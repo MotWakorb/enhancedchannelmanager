@@ -1,0 +1,56 @@
+.split-pane {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+  height: 100%;
+}
+
+.split-pane-left,
+.split-pane-right {
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.split-pane-left {
+  min-width: 0;
+}
+
+.split-pane-right {
+  min-width: 0;
+}
+
+.split-pane-divider {
+  width: 6px;
+  background-color: #2a2a2a;
+  cursor: col-resize;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: background-color 0.15s;
+}
+
+.split-pane-divider:hover {
+  background-color: #3a3a3a;
+}
+
+.split-pane-divider.dragging {
+  background-color: #646cff;
+}
+
+.divider-handle {
+  width: 4px;
+  height: 40px;
+  background-color: #444;
+  border-radius: 2px;
+  transition: background-color 0.15s;
+}
+
+.split-pane-divider:hover .divider-handle {
+  background-color: #666;
+}
+
+.split-pane-divider.dragging .divider-handle {
+  background-color: #fff;
+}
