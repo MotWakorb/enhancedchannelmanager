@@ -9,7 +9,7 @@ import {
 } from './components';
 import { useChangeHistory, useEditMode } from './hooks';
 import * as api from './services/api';
-import type { Channel, ChannelGroup, Stream, M3UAccount, Logo, ChangeInfo } from './types';
+import type { Channel, ChannelGroup, Stream, M3UAccount, Logo, ChangeInfo, EPGData, StreamProfile, EPGSource } from './types';
 import './App.css';
 
 function App() {
@@ -39,6 +39,12 @@ function App() {
 
   // Logos state
   const [logos, setLogos] = useState<Logo[]>([]);
+
+  // EPG Data, EPG Sources, and Stream Profiles state
+  const [epgData, setEpgData] = useState<EPGData[]>([]);
+  const [epgSources, setEpgSources] = useState<EPGSource[]>([]);
+  const [streamProfiles, setStreamProfiles] = useState<StreamProfile[]>([]);
+  const [epgDataLoading, setEpgDataLoading] = useState(false);
 
   // Settings state
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -151,6 +157,9 @@ function App() {
         loadStreamGroups();
         loadStreams();
         loadLogos();
+        loadStreamProfiles();
+        loadEpgSources();
+        loadEpgData();
       } catch (err) {
         console.error('Failed to load settings:', err);
         setSettingsOpen(true);
@@ -178,6 +187,9 @@ function App() {
     loadStreamGroups();
     loadStreams();
     loadLogos();
+    loadStreamProfiles();
+    loadEpgSources();
+    loadEpgData();
   };
 
   const loadChannelGroups = async () => {
@@ -251,6 +263,36 @@ function App() {
       setLogos(allLogos);
     } catch (err) {
       console.error('Failed to load logos:', err);
+    }
+  };
+
+  const loadStreamProfiles = async () => {
+    try {
+      const profiles = await api.getStreamProfiles();
+      setStreamProfiles(profiles);
+    } catch (err) {
+      console.error('Failed to load stream profiles:', err);
+    }
+  };
+
+  const loadEpgSources = async () => {
+    try {
+      const sources = await api.getEPGSources();
+      setEpgSources(sources);
+    } catch (err) {
+      console.error('Failed to load EPG sources:', err);
+    }
+  };
+
+  const loadEpgData = async () => {
+    setEpgDataLoading(true);
+    try {
+      const data = await api.getEPGData();
+      setEpgData(data);
+    } catch (err) {
+      console.error('Failed to load EPG data:', err);
+    } finally {
+      setEpgDataLoading(false);
     }
   };
 
@@ -626,6 +668,11 @@ function App() {
               onDeleteSavePoint={deleteSavePoint}
               logos={logos}
               onLogosChange={loadLogos}
+              // EPG and Stream Profile props
+              epgData={epgData}
+              epgSources={epgSources}
+              streamProfiles={streamProfiles}
+              epgDataLoading={epgDataLoading}
             />
           }
           right={

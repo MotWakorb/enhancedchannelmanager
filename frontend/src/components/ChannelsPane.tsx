@@ -18,7 +18,7 @@ import {
   verticalListSortingStrategy,
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import type { Channel, ChannelGroup, Stream, M3UAccount, Logo, ChangeInfo, ChangeRecord, SavePoint } from '../types';
+import type { Channel, ChannelGroup, Stream, M3UAccount, Logo, ChangeInfo, ChangeRecord, SavePoint, EPGData, EPGSource, StreamProfile } from '../types';
 import * as api from '../services/api';
 import { EditModeToggle } from './EditModeToggle';
 import { HistoryToolbar } from './HistoryToolbar';
@@ -73,6 +73,11 @@ interface ChannelsPaneProps {
   // Logo props
   logos?: Logo[];
   onLogosChange?: () => void;
+  // EPG and Stream Profile props
+  epgData?: EPGData[];
+  epgSources?: EPGSource[];
+  streamProfiles?: StreamProfile[];
+  epgDataLoading?: boolean;
 }
 
 interface GroupState {
@@ -331,19 +336,59 @@ function SortableChannel({
 }
 
 // Edit Channel Modal Component
+interface ChannelMetadataChanges {
+  logo_id?: number | null;
+  tvg_id?: string | null;
+  tvc_guide_stationid?: string | null;
+  epg_data_id?: number | null;
+  stream_profile_id?: number | null;
+}
+
 interface EditChannelModalProps {
   channel: Channel;
   logos: Logo[];
+  epgData: { id: number; tvg_id: string; name: string; icon_url: string | null; epg_source: number }[];
+  epgSources: { id: number; name: string }[];
+  streamProfiles: { id: number; name: string; is_active: boolean }[];
   onClose: () => void;
-  onSave: (logoId: number | null) => Promise<void>;
+  onSave: (changes: ChannelMetadataChanges) => Promise<void>;
   onLogoCreate: (url: string) => Promise<Logo>;
+  epgDataLoading?: boolean;
 }
 
-function EditChannelModal({ channel, logos, onClose, onSave, onLogoCreate }: EditChannelModalProps) {
+function EditChannelModal({
+  channel,
+  logos,
+  epgData,
+  epgSources,
+  streamProfiles,
+  onClose,
+  onSave,
+  onLogoCreate,
+  epgDataLoading,
+}: EditChannelModalProps) {
+  // Create a map for quick EPG source name lookup
+  const epgSourceMap = new Map(epgSources.map((s) => [s.id, s.name]));
+  // Logo state
   const [selectedLogoId, setSelectedLogoId] = useState<number | null>(channel.logo_id);
   const [logoSearch, setLogoSearch] = useState('');
   const [newLogoUrl, setNewLogoUrl] = useState('');
   const [addingLogo, setAddingLogo] = useState(false);
+
+  // Metadata state
+  const [tvgId, setTvgId] = useState<string>(channel.tvg_id || '');
+  const [tvcGuideStationId, setTvcGuideStationId] = useState<string>(channel.tvc_guide_stationid || '');
+  const [selectedEpgDataId, setSelectedEpgDataId] = useState<number | null>(channel.epg_data_id);
+  const [selectedStreamProfileId, setSelectedStreamProfileId] = useState<number | null>(channel.stream_profile_id);
+
+  // EPG search state
+  const [epgSearch, setEpgSearch] = useState('');
+  const [epgDropdownOpen, setEpgDropdownOpen] = useState(false);
+
+  // TVG-ID from EPG picker state
+  const [tvgIdPickerOpen, setTvgIdPickerOpen] = useState(false);
+  const [tvgIdSearch, setTvgIdSearch] = useState('');
+
   const [saving, setSaving] = useState(false);
 
   // Filter logos by search term
@@ -354,10 +399,39 @@ function EditChannelModal({ channel, logos, onClose, onSave, onLogoCreate }: Edi
   // Get currently selected logo
   const currentLogo = selectedLogoId ? logos.find((l) => l.id === selectedLogoId) : null;
 
+  // Get currently selected EPG data
+  const currentEpgData = selectedEpgDataId ? epgData.find((e) => e.id === selectedEpgDataId) : null;
+
+  // Check if any changes were made
+  const hasChanges =
+    selectedLogoId !== channel.logo_id ||
+    tvgId !== (channel.tvg_id || '') ||
+    tvcGuideStationId !== (channel.tvc_guide_stationid || '') ||
+    selectedEpgDataId !== channel.epg_data_id ||
+    selectedStreamProfileId !== channel.stream_profile_id;
+
   const handleSave = async () => {
     setSaving(true);
     try {
-      await onSave(selectedLogoId);
+      const changes: ChannelMetadataChanges = {};
+
+      if (selectedLogoId !== channel.logo_id) {
+        changes.logo_id = selectedLogoId;
+      }
+      if (tvgId !== (channel.tvg_id || '')) {
+        changes.tvg_id = tvgId || null;
+      }
+      if (tvcGuideStationId !== (channel.tvc_guide_stationid || '')) {
+        changes.tvc_guide_stationid = tvcGuideStationId || null;
+      }
+      if (selectedEpgDataId !== channel.epg_data_id) {
+        changes.epg_data_id = selectedEpgDataId;
+      }
+      if (selectedStreamProfileId !== channel.stream_profile_id) {
+        changes.stream_profile_id = selectedStreamProfileId;
+      }
+
+      await onSave(changes);
     } finally {
       setSaving(false);
     }
@@ -378,11 +452,245 @@ function EditChannelModal({ channel, logos, onClose, onSave, onLogoCreate }: Edi
     }
   };
 
+  const handleEpgSearch = (value: string) => {
+    setEpgSearch(value);
+  };
+
+  // Handle TVG-ID picker search
+  const handleTvgIdSearch = (value: string) => {
+    setTvgIdSearch(value);
+  };
+
+  // Filter EPG data client-side based on search terms
+  const filteredEpgData = epgData.filter((epg) => {
+    const searchTerm = (epgDropdownOpen ? epgSearch : tvgIdSearch).toLowerCase();
+    if (!searchTerm) return true;
+    return (
+      epg.name.toLowerCase().includes(searchTerm) ||
+      epg.tvg_id.toLowerCase().includes(searchTerm)
+    );
+  });
+
+  // Filter for TVG-ID picker specifically
+  const filteredTvgIdEpgData = epgData.filter((epg) => {
+    const searchTerm = tvgIdSearch.toLowerCase();
+    if (!searchTerm) return true;
+    return (
+      epg.name.toLowerCase().includes(searchTerm) ||
+      epg.tvg_id.toLowerCase().includes(searchTerm)
+    );
+  });
+
+  // Select TVG-ID from EPG data picker
+  const handleSelectTvgIdFromEpg = (epg: { tvg_id: string }) => {
+    setTvgId(epg.tvg_id);
+    setTvgIdPickerOpen(false);
+    setTvgIdSearch('');
+  };
+
   return (
     <div className="edit-channel-modal-overlay" onClick={onClose}>
       <div className="edit-channel-modal" onClick={(e) => e.stopPropagation()}>
-        <h3>Edit Channel: {channel.name}</h3>
+        <div className="edit-channel-titlebar">
+          <span className="edit-channel-titlebar-text">Edit Channel</span>
+          <button className="edit-channel-titlebar-close" onClick={onClose} title="Close">
+            <span className="material-icons">close</span>
+          </button>
+        </div>
+        <div className="edit-channel-content">
+        <h3 className="edit-channel-name">{channel.name}</h3>
 
+        {/* TVG-ID Section */}
+        <div className="edit-channel-section">
+          <label>TVG-ID</label>
+          <div className="edit-channel-input-row">
+            <input
+              type="text"
+              className="edit-channel-text-input"
+              placeholder="Enter TVG-ID for EPG matching..."
+              value={tvgId}
+              onChange={(e) => setTvgId(e.target.value)}
+            />
+            <button
+              className="edit-channel-get-epg-btn"
+              onClick={() => {
+                if (currentEpgData?.tvg_id) {
+                  // If EPG data is selected, directly copy the TVG-ID
+                  setTvgId(currentEpgData.tvg_id);
+                } else {
+                  // Otherwise, open the picker to search
+                  setTvgIdPickerOpen(!tvgIdPickerOpen);
+                }
+              }}
+              title={currentEpgData ? "Copy TVG-ID from selected EPG data" : "Search EPG data for TVG-ID"}
+            >
+              <span className="material-icons">{currentEpgData ? 'content_copy' : 'search'}</span>
+              {currentEpgData ? 'Copy from EPG' : 'Get from EPG'}
+            </button>
+          </div>
+          {tvgIdPickerOpen && (
+            <div className="tvg-id-picker">
+              <input
+                type="text"
+                className="edit-channel-text-input"
+                placeholder="Search EPG data..."
+                value={tvgIdSearch}
+                onChange={(e) => handleTvgIdSearch(e.target.value)}
+                autoFocus
+              />
+              <div className="tvg-id-picker-dropdown">
+                {epgDataLoading ? (
+                  <div className="epg-dropdown-loading">Loading...</div>
+                ) : filteredTvgIdEpgData.length === 0 ? (
+                  <div className="epg-dropdown-empty">
+                    {tvgIdSearch ? 'No EPG data found' : 'Type to search EPG data'}
+                  </div>
+                ) : (
+                  filteredTvgIdEpgData.slice(0, 100).map((epg) => (
+                    <div
+                      key={epg.id}
+                      className="epg-dropdown-item"
+                      onClick={() => handleSelectTvgIdFromEpg(epg)}
+                    >
+                      {epg.icon_url && (
+                        <img
+                          src={epg.icon_url}
+                          alt=""
+                          className="epg-dropdown-icon"
+                          onError={(e) => {
+                            (e.target as HTMLImageElement).style.display = 'none';
+                          }}
+                        />
+                      )}
+                      <div className="epg-dropdown-info">
+                        <span className="epg-dropdown-name">{epg.name}</span>
+                        <span className="epg-dropdown-tvgid">{epg.tvg_id}</span>
+                        {epgSourceMap.get(epg.epg_source) && (
+                          <span className="epg-dropdown-source">{epgSourceMap.get(epg.epg_source)}</span>
+                        )}
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          )}
+          <span className="edit-channel-hint">Used for matching EPG program data</span>
+        </div>
+
+        {/* Gracenote Station ID Section */}
+        <div className="edit-channel-section">
+          <label>Gracenote Station ID</label>
+          <input
+            type="text"
+            className="edit-channel-text-input"
+            placeholder="Enter Gracenote/TVC station ID..."
+            value={tvcGuideStationId}
+            onChange={(e) => setTvcGuideStationId(e.target.value)}
+          />
+          <span className="edit-channel-hint">Numeric ID for Gracenote/TVC guide data</span>
+        </div>
+
+        {/* EPG Data Section */}
+        <div className="edit-channel-section">
+          <label>EPG Data</label>
+          {currentEpgData && (
+            <div className="current-epg-preview">
+              {currentEpgData.icon_url && (
+                <img
+                  src={currentEpgData.icon_url}
+                  alt=""
+                  onError={(e) => {
+                    (e.target as HTMLImageElement).style.display = 'none';
+                  }}
+                />
+              )}
+              <div className="current-epg-info">
+                <span className="current-epg-name">{currentEpgData.name}</span>
+                <span className="current-epg-tvgid">{currentEpgData.tvg_id}</span>
+              </div>
+              <button
+                className="current-epg-remove-btn"
+                onClick={() => setSelectedEpgDataId(null)}
+              >
+                Remove
+              </button>
+            </div>
+          )}
+          <div className="epg-search-container">
+            <input
+              type="text"
+              className="edit-channel-text-input"
+              placeholder="Search EPG data..."
+              value={epgSearch}
+              onChange={(e) => handleEpgSearch(e.target.value)}
+              onFocus={() => setEpgDropdownOpen(true)}
+            />
+            {epgDropdownOpen && (
+              <div className="epg-dropdown">
+                {epgDataLoading ? (
+                  <div className="epg-dropdown-loading">Loading...</div>
+                ) : filteredEpgData.length === 0 ? (
+                  <div className="epg-dropdown-empty">
+                    {epgSearch ? 'No EPG data found' : 'Type to search or scroll to browse'}
+                  </div>
+                ) : (
+                  filteredEpgData.slice(0, 100).map((epg) => (
+                    <div
+                      key={epg.id}
+                      className={`epg-dropdown-item ${selectedEpgDataId === epg.id ? 'selected' : ''}`}
+                      onClick={() => {
+                        setSelectedEpgDataId(epg.id);
+                        setEpgDropdownOpen(false);
+                        setEpgSearch('');
+                      }}
+                    >
+                      {epg.icon_url && (
+                        <img
+                          src={epg.icon_url}
+                          alt=""
+                          className="epg-dropdown-icon"
+                          onError={(e) => {
+                            (e.target as HTMLImageElement).style.display = 'none';
+                          }}
+                        />
+                      )}
+                      <div className="epg-dropdown-info">
+                        <span className="epg-dropdown-name">{epg.name}</span>
+                        <span className="epg-dropdown-tvgid">{epg.tvg_id}</span>
+                        {epgSourceMap.get(epg.epg_source) && (
+                          <span className="epg-dropdown-source">{epgSourceMap.get(epg.epg_source)}</span>
+                        )}
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Stream Profile Section */}
+        <div className="edit-channel-section">
+          <label>Stream Profile</label>
+          <select
+            className="edit-channel-select"
+            value={selectedStreamProfileId ?? ''}
+            onChange={(e) => setSelectedStreamProfileId(e.target.value ? Number(e.target.value) : null)}
+          >
+            <option value="">Default (no profile)</option>
+            {streamProfiles
+              .filter((p) => p.is_active)
+              .map((profile) => (
+                <option key={profile.id} value={profile.id}>
+                  {profile.name}
+                </option>
+              ))}
+          </select>
+          <span className="edit-channel-hint">Determines how streams are processed/transcoded</span>
+        </div>
+
+        {/* Logo Section */}
         <div className="edit-channel-section">
           <label>Channel Logo</label>
 
@@ -470,10 +778,11 @@ function EditChannelModal({ channel, logos, onClose, onSave, onLogoCreate }: Edi
           <button
             className="edit-channel-save-btn"
             onClick={handleSave}
-            disabled={saving || selectedLogoId === channel.logo_id}
+            disabled={saving || !hasChanges}
           >
             {saving ? 'Saving...' : 'Save'}
           </button>
+        </div>
         </div>
       </div>
     </div>
@@ -528,6 +837,11 @@ export function ChannelsPane({
   // Logo props
   logos = [],
   onLogosChange,
+  // EPG and Stream Profile props
+  epgData = [],
+  epgSources = [],
+  streamProfiles = [],
+  epgDataLoading = false,
 }: ChannelsPaneProps) {
   // Suppress unused variable warnings - these are passed through but handled in parent
   void _onStageAddStream;
@@ -1786,26 +2100,55 @@ export function ChannelsPane({
         <EditChannelModal
           channel={channelToEdit}
           logos={logos}
+          epgData={epgData}
+          epgSources={epgSources}
+          streamProfiles={streamProfiles}
+          epgDataLoading={epgDataLoading}
           onClose={() => {
             setShowEditChannelModal(false);
             setChannelToEdit(null);
           }}
-          onSave={async (logoId: number | null) => {
+          onSave={async (changes: ChannelMetadataChanges) => {
+            if (Object.keys(changes).length === 0) {
+              setShowEditChannelModal(false);
+              setChannelToEdit(null);
+              return;
+            }
+
+            // Build description of changes
+            const changeDescriptions: string[] = [];
+            if (changes.logo_id !== undefined) {
+              const logoName = changes.logo_id ? logos.find((l) => l.id === changes.logo_id)?.name : null;
+              changeDescriptions.push(logoName ? `logo to "${logoName}"` : 'removed logo');
+            }
+            if (changes.tvg_id !== undefined) {
+              changeDescriptions.push(changes.tvg_id ? `TVG-ID to "${changes.tvg_id}"` : 'cleared TVG-ID');
+            }
+            if (changes.tvc_guide_stationid !== undefined) {
+              changeDescriptions.push(changes.tvc_guide_stationid ? `Station ID to "${changes.tvc_guide_stationid}"` : 'cleared Station ID');
+            }
+            if (changes.epg_data_id !== undefined) {
+              const epgName = changes.epg_data_id ? epgData.find((e) => e.id === changes.epg_data_id)?.name : null;
+              changeDescriptions.push(epgName ? `EPG to "${epgName}"` : 'removed EPG');
+            }
+            if (changes.stream_profile_id !== undefined) {
+              const profileName = changes.stream_profile_id ? streamProfiles.find((p) => p.id === changes.stream_profile_id)?.name : null;
+              changeDescriptions.push(profileName ? `profile to "${profileName}"` : 'cleared profile');
+            }
+
+            const description = `Updated ${channelToEdit.name}: ${changeDescriptions.join(', ')}`;
+
             if (isEditMode && onStageUpdateChannel) {
-              const logoName = logoId ? logos.find((l) => l.id === logoId)?.name : null;
-              const description = logoId
-                ? `Set logo "${logoName}" on "${channelToEdit.name}"`
-                : `Removed logo from "${channelToEdit.name}"`;
-              onStageUpdateChannel(channelToEdit.id, { logo_id: logoId }, description);
+              onStageUpdateChannel(channelToEdit.id, changes, description);
             } else {
               try {
-                const updated = await api.updateChannel(channelToEdit.id, { logo_id: logoId });
+                const updated = await api.updateChannel(channelToEdit.id, changes);
                 onChannelUpdate(updated, {
-                  type: 'channel_logo_update',
-                  description: `Updated logo for "${channelToEdit.name}"`,
+                  type: 'channel_metadata_update',
+                  description,
                 });
               } catch (err) {
-                console.error('Failed to update channel logo:', err);
+                console.error('Failed to update channel:', err);
               }
             }
             setShowEditChannelModal(false);

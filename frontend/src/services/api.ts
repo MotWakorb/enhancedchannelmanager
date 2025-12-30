@@ -5,6 +5,9 @@ import type {
   M3UAccount,
   Logo,
   PaginatedResponse,
+  EPGSource,
+  EPGData,
+  StreamProfile,
 } from '../types';
 
 const API_BASE = '/api';
@@ -255,4 +258,31 @@ export async function uploadLogo(file: File): Promise<Logo> {
   }
 
   return response.json();
+}
+
+// EPG Sources
+export async function getEPGSources(): Promise<EPGSource[]> {
+  return fetchJson(`${API_BASE}/epg/sources`);
+}
+
+// EPG Data
+export async function getEPGData(params?: {
+  search?: string;
+  epgSource?: number;
+}): Promise<EPGData[]> {
+  const searchParams = new URLSearchParams();
+  if (params?.search) searchParams.set('search', params.search);
+  if (params?.epgSource) searchParams.set('epg_source', String(params.epgSource));
+
+  const query = searchParams.toString();
+  return fetchJson(`${API_BASE}/epg/data${query ? `?${query}` : ''}`);
+}
+
+export async function getEPGDataById(id: number): Promise<EPGData> {
+  return fetchJson(`${API_BASE}/epg/data/${id}`);
+}
+
+// Stream Profiles
+export async function getStreamProfiles(): Promise<StreamProfile[]> {
+  return fetchJson(`${API_BASE}/stream-profiles`);
 }

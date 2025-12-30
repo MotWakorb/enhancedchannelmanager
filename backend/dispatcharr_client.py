@@ -285,6 +285,66 @@ class DispatcharrClient:
         response.raise_for_status()
 
     # -------------------------------------------------------------------------
+    # EPG Sources
+    # -------------------------------------------------------------------------
+
+    async def get_epg_sources(self) -> list:
+        """Get all EPG sources."""
+        response = await self._request("GET", "/api/epg/sources/")
+        response.raise_for_status()
+        return response.json()
+
+    async def get_epg_source(self, source_id: int) -> dict:
+        """Get a single EPG source by ID."""
+        response = await self._request("GET", f"/api/epg/sources/{source_id}/")
+        response.raise_for_status()
+        return response.json()
+
+    # -------------------------------------------------------------------------
+    # EPG Data
+    # -------------------------------------------------------------------------
+
+    async def get_epg_data(
+        self,
+        page: int = 1,
+        page_size: int = 100,
+        search: Optional[str] = None,
+        epg_source: Optional[int] = None,
+    ) -> dict:
+        """Get paginated list of EPG data entries."""
+        params = {"page": page, "page_size": page_size}
+        if search:
+            params["search"] = search
+        if epg_source:
+            params["epg_source"] = epg_source
+
+        response = await self._request("GET", "/api/epg/epgdata/", params=params)
+        response.raise_for_status()
+        return response.json()
+
+    async def get_epg_data_by_id(self, data_id: int) -> dict:
+        """Get a single EPG data entry by ID."""
+        response = await self._request("GET", f"/api/epg/epgdata/{data_id}/")
+        response.raise_for_status()
+        return response.json()
+
+    # -------------------------------------------------------------------------
+    # Stream Profiles
+    # -------------------------------------------------------------------------
+
+    async def get_stream_profiles(self) -> list:
+        """Get all stream profiles."""
+        response = await self._request("GET", "/api/core/streamprofiles/")
+        response.raise_for_status()
+        return response.json()
+
+    async def get_stream_profile(self, profile_id: int) -> dict:
+        """Get a single stream profile by ID."""
+        response = await self._request("GET", f"/api/core/streamprofiles/{profile_id}/")
+        response.raise_for_status()
+        return response.json()
+
+    # -------------------------------------------------------------------------
     # Cleanup
     # -------------------------------------------------------------------------
 

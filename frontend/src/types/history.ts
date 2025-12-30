@@ -7,6 +7,7 @@ export type ChangeType =
   | 'channel_number_update'
   | 'channel_name_update'
   | 'channel_logo_update'
+  | 'channel_metadata_update'
   | 'stream_add'
   | 'stream_remove'
   | 'stream_reorder'
