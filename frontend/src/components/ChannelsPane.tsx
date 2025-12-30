@@ -337,6 +337,8 @@ function SortableChannel({
 
 // Edit Channel Modal Component
 interface ChannelMetadataChanges {
+  channel_number?: number;
+  name?: string;
   logo_id?: number | null;
   tvg_id?: string | null;
   tvc_guide_stationid?: string | null;
@@ -353,6 +355,7 @@ interface EditChannelModalProps {
   onClose: () => void;
   onSave: (changes: ChannelMetadataChanges) => Promise<void>;
   onLogoCreate: (url: string) => Promise<Logo>;
+  onLogoUpload: (file: File) => Promise<Logo>;
   epgDataLoading?: boolean;
 }
 
@@ -365,15 +368,23 @@ function EditChannelModal({
   onClose,
   onSave,
   onLogoCreate,
+  onLogoUpload,
   epgDataLoading,
 }: EditChannelModalProps) {
   // Create a map for quick EPG source name lookup
   const epgSourceMap = new Map(epgSources.map((s) => [s.id, s.name]));
+
+  // Channel basic info state
+  const [channelNumber, setChannelNumber] = useState<string>(String(channel.channel_number));
+  const [channelName, setChannelName] = useState<string>(channel.name);
+
   // Logo state
   const [selectedLogoId, setSelectedLogoId] = useState<number | null>(channel.logo_id);
   const [logoSearch, setLogoSearch] = useState('');
   const [newLogoUrl, setNewLogoUrl] = useState('');
   const [addingLogo, setAddingLogo] = useState(false);
+  const [uploadingLogo, setUploadingLogo] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Metadata state
   const [tvgId, setTvgId] = useState<string>(channel.tvg_id || '');
@@ -403,7 +414,10 @@ function EditChannelModal({
   const currentEpgData = selectedEpgDataId ? epgData.find((e) => e.id === selectedEpgDataId) : null;
 
   // Check if any changes were made
+  const parsedChannelNumber = parseFloat(channelNumber);
   const hasChanges =
+    (!isNaN(parsedChannelNumber) && parsedChannelNumber !== channel.channel_number) ||
+    channelName !== channel.name ||
     selectedLogoId !== channel.logo_id ||
     tvgId !== (channel.tvg_id || '') ||
     tvcGuideStationId !== (channel.tvc_guide_stationid || '') ||
@@ -415,6 +429,12 @@ function EditChannelModal({
     try {
       const changes: ChannelMetadataChanges = {};
 
+      if (!isNaN(parsedChannelNumber) && parsedChannelNumber !== channel.channel_number) {
+        changes.channel_number = parsedChannelNumber;
+      }
+      if (channelName !== channel.name) {
+        changes.name = channelName;
+      }
       if (selectedLogoId !== channel.logo_id) {
         changes.logo_id = selectedLogoId;
       }
@@ -449,6 +469,31 @@ function EditChannelModal({
       console.error('Failed to add logo:', err);
     } finally {
       setAddingLogo(false);
+    }
+  };
+
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    // Validate file type
+    if (!file.type.startsWith('image/')) {
+      console.error('Invalid file type. Please select an image file.');
+      return;
+    }
+
+    setUploadingLogo(true);
+    try {
+      const newLogo = await onLogoUpload(file);
+      setSelectedLogoId(newLogo.id);
+    } catch (err) {
+      console.error('Failed to upload logo:', err);
+    } finally {
+      setUploadingLogo(false);
+      // Reset file input
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
+      }
     }
   };
 
@@ -498,7 +543,29 @@ function EditChannelModal({
           </button>
         </div>
         <div className="edit-channel-content">
-        <h3 className="edit-channel-name">{channel.name}</h3>
+        {/* Channel Number and Name Section */}
+        <div className="edit-channel-header-fields">
+          <div className="edit-channel-number-field">
+            <label>Channel #</label>
+            <input
+              type="text"
+              className="edit-channel-number-input"
+              value={channelNumber}
+              onChange={(e) => setChannelNumber(e.target.value)}
+              placeholder="123"
+            />
+          </div>
+          <div className="edit-channel-name-field">
+            <label>Channel Name</label>
+            <input
+              type="text"
+              className="edit-channel-name-input"
+              value={channelName}
+              onChange={(e) => setChannelName(e.target.value)}
+              placeholder="Enter channel name..."
+            />
+          </div>
+        </div>
 
         {/* TVG-ID Section */}
         <div className="edit-channel-section">
@@ -749,25 +816,48 @@ function EditChannelModal({
             ))}
           </div>
 
-          {/* Add logo from URL */}
-          <div className="logo-add-url">
-            <input
-              type="text"
-              placeholder="Add logo from URL..."
-              value={newLogoUrl}
-              onChange={(e) => setNewLogoUrl(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') {
-                  handleAddLogoFromUrl();
-                }
-              }}
-            />
-            <button
-              onClick={handleAddLogoFromUrl}
-              disabled={!newLogoUrl.trim() || addingLogo}
-            >
-              {addingLogo ? 'Adding...' : 'Add'}
-            </button>
+          {/* Add logo from URL or file */}
+          <div className="logo-add-section">
+            <div className="logo-add-url">
+              <input
+                type="text"
+                placeholder="Add logo from URL..."
+                value={newLogoUrl}
+                onChange={(e) => setNewLogoUrl(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    handleAddLogoFromUrl();
+                  }
+                }}
+              />
+              <button
+                onClick={handleAddLogoFromUrl}
+                disabled={!newLogoUrl.trim() || addingLogo}
+              >
+                {addingLogo ? 'Adding...' : 'Add'}
+              </button>
+            </div>
+            <div className="logo-add-divider">
+              <span>or</span>
+            </div>
+            <div className="logo-add-file">
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/*"
+                onChange={handleFileUpload}
+                style={{ display: 'none' }}
+                id="logo-file-input"
+              />
+              <button
+                onClick={() => fileInputRef.current?.click()}
+                disabled={uploadingLogo}
+                className="logo-upload-btn"
+              >
+                <span className="material-icons">upload_file</span>
+                {uploadingLogo ? 'Uploading...' : 'Upload Image'}
+              </button>
+            </div>
           </div>
         </div>
 
@@ -2117,6 +2207,12 @@ export function ChannelsPane({
 
             // Build description of changes
             const changeDescriptions: string[] = [];
+            if (changes.channel_number !== undefined) {
+              changeDescriptions.push(`number to ${changes.channel_number}`);
+            }
+            if (changes.name !== undefined) {
+              changeDescriptions.push(`name to "${changes.name}"`);
+            }
             if (changes.logo_id !== undefined) {
               const logoName = changes.logo_id ? logos.find((l) => l.id === changes.logo_id)?.name : null;
               changeDescriptions.push(logoName ? `logo to "${logoName}"` : 'removed logo');
@@ -2164,6 +2260,18 @@ export function ChannelsPane({
               return newLogo;
             } catch (err) {
               console.error('Failed to create logo:', err);
+              throw err;
+            }
+          }}
+          onLogoUpload={async (file: File) => {
+            try {
+              const newLogo = await api.uploadLogo(file);
+              if (onLogosChange) {
+                onLogosChange();
+              }
+              return newLogo;
+            } catch (err) {
+              console.error('Failed to upload logo:', err);
               throw err;
             }
           }}
