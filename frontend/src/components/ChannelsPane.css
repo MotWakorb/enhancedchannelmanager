@@ -22,19 +22,33 @@
   margin: 0;
 }
 
+.pane-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
 .create-channel-btn {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
   background-color: #646cff;
-  border: none;
+  border: 1px solid #646cff;
   color: #fff;
   padding: 0.375rem 0.75rem;
   border-radius: 4px;
-  font-size: 0.8rem;
+  font-size: 0.85rem;
+  font-weight: 500;
   cursor: pointer;
-  transition: background-color 0.15s;
+  transition: background-color 0.15s, border-color 0.15s;
 }
 
 .create-channel-btn:hover {
   background-color: #535bf2;
+}
+
+.create-channel-icon {
+  font-size: 18px;
 }
 
 .pane-filters {
@@ -272,6 +286,15 @@
   color: #666;
 }
 
+.channel-drag-handle.disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+.channel-drag-handle.disabled:active {
+  cursor: not-allowed;
+}
+
 .channel-number {
   width: 3rem;
   font-size: 0.85rem;
@@ -314,10 +337,66 @@
   text-overflow: ellipsis;
 }
 
+.channel-name.editable {
+  cursor: pointer;
+  padding: 0.125rem 0.25rem;
+  border-radius: 3px;
+  transition: background-color 0.15s;
+}
+
+.channel-name.editable:hover {
+  background-color: #3d3d3d;
+  color: #fff;
+}
+
+.channel-name-input {
+  flex: 1;
+  padding: 0.125rem 0.25rem;
+  background-color: #2d2d2d;
+  border: 1px solid #646cff;
+  border-radius: 3px;
+  color: #fff;
+  font-size: 0.9rem;
+  min-width: 0;
+}
+
+.channel-name-input:focus {
+  outline: none;
+}
+
 .channel-streams-count {
   font-size: 0.75rem;
   color: #666;
   margin-left: 0.5rem;
+}
+
+/* Hover delete button on channel row (edit mode only) */
+.channel-row-delete-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  color: #555;
+  cursor: pointer;
+  padding: 0.25rem;
+  margin-left: 0.5rem;
+  border-radius: 3px;
+  opacity: 0;
+  transition: opacity 0.15s, background-color 0.15s, color 0.15s;
+}
+
+.channel-item:hover .channel-row-delete-btn {
+  opacity: 1;
+}
+
+.channel-row-delete-btn:hover {
+  background-color: rgba(248, 113, 113, 0.2);
+  color: #f87171;
+}
+
+.channel-row-delete-btn .material-icons {
+  font-size: 18px;
 }
 
 .channel-expand-icon {
@@ -399,6 +478,15 @@
 
 .inline-stream-item:hover .stream-drag-handle {
   color: #666;
+}
+
+.stream-drag-handle.disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+.stream-drag-handle.disabled:active {
+  cursor: not-allowed;
 }
 
 .stream-logo-small {
@@ -552,6 +640,83 @@
   cursor: not-allowed;
 }
 
+/* Conflict Dialog Styles */
+.conflict-dialog {
+  max-width: 450px;
+}
+
+.conflict-message {
+  margin-bottom: 1rem;
+  color: #ccc;
+}
+
+.conflict-message p {
+  margin: 0 0 0.5rem;
+}
+
+.conflict-message strong {
+  color: #fff;
+}
+
+.conflict-options {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+
+.conflict-option-btn {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem 1rem;
+  background-color: #2a2a2a;
+  border: 1px solid #404040;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background-color 0.15s, border-color 0.15s;
+  text-align: left;
+}
+
+.conflict-option-btn:hover:not(:disabled) {
+  background-color: #333;
+  border-color: #555;
+}
+
+.conflict-option-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.conflict-option-btn .material-icons {
+  font-size: 24px;
+  color: #888;
+}
+
+.conflict-option-btn.push-down:hover:not(:disabled) .material-icons {
+  color: #646cff;
+}
+
+.conflict-option-btn.add-to-end:hover:not(:disabled) .material-icons {
+  color: #4ade80;
+}
+
+.conflict-option-text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.conflict-option-text strong {
+  color: #fff;
+  font-size: 0.95rem;
+}
+
+.conflict-option-text span {
+  color: #888;
+  font-size: 0.8rem;
+}
+
 /* Group autocomplete styles */
 .group-autocomplete {
   position: relative;
@@ -627,4 +792,382 @@
   font-size: 0.85rem;
   color: #666;
   font-style: italic;
+}
+
+/* Delete confirmation dialog */
+.delete-dialog {
+  max-width: 400px;
+}
+
+.delete-message {
+  padding: 0 0.5rem;
+}
+
+.delete-message p {
+  margin: 0 0 0.75rem;
+  color: #ccc;
+}
+
+.delete-warning {
+  font-size: 0.85rem;
+  color: #f59e0b !important;
+  font-style: italic;
+}
+
+.modal-btn.danger {
+  background-color: #dc2626;
+  color: #fff;
+}
+
+.modal-btn.danger:hover:not(:disabled) {
+  background-color: #b91c1c;
+}
+
+.modal-btn.danger:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Renumber option in delete dialog */
+.delete-renumber-option {
+  margin: 1rem 0.5rem;
+  padding: 0.75rem;
+  background-color: #252525;
+  border: 1px solid #3d3d3d;
+  border-radius: 4px;
+}
+
+.renumber-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  cursor: pointer;
+  color: #ccc;
+  font-size: 0.9rem;
+}
+
+.renumber-checkbox input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+}
+
+.renumber-preview {
+  margin-top: 0.75rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid #3d3d3d;
+}
+
+.renumber-preview-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.25rem 0;
+  font-size: 0.85rem;
+  flex-wrap: wrap;
+}
+
+.renumber-old {
+  color: #888;
+  min-width: 2rem;
+  text-align: right;
+}
+
+.renumber-arrow {
+  color: #666;
+}
+
+.renumber-new {
+  color: #4ade80;
+  min-width: 2rem;
+}
+
+.renumber-name-old {
+  color: #888;
+  margin-left: 0.5rem;
+  font-size: 0.8rem;
+}
+
+.renumber-name-new {
+  color: #4ade80;
+  font-size: 0.8rem;
+}
+
+.renumber-preview-more {
+  color: #666;
+  font-size: 0.8rem;
+  font-style: italic;
+  margin-top: 0.25rem;
+}
+
+/* Channel logo styles */
+.channel-logo-container {
+  width: 32px;
+  height: 32px;
+  min-width: 32px;
+  margin-right: 0.5rem;
+  border-radius: 4px;
+  overflow: hidden;
+  background-color: #2d2d2d;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background-color 0.15s, transform 0.15s;
+}
+
+.channel-logo-container:hover {
+  background-color: #3d3d3d;
+  transform: scale(1.05);
+}
+
+.channel-logo {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.channel-logo-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  color: #555;
+}
+
+.channel-logo-placeholder .material-icons {
+  font-size: 18px;
+}
+
+.channel-logo-placeholder:hover {
+  color: #888;
+}
+
+/* Edit Channel Modal */
+.edit-channel-modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: rgba(0, 0, 0, 0.7);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.edit-channel-modal {
+  background-color: #252525;
+  border-radius: 8px;
+  padding: 1.5rem;
+  min-width: 600px;
+  max-width: 800px;
+  max-height: 80vh;
+  overflow-y: auto;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+}
+
+.edit-channel-modal h3 {
+  margin: 0 0 1.5rem 0;
+  color: #fff;
+  font-size: 1.25rem;
+}
+
+.edit-channel-section {
+  margin-bottom: 1.5rem;
+}
+
+.edit-channel-section label {
+  display: block;
+  margin-bottom: 0.5rem;
+  color: #888;
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.logo-selection-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(80px, 1fr));
+  gap: 0.75rem;
+  max-height: 300px;
+  overflow-y: auto;
+  padding: 0.5rem;
+  background-color: #1e1e1e;
+  border-radius: 4px;
+}
+
+.logo-option {
+  aspect-ratio: 1;
+  padding: 0.5rem;
+  background-color: #2d2d2d;
+  border: 2px solid transparent;
+  border-radius: 4px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: border-color 0.15s, background-color 0.15s;
+}
+
+.logo-option:hover {
+  background-color: #3d3d3d;
+  border-color: #555;
+}
+
+.logo-option.selected {
+  border-color: #646cff;
+  background-color: #646cff22;
+}
+
+.logo-option img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+
+.logo-option-none {
+  color: #666;
+  font-size: 0.8rem;
+  text-align: center;
+}
+
+.logo-search-input {
+  width: 100%;
+  padding: 0.5rem;
+  margin-bottom: 0.75rem;
+  background-color: #2d2d2d;
+  border: 1px solid #404040;
+  border-radius: 4px;
+  color: #fff;
+  font-size: 0.9rem;
+}
+
+.logo-search-input:focus {
+  outline: none;
+  border-color: #646cff;
+}
+
+.logo-add-url {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+}
+
+.logo-add-url input {
+  flex: 1;
+  padding: 0.5rem;
+  background-color: #2d2d2d;
+  border: 1px solid #404040;
+  border-radius: 4px;
+  color: #fff;
+  font-size: 0.9rem;
+}
+
+.logo-add-url input:focus {
+  outline: none;
+  border-color: #646cff;
+}
+
+.logo-add-url button {
+  padding: 0.5rem 1rem;
+  background-color: #646cff;
+  border: none;
+  border-radius: 4px;
+  color: #fff;
+  cursor: pointer;
+  transition: background-color 0.15s;
+}
+
+.logo-add-url button:hover {
+  background-color: #535bf2;
+}
+
+.logo-add-url button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.edit-channel-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.75rem;
+  margin-top: 1.5rem;
+  padding-top: 1rem;
+  border-top: 1px solid #333;
+}
+
+.edit-channel-cancel-btn {
+  padding: 0.5rem 1rem;
+  background-color: transparent;
+  border: 1px solid #555;
+  border-radius: 4px;
+  color: #888;
+  cursor: pointer;
+  transition: background-color 0.15s, color 0.15s;
+}
+
+.edit-channel-cancel-btn:hover {
+  background-color: #333;
+  color: #fff;
+}
+
+.edit-channel-save-btn {
+  padding: 0.5rem 1.5rem;
+  background-color: #646cff;
+  border: none;
+  border-radius: 4px;
+  color: #fff;
+  cursor: pointer;
+  transition: background-color 0.15s;
+}
+
+.edit-channel-save-btn:hover {
+  background-color: #535bf2;
+}
+
+.edit-channel-save-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.current-logo-preview {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.75rem;
+  background-color: #1e1e1e;
+  border-radius: 4px;
+  margin-bottom: 0.75rem;
+}
+
+.current-logo-preview img {
+  width: 48px;
+  height: 48px;
+  object-fit: contain;
+  border-radius: 4px;
+  background-color: #2d2d2d;
+}
+
+.current-logo-preview span {
+  color: #888;
+  font-size: 0.9rem;
+}
+
+.current-logo-remove-btn {
+  margin-left: auto;
+  padding: 0.25rem 0.5rem;
+  background-color: transparent;
+  border: 1px solid #ef4444;
+  border-radius: 4px;
+  color: #ef4444;
+  font-size: 0.8rem;
+  cursor: pointer;
+  transition: background-color 0.15s;
+}
+
+.current-logo-remove-btn:hover {
+  background-color: #ef444422;
 }

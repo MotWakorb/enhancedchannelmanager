@@ -3,6 +3,7 @@ import type {
   ChannelGroup,
   Stream,
   M3UAccount,
+  Logo,
   PaginatedResponse,
 } from '../types';
 
@@ -87,6 +88,12 @@ export async function bulkAssignChannelNumbers(
   });
 }
 
+export async function deleteChannel(channelId: number): Promise<void> {
+  return fetchJson(`${API_BASE}/channels/${channelId}`, {
+    method: 'DELETE',
+  });
+}
+
 export async function createChannel(data: {
   name: string;
   channel_number?: number;
@@ -159,6 +166,7 @@ export interface SettingsResponse {
   url: string;
   username: string;
   configured: boolean;
+  auto_rename_channel_number: boolean;
 }
 
 export interface TestConnectionResult {
@@ -173,7 +181,8 @@ export async function getSettings(): Promise<SettingsResponse> {
 export async function saveSettings(settings: {
   url: string;
   username: string;
-  password: string;
+  password?: string;  // Optional - only required when changing URL or username
+  auto_rename_channel_number: boolean;
 }): Promise<{ status: string; configured: boolean }> {
   return fetchJson(`${API_BASE}/settings`, {
     method: 'POST',
@@ -190,4 +199,60 @@ export async function testConnection(settings: {
     method: 'POST',
     body: JSON.stringify(settings),
   });
+}
+
+// Logos
+export async function getLogos(params?: {
+  page?: number;
+  pageSize?: number;
+  search?: string;
+}): Promise<PaginatedResponse<Logo>> {
+  const searchParams = new URLSearchParams();
+  if (params?.page) searchParams.set('page', String(params.page));
+  if (params?.pageSize) searchParams.set('page_size', String(params.pageSize));
+  if (params?.search) searchParams.set('search', params.search);
+
+  const query = searchParams.toString();
+  return fetchJson(`${API_BASE}/channels/logos${query ? `?${query}` : ''}`);
+}
+
+export async function getLogo(id: number): Promise<Logo> {
+  return fetchJson(`${API_BASE}/channels/logos/${id}`);
+}
+
+export async function createLogo(data: { name: string; url: string }): Promise<Logo> {
+  return fetchJson(`${API_BASE}/channels/logos`, {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
+export async function updateLogo(id: number, data: Partial<Logo>): Promise<Logo> {
+  return fetchJson(`${API_BASE}/channels/logos/${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify(data),
+  });
+}
+
+export async function deleteLogo(id: number): Promise<void> {
+  return fetchJson(`${API_BASE}/channels/logos/${id}`, {
+    method: 'DELETE',
+  });
+}
+
+export async function uploadLogo(file: File): Promise<Logo> {
+  const formData = new FormData();
+  formData.append('file', file);
+  formData.append('name', file.name);
+
+  const response = await fetch(`${API_BASE}/channels/logos/upload`, {
+    method: 'POST',
+    body: formData,
+  });
+
+  if (!response.ok) {
+    throw new Error(`API error: ${response.status} ${response.statusText}`);
+  }
+
+  return response.json();
 }
