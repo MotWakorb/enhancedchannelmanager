@@ -133,6 +133,13 @@ class DispatcharrClient:
         response.raise_for_status()
         return response.json()
 
+    async def delete_channel(self, channel_id: int) -> None:
+        """Delete a channel."""
+        response = await self._request(
+            "DELETE", f"/api/channels/channels/{channel_id}/"
+        )
+        response.raise_for_status()
+
     async def assign_channel_numbers(
         self, channel_ids: list[int], starting_number: Optional[float] = None
     ) -> dict:
@@ -232,6 +239,50 @@ class DispatcharrClient:
         response = await self._request("GET", "/api/m3u/accounts/")
         response.raise_for_status()
         return response.json()
+
+    # -------------------------------------------------------------------------
+    # Logos
+    # -------------------------------------------------------------------------
+
+    async def get_logos(
+        self,
+        page: int = 1,
+        page_size: int = 100,
+        search: Optional[str] = None,
+    ) -> dict:
+        """Get paginated list of logos."""
+        params = {"page": page, "page_size": page_size}
+        if search:
+            params["search"] = search
+
+        response = await self._request("GET", "/api/channels/logos/", params=params)
+        response.raise_for_status()
+        return response.json()
+
+    async def get_logo(self, logo_id: int) -> dict:
+        """Get a single logo by ID."""
+        response = await self._request("GET", f"/api/channels/logos/{logo_id}/")
+        response.raise_for_status()
+        return response.json()
+
+    async def create_logo(self, data: dict) -> dict:
+        """Create a new logo."""
+        response = await self._request("POST", "/api/channels/logos/", json=data)
+        response.raise_for_status()
+        return response.json()
+
+    async def update_logo(self, logo_id: int, data: dict) -> dict:
+        """Update a logo."""
+        response = await self._request(
+            "PATCH", f"/api/channels/logos/{logo_id}/", json=data
+        )
+        response.raise_for_status()
+        return response.json()
+
+    async def delete_logo(self, logo_id: int) -> None:
+        """Delete a logo."""
+        response = await self._request("DELETE", f"/api/channels/logos/{logo_id}/")
+        response.raise_for_status()
 
     # -------------------------------------------------------------------------
     # Cleanup

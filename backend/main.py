@@ -5,6 +5,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from typing import Optional
 import os
+import re
 
 from dispatcharr_client import get_client, reset_client
 from config import (
@@ -62,13 +63,15 @@ async def health_check():
 class SettingsRequest(BaseModel):
     url: str
     username: str
-    password: str
+    password: Optional[str] = None  # Optional - only required if changing auth settings
+    auto_rename_channel_number: bool = False
 
 
 class SettingsResponse(BaseModel):
     url: str
     username: str
     configured: bool
+    auto_rename_channel_number: bool
 
 
 class TestConnectionRequest(BaseModel):
@@ -85,16 +88,35 @@ async def get_current_settings():
         url=settings.url,
         username=settings.username,
         configured=settings.is_configured(),
+        auto_rename_channel_number=settings.auto_rename_channel_number,
     )
 
 
 @app.post("/api/settings")
 async def update_settings(request: SettingsRequest):
     """Update Dispatcharr connection settings."""
+    current_settings = get_settings()
+
+    # If password is not provided, keep the existing password
+    # This allows updating non-auth settings without re-entering password
+    password = request.password if request.password else current_settings.password
+
+    # Check if auth settings are being changed and password is required
+    auth_changed = (
+        request.url != current_settings.url or
+        request.username != current_settings.username
+    )
+    if auth_changed and not request.password:
+        raise HTTPException(
+            status_code=400,
+            detail="Password is required when changing URL or username"
+        )
+
     new_settings = DispatcharrSettings(
         url=request.url,
         username=request.username,
-        password=request.password,
+        password=password,
+        auto_rename_channel_number=request.auto_rename_channel_number,
     )
     save_settings(new_settings)
     clear_settings_cache()
@@ -172,6 +194,63 @@ async def create_channel(request: CreateChannelRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# Logos - MUST be defined before /api/channels/{channel_id} routes
+class CreateLogoRequest(BaseModel):
+    name: str
+    url: str
+
+
+@app.get("/api/channels/logos")
+async def get_logos(
+    page: int = 1,
+    page_size: int = 100,
+    search: Optional[str] = None,
+):
+    client = get_client()
+    try:
+        return await client.get_logos(page=page, page_size=page_size, search=search)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/channels/logos/{logo_id}")
+async def get_logo(logo_id: int):
+    client = get_client()
+    try:
+        return await client.get_logo(logo_id)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/channels/logos")
+async def create_logo(request: CreateLogoRequest):
+    client = get_client()
+    try:
+        return await client.create_logo({"name": request.name, "url": request.url})
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.patch("/api/channels/logos/{logo_id}")
+async def update_logo(logo_id: int, data: dict):
+    client = get_client()
+    try:
+        return await client.update_logo(logo_id, data)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/api/channels/logos/{logo_id}")
+async def delete_logo(logo_id: int):
+    client = get_client()
+    try:
+        await client.delete_logo(logo_id)
+        return {"success": True}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# Channel by ID routes - must come after /api/channels/logos
 @app.get("/api/channels/{channel_id}")
 async def get_channel(channel_id: int):
     client = get_client()
@@ -195,6 +274,16 @@ async def update_channel(channel_id: int, data: dict):
     client = get_client()
     try:
         return await client.update_channel(channel_id, data)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/api/channels/{channel_id}")
+async def delete_channel(channel_id: int):
+    client = get_client()
+    try:
+        await client.delete_channel(channel_id)
+        return {"success": True}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -245,10 +334,45 @@ async def reorder_channel_streams(channel_id: int, request: ReorderStreamsReques
 @app.post("/api/channels/assign-numbers")
 async def assign_channel_numbers(request: AssignNumbersRequest):
     client = get_client()
+    settings = get_settings()
+
     try:
-        return await client.assign_channel_numbers(
+        # If auto-rename is enabled, we need to get current channel data first
+        # to calculate name updates
+        name_updates = {}
+        if settings.auto_rename_channel_number and request.starting_number is not None:
+            # Get current channel data for all affected channels
+            for idx, channel_id in enumerate(request.channel_ids):
+                channel = await client.get_channel(channel_id)
+                old_number = channel.get("channel_number")
+                new_number = request.starting_number + idx
+                channel_name = channel.get("name", "")
+
+                if old_number is not None and old_number != new_number and channel_name:
+                    # Check if channel name contains the old number
+                    old_number_str = str(int(old_number) if old_number == int(old_number) else old_number)
+                    new_number_str = str(int(new_number) if new_number == int(new_number) else new_number)
+                    # Match the number as a standalone value (not part of a larger number)
+                    pattern = re.compile(r'(^|[^0-9])' + re.escape(old_number_str) + r'([^0-9]|$)')
+                    if pattern.search(channel_name):
+                        new_name = pattern.sub(r'\g<1>' + new_number_str + r'\g<2>', channel_name)
+                        if new_name != channel_name:
+                            name_updates[channel_id] = new_name
+
+        # Call the bulk assign API
+        result = await client.assign_channel_numbers(
             request.channel_ids, request.starting_number
         )
+
+        # Apply name updates if any
+        for channel_id, new_name in name_updates.items():
+            try:
+                await client.update_channel(channel_id, {"name": new_name})
+            except Exception:
+                # Don't fail the whole operation if a name update fails
+                pass
+
+        return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

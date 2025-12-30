@@ -1,7 +1,15 @@
-import { useState, useEffect, useCallback } from 'react';
-import { ChannelsPane, StreamsPane, SettingsModal, SplitPane } from './components';
+import { useState, useEffect, useCallback, useRef } from 'react';
+import {
+  ChannelsPane,
+  StreamsPane,
+  SettingsModal,
+  SplitPane,
+  EditModeBanner,
+  EditModeExitDialog,
+} from './components';
+import { useChangeHistory, useEditMode } from './hooks';
 import * as api from './services/api';
-import type { Channel, ChannelGroup, Stream, M3UAccount } from './types';
+import type { Channel, ChannelGroup, Stream, M3UAccount, Logo, ChangeInfo } from './types';
 import './App.css';
 
 function App() {
@@ -26,14 +34,104 @@ function App() {
   const [streamProviderFilter, setStreamProviderFilter] = useState<number | null>(null);
   const [streamGroupFilter, setStreamGroupFilter] = useState<string | null>(null);
 
+  // Logos state
+  const [logos, setLogos] = useState<Logo[]>([]);
+
   // Settings state
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [autoRenameChannelNumber, setAutoRenameChannelNumber] = useState(false);
+
+  // Track if baseline has been initialized
+  const baselineInitialized = useRef(false);
+
+  // Edit mode exit dialog state
+  const [showExitDialog, setShowExitDialog] = useState(false);
+
+  // Edit mode for staging changes
+  const {
+    isEditMode,
+    isCommitting,
+    stagedOperationCount,
+    modifiedChannelIds,
+    displayChannels,
+    canLocalUndo,
+    canLocalRedo,
+    editModeDuration,
+    enterEditMode,
+    exitEditMode: rawExitEditMode,
+    stageUpdateChannel,
+    stageAddStream,
+    stageRemoveStream,
+    stageReorderStreams,
+    stageBulkAssignNumbers,
+    addChannelToWorkingCopy,
+    getSummary,
+    commit,
+    discard,
+    localUndo,
+    localRedo,
+  } = useEditMode({
+    channels,
+    onChannelsChange: setChannels,
+    onCommitComplete: () => {
+      loadChannels(); // Refresh from server
+    },
+    onError: setError,
+  });
+
+  // Wrap exit to show dialog if there are staged changes
+  const handleExitEditMode = useCallback(() => {
+    if (stagedOperationCount > 0) {
+      setShowExitDialog(true);
+    } else {
+      rawExitEditMode();
+    }
+  }, [stagedOperationCount, rawExitEditMode]);
+
+  // Handle dialog actions
+  const handleApplyChanges = useCallback(async () => {
+    await commit();
+    setShowExitDialog(false);
+  }, [commit]);
+
+  const handleDiscardChanges = useCallback(() => {
+    discard();
+    setShowExitDialog(false);
+  }, [discard]);
+
+  const handleKeepEditing = useCallback(() => {
+    setShowExitDialog(false);
+  }, []);
+
+  // Change history for undo/redo
+  const {
+    canUndo,
+    canRedo,
+    undoCount,
+    redoCount,
+    savePoints,
+    hasUnsavedChanges,
+    lastChange,
+    isOperationPending,
+    recordChange,
+    undo,
+    redo,
+    createSavePoint,
+    revertToSavePoint,
+    deleteSavePoint,
+    initializeBaseline,
+  } = useChangeHistory({
+    channels,
+    onChannelsRestore: setChannels,
+    onError: setError,
+  });
 
   // Check settings and load initial data
   useEffect(() => {
     const init = async () => {
       try {
         const settings = await api.getSettings();
+        setAutoRenameChannelNumber(settings.auto_rename_channel_number);
 
         if (!settings.configured) {
           setSettingsOpen(true);
@@ -49,6 +147,7 @@ function App() {
         loadProviders();
         loadStreamGroups();
         loadStreams();
+        loadLogos();
       } catch (err) {
         console.error('Failed to load settings:', err);
         setSettingsOpen(true);
@@ -57,8 +156,15 @@ function App() {
     init();
   }, []);
 
-  const handleSettingsSaved = () => {
+  const handleSettingsSaved = async () => {
     setError(null);
+    // Reload settings to get updated auto_rename_channel_number
+    try {
+      const settings = await api.getSettings();
+      setAutoRenameChannelNumber(settings.auto_rename_channel_number);
+    } catch (err) {
+      console.error('Failed to reload settings:', err);
+    }
     // Reload all data after settings change
     api.getHealth()
       .then(setHealth)
@@ -68,6 +174,7 @@ function App() {
     loadProviders();
     loadStreamGroups();
     loadStreams();
+    loadLogos();
   };
 
   const loadChannelGroups = async () => {
@@ -124,6 +231,26 @@ function App() {
     }
   };
 
+  const loadLogos = async () => {
+    try {
+      // Fetch all logos
+      const allLogos: Logo[] = [];
+      let page = 1;
+      let hasMore = true;
+
+      while (hasMore) {
+        const response = await api.getLogos({ page, pageSize: 500 });
+        allLogos.push(...response.results);
+        hasMore = response.next !== null;
+        page++;
+      }
+
+      setLogos(allLogos);
+    } catch (err) {
+      console.error('Failed to load logos:', err);
+    }
+  };
+
   const loadStreams = async () => {
     setStreamsLoading(true);
     try {
@@ -169,51 +296,136 @@ function App() {
     return () => clearTimeout(timer);
   }, [streamSearch, streamProviderFilter, streamGroupFilter]);
 
+  // Initialize baseline when channels first load
+  useEffect(() => {
+    if (channels.length > 0 && !channelsLoading && !baselineInitialized.current) {
+      initializeBaseline(channels);
+      baselineInitialized.current = true;
+    }
+  }, [channels, channelsLoading, initializeBaseline]);
+
+  // Keyboard shortcuts for undo/redo
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Don't trigger when typing in inputs
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) {
+        return;
+      }
+
+      // Cmd/Ctrl+Z for undo
+      if ((e.metaKey || e.ctrlKey) && e.key === 'z' && !e.shiftKey) {
+        e.preventDefault();
+        // In edit mode, use local undo; otherwise global undo
+        if (isEditMode) {
+          if (canLocalUndo) localUndo();
+        } else {
+          if (canUndo && !isOperationPending) undo();
+        }
+      }
+
+      // Cmd/Ctrl+Shift+Z for redo
+      if ((e.metaKey || e.ctrlKey) && e.key === 'z' && e.shiftKey) {
+        e.preventDefault();
+        // In edit mode, use local redo; otherwise global redo
+        if (isEditMode) {
+          if (canLocalRedo) localRedo();
+        } else {
+          if (canRedo && !isOperationPending) redo();
+        }
+      }
+    };
+
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [canUndo, canRedo, isOperationPending, undo, redo, isEditMode, canLocalUndo, canLocalRedo, localUndo, localRedo]);
+
+  // Warn before leaving with unsaved changes or staged edit mode changes
+  useEffect(() => {
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (hasUnsavedChanges || (isEditMode && stagedOperationCount > 0)) {
+        e.preventDefault();
+        e.returnValue = 'You have unsaved changes. Are you sure you want to leave?';
+        return e.returnValue;
+      }
+    };
+
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, [hasUnsavedChanges, isEditMode, stagedOperationCount]);
+
   const handleChannelSelect = (channel: Channel | null) => {
     setSelectedChannel(channel);
   };
 
-  const handleChannelUpdate = useCallback((updatedChannel: Channel) => {
-    setChannels((prev) =>
-      prev.map((ch) => (ch.id === updatedChannel.id ? updatedChannel : ch))
-    );
-    if (selectedChannel?.id === updatedChannel.id) {
-      setSelectedChannel(updatedChannel);
-    }
-  }, [selectedChannel]);
+  const handleChannelUpdate = useCallback(
+    (updatedChannel: Channel, changeInfo?: ChangeInfo) => {
+      const originalChannel = channels.find((ch) => ch.id === updatedChannel.id);
+
+      // Record change if change info provided and original channel exists
+      if (changeInfo && originalChannel) {
+        recordChange({
+          type: changeInfo.type,
+          description: changeInfo.description,
+          channelIds: [updatedChannel.id],
+          before: [
+            {
+              id: originalChannel.id,
+              channel_number: originalChannel.channel_number,
+              name: originalChannel.name,
+              channel_group_id: originalChannel.channel_group_id,
+              streams: [...originalChannel.streams],
+            },
+          ],
+          after: [
+            {
+              id: updatedChannel.id,
+              channel_number: updatedChannel.channel_number,
+              name: updatedChannel.name,
+              channel_group_id: updatedChannel.channel_group_id,
+              streams: [...updatedChannel.streams],
+            },
+          ],
+        });
+      }
+
+      setChannels((prev) =>
+        prev.map((ch) => (ch.id === updatedChannel.id ? updatedChannel : ch))
+      );
+      if (selectedChannel?.id === updatedChannel.id) {
+        setSelectedChannel(updatedChannel);
+      }
+    },
+    [selectedChannel, channels, recordChange]
+  );
 
   const handleStreamDropOnChannel = useCallback(
     async (channelId: number, streamId: number) => {
-      try {
-        const updatedChannel = await api.addStreamToChannel(channelId, streamId);
-        handleChannelUpdate(updatedChannel);
-      } catch (err) {
-        console.error('Failed to add stream to channel:', err);
-        setError('Failed to add stream to channel');
-      }
+      // Require edit mode for stream operations
+      if (!isEditMode) return;
+
+      const originalChannel = displayChannels.find((ch) => ch.id === channelId);
+      if (!originalChannel) return;
+
+      const description = `Added stream to "${originalChannel.name}"`;
+      stageAddStream(channelId, streamId, description);
     },
-    [handleChannelUpdate]
+    [displayChannels, isEditMode, stageAddStream]
   );
 
   const handleBulkStreamDropOnChannel = useCallback(
     async (channelId: number, streamIds: number[]) => {
-      try {
-        // Add streams sequentially to maintain order
-        let updatedChannel: Channel | null = null;
-        for (const streamId of streamIds) {
-          updatedChannel = await api.addStreamToChannel(channelId, streamId);
-        }
-        if (updatedChannel) {
-          handleChannelUpdate(updatedChannel);
-        }
-      } catch (err) {
-        console.error('Failed to add streams to channel:', err);
-        setError('Failed to add streams to channel');
-        // Reload to get current state
-        loadChannels();
+      // Require edit mode for stream operations
+      if (!isEditMode) return;
+
+      const originalChannel = displayChannels.find((ch) => ch.id === channelId);
+      if (!originalChannel) return;
+
+      // Stage each stream add operation
+      for (const streamId of streamIds) {
+        stageAddStream(channelId, streamId, `Added stream to "${originalChannel.name}"`);
       }
     },
-    [handleChannelUpdate]
+    [displayChannels, isEditMode, stageAddStream]
   );
 
   const handleCreateChannel = useCallback(
@@ -225,6 +437,10 @@ function App() {
           channel_group_id: groupId,
         });
         setChannels((prev) => [...prev, newChannel]);
+        // In edit mode, also add to the working copy so it can be used immediately
+        if (isEditMode) {
+          addChannelToWorkingCopy(newChannel);
+        }
         return newChannel;
       } catch (err) {
         console.error('Failed to create channel:', err);
@@ -232,23 +448,85 @@ function App() {
         throw err;
       }
     },
-    []
+    [isEditMode, addChannelToWorkingCopy]
+  );
+
+  const handleDeleteChannel = useCallback(
+    async (channelId: number) => {
+      try {
+        await api.deleteChannel(channelId);
+        setChannels((prev) => prev.filter((ch) => ch.id !== channelId));
+        if (selectedChannel?.id === channelId) {
+          setSelectedChannel(null);
+        }
+      } catch (err) {
+        console.error('Failed to delete channel:', err);
+        setError('Failed to delete channel');
+        throw err;
+      }
+    },
+    [selectedChannel]
   );
 
   const handleChannelReorder = useCallback(
     async (channelIds: number[], startingNumber: number) => {
-      try {
-        await api.bulkAssignChannelNumbers(channelIds, startingNumber);
-        // Reload channels to get updated numbers from server
-        loadChannels();
-      } catch (err) {
-        console.error('Failed to reorder channels:', err);
-        setError('Failed to reorder channels');
-        // Reload to revert optimistic update
-        loadChannels();
+      // Use displayChannels in edit mode, channels in normal mode
+      const channelSource = isEditMode ? displayChannels : channels;
+
+      // Capture before state for all affected channels
+      const beforeSnapshots = channelIds.map((id) => {
+        const ch = channelSource.find((c) => c.id === id)!;
+        return {
+          id: ch.id,
+          channel_number: ch.channel_number,
+          name: ch.name,
+          channel_group_id: ch.channel_group_id,
+          streams: [...ch.streams],
+        };
+      });
+
+      // Calculate after state
+      const afterSnapshots = channelIds.map((id, index) => {
+        const ch = channelSource.find((c) => c.id === id)!;
+        return {
+          id: ch.id,
+          channel_number: startingNumber + index,
+          name: ch.name,
+          channel_group_id: ch.channel_group_id,
+          streams: [...ch.streams],
+        };
+      });
+
+      const description = `Reordered ${channelIds.length} channel${channelIds.length > 1 ? 's' : ''} starting at ${startingNumber}`;
+
+      if (isEditMode) {
+        // Stage the bulk assign operation
+        stageBulkAssignNumbers(channelIds, startingNumber, description);
+      } else {
+        // Normal mode - call API directly
+        try {
+          await api.bulkAssignChannelNumbers(channelIds, startingNumber);
+
+          // Record the change
+          recordChange({
+            type: 'channel_reorder',
+            description,
+            channelIds,
+            before: beforeSnapshots,
+            after: afterSnapshots,
+          });
+
+          // Reload channels to get updated numbers from server
+          loadChannels();
+        } catch (err) {
+          console.error('Failed to reorder channels:', err);
+          setError('Failed to reorder channels');
+          // Reload to revert optimistic update
+          loadChannels();
+        }
       }
     },
-    []
+    [channels, displayChannels, isEditMode, stageBulkAssignNumbers, recordChange]
   );
 
   return (
@@ -259,6 +537,20 @@ function App() {
           Settings
         </button>
       </header>
+      {isEditMode && (
+        <EditModeBanner
+          stagedCount={stagedOperationCount}
+          duration={editModeDuration}
+        />
+      )}
+      <EditModeExitDialog
+        isOpen={showExitDialog}
+        summary={getSummary()}
+        onApply={handleApplyChanges}
+        onDiscard={handleDiscardChanges}
+        onKeepEditing={handleKeepEditing}
+        isCommitting={isCommitting}
+      />
       <SettingsModal
         isOpen={settingsOpen}
         onClose={() => setSettingsOpen(false)}
@@ -269,7 +561,8 @@ function App() {
           left={
             <ChannelsPane
               channelGroups={channelGroups}
-              channels={channels}
+              channels={displayChannels}
+              streams={streams}
               providers={providers}
               selectedChannelId={selectedChannel?.id ?? null}
               onChannelSelect={handleChannelSelect}
@@ -278,11 +571,41 @@ function App() {
               onBulkStreamDrop={handleBulkStreamDropOnChannel}
               onChannelReorder={handleChannelReorder}
               onCreateChannel={handleCreateChannel}
+              onDeleteChannel={handleDeleteChannel}
               searchTerm={channelSearch}
               onSearchChange={setChannelSearch}
               selectedGroups={channelGroupFilter}
               onSelectedGroupsChange={setChannelGroupFilter}
               loading={channelsLoading}
+              autoRenameChannelNumber={autoRenameChannelNumber}
+              isEditMode={isEditMode}
+              modifiedChannelIds={modifiedChannelIds}
+              onStageUpdateChannel={stageUpdateChannel}
+              onStageAddStream={stageAddStream}
+              onStageRemoveStream={stageRemoveStream}
+              onStageReorderStreams={stageReorderStreams}
+              onStageBulkAssignNumbers={stageBulkAssignNumbers}
+              // Edit mode toggle props
+              onEnterEditMode={enterEditMode}
+              onExitEditMode={handleExitEditMode}
+              isCommitting={isCommitting}
+              stagedOperationCount={stagedOperationCount}
+              // History toolbar props
+              canUndo={isEditMode ? canLocalUndo : canUndo}
+              canRedo={isEditMode ? canLocalRedo : canRedo}
+              undoCount={isEditMode ? stagedOperationCount : undoCount}
+              redoCount={isEditMode ? 0 : redoCount}
+              lastChange={lastChange}
+              savePoints={savePoints}
+              hasUnsavedChanges={hasUnsavedChanges}
+              isOperationPending={isOperationPending}
+              onUndo={isEditMode ? localUndo : undo}
+              onRedo={isEditMode ? localRedo : redo}
+              onCreateSavePoint={createSavePoint}
+              onRevertToSavePoint={revertToSavePoint}
+              onDeleteSavePoint={deleteSavePoint}
+              logos={logos}
+              onLogosChange={loadLogos}
             />
           }
           right={

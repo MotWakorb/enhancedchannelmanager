@@ -14,6 +14,7 @@ class DispatcharrSettings(BaseModel):
     url: str = ""
     username: str = ""
     password: str = ""
+    auto_rename_channel_number: bool = False
 
     def is_configured(self) -> bool:
         return bool(self.url and self.username and self.password)

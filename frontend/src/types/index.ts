@@ -38,6 +38,15 @@ export interface M3UAccount {
   is_active: boolean;
 }
 
+export interface Logo {
+  id: number;
+  name: string;
+  url: string;
+  cache_url: string;
+  channel_count: number;
+  is_used: boolean;
+}
+
 export interface PaginatedResponse<T> {
   count: number;
   next: string | null;
@@ -53,3 +62,9 @@ export interface ChannelGroupWithChannels extends ChannelGroup {
   channels: Channel[];
   expanded?: boolean;
 }
+
+// Re-export history types
+export * from './history';
+
+// Re-export edit mode types
+export * from './editMode';
