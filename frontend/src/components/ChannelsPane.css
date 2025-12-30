@@ -912,11 +912,15 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  cursor: pointer;
+  cursor: default;
   transition: background-color 0.15s, transform 0.15s;
 }
 
-.channel-logo-container:hover {
+.channel-logo-container.editable {
+  cursor: pointer;
+}
+
+.channel-logo-container.editable:hover {
   background-color: #3d3d3d;
   transform: scale(1.05);
 }
@@ -940,7 +944,7 @@
   font-size: 18px;
 }
 
-.channel-logo-placeholder:hover {
+.channel-logo-container.editable .channel-logo-placeholder:hover {
   color: #888;
 }
 

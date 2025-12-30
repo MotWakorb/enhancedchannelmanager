@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import {
   ChannelsPane,
   StreamsPane,
@@ -33,6 +33,9 @@ function App() {
   const [streamSearch, setStreamSearch] = useState('');
   const [streamProviderFilter, setStreamProviderFilter] = useState<number | null>(null);
   const [streamGroupFilter, setStreamGroupFilter] = useState<string | null>(null);
+  // Multi-select filter state for streams pane (UI filtering)
+  const [selectedProviderFilters, setSelectedProviderFilters] = useState<number[]>([]);
+  const [selectedStreamGroupFilters, setSelectedStreamGroupFilters] = useState<string[]>([]);
 
   // Logos state
   const [logos, setLogos] = useState<Logo[]>([]);
@@ -451,6 +454,23 @@ function App() {
     [isEditMode, addChannelToWorkingCopy]
   );
 
+  // Filter streams based on multi-select filters (client-side)
+  const filteredStreams = useMemo(() => {
+    let result = streams;
+
+    // Filter by selected providers
+    if (selectedProviderFilters.length > 0) {
+      result = result.filter((s) => s.m3u_account !== null && selectedProviderFilters.includes(s.m3u_account));
+    }
+
+    // Filter by selected stream groups
+    if (selectedStreamGroupFilters.length > 0) {
+      result = result.filter((s) => selectedStreamGroupFilters.includes(s.channel_group_name || ''));
+    }
+
+    return result;
+  }, [streams, selectedProviderFilters, selectedStreamGroupFilters]);
+
   const handleDeleteChannel = useCallback(
     async (channelId: number) => {
       try {
@@ -610,7 +630,7 @@ function App() {
           }
           right={
             <StreamsPane
-              streams={streams}
+              streams={filteredStreams}
               providers={providers}
               streamGroups={streamGroups}
               searchTerm={streamSearch}
@@ -620,6 +640,10 @@ function App() {
               groupFilter={streamGroupFilter}
               onGroupFilterChange={setStreamGroupFilter}
               loading={streamsLoading}
+              selectedProviders={selectedProviderFilters}
+              onSelectedProvidersChange={setSelectedProviderFilters}
+              selectedStreamGroups={selectedStreamGroupFilters}
+              onSelectedStreamGroupsChange={setSelectedStreamGroupFilters}
             />
           }
         />

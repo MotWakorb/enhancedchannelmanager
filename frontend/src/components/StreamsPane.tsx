@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import type { Stream, M3UAccount } from '../types';
 import { useSelection } from '../hooks';
 import './StreamsPane.css';
@@ -21,6 +21,11 @@ interface StreamsPaneProps {
   onGroupFilterChange: (group: string | null) => void;
   loading: boolean;
   onBulkAddToChannel?: (streamIds: number[], channelId: number) => void;
+  // Multi-select support
+  selectedProviders?: number[];
+  onSelectedProvidersChange?: (providerIds: number[]) => void;
+  selectedStreamGroups?: string[];
+  onSelectedStreamGroupsChange?: (groups: string[]) => void;
 }
 
 export function StreamsPane({
@@ -34,6 +39,10 @@ export function StreamsPane({
   groupFilter,
   onGroupFilterChange,
   loading,
+  selectedProviders = [],
+  onSelectedProvidersChange,
+  selectedStreamGroups = [],
+  onSelectedStreamGroupsChange,
 }: StreamsPaneProps) {
   const {
     selectedIds,
@@ -45,6 +54,30 @@ export function StreamsPane({
   } = useSelection(streams);
 
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
+
+  // Dropdown state
+  const [providerDropdownOpen, setProviderDropdownOpen] = useState(false);
+  const [groupDropdownOpen, setGroupDropdownOpen] = useState(false);
+  const providerDropdownRef = useRef<HTMLDivElement>(null);
+  const groupDropdownRef = useRef<HTMLDivElement>(null);
+
+  // Close dropdowns when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (providerDropdownRef.current && !providerDropdownRef.current.contains(event.target as Node)) {
+        setProviderDropdownOpen(false);
+      }
+      if (groupDropdownRef.current && !groupDropdownRef.current.contains(event.target as Node)) {
+        setGroupDropdownOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  // Determine if we're using multi-select mode
+  const useMultiSelectProviders = !!onSelectedProvidersChange;
+  const useMultiSelectGroups = !!onSelectedStreamGroupsChange;
 
   // Group and sort streams
   const groupedStreams = useMemo((): StreamGroup[] => {
@@ -184,32 +217,139 @@ export function StreamsPane({
           className="search-input"
         />
         <div className="filter-row">
-          <select
-            value={providerFilter ?? ''}
-            onChange={(e) =>
-              onProviderFilterChange(e.target.value ? parseInt(e.target.value, 10) : null)
-            }
-            className="filter-select"
-          >
-            <option value="">All Providers</option>
-            {providers.map((provider) => (
-              <option key={provider.id} value={provider.id}>
-                {provider.name}
-              </option>
-            ))}
-          </select>
-          <select
-            value={groupFilter ?? ''}
-            onChange={(e) => onGroupFilterChange(e.target.value || null)}
-            className="filter-select"
-          >
-            <option value="">All Groups</option>
-            {streamGroups.map((group) => (
-              <option key={group} value={group}>
-                {group}
-              </option>
-            ))}
-          </select>
+          {/* Provider Filter Dropdown */}
+          {useMultiSelectProviders ? (
+            <div className="filter-dropdown" ref={providerDropdownRef}>
+              <button
+                className="filter-dropdown-button"
+                onClick={() => setProviderDropdownOpen(!providerDropdownOpen)}
+              >
+                <span>
+                  {selectedProviders.length === 0
+                    ? 'All Providers'
+                    : `${selectedProviders.length} provider${selectedProviders.length > 1 ? 's' : ''}`}
+                </span>
+                <span className="dropdown-arrow">{providerDropdownOpen ? '▲' : '▼'}</span>
+              </button>
+              {providerDropdownOpen && (
+                <div className="filter-dropdown-menu">
+                  <div className="filter-dropdown-actions">
+                    <button
+                      className="filter-dropdown-action"
+                      onClick={() => onSelectedProvidersChange!(providers.map((p) => p.id))}
+                    >
+                      Select All
+                    </button>
+                    <button
+                      className="filter-dropdown-action"
+                      onClick={() => onSelectedProvidersChange!([])}
+                    >
+                      Clear All
+                    </button>
+                  </div>
+                  <div className="filter-dropdown-options">
+                    {providers.map((provider) => (
+                      <label key={provider.id} className="filter-dropdown-option">
+                        <input
+                          type="checkbox"
+                          checked={selectedProviders.includes(provider.id)}
+                          onChange={(e) => {
+                            if (e.target.checked) {
+                              onSelectedProvidersChange!([...selectedProviders, provider.id]);
+                            } else {
+                              onSelectedProvidersChange!(selectedProviders.filter((id) => id !== provider.id));
+                            }
+                          }}
+                        />
+                        <span className="filter-option-name">{provider.name}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          ) : (
+            <select
+              value={providerFilter ?? ''}
+              onChange={(e) =>
+                onProviderFilterChange(e.target.value ? parseInt(e.target.value, 10) : null)
+              }
+              className="filter-select"
+            >
+              <option value="">All Providers</option>
+              {providers.map((provider) => (
+                <option key={provider.id} value={provider.id}>
+                  {provider.name}
+                </option>
+              ))}
+            </select>
+          )}
+
+          {/* Group Filter Dropdown */}
+          {useMultiSelectGroups ? (
+            <div className="filter-dropdown" ref={groupDropdownRef}>
+              <button
+                className="filter-dropdown-button"
+                onClick={() => setGroupDropdownOpen(!groupDropdownOpen)}
+              >
+                <span>
+                  {selectedStreamGroups.length === 0
+                    ? 'All Groups'
+                    : `${selectedStreamGroups.length} group${selectedStreamGroups.length > 1 ? 's' : ''}`}
+                </span>
+                <span className="dropdown-arrow">{groupDropdownOpen ? '▲' : '▼'}</span>
+              </button>
+              {groupDropdownOpen && (
+                <div className="filter-dropdown-menu">
+                  <div className="filter-dropdown-actions">
+                    <button
+                      className="filter-dropdown-action"
+                      onClick={() => onSelectedStreamGroupsChange!(streamGroups)}
+                    >
+                      Select All
+                    </button>
+                    <button
+                      className="filter-dropdown-action"
+                      onClick={() => onSelectedStreamGroupsChange!([])}
+                    >
+                      Clear All
+                    </button>
+                  </div>
+                  <div className="filter-dropdown-options">
+                    {streamGroups.map((group) => (
+                      <label key={group} className="filter-dropdown-option">
+                        <input
+                          type="checkbox"
+                          checked={selectedStreamGroups.includes(group)}
+                          onChange={(e) => {
+                            if (e.target.checked) {
+                              onSelectedStreamGroupsChange!([...selectedStreamGroups, group]);
+                            } else {
+                              onSelectedStreamGroupsChange!(selectedStreamGroups.filter((g) => g !== group));
+                            }
+                          }}
+                        />
+                        <span className="filter-option-name">{group}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          ) : (
+            <select
+              value={groupFilter ?? ''}
+              onChange={(e) => onGroupFilterChange(e.target.value || null)}
+              className="filter-select"
+            >
+              <option value="">All Groups</option>
+              {streamGroups.map((group) => (
+                <option key={group} value={group}>
+                  {group}
+                </option>
+              ))}
+            </select>
+          )}
         </div>
       </div>
 
