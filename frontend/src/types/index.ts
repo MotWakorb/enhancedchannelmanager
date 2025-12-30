@@ -4,6 +4,7 @@ export interface Channel {
   name: string;
   channel_group_id: number | null;
   tvg_id: string | null;
+  tvc_guide_stationid: string | null;
   epg_data_id: number | null;
   streams: number[];
   stream_profile_id: number | null;
@@ -12,6 +13,30 @@ export interface Channel {
   auto_created: boolean;
   auto_created_by: number | null;
   auto_created_by_name: string | null;
+}
+
+export interface EPGSource {
+  id: number;
+  name: string;
+  url: string;
+  is_active: boolean;
+}
+
+export interface EPGData {
+  id: number;
+  tvg_id: string;
+  name: string;
+  icon_url: string | null;
+  epg_source: number;
+}
+
+export interface StreamProfile {
+  id: number;
+  name: string;
+  command: string;
+  parameters: string;
+  is_active: boolean;
+  locked: boolean;
 }
 
 export interface ChannelGroup {

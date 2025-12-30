@@ -467,6 +467,64 @@ async def get_providers():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# EPG Sources
+@app.get("/api/epg/sources")
+async def get_epg_sources():
+    client = get_client()
+    try:
+        return await client.get_epg_sources()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/epg/sources/{source_id}")
+async def get_epg_source(source_id: int):
+    client = get_client()
+    try:
+        return await client.get_epg_source(source_id)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# EPG Data
+@app.get("/api/epg/data")
+async def get_epg_data(
+    page: int = 1,
+    page_size: int = 100,
+    search: Optional[str] = None,
+    epg_source: Optional[int] = None,
+):
+    client = get_client()
+    try:
+        return await client.get_epg_data(
+            page=page,
+            page_size=page_size,
+            search=search,
+            epg_source=epg_source,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/epg/data/{data_id}")
+async def get_epg_data_by_id(data_id: int):
+    client = get_client()
+    try:
+        return await client.get_epg_data_by_id(data_id)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# Stream Profiles
+@app.get("/api/stream-profiles")
+async def get_stream_profiles():
+    client = get_client()
+    try:
+        return await client.get_stream_profiles()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # Serve static files in production
 static_dir = os.path.join(os.path.dirname(__file__), "static")
 if os.path.exists(static_dir):
