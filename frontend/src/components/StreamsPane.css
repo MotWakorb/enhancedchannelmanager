@@ -240,3 +240,112 @@
   opacity: 0.5;
   cursor: not-allowed;
 }
+
+/* Multi-select filter dropdown (matching Channels pane style) */
+.filter-dropdown {
+  position: relative;
+  flex: 1;
+}
+
+.filter-dropdown-button {
+  width: 100%;
+  padding: 0.5rem;
+  background-color: #2d2d2d;
+  border: 1px solid #404040;
+  border-radius: 4px;
+  color: #fff;
+  font-size: 0.9rem;
+  cursor: pointer;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  text-align: left;
+}
+
+.filter-dropdown-button:hover {
+  border-color: #555;
+}
+
+.filter-dropdown-button:focus {
+  outline: none;
+  border-color: #646cff;
+}
+
+.filter-dropdown-button .dropdown-arrow {
+  font-size: 0.6rem;
+  color: #888;
+}
+
+.filter-dropdown-menu {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  margin-top: 4px;
+  background-color: #2d2d2d;
+  border: 1px solid #404040;
+  border-radius: 4px;
+  z-index: 100;
+  max-height: 300px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
+.filter-dropdown-actions {
+  display: flex;
+  gap: 0.5rem;
+  padding: 0.5rem;
+  border-bottom: 1px solid #404040;
+}
+
+.filter-dropdown-action {
+  flex: 1;
+  padding: 0.375rem 0.5rem;
+  background-color: #3d3d3d;
+  border: 1px solid #505050;
+  border-radius: 4px;
+  color: #ccc;
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+
+.filter-dropdown-action:hover {
+  background-color: #4d4d4d;
+  color: #fff;
+}
+
+.filter-dropdown-options {
+  overflow-y: auto;
+  max-height: 250px;
+}
+
+.filter-dropdown-option {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  cursor: pointer;
+  transition: background-color 0.1s;
+}
+
+.filter-dropdown-option:hover {
+  background-color: #3d3d3d;
+}
+
+.filter-dropdown-option input[type="checkbox"] {
+  width: 14px;
+  height: 14px;
+  accent-color: #646cff;
+  cursor: pointer;
+}
+
+.filter-option-name {
+  flex: 1;
+  font-size: 0.85rem;
+  color: #ddd;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

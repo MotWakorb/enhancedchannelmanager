@@ -247,12 +247,14 @@ function SortableChannel({
       </span>
       <span className="channel-expand-icon">{isExpanded ? '▼' : '▶'}</span>
       <div
-        className="channel-logo-container"
+        className={`channel-logo-container ${isEditMode ? 'editable' : ''}`}
         onClick={(e) => {
           e.stopPropagation();
-          onEditChannel();
+          if (isEditMode) {
+            onEditChannel();
+          }
         }}
-        title="Click to edit channel"
+        title={isEditMode ? 'Click to edit channel logo' : 'Enter Edit Mode to change logo'}
       >
         {logoUrl ? (
           <img
