@@ -294,7 +294,7 @@ export async function getStreamProfiles(): Promise<StreamProfile[]> {
 
 // Bulk Channel Creation
 export async function bulkCreateChannelsFromStreams(
-  streams: { id: number; name: string }[],
+  streams: { id: number; name: string; logo_url?: string | null }[],
   startingNumber: number,
   channelGroupId: number | null
 ): Promise<{ created: Channel[]; errors: string[] }> {
@@ -316,11 +316,23 @@ export async function bulkCreateChannelsFromStreams(
       // Add the stream to the channel
       try {
         await addStreamToChannel(channel.id, stream.id);
-        created.push({ ...channel, streams: [stream.id] });
       } catch (streamError) {
-        // Channel was created but stream assignment failed
-        created.push(channel);
         errors.push(`Channel "${stream.name}" created but stream assignment failed: ${streamError}`);
+      }
+
+      // If the stream has a logo, create it and assign to the channel
+      if (stream.logo_url) {
+        try {
+          const logo = await createLogo({ name: stream.name, url: stream.logo_url });
+          await updateChannel(channel.id, { logo_id: logo.id });
+          created.push({ ...channel, streams: [stream.id], logo_id: logo.id });
+        } catch (logoError) {
+          // Logo assignment failed, but channel was still created
+          errors.push(`Channel "${stream.name}" created but logo assignment failed: ${logoError}`);
+          created.push({ ...channel, streams: [stream.id] });
+        }
+      } else {
+        created.push({ ...channel, streams: [stream.id] });
       }
     } catch (error) {
       errors.push(`Failed to create channel "${stream.name}": ${error}`);
