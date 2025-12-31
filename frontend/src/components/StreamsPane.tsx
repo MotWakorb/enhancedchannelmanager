@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import type { Stream, M3UAccount } from '../types';
+import type { Stream, M3UAccount, ChannelGroup } from '../types';
 import { useSelection } from '../hooks';
 import './StreamsPane.css';
 
@@ -26,6 +26,15 @@ interface StreamsPaneProps {
   onSelectedProvidersChange?: (providerIds: number[]) => void;
   selectedStreamGroups?: string[];
   onSelectedStreamGroupsChange?: (groups: string[]) => void;
+  // Bulk channel creation
+  isEditMode?: boolean;
+  channelGroups?: ChannelGroup[];
+  onBulkCreateFromGroup?: (
+    streams: Stream[],
+    startingNumber: number,
+    channelGroupId: number | null,
+    newGroupName?: string
+  ) => Promise<void>;
 }
 
 export function StreamsPane({
@@ -43,6 +52,9 @@ export function StreamsPane({
   onSelectedProvidersChange,
   selectedStreamGroups = [],
   onSelectedStreamGroupsChange,
+  isEditMode = false,
+  channelGroups = [],
+  onBulkCreateFromGroup,
 }: StreamsPaneProps) {
   const {
     selectedIds,
@@ -54,6 +66,15 @@ export function StreamsPane({
   } = useSelection(streams);
 
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
+
+  // Bulk create modal state
+  const [bulkCreateModalOpen, setBulkCreateModalOpen] = useState(false);
+  const [bulkCreateGroup, setBulkCreateGroup] = useState<StreamGroup | null>(null);
+  const [bulkCreateStartingNumber, setBulkCreateStartingNumber] = useState<string>('');
+  const [bulkCreateGroupOption, setBulkCreateGroupOption] = useState<'same' | 'existing' | 'new'>('same');
+  const [bulkCreateSelectedGroupId, setBulkCreateSelectedGroupId] = useState<number | null>(null);
+  const [bulkCreateNewGroupName, setBulkCreateNewGroupName] = useState('');
+  const [bulkCreateLoading, setBulkCreateLoading] = useState(false);
 
   // Dropdown state
   const [providerDropdownOpen, setProviderDropdownOpen] = useState(false);
@@ -193,6 +214,80 @@ export function StreamsPane({
     },
     [handleSelect]
   );
+
+  // Bulk create handlers
+  const openBulkCreateModal = useCallback((group: StreamGroup) => {
+    setBulkCreateGroup(group);
+    setBulkCreateStartingNumber('');
+    setBulkCreateGroupOption('same');
+    setBulkCreateSelectedGroupId(null);
+    setBulkCreateNewGroupName('');
+    setBulkCreateModalOpen(true);
+  }, []);
+
+  const closeBulkCreateModal = useCallback(() => {
+    setBulkCreateModalOpen(false);
+    setBulkCreateGroup(null);
+  }, []);
+
+  const handleBulkCreate = useCallback(async () => {
+    if (!bulkCreateGroup || !onBulkCreateFromGroup) return;
+
+    const startingNum = parseInt(bulkCreateStartingNumber, 10);
+    if (isNaN(startingNum) || startingNum < 0) {
+      alert('Please enter a valid starting channel number');
+      return;
+    }
+
+    setBulkCreateLoading(true);
+
+    try {
+      let groupId: number | null = null;
+      let newGroupName: string | undefined;
+
+      if (bulkCreateGroupOption === 'same') {
+        // Find existing group with same name, or create new
+        const existingGroup = channelGroups.find(g => g.name === bulkCreateGroup.name);
+        if (existingGroup) {
+          groupId = existingGroup.id;
+        } else {
+          newGroupName = bulkCreateGroup.name;
+        }
+      } else if (bulkCreateGroupOption === 'existing') {
+        groupId = bulkCreateSelectedGroupId;
+      } else if (bulkCreateGroupOption === 'new') {
+        if (!bulkCreateNewGroupName.trim()) {
+          alert('Please enter a name for the new group');
+          setBulkCreateLoading(false);
+          return;
+        }
+        newGroupName = bulkCreateNewGroupName.trim();
+      }
+
+      await onBulkCreateFromGroup(
+        bulkCreateGroup.streams,
+        startingNum,
+        groupId,
+        newGroupName
+      );
+
+      closeBulkCreateModal();
+    } catch (error) {
+      console.error('Bulk create failed:', error);
+      alert(`Bulk create failed: ${error}`);
+    } finally {
+      setBulkCreateLoading(false);
+    }
+  }, [
+    bulkCreateGroup,
+    bulkCreateStartingNumber,
+    bulkCreateGroupOption,
+    bulkCreateSelectedGroupId,
+    bulkCreateNewGroupName,
+    channelGroups,
+    onBulkCreateFromGroup,
+    closeBulkCreateModal,
+  ]);
 
   return (
     <div className="streams-pane">
@@ -368,6 +463,18 @@ export function StreamsPane({
                     <span className="expand-icon">{group.expanded ? '▼' : '▶'}</span>
                     <span className="group-name">{group.name}</span>
                     <span className="group-count">{group.streams.length}</span>
+                    {isEditMode && onBulkCreateFromGroup && (
+                      <button
+                        className="bulk-create-btn"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          openBulkCreateModal(group);
+                        }}
+                        title="Create channels from this group"
+                      >
+                        <span className="material-icons">playlist_add</span>
+                      </button>
+                    )}
                   </div>
                   {group.expanded && (
                     <div className="stream-group-items">
@@ -411,6 +518,149 @@ export function StreamsPane({
           </>
         )}
       </div>
+
+      {/* Bulk Create Modal */}
+      {bulkCreateModalOpen && bulkCreateGroup && (
+        <div className="modal-overlay" onClick={closeBulkCreateModal}>
+          <div className="bulk-create-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>Create Channels from "{bulkCreateGroup.name}"</h3>
+              <button className="modal-close-btn" onClick={closeBulkCreateModal}>
+                <span className="material-icons">close</span>
+              </button>
+            </div>
+
+            <div className="modal-body">
+              <div className="bulk-create-info">
+                <span className="material-icons">info</span>
+                <span>{bulkCreateGroup.streams.length} channels will be created, each with its stream assigned</span>
+              </div>
+
+              <div className="form-group">
+                <label>Starting Channel Number</label>
+                <input
+                  type="number"
+                  min="0"
+                  value={bulkCreateStartingNumber}
+                  onChange={(e) => setBulkCreateStartingNumber(e.target.value)}
+                  placeholder="e.g., 100"
+                  className="form-input"
+                  autoFocus
+                />
+                {bulkCreateStartingNumber && !isNaN(parseInt(bulkCreateStartingNumber, 10)) && (
+                  <div className="number-range-preview">
+                    Channels {bulkCreateStartingNumber} - {parseInt(bulkCreateStartingNumber, 10) + bulkCreateGroup.streams.length - 1}
+                  </div>
+                )}
+              </div>
+
+              <div className="form-group">
+                <label>Channel Group</label>
+                <div className="radio-group">
+                  <label className="radio-option">
+                    <input
+                      type="radio"
+                      name="groupOption"
+                      checked={bulkCreateGroupOption === 'same'}
+                      onChange={() => setBulkCreateGroupOption('same')}
+                    />
+                    <span>Use same name "{bulkCreateGroup.name}"</span>
+                    {channelGroups.find(g => g.name === bulkCreateGroup.name) ? (
+                      <span className="group-exists-badge">exists</span>
+                    ) : (
+                      <span className="group-new-badge">will create</span>
+                    )}
+                  </label>
+
+                  <label className="radio-option">
+                    <input
+                      type="radio"
+                      name="groupOption"
+                      checked={bulkCreateGroupOption === 'existing'}
+                      onChange={() => setBulkCreateGroupOption('existing')}
+                    />
+                    <span>Select existing group</span>
+                  </label>
+                  {bulkCreateGroupOption === 'existing' && (
+                    <select
+                      value={bulkCreateSelectedGroupId ?? ''}
+                      onChange={(e) => setBulkCreateSelectedGroupId(e.target.value ? parseInt(e.target.value, 10) : null)}
+                      className="form-select"
+                    >
+                      <option value="">-- Select a group --</option>
+                      {channelGroups.map((g) => (
+                        <option key={g.id} value={g.id}>{g.name}</option>
+                      ))}
+                    </select>
+                  )}
+
+                  <label className="radio-option">
+                    <input
+                      type="radio"
+                      name="groupOption"
+                      checked={bulkCreateGroupOption === 'new'}
+                      onChange={() => setBulkCreateGroupOption('new')}
+                    />
+                    <span>Create new group</span>
+                  </label>
+                  {bulkCreateGroupOption === 'new' && (
+                    <input
+                      type="text"
+                      value={bulkCreateNewGroupName}
+                      onChange={(e) => setBulkCreateNewGroupName(e.target.value)}
+                      placeholder="New group name"
+                      className="form-input"
+                    />
+                  )}
+                </div>
+              </div>
+
+              <div className="bulk-create-preview">
+                <label>Preview (first 10)</label>
+                <div className="preview-list">
+                  {bulkCreateGroup.streams.slice(0, 10).map((stream, idx) => {
+                    const num = bulkCreateStartingNumber ? parseInt(bulkCreateStartingNumber, 10) + idx : '?';
+                    return (
+                      <div key={stream.id} className="preview-item">
+                        <span className="preview-number">{num}</span>
+                        <span className="preview-name">{stream.name}</span>
+                      </div>
+                    );
+                  })}
+                  {bulkCreateGroup.streams.length > 10 && (
+                    <div className="preview-more">
+                      ... and {bulkCreateGroup.streams.length - 10} more
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            <div className="modal-footer">
+              <button className="btn-cancel" onClick={closeBulkCreateModal}>
+                Cancel
+              </button>
+              <button
+                className="btn-create"
+                onClick={handleBulkCreate}
+                disabled={bulkCreateLoading || !bulkCreateStartingNumber}
+              >
+                {bulkCreateLoading ? (
+                  <>
+                    <span className="material-icons spinning">sync</span>
+                    Creating...
+                  </>
+                ) : (
+                  <>
+                    <span className="material-icons">add</span>
+                    Create {bulkCreateGroup.streams.length} Channels
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

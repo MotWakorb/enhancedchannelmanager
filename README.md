@@ -22,6 +22,15 @@ A professional-grade web interface for managing TV channels, streams, and metada
 - **Filter by Provider** - Filter streams by M3U account
 - **Filter by Group** - Filter streams by their source group
 
+### Bulk Channel Creation
+
+- **Create from Stream Group** - Create multiple channels from an entire M3U stream group at once
+- **Auto-Assign Streams** - Each created channel automatically gets its source stream assigned
+- **Custom Starting Number** - Choose the starting channel number for sequential assignment
+- **Flexible Group Options** - Create in same-named group, select existing group, or create new group
+- **Preview Before Creating** - See a preview of channels that will be created
+- **Edit Mode Integration** - Requires edit mode, button visible on stream group headers on hover
+
 ### Edit Mode (Staged Editing)
 
 A unique workflow that lets you stage changes locally before committing to the server:

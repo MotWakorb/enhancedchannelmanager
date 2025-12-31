@@ -608,6 +608,61 @@ function App() {
     [isEditMode, addChannelToWorkingCopy]
   );
 
+  const handleBulkCreateFromGroup = useCallback(
+    async (
+      streamsToCreate: Stream[],
+      startingNumber: number,
+      channelGroupId: number | null,
+      newGroupName?: string
+    ) => {
+      try {
+        // If we need to create a new group first
+        let targetGroupId = channelGroupId;
+        if (newGroupName) {
+          const newGroup = await api.createChannelGroup(newGroupName);
+          targetGroupId = newGroup.id;
+          // Refresh channel groups
+          const updatedGroups = await api.getChannelGroups();
+          setChannelGroups(updatedGroups);
+        }
+
+        // Create channels with streams
+        const result = await api.bulkCreateChannelsFromStreams(
+          streamsToCreate.map(s => ({ id: s.id, name: s.name })),
+          startingNumber,
+          targetGroupId
+        );
+
+        // Update channels state with new channels
+        if (result.created.length > 0) {
+          setChannels((prev) => [...prev, ...result.created]);
+
+          // In edit mode, also add to working copy
+          if (isEditMode) {
+            result.created.forEach(ch => addChannelToWorkingCopy(ch));
+          }
+        }
+
+        // Show results
+        if (result.errors.length > 0) {
+          alert(`Created ${result.created.length} channels.\n\nErrors:\n${result.errors.join('\n')}`);
+        } else {
+          alert(`Successfully created ${result.created.length} channels!`);
+        }
+
+        // Refresh channel groups to update counts
+        const updatedGroups = await api.getChannelGroups();
+        setChannelGroups(updatedGroups);
+
+      } catch (err) {
+        console.error('Bulk create failed:', err);
+        setError('Failed to bulk create channels');
+        throw err;
+      }
+    },
+    [isEditMode, addChannelToWorkingCopy]
+  );
+
   // Filter streams based on multi-select filters (client-side)
   const filteredStreams = useMemo(() => {
     let result = streams;
@@ -814,6 +869,9 @@ function App() {
               onSelectedProvidersChange={setSelectedProviderFilters}
               selectedStreamGroups={selectedStreamGroupFilters}
               onSelectedStreamGroupsChange={setSelectedStreamGroupFilters}
+              isEditMode={isEditMode}
+              channelGroups={channelGroups}
+              onBulkCreateFromGroup={handleBulkCreateFromGroup}
             />
           }
         />
