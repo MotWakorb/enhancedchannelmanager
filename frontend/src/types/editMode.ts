@@ -34,6 +34,17 @@ export interface StagedOperation {
 }
 
 /**
+ * An undo entry that groups one or more operations together
+ * This allows batch operations (like renumbering multiple channels) to be undone as a unit
+ */
+export interface UndoEntry {
+  id: string;
+  timestamp: number;
+  description: string; // Summary description for the batch
+  operations: StagedOperation[];
+}
+
+/**
  * Individual operation detail for the exit dialog
  */
 export interface OperationDetail {
@@ -78,10 +89,11 @@ export interface EditModeState {
   stagedOperations: StagedOperation[];
 
   // Undo stack for local operations (within edit session)
-  localUndoStack: StagedOperation[];
+  // Each entry may contain multiple operations that are undone together
+  localUndoStack: UndoEntry[];
 
   // Redo stack for local operations (within edit session)
-  localRedoStack: StagedOperation[];
+  localRedoStack: UndoEntry[];
 
   // IDs of channels that have been modified
   modifiedChannelIds: Set<number>;
@@ -91,6 +103,12 @@ export interface EditModeState {
 
   // Map of temp IDs to real IDs after commit
   tempIdMap: Map<number, number>;
+
+  // Current batch being built (null when not batching)
+  currentBatch: {
+    description: string;
+    operations: StagedOperation[];
+  } | null;
 }
 
 /**
@@ -138,6 +156,10 @@ export interface UseEditModeReturn {
   // Local undo/redo (within edit session)
   localUndo: () => void;
   localRedo: () => void;
+
+  // Batch operations - groups multiple operations into a single undo entry
+  startBatch: (description: string) => void;
+  endBatch: () => void;
 
   // Commit/Discard
   getSummary: () => EditModeSummary;

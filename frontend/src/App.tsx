@@ -102,6 +102,8 @@ function App() {
     discard,
     localUndo,
     localRedo,
+    startBatch,
+    endBatch,
   } = useEditMode({
     channels,
     onChannelsChange: setChannels,
@@ -751,6 +753,8 @@ function App() {
               onStageRemoveStream={stageRemoveStream}
               onStageReorderStreams={stageReorderStreams}
               onStageBulkAssignNumbers={stageBulkAssignNumbers}
+              onStartBatch={startBatch}
+              onEndBatch={endBatch}
               // Edit mode toggle props
               onEnterEditMode={enterEditMode}
               onExitEditMode={handleExitEditMode}

@@ -4,6 +4,7 @@ import type {
   ChannelSnapshot,
   EditModeState,
   StagedOperation,
+  UndoEntry,
   EditModeSummary,
   CommitResult,
   UseEditModeReturn,
@@ -40,6 +41,7 @@ function createInitialState(): EditModeState {
     modifiedChannelIds: new Set(),
     nextTempId: -1,
     tempIdMap: new Map(),
+    currentBatch: null,
   };
 }
 
@@ -79,6 +81,7 @@ export function useEditMode({
       modifiedChannelIds: new Set(),
       nextTempId: -1,
       tempIdMap: new Map(),
+      currentBatch: null,
     });
   }, [channels]);
 
@@ -217,14 +220,36 @@ export function useEditMode({
           newModifiedIds.add(prev.nextTempId);
         }
 
+        // Handle batching vs immediate undo entry
+        let newUndoStack = prev.localUndoStack;
+        let newCurrentBatch = prev.currentBatch;
+
+        if (prev.currentBatch !== null) {
+          // We're in a batch - add operation to the current batch, don't create undo entry yet
+          newCurrentBatch = {
+            ...prev.currentBatch,
+            operations: [...prev.currentBatch.operations, operation],
+          };
+        } else {
+          // Not in a batch - create single-operation undo entry immediately
+          const undoEntry: UndoEntry = {
+            id: generateId(),
+            timestamp: Date.now(),
+            description,
+            operations: [operation],
+          };
+          newUndoStack = [...prev.localUndoStack, undoEntry];
+        }
+
         return {
           ...prev,
           workingCopy: newWorkingCopy,
           stagedOperations: [...prev.stagedOperations, operation],
-          localUndoStack: [...prev.localUndoStack, operation],
+          localUndoStack: newUndoStack,
           localRedoStack: [], // Clear redo on new operation
           modifiedChannelIds: newModifiedIds,
           nextTempId: apiCall.type === 'createChannel' ? prev.nextTempId - 1 : prev.nextTempId,
+          currentBatch: newCurrentBatch,
         };
       });
     },
@@ -315,50 +340,107 @@ export function useEditMode({
     []
   );
 
+  // Start a batch of operations that will be grouped as a single undo entry
+  const startBatch = useCallback((description: string) => {
+    setState((prev) => {
+      if (!prev.isActive) return prev;
+      // If already in a batch, don't start a new one
+      if (prev.currentBatch !== null) {
+        console.warn('startBatch called while already in a batch');
+        return prev;
+      }
+      return {
+        ...prev,
+        currentBatch: {
+          description,
+          operations: [],
+        },
+      };
+    });
+  }, []);
+
+  // End the current batch and create a single undo entry for all collected operations
+  const endBatch = useCallback(() => {
+    setState((prev) => {
+      if (!prev.isActive || prev.currentBatch === null) return prev;
+
+      // If no operations were staged during the batch, just clear it
+      if (prev.currentBatch.operations.length === 0) {
+        return {
+          ...prev,
+          currentBatch: null,
+        };
+      }
+
+      // Create a single undo entry for all operations in the batch
+      const undoEntry: UndoEntry = {
+        id: generateId(),
+        timestamp: Date.now(),
+        description: prev.currentBatch.description,
+        operations: prev.currentBatch.operations,
+      };
+
+      return {
+        ...prev,
+        localUndoStack: [...prev.localUndoStack, undoEntry],
+        localRedoStack: [], // Clear redo on new batch
+        currentBatch: null,
+      };
+    });
+  }, []);
+
   // Local undo within edit session
   const localUndo = useCallback(() => {
     setState((prev) => {
       if (!prev.isActive || prev.localUndoStack.length === 0) return prev;
 
-      const lastOperation = prev.localUndoStack[prev.localUndoStack.length - 1];
+      const lastEntry = prev.localUndoStack[prev.localUndoStack.length - 1];
 
-      // Restore working copy from before snapshot
+      // Undo all operations in the entry, in reverse order
       let newWorkingCopy = [...prev.workingCopy];
-      for (const snapshot of lastOperation.beforeSnapshot) {
-        const index = newWorkingCopy.findIndex((ch) => ch.id === snapshot.id);
-        if (index >= 0) {
-          newWorkingCopy[index] = {
-            ...newWorkingCopy[index],
-            channel_number: snapshot.channel_number,
-            name: snapshot.name,
-            channel_group_id: snapshot.channel_group_id,
-            streams: [...snapshot.streams],
-          };
+      let newStagedOperations = [...prev.stagedOperations];
+
+      // Process operations in reverse order
+      for (let i = lastEntry.operations.length - 1; i >= 0; i--) {
+        const operation = lastEntry.operations[i];
+
+        // Restore working copy from before snapshot
+        for (const snapshot of operation.beforeSnapshot) {
+          const index = newWorkingCopy.findIndex((ch) => ch.id === snapshot.id);
+          if (index >= 0) {
+            newWorkingCopy[index] = {
+              ...newWorkingCopy[index],
+              channel_number: snapshot.channel_number,
+              name: snapshot.name,
+              channel_group_id: snapshot.channel_group_id,
+              streams: [...snapshot.streams],
+            };
+          }
+        }
+
+        // If it was a create channel, remove the temp channel
+        if (operation.apiCall.type === 'createChannel') {
+          const tempId = operation.afterSnapshot[0]?.id;
+          if (tempId && tempId < 0) {
+            newWorkingCopy = newWorkingCopy.filter((ch) => ch.id !== tempId);
+          }
+        }
+
+        // Remove from staged operations
+        const operationIndex = newStagedOperations.findIndex(
+          (op) => op.id === operation.id
+        );
+        if (operationIndex >= 0) {
+          newStagedOperations = newStagedOperations.filter((_, idx) => idx !== operationIndex);
         }
       }
-
-      // If it was a create channel, remove the temp channel
-      if (lastOperation.apiCall.type === 'createChannel') {
-        const tempId = lastOperation.afterSnapshot[0]?.id;
-        if (tempId && tempId < 0) {
-          newWorkingCopy = newWorkingCopy.filter((ch) => ch.id !== tempId);
-        }
-      }
-
-      // Remove from staged operations
-      const operationIndex = prev.stagedOperations.findIndex(
-        (op) => op.id === lastOperation.id
-      );
-      const newStagedOperations = operationIndex >= 0
-        ? prev.stagedOperations.filter((_, i) => i !== operationIndex)
-        : prev.stagedOperations;
 
       return {
         ...prev,
         workingCopy: newWorkingCopy,
         stagedOperations: newStagedOperations,
         localUndoStack: prev.localUndoStack.slice(0, -1),
-        localRedoStack: [...prev.localRedoStack, lastOperation],
+        localRedoStack: [...prev.localRedoStack, lastEntry],
       };
     });
   }, []);
@@ -368,40 +450,49 @@ export function useEditMode({
     setState((prev) => {
       if (!prev.isActive || prev.localRedoStack.length === 0) return prev;
 
-      const operation = prev.localRedoStack[prev.localRedoStack.length - 1];
+      const entry = prev.localRedoStack[prev.localRedoStack.length - 1];
 
-      // Apply operation to working copy
-      let newWorkingCopy = applyOperationToWorkingCopy(prev.workingCopy, operation);
+      // Redo all operations in the entry, in order
+      let newWorkingCopy = [...prev.workingCopy];
+      let newStagedOperations = [...prev.stagedOperations];
 
-      // Handle create channel
-      if (operation.apiCall.type === 'createChannel') {
-        const snapshot = operation.afterSnapshot[0];
-        if (snapshot && snapshot.id < 0) {
-          const newChannel: Channel = {
-            id: snapshot.id,
-            channel_number: snapshot.channel_number,
-            name: snapshot.name,
-            channel_group_id: snapshot.channel_group_id,
-            tvg_id: null,
-            tvc_guide_stationid: null,
-            epg_data_id: null,
-            streams: [...snapshot.streams],
-            stream_profile_id: null,
-            uuid: `temp-${snapshot.id}`,
-            logo_id: null,
-            auto_created: false,
-            auto_created_by: null,
-            auto_created_by_name: null,
-          };
-          newWorkingCopy = [...newWorkingCopy, newChannel];
+      for (const operation of entry.operations) {
+        // Apply operation to working copy
+        newWorkingCopy = applyOperationToWorkingCopy(newWorkingCopy, operation);
+
+        // Handle create channel
+        if (operation.apiCall.type === 'createChannel') {
+          const snapshot = operation.afterSnapshot[0];
+          if (snapshot && snapshot.id < 0) {
+            const newChannel: Channel = {
+              id: snapshot.id,
+              channel_number: snapshot.channel_number,
+              name: snapshot.name,
+              channel_group_id: snapshot.channel_group_id,
+              tvg_id: null,
+              tvc_guide_stationid: null,
+              epg_data_id: null,
+              streams: [...snapshot.streams],
+              stream_profile_id: null,
+              uuid: `temp-${snapshot.id}`,
+              logo_id: null,
+              auto_created: false,
+              auto_created_by: null,
+              auto_created_by_name: null,
+            };
+            newWorkingCopy = [...newWorkingCopy, newChannel];
+          }
         }
+
+        // Add back to staged operations
+        newStagedOperations = [...newStagedOperations, operation];
       }
 
       return {
         ...prev,
         workingCopy: newWorkingCopy,
-        stagedOperations: [...prev.stagedOperations, operation],
-        localUndoStack: [...prev.localUndoStack, operation],
+        stagedOperations: newStagedOperations,
+        localUndoStack: [...prev.localUndoStack, entry],
         localRedoStack: prev.localRedoStack.slice(0, -1),
       };
     });
@@ -688,6 +779,10 @@ export function useEditMode({
     // Local undo/redo
     localUndo,
     localRedo,
+
+    // Batch operations
+    startBatch,
+    endBatch,
 
     // Commit/Discard
     getSummary,
