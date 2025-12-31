@@ -1,0 +1,22 @@
+# ZAP Baseline Scan Rules Configuration
+# Format: rule_id	action	description
+# Actions: IGNORE, WARN, FAIL
+# See: https://www.zaproxy.org/docs/docker/baseline-scan/
+
+# Informational findings - warn but don't fail
+10021	WARN	X-Content-Type-Options Header Missing
+10036	WARN	Server Leaks Version Information
+10037	WARN	Server Leaks Information via X-Powered-By
+10038	WARN	Content Security Policy Header Not Set
+
+# These are common in development/internal tools - warn only
+10035	WARN	Strict-Transport-Security Header Not Set
+10098	WARN	Cross-Domain Misconfiguration
+
+# Cookie flags - may need adjustment based on deployment
+10010	WARN	Cookie No HttpOnly Flag
+10011	WARN	Cookie Without Secure Flag
+10054	WARN	Cookie without SameSite Attribute
+
+# API-specific - may generate false positives
+90033	WARN	Loosely Scoped Cookie
