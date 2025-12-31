@@ -28,6 +28,42 @@ function generateId(): string {
   return `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
 }
 
+// Compute which channels are modified by comparing working copy to baseline
+function computeModifiedChannelIds(
+  workingCopy: Channel[],
+  baselineSnapshot: ChannelSnapshot[]
+): Set<number> {
+  const modified = new Set<number>();
+
+  // Check each channel in working copy against baseline
+  for (const channel of workingCopy) {
+    // New channels (negative IDs) are always modified
+    if (channel.id < 0) {
+      modified.add(channel.id);
+      continue;
+    }
+
+    const baseline = baselineSnapshot.find((s) => s.id === channel.id);
+    if (!baseline) {
+      // Channel exists in working copy but not baseline - it's new
+      modified.add(channel.id);
+      continue;
+    }
+
+    // Compare relevant fields
+    if (
+      channel.channel_number !== baseline.channel_number ||
+      channel.name !== baseline.name ||
+      channel.channel_group_id !== baseline.channel_group_id ||
+      JSON.stringify(channel.streams) !== JSON.stringify(baseline.streams)
+    ) {
+      modified.add(channel.id);
+    }
+  }
+
+  return modified;
+}
+
 // Initial state for edit mode
 function createInitialState(): EditModeState {
   return {
@@ -435,12 +471,16 @@ export function useEditMode({
         }
       }
 
+      // Recompute which channels are actually modified compared to baseline
+      const newModifiedIds = computeModifiedChannelIds(newWorkingCopy, prev.baselineSnapshot);
+
       return {
         ...prev,
         workingCopy: newWorkingCopy,
         stagedOperations: newStagedOperations,
         localUndoStack: prev.localUndoStack.slice(0, -1),
         localRedoStack: [...prev.localRedoStack, lastEntry],
+        modifiedChannelIds: newModifiedIds,
       };
     });
   }, []);
@@ -488,12 +528,16 @@ export function useEditMode({
         newStagedOperations = [...newStagedOperations, operation];
       }
 
+      // Recompute which channels are actually modified compared to baseline
+      const newModifiedIds = computeModifiedChannelIds(newWorkingCopy, prev.baselineSnapshot);
+
       return {
         ...prev,
         workingCopy: newWorkingCopy,
         stagedOperations: newStagedOperations,
         localUndoStack: [...prev.localUndoStack, entry],
         localRedoStack: prev.localRedoStack.slice(0, -1),
+        modifiedChannelIds: newModifiedIds,
       };
     });
   }, [applyOperationToWorkingCopy]);
