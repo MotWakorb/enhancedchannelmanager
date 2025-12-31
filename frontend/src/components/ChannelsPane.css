@@ -2484,6 +2484,28 @@
   font-size: 0.85rem;
 }
 
+.sort-renumber-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+  cursor: pointer;
+  color: #ccc;
+  font-size: 0.9rem;
+}
+
+.sort-renumber-checkbox input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  cursor: pointer;
+  accent-color: #22d3ee;
+}
+
+.sort-renumber-checkbox span {
+  user-select: none;
+}
+
 .sort-renumber-preview {
   margin-bottom: 1.25rem;
 }

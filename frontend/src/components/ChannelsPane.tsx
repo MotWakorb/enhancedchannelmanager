@@ -1225,6 +1225,7 @@ export function ChannelsPane({
     currentMinNumber: number | null;
   } | null>(null);
   const [sortRenumberStartingNumber, setSortRenumberStartingNumber] = useState<string>('');
+  const [sortStripNumbers, setSortStripNumbers] = useState<boolean>(true);
 
   // Drag overlay state
   const [activeDragId, setActiveDragId] = useState<number | null>(null);
@@ -1798,6 +1799,25 @@ export function ChannelsPane({
     }
 
     return undefined;
+  };
+
+  // Helper function to strip leading/trailing channel numbers from a name for sorting purposes
+  // Matches same patterns as computeAutoRename: "123 | Name", "123-Name", "123.Name", "123 Name", "Name | 123"
+  const getNameForSorting = (channelName: string): string => {
+    // Try stripping prefix first: "123 | Name" or "123-Name" or "123.Name" or "123 Name"
+    const prefixMatch = channelName.match(/^(\d+(?:\.\d+)?)\s*[|\-.\s]\s*(.+)$/);
+    if (prefixMatch) {
+      return prefixMatch[2].trim();
+    }
+
+    // Try stripping suffix: "Name | 123"
+    const suffixMatch = channelName.match(/^(.+)\s*[|\-.]\s*(\d+(?:\.\d+)?)$/);
+    if (suffixMatch) {
+      return suffixMatch[1].trim();
+    }
+
+    // No number prefix/suffix found, return as-is
+    return channelName;
   };
 
   // Handle editing channel number
@@ -2826,6 +2846,7 @@ export function ChannelsPane({
     setShowSortRenumberModal(false);
     setSortRenumberData(null);
     setSortRenumberStartingNumber('');
+    setSortStripNumbers(true);
   };
 
   const handleSortRenumberConfirm = () => {
@@ -2835,9 +2856,12 @@ export function ChannelsPane({
     if (isNaN(startingNumber) || startingNumber < 1) return;
 
     // Sort channels alphabetically by name (case-insensitive)
-    const sortedChannels = [...sortRenumberData.channels].sort((a, b) =>
-      a.name.toLowerCase().localeCompare(b.name.toLowerCase())
-    );
+    // If sortStripNumbers is enabled, strip channel numbers from names before comparing
+    const sortedChannels = [...sortRenumberData.channels].sort((a, b) => {
+      const nameA = sortStripNumbers ? getNameForSorting(a.name) : a.name;
+      const nameB = sortStripNumbers ? getNameForSorting(b.name) : b.name;
+      return nameA.toLowerCase().localeCompare(nameB.toLowerCase());
+    });
 
     // Start a batch for the entire operation
     if (sortedChannels.length > 1 && onStartBatch) {
@@ -2871,6 +2895,7 @@ export function ChannelsPane({
     setShowSortRenumberModal(false);
     setSortRenumberData(null);
     setSortRenumberStartingNumber('');
+    setSortStripNumbers(true);
   };
 
   const renderGroup = (groupId: number | 'ungrouped', groupName: string, groupChannels: Channel[], isEmpty: boolean = false) => {
@@ -3732,6 +3757,14 @@ export function ChannelsPane({
                   </span>
                 )}
               </div>
+              <label className="sort-renumber-checkbox">
+                <input
+                  type="checkbox"
+                  checked={sortStripNumbers}
+                  onChange={(e) => setSortStripNumbers(e.target.checked)}
+                />
+                <span>Ignore channel numbers in names when sorting</span>
+              </label>
             </div>
 
             {/* Preview of sorted order */}
@@ -3739,7 +3772,11 @@ export function ChannelsPane({
               <label>Preview (sorted A–Z)</label>
               <ul className="sort-renumber-preview-list">
                 {[...sortRenumberData.channels]
-                  .sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase()))
+                  .sort((a, b) => {
+                    const nameA = sortStripNumbers ? getNameForSorting(a.name) : a.name;
+                    const nameB = sortStripNumbers ? getNameForSorting(b.name) : b.name;
+                    return nameA.toLowerCase().localeCompare(nameB.toLowerCase());
+                  })
                   .slice(0, 5)
                   .map((ch, index) => {
                     const startNum = parseInt(sortRenumberStartingNumber, 10) || 1;
