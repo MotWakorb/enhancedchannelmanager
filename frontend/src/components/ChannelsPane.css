@@ -2325,3 +2325,51 @@
   border-radius: 10px;
   white-space: nowrap;
 }
+
+/* Drop indicator - visual line showing where channel will be inserted */
+.channel-drop-indicator {
+  position: relative;
+  height: 4px;
+  margin: 2px 0;
+  padding: 0 0.5rem;
+}
+
+.drop-indicator-line {
+  height: 3px;
+  background: linear-gradient(90deg, #646cff 0%, #8b5cf6 50%, #646cff 100%);
+  border-radius: 2px;
+  box-shadow: 0 0 8px rgba(100, 108, 255, 0.6), 0 0 16px rgba(100, 108, 255, 0.3);
+  animation: drop-indicator-pulse 1.2s ease-in-out infinite;
+}
+
+.drop-indicator-line::before,
+.drop-indicator-line::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 10px;
+  height: 10px;
+  background-color: #646cff;
+  border-radius: 50%;
+  box-shadow: 0 0 6px rgba(100, 108, 255, 0.8);
+}
+
+.drop-indicator-line::before {
+  left: 0.5rem;
+}
+
+.drop-indicator-line::after {
+  right: 0.5rem;
+}
+
+@keyframes drop-indicator-pulse {
+  0%, 100% {
+    opacity: 1;
+    box-shadow: 0 0 8px rgba(100, 108, 255, 0.6), 0 0 16px rgba(100, 108, 255, 0.3);
+  }
+  50% {
+    opacity: 0.8;
+    box-shadow: 0 0 12px rgba(100, 108, 255, 0.8), 0 0 24px rgba(100, 108, 255, 0.5);
+  }
+}
