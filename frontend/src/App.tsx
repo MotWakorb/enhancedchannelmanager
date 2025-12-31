@@ -71,6 +71,9 @@ function App() {
   // Track if baseline has been initialized
   const baselineInitialized = useRef(false);
 
+  // Track if channel group filter has been auto-initialized
+  const channelGroupFilterInitialized = useRef(false);
+
   // Edit mode exit dialog state
   const [showExitDialog, setShowExitDialog] = useState(false);
 
@@ -186,6 +189,25 @@ function App() {
     };
     init();
   }, []);
+
+  // Auto-select channel groups that have channels when data first loads
+  useEffect(() => {
+    if (channelGroupFilterInitialized.current) return;
+    if (channels.length === 0 || channelGroups.length === 0) return;
+
+    // Get unique group IDs from channels
+    const groupsWithChannels = new Set<number>();
+    channels.forEach((ch) => {
+      if (ch.channel_group_id !== null) {
+        groupsWithChannels.add(ch.channel_group_id);
+      }
+    });
+
+    // Auto-select groups that have channels
+    const groupIds = Array.from(groupsWithChannels);
+    setChannelGroupFilter(groupIds);
+    channelGroupFilterInitialized.current = true;
+  }, [channels, channelGroups]);
 
   const handleSettingsSaved = async () => {
     setError(null);

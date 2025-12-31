@@ -9,6 +9,7 @@ import {
   DragEndEvent,
   DragOverEvent,
   DragStartEvent,
+  useDroppable,
 } from '@dnd-kit/core';
 import {
   arrayMove,
@@ -355,6 +356,46 @@ function SortableChannel({
           <span className="material-icons">delete</span>
         </button>
       )}
+    </div>
+  );
+}
+
+// Droppable Group Header component for cross-group channel dragging
+interface DroppableGroupHeaderProps {
+  groupId: number | 'ungrouped';
+  groupName: string;
+  channelCount: number;
+  isEmpty: boolean;
+  isExpanded: boolean;
+  isEditMode: boolean;
+  onToggle: () => void;
+}
+
+function DroppableGroupHeader({
+  groupId,
+  groupName,
+  channelCount,
+  isEmpty,
+  isExpanded,
+  isEditMode,
+  onToggle,
+}: DroppableGroupHeaderProps) {
+  const droppableId = `group-${groupId}`;
+  const { isOver, setNodeRef } = useDroppable({
+    id: droppableId,
+    disabled: !isEditMode,
+  });
+
+  return (
+    <div
+      ref={setNodeRef}
+      className={`group-header ${isOver && isEditMode ? 'drop-target' : ''}`}
+      onClick={onToggle}
+    >
+      <span className="group-toggle">{isExpanded ? '▼' : '▶'}</span>
+      <span className="group-name">{groupName}</span>
+      <span className="group-count">{channelCount}</span>
+      {isEmpty && <span className="group-empty-badge">Empty</span>}
     </div>
   );
 }
@@ -1051,6 +1092,19 @@ export function ChannelsPane({
   const [showCreateGroupModal, setShowCreateGroupModal] = useState(false);
   const [newGroupName, setNewGroupName] = useState('');
   const [creatingGroup, setCreatingGroup] = useState(false);
+
+  // Cross-group move modal state
+  const [showCrossGroupMoveModal, setShowCrossGroupMoveModal] = useState(false);
+  const [crossGroupMoveData, setCrossGroupMoveData] = useState<{
+    channel: Channel;
+    targetGroupId: number | null;
+    targetGroupName: string;
+    sourceGroupName: string;
+    isTargetAutoSync: boolean;
+    suggestedChannelNumber: number | null;
+    minChannelInGroup: number | null;
+    maxChannelInGroup: number | null;
+  } | null>(null);
 
   // Stream reorder sensors (separate from channel reorder)
   const streamSensors = useSensors(
@@ -1830,9 +1884,73 @@ export function ChannelsPane({
     if (!over || active.id === over.id) return;
 
     const activeChannel = localChannels.find((c) => c.id === active.id);
-    const overChannel = localChannels.find((c) => c.id === over.id);
+    if (!activeChannel) return;
 
-    if (!activeChannel || !overChannel) return;
+    // Check if dropped on a group header (cross-group move)
+    const overId = String(over.id);
+    if (overId.startsWith('group-')) {
+      const targetGroupId = overId.replace('group-', '');
+      const newGroupId = targetGroupId === 'ungrouped' ? null : parseInt(targetGroupId, 10);
+
+      // Don't do anything if dropping on the same group
+      if ((newGroupId === null && activeChannel.channel_group_id === null) ||
+          (newGroupId !== null && activeChannel.channel_group_id === newGroupId)) {
+        return;
+      }
+
+      // Get the target group's name for the description
+      const targetGroupName = newGroupId === null
+        ? 'Uncategorized'
+        : channelGroups.find((g) => g.id === newGroupId)?.name ?? 'Unknown Group';
+      const sourceGroupName = activeChannel.channel_group_id === null
+        ? 'Uncategorized'
+        : channelGroups.find((g) => g.id === activeChannel.channel_group_id)?.name ?? 'Unknown Group';
+
+      // Check if target group is an auto-sync group
+      const isTargetAutoSync = newGroupId !== null && autoSyncRelatedGroups.has(newGroupId);
+
+      // Calculate channel number range in target group
+      const targetGroupChannels = newGroupId === null
+        ? channelsByGroup.ungrouped || []
+        : channelsByGroup[newGroupId] || [];
+
+      let minChannelInGroup: number | null = null;
+      let maxChannelInGroup: number | null = null;
+      let suggestedChannelNumber: number | null = null;
+
+      if (targetGroupChannels.length > 0) {
+        const channelNumbers = targetGroupChannels
+          .map(ch => ch.channel_number)
+          .filter((n): n is number => n !== null)
+          .sort((a, b) => a - b);
+
+        if (channelNumbers.length > 0) {
+          minChannelInGroup = channelNumbers[0];
+          maxChannelInGroup = channelNumbers[channelNumbers.length - 1];
+          // Suggest the next number after the max
+          suggestedChannelNumber = maxChannelInGroup + 1;
+        }
+      }
+
+      // Show the modal instead of immediately moving
+      setCrossGroupMoveData({
+        channel: activeChannel,
+        targetGroupId: newGroupId,
+        targetGroupName,
+        sourceGroupName,
+        isTargetAutoSync,
+        suggestedChannelNumber,
+        minChannelInGroup,
+        maxChannelInGroup,
+      });
+      setShowCrossGroupMoveModal(true);
+
+      return;
+    }
+
+    // Otherwise, this is a within-group reorder
+    const overChannel = localChannels.find((c) => c.id === over.id);
+    if (!overChannel) return;
 
     // Get the group for the channels
     const groupId = activeChannel.channel_group_id ?? 'ungrouped';
@@ -1999,38 +2117,82 @@ export function ChannelsPane({
     }
   };
 
+  // Handle cross-group move confirmation
+  const handleCrossGroupMoveConfirm = (keepChannelNumber: boolean, newChannelNumber?: number) => {
+    if (!crossGroupMoveData) return;
+
+    const { channel, targetGroupId, targetGroupName, sourceGroupName } = crossGroupMoveData;
+
+    // Determine the final channel number
+    let finalChannelNumber = channel.channel_number;
+    if (!keepChannelNumber && newChannelNumber !== undefined) {
+      finalChannelNumber = newChannelNumber;
+    }
+
+    // Update local state immediately
+    const updatedChannels = localChannels.map((ch) => {
+      if (ch.id === channel.id) {
+        return {
+          ...ch,
+          channel_group_id: targetGroupId,
+          channel_number: finalChannelNumber,
+        };
+      }
+      return ch;
+    });
+    setLocalChannels(updatedChannels);
+
+    // Stage the changes
+    if (onStageUpdateChannel) {
+      const updates: Partial<Channel> = { channel_group_id: targetGroupId };
+      let description = `Moved "${channel.name}" from "${sourceGroupName}" to "${targetGroupName}"`;
+
+      if (!keepChannelNumber && newChannelNumber !== undefined && newChannelNumber !== channel.channel_number) {
+        updates.channel_number = newChannelNumber;
+        description += ` (channel ${channel.channel_number ?? '-'} → ${newChannelNumber})`;
+      }
+
+      onStageUpdateChannel(channel.id, updates, description);
+    }
+
+    // Close modal
+    setShowCrossGroupMoveModal(false);
+    setCrossGroupMoveData(null);
+  };
+
+  const handleCrossGroupMoveCancel = () => {
+    setShowCrossGroupMoveModal(false);
+    setCrossGroupMoveData(null);
+  };
+
   const renderGroup = (groupId: number | 'ungrouped', groupName: string, groupChannels: Channel[], isEmpty: boolean = false) => {
     // Only show empty groups if explicitly marked (selected in filter or newly created)
     if (groupChannels.length === 0 && !isEmpty) return null;
-    // If groups are selected, only show those groups (or ungrouped if showing all)
-    if (selectedGroups.length > 0 && groupId !== 'ungrouped' && !selectedGroups.includes(groupId)) return null;
+    // Only show groups that are in selectedGroups (or ungrouped which is always shown if it has channels)
+    if (groupId !== 'ungrouped' && !selectedGroups.includes(groupId as number)) return null;
 
     const numericGroupId = groupId === 'ungrouped' ? -1 : groupId;
     const isExpanded = expandedGroups[numericGroupId] === true;
 
     return (
       <div key={groupId} className={`channel-group ${isEmpty ? 'empty-group' : ''}`}>
-        <div className="group-header" onClick={() => toggleGroup(numericGroupId)}>
-          <span className="group-toggle">{isExpanded ? '▼' : '▶'}</span>
-          <span className="group-name">{groupName}</span>
-          <span className="group-count">{groupChannels.length}</span>
-          {isEmpty && <span className="group-empty-badge">Empty</span>}
-        </div>
+        <DroppableGroupHeader
+          groupId={groupId}
+          groupName={groupName}
+          channelCount={groupChannels.length}
+          isEmpty={isEmpty}
+          isExpanded={isExpanded}
+          isEditMode={isEditMode}
+          onToggle={() => toggleGroup(numericGroupId)}
+        />
         {isExpanded && isEmpty && (
           <div className="group-channels empty-group-placeholder">
             <div className="empty-group-message">
-              No channels in this group. Create a channel and assign it to this group.
+              No channels in this group. Drag a channel here or create a new one.
             </div>
           </div>
         )}
         {isExpanded && !isEmpty && (
-          <DndContext
-            sensors={sensors}
-            collisionDetection={closestCenter}
-            onDragStart={handleDragStart}
-            onDragOver={handleDragOver}
-            onDragEnd={handleDragEnd}
-          >
             <SortableContext
               items={groupChannels.map((c) => c.id)}
               strategy={verticalListSortingStrategy}
@@ -2105,7 +2267,6 @@ export function ChannelsPane({
                 ))}
               </div>
             </SortableContext>
-          </DndContext>
         )}
       </div>
     );
@@ -2617,6 +2778,82 @@ export function ChannelsPane({
         />
       )}
 
+      {/* Cross-Group Move Modal */}
+      {showCrossGroupMoveModal && crossGroupMoveData && (
+        <div className="modal-overlay" onClick={handleCrossGroupMoveCancel}>
+          <div className="modal-content cross-group-move-dialog" onClick={(e) => e.stopPropagation()}>
+            <h3>Move Channel to Group</h3>
+
+            <div className="cross-group-move-info">
+              <p>
+                Moving <strong>{crossGroupMoveData.channel.name}</strong> from{' '}
+                <span className="group-tag">{crossGroupMoveData.sourceGroupName}</span> to{' '}
+                <span className="group-tag">{crossGroupMoveData.targetGroupName}</span>
+              </p>
+            </div>
+
+            {crossGroupMoveData.isTargetAutoSync && (
+              <div className="cross-group-move-warning">
+                <span className="material-icons warning-icon">warning</span>
+                <div className="warning-text">
+                  <strong>Auto-populated group</strong>
+                  <p>
+                    The target group "{crossGroupMoveData.targetGroupName}" is managed by auto channel sync.
+                    Manually added channels may be affected when the provider syncs.
+                  </p>
+                </div>
+              </div>
+            )}
+
+            <div className="cross-group-move-options">
+              <div className="channel-number-section">
+                <label>Channel Number</label>
+                {crossGroupMoveData.minChannelInGroup !== null && crossGroupMoveData.maxChannelInGroup !== null && (
+                  <p className="group-range-info">
+                    Target group range: {crossGroupMoveData.minChannelInGroup} – {crossGroupMoveData.maxChannelInGroup}
+                  </p>
+                )}
+              </div>
+
+              <div className="move-option-buttons">
+                <button
+                  className="move-option-btn"
+                  onClick={() => handleCrossGroupMoveConfirm(true)}
+                >
+                  <span className="material-icons">numbers</span>
+                  <div className="move-option-text">
+                    <strong>Keep current number</strong>
+                    <span>Stay at channel {crossGroupMoveData.channel.channel_number ?? '(none)'}</span>
+                  </div>
+                </button>
+
+                {crossGroupMoveData.suggestedChannelNumber !== null && (
+                  <button
+                    className="move-option-btn suggested"
+                    onClick={() => handleCrossGroupMoveConfirm(false, crossGroupMoveData.suggestedChannelNumber!)}
+                  >
+                    <span className="material-icons">add_circle</span>
+                    <div className="move-option-text">
+                      <strong>Assign next available</strong>
+                      <span>Use channel {crossGroupMoveData.suggestedChannelNumber}</span>
+                    </div>
+                  </button>
+                )}
+              </div>
+            </div>
+
+            <div className="modal-actions">
+              <button
+                className="modal-btn cancel"
+                onClick={handleCrossGroupMoveCancel}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="pane-filters">
         <input
           type="text"
@@ -2633,7 +2870,7 @@ export function ChannelsPane({
           >
             <span>
               {selectedGroups.length === 0
-                ? 'All Groups'
+                ? 'No groups selected'
                 : `${selectedGroups.length} group${selectedGroups.length > 1 ? 's' : ''} selected`}
             </span>
             <span className="dropdown-arrow">{groupDropdownOpen ? '▲' : '▼'}</span>
@@ -2682,6 +2919,13 @@ export function ChannelsPane({
               <div className="group-filter-options">
                 {allGroupsSorted
                   .filter((g) => g.name.toLowerCase().includes(groupFilterSearch.toLowerCase()))
+                  .sort((a, b) => {
+                    const aSelected = selectedGroups.includes(a.id);
+                    const bSelected = selectedGroups.includes(b.id);
+                    if (aSelected && !bSelected) return -1;
+                    if (!aSelected && bSelected) return 1;
+                    return a.name.localeCompare(b.name);
+                  })
                   .map((group) => (
                     <label key={group.id} className="group-filter-option">
                       <input
@@ -2771,7 +3015,13 @@ export function ChannelsPane({
         {loading ? (
           <div className="loading">Loading channels...</div>
         ) : (
-          <>
+          <DndContext
+            sensors={sensors}
+            collisionDetection={closestCenter}
+            onDragStart={handleDragStart}
+            onDragOver={handleDragOver}
+            onDragEnd={handleDragEnd}
+          >
             {/* Render filtered groups with channels */}
             {filteredChannelGroups.map((group) =>
               renderGroup(group.id, group.name, channelsByGroup[group.id] || [])
@@ -2799,9 +3049,10 @@ export function ChannelsPane({
                 return group ? renderGroup(group.id, group.name, [], true) : null;
               })
             }
-            {selectedGroups.length === 0 &&
+            {/* Always render Uncategorized if it has channels */}
+            {channelsByGroup.ungrouped?.length > 0 &&
               renderGroup('ungrouped', 'Uncategorized', channelsByGroup.ungrouped)}
-          </>
+          </DndContext>
         )}
       </div>
     </div>
