@@ -291,3 +291,41 @@ export async function getEPGDataById(id: number): Promise<EPGData> {
 export async function getStreamProfiles(): Promise<StreamProfile[]> {
   return fetchJson(`${API_BASE}/stream-profiles`);
 }
+
+// Bulk Channel Creation
+export async function bulkCreateChannelsFromStreams(
+  streams: { id: number; name: string }[],
+  startingNumber: number,
+  channelGroupId: number | null
+): Promise<{ created: Channel[]; errors: string[] }> {
+  const created: Channel[] = [];
+  const errors: string[] = [];
+
+  for (let i = 0; i < streams.length; i++) {
+    const stream = streams[i];
+    const channelNumber = startingNumber + i;
+
+    try {
+      // Create the channel
+      const channel = await createChannel({
+        name: stream.name,
+        channel_number: channelNumber,
+        channel_group_id: channelGroupId ?? undefined,
+      });
+
+      // Add the stream to the channel
+      try {
+        await addStreamToChannel(channel.id, stream.id);
+        created.push({ ...channel, streams: [stream.id] });
+      } catch (streamError) {
+        // Channel was created but stream assignment failed
+        created.push(channel);
+        errors.push(`Channel "${stream.name}" created but stream assignment failed: ${streamError}`);
+      }
+    } catch (error) {
+      errors.push(`Failed to create channel "${stream.name}": ${error}`);
+    }
+  }
+
+  return { created, errors };
+}
