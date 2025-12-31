@@ -435,7 +435,7 @@ function DroppableGroupHeader({
       <span className="group-name">{groupName}</span>
       {isAutoSync && (
         <span className="group-auto-sync-badge" title="Auto-populated by channel sync">
-          <span className="material-icons">sync</span>
+          Auto-Sync
         </span>
       )}
       <span className="group-count">{channelCount}</span>
