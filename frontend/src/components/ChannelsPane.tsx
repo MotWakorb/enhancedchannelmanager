@@ -1161,6 +1161,8 @@ export function ChannelsPane({
   } | null>(null);
   const [customStartingNumber, setCustomStartingNumber] = useState<string>('');
   const [renumberSourceGroup, setRenumberSourceGroup] = useState<boolean>(false);
+  // Selected numbering option: 'keep' | 'suggested' | 'custom'
+  const [selectedNumberingOption, setSelectedNumberingOption] = useState<'keep' | 'suggested' | 'custom'>('suggested');
 
   // Drag overlay state
   const [activeDragId, setActiveDragId] = useState<number | null>(null);
@@ -2203,6 +2205,8 @@ export function ChannelsPane({
         sourceGroupMinChannel,
       });
       setRenumberSourceGroup(false);  // Reset the checkbox when showing modal
+      setSelectedNumberingOption('suggested');  // Default to suggested option
+      setCustomStartingNumber('');  // Clear custom number input
       setShowCrossGroupMoveModal(true);
 
       return;
@@ -2586,6 +2590,37 @@ export function ChannelsPane({
     setShowCrossGroupMoveModal(false);
     setCrossGroupMoveData(null);
     setCustomStartingNumber('');
+  };
+
+  // Handle the Move button click based on selected option
+  const handleMoveButtonClick = () => {
+    if (!crossGroupMoveData) return;
+
+    switch (selectedNumberingOption) {
+      case 'keep':
+        handleCrossGroupMoveConfirm(true, undefined, renumberSourceGroup);
+        break;
+      case 'suggested':
+        if (crossGroupMoveData.suggestedChannelNumber !== null) {
+          handleCrossGroupMoveConfirm(false, crossGroupMoveData.suggestedChannelNumber, renumberSourceGroup);
+        }
+        break;
+      case 'custom':
+        const customNum = parseInt(customStartingNumber, 10);
+        if (!isNaN(customNum) && customNum >= 1) {
+          handleCrossGroupMoveConfirm(false, customNum, renumberSourceGroup);
+        }
+        break;
+    }
+  };
+
+  // Check if Move button should be enabled
+  const isMoveButtonEnabled = () => {
+    if (selectedNumberingOption === 'custom') {
+      const customNum = parseInt(customStartingNumber, 10);
+      return !isNaN(customNum) && customNum >= 1;
+    }
+    return true;
   };
 
   const renderGroup = (groupId: number | 'ungrouped', groupName: string, groupChannels: Channel[], isEmpty: boolean = false) => {
@@ -3288,11 +3323,15 @@ export function ChannelsPane({
                 )}
               </div>
 
-              <div className="move-option-buttons">
-                <button
-                  className="move-option-btn"
-                  onClick={() => handleCrossGroupMoveConfirm(true, undefined, renumberSourceGroup)}
-                >
+              <div className="move-option-radio-group">
+                {/* Keep current numbers option */}
+                <label className={`move-option-radio ${selectedNumberingOption === 'keep' ? 'selected' : ''}`}>
+                  <input
+                    type="radio"
+                    name="numberingOption"
+                    checked={selectedNumberingOption === 'keep'}
+                    onChange={() => setSelectedNumberingOption('keep')}
+                  />
                   <span className="material-icons">numbers</span>
                   <div className="move-option-text">
                     <strong>Keep current numbers</strong>
@@ -3302,13 +3341,17 @@ export function ChannelsPane({
                       <span>Keep existing channel numbers</span>
                     )}
                   </div>
-                </button>
+                </label>
 
+                {/* Suggested number option */}
                 {crossGroupMoveData.suggestedChannelNumber !== null && (
-                  <button
-                    className="move-option-btn suggested"
-                    onClick={() => handleCrossGroupMoveConfirm(false, crossGroupMoveData.suggestedChannelNumber!, renumberSourceGroup)}
-                  >
+                  <label className={`move-option-radio ${selectedNumberingOption === 'suggested' ? 'selected' : ''}`}>
+                    <input
+                      type="radio"
+                      name="numberingOption"
+                      checked={selectedNumberingOption === 'suggested'}
+                      onChange={() => setSelectedNumberingOption('suggested')}
+                    />
                     <span className="material-icons">{crossGroupMoveData.insertAtPosition ? 'playlist_add' : 'add_circle'}</span>
                     <div className="move-option-text">
                       <strong>{crossGroupMoveData.insertAtPosition ? 'Insert at position' : 'Assign sequential numbers'}</strong>
@@ -3318,37 +3361,43 @@ export function ChannelsPane({
                         <span>Starting at {crossGroupMoveData.suggestedChannelNumber} ({crossGroupMoveData.suggestedChannelNumber}–{crossGroupMoveData.suggestedChannelNumber + crossGroupMoveData.channels.length - 1})</span>
                       )}
                     </div>
-                  </button>
+                  </label>
                 )}
 
-                <div className="move-option-custom">
-                  <div className="custom-number-row">
-                    <span className="material-icons">edit</span>
-                    <div className="move-option-text">
-                      <strong>Custom starting number</strong>
-                    </div>
+                {/* Custom number option */}
+                <label className={`move-option-radio ${selectedNumberingOption === 'custom' ? 'selected' : ''}`}>
+                  <input
+                    type="radio"
+                    name="numberingOption"
+                    checked={selectedNumberingOption === 'custom'}
+                    onChange={() => setSelectedNumberingOption('custom')}
+                  />
+                  <span className="material-icons">edit</span>
+                  <div className="move-option-text">
+                    <strong>Custom starting number</strong>
+                    <span>Enter a specific channel number</span>
+                  </div>
+                </label>
+
+                {/* Custom number input - only visible when custom is selected */}
+                {selectedNumberingOption === 'custom' && (
+                  <div className="custom-number-input-row">
                     <input
                       type="number"
                       className="custom-number-input"
-                      placeholder="Enter number"
+                      placeholder="Enter channel number"
                       value={customStartingNumber}
                       onChange={(e) => setCustomStartingNumber(e.target.value)}
                       min="1"
+                      autoFocus
                     />
-                    <button
-                      className="custom-number-apply-btn"
-                      disabled={!customStartingNumber || isNaN(parseInt(customStartingNumber, 10)) || parseInt(customStartingNumber, 10) < 1}
-                      onClick={() => handleCrossGroupMoveConfirm(false, parseInt(customStartingNumber, 10), renumberSourceGroup)}
-                    >
-                      Apply
-                    </button>
+                    {customStartingNumber && !isNaN(parseInt(customStartingNumber, 10)) && parseInt(customStartingNumber, 10) >= 1 && crossGroupMoveData.channels.length > 1 && (
+                      <span className="custom-number-range">
+                        Channels will be {parseInt(customStartingNumber, 10)}–{parseInt(customStartingNumber, 10) + crossGroupMoveData.channels.length - 1}
+                      </span>
+                    )}
                   </div>
-                  {customStartingNumber && !isNaN(parseInt(customStartingNumber, 10)) && parseInt(customStartingNumber, 10) >= 1 && crossGroupMoveData.channels.length > 1 && (
-                    <span className="custom-number-range">
-                      Channels will be {parseInt(customStartingNumber, 10)}–{parseInt(customStartingNumber, 10) + crossGroupMoveData.channels.length - 1}
-                    </span>
-                  )}
-                </div>
+                )}
               </div>
             </div>
 
@@ -3377,6 +3426,13 @@ export function ChannelsPane({
                 onClick={handleCrossGroupMoveCancel}
               >
                 Cancel
+              </button>
+              <button
+                className="modal-btn primary"
+                onClick={handleMoveButtonClick}
+                disabled={!isMoveButtonEnabled()}
+              >
+                Move {crossGroupMoveData.channels.length > 1 ? `${crossGroupMoveData.channels.length} Channels` : 'Channel'}
               </button>
             </div>
           </div>

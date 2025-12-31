@@ -2144,46 +2144,50 @@
   font-size: 0.85rem;
 }
 
-.move-option-buttons {
+/* Radio button option group */
+.move-option-radio-group {
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
 }
 
-.move-option-btn {
+.move-option-radio {
   display: flex;
   align-items: center;
   gap: 0.75rem;
   width: 100%;
-  padding: 0.875rem 1rem;
+  padding: 0.75rem 1rem;
   background-color: #2d2d2d;
   border: 1px solid #404040;
   border-radius: 6px;
   cursor: pointer;
-  text-align: left;
   transition: all 0.15s;
 }
 
-.move-option-btn:hover {
+.move-option-radio:hover {
   background-color: #3d3d3d;
   border-color: #555;
 }
 
-.move-option-btn.suggested {
+.move-option-radio.selected {
   border-color: #646cff;
   background-color: rgba(100, 108, 255, 0.1);
 }
 
-.move-option-btn.suggested:hover {
-  background-color: rgba(100, 108, 255, 0.2);
+.move-option-radio input[type="radio"] {
+  width: 18px;
+  height: 18px;
+  accent-color: #646cff;
+  cursor: pointer;
+  flex-shrink: 0;
 }
 
-.move-option-btn .material-icons {
-  font-size: 1.5rem;
+.move-option-radio .material-icons {
+  font-size: 1.25rem;
   color: #888;
 }
 
-.move-option-btn.suggested .material-icons {
+.move-option-radio.selected .material-icons {
   color: #646cff;
 }
 
@@ -2203,37 +2207,17 @@
   font-size: 0.8rem;
 }
 
-/* Custom starting number option */
-.move-option-custom {
+/* Custom number input row */
+.custom-number-input-row {
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
-  padding: 0.75rem 1rem;
-  background: #2a2a2a;
-  border: 1px solid #444;
-  border-radius: 8px;
-  margin-top: 0.5rem;
-}
-
-.custom-number-row {
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
-}
-
-.custom-number-row .material-icons {
-  font-size: 1.5rem;
-  color: #888;
-}
-
-.custom-number-row .move-option-text {
-  flex: 0 0 auto;
+  margin-left: 2.75rem;
+  padding: 0.5rem 0;
 }
 
 .custom-number-input {
-  flex: 1;
-  min-width: 120px;
-  max-width: 140px;
+  width: 180px;
   padding: 0.5rem 0.75rem;
   background: #1a1a1a;
   border: 1px solid #555;
@@ -2251,32 +2235,9 @@
   color: #666;
 }
 
-.custom-number-apply-btn {
-  padding: 0.5rem 1rem;
-  background: #646cff;
-  color: #fff;
-  border: none;
-  border-radius: 4px;
-  font-size: 0.85rem;
-  font-weight: 500;
-  cursor: pointer;
-  transition: background-color 0.15s;
-}
-
-.custom-number-apply-btn:hover:not(:disabled) {
-  background: #5558dd;
-}
-
-.custom-number-apply-btn:disabled {
-  background: #444;
-  color: #666;
-  cursor: not-allowed;
-}
-
 .custom-number-range {
   color: #888;
   font-size: 0.8rem;
-  margin-left: 2.25rem;
 }
 
 /* Source Group Renumbering Option */
