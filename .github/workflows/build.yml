@@ -195,14 +195,14 @@ jobs:
         with:
           context: .
           load: true
-          tags: ${{ env.IMAGE_NAME }}:scan
+          tags: ecm-scan:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
       - name: Run Trivy vulnerability scanner
         uses: aquasecurity/trivy-action@master
         with:
-          image-ref: ${{ env.IMAGE_NAME }}:scan
+          image-ref: ecm-scan:latest
           format: 'table'
           exit-code: '1'
           ignore-unfixed: true
