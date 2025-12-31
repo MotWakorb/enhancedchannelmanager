@@ -63,6 +63,27 @@ export interface M3UAccount {
   is_active: boolean;
 }
 
+export interface M3UGroupSetting {
+  channel_group: number;
+  enabled: boolean;
+  auto_channel_sync: boolean;
+  auto_sync_channel_start: number | null;
+  m3u_account_id: number;
+  m3u_account_name: string;
+  custom_properties?: {
+    group_override?: number;
+    [key: string]: unknown;
+  };
+}
+
+export interface ChannelListFilterSettings {
+  showEmptyGroups: boolean;
+  showNewlyCreatedGroups: boolean;
+  showProviderGroups: boolean;
+  showManualGroups: boolean;
+  showAutoChannelGroups: boolean;
+}
+
 export interface Logo {
   id: number;
   name: string;

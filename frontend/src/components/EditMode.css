@@ -119,6 +119,8 @@
 }
 
 .edit-mode-banner-btn.discard {
+  display: flex;
+  align-items: center;
   background-color: rgba(248, 113, 113, 0.2);
   color: #f87171;
 }

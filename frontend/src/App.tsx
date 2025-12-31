@@ -4,12 +4,11 @@ import {
   StreamsPane,
   SettingsModal,
   SplitPane,
-  EditModeBanner,
   EditModeExitDialog,
 } from './components';
 import { useChangeHistory, useEditMode } from './hooks';
 import * as api from './services/api';
-import type { Channel, ChannelGroup, Stream, M3UAccount, Logo, ChangeInfo, EPGData, StreamProfile, EPGSource } from './types';
+import type { Channel, ChannelGroup, Stream, M3UAccount, M3UGroupSetting, Logo, ChangeInfo, EPGData, StreamProfile, EPGSource, ChannelListFilterSettings } from './types';
 import './App.css';
 
 function App() {
@@ -49,6 +48,25 @@ function App() {
   // Settings state
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [autoRenameChannelNumber, setAutoRenameChannelNumber] = useState(false);
+
+  // Provider group settings (for identifying auto channel sync groups)
+  const [providerGroupSettings, setProviderGroupSettings] = useState<Record<number, M3UGroupSetting>>({});
+
+  // Channel list filter settings (persisted to localStorage)
+  const defaultFilterSettings: ChannelListFilterSettings = {
+    showEmptyGroups: false,
+    showNewlyCreatedGroups: true,
+    showProviderGroups: true,
+    showManualGroups: true,
+    showAutoChannelGroups: true,
+  };
+  const [channelListFilters, setChannelListFilters] = useState<ChannelListFilterSettings>(() => {
+    const saved = localStorage.getItem('channelListFilters');
+    return saved ? JSON.parse(saved) : defaultFilterSettings;
+  });
+
+  // Track newly created group IDs in this session
+  const [newlyCreatedGroupIds, setNewlyCreatedGroupIds] = useState<Set<number>>(new Set());
 
   // Track if baseline has been initialized
   const baselineInitialized = useRef(false);
@@ -154,6 +172,7 @@ function App() {
         loadChannelGroups();
         loadChannels();
         loadProviders();
+        loadProviderGroupSettings();
         loadStreamGroups();
         loadStreams();
         loadLogos();
@@ -184,6 +203,7 @@ function App() {
     loadChannelGroups();
     loadChannels();
     loadProviders();
+    loadProviderGroupSettings();
     loadStreamGroups();
     loadStreams();
     loadLogos();
@@ -200,6 +220,27 @@ function App() {
       console.error('Failed to load channel groups:', err);
     }
   };
+
+  const loadProviderGroupSettings = async () => {
+    try {
+      const settings = await api.getProviderGroupSettings();
+      setProviderGroupSettings(settings);
+    } catch (err) {
+      console.error('Failed to load provider group settings:', err);
+    }
+  };
+
+  const updateChannelListFilters = useCallback((updates: Partial<ChannelListFilterSettings>) => {
+    setChannelListFilters((prev) => {
+      const newFilters = { ...prev, ...updates };
+      localStorage.setItem('channelListFilters', JSON.stringify(newFilters));
+      return newFilters;
+    });
+  }, []);
+
+  const trackNewlyCreatedGroup = useCallback((groupId: number) => {
+    setNewlyCreatedGroupIds((prev) => new Set([...prev, groupId]));
+  }, []);
 
   const loadChannels = async () => {
     setChannelsLoading(true);
@@ -599,12 +640,6 @@ function App() {
           Settings
         </button>
       </header>
-      {isEditMode && (
-        <EditModeBanner
-          stagedCount={stagedOperationCount}
-          duration={editModeDuration}
-        />
-      )}
       <EditModeExitDialog
         isOpen={showExitDialog}
         summary={getSummary()}
@@ -650,8 +685,10 @@ function App() {
               // Edit mode toggle props
               onEnterEditMode={enterEditMode}
               onExitEditMode={handleExitEditMode}
+              onCancelEditMode={discard}
               isCommitting={isCommitting}
               stagedOperationCount={stagedOperationCount}
+              editModeDuration={editModeDuration}
               // History toolbar props
               canUndo={isEditMode ? canLocalUndo : canUndo}
               canRedo={isEditMode ? canLocalRedo : canRedo}
@@ -668,11 +705,18 @@ function App() {
               onDeleteSavePoint={deleteSavePoint}
               logos={logos}
               onLogosChange={loadLogos}
+              onChannelGroupsChange={loadChannelGroups}
               // EPG and Stream Profile props
               epgData={epgData}
               epgSources={epgSources}
               streamProfiles={streamProfiles}
               epgDataLoading={epgDataLoading}
+              // Channel list filter props
+              providerGroupSettings={providerGroupSettings}
+              channelListFilters={channelListFilters}
+              onChannelListFiltersChange={updateChannelListFilters}
+              newlyCreatedGroupIds={newlyCreatedGroupIds}
+              onTrackNewlyCreatedGroup={trackNewlyCreatedGroup}
             />
           }
           right={

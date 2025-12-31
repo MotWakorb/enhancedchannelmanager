@@ -3,6 +3,7 @@ import type {
   ChannelGroup,
   Stream,
   M3UAccount,
+  M3UGroupSetting,
   Logo,
   PaginatedResponse,
   EPGSource,
@@ -157,6 +158,10 @@ export async function getStreamGroups(): Promise<string[]> {
 // M3U Accounts (Providers)
 export async function getM3UAccounts(): Promise<M3UAccount[]> {
   return fetchJson(`${API_BASE}/providers`);
+}
+
+export async function getProviderGroupSettings(): Promise<Record<number, M3UGroupSetting>> {
+  return fetchJson(`${API_BASE}/providers/group-settings`);
 }
 
 // Health check

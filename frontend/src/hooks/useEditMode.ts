@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef, useMemo } from 'react';
+import { useState, useCallback, useRef, useEffect } from 'react';
 import type {
   Channel,
   ChannelSnapshot,
@@ -638,10 +638,24 @@ export function useEditMode({
     onError,
   ]);
 
-  // Compute edit mode duration
-  const editModeDuration = useMemo(() => {
-    if (!state.isActive || !state.enteredAt) return null;
-    return Date.now() - state.enteredAt;
+  // Compute edit mode duration with live updates
+  const [editModeDuration, setEditModeDuration] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (!state.isActive || !state.enteredAt) {
+      setEditModeDuration(null);
+      return;
+    }
+
+    // Update immediately
+    setEditModeDuration(Date.now() - state.enteredAt);
+
+    // Update every second
+    const interval = setInterval(() => {
+      setEditModeDuration(Date.now() - state.enteredAt!);
+    }, 1000);
+
+    return () => clearInterval(interval);
   }, [state.isActive, state.enteredAt]);
 
   // Determine which channels to display
