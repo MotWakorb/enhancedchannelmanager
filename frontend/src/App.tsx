@@ -96,6 +96,8 @@ function App() {
     stageRemoveStream,
     stageReorderStreams,
     stageBulkAssignNumbers,
+    stageDeleteChannel,
+    stageDeleteChannelGroup,
     addChannelToWorkingCopy,
     getSummary,
     commit,
@@ -901,6 +903,8 @@ function App() {
               onStageRemoveStream={stageRemoveStream}
               onStageReorderStreams={stageReorderStreams}
               onStageBulkAssignNumbers={stageBulkAssignNumbers}
+              onStageDeleteChannel={stageDeleteChannel}
+              onStageDeleteChannelGroup={stageDeleteChannelGroup}
               onStartBatch={startBatch}
               onEndBatch={endBatch}
               isCommitting={isCommitting}

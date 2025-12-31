@@ -17,7 +17,9 @@ export type ApiCallSpec =
   | { type: 'removeStreamFromChannel'; channelId: number; streamId: number }
   | { type: 'reorderChannelStreams'; channelId: number; streamIds: number[] }
   | { type: 'bulkAssignChannelNumbers'; channelIds: number[]; startingNumber?: number }
-  | { type: 'createChannel'; name: string; channelNumber?: number; groupId?: number };
+  | { type: 'createChannel'; name: string; channelNumber?: number; groupId?: number }
+  | { type: 'deleteChannel'; channelId: number }
+  | { type: 'deleteChannelGroup'; groupId: number };
 
 /**
  * A staged operation in the edit mode queue
@@ -65,6 +67,8 @@ export interface EditModeSummary {
   channelNumberChanges: number;
   channelNameChanges: number;
   newChannels: number;
+  deletedChannels: number;
+  deletedGroups: number;
   // Detailed list of all operations with descriptions
   operationDetails: OperationDetail[];
 }
@@ -151,6 +155,8 @@ export interface UseEditModeReturn {
   stageReorderStreams: (channelId: number, streamIds: number[], description: string) => void;
   stageBulkAssignNumbers: (channelIds: number[], startingNumber: number, description: string) => void;
   stageCreateChannel: (name: string, channelNumber?: number, groupId?: number) => number; // returns temp ID
+  stageDeleteChannel: (channelId: number, description: string) => void;
+  stageDeleteChannelGroup: (groupId: number, description: string) => void;
   addChannelToWorkingCopy: (channel: Channel) => void; // Add a newly created channel to working copy
 
   // Local undo/redo (within edit session)
