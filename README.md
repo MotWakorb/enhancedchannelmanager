@@ -134,21 +134,14 @@ Fine-tune which groups appear in the channel list:
 ```yaml
 services:
   ecm:
-    build: .
+    image: ghcr.io/motwakorb/enhancedchannelmanager:latest
     ports:
-      - "8080:8080"
-    environment:
-      - DISPATCHARR_URL=http://your-dispatcharr-server:port
+      - "8080:8000"
     volumes:
       - ./config:/config
 ```
 
-### Environment Variables
-
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `DISPATCHARR_URL` | URL of your Dispatcharr server | Required |
-| `PORT` | Port to run the server on | 8080 |
+The Dispatcharr URL can be configured through the Settings modal in the UI, which persists to the config volume.
 
 ### Development
 
