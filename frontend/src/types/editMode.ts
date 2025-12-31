@@ -165,6 +165,7 @@ export interface EditModeToggleProps {
 export interface EditModeBannerProps {
   stagedCount: number;
   duration: number | null;
+  onCancel: () => void;
 }
 
 /**

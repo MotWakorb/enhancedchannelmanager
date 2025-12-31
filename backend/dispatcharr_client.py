@@ -240,6 +240,34 @@ class DispatcharrClient:
         response.raise_for_status()
         return response.json()
 
+    async def get_all_m3u_group_settings(self) -> dict:
+        """Get group settings for all M3U accounts, returns dict mapping channel_group_id to settings.
+
+        The channel_groups data is embedded in the accounts response, so we extract it from there.
+        When multiple accounts have settings for the same group, prefer the one with auto_channel_sync enabled.
+        """
+        accounts = await self.get_m3u_accounts()
+        all_settings = {}
+        for account in accounts:
+            # channel_groups is embedded in the account response
+            channel_groups = account.get("channel_groups", [])
+            for setting in channel_groups:
+                channel_group_id = setting.get("channel_group")
+                if channel_group_id:
+                    new_setting = {
+                        **setting,
+                        "m3u_account_id": account["id"],
+                        "m3u_account_name": account.get("name", ""),
+                    }
+                    # If this group already exists, only overwrite if new setting has auto_channel_sync
+                    # and existing one doesn't (prefer the one with auto_channel_sync enabled)
+                    existing = all_settings.get(channel_group_id)
+                    if existing is None:
+                        all_settings[channel_group_id] = new_setting
+                    elif new_setting.get("auto_channel_sync") and not existing.get("auto_channel_sync"):
+                        all_settings[channel_group_id] = new_setting
+        return all_settings
+
     # -------------------------------------------------------------------------
     # Logos
     # -------------------------------------------------------------------------
