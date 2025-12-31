@@ -20,6 +20,8 @@ function App() {
   const [channels, setChannels] = useState<Channel[]>([]);
   const [channelGroups, setChannelGroups] = useState<ChannelGroup[]>([]);
   const [selectedChannel, setSelectedChannel] = useState<Channel | null>(null);
+  const [selectedChannelIds, setSelectedChannelIds] = useState<Set<number>>(new Set());
+  const [lastSelectedChannelId, setLastSelectedChannelId] = useState<number | null>(null);
   const [channelsLoading, setChannelsLoading] = useState(true);
   const [channelSearch, setChannelSearch] = useState('');
   const [channelGroupFilter, setChannelGroupFilter] = useState<number[]>([]);
@@ -465,6 +467,51 @@ function App() {
     setSelectedChannel(channel);
   };
 
+  // Multi-select handlers
+  const handleToggleChannelSelection = useCallback((channelId: number, addToSelection: boolean) => {
+    setSelectedChannelIds((prev) => {
+      const newSet = new Set(prev);
+      if (addToSelection) {
+        if (newSet.has(channelId)) {
+          newSet.delete(channelId);
+        } else {
+          newSet.add(channelId);
+        }
+      } else {
+        // Single select - clear others and select this one
+        newSet.clear();
+        newSet.add(channelId);
+      }
+      return newSet;
+    });
+    setLastSelectedChannelId(channelId);
+  }, []);
+
+  const handleClearChannelSelection = useCallback(() => {
+    setSelectedChannelIds(new Set());
+    setLastSelectedChannelId(null);
+  }, []);
+
+  const handleSelectChannelRange = useCallback((fromId: number, toId: number, groupChannelIds: number[]) => {
+    // Select all channels between fromId and toId within the given group's channels (in display order)
+    const fromIndex = groupChannelIds.indexOf(fromId);
+    const toIndex = groupChannelIds.indexOf(toId);
+
+    if (fromIndex === -1 || toIndex === -1) return;
+
+    const startIndex = Math.min(fromIndex, toIndex);
+    const endIndex = Math.max(fromIndex, toIndex);
+
+    const rangeIds = groupChannelIds.slice(startIndex, endIndex + 1);
+
+    setSelectedChannelIds((prev) => {
+      const newSet = new Set(prev);
+      rangeIds.forEach((id) => newSet.add(id));
+      return newSet;
+    });
+    setLastSelectedChannelId(toId);
+  }, []);
+
   const handleChannelUpdate = useCallback(
     (updatedChannel: Channel, changeInfo?: ChangeInfo) => {
       const originalChannel = channels.find((ch) => ch.id === updatedChannel.id);
@@ -739,6 +786,12 @@ function App() {
               onChannelListFiltersChange={updateChannelListFilters}
               newlyCreatedGroupIds={newlyCreatedGroupIds}
               onTrackNewlyCreatedGroup={trackNewlyCreatedGroup}
+              // Multi-select props
+              selectedChannelIds={selectedChannelIds}
+              lastSelectedChannelId={lastSelectedChannelId}
+              onToggleChannelSelection={handleToggleChannelSelection}
+              onClearChannelSelection={handleClearChannelSelection}
+              onSelectChannelRange={handleSelectChannelRange}
             />
           }
           right={

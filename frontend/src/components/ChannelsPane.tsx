@@ -103,6 +103,12 @@ interface ChannelsPaneProps {
   onChannelListFiltersChange?: (updates: Partial<ChannelListFilterSettings>) => void;
   newlyCreatedGroupIds?: Set<number>;
   onTrackNewlyCreatedGroup?: (groupId: number) => void;
+  // Multi-select props
+  selectedChannelIds?: Set<number>;
+  lastSelectedChannelId?: number | null;
+  onToggleChannelSelection?: (channelId: number, addToSelection: boolean) => void;
+  onClearChannelSelection?: () => void;
+  onSelectChannelRange?: (fromId: number, toId: number, groupChannelIds: number[]) => void;
 }
 
 interface GroupState {
@@ -112,6 +118,7 @@ interface GroupState {
 interface SortableChannelProps {
   channel: Channel;
   isSelected: boolean;
+  isMultiSelected: boolean;
   isExpanded: boolean;
   isDragOver: boolean;
   isEditingNumber: boolean;
@@ -121,6 +128,7 @@ interface SortableChannelProps {
   editingNumber: string;
   editingName: string;
   logoUrl: string | null;
+  multiSelectCount: number;
   onEditingNumberChange: (value: string) => void;
   onEditingNameChange: (value: string) => void;
   onStartEditNumber: (e: React.MouseEvent) => void;
@@ -129,7 +137,9 @@ interface SortableChannelProps {
   onSaveName: () => void;
   onCancelEditNumber: () => void;
   onCancelEditName: () => void;
-  onClick: () => void;
+  onClick: (e: React.MouseEvent) => void;
+  onToggleExpand: () => void;
+  onToggleSelect: (e: React.MouseEvent) => void;
   onStreamDragOver: (e: React.DragEvent) => void;
   onStreamDragLeave: () => void;
   onStreamDrop: (e: React.DragEvent) => void;
@@ -202,6 +212,7 @@ function SortableStreamItem({ stream, providerName, isEditMode, onRemove }: Sort
 function SortableChannel({
   channel,
   isSelected,
+  isMultiSelected,
   isExpanded,
   isDragOver,
   isEditingNumber,
@@ -211,6 +222,7 @@ function SortableChannel({
   editingNumber,
   editingName,
   logoUrl,
+  multiSelectCount,
   onEditingNumberChange,
   onEditingNameChange,
   onStartEditNumber,
@@ -220,6 +232,8 @@ function SortableChannel({
   onCancelEditNumber,
   onCancelEditName,
   onClick,
+  onToggleExpand,
+  onToggleSelect,
   onStreamDragOver,
   onStreamDragLeave,
   onStreamDrop,
@@ -261,21 +275,43 @@ function SortableChannel({
     <div
       ref={setNodeRef}
       style={style}
-      className={`channel-item ${isSelected ? 'selected' : ''} ${isDragOver ? 'drag-over' : ''} ${isDragging ? 'dragging' : ''} ${isModified ? 'channel-modified' : ''}`}
+      className={`channel-item ${isSelected ? 'selected' : ''} ${isMultiSelected ? 'multi-selected' : ''} ${isDragOver ? 'drag-over' : ''} ${isDragging ? 'dragging' : ''} ${isModified ? 'channel-modified' : ''}`}
       onClick={onClick}
       onDragOver={onStreamDragOver}
       onDragLeave={onStreamDragLeave}
       onDrop={onStreamDrop}
     >
+      {isEditMode && (
+        <span
+          className={`channel-select-indicator ${isMultiSelected ? 'selected' : ''}`}
+          onClick={onToggleSelect}
+          title="Click to select/deselect"
+        >
+          {isMultiSelected ? (
+            <span className="material-icons">check_box</span>
+          ) : (
+            <span className="material-icons">check_box_outline_blank</span>
+          )}
+        </span>
+      )}
       <span
         className={`channel-drag-handle ${!isEditMode ? 'disabled' : ''}`}
         {...attributes}
         {...listeners}
-        title={isEditMode ? 'Drag to reorder' : 'Enter Edit Mode to reorder channels'}
+        title={isEditMode ? (multiSelectCount > 1 && isMultiSelected ? `Drag ${multiSelectCount} channels` : 'Drag to reorder') : 'Enter Edit Mode to reorder channels'}
       >
         ⋮⋮
       </span>
-      <span className="channel-expand-icon">{isExpanded ? '▼' : '▶'}</span>
+      <span
+        className="channel-expand-icon"
+        onClick={(e) => {
+          e.stopPropagation();
+          onToggleExpand();
+        }}
+        title="Click to expand/collapse"
+      >
+        {isExpanded ? '▼' : '▶'}
+      </span>
       <div
         className={`channel-logo-container ${isEditMode ? 'editable' : ''}`}
         onClick={(e) => {
@@ -1041,6 +1077,12 @@ export function ChannelsPane({
   onChannelListFiltersChange,
   newlyCreatedGroupIds = new Set(),
   onTrackNewlyCreatedGroup,
+  // Multi-select props
+  selectedChannelIds = new Set(),
+  lastSelectedChannelId = null,
+  onToggleChannelSelection,
+  onClearChannelSelection,
+  onSelectChannelRange,
 }: ChannelsPaneProps) {
   // Suppress unused variable warnings - these are passed through but handled in parent
   void _onStageAddStream;
@@ -1103,7 +1145,7 @@ export function ChannelsPane({
   // Cross-group move modal state
   const [showCrossGroupMoveModal, setShowCrossGroupMoveModal] = useState(false);
   const [crossGroupMoveData, setCrossGroupMoveData] = useState<{
-    channel: Channel;
+    channels: Channel[];  // Changed from single channel to array
     targetGroupId: number | null;
     targetGroupName: string;
     sourceGroupName: string;
@@ -1112,6 +1154,7 @@ export function ChannelsPane({
     minChannelInGroup: number | null;
     maxChannelInGroup: number | null;
   } | null>(null);
+  const [customStartingNumber, setCustomStartingNumber] = useState<string>('');
 
   // Stream reorder sensors (separate from channel reorder)
   const streamSensors = useSensors(
@@ -1216,12 +1259,65 @@ export function ChannelsPane({
     loadStreams();
   }, [selectedChannelId, channels, isEditMode, allStreams]);
 
-  // Handle channel click - toggle selection
-  const handleChannelClick = (channel: Channel) => {
+  // Handle channel row click - in edit mode handles multi-select, outside edit mode expands
+  const handleChannelClick = (channel: Channel, e: React.MouseEvent, groupChannelIds: number[]) => {
+    // In edit mode, clicking the row handles selection (Ctrl/Shift modifiers)
+    if (isEditMode) {
+      const isCtrlOrCmd = e.ctrlKey || e.metaKey;
+      const isShift = e.shiftKey;
+
+      if (isShift && lastSelectedChannelId !== null && onSelectChannelRange) {
+        // Shift+click: select range from last selected to current
+        onSelectChannelRange(lastSelectedChannelId, channel.id, groupChannelIds);
+        return;
+      }
+
+      if (isCtrlOrCmd && onToggleChannelSelection) {
+        // Ctrl/Cmd+click: toggle selection
+        onToggleChannelSelection(channel.id, true);
+        return;
+      }
+
+      // Regular click in edit mode: just select this one channel (clear others)
+      if (onToggleChannelSelection) {
+        onToggleChannelSelection(channel.id, false);
+      }
+      return;
+    }
+
+    // Outside edit mode: toggle expand/collapse
     if (selectedChannelId === channel.id) {
       onChannelSelect(null); // Collapse if already selected
     } else {
       onChannelSelect(channel);
+    }
+  };
+
+  // Handle expand icon click - toggle expand/collapse
+  const handleToggleExpand = (channel: Channel) => {
+    if (selectedChannelId === channel.id) {
+      onChannelSelect(null); // Collapse
+    } else {
+      onChannelSelect(channel); // Expand
+    }
+  };
+
+  // Handle checkbox click - toggle selection
+  const handleToggleSelect = (channel: Channel, e: React.MouseEvent, groupChannelIds: number[]) => {
+    e.stopPropagation();
+
+    const isCtrlOrCmd = e.ctrlKey || e.metaKey;
+    const isShift = e.shiftKey;
+
+    if (isShift && lastSelectedChannelId !== null && onSelectChannelRange) {
+      // Shift+click: select range
+      onSelectChannelRange(lastSelectedChannelId, channel.id, groupChannelIds);
+      return;
+    }
+
+    if (onToggleChannelSelection) {
+      // Toggle this channel's selection (add to existing if Ctrl held, otherwise just this one)
+      onToggleChannelSelection(channel.id, isCtrlOrCmd || selectedChannelIds.size > 0);
     }
   };
 
@@ -1899,6 +1995,20 @@ export function ChannelsPane({
       const targetGroupId = overId.replace('group-', '');
       const newGroupId = targetGroupId === 'ungrouped' ? null : parseInt(targetGroupId, 10);
 
+      // Collect channels to move: if the dragged channel is part of multi-selection, move all selected
+      // Otherwise, just move the single dragged channel
+      let channelsToMove: Channel[] = [];
+      if (selectedChannelIds.has(activeChannel.id) && selectedChannelIds.size > 1) {
+        // Multi-selection: collect all selected channels from the same source group
+        channelsToMove = localChannels.filter(
+          (ch) => selectedChannelIds.has(ch.id) && ch.channel_group_id === activeChannel.channel_group_id
+        );
+        // Sort by channel number for consistent ordering
+        channelsToMove.sort((a, b) => (a.channel_number ?? 0) - (b.channel_number ?? 0));
+      } else {
+        channelsToMove = [activeChannel];
+      }
+
       // Don't do anything if dropping on the same group
       if ((newGroupId === null && activeChannel.channel_group_id === null) ||
           (newGroupId !== null && activeChannel.channel_group_id === newGroupId)) {
@@ -1941,7 +2051,7 @@ export function ChannelsPane({
 
       // Show the modal instead of immediately moving
       setCrossGroupMoveData({
-        channel: activeChannel,
+        channels: channelsToMove,
         targetGroupId: newGroupId,
         targetGroupName,
         sourceGroupName,
@@ -2124,58 +2234,79 @@ export function ChannelsPane({
     }
   };
 
-  // Handle cross-group move confirmation
-  const handleCrossGroupMoveConfirm = (keepChannelNumber: boolean, newChannelNumber?: number) => {
+  // Handle cross-group move confirmation (supports multiple channels)
+  const handleCrossGroupMoveConfirm = (keepChannelNumber: boolean, startingChannelNumber?: number) => {
     if (!crossGroupMoveData) return;
 
-    const { channel, targetGroupId, targetGroupName, sourceGroupName } = crossGroupMoveData;
+    const { channels: channelsToMove, targetGroupId, targetGroupName, sourceGroupName } = crossGroupMoveData;
 
-    // Determine the final channel number
-    let finalChannelNumber = channel.channel_number;
-    if (!keepChannelNumber && newChannelNumber !== undefined) {
-      finalChannelNumber = newChannelNumber;
-    }
+    // Build updates for each channel
+    const channelUpdates: Array<{
+      channel: Channel;
+      finalChannelNumber: number | null;
+      finalName: string;
+    }> = [];
 
-    // Check if auto-rename applies when changing channel number
-    let finalName = channel.name;
-    if (!keepChannelNumber && newChannelNumber !== undefined && newChannelNumber !== channel.channel_number) {
-      const newName = computeAutoRename(channel.name, channel.channel_number, newChannelNumber);
-      if (newName) {
-        finalName = newName;
+    channelsToMove.forEach((channel, index) => {
+      // Determine the final channel number
+      let finalChannelNumber = channel.channel_number;
+      if (!keepChannelNumber && startingChannelNumber !== undefined) {
+        // Assign sequential numbers starting from the suggested number
+        finalChannelNumber = startingChannelNumber + index;
       }
-    }
+
+      // Check if auto-rename applies when changing channel number
+      let finalName = channel.name;
+      if (!keepChannelNumber && finalChannelNumber !== null && finalChannelNumber !== channel.channel_number) {
+        const newName = computeAutoRename(channel.name, channel.channel_number, finalChannelNumber);
+        if (newName) {
+          finalName = newName;
+        }
+      }
+
+      channelUpdates.push({ channel, finalChannelNumber, finalName });
+    });
 
     // Update local state immediately
     const updatedChannels = localChannels.map((ch) => {
-      if (ch.id === channel.id) {
+      const update = channelUpdates.find((u) => u.channel.id === ch.id);
+      if (update) {
         return {
           ...ch,
           channel_group_id: targetGroupId,
-          channel_number: finalChannelNumber,
-          name: finalName,
+          channel_number: update.finalChannelNumber,
+          name: update.finalName,
         };
       }
       return ch;
     });
     setLocalChannels(updatedChannels);
 
-    // Stage the changes
+    // Stage the changes for each channel
     if (onStageUpdateChannel) {
-      const updates: Partial<Channel> = { channel_group_id: targetGroupId };
-      let description = `Moved "${channel.name}" from "${sourceGroupName}" to "${targetGroupName}"`;
+      for (const update of channelUpdates) {
+        const { channel, finalChannelNumber, finalName } = update;
+        const updates: Partial<Channel> = { channel_group_id: targetGroupId };
+        let description = `Moved "${channel.name}" from "${sourceGroupName}" to "${targetGroupName}"`;
 
-      if (!keepChannelNumber && newChannelNumber !== undefined && newChannelNumber !== channel.channel_number) {
-        updates.channel_number = newChannelNumber;
-        description += ` (channel ${channel.channel_number ?? '-'} → ${newChannelNumber})`;
+        if (!keepChannelNumber && finalChannelNumber !== null && finalChannelNumber !== channel.channel_number) {
+          updates.channel_number = finalChannelNumber;
+          description += ` (channel ${channel.channel_number ?? '-'} → ${finalChannelNumber})`;
 
-        // Include name update if auto-rename applied
-        if (finalName !== channel.name) {
-          updates.name = finalName;
-          description += `, renamed to "${finalName}"`;
+          // Include name update if auto-rename applied
+          if (finalName !== channel.name) {
+            updates.name = finalName;
+            description += `, renamed to "${finalName}"`;
+          }
         }
-      }
 
-      onStageUpdateChannel(channel.id, updates, description);
+        onStageUpdateChannel(channel.id, updates, description);
+      }
+    }
+
+    // Clear multi-selection after move
+    if (onClearChannelSelection) {
+      onClearChannelSelection();
     }
 
     // Close modal
@@ -2186,6 +2317,7 @@ export function ChannelsPane({
   const handleCrossGroupMoveCancel = () => {
     setShowCrossGroupMoveModal(false);
     setCrossGroupMoveData(null);
+    setCustomStartingNumber('');
   };
 
   const renderGroup = (groupId: number | 'ungrouped', groupName: string, groupChannels: Channel[], isEmpty: boolean = false) => {
@@ -2228,6 +2360,7 @@ export function ChannelsPane({
                     <SortableChannel
                       channel={channel}
                       isSelected={selectedChannelId === channel.id}
+                      isMultiSelected={selectedChannelIds.has(channel.id)}
                       isExpanded={selectedChannelId === channel.id}
                       isDragOver={dragOverChannelId === channel.id}
                       isEditingNumber={editingChannelId === channel.id}
@@ -2237,6 +2370,7 @@ export function ChannelsPane({
                       editingNumber={editingChannelNumber}
                       editingName={editingChannelName}
                       logoUrl={getChannelLogoUrl(channel)}
+                      multiSelectCount={selectedChannelIds.size}
                       onEditingNumberChange={setEditingChannelNumber}
                       onEditingNameChange={setEditingChannelName}
                       onStartEditNumber={(e) => handleStartEditNumber(e, channel)}
@@ -2245,7 +2379,9 @@ export function ChannelsPane({
                       onSaveName={() => handleSaveChannelName(channel.id)}
                       onCancelEditNumber={handleCancelEditNumber}
                       onCancelEditName={handleCancelEditName}
-                      onClick={() => handleChannelClick(channel)}
+                      onClick={(e) => handleChannelClick(channel, e, groupChannels.map((c) => c.id))}
+                      onToggleExpand={() => handleToggleExpand(channel)}
+                      onToggleSelect={(e) => handleToggleSelect(channel, e, groupChannels.map((c) => c.id))}
                       onStreamDragOver={(e) => handleStreamDragOver(e, channel.id)}
                       onStreamDragLeave={handleStreamDragLeave}
                       onStreamDrop={(e) => handleStreamDrop(e, channel.id)}
@@ -2807,14 +2943,35 @@ export function ChannelsPane({
       {showCrossGroupMoveModal && crossGroupMoveData && (
         <div className="modal-overlay" onClick={handleCrossGroupMoveCancel}>
           <div className="modal-content cross-group-move-dialog" onClick={(e) => e.stopPropagation()}>
-            <h3>Move Channel to Group</h3>
+            <h3>Move {crossGroupMoveData.channels.length > 1 ? `${crossGroupMoveData.channels.length} Channels` : 'Channel'} to Group</h3>
 
             <div className="cross-group-move-info">
-              <p>
-                Moving <strong>{crossGroupMoveData.channel.name}</strong> from{' '}
-                <span className="group-tag">{crossGroupMoveData.sourceGroupName}</span> to{' '}
-                <span className="group-tag">{crossGroupMoveData.targetGroupName}</span>
-              </p>
+              {crossGroupMoveData.channels.length === 1 ? (
+                <p>
+                  Moving <strong>{crossGroupMoveData.channels[0].name}</strong> from{' '}
+                  <span className="group-tag">{crossGroupMoveData.sourceGroupName}</span> to{' '}
+                  <span className="group-tag">{crossGroupMoveData.targetGroupName}</span>
+                </p>
+              ) : (
+                <>
+                  <p>
+                    Moving <strong>{crossGroupMoveData.channels.length} channels</strong> from{' '}
+                    <span className="group-tag">{crossGroupMoveData.sourceGroupName}</span> to{' '}
+                    <span className="group-tag">{crossGroupMoveData.targetGroupName}</span>
+                  </p>
+                  <ul className="cross-group-move-channel-list">
+                    {crossGroupMoveData.channels.slice(0, 5).map((ch) => (
+                      <li key={ch.id}>
+                        <span className="channel-number-badge">{ch.channel_number ?? '-'}</span>
+                        {ch.name}
+                      </li>
+                    ))}
+                    {crossGroupMoveData.channels.length > 5 && (
+                      <li className="more-channels">...and {crossGroupMoveData.channels.length - 5} more</li>
+                    )}
+                  </ul>
+                </>
+              )}
             </div>
 
             {crossGroupMoveData.isTargetAutoSync && (
@@ -2832,7 +2989,7 @@ export function ChannelsPane({
 
             <div className="cross-group-move-options">
               <div className="channel-number-section">
-                <label>Channel Number</label>
+                <label>Channel Numbers</label>
                 {crossGroupMoveData.minChannelInGroup !== null && crossGroupMoveData.maxChannelInGroup !== null && (
                   <p className="group-range-info">
                     Target group range: {crossGroupMoveData.minChannelInGroup} – {crossGroupMoveData.maxChannelInGroup}
@@ -2847,8 +3004,12 @@ export function ChannelsPane({
                 >
                   <span className="material-icons">numbers</span>
                   <div className="move-option-text">
-                    <strong>Keep current number</strong>
-                    <span>Stay at channel {crossGroupMoveData.channel.channel_number ?? '(none)'}</span>
+                    <strong>Keep current numbers</strong>
+                    {crossGroupMoveData.channels.length === 1 ? (
+                      <span>Stay at channel {crossGroupMoveData.channels[0].channel_number ?? '(none)'}</span>
+                    ) : (
+                      <span>Keep existing channel numbers</span>
+                    )}
                   </div>
                 </button>
 
@@ -2859,11 +3020,44 @@ export function ChannelsPane({
                   >
                     <span className="material-icons">add_circle</span>
                     <div className="move-option-text">
-                      <strong>Assign next available</strong>
-                      <span>Use channel {crossGroupMoveData.suggestedChannelNumber}</span>
+                      <strong>Assign sequential numbers</strong>
+                      {crossGroupMoveData.channels.length === 1 ? (
+                        <span>Use channel {crossGroupMoveData.suggestedChannelNumber}</span>
+                      ) : (
+                        <span>Starting at {crossGroupMoveData.suggestedChannelNumber} ({crossGroupMoveData.suggestedChannelNumber}–{crossGroupMoveData.suggestedChannelNumber + crossGroupMoveData.channels.length - 1})</span>
+                      )}
                     </div>
                   </button>
                 )}
+
+                <div className="move-option-custom">
+                  <div className="custom-number-row">
+                    <span className="material-icons">edit</span>
+                    <div className="move-option-text">
+                      <strong>Custom starting number</strong>
+                    </div>
+                    <input
+                      type="number"
+                      className="custom-number-input"
+                      placeholder="Enter number"
+                      value={customStartingNumber}
+                      onChange={(e) => setCustomStartingNumber(e.target.value)}
+                      min="1"
+                    />
+                    <button
+                      className="custom-number-apply-btn"
+                      disabled={!customStartingNumber || isNaN(parseInt(customStartingNumber, 10)) || parseInt(customStartingNumber, 10) < 1}
+                      onClick={() => handleCrossGroupMoveConfirm(false, parseInt(customStartingNumber, 10))}
+                    >
+                      Apply
+                    </button>
+                  </div>
+                  {customStartingNumber && !isNaN(parseInt(customStartingNumber, 10)) && parseInt(customStartingNumber, 10) >= 1 && crossGroupMoveData.channels.length > 1 && (
+                    <span className="custom-number-range">
+                      Channels will be {parseInt(customStartingNumber, 10)}–{parseInt(customStartingNumber, 10) + crossGroupMoveData.channels.length - 1}
+                    </span>
+                  )}
+                </div>
               </div>
             </div>
 

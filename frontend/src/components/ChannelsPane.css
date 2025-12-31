@@ -121,8 +121,8 @@
 }
 
 .edit-mode-done-count {
-  background-color: #4ade80;
-  color: #1a1a1a;
+  background-color: #16a34a;
+  color: #ffffff;
   padding: 0.125rem 0.375rem;
   border-radius: 8px;
   font-size: 0.7rem;
@@ -601,6 +601,40 @@
   z-index: 100;
 }
 
+.channel-item.multi-selected {
+  background-color: rgba(100, 108, 255, 0.15);
+  border: 1px solid rgba(100, 108, 255, 0.5);
+}
+
+.channel-item.multi-selected:hover {
+  background-color: rgba(100, 108, 255, 0.25);
+}
+
+.channel-select-indicator {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-right: 0.25rem;
+  color: #555;
+  cursor: pointer;
+}
+
+.channel-select-indicator .material-icons {
+  font-size: 1.1rem;
+}
+
+.channel-select-indicator.selected {
+  color: #646cff;
+}
+
+.channel-select-indicator:hover {
+  color: #888;
+}
+
+.channel-select-indicator.selected:hover {
+  color: #535bf2;
+}
+
 .channel-drag-handle {
   color: #444;
   cursor: grab;
@@ -736,6 +770,15 @@
   color: #555;
   width: 1rem;
   margin-right: 0.25rem;
+  cursor: pointer;
+  padding: 0.25rem;
+  border-radius: 3px;
+  transition: background-color 0.15s, color 0.15s;
+}
+
+.channel-expand-icon:hover {
+  background-color: #3d3d3d;
+  color: #888;
 }
 
 .channel-wrapper {
@@ -1996,6 +2039,49 @@
   font-weight: 500;
 }
 
+.cross-group-move-channel-list {
+  list-style: none;
+  margin: 0.75rem 0 0 0;
+  padding: 0;
+  max-height: 150px;
+  overflow-y: auto;
+  background-color: #1e1e1e;
+  border-radius: 4px;
+  padding: 0.5rem;
+}
+
+.cross-group-move-channel-list li {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.375rem 0;
+  color: #ccc;
+  font-size: 0.85rem;
+  border-bottom: 1px solid #333;
+}
+
+.cross-group-move-channel-list li:last-child {
+  border-bottom: none;
+}
+
+.cross-group-move-channel-list li.more-channels {
+  color: #888;
+  font-style: italic;
+}
+
+.cross-group-move-channel-list .channel-number-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 2.5rem;
+  padding: 0.125rem 0.375rem;
+  background-color: #333;
+  color: #888;
+  border-radius: 3px;
+  font-family: monospace;
+  font-size: 0.75rem;
+}
+
 .cross-group-move-warning {
   display: flex;
   gap: 0.75rem;
@@ -2110,4 +2196,80 @@
 .move-option-text span {
   color: #888;
   font-size: 0.8rem;
+}
+
+/* Custom starting number option */
+.move-option-custom {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.75rem 1rem;
+  background: #2a2a2a;
+  border: 1px solid #444;
+  border-radius: 8px;
+  margin-top: 0.5rem;
+}
+
+.custom-number-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.custom-number-row .material-icons {
+  font-size: 1.5rem;
+  color: #888;
+}
+
+.custom-number-row .move-option-text {
+  flex: 0 0 auto;
+}
+
+.custom-number-input {
+  flex: 1;
+  min-width: 100px;
+  max-width: 120px;
+  padding: 0.5rem 0.75rem;
+  background: #1a1a1a;
+  border: 1px solid #555;
+  border-radius: 4px;
+  color: #fff;
+  font-size: 0.9rem;
+}
+
+.custom-number-input:focus {
+  outline: none;
+  border-color: #646cff;
+}
+
+.custom-number-input::placeholder {
+  color: #666;
+}
+
+.custom-number-apply-btn {
+  padding: 0.5rem 1rem;
+  background: #646cff;
+  color: #fff;
+  border: none;
+  border-radius: 4px;
+  font-size: 0.85rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color 0.15s;
+}
+
+.custom-number-apply-btn:hover:not(:disabled) {
+  background: #5558dd;
+}
+
+.custom-number-apply-btn:disabled {
+  background: #444;
+  color: #666;
+  cursor: not-allowed;
+}
+
+.custom-number-range {
+  color: #888;
+  font-size: 0.8rem;
+  margin-left: 2.25rem;
 }
