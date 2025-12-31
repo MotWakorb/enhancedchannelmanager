@@ -11,6 +11,8 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
+  min-height: 56px;
+  box-sizing: border-box;
 }
 
 .pane-header h2 {
