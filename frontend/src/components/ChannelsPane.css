@@ -13,6 +13,8 @@
   align-items: center;
   justify-content: space-between;
   transition: background-color 0.2s, border-color 0.2s;
+  min-height: 56px;
+  box-sizing: border-box;
 }
 
 .pane-header.edit-mode {
