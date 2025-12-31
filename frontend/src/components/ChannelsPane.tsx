@@ -1154,6 +1154,7 @@ export function ChannelsPane({
     suggestedChannelNumber: number | null;
     minChannelInGroup: number | null;
     maxChannelInGroup: number | null;
+    insertAtPosition: boolean;  // true if dropped on a specific channel (not group header)
   } | null>(null);
   const [customStartingNumber, setCustomStartingNumber] = useState<string>('');
 
@@ -1999,12 +2000,34 @@ export function ChannelsPane({
     const activeChannel = localChannels.find((c) => c.id === active.id);
     if (!activeChannel) return;
 
-    // Check if dropped on a group header (cross-group move)
+    // Check if dropped on a group header (cross-group move) or on a channel in a different group
     const overId = String(over.id);
-    if (overId.startsWith('group-')) {
-      const targetGroupId = overId.replace('group-', '');
-      const newGroupId = targetGroupId === 'ungrouped' ? null : parseInt(targetGroupId, 10);
+    const overChannel = localChannels.find((c) => c.id === over.id);
 
+    // Determine if this is a cross-group move
+    let isCrossGroupMove = false;
+    let newGroupId: number | null = null;
+    let insertAtChannelNumber: number | null = null;
+
+    if (overId.startsWith('group-')) {
+      // Dropped on a group header
+      const targetGroupId = overId.replace('group-', '');
+      newGroupId = targetGroupId === 'ungrouped' ? null : parseInt(targetGroupId, 10);
+
+      // Check if it's actually a different group
+      if ((newGroupId === null && activeChannel.channel_group_id !== null) ||
+          (newGroupId !== null && activeChannel.channel_group_id !== newGroupId)) {
+        isCrossGroupMove = true;
+      }
+    } else if (overChannel && overChannel.channel_group_id !== activeChannel.channel_group_id) {
+      // Dropped on a channel in a different group
+      isCrossGroupMove = true;
+      newGroupId = overChannel.channel_group_id;
+      // Use the channel number of the drop target as the suggested insertion point
+      insertAtChannelNumber = overChannel.channel_number;
+    }
+
+    if (isCrossGroupMove) {
       // Collect channels to move: if the dragged channel is part of multi-selection, move all selected
       // Otherwise, just move the single dragged channel
       let channelsToMove: Channel[] = [];
@@ -2017,12 +2040,6 @@ export function ChannelsPane({
         channelsToMove.sort((a, b) => (a.channel_number ?? 0) - (b.channel_number ?? 0));
       } else {
         channelsToMove = [activeChannel];
-      }
-
-      // Don't do anything if dropping on the same group
-      if ((newGroupId === null && activeChannel.channel_group_id === null) ||
-          (newGroupId !== null && activeChannel.channel_group_id === newGroupId)) {
-        return;
       }
 
       // Get the target group's name for the description
@@ -2054,8 +2071,14 @@ export function ChannelsPane({
         if (channelNumbers.length > 0) {
           minChannelInGroup = channelNumbers[0];
           maxChannelInGroup = channelNumbers[channelNumbers.length - 1];
-          // Suggest the next number after the max
-          suggestedChannelNumber = maxChannelInGroup + 1;
+
+          // If we dropped on a specific channel, suggest that channel's number
+          // Otherwise suggest the next number after the max
+          if (insertAtChannelNumber !== null) {
+            suggestedChannelNumber = insertAtChannelNumber;
+          } else {
+            suggestedChannelNumber = maxChannelInGroup + 1;
+          }
         }
       }
 
@@ -2069,6 +2092,7 @@ export function ChannelsPane({
         suggestedChannelNumber,
         minChannelInGroup,
         maxChannelInGroup,
+        insertAtPosition: insertAtChannelNumber !== null,
       });
       setShowCrossGroupMoveModal(true);
 
@@ -2076,7 +2100,6 @@ export function ChannelsPane({
     }
 
     // Otherwise, this is a within-group reorder
-    const overChannel = localChannels.find((c) => c.id === over.id);
     if (!overChannel) return;
 
     // Get the group for the channels
@@ -3028,11 +3051,11 @@ export function ChannelsPane({
                     className="move-option-btn suggested"
                     onClick={() => handleCrossGroupMoveConfirm(false, crossGroupMoveData.suggestedChannelNumber!)}
                   >
-                    <span className="material-icons">add_circle</span>
+                    <span className="material-icons">{crossGroupMoveData.insertAtPosition ? 'playlist_add' : 'add_circle'}</span>
                     <div className="move-option-text">
-                      <strong>Assign sequential numbers</strong>
+                      <strong>{crossGroupMoveData.insertAtPosition ? 'Insert at position' : 'Assign sequential numbers'}</strong>
                       {crossGroupMoveData.channels.length === 1 ? (
-                        <span>Use channel {crossGroupMoveData.suggestedChannelNumber}</span>
+                        <span>{crossGroupMoveData.insertAtPosition ? 'Insert at' : 'Use'} channel {crossGroupMoveData.suggestedChannelNumber}</span>
                       ) : (
                         <span>Starting at {crossGroupMoveData.suggestedChannelNumber} ({crossGroupMoveData.suggestedChannelNumber}–{crossGroupMoveData.suggestedChannelNumber + crossGroupMoveData.channels.length - 1})</span>
                       )}
