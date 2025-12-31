@@ -756,7 +756,7 @@ export function useEditMode({
     // State
     isEditMode: state.isActive,
     isCommitting,
-    stagedOperationCount: state.stagedOperations.length,
+    stagedOperationCount: state.localUndoStack.length,
     modifiedChannelIds: state.modifiedChannelIds,
     displayChannels,
     canLocalUndo: state.localUndoStack.length > 0,
