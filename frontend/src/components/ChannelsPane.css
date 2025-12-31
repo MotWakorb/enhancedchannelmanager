@@ -41,6 +41,63 @@
   color: #a5b4fc;
 }
 
+/* Selection info in header */
+.selection-info {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.selection-count {
+  font-size: 0.85rem;
+  color: #646cff;
+  font-weight: 500;
+}
+
+.bulk-delete-btn {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  background-color: rgba(248, 113, 113, 0.15);
+  border: 1px solid #f87171;
+  color: #f87171;
+  padding: 0.25rem 0.5rem;
+  border-radius: 4px;
+  font-size: 0.8rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color 0.15s;
+}
+
+.bulk-delete-btn:hover {
+  background-color: rgba(248, 113, 113, 0.25);
+}
+
+.bulk-delete-btn .material-icons {
+  font-size: 16px;
+}
+
+.clear-selection-btn {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  background-color: #3d3d3d;
+  border: 1px solid #555;
+  color: #ccc;
+  padding: 0.25rem 0.5rem;
+  border-radius: 4px;
+  font-size: 0.8rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color 0.15s, border-color 0.15s, color 0.15s;
+}
+
+.clear-selection-btn:hover {
+  background-color: #4d4d4d;
+  border-color: #666;
+  color: #fff;
+}
+
 .edit-mode-info {
   display: flex;
   align-items: center;

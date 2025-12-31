@@ -1190,6 +1190,10 @@ export function ChannelsPane({
   const [groupToDelete, setGroupToDelete] = useState<ChannelGroup | null>(null);
   const [deletingGroup, setDeletingGroup] = useState(false);
 
+  // Bulk delete channels state
+  const [showBulkDeleteConfirm, setShowBulkDeleteConfirm] = useState(false);
+  const [bulkDeleting, setBulkDeleting] = useState(false);
+
   // Cross-group move modal state
   const [showCrossGroupMoveModal, setShowCrossGroupMoveModal] = useState(false);
   const [crossGroupMoveData, setCrossGroupMoveData] = useState<{
@@ -1556,6 +1560,48 @@ export function ChannelsPane({
   const handleCancelDeleteGroup = () => {
     setShowDeleteGroupConfirm(false);
     setGroupToDelete(null);
+  };
+
+  // Handle bulk delete channels
+  const handleBulkDeleteClick = () => {
+    if (selectedChannelIds.size === 0) return;
+    setShowBulkDeleteConfirm(true);
+  };
+
+  const handleConfirmBulkDelete = async () => {
+    if (selectedChannelIds.size === 0) return;
+
+    setBulkDeleting(true);
+    try {
+      // Delete channels one by one
+      const channelIdsToDelete = Array.from(selectedChannelIds);
+      for (const channelId of channelIdsToDelete) {
+        await onDeleteChannel(channelId);
+      }
+
+      // Update local state
+      setLocalChannels((prev) => prev.filter((ch) => !selectedChannelIds.has(ch.id)));
+
+      // Clear selection
+      if (onClearChannelSelection) {
+        onClearChannelSelection();
+      }
+
+      // Clear selected channel if it was deleted
+      if (selectedChannelId && selectedChannelIds.has(selectedChannelId)) {
+        onChannelSelect(null);
+      }
+
+      setShowBulkDeleteConfirm(false);
+    } catch (err) {
+      console.error('Failed to bulk delete channels:', err);
+    } finally {
+      setBulkDeleting(false);
+    }
+  };
+
+  const handleCancelBulkDelete = () => {
+    setShowBulkDeleteConfirm(false);
   };
 
   // Handle reordering streams within the channel
@@ -3084,6 +3130,26 @@ export function ChannelsPane({
       <div className={`pane-header ${isEditMode ? 'edit-mode' : ''}`}>
         <div className="pane-header-title">
           <h2>Channels</h2>
+          {isEditMode && selectedChannelIds.size > 0 && (
+            <div className="selection-info">
+              <span className="selection-count">{selectedChannelIds.size} selected</span>
+              <button
+                className="bulk-delete-btn"
+                onClick={handleBulkDeleteClick}
+                title="Delete selected channels"
+              >
+                <span className="material-icons">delete</span>
+                Delete
+              </button>
+              <button
+                className="clear-selection-btn"
+                onClick={onClearChannelSelection}
+                title="Clear selection"
+              >
+                Clear
+              </button>
+            </div>
+          )}
         </div>
         <div className="pane-header-actions">
           {isEditMode && onUndo && onRedo && onCreateSavePoint && onRevertToSavePoint && onDeleteSavePoint && (
@@ -3428,6 +3494,40 @@ export function ChannelsPane({
                 disabled={deletingGroup}
               >
                 {deletingGroup ? 'Deleting...' : 'Delete'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Bulk Delete Channels Confirmation Dialog */}
+      {showBulkDeleteConfirm && selectedChannelIds.size > 0 && (
+        <div className="modal-overlay" onClick={handleCancelBulkDelete}>
+          <div className="modal-content delete-dialog" onClick={(e) => e.stopPropagation()}>
+            <h3>Delete {selectedChannelIds.size} Channel{selectedChannelIds.size !== 1 ? 's' : ''}</h3>
+            <div className="delete-message">
+              <p>
+                Are you sure you want to delete{' '}
+                <strong>{selectedChannelIds.size} selected channel{selectedChannelIds.size !== 1 ? 's' : ''}</strong>?
+              </p>
+              <p className="delete-warning">
+                This action cannot be undone. All selected channels and their stream assignments will be permanently removed.
+              </p>
+            </div>
+            <div className="modal-actions">
+              <button
+                className="modal-btn cancel"
+                onClick={handleCancelBulkDelete}
+                disabled={bulkDeleting}
+              >
+                Cancel
+              </button>
+              <button
+                className="modal-btn danger"
+                onClick={handleConfirmBulkDelete}
+                disabled={bulkDeleting}
+              >
+                {bulkDeleting ? 'Deleting...' : `Delete ${selectedChannelIds.size} Channel${selectedChannelIds.size !== 1 ? 's' : ''}`}
               </button>
             </div>
           </div>
