@@ -203,6 +203,8 @@
   flex-direction: column;
   gap: 0.5rem;
   border-bottom: 1px solid #333;
+  min-height: 96px;
+  box-sizing: border-box;
 }
 
 .pane-filters-row {
