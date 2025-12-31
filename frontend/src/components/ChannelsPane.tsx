@@ -2752,6 +2752,7 @@ export function ChannelsPane({
           </div>
         )}
         {isExpanded && !isEmpty && (
+          <>
             <SortableContext
               items={groupChannels.map((c) => c.id)}
               strategy={verticalListSortingStrategy}
@@ -2851,17 +2852,18 @@ export function ChannelsPane({
                   </div>
                   );
                 })}
-                {/* Drop zone at the end of the group */}
-                <DroppableGroupEnd
-                  groupId={groupId}
-                  isEditMode={isEditMode}
-                  showDropIndicator={
-                    dropIndicator?.atGroupEnd === true &&
-                    dropIndicator?.groupId === groupId
-                  }
-                />
               </div>
             </SortableContext>
+            {/* Drop zone at the end of the group - outside SortableContext for better detection */}
+            <DroppableGroupEnd
+              groupId={groupId}
+              isEditMode={isEditMode}
+              showDropIndicator={
+                dropIndicator?.atGroupEnd === true &&
+                dropIndicator?.groupId === groupId
+              }
+            />
+          </>
         )}
       </div>
     );
@@ -3483,29 +3485,29 @@ export function ChannelsPane({
                   <span className="material-icons">edit</span>
                   <div className="move-option-text">
                     <strong>Custom starting number</strong>
-                    <span>Enter a specific channel number</span>
-                  </div>
-                </label>
-
-                {/* Custom number input - only visible when custom is selected */}
-                {selectedNumberingOption === 'custom' && (
-                  <div className="custom-number-input-row">
-                    <input
-                      type="number"
-                      className="custom-number-input"
-                      placeholder="Enter channel number"
-                      value={customStartingNumber}
-                      onChange={(e) => setCustomStartingNumber(e.target.value)}
-                      min="1"
-                      autoFocus
-                    />
-                    {customStartingNumber && !isNaN(parseInt(customStartingNumber, 10)) && parseInt(customStartingNumber, 10) >= 1 && crossGroupMoveData.channels.length > 1 && (
-                      <span className="custom-number-range">
-                        Channels will be {parseInt(customStartingNumber, 10)}–{parseInt(customStartingNumber, 10) + crossGroupMoveData.channels.length - 1}
-                      </span>
+                    {selectedNumberingOption === 'custom' ? (
+                      <div className="custom-number-inline">
+                        <input
+                          type="number"
+                          className="custom-number-input-inline"
+                          placeholder="Enter channel number"
+                          value={customStartingNumber}
+                          onChange={(e) => setCustomStartingNumber(e.target.value)}
+                          onClick={(e) => e.stopPropagation()}
+                          min="1"
+                          autoFocus
+                        />
+                        {customStartingNumber && !isNaN(parseInt(customStartingNumber, 10)) && parseInt(customStartingNumber, 10) >= 1 && crossGroupMoveData.channels.length > 1 && (
+                          <span className="custom-number-range-inline">
+                            → {parseInt(customStartingNumber, 10)}–{parseInt(customStartingNumber, 10) + crossGroupMoveData.channels.length - 1}
+                          </span>
+                        )}
+                      </div>
+                    ) : (
+                      <span>Enter a specific channel number</span>
                     )}
                   </div>
-                )}
+                </label>
               </div>
             </div>
 
