@@ -70,6 +70,7 @@ export function StreamsPane({
   // Bulk create modal state
   const [bulkCreateModalOpen, setBulkCreateModalOpen] = useState(false);
   const [bulkCreateGroup, setBulkCreateGroup] = useState<StreamGroup | null>(null);
+  const [bulkCreateStreams, setBulkCreateStreams] = useState<Stream[]>([]); // For selected streams
   const [bulkCreateStartingNumber, setBulkCreateStartingNumber] = useState<string>('');
   const [bulkCreateGroupOption, setBulkCreateGroupOption] = useState<'same' | 'existing' | 'new'>('same');
   const [bulkCreateSelectedGroupId, setBulkCreateSelectedGroupId] = useState<number | null>(null);
@@ -218,6 +219,7 @@ export function StreamsPane({
   // Bulk create handlers
   const openBulkCreateModal = useCallback((group: StreamGroup) => {
     setBulkCreateGroup(group);
+    setBulkCreateStreams([]);
     setBulkCreateStartingNumber('');
     setBulkCreateGroupOption('same');
     setBulkCreateSelectedGroupId(null);
@@ -225,13 +227,30 @@ export function StreamsPane({
     setBulkCreateModalOpen(true);
   }, []);
 
+  const openBulkCreateModalForSelection = useCallback(() => {
+    // Get selected streams in order
+    const selectedStreamsList = streams.filter(s => selectedIds.has(s.id));
+    setBulkCreateGroup(null);
+    setBulkCreateStreams(selectedStreamsList);
+    setBulkCreateStartingNumber('');
+    setBulkCreateGroupOption('existing'); // Default to existing group for selections
+    setBulkCreateSelectedGroupId(null);
+    setBulkCreateNewGroupName('');
+    setBulkCreateModalOpen(true);
+  }, [streams, selectedIds]);
+
   const closeBulkCreateModal = useCallback(() => {
     setBulkCreateModalOpen(false);
     setBulkCreateGroup(null);
+    setBulkCreateStreams([]);
   }, []);
 
+  // Get the streams to create channels from (either from group or selection)
+  const streamsToCreate = bulkCreateGroup ? bulkCreateGroup.streams : bulkCreateStreams;
+  const isFromGroup = !!bulkCreateGroup;
+
   const handleBulkCreate = useCallback(async () => {
-    if (!bulkCreateGroup || !onBulkCreateFromGroup) return;
+    if (streamsToCreate.length === 0 || !onBulkCreateFromGroup) return;
 
     const startingNum = parseInt(bulkCreateStartingNumber, 10);
     if (isNaN(startingNum) || startingNum < 0) {
@@ -245,7 +264,7 @@ export function StreamsPane({
       let groupId: number | null = null;
       let newGroupName: string | undefined;
 
-      if (bulkCreateGroupOption === 'same') {
+      if (bulkCreateGroupOption === 'same' && bulkCreateGroup) {
         // Find existing group with same name, or create new
         const existingGroup = channelGroups.find(g => g.name === bulkCreateGroup.name);
         if (existingGroup) {
@@ -265,11 +284,16 @@ export function StreamsPane({
       }
 
       await onBulkCreateFromGroup(
-        bulkCreateGroup.streams,
+        streamsToCreate,
         startingNum,
         groupId,
         newGroupName
       );
+
+      // Clear selection after successful creation
+      if (!isFromGroup) {
+        clearSelection();
+      }
 
       closeBulkCreateModal();
     } catch (error) {
@@ -279,6 +303,8 @@ export function StreamsPane({
       setBulkCreateLoading(false);
     }
   }, [
+    streamsToCreate,
+    isFromGroup,
     bulkCreateGroup,
     bulkCreateStartingNumber,
     bulkCreateGroupOption,
@@ -286,6 +312,7 @@ export function StreamsPane({
     bulkCreateNewGroupName,
     channelGroups,
     onBulkCreateFromGroup,
+    clearSelection,
     closeBulkCreateModal,
   ]);
 
@@ -296,6 +323,16 @@ export function StreamsPane({
         {selectedCount > 0 && (
           <div className="selection-info">
             <span className="selection-count">{selectedCount} selected</span>
+            {isEditMode && onBulkCreateFromGroup && (
+              <button
+                className="create-channels-btn"
+                onClick={openBulkCreateModalForSelection}
+                title="Create channels from selected streams"
+              >
+                <span className="material-icons">playlist_add</span>
+                Create
+              </button>
+            )}
             <button className="clear-selection-btn" onClick={clearSelection}>
               Clear
             </button>
@@ -520,11 +557,16 @@ export function StreamsPane({
       </div>
 
       {/* Bulk Create Modal */}
-      {bulkCreateModalOpen && bulkCreateGroup && (
+      {bulkCreateModalOpen && streamsToCreate.length > 0 && (
         <div className="modal-overlay" onClick={closeBulkCreateModal}>
           <div className="bulk-create-modal" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
-              <h3>Create Channels from "{bulkCreateGroup.name}"</h3>
+              <h3>
+                {isFromGroup
+                  ? `Create Channels from "${bulkCreateGroup!.name}"`
+                  : `Create Channels from ${streamsToCreate.length} Selected Streams`
+                }
+              </h3>
               <button className="modal-close-btn" onClick={closeBulkCreateModal}>
                 <span className="material-icons">close</span>
               </button>
@@ -533,7 +575,7 @@ export function StreamsPane({
             <div className="modal-body">
               <div className="bulk-create-info">
                 <span className="material-icons">info</span>
-                <span>{bulkCreateGroup.streams.length} channels will be created, each with its stream assigned</span>
+                <span>{streamsToCreate.length} channels will be created, each with its stream assigned</span>
               </div>
 
               <div className="form-group">
@@ -549,7 +591,7 @@ export function StreamsPane({
                 />
                 {bulkCreateStartingNumber && !isNaN(parseInt(bulkCreateStartingNumber, 10)) && (
                   <div className="number-range-preview">
-                    Channels {bulkCreateStartingNumber} - {parseInt(bulkCreateStartingNumber, 10) + bulkCreateGroup.streams.length - 1}
+                    Channels {bulkCreateStartingNumber} - {parseInt(bulkCreateStartingNumber, 10) + streamsToCreate.length - 1}
                   </div>
                 )}
               </div>
@@ -557,20 +599,23 @@ export function StreamsPane({
               <div className="form-group">
                 <label>Channel Group</label>
                 <div className="radio-group">
-                  <label className="radio-option">
-                    <input
-                      type="radio"
-                      name="groupOption"
-                      checked={bulkCreateGroupOption === 'same'}
-                      onChange={() => setBulkCreateGroupOption('same')}
-                    />
-                    <span>Use same name "{bulkCreateGroup.name}"</span>
-                    {channelGroups.find(g => g.name === bulkCreateGroup.name) ? (
-                      <span className="group-exists-badge">exists</span>
-                    ) : (
-                      <span className="group-new-badge">will create</span>
-                    )}
-                  </label>
+                  {/* Only show "same name" option when creating from a group */}
+                  {isFromGroup && bulkCreateGroup && (
+                    <label className="radio-option">
+                      <input
+                        type="radio"
+                        name="groupOption"
+                        checked={bulkCreateGroupOption === 'same'}
+                        onChange={() => setBulkCreateGroupOption('same')}
+                      />
+                      <span>Use same name "{bulkCreateGroup.name}"</span>
+                      {channelGroups.find(g => g.name === bulkCreateGroup.name) ? (
+                        <span className="group-exists-badge">exists</span>
+                      ) : (
+                        <span className="group-new-badge">will create</span>
+                      )}
+                    </label>
+                  )}
 
                   <label className="radio-option">
                     <input
@@ -618,7 +663,7 @@ export function StreamsPane({
               <div className="bulk-create-preview">
                 <label>Preview (first 10)</label>
                 <div className="preview-list">
-                  {bulkCreateGroup.streams.slice(0, 10).map((stream, idx) => {
+                  {streamsToCreate.slice(0, 10).map((stream, idx) => {
                     const num = bulkCreateStartingNumber ? parseInt(bulkCreateStartingNumber, 10) + idx : '?';
                     return (
                       <div key={stream.id} className="preview-item">
@@ -627,9 +672,9 @@ export function StreamsPane({
                       </div>
                     );
                   })}
-                  {bulkCreateGroup.streams.length > 10 && (
+                  {streamsToCreate.length > 10 && (
                     <div className="preview-more">
-                      ... and {bulkCreateGroup.streams.length - 10} more
+                      ... and {streamsToCreate.length - 10} more
                     </div>
                   )}
                 </div>
@@ -653,7 +698,7 @@ export function StreamsPane({
                 ) : (
                   <>
                     <span className="material-icons">add</span>
-                    Create {bulkCreateGroup.streams.length} Channels
+                    Create {streamsToCreate.length} Channels
                   </>
                 )}
               </button>
