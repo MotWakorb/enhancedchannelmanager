@@ -2279,6 +2279,47 @@
   margin-left: 2.25rem;
 }
 
+/* Source Group Renumbering Option */
+.cross-group-move-source-renumber {
+  margin-bottom: 1.25rem;
+  padding: 0.875rem;
+  background-color: rgba(100, 108, 255, 0.05);
+  border: 1px solid rgba(100, 108, 255, 0.2);
+  border-radius: 6px;
+}
+
+.source-renumber-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+  cursor: pointer;
+}
+
+.source-renumber-option input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  margin-top: 2px;
+  accent-color: #646cff;
+  cursor: pointer;
+}
+
+.source-renumber-text {
+  flex: 1;
+}
+
+.source-renumber-text strong {
+  display: block;
+  color: #fff;
+  font-size: 0.9rem;
+  margin-bottom: 0.25rem;
+}
+
+.source-renumber-text span {
+  color: #888;
+  font-size: 0.8rem;
+  line-height: 1.4;
+}
+
 /* Drag Overlay */
 .drag-overlay-item {
   display: flex;

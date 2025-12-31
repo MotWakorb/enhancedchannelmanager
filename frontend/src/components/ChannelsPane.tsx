@@ -1149,14 +1149,18 @@ export function ChannelsPane({
     channels: Channel[];  // Changed from single channel to array
     targetGroupId: number | null;
     targetGroupName: string;
+    sourceGroupId: number | null;  // Added to track source group for renumbering
     sourceGroupName: string;
     isTargetAutoSync: boolean;
     suggestedChannelNumber: number | null;
     minChannelInGroup: number | null;
     maxChannelInGroup: number | null;
     insertAtPosition: boolean;  // true if dropped on a specific channel (not group header)
+    sourceGroupHasGaps: boolean;  // true if removing channels would create gaps
+    sourceGroupMinChannel: number | null;  // Min channel in source group (for renumber preview)
   } | null>(null);
   const [customStartingNumber, setCustomStartingNumber] = useState<string>('');
+  const [renumberSourceGroup, setRenumberSourceGroup] = useState<boolean>(false);
 
   // Drag overlay state
   const [activeDragId, setActiveDragId] = useState<number | null>(null);
@@ -2155,18 +2159,50 @@ export function ChannelsPane({
         }
       }
 
+      // Calculate source group info for renumbering option
+      const sourceGroupId = activeChannel.channel_group_id;
+      const sourceGroupChannels = sourceGroupId === null
+        ? channelsByGroup.ungrouped || []
+        : channelsByGroup[sourceGroupId] || [];
+
+      // Get channel numbers from source group (excluding channels being moved)
+      const movedChannelIds = new Set(channelsToMove.map(ch => ch.id));
+      const remainingSourceChannelNumbers = sourceGroupChannels
+        .filter(ch => !movedChannelIds.has(ch.id))
+        .map(ch => ch.channel_number)
+        .filter((n): n is number => n !== null)
+        .sort((a, b) => a - b);
+
+      // Check if there will be gaps after the move
+      let sourceGroupHasGaps = false;
+      let sourceGroupMinChannel: number | null = null;
+      if (remainingSourceChannelNumbers.length > 1) {
+        sourceGroupMinChannel = remainingSourceChannelNumbers[0];
+        // Check for gaps in the remaining channels
+        for (let i = 1; i < remainingSourceChannelNumbers.length; i++) {
+          if (remainingSourceChannelNumbers[i] - remainingSourceChannelNumbers[i - 1] > 1) {
+            sourceGroupHasGaps = true;
+            break;
+          }
+        }
+      }
+
       // Show the modal instead of immediately moving
       setCrossGroupMoveData({
         channels: channelsToMove,
         targetGroupId: newGroupId,
         targetGroupName,
+        sourceGroupId,
         sourceGroupName,
         isTargetAutoSync,
         suggestedChannelNumber,
         minChannelInGroup,
         maxChannelInGroup,
         insertAtPosition: insertAtChannelNumber !== null,
+        sourceGroupHasGaps,
+        sourceGroupMinChannel,
       });
+      setRenumberSourceGroup(false);  // Reset the checkbox when showing modal
       setShowCrossGroupMoveModal(true);
 
       return;
@@ -2341,10 +2377,10 @@ export function ChannelsPane({
   };
 
   // Handle cross-group move confirmation (supports multiple channels)
-  const handleCrossGroupMoveConfirm = (keepChannelNumber: boolean, startingChannelNumber?: number) => {
+  const handleCrossGroupMoveConfirm = (keepChannelNumber: boolean, startingChannelNumber?: number, shouldRenumberSource?: boolean) => {
     if (!crossGroupMoveData) return;
 
-    const { channels: channelsToMove, targetGroupId, targetGroupName, sourceGroupName, insertAtPosition } = crossGroupMoveData;
+    const { channels: channelsToMove, targetGroupId, targetGroupName, sourceGroupId, sourceGroupName, insertAtPosition, sourceGroupMinChannel } = crossGroupMoveData;
 
     // Build updates for moved channels
     const channelUpdates: Array<{
@@ -2353,8 +2389,15 @@ export function ChannelsPane({
       finalName: string;
     }> = [];
 
-    // Build updates for existing channels that need to be shifted
+    // Build updates for existing channels that need to be shifted (target group)
     const shiftUpdates: Array<{
+      channel: Channel;
+      finalChannelNumber: number;
+      finalName: string;
+    }> = [];
+
+    // Build updates for source group renumbering
+    const sourceRenumberUpdates: Array<{
       channel: Channel;
       finalChannelNumber: number;
       finalName: string;
@@ -2394,6 +2437,34 @@ export function ChannelsPane({
       }
     }
 
+    // Handle source group renumbering (close gaps)
+    if (shouldRenumberSource && sourceGroupMinChannel !== null) {
+      // Get remaining channels in source group (excluding those being moved)
+      const movedChannelIds = new Set(channelsToMove.map(ch => ch.id));
+      const remainingSourceChannels = localChannels
+        .filter((ch) => {
+          if (sourceGroupId === null) {
+            return ch.channel_group_id === null && !movedChannelIds.has(ch.id);
+          }
+          return ch.channel_group_id === sourceGroupId && !movedChannelIds.has(ch.id);
+        })
+        .filter(ch => ch.channel_number !== null)
+        .sort((a, b) => (a.channel_number ?? 0) - (b.channel_number ?? 0));
+
+      // Renumber sequentially starting from the original minimum
+      remainingSourceChannels.forEach((channel, index) => {
+        const newNumber = sourceGroupMinChannel + index;
+        if (newNumber !== channel.channel_number) {
+          let finalName = channel.name;
+          const newName = computeAutoRename(channel.name, channel.channel_number, newNumber);
+          if (newName) {
+            finalName = newName;
+          }
+          sourceRenumberUpdates.push({ channel, finalChannelNumber: newNumber, finalName });
+        }
+      });
+    }
+
     channelsToMove.forEach((channel, index) => {
       // Determine the final channel number
       let finalChannelNumber = channel.channel_number;
@@ -2414,7 +2485,7 @@ export function ChannelsPane({
       channelUpdates.push({ channel, finalChannelNumber, finalName });
     });
 
-    // Update local state immediately (both moved and shifted channels)
+    // Update local state immediately (moved, shifted, and source-renumbered channels)
     const updatedChannels = localChannels.map((ch) => {
       // Check if this is a moved channel
       const moveUpdate = channelUpdates.find((u) => u.channel.id === ch.id);
@@ -2427,13 +2498,23 @@ export function ChannelsPane({
         };
       }
 
-      // Check if this is a shifted channel
+      // Check if this is a shifted channel (target group)
       const shiftUpdate = shiftUpdates.find((u) => u.channel.id === ch.id);
       if (shiftUpdate) {
         return {
           ...ch,
           channel_number: shiftUpdate.finalChannelNumber,
           name: shiftUpdate.finalName,
+        };
+      }
+
+      // Check if this is a source group renumbered channel
+      const sourceUpdate = sourceRenumberUpdates.find((u) => u.channel.id === ch.id);
+      if (sourceUpdate) {
+        return {
+          ...ch,
+          channel_number: sourceUpdate.finalChannelNumber,
+          name: sourceUpdate.finalName,
         };
       }
 
@@ -2462,11 +2543,25 @@ export function ChannelsPane({
         onStageUpdateChannel(channel.id, updates, description);
       }
 
-      // Stage the changes for shifted channels
+      // Stage the changes for shifted channels (target group)
       for (const update of shiftUpdates) {
         const { channel, finalChannelNumber, finalName } = update;
         const updates: Partial<Channel> = { channel_number: finalChannelNumber };
         let description = `Shifted "${channel.name}" from channel ${channel.channel_number} to ${finalChannelNumber}`;
+
+        if (finalName !== channel.name) {
+          updates.name = finalName;
+          description += `, renamed to "${finalName}"`;
+        }
+
+        onStageUpdateChannel(channel.id, updates, description);
+      }
+
+      // Stage the changes for source group renumbered channels
+      for (const update of sourceRenumberUpdates) {
+        const { channel, finalChannelNumber, finalName } = update;
+        const updates: Partial<Channel> = { channel_number: finalChannelNumber };
+        let description = `Renumbered "${channel.name}" in "${sourceGroupName}" from ${channel.channel_number} to ${finalChannelNumber}`;
 
         if (finalName !== channel.name) {
           updates.name = finalName;
@@ -3196,7 +3291,7 @@ export function ChannelsPane({
               <div className="move-option-buttons">
                 <button
                   className="move-option-btn"
-                  onClick={() => handleCrossGroupMoveConfirm(true)}
+                  onClick={() => handleCrossGroupMoveConfirm(true, undefined, renumberSourceGroup)}
                 >
                   <span className="material-icons">numbers</span>
                   <div className="move-option-text">
@@ -3212,7 +3307,7 @@ export function ChannelsPane({
                 {crossGroupMoveData.suggestedChannelNumber !== null && (
                   <button
                     className="move-option-btn suggested"
-                    onClick={() => handleCrossGroupMoveConfirm(false, crossGroupMoveData.suggestedChannelNumber!)}
+                    onClick={() => handleCrossGroupMoveConfirm(false, crossGroupMoveData.suggestedChannelNumber!, renumberSourceGroup)}
                   >
                     <span className="material-icons">{crossGroupMoveData.insertAtPosition ? 'playlist_add' : 'add_circle'}</span>
                     <div className="move-option-text">
@@ -3243,7 +3338,7 @@ export function ChannelsPane({
                     <button
                       className="custom-number-apply-btn"
                       disabled={!customStartingNumber || isNaN(parseInt(customStartingNumber, 10)) || parseInt(customStartingNumber, 10) < 1}
-                      onClick={() => handleCrossGroupMoveConfirm(false, parseInt(customStartingNumber, 10))}
+                      onClick={() => handleCrossGroupMoveConfirm(false, parseInt(customStartingNumber, 10), renumberSourceGroup)}
                     >
                       Apply
                     </button>
@@ -3256,6 +3351,25 @@ export function ChannelsPane({
                 </div>
               </div>
             </div>
+
+            {/* Source Group Renumbering Option */}
+            {crossGroupMoveData.sourceGroupHasGaps && (
+              <div className="cross-group-move-source-renumber">
+                <label className="source-renumber-option">
+                  <input
+                    type="checkbox"
+                    checked={renumberSourceGroup}
+                    onChange={(e) => setRenumberSourceGroup(e.target.checked)}
+                  />
+                  <div className="source-renumber-text">
+                    <strong>Close gaps in source group</strong>
+                    <span>
+                      Renumber remaining channels in "{crossGroupMoveData.sourceGroupName}" to remove gaps
+                    </span>
+                  </div>
+                </label>
+              </div>
+            )}
 
             <div className="modal-actions">
               <button
