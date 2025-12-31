@@ -2136,6 +2136,15 @@ export function ChannelsPane({
       finalChannelNumber = newChannelNumber;
     }
 
+    // Check if auto-rename applies when changing channel number
+    let finalName = channel.name;
+    if (!keepChannelNumber && newChannelNumber !== undefined && newChannelNumber !== channel.channel_number) {
+      const newName = computeAutoRename(channel.name, channel.channel_number, newChannelNumber);
+      if (newName) {
+        finalName = newName;
+      }
+    }
+
     // Update local state immediately
     const updatedChannels = localChannels.map((ch) => {
       if (ch.id === channel.id) {
@@ -2143,6 +2152,7 @@ export function ChannelsPane({
           ...ch,
           channel_group_id: targetGroupId,
           channel_number: finalChannelNumber,
+          name: finalName,
         };
       }
       return ch;
@@ -2157,6 +2167,12 @@ export function ChannelsPane({
       if (!keepChannelNumber && newChannelNumber !== undefined && newChannelNumber !== channel.channel_number) {
         updates.channel_number = newChannelNumber;
         description += ` (channel ${channel.channel_number ?? '-'} → ${newChannelNumber})`;
+
+        // Include name update if auto-rename applied
+        if (finalName !== channel.name) {
+          updates.name = finalName;
+          description += `, renamed to "${finalName}"`;
+        }
       }
 
       onStageUpdateChannel(channel.id, updates, description);
