@@ -775,13 +775,82 @@ function App() {
     [channels, displayChannels, isEditMode, stageBulkAssignNumbers, recordChange]
   );
 
+  // Format duration for display
+  const formatDuration = (seconds: number): string => {
+    if (seconds < 60) return `${seconds}s`;
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return secs > 0 ? `${mins}m ${secs}s` : `${mins}m`;
+  };
+
   return (
     <div className="app">
-      <header className="header">
+      <header className={`header ${isEditMode ? 'edit-mode-active' : ''}`}>
         <h1>Enhanced Channel Manager</h1>
-        <button className="settings-btn" onClick={() => setSettingsOpen(true)}>
-          Settings
-        </button>
+        <div className="header-actions">
+          {/* Edit Mode Controls */}
+          {isEditMode ? (
+            <div className="edit-mode-header-controls">
+              <span className="edit-mode-label">
+                <span className="material-icons" style={{ fontSize: '18px', marginRight: '4px' }}>edit</span>
+                Edit Mode
+              </span>
+              {stagedOperationCount > 0 && (
+                <span className="edit-mode-changes">
+                  {stagedOperationCount} change{stagedOperationCount !== 1 ? 's' : ''}
+                </span>
+              )}
+              {editModeDuration !== null && (
+                <span className="edit-mode-timer">
+                  ({formatDuration(editModeDuration)})
+                </span>
+              )}
+              <div className="edit-mode-buttons">
+                <button
+                  className="edit-mode-done-btn"
+                  onClick={handleExitEditMode}
+                  disabled={isCommitting}
+                  title="Apply changes"
+                >
+                  <span className="material-icons" style={{ fontSize: '16px', marginRight: '4px' }}>check</span>
+                  Done
+                  {stagedOperationCount > 0 && (
+                    <span className="edit-mode-done-count">{stagedOperationCount}</span>
+                  )}
+                </button>
+                <button
+                  className="edit-mode-cancel-btn"
+                  onClick={() => {
+                    if (stagedOperationCount > 0) {
+                      if (confirm(`You have ${stagedOperationCount} pending change${stagedOperationCount !== 1 ? 's' : ''} that will be lost. Are you sure you want to cancel?`)) {
+                        discard();
+                      }
+                    } else {
+                      discard();
+                    }
+                  }}
+                  disabled={isCommitting}
+                  title="Cancel and discard changes"
+                >
+                  <span className="material-icons" style={{ fontSize: '16px', marginRight: '4px' }}>close</span>
+                  Cancel
+                </button>
+              </div>
+            </div>
+          ) : (
+            <button
+              className="enter-edit-mode-btn"
+              onClick={enterEditMode}
+              title="Enter Edit Mode to make changes"
+            >
+              <span className="material-icons" style={{ fontSize: '16px', marginRight: '4px' }}>edit</span>
+              Edit Mode
+            </button>
+          )}
+          <button className="settings-btn" onClick={() => setSettingsOpen(true)}>
+            Settings
+          </button>
+        </div>
       </header>
       <EditModeExitDialog
         isOpen={showExitDialog}
@@ -827,13 +896,7 @@ function App() {
               onStageBulkAssignNumbers={stageBulkAssignNumbers}
               onStartBatch={startBatch}
               onEndBatch={endBatch}
-              // Edit mode toggle props
-              onEnterEditMode={enterEditMode}
-              onExitEditMode={handleExitEditMode}
-              onCancelEditMode={discard}
               isCommitting={isCommitting}
-              stagedOperationCount={stagedOperationCount}
-              editModeDuration={editModeDuration}
               // History toolbar props
               canUndo={isEditMode ? canLocalUndo : canUndo}
               canRedo={isEditMode ? canLocalRedo : canRedo}
