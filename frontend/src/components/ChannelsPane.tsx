@@ -3459,8 +3459,10 @@ export function ChannelsPane({
                 Are you sure you want to delete channel{' '}
                 <strong>{channelToDelete.channel_number} - {channelToDelete.name}</strong>?
               </p>
-              <p className="delete-warning">
-                This action cannot be undone. The channel and all its stream assignments will be permanently removed.
+              <p className={isEditMode ? "delete-info" : "delete-warning"}>
+                {isEditMode
+                  ? 'Changes can be undone while in edit mode.'
+                  : 'This action cannot be undone. The channel and all its stream assignments will be permanently removed.'}
               </p>
             </div>
             {subsequentChannels.length > 0 && (
@@ -3555,7 +3557,7 @@ export function ChannelsPane({
               )}
               <p className="delete-info">
                 {isEditMode
-                  ? 'Changes can be undone until you click Done.'
+                  ? 'Changes can be undone while in edit mode.'
                   : 'This action cannot be undone.'}
               </p>
             </div>
@@ -3589,8 +3591,10 @@ export function ChannelsPane({
                 Are you sure you want to delete{' '}
                 <strong>{selectedChannelIds.size} selected channel{selectedChannelIds.size !== 1 ? 's' : ''}</strong>?
               </p>
-              <p className="delete-warning">
-                This action cannot be undone. All selected channels and their stream assignments will be permanently removed.
+              <p className={isEditMode ? "delete-info" : "delete-warning"}>
+                {isEditMode
+                  ? 'Changes can be undone while in edit mode.'
+                  : 'This action cannot be undone. All selected channels and their stream assignments will be permanently removed.'}
               </p>
             </div>
             <div className="modal-actions">
