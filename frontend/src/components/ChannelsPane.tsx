@@ -2646,17 +2646,18 @@ export function ChannelsPane({
     });
     setLocalChannels(updatedChannels);
 
-    // Stage the changes for moved channels
+    // Stage the changes in separate batches for each logical phase:
+    // 1. Move channels to target group (with new numbers if applicable)
+    // 2. Shift existing channels in target group (if inserting at position)
+    // 3. Renumber remaining channels in source group (if closing gaps)
     if (onStageUpdateChannel) {
-      // Calculate total number of operations to batch
-      const totalOps = channelUpdates.length + shiftUpdates.length + sourceRenumberUpdates.length;
+      const channelNames = channelsToMove.length <= 3
+        ? channelsToMove.map(ch => ch.name).join(', ')
+        : `${channelsToMove.length} channels`;
 
-      // Start a batch if there are multiple operations
-      if (totalOps > 1 && onStartBatch) {
-        const channelNames = channelsToMove.length <= 3
-          ? channelsToMove.map(ch => ch.name).join(', ')
-          : `${channelsToMove.length} channels`;
-        onStartBatch(`Move ${channelNames} from "${sourceGroupName}" to "${targetGroupName}"`);
+      // Batch 1: Move the channels to target group
+      if (channelUpdates.length > 1 && onStartBatch) {
+        onStartBatch(`Move ${channelNames} to "${targetGroupName}"`);
       }
 
       for (const update of channelUpdates) {
@@ -2678,37 +2679,56 @@ export function ChannelsPane({
         onStageUpdateChannel(channel.id, updates, description);
       }
 
-      // Stage the changes for shifted channels (target group)
-      for (const update of shiftUpdates) {
-        const { channel, finalChannelNumber, finalName } = update;
-        const updates: Partial<Channel> = { channel_number: finalChannelNumber };
-        let description = `Shifted "${channel.name}" from channel ${channel.channel_number} to ${finalChannelNumber}`;
-
-        if (finalName !== channel.name) {
-          updates.name = finalName;
-          description += `, renamed to "${finalName}"`;
-        }
-
-        onStageUpdateChannel(channel.id, updates, description);
-      }
-
-      // Stage the changes for source group renumbered channels
-      for (const update of sourceRenumberUpdates) {
-        const { channel, finalChannelNumber, finalName } = update;
-        const updates: Partial<Channel> = { channel_number: finalChannelNumber };
-        let description = `Renumbered "${channel.name}" in "${sourceGroupName}" from ${channel.channel_number} to ${finalChannelNumber}`;
-
-        if (finalName !== channel.name) {
-          updates.name = finalName;
-          description += `, renamed to "${finalName}"`;
-        }
-
-        onStageUpdateChannel(channel.id, updates, description);
-      }
-
-      // End the batch
-      if (totalOps > 1 && onEndBatch) {
+      if (channelUpdates.length > 1 && onEndBatch) {
         onEndBatch();
+      }
+
+      // Batch 2: Shift existing channels in target group
+      if (shiftUpdates.length > 0) {
+        if (shiftUpdates.length > 1 && onStartBatch) {
+          onStartBatch(`Shift ${shiftUpdates.length} channels in "${targetGroupName}"`);
+        }
+
+        for (const update of shiftUpdates) {
+          const { channel, finalChannelNumber, finalName } = update;
+          const updates: Partial<Channel> = { channel_number: finalChannelNumber };
+          let description = `Shifted "${channel.name}" from channel ${channel.channel_number} to ${finalChannelNumber}`;
+
+          if (finalName !== channel.name) {
+            updates.name = finalName;
+            description += `, renamed to "${finalName}"`;
+          }
+
+          onStageUpdateChannel(channel.id, updates, description);
+        }
+
+        if (shiftUpdates.length > 1 && onEndBatch) {
+          onEndBatch();
+        }
+      }
+
+      // Batch 3: Renumber remaining channels in source group
+      if (sourceRenumberUpdates.length > 0) {
+        if (sourceRenumberUpdates.length > 1 && onStartBatch) {
+          onStartBatch(`Renumber ${sourceRenumberUpdates.length} channels in "${sourceGroupName}"`);
+        }
+
+        for (const update of sourceRenumberUpdates) {
+          const { channel, finalChannelNumber, finalName } = update;
+          const updates: Partial<Channel> = { channel_number: finalChannelNumber };
+          let description = `Renumbered "${channel.name}" in "${sourceGroupName}" from ${channel.channel_number} to ${finalChannelNumber}`;
+
+          if (finalName !== channel.name) {
+            updates.name = finalName;
+            description += `, renamed to "${finalName}"`;
+          }
+
+          onStageUpdateChannel(channel.id, updates, description);
+        }
+
+        if (sourceRenumberUpdates.length > 1 && onEndBatch) {
+          onEndBatch();
+        }
       }
     }
 
