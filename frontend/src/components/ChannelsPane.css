@@ -2274,3 +2274,54 @@
   font-size: 0.8rem;
   margin-left: 2.25rem;
 }
+
+/* Drag Overlay */
+.drag-overlay-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  background-color: #2d2d2d;
+  border: 2px solid #646cff;
+  border-radius: 6px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  cursor: grabbing;
+  min-width: 200px;
+  max-width: 350px;
+}
+
+.drag-overlay-icon {
+  font-size: 1.25rem;
+  color: #646cff;
+}
+
+.drag-overlay-number {
+  min-width: 2.5rem;
+  text-align: center;
+  font-family: monospace;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #888;
+  background-color: #1e1e1e;
+  padding: 0.125rem 0.375rem;
+  border-radius: 3px;
+}
+
+.drag-overlay-name {
+  flex: 1;
+  font-size: 0.9rem;
+  color: #fff;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.drag-overlay-count {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: #646cff;
+  background-color: rgba(100, 108, 255, 0.2);
+  padding: 0.125rem 0.5rem;
+  border-radius: 10px;
+  white-space: nowrap;
+}
