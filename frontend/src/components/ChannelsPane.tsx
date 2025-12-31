@@ -368,6 +368,7 @@ interface DroppableGroupHeaderProps {
   isEmpty: boolean;
   isExpanded: boolean;
   isEditMode: boolean;
+  isAutoSync: boolean;
   onToggle: () => void;
 }
 
@@ -378,6 +379,7 @@ function DroppableGroupHeader({
   isEmpty,
   isExpanded,
   isEditMode,
+  isAutoSync,
   onToggle,
 }: DroppableGroupHeaderProps) {
   const droppableId = `group-${groupId}`;
@@ -394,6 +396,11 @@ function DroppableGroupHeader({
     >
       <span className="group-toggle">{isExpanded ? '▼' : '▶'}</span>
       <span className="group-name">{groupName}</span>
+      {isAutoSync && (
+        <span className="group-auto-sync-badge" title="Auto-populated by channel sync">
+          <span className="material-icons">sync</span>
+        </span>
+      )}
       <span className="group-count">{channelCount}</span>
       {isEmpty && <span className="group-empty-badge">Empty</span>}
     </div>
@@ -2173,6 +2180,7 @@ export function ChannelsPane({
 
     const numericGroupId = groupId === 'ungrouped' ? -1 : groupId;
     const isExpanded = expandedGroups[numericGroupId] === true;
+    const isAutoSync = groupId !== 'ungrouped' && autoSyncRelatedGroups.has(groupId);
 
     return (
       <div key={groupId} className={`channel-group ${isEmpty ? 'empty-group' : ''}`}>
@@ -2183,6 +2191,7 @@ export function ChannelsPane({
           isEmpty={isEmpty}
           isExpanded={isExpanded}
           isEditMode={isEditMode}
+          isAutoSync={isAutoSync}
           onToggle={() => toggleGroup(numericGroupId)}
         />
         {isExpanded && isEmpty && (
