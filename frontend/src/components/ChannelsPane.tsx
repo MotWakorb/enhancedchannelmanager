@@ -409,6 +409,7 @@ interface DroppableGroupHeaderProps {
   isEditMode: boolean;
   isAutoSync: boolean;
   onToggle: () => void;
+  onSortAndRenumber?: () => void;
 }
 
 function DroppableGroupHeader({
@@ -420,12 +421,18 @@ function DroppableGroupHeader({
   isEditMode,
   isAutoSync,
   onToggle,
+  onSortAndRenumber,
 }: DroppableGroupHeaderProps) {
   const droppableId = `group-${groupId}`;
   const { isOver, setNodeRef } = useDroppable({
     id: droppableId,
     disabled: !isEditMode,
   });
+
+  const handleSortClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    onSortAndRenumber?.();
+  };
 
   return (
     <div
@@ -442,6 +449,15 @@ function DroppableGroupHeader({
       )}
       <span className="group-count">{channelCount}</span>
       {isEmpty && <span className="group-empty-badge">Empty</span>}
+      {isEditMode && !isEmpty && onSortAndRenumber && (
+        <button
+          className="group-sort-btn"
+          onClick={handleSortClick}
+          title="Sort alphabetically and renumber channels"
+        >
+          <span className="material-icons">sort_by_alpha</span>
+        </button>
+      )}
     </div>
   );
 }
@@ -1199,6 +1215,16 @@ export function ChannelsPane({
   const [renumberSourceGroup, setRenumberSourceGroup] = useState<boolean>(false);
   // Selected numbering option: 'keep' | 'suggested' | 'custom'
   const [selectedNumberingOption, setSelectedNumberingOption] = useState<'keep' | 'suggested' | 'custom'>('suggested');
+
+  // Sort and Renumber modal state
+  const [showSortRenumberModal, setShowSortRenumberModal] = useState(false);
+  const [sortRenumberData, setSortRenumberData] = useState<{
+    groupId: number | 'ungrouped';
+    groupName: string;
+    channels: Channel[];
+    currentMinNumber: number | null;
+  } | null>(null);
+  const [sortRenumberStartingNumber, setSortRenumberStartingNumber] = useState<string>('');
 
   // Drag overlay state
   const [activeDragId, setActiveDragId] = useState<number | null>(null);
@@ -2779,6 +2805,74 @@ export function ChannelsPane({
     return true;
   };
 
+  // Sort & Renumber handlers
+  const handleOpenSortRenumber = (groupId: number | 'ungrouped', groupName: string, groupChannels: Channel[]) => {
+    const channelNumbers = groupChannels
+      .map((ch) => ch.channel_number)
+      .filter((n): n is number => n !== null);
+    const minNumber = channelNumbers.length > 0 ? Math.min(...channelNumbers) : null;
+
+    setSortRenumberData({
+      groupId,
+      groupName,
+      channels: groupChannels,
+      currentMinNumber: minNumber,
+    });
+    setSortRenumberStartingNumber(minNumber !== null ? String(minNumber) : '1');
+    setShowSortRenumberModal(true);
+  };
+
+  const handleSortRenumberCancel = () => {
+    setShowSortRenumberModal(false);
+    setSortRenumberData(null);
+    setSortRenumberStartingNumber('');
+  };
+
+  const handleSortRenumberConfirm = () => {
+    if (!sortRenumberData || !onStageUpdateChannel) return;
+
+    const startingNumber = parseInt(sortRenumberStartingNumber, 10);
+    if (isNaN(startingNumber) || startingNumber < 1) return;
+
+    // Sort channels alphabetically by name (case-insensitive)
+    const sortedChannels = [...sortRenumberData.channels].sort((a, b) =>
+      a.name.toLowerCase().localeCompare(b.name.toLowerCase())
+    );
+
+    // Start a batch for the entire operation
+    if (sortedChannels.length > 1 && onStartBatch) {
+      onStartBatch(`Sort and renumber ${sortedChannels.length} channels in "${sortRenumberData.groupName}"`);
+    }
+
+    // Renumber each channel
+    sortedChannels.forEach((channel, index) => {
+      const newNumber = startingNumber + index;
+      if (channel.channel_number !== newNumber) {
+        // Apply auto-rename if enabled
+        let updates: Partial<Channel> = { channel_number: newNumber };
+        if (autoRenameChannelNumber && channel.channel_number !== null) {
+          const newName = computeAutoRename(channel.name, channel.channel_number, newNumber);
+          if (newName !== channel.name) {
+            updates.name = newName;
+          }
+        }
+        const description = updates.name
+          ? `Renumber and rename "${channel.name}" to ch.${newNumber} "${updates.name}"`
+          : `Renumber "${channel.name}" to ch.${newNumber}`;
+        onStageUpdateChannel(channel.id, updates, description);
+      }
+    });
+
+    if (sortedChannels.length > 1 && onEndBatch) {
+      onEndBatch();
+    }
+
+    // Close modal
+    setShowSortRenumberModal(false);
+    setSortRenumberData(null);
+    setSortRenumberStartingNumber('');
+  };
+
   const renderGroup = (groupId: number | 'ungrouped', groupName: string, groupChannels: Channel[], isEmpty: boolean = false) => {
     // Only show empty groups if explicitly marked (selected in filter or newly created)
     if (groupChannels.length === 0 && !isEmpty) return null;
@@ -2800,6 +2894,7 @@ export function ChannelsPane({
           isEditMode={isEditMode}
           isAutoSync={isAutoSync}
           onToggle={() => toggleGroup(numericGroupId)}
+          onSortAndRenumber={() => handleOpenSortRenumber(groupId, groupName, groupChannels)}
         />
         {isExpanded && isEmpty && (
           <div className="group-channels empty-group-placeholder">
@@ -3600,6 +3695,83 @@ export function ChannelsPane({
                 disabled={!isMoveButtonEnabled()}
               >
                 Move {crossGroupMoveData.channels.length > 1 ? `${crossGroupMoveData.channels.length} Channels` : 'Channel'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Sort & Renumber Modal */}
+      {showSortRenumberModal && sortRenumberData && (
+        <div className="modal-overlay" onClick={handleSortRenumberCancel}>
+          <div className="modal-content sort-renumber-dialog" onClick={(e) => e.stopPropagation()}>
+            <h3>Sort & Renumber Channels</h3>
+
+            <div className="sort-renumber-info">
+              <p>
+                Sort <strong>{sortRenumberData.channels.length} channels</strong> in{' '}
+                <span className="group-tag">{sortRenumberData.groupName}</span> alphabetically and assign sequential numbers.
+              </p>
+            </div>
+
+            <div className="sort-renumber-options">
+              <div className="sort-renumber-field">
+                <label htmlFor="starting-number">Starting Channel Number</label>
+                <input
+                  id="starting-number"
+                  type="number"
+                  min="1"
+                  value={sortRenumberStartingNumber}
+                  onChange={(e) => setSortRenumberStartingNumber(e.target.value)}
+                  className="sort-renumber-input"
+                  autoFocus
+                />
+                {sortRenumberStartingNumber && !isNaN(parseInt(sortRenumberStartingNumber, 10)) && parseInt(sortRenumberStartingNumber, 10) >= 1 && (
+                  <span className="sort-renumber-range">
+                    Channels will be numbered {parseInt(sortRenumberStartingNumber, 10)} – {parseInt(sortRenumberStartingNumber, 10) + sortRenumberData.channels.length - 1}
+                  </span>
+                )}
+              </div>
+            </div>
+
+            {/* Preview of sorted order */}
+            <div className="sort-renumber-preview">
+              <label>Preview (sorted A–Z)</label>
+              <ul className="sort-renumber-preview-list">
+                {[...sortRenumberData.channels]
+                  .sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase()))
+                  .slice(0, 5)
+                  .map((ch, index) => {
+                    const startNum = parseInt(sortRenumberStartingNumber, 10) || 1;
+                    const newNumber = startNum + index;
+                    return (
+                      <li key={ch.id}>
+                        <span className="preview-old-number">{ch.channel_number ?? '-'}</span>
+                        <span className="preview-arrow">→</span>
+                        <span className="preview-new-number">{newNumber}</span>
+                        <span className="preview-name">{ch.name}</span>
+                      </li>
+                    );
+                  })}
+                {sortRenumberData.channels.length > 5 && (
+                  <li className="more-channels">...and {sortRenumberData.channels.length - 5} more</li>
+                )}
+              </ul>
+            </div>
+
+            <div className="modal-actions">
+              <button
+                className="modal-btn cancel"
+                onClick={handleSortRenumberCancel}
+              >
+                Cancel
+              </button>
+              <button
+                className="modal-btn primary"
+                onClick={handleSortRenumberConfirm}
+                disabled={!sortRenumberStartingNumber || isNaN(parseInt(sortRenumberStartingNumber, 10)) || parseInt(sortRenumberStartingNumber, 10) < 1}
+              >
+                Sort & Renumber
               </button>
             </div>
           </div>
