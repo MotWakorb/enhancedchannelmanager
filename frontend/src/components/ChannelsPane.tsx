@@ -25,21 +25,6 @@ import * as api from '../services/api';
 import { HistoryToolbar } from './HistoryToolbar';
 import './ChannelsPane.css';
 
-// Helper to format duration for display
-function formatDuration(ms: number): string {
-  const seconds = Math.floor(ms / 1000);
-  const minutes = Math.floor(seconds / 60);
-  const hours = Math.floor(minutes / 60);
-
-  if (hours > 0) {
-    return `${hours}h ${minutes % 60}m`;
-  }
-  if (minutes > 0) {
-    return `${minutes}m ${seconds % 60}s`;
-  }
-  return `${seconds}s`;
-}
-
 interface ChannelsPaneProps {
   channelGroups: ChannelGroup[];
   channels: Channel[];
@@ -69,13 +54,7 @@ interface ChannelsPaneProps {
   onStageBulkAssignNumbers?: (channelIds: number[], startingNumber: number, description: string) => void;
   onStartBatch?: (description: string) => void;
   onEndBatch?: () => void;
-  // Edit mode toggle props
-  onEnterEditMode?: () => void;
-  onExitEditMode?: () => void;
-  onCancelEditMode?: () => void;
   isCommitting?: boolean;
-  stagedOperationCount?: number;
-  editModeDuration?: number | null;
   // History toolbar props (only shown in edit mode)
   canUndo?: boolean;
   canRedo?: boolean;
@@ -1093,13 +1072,7 @@ export function ChannelsPane({
   onStageBulkAssignNumbers: _onStageBulkAssignNumbers, // Handled in App.tsx for channel reorder
   onStartBatch,
   onEndBatch,
-  // Edit mode toggle props
-  onEnterEditMode,
-  onExitEditMode,
-  onCancelEditMode,
   isCommitting = false,
-  stagedOperationCount = 0,
-  editModeDuration = null,
   // History toolbar props
   canUndo = false,
   canRedo = false,
@@ -1186,9 +1159,6 @@ export function ChannelsPane({
   // Edit channel modal state
   const [showEditChannelModal, setShowEditChannelModal] = useState(false);
   const [channelToEdit, setChannelToEdit] = useState<Channel | null>(null);
-
-  // Cancel edit mode confirmation state
-  const [showCancelEditModeConfirm, setShowCancelEditModeConfirm] = useState(false);
 
   // Create channel group modal state
   const [showCreateGroupModal, setShowCreateGroupModal] = useState(false);
@@ -3046,39 +3016,11 @@ export function ChannelsPane({
     );
   };
 
-  // Handle cancel edit mode click
-  const handleCancelEditModeClick = () => {
-    if (stagedOperationCount > 0) {
-      setShowCancelEditModeConfirm(true);
-    } else {
-      onCancelEditMode?.();
-    }
-  };
-
-  const handleConfirmCancelEditMode = () => {
-    setShowCancelEditModeConfirm(false);
-    onCancelEditMode?.();
-  };
-
   return (
     <div className="channels-pane">
       <div className={`pane-header ${isEditMode ? 'edit-mode' : ''}`}>
         <div className="pane-header-title">
-          <h2>{isEditMode ? 'Editing Channels' : 'Channels'}</h2>
-          {isEditMode && (
-            <span className="edit-mode-info">
-              {stagedOperationCount > 0 && (
-                <span className="edit-mode-count">
-                  {stagedOperationCount} change{stagedOperationCount !== 1 ? 's' : ''}
-                </span>
-              )}
-              {editModeDuration !== null && (
-                <span className="edit-mode-duration">
-                  ({formatDuration(editModeDuration)})
-                </span>
-              )}
-            </span>
-          )}
+          <h2>Channels</h2>
         </div>
         <div className="pane-header-actions">
           {isEditMode && onUndo && onRedo && onCreateSavePoint && onRevertToSavePoint && onDeleteSavePoint && (
@@ -3119,78 +3061,8 @@ export function ChannelsPane({
               </button>
             </>
           )}
-          {/* Edit Mode: Done and Cancel buttons */}
-          {isEditMode && onExitEditMode && onCancelEditMode && (
-            <div className="edit-mode-buttons">
-              <button
-                className="edit-mode-done-btn"
-                onClick={onExitEditMode}
-                disabled={isCommitting}
-                title="Apply changes"
-              >
-                <span className="material-icons" style={{ fontSize: '16px', marginRight: '4px' }}>check</span>
-                Done
-                {stagedOperationCount > 0 && (
-                  <span className="edit-mode-done-count">{stagedOperationCount}</span>
-                )}
-              </button>
-              <button
-                className="edit-mode-cancel-btn"
-                onClick={handleCancelEditModeClick}
-                disabled={isCommitting}
-                title="Cancel and discard changes"
-              >
-                <span className="material-icons" style={{ fontSize: '16px', marginRight: '4px' }}>close</span>
-                Cancel
-              </button>
-            </div>
-          )}
-          {/* Not in Edit Mode: Enter Edit Mode button */}
-          {!isEditMode && onEnterEditMode && (
-            <button
-              className="enter-edit-mode-btn"
-              onClick={onEnterEditMode}
-              title="Enter Edit Mode"
-            >
-              <span className="material-icons" style={{ fontSize: '16px', marginRight: '4px' }}>edit</span>
-              Edit Mode
-            </button>
-          )}
         </div>
       </div>
-
-      {/* Cancel Edit Mode Confirmation Dialog */}
-      {showCancelEditModeConfirm && (
-        <div className="edit-mode-dialog-overlay" onClick={() => setShowCancelEditModeConfirm(false)}>
-          <div className="edit-mode-dialog" onClick={(e) => e.stopPropagation()}>
-            <div className="edit-mode-dialog-header">
-              <h2>Discard Changes?</h2>
-            </div>
-            <div className="edit-mode-dialog-content">
-              <p className="edit-mode-dialog-summary-intro">
-                You have <strong>{stagedOperationCount}</strong> pending change{stagedOperationCount !== 1 ? 's' : ''} that will be lost.
-              </p>
-              <p className="edit-mode-dialog-question">
-                Are you sure you want to cancel Edit Mode and discard all changes?
-              </p>
-            </div>
-            <div className="edit-mode-dialog-actions">
-              <button
-                className="edit-mode-dialog-btn secondary"
-                onClick={() => setShowCancelEditModeConfirm(false)}
-              >
-                Keep Editing
-              </button>
-              <button
-                className="edit-mode-dialog-btn danger"
-                onClick={handleConfirmCancelEditMode}
-              >
-                Discard Changes
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* Create Channel Modal */}
       {showCreateModal && (
