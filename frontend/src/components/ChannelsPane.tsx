@@ -2344,14 +2344,55 @@ export function ChannelsPane({
   const handleCrossGroupMoveConfirm = (keepChannelNumber: boolean, startingChannelNumber?: number) => {
     if (!crossGroupMoveData) return;
 
-    const { channels: channelsToMove, targetGroupId, targetGroupName, sourceGroupName } = crossGroupMoveData;
+    const { channels: channelsToMove, targetGroupId, targetGroupName, sourceGroupName, insertAtPosition } = crossGroupMoveData;
 
-    // Build updates for each channel
+    // Build updates for moved channels
     const channelUpdates: Array<{
       channel: Channel;
       finalChannelNumber: number | null;
       finalName: string;
     }> = [];
+
+    // Build updates for existing channels that need to be shifted
+    const shiftUpdates: Array<{
+      channel: Channel;
+      finalChannelNumber: number;
+      finalName: string;
+    }> = [];
+
+    // If inserting at a position, we need to shift existing channels
+    if (!keepChannelNumber && startingChannelNumber !== undefined && insertAtPosition) {
+      // Get existing channels in the target group that are at or after the insertion point
+      const targetGroupChannels = localChannels.filter((ch) => {
+        if (targetGroupId === null) {
+          return ch.channel_group_id === null;
+        }
+        return ch.channel_group_id === targetGroupId;
+      });
+
+      // Find channels that need to be shifted (at or after insertion point)
+      const channelsToShift = targetGroupChannels.filter((ch) => {
+        return ch.channel_number !== null && ch.channel_number >= startingChannelNumber;
+      });
+
+      // Sort by channel number to process in order
+      channelsToShift.sort((a, b) => (a.channel_number ?? 0) - (b.channel_number ?? 0));
+
+      // Shift each channel up by the number of channels being inserted
+      const shiftAmount = channelsToMove.length;
+      for (const channel of channelsToShift) {
+        const newNumber = (channel.channel_number ?? 0) + shiftAmount;
+        let finalName = channel.name;
+
+        // Apply auto-rename if enabled
+        const newName = computeAutoRename(channel.name, channel.channel_number, newNumber);
+        if (newName) {
+          finalName = newName;
+        }
+
+        shiftUpdates.push({ channel, finalChannelNumber: newNumber, finalName });
+      }
+    }
 
     channelsToMove.forEach((channel, index) => {
       // Determine the final channel number
@@ -2373,22 +2414,34 @@ export function ChannelsPane({
       channelUpdates.push({ channel, finalChannelNumber, finalName });
     });
 
-    // Update local state immediately
+    // Update local state immediately (both moved and shifted channels)
     const updatedChannels = localChannels.map((ch) => {
-      const update = channelUpdates.find((u) => u.channel.id === ch.id);
-      if (update) {
+      // Check if this is a moved channel
+      const moveUpdate = channelUpdates.find((u) => u.channel.id === ch.id);
+      if (moveUpdate) {
         return {
           ...ch,
           channel_group_id: targetGroupId,
-          channel_number: update.finalChannelNumber,
-          name: update.finalName,
+          channel_number: moveUpdate.finalChannelNumber,
+          name: moveUpdate.finalName,
         };
       }
+
+      // Check if this is a shifted channel
+      const shiftUpdate = shiftUpdates.find((u) => u.channel.id === ch.id);
+      if (shiftUpdate) {
+        return {
+          ...ch,
+          channel_number: shiftUpdate.finalChannelNumber,
+          name: shiftUpdate.finalName,
+        };
+      }
+
       return ch;
     });
     setLocalChannels(updatedChannels);
 
-    // Stage the changes for each channel
+    // Stage the changes for moved channels
     if (onStageUpdateChannel) {
       for (const update of channelUpdates) {
         const { channel, finalChannelNumber, finalName } = update;
@@ -2404,6 +2457,20 @@ export function ChannelsPane({
             updates.name = finalName;
             description += `, renamed to "${finalName}"`;
           }
+        }
+
+        onStageUpdateChannel(channel.id, updates, description);
+      }
+
+      // Stage the changes for shifted channels
+      for (const update of shiftUpdates) {
+        const { channel, finalChannelNumber, finalName } = update;
+        const updates: Partial<Channel> = { channel_number: finalChannelNumber };
+        let description = `Shifted "${channel.name}" from channel ${channel.channel_number} to ${finalChannelNumber}`;
+
+        if (finalName !== channel.name) {
+          updates.name = finalName;
+          description += `, renamed to "${finalName}"`;
         }
 
         onStageUpdateChannel(channel.id, updates, description);
