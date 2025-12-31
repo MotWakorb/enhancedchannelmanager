@@ -575,13 +575,15 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  margin-left: 0.375rem;
+  margin-left: 0.5rem;
+  font-size: 0.65rem;
+  font-weight: 500;
   color: #22d3ee;
-  opacity: 0.7;
-}
-
-.group-auto-sync-badge .material-icons {
-  font-size: 0.9rem;
+  background-color: rgba(34, 211, 238, 0.15);
+  padding: 0.125rem 0.375rem;
+  border-radius: 4px;
+  text-transform: uppercase;
+  letter-spacing: 0.025em;
 }
 
 .group-empty-badge {
