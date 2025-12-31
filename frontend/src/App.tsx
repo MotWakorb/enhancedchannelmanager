@@ -247,6 +247,13 @@ function App() {
     }
   };
 
+  const handleDeleteChannelGroup = async (groupId: number) => {
+    await api.deleteChannelGroup(groupId);
+    // Reload channel groups and channels after deletion
+    await loadChannelGroups();
+    await loadChannels();
+  };
+
   const loadProviderGroupSettings = async () => {
     try {
       const settings = await api.getProviderGroupSettings();
@@ -914,6 +921,7 @@ function App() {
               logos={logos}
               onLogosChange={loadLogos}
               onChannelGroupsChange={loadChannelGroups}
+              onDeleteChannelGroup={handleDeleteChannelGroup}
               // EPG and Stream Profile props
               epgData={epgData}
               epgSources={epgSources}

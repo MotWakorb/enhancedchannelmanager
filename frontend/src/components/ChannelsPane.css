@@ -2423,6 +2423,36 @@
   font-size: 1rem;
 }
 
+/* Group Delete Button */
+.group-delete-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  margin-left: 0.25rem;
+  background: none;
+  border: none;
+  border-radius: 4px;
+  color: #666;
+  cursor: pointer;
+  transition: background-color 0.15s, color 0.15s;
+  opacity: 0;
+}
+
+.group-header:hover .group-delete-btn {
+  opacity: 1;
+}
+
+.group-delete-btn:hover {
+  background-color: rgba(248, 113, 113, 0.2);
+  color: #f87171;
+}
+
+.group-delete-btn .material-icons {
+  font-size: 1rem;
+}
+
 /* Sort & Renumber Modal */
 .sort-renumber-dialog {
   min-width: 450px;

@@ -74,6 +74,7 @@ interface ChannelsPaneProps {
   onLogosChange?: () => void;
   // Channel group callback
   onChannelGroupsChange?: () => void;
+  onDeleteChannelGroup?: (groupId: number) => Promise<void>;
   // EPG and Stream Profile props
   epgData?: EPGData[];
   epgSources?: EPGSource[];
@@ -387,8 +388,10 @@ interface DroppableGroupHeaderProps {
   isExpanded: boolean;
   isEditMode: boolean;
   isAutoSync: boolean;
+  isManualGroup: boolean;
   onToggle: () => void;
   onSortAndRenumber?: () => void;
+  onDeleteGroup?: () => void;
 }
 
 function DroppableGroupHeader({
@@ -399,8 +402,10 @@ function DroppableGroupHeader({
   isExpanded,
   isEditMode,
   isAutoSync,
+  isManualGroup,
   onToggle,
   onSortAndRenumber,
+  onDeleteGroup,
 }: DroppableGroupHeaderProps) {
   const droppableId = `group-${groupId}`;
   const { isOver, setNodeRef } = useDroppable({
@@ -411,6 +416,11 @@ function DroppableGroupHeader({
   const handleSortClick = (e: React.MouseEvent) => {
     e.stopPropagation();
     onSortAndRenumber?.();
+  };
+
+  const handleDeleteClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    onDeleteGroup?.();
   };
 
   return (
@@ -435,6 +445,15 @@ function DroppableGroupHeader({
           title="Sort alphabetically and renumber channels"
         >
           <span className="material-icons">sort_by_alpha</span>
+        </button>
+      )}
+      {isEditMode && isManualGroup && onDeleteGroup && (
+        <button
+          className="group-delete-btn"
+          onClick={handleDeleteClick}
+          title="Delete this group"
+        >
+          <span className="material-icons">delete</span>
         </button>
       )}
     </div>
@@ -1092,6 +1111,7 @@ export function ChannelsPane({
   onLogosChange,
   // Channel group callback
   onChannelGroupsChange,
+  onDeleteChannelGroup,
   // EPG and Stream Profile props
   epgData = [],
   epgSources = [],
@@ -1164,6 +1184,11 @@ export function ChannelsPane({
   const [showCreateGroupModal, setShowCreateGroupModal] = useState(false);
   const [newGroupName, setNewGroupName] = useState('');
   const [creatingGroup, setCreatingGroup] = useState(false);
+
+  // Delete group state
+  const [showDeleteGroupConfirm, setShowDeleteGroupConfirm] = useState(false);
+  const [groupToDelete, setGroupToDelete] = useState<ChannelGroup | null>(null);
+  const [deletingGroup, setDeletingGroup] = useState(false);
 
   // Cross-group move modal state
   const [showCrossGroupMoveModal, setShowCrossGroupMoveModal] = useState(false);
@@ -1503,6 +1528,34 @@ export function ChannelsPane({
     setChannelToDelete(null);
     setSubsequentChannels([]);
     setRenumberAfterDelete(true);
+  };
+
+  // Handle initiating group deletion
+  const handleDeleteGroupClick = (group: ChannelGroup) => {
+    setGroupToDelete(group);
+    setShowDeleteGroupConfirm(true);
+  };
+
+  // Handle confirming group deletion
+  const handleConfirmDeleteGroup = async () => {
+    if (!groupToDelete || !onDeleteChannelGroup) return;
+
+    setDeletingGroup(true);
+    try {
+      await onDeleteChannelGroup(groupToDelete.id);
+      setShowDeleteGroupConfirm(false);
+      setGroupToDelete(null);
+    } catch (err) {
+      console.error('Failed to delete group:', err);
+    } finally {
+      setDeletingGroup(false);
+    }
+  };
+
+  // Handle canceling group deletion
+  const handleCancelDeleteGroup = () => {
+    setShowDeleteGroupConfirm(false);
+    setGroupToDelete(null);
   };
 
   // Handle reordering streams within the channel
@@ -2878,6 +2931,14 @@ export function ChannelsPane({
     const isExpanded = expandedGroups[numericGroupId] === true;
     const isAutoSync = groupId !== 'ungrouped' && autoSyncRelatedGroups.has(groupId);
 
+    // Determine if this is a manual group (not linked to any M3U provider and not auto-sync related)
+    const groupIdStr = String(groupId);
+    const isProviderGroup = groupId !== 'ungrouped' && groupIdStr in (providerSettingsMap ?? {});
+    const isManualGroup = groupId !== 'ungrouped' && !isProviderGroup && !isAutoSync;
+
+    // Find the group object for deletion
+    const group = groupId !== 'ungrouped' ? channelGroups.find(g => g.id === groupId) : null;
+
     return (
       <div key={groupId} className={`channel-group ${isEmpty ? 'empty-group' : ''}`}>
         <DroppableGroupHeader
@@ -2888,8 +2949,10 @@ export function ChannelsPane({
           isExpanded={isExpanded}
           isEditMode={isEditMode}
           isAutoSync={isAutoSync}
+          isManualGroup={isManualGroup}
           onToggle={() => toggleGroup(numericGroupId)}
           onSortAndRenumber={() => handleOpenSortRenumber(groupId, groupName, groupChannels)}
+          onDeleteGroup={group ? () => handleDeleteGroupClick(group) : undefined}
         />
         {isExpanded && isEmpty && (
           <div className="group-channels empty-group-placeholder">
@@ -3325,6 +3388,46 @@ export function ChannelsPane({
                 disabled={deleting}
               >
                 {deleting ? 'Deleting...' : 'Delete'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Group Confirmation Dialog */}
+      {showDeleteGroupConfirm && groupToDelete && (
+        <div className="modal-overlay" onClick={handleCancelDeleteGroup}>
+          <div className="modal-content delete-dialog" onClick={(e) => e.stopPropagation()}>
+            <h3>Delete Group</h3>
+            <div className="delete-message">
+              <p>
+                Are you sure you want to delete the group{' '}
+                <strong>{groupToDelete.name}</strong>?
+              </p>
+              {groupToDelete.channel_count > 0 && (
+                <p className="delete-warning">
+                  This group contains {groupToDelete.channel_count} channel{groupToDelete.channel_count !== 1 ? 's' : ''}.
+                  The channels will be moved to "Ungrouped".
+                </p>
+              )}
+              <p className="delete-info">
+                This action cannot be undone.
+              </p>
+            </div>
+            <div className="modal-actions">
+              <button
+                className="modal-btn cancel"
+                onClick={handleCancelDeleteGroup}
+                disabled={deletingGroup}
+              >
+                Cancel
+              </button>
+              <button
+                className="modal-btn danger"
+                onClick={handleConfirmDeleteGroup}
+                disabled={deletingGroup}
+              >
+                {deletingGroup ? 'Deleting...' : 'Delete'}
               </button>
             </div>
           </div>
