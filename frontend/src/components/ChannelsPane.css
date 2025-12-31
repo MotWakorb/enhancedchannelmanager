@@ -2379,3 +2379,13 @@
     box-shadow: 0 0 12px rgba(100, 108, 255, 0.8), 0 0 24px rgba(100, 108, 255, 0.5);
   }
 }
+
+/* Drop zone at the end of a group - invisible until hovered */
+.group-end-dropzone {
+  min-height: 20px;
+  position: relative;
+}
+
+.group-end-dropzone.drop-target-active {
+  background-color: rgba(100, 108, 255, 0.05);
+}

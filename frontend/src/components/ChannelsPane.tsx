@@ -444,6 +444,38 @@ function DroppableGroupHeader({
   );
 }
 
+// Droppable zone at the end of a group (for dropping below the last channel)
+interface DroppableGroupEndProps {
+  groupId: number | 'ungrouped';
+  isEditMode: boolean;
+  showDropIndicator: boolean;
+}
+
+function DroppableGroupEnd({
+  groupId,
+  isEditMode,
+  showDropIndicator,
+}: DroppableGroupEndProps) {
+  const droppableId = `group-end-${groupId}`;
+  const { isOver, setNodeRef } = useDroppable({
+    id: droppableId,
+    disabled: !isEditMode,
+  });
+
+  return (
+    <div
+      ref={setNodeRef}
+      className={`group-end-dropzone ${isOver && isEditMode ? 'drop-target-active' : ''}`}
+    >
+      {(showDropIndicator || (isOver && isEditMode)) && (
+        <div className="channel-drop-indicator">
+          <div className="drop-indicator-line" />
+        </div>
+      )}
+    </div>
+  );
+}
+
 // Edit Channel Modal Component
 interface ChannelMetadataChanges {
   channel_number?: number;
@@ -1171,6 +1203,7 @@ export function ChannelsPane({
     channelId: number;
     position: 'before' | 'after';
     groupId: number | 'ungrouped';
+    atGroupEnd?: boolean;  // When true, indicates dropping at end of group
   } | null>(null);
 
   // Stream reorder sensors (separate from channel reorder)
@@ -2015,6 +2048,28 @@ export function ChannelsPane({
 
     const overId = String(over.id);
 
+    // If hovering over a group-end drop zone, show indicator at end of that group
+    if (overId.startsWith('group-end-')) {
+      const targetGroupIdStr = overId.replace('group-end-', '');
+      const targetGroupId: number | 'ungrouped' = targetGroupIdStr === 'ungrouped'
+        ? 'ungrouped'
+        : parseInt(targetGroupIdStr, 10);
+      const targetGroupChannels = channelsByGroup[targetGroupId] || [];
+
+      if (targetGroupChannels.length > 0) {
+        const lastChannel = targetGroupChannels[targetGroupChannels.length - 1];
+        setDropIndicator({
+          channelId: lastChannel.id,
+          position: 'after',
+          groupId: targetGroupId,
+          atGroupEnd: true,
+        });
+      } else {
+        setDropIndicator(null);
+      }
+      return;
+    }
+
     // If hovering over a group header, don't show channel drop indicator
     if (overId.startsWith('group-')) {
       setDropIndicator(null);
@@ -2087,8 +2142,33 @@ export function ChannelsPane({
     let isCrossGroupMove = false;
     let newGroupId: number | null = null;
     let insertAtChannelNumber: number | null = null;
+    let droppedAtGroupEnd = false;
 
-    if (overId.startsWith('group-')) {
+    if (overId.startsWith('group-end-')) {
+      // Dropped at the end of a group
+      const targetGroupIdStr = overId.replace('group-end-', '');
+      newGroupId = targetGroupIdStr === 'ungrouped' ? null : parseInt(targetGroupIdStr, 10);
+      droppedAtGroupEnd = true;
+
+      // Get the target group's channels to find the last channel number
+      const targetGroupChannels = newGroupId === null
+        ? channelsByGroup.ungrouped || []
+        : channelsByGroup[newGroupId] || [];
+
+      if (targetGroupChannels.length > 0) {
+        const lastChannel = targetGroupChannels[targetGroupChannels.length - 1];
+        // For end of group, we'll insert after the last channel
+        insertAtChannelNumber = lastChannel.channel_number !== null
+          ? lastChannel.channel_number + 1
+          : null;
+      }
+
+      // Check if it's actually a different group
+      if ((newGroupId === null && activeChannel.channel_group_id !== null) ||
+          (newGroupId !== null && activeChannel.channel_group_id !== newGroupId)) {
+        isCrossGroupMove = true;
+      }
+    } else if (overId.startsWith('group-')) {
       // Dropped on a group header
       const targetGroupId = overId.replace('group-', '');
       newGroupId = targetGroupId === 'ungrouped' ? null : parseInt(targetGroupId, 10);
@@ -2213,14 +2293,22 @@ export function ChannelsPane({
     }
 
     // Otherwise, this is a within-group reorder
-    if (!overChannel) return;
-
     // Get the group for the channels
     const groupId = activeChannel.channel_group_id ?? 'ungrouped';
     const groupChannels = channelsByGroup[groupId] || [];
 
     const oldIndex = groupChannels.findIndex((c) => c.id === active.id);
-    const newIndex = groupChannels.findIndex((c) => c.id === over.id);
+
+    // Determine the new index: either from the overChannel or end of group
+    let newIndex: number;
+    if (droppedAtGroupEnd) {
+      // Dropped at end of same group - move to the last position
+      newIndex = groupChannels.length - 1;
+    } else if (overChannel) {
+      newIndex = groupChannels.findIndex((c) => c.id === over.id);
+    } else {
+      return;
+    }
 
     if (oldIndex === -1 || newIndex === -1) return;
 
@@ -2292,7 +2380,18 @@ export function ChannelsPane({
       // The dragged channel takes the target position, and channels in between shift
       // All channels must have a number, so we can safely use them
       const activeNum = activeChannel.channel_number!;
-      const overNum = overChannel.channel_number!;
+
+      // For group end drop, use the last channel's number + 1
+      // Otherwise use the overChannel's number
+      let overNum: number;
+      if (droppedAtGroupEnd) {
+        const lastChannel = groupChannels[groupChannels.length - 1];
+        overNum = (lastChannel?.channel_number ?? 0) + 1;
+      } else if (overChannel) {
+        overNum = overChannel.channel_number!;
+      } else {
+        return;
+      }
 
       // Determine direction and range
       const movingDown = overNum > activeNum;
@@ -2744,7 +2843,7 @@ export function ChannelsPane({
                         )}
                       </div>
                     )}
-                    {showIndicatorAfter && (
+                    {showIndicatorAfter && !dropIndicator?.atGroupEnd && (
                       <div className="channel-drop-indicator">
                         <div className="drop-indicator-line" />
                       </div>
@@ -2752,6 +2851,15 @@ export function ChannelsPane({
                   </div>
                   );
                 })}
+                {/* Drop zone at the end of the group */}
+                <DroppableGroupEnd
+                  groupId={groupId}
+                  isEditMode={isEditMode}
+                  showDropIndicator={
+                    dropIndicator?.atGroupEnd === true &&
+                    dropIndicator?.groupId === groupId
+                  }
+                />
               </div>
             </SortableContext>
         )}
