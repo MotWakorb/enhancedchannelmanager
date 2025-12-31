@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import {
   DndContext,
+  DragOverlay,
   closestCenter,
   KeyboardSensor,
   PointerSensor,
@@ -1156,6 +1157,9 @@ export function ChannelsPane({
   } | null>(null);
   const [customStartingNumber, setCustomStartingNumber] = useState<string>('');
 
+  // Drag overlay state
+  const [activeDragId, setActiveDragId] = useState<number | null>(null);
+
   // Stream reorder sensors (separate from channel reorder)
   const streamSensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
@@ -1970,8 +1974,11 @@ export function ChannelsPane({
   // Filter sorted channel groups based on filter settings
   const filteredChannelGroups = sortedChannelGroups.filter((g) => shouldShowGroup(g.id));
 
-  const handleDragStart = (_event: DragStartEvent) => {
-    // Could add visual feedback here
+  const handleDragStart = (event: DragStartEvent) => {
+    const activeId = event.active.id;
+    if (typeof activeId === 'number') {
+      setActiveDragId(activeId);
+    }
   };
 
   const handleDragOver = (_event: DragOverEvent) => {
@@ -1979,6 +1986,9 @@ export function ChannelsPane({
   };
 
   const handleDragEnd = (event: DragEndEvent) => {
+    // Clear drag overlay state
+    setActiveDragId(null);
+
     // Block channel reordering when not in edit mode
     if (!isEditMode) return;
 
@@ -3271,6 +3281,29 @@ export function ChannelsPane({
             {/* Always render Uncategorized if it has channels */}
             {channelsByGroup.ungrouped?.length > 0 &&
               renderGroup('ungrouped', 'Uncategorized', channelsByGroup.ungrouped)}
+
+            {/* Drag overlay - shows what's being dragged */}
+            <DragOverlay dropAnimation={null}>
+              {activeDragId !== null && (() => {
+                const draggedChannel = localChannels.find((c) => c.id === activeDragId);
+                if (!draggedChannel) return null;
+
+                // Check if dragging multiple selected channels
+                const isDraggedPartOfSelection = selectedChannelIds.has(activeDragId);
+                const dragCount = isDraggedPartOfSelection ? selectedChannelIds.size : 1;
+
+                return (
+                  <div className="drag-overlay-item">
+                    <span className="material-icons drag-overlay-icon">drag_indicator</span>
+                    <span className="drag-overlay-number">{draggedChannel.channel_number ?? '-'}</span>
+                    <span className="drag-overlay-name">{draggedChannel.name}</span>
+                    {dragCount > 1 && (
+                      <span className="drag-overlay-count">+{dragCount - 1} more</span>
+                    )}
+                  </div>
+                );
+              })()}
+            </DragOverlay>
           </DndContext>
         )}
       </div>
