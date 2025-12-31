@@ -2010,7 +2010,8 @@
 
 /* Cross-Group Move Modal */
 .cross-group-move-dialog {
-  max-width: 480px;
+  min-width: 500px;
+  max-width: 560px;
 }
 
 .cross-group-move-dialog h3 {
@@ -2227,8 +2228,8 @@
 
 .custom-number-input {
   flex: 1;
-  min-width: 100px;
-  max-width: 120px;
+  min-width: 120px;
+  max-width: 140px;
   padding: 0.5rem 0.75rem;
   background: #1a1a1a;
   border: 1px solid #555;
