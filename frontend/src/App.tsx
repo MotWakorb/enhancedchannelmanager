@@ -618,9 +618,11 @@ function App() {
       try {
         // If we need to create a new group first
         let targetGroupId = channelGroupId;
+        let newGroupCreated = false;
         if (newGroupName) {
           const newGroup = await api.createChannelGroup(newGroupName);
           targetGroupId = newGroup.id;
+          newGroupCreated = true;
           // Refresh channel groups
           const updatedGroups = await api.getChannelGroups();
           setChannelGroups(updatedGroups);
@@ -654,13 +656,28 @@ function App() {
         const updatedGroups = await api.getChannelGroups();
         setChannelGroups(updatedGroups);
 
+        // If a new group was created or we used an existing group, add it to the visible filter
+        if (targetGroupId !== null) {
+          setChannelGroupFilter((prev) => {
+            if (!prev.includes(targetGroupId!)) {
+              return [...prev, targetGroupId!];
+            }
+            return prev;
+          });
+        }
+
+        // Track as newly created if it was a new group
+        if (newGroupCreated && targetGroupId !== null) {
+          trackNewlyCreatedGroup(targetGroupId);
+        }
+
       } catch (err) {
         console.error('Bulk create failed:', err);
         setError('Failed to bulk create channels');
         throw err;
       }
     },
-    [isEditMode, addChannelToWorkingCopy]
+    [isEditMode, addChannelToWorkingCopy, trackNewlyCreatedGroup]
   );
 
   // Filter streams based on multi-select filters (client-side)
