@@ -467,6 +467,16 @@ async def get_providers():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/api/providers/group-settings")
+async def get_all_provider_group_settings():
+    """Get group settings from all M3U providers, mapped by channel_group_id."""
+    client = get_client()
+    try:
+        return await client.get_all_m3u_group_settings()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # EPG Sources
 @app.get("/api/epg/sources")
 async def get_epg_sources():

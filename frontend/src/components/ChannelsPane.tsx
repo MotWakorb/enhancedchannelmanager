@@ -18,11 +18,25 @@ import {
   verticalListSortingStrategy,
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import type { Channel, ChannelGroup, Stream, M3UAccount, Logo, ChangeInfo, ChangeRecord, SavePoint, EPGData, EPGSource, StreamProfile } from '../types';
+import type { Channel, ChannelGroup, Stream, M3UAccount, M3UGroupSetting, Logo, ChangeInfo, ChangeRecord, SavePoint, EPGData, EPGSource, StreamProfile, ChannelListFilterSettings } from '../types';
 import * as api from '../services/api';
-import { EditModeToggle } from './EditModeToggle';
 import { HistoryToolbar } from './HistoryToolbar';
 import './ChannelsPane.css';
+
+// Helper to format duration for display
+function formatDuration(ms: number): string {
+  const seconds = Math.floor(ms / 1000);
+  const minutes = Math.floor(seconds / 60);
+  const hours = Math.floor(minutes / 60);
+
+  if (hours > 0) {
+    return `${hours}h ${minutes % 60}m`;
+  }
+  if (minutes > 0) {
+    return `${minutes}m ${seconds % 60}s`;
+  }
+  return `${seconds}s`;
+}
 
 interface ChannelsPaneProps {
   channelGroups: ChannelGroup[];
@@ -54,8 +68,10 @@ interface ChannelsPaneProps {
   // Edit mode toggle props
   onEnterEditMode?: () => void;
   onExitEditMode?: () => void;
+  onCancelEditMode?: () => void;
   isCommitting?: boolean;
   stagedOperationCount?: number;
+  editModeDuration?: number | null;
   // History toolbar props (only shown in edit mode)
   canUndo?: boolean;
   canRedo?: boolean;
@@ -73,11 +89,19 @@ interface ChannelsPaneProps {
   // Logo props
   logos?: Logo[];
   onLogosChange?: () => void;
+  // Channel group callback
+  onChannelGroupsChange?: () => void;
   // EPG and Stream Profile props
   epgData?: EPGData[];
   epgSources?: EPGSource[];
   streamProfiles?: StreamProfile[];
   epgDataLoading?: boolean;
+  // Channel list filter props
+  providerGroupSettings?: Record<number, M3UGroupSetting>;
+  channelListFilters?: ChannelListFilterSettings;
+  onChannelListFiltersChange?: (updates: Partial<ChannelListFilterSettings>) => void;
+  newlyCreatedGroupIds?: Set<number>;
+  onTrackNewlyCreatedGroup?: (groupId: number) => void;
 }
 
 interface GroupState {
@@ -401,6 +425,7 @@ function EditChannelModal({
   const [tvgIdSearch, setTvgIdSearch] = useState('');
 
   const [saving, setSaving] = useState(false);
+  const [showDiscardConfirm, setShowDiscardConfirm] = useState(false);
 
   // Filter logos by search term
   const filteredLogos = logos.filter((logo) =>
@@ -423,6 +448,15 @@ function EditChannelModal({
     tvcGuideStationId !== (channel.tvc_guide_stationid || '') ||
     selectedEpgDataId !== channel.epg_data_id ||
     selectedStreamProfileId !== channel.stream_profile_id;
+
+  // Handle close with unsaved changes check
+  const handleClose = () => {
+    if (hasChanges) {
+      setShowDiscardConfirm(true);
+    } else {
+      onClose();
+    }
+  };
 
   const handleSave = async () => {
     setSaving(true);
@@ -534,11 +568,11 @@ function EditChannelModal({
   };
 
   return (
-    <div className="edit-channel-modal-overlay" onClick={onClose}>
+    <div className="edit-channel-modal-overlay" onClick={handleClose}>
       <div className="edit-channel-modal" onClick={(e) => e.stopPropagation()}>
         <div className="edit-channel-titlebar">
           <span className="edit-channel-titlebar-text">Edit Channel</span>
-          <button className="edit-channel-titlebar-close" onClick={onClose} title="Close">
+          <button className="edit-channel-titlebar-close" onClick={handleClose} title="Close">
             <span className="material-icons">close</span>
           </button>
         </div>
@@ -817,63 +851,80 @@ function EditChannelModal({
           </div>
 
           {/* Add logo from URL or file */}
-          <div className="logo-add-section">
-            <div className="logo-add-url">
-              <input
-                type="text"
-                placeholder="Add logo from URL..."
-                value={newLogoUrl}
-                onChange={(e) => setNewLogoUrl(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') {
-                    handleAddLogoFromUrl();
-                  }
-                }}
-              />
-              <button
-                onClick={handleAddLogoFromUrl}
-                disabled={!newLogoUrl.trim() || addingLogo}
-              >
-                {addingLogo ? 'Adding...' : 'Add'}
-              </button>
-            </div>
-            <div className="logo-add-divider">
-              <span>or</span>
-            </div>
-            <div className="logo-add-file">
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept="image/*"
-                onChange={handleFileUpload}
-                style={{ display: 'none' }}
-                id="logo-file-input"
-              />
-              <button
-                onClick={() => fileInputRef.current?.click()}
-                disabled={uploadingLogo}
-                className="logo-upload-btn"
-              >
-                <span className="material-icons">upload_file</span>
-                {uploadingLogo ? 'Uploading...' : 'Upload Image'}
-              </button>
-            </div>
+          <div className="logo-add-row">
+            <input
+              type="text"
+              placeholder="Add logo from URL..."
+              value={newLogoUrl}
+              onChange={(e) => setNewLogoUrl(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  handleAddLogoFromUrl();
+                }
+              }}
+            />
+            <button
+              onClick={handleAddLogoFromUrl}
+              disabled={!newLogoUrl.trim() || addingLogo}
+              className="logo-add-btn"
+            >
+              {addingLogo ? 'Adding...' : 'Add'}
+            </button>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/*"
+              onChange={handleFileUpload}
+              style={{ display: 'none' }}
+              id="logo-file-input"
+            />
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              disabled={uploadingLogo}
+              className="logo-upload-btn"
+            >
+              <span className="material-icons">upload_file</span>
+              {uploadingLogo ? 'Uploading...' : 'Upload'}
+            </button>
           </div>
         </div>
 
         <div className="edit-channel-actions">
-          <button className="edit-channel-cancel-btn" onClick={onClose} disabled={saving}>
-            Cancel
-          </button>
           <button
             className="edit-channel-save-btn"
             onClick={handleSave}
             disabled={saving || !hasChanges}
           >
-            {saving ? 'Saving...' : 'Save'}
+            {saving ? 'Saving...' : 'Save Changes'}
           </button>
         </div>
         </div>
+
+        {/* Discard Changes Confirmation Dialog */}
+        {showDiscardConfirm && (
+          <div className="discard-confirm-overlay" onClick={() => setShowDiscardConfirm(false)}>
+            <div className="discard-confirm-dialog" onClick={(e) => e.stopPropagation()}>
+              <div className="discard-confirm-title">Unsaved Changes</div>
+              <div className="discard-confirm-message">
+                You have unsaved changes. Are you sure you want to close without saving?
+              </div>
+              <div className="discard-confirm-actions">
+                <button
+                  className="discard-confirm-cancel"
+                  onClick={() => setShowDiscardConfirm(false)}
+                >
+                  Keep Editing
+                </button>
+                <button
+                  className="discard-confirm-discard"
+                  onClick={onClose}
+                >
+                  Discard Changes
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -908,8 +959,10 @@ export function ChannelsPane({
   // Edit mode toggle props
   onEnterEditMode,
   onExitEditMode,
+  onCancelEditMode,
   isCommitting = false,
   stagedOperationCount = 0,
+  editModeDuration = null,
   // History toolbar props
   canUndo = false,
   canRedo = false,
@@ -927,11 +980,19 @@ export function ChannelsPane({
   // Logo props
   logos = [],
   onLogosChange,
+  // Channel group callback
+  onChannelGroupsChange,
   // EPG and Stream Profile props
   epgData = [],
   epgSources = [],
   streamProfiles = [],
   epgDataLoading = false,
+  // Channel list filter props
+  providerGroupSettings = {},
+  channelListFilters,
+  onChannelListFiltersChange,
+  newlyCreatedGroupIds = new Set(),
+  onTrackNewlyCreatedGroup,
 }: ChannelsPaneProps) {
   // Suppress unused variable warnings - these are passed through but handled in parent
   void _onStageAddStream;
@@ -941,7 +1002,11 @@ export function ChannelsPane({
   const [dragOverChannelId, setDragOverChannelId] = useState<number | null>(null);
   const [localChannels, setLocalChannels] = useState<Channel[]>(channels);
   const [groupDropdownOpen, setGroupDropdownOpen] = useState(false);
+  const [groupFilterSearch, setGroupFilterSearch] = useState('');
+  const [filterSettingsOpen, setFilterSettingsOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
+  const groupFilterSearchRef = useRef<HTMLInputElement>(null);
+  const filterSettingsRef = useRef<HTMLDivElement>(null);
 
   // Create channel modal state
   const [showCreateModal, setShowCreateModal] = useState(false);
@@ -979,6 +1044,14 @@ export function ChannelsPane({
   const [showEditChannelModal, setShowEditChannelModal] = useState(false);
   const [channelToEdit, setChannelToEdit] = useState<Channel | null>(null);
 
+  // Cancel edit mode confirmation state
+  const [showCancelEditModeConfirm, setShowCancelEditModeConfirm] = useState(false);
+
+  // Create channel group modal state
+  const [showCreateGroupModal, setShowCreateGroupModal] = useState(false);
+  const [newGroupName, setNewGroupName] = useState('');
+  const [creatingGroup, setCreatingGroup] = useState(false);
+
   // Stream reorder sensors (separate from channel reorder)
   const streamSensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
@@ -1005,11 +1078,15 @@ export function ChannelsPane({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isEditMode]);
 
-  // Close dropdown when clicking outside
+  // Close dropdowns when clicking outside
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
       if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
         setGroupDropdownOpen(false);
+        setGroupFilterSearch('');
+      }
+      if (filterSettingsRef.current && !filterSettingsRef.current.contains(event.target as Node)) {
+        setFilterSettingsOpen(false);
       }
     };
     document.addEventListener('mousedown', handleClickOutside);
@@ -1032,8 +1109,8 @@ export function ChannelsPane({
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  // Filter channel groups based on search text
-  const filteredChannelGroups = channelGroups.filter((group) =>
+  // Filter channel groups based on search text (for create modal dropdown)
+  const searchFilteredChannelGroups = channelGroups.filter((group) =>
     group.name.toLowerCase().includes(groupSearchText.toLowerCase())
   );
 
@@ -1256,6 +1333,38 @@ export function ChannelsPane({
       coordinateGetter: sortableKeyboardCoordinates,
     })
   );
+
+  // Close the create group modal and reset form state
+  const handleCloseCreateGroupModal = () => {
+    setShowCreateGroupModal(false);
+    setNewGroupName('');
+  };
+
+  // Handle creating a new channel group
+  const handleCreateGroup = async () => {
+    if (!newGroupName.trim()) return;
+
+    setCreatingGroup(true);
+    try {
+      const newGroup = await api.createChannelGroup(newGroupName.trim());
+      if (onChannelGroupsChange) {
+        onChannelGroupsChange();
+      }
+      // Track the newly created group
+      if (onTrackNewlyCreatedGroup) {
+        onTrackNewlyCreatedGroup(newGroup.id);
+      }
+      // Auto-select the new group so it appears in the channel list
+      if (!selectedGroups.includes(newGroup.id)) {
+        onSelectedGroupsChange([...selectedGroups, newGroup.id]);
+      }
+      handleCloseCreateGroupModal();
+    } catch (err) {
+      console.error('Failed to create channel group:', err);
+    } finally {
+      setCreatingGroup(false);
+    }
+  };
 
   // Close the create modal and reset form state
   const handleCloseCreateModal = () => {
@@ -1600,9 +1709,38 @@ export function ChannelsPane({
     }
   };
 
-  // Filter out auto-created channels, then group by channel_group_id
-  const manualChannels = localChannels.filter((ch) => !ch.auto_created);
-  const channelsByGroup = manualChannels.reduce<Record<number | 'ungrouped', Channel[]>>(
+  // Filter channels: show manual channels always, show auto-created only if their group is related to auto_channel_sync
+  // Note: providerGroupSettings keys are strings from JSON even though typed as number
+  const providerSettingsMap = providerGroupSettings as unknown as Record<string, M3UGroupSetting> | undefined;
+
+  // Build a set of group IDs that are related to auto_channel_sync:
+  // 1. Groups that have auto_channel_sync: true directly
+  // 2. Groups that are group_override targets of auto_channel_sync groups
+  const autoSyncRelatedGroups = new Set<number>();
+  if (providerSettingsMap) {
+    for (const setting of Object.values(providerSettingsMap)) {
+      if (setting.auto_channel_sync) {
+        // Add the source group itself
+        autoSyncRelatedGroups.add(setting.channel_group);
+        // Also add the group_override target if set
+        if (setting.custom_properties?.group_override) {
+          autoSyncRelatedGroups.add(setting.custom_properties.group_override);
+        }
+      }
+    }
+  }
+
+  const visibleChannels = localChannels.filter((ch) => {
+    if (!ch.auto_created) return true; // Always show manual channels
+    // For auto-created channels, check if their group is related to auto_channel_sync
+    const groupId = ch.channel_group_id;
+    if (groupId && autoSyncRelatedGroups.has(groupId)) {
+      // Show auto-created channel if showAutoChannelGroups filter is on
+      return channelListFilters?.showAutoChannelGroups !== false;
+    }
+    return false; // Hide auto-created channels from non-auto-sync groups
+  });
+  const channelsByGroup = visibleChannels.reduce<Record<number | 'ungrouped', Channel[]>>(
     (acc, channel) => {
       const key = channel.channel_group_id ?? 'ungrouped';
       if (!acc[key]) acc[key] = [];
@@ -1617,7 +1755,7 @@ export function ChannelsPane({
     group.sort((a, b) => (a.channel_number ?? 9999) - (b.channel_number ?? 9999));
   });
 
-  // Sort channel groups by their lowest channel number
+  // Sort channel groups by their lowest channel number (only groups with channels)
   const sortedChannelGroups = [...channelGroups]
     .filter((g) => channelsByGroup[g.id]?.length > 0)
     .sort((a, b) => {
@@ -1625,6 +1763,55 @@ export function ChannelsPane({
       const bMin = channelsByGroup[b.id]?.[0]?.channel_number ?? 9999;
       return aMin - bMin;
     });
+
+  // All groups sorted alphabetically (for filter dropdown - includes empty groups)
+  const allGroupsSorted = [...channelGroups].sort((a, b) => a.name.localeCompare(b.name));
+
+  // Helper function to determine if a group should be visible based on filter settings
+  const shouldShowGroup = (groupId: number): boolean => {
+    if (!channelListFilters) return true;
+
+    const groupHasChannels = (channelsByGroup[groupId]?.length ?? 0) > 0;
+    const isNewlyCreated = newlyCreatedGroupIds.has(groupId);
+    // Check if this group is related to auto_channel_sync (source or target)
+    const isAutoSyncRelated = autoSyncRelatedGroups.has(groupId);
+    // Note: providerGroupSettings keys are strings from JSON, so we use String(groupId)
+    const groupIdStr = String(groupId);
+    const isProviderGroup = groupIdStr in (providerSettingsMap ?? {});
+    const isManualGroup = !isProviderGroup && !isAutoSyncRelated;
+
+    // Empty group checks
+    if (!groupHasChannels) {
+      // If showEmptyGroups is off, only show if newly created and showNewlyCreatedGroups is on
+      if (!channelListFilters.showEmptyGroups) {
+        if (isNewlyCreated && channelListFilters.showNewlyCreatedGroups) {
+          // Allow newly created empty groups
+        } else {
+          return false;
+        }
+      }
+    }
+
+    // Auto channel group filter - applies to groups related to auto_channel_sync
+    if (isAutoSyncRelated && !channelListFilters.showAutoChannelGroups) {
+      return false;
+    }
+
+    // Provider group filter (groups linked to an M3U provider, but not auto-sync related)
+    if (isProviderGroup && !isAutoSyncRelated && !channelListFilters.showProviderGroups) {
+      return false;
+    }
+
+    // Manual group filter (groups not linked to any M3U provider)
+    if (isManualGroup && !channelListFilters.showManualGroups) {
+      return false;
+    }
+
+    return true;
+  };
+
+  // Filter sorted channel groups based on filter settings
+  const filteredChannelGroups = sortedChannelGroups.filter((g) => shouldShowGroup(g.id));
 
   const handleDragStart = (_event: DragStartEvent) => {
     // Could add visual feedback here
@@ -1812,8 +1999,9 @@ export function ChannelsPane({
     }
   };
 
-  const renderGroup = (groupId: number | 'ungrouped', groupName: string, groupChannels: Channel[]) => {
-    if (groupChannels.length === 0) return null;
+  const renderGroup = (groupId: number | 'ungrouped', groupName: string, groupChannels: Channel[], isEmpty: boolean = false) => {
+    // Only show empty groups if explicitly marked (selected in filter or newly created)
+    if (groupChannels.length === 0 && !isEmpty) return null;
     // If groups are selected, only show those groups (or ungrouped if showing all)
     if (selectedGroups.length > 0 && groupId !== 'ungrouped' && !selectedGroups.includes(groupId)) return null;
 
@@ -1821,13 +2009,21 @@ export function ChannelsPane({
     const isExpanded = expandedGroups[numericGroupId] === true;
 
     return (
-      <div key={groupId} className="channel-group">
+      <div key={groupId} className={`channel-group ${isEmpty ? 'empty-group' : ''}`}>
         <div className="group-header" onClick={() => toggleGroup(numericGroupId)}>
           <span className="group-toggle">{isExpanded ? '▼' : '▶'}</span>
           <span className="group-name">{groupName}</span>
           <span className="group-count">{groupChannels.length}</span>
+          {isEmpty && <span className="group-empty-badge">Empty</span>}
         </div>
-        {isExpanded && (
+        {isExpanded && isEmpty && (
+          <div className="group-channels empty-group-placeholder">
+            <div className="empty-group-message">
+              No channels in this group. Create a channel and assign it to this group.
+            </div>
+          </div>
+        )}
+        {isExpanded && !isEmpty && (
           <DndContext
             sensors={sensors}
             collisionDetection={closestCenter}
@@ -1915,10 +2111,40 @@ export function ChannelsPane({
     );
   };
 
+  // Handle cancel edit mode click
+  const handleCancelEditModeClick = () => {
+    if (stagedOperationCount > 0) {
+      setShowCancelEditModeConfirm(true);
+    } else {
+      onCancelEditMode?.();
+    }
+  };
+
+  const handleConfirmCancelEditMode = () => {
+    setShowCancelEditModeConfirm(false);
+    onCancelEditMode?.();
+  };
+
   return (
     <div className="channels-pane">
-      <div className="pane-header">
-        <h2>Channels</h2>
+      <div className={`pane-header ${isEditMode ? 'edit-mode' : ''}`}>
+        <div className="pane-header-title">
+          <h2>{isEditMode ? 'Editing Channels' : 'Channels'}</h2>
+          {isEditMode && (
+            <span className="edit-mode-info">
+              {stagedOperationCount > 0 && (
+                <span className="edit-mode-count">
+                  {stagedOperationCount} change{stagedOperationCount !== 1 ? 's' : ''}
+                </span>
+              )}
+              {editModeDuration !== null && (
+                <span className="edit-mode-duration">
+                  ({formatDuration(editModeDuration)})
+                </span>
+              )}
+            </span>
+          )}
+        </div>
         <div className="pane-header-actions">
           {isEditMode && onUndo && onRedo && onCreateSavePoint && onRevertToSavePoint && onDeleteSavePoint && (
             <HistoryToolbar
@@ -1938,27 +2164,98 @@ export function ChannelsPane({
               isEditMode={isEditMode}
             />
           )}
-          {onEnterEditMode && onExitEditMode && (
-            <EditModeToggle
-              isEditMode={isEditMode}
-              stagedCount={stagedOperationCount}
-              onEnter={onEnterEditMode}
-              onExit={onExitEditMode}
-              disabled={isCommitting}
-            />
-          )}
           {isEditMode && (
+            <>
+              <button
+                className="create-channel-btn"
+                onClick={() => setShowCreateModal(true)}
+                title="Create new channel"
+              >
+                <span className="material-icons create-channel-icon">add</span>
+                <span>Channel</span>
+              </button>
+              <button
+                className="create-group-btn"
+                onClick={() => setShowCreateGroupModal(true)}
+                title="Create new channel group"
+              >
+                <span className="material-icons create-channel-icon">create_new_folder</span>
+                <span>Group</span>
+              </button>
+            </>
+          )}
+          {/* Edit Mode: Done and Cancel buttons */}
+          {isEditMode && onExitEditMode && onCancelEditMode && (
+            <div className="edit-mode-buttons">
+              <button
+                className="edit-mode-done-btn"
+                onClick={onExitEditMode}
+                disabled={isCommitting}
+                title="Apply changes"
+              >
+                <span className="material-icons" style={{ fontSize: '16px', marginRight: '4px' }}>check</span>
+                Done
+                {stagedOperationCount > 0 && (
+                  <span className="edit-mode-done-count">{stagedOperationCount}</span>
+                )}
+              </button>
+              <button
+                className="edit-mode-cancel-btn"
+                onClick={handleCancelEditModeClick}
+                disabled={isCommitting}
+                title="Cancel and discard changes"
+              >
+                <span className="material-icons" style={{ fontSize: '16px', marginRight: '4px' }}>close</span>
+                Cancel
+              </button>
+            </div>
+          )}
+          {/* Not in Edit Mode: Enter Edit Mode button */}
+          {!isEditMode && onEnterEditMode && (
             <button
-              className="create-channel-btn"
-              onClick={() => setShowCreateModal(true)}
-              title="Create new channel"
+              className="enter-edit-mode-btn"
+              onClick={onEnterEditMode}
+              title="Enter Edit Mode"
             >
-              <span className="material-icons create-channel-icon">add</span>
-              <span>New</span>
+              <span className="material-icons" style={{ fontSize: '16px', marginRight: '4px' }}>edit</span>
+              Edit Mode
             </button>
           )}
         </div>
       </div>
+
+      {/* Cancel Edit Mode Confirmation Dialog */}
+      {showCancelEditModeConfirm && (
+        <div className="edit-mode-dialog-overlay" onClick={() => setShowCancelEditModeConfirm(false)}>
+          <div className="edit-mode-dialog" onClick={(e) => e.stopPropagation()}>
+            <div className="edit-mode-dialog-header">
+              <h2>Discard Changes?</h2>
+            </div>
+            <div className="edit-mode-dialog-content">
+              <p className="edit-mode-dialog-summary-intro">
+                You have <strong>{stagedOperationCount}</strong> pending change{stagedOperationCount !== 1 ? 's' : ''} that will be lost.
+              </p>
+              <p className="edit-mode-dialog-question">
+                Are you sure you want to cancel Edit Mode and discard all changes?
+              </p>
+            </div>
+            <div className="edit-mode-dialog-actions">
+              <button
+                className="edit-mode-dialog-btn secondary"
+                onClick={() => setShowCancelEditModeConfirm(false)}
+              >
+                Keep Editing
+              </button>
+              <button
+                className="edit-mode-dialog-btn danger"
+                onClick={handleConfirmCancelEditMode}
+              >
+                Discard Changes
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Create Channel Modal */}
       {showCreateModal && (
@@ -2025,7 +2322,7 @@ export function ChannelsPane({
                       >
                         No Group
                       </div>
-                      {filteredChannelGroups.map((group) => (
+                      {searchFilteredChannelGroups.map((group) => (
                         <div
                           key={group.id}
                           className={`group-autocomplete-option ${newChannelGroup === group.id ? 'selected' : ''}`}
@@ -2034,7 +2331,7 @@ export function ChannelsPane({
                           {group.name}
                         </div>
                       ))}
-                      {filteredChannelGroups.length === 0 && groupSearchText && (
+                      {searchFilteredChannelGroups.length === 0 && groupSearchText && (
                         <div className="group-autocomplete-empty">No matching groups</div>
                       )}
                     </div>
@@ -2056,6 +2353,48 @@ export function ChannelsPane({
                 disabled={creating || !newChannelName.trim() || !newChannelNumber.trim()}
               >
                 {creating ? 'Creating...' : 'Create Channel'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Create Channel Group Modal */}
+      {showCreateGroupModal && (
+        <div className="modal-overlay" onClick={handleCloseCreateGroupModal}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+            <h3>Create New Channel Group</h3>
+            <div className="modal-form">
+              <label>
+                Group Name *
+                <input
+                  type="text"
+                  value={newGroupName}
+                  onChange={(e) => setNewGroupName(e.target.value)}
+                  placeholder="e.g., Sports, Movies, News"
+                  autoFocus
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && newGroupName.trim()) {
+                      handleCreateGroup();
+                    }
+                  }}
+                />
+              </label>
+            </div>
+            <div className="modal-actions">
+              <button
+                className="modal-btn cancel"
+                onClick={handleCloseCreateGroupModal}
+                disabled={creatingGroup}
+              >
+                Cancel
+              </button>
+              <button
+                className="modal-btn primary"
+                onClick={handleCreateGroup}
+                disabled={creatingGroup || !newGroupName.trim()}
+              >
+                {creatingGroup ? 'Creating...' : 'Create Group'}
               </button>
             </div>
           </div>
@@ -2286,6 +2625,7 @@ export function ChannelsPane({
           onChange={(e) => onSearchChange(e.target.value)}
           className="search-input"
         />
+        <div className="pane-filters-row">
         <div className="group-filter-dropdown" ref={dropdownRef}>
           <button
             className="group-filter-button"
@@ -2300,12 +2640,34 @@ export function ChannelsPane({
           </button>
           {groupDropdownOpen && (
             <div className="group-filter-menu">
+              <div className="group-filter-search">
+                <input
+                  ref={groupFilterSearchRef}
+                  type="text"
+                  placeholder="Search groups..."
+                  value={groupFilterSearch}
+                  onChange={(e) => setGroupFilterSearch(e.target.value)}
+                  className="group-filter-search-input"
+                  autoFocus
+                />
+                {groupFilterSearch && (
+                  <button
+                    className="group-filter-search-clear"
+                    onClick={() => setGroupFilterSearch('')}
+                  >
+                    ✕
+                  </button>
+                )}
+              </div>
               <div className="group-filter-actions">
                 <button
                   className="group-filter-action"
                   onClick={() => {
-                    // Select all groups that have channels
-                    onSelectedGroupsChange(sortedChannelGroups.map((g) => g.id));
+                    // Select all visible groups
+                    const visibleGroups = allGroupsSorted.filter((g) =>
+                      g.name.toLowerCase().includes(groupFilterSearch.toLowerCase())
+                    );
+                    onSelectedGroupsChange(visibleGroups.map((g) => g.id));
                   }}
                 >
                   Select All
@@ -2318,7 +2680,9 @@ export function ChannelsPane({
                 </button>
               </div>
               <div className="group-filter-options">
-                {sortedChannelGroups.map((group) => (
+                {allGroupsSorted
+                  .filter((g) => g.name.toLowerCase().includes(groupFilterSearch.toLowerCase()))
+                  .map((group) => (
                     <label key={group.id} className="group-filter-option">
                       <input
                         type="checkbox"
@@ -2335,9 +2699,71 @@ export function ChannelsPane({
                       <span className="group-option-count">({channelsByGroup[group.id]?.length || 0})</span>
                     </label>
                   ))}
+                {allGroupsSorted.filter((g) => g.name.toLowerCase().includes(groupFilterSearch.toLowerCase())).length === 0 && (
+                  <div className="group-filter-empty">No groups match "{groupFilterSearch}"</div>
+                )}
               </div>
             </div>
           )}
+        </div>
+
+        {/* Channel List Filter Settings */}
+        <div className="filter-settings-dropdown" ref={filterSettingsRef}>
+          <button
+            className="filter-settings-button"
+            onClick={() => setFilterSettingsOpen(!filterSettingsOpen)}
+            title="Channel List Filters"
+          >
+            <span className="material-icons" style={{ fontSize: '18px' }}>tune</span>
+          </button>
+          {filterSettingsOpen && channelListFilters && (
+            <div className="filter-settings-menu">
+              <div className="filter-settings-header">Channel List Filters</div>
+              <div className="filter-settings-options">
+                <label className="filter-settings-option">
+                  <input
+                    type="checkbox"
+                    checked={channelListFilters.showEmptyGroups}
+                    onChange={(e) => onChannelListFiltersChange?.({ showEmptyGroups: e.target.checked })}
+                  />
+                  <span>Show Empty Groups</span>
+                </label>
+                <label className="filter-settings-option">
+                  <input
+                    type="checkbox"
+                    checked={channelListFilters.showNewlyCreatedGroups}
+                    onChange={(e) => onChannelListFiltersChange?.({ showNewlyCreatedGroups: e.target.checked })}
+                  />
+                  <span>Show Newly Created Groups</span>
+                </label>
+                <label className="filter-settings-option">
+                  <input
+                    type="checkbox"
+                    checked={channelListFilters.showProviderGroups}
+                    onChange={(e) => onChannelListFiltersChange?.({ showProviderGroups: e.target.checked })}
+                  />
+                  <span>Show Provider Groups</span>
+                </label>
+                <label className="filter-settings-option">
+                  <input
+                    type="checkbox"
+                    checked={channelListFilters.showManualGroups}
+                    onChange={(e) => onChannelListFiltersChange?.({ showManualGroups: e.target.checked })}
+                  />
+                  <span>Show Manual Groups</span>
+                </label>
+                <label className="filter-settings-option">
+                  <input
+                    type="checkbox"
+                    checked={channelListFilters.showAutoChannelGroups}
+                    onChange={(e) => onChannelListFiltersChange?.({ showAutoChannelGroups: e.target.checked })}
+                  />
+                  <span>Show Auto Channel Groups</span>
+                </label>
+              </div>
+            </div>
+          )}
+        </div>
         </div>
       </div>
 
@@ -2346,9 +2772,33 @@ export function ChannelsPane({
           <div className="loading">Loading channels...</div>
         ) : (
           <>
-            {sortedChannelGroups.map((group) =>
+            {/* Render filtered groups with channels */}
+            {filteredChannelGroups.map((group) =>
               renderGroup(group.id, group.name, channelsByGroup[group.id] || [])
             )}
+            {/* Render selected empty groups that pass the filter */}
+            {selectedGroups
+              .filter((groupId) => {
+                const isEmpty = !channelsByGroup[groupId] || channelsByGroup[groupId].length === 0;
+                return isEmpty && shouldShowGroup(groupId);
+              })
+              .map((groupId) => {
+                const group = channelGroups.find((g) => g.id === groupId);
+                return group ? renderGroup(group.id, group.name, [], true) : null;
+              })
+            }
+            {/* Render newly created empty groups that pass the filter */}
+            {Array.from(newlyCreatedGroupIds)
+              .filter((groupId) => {
+                const isEmpty = !channelsByGroup[groupId] || channelsByGroup[groupId].length === 0;
+                const notAlreadyRendered = !filteredChannelGroups.some((g) => g.id === groupId) && !selectedGroups.includes(groupId);
+                return isEmpty && notAlreadyRendered && shouldShowGroup(groupId);
+              })
+              .map((groupId) => {
+                const group = channelGroups.find((g) => g.id === groupId);
+                return group ? renderGroup(group.id, group.name, [], true) : null;
+              })
+            }
             {selectedGroups.length === 0 &&
               renderGroup('ungrouped', 'Uncategorized', channelsByGroup.ungrouped)}
           </>
