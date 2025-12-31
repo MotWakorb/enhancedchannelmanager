@@ -1,0 +1,5774 @@
+swagger: '2.0'
+info:
+  title: Dispatcharr API
+  description: API documentation for Dispatcharr
+  termsOfService: https://www.google.com/policies/terms/
+  contact:
+    email: contact@dispatcharr.local
+  license:
+    name: Creative Commons by-nc-sa
+  version: v1
+host: 172.16.0.19:9191
+schemes:
+- http
+basePath: /
+consumes:
+- application/json
+produces:
+- application/json
+securityDefinitions:
+  Bearer:
+    type: apiKey
+    name: Authorization
+    in: header
+security:
+- Bearer: []
+paths:
+  /api/accounts/auth/login/:
+    post:
+      operationId: api_accounts_auth_login
+      description: Authenticate and log in a user
+      parameters:
+      - name: data
+        in: body
+        required: true
+        schema:
+          required:
+          - username
+          - password
+          type: object
+          properties:
+            username:
+              type: string
+            password:
+              type: string
+              format: password
+      responses:
+        '200':
+          description: Login successful
+        '400':
+          description: Invalid credentials
+      tags:
+      - api
+    parameters: []
+  /api/accounts/auth/logout/:
+    post:
+      operationId: api_accounts_auth_logout
+      description: Log out the current user
+      parameters: []
+      responses:
+        '200':
+          description: Logout successful
+      tags:
+      - api
+    parameters: []
+  /api/accounts/groups/:
+    get:
+      operationId: api_accounts_groups_list
+      description: Retrieve a list of groups
+      parameters: []
+      responses:
+        '200':
+          description: ''
+          schema:
+            type: array
+            items:
+              $ref: '#/definitions/Group'
+      tags:
+      - api
+    post:
+      operationId: api_accounts_groups_create
+      description: Create a new group
+      parameters:
+      - name: data
+        in: body
+        required: true
+        schema:
+          $ref: '#/definitions/Group'
+      responses:
+        '201':
+          description: ''
+          schema:
+            $ref: '#/definitions/Group'
+      tags:
+      - api
+    parameters: []
+  /api/accounts/groups/{id}/:
+    get:
+      operationId: api_accounts_groups_read
+      description: Retrieve a specific group by ID
+      parameters: []
+      responses:
+        '200':
+          description: ''
+          schema:
+            $ref: '#/definitions/Group'
+      tags:
+      - api
+    put:
+      operationId: api_accounts_groups_update
+      description: Update a group
+      parameters:
+      - name: data
+        in: body
+        required: true
+        schema:
+          $ref: '#/definitions/Group'
+      responses:
+        '200':
+          description: ''
+          schema:
+            $ref: '#/definitions/Group'
+      tags:
+      - api
+    patch:
+      operationId: api_accounts_groups_partial_update
+      description: Handles CRUD operations for Groups
+      parameters:
+      - name: data
+        in: body
+        required: true
+        schema:
+          $ref: '#/definitions/Group'
+      responses:
+        '200':
+          description: ''
+          schema:
+            $ref: '#/definitions/Group'
+      tags:
+      - api
+    delete:
+      operationId: api_accounts_groups_delete
+      description: Delete a group
+      parameters: []
+      responses:
+        '204':
+          description: ''
+      tags:
+      - api
+    parameters:
+    - name: id
+      in: path
+      description: A unique integer value identifying this group.
+      required: true
+      type: integer
+  /api/accounts/permissions/:
+    get:
+      operationId: api_accounts_permissions_list
+      description: Retrieve a list of all permissions
+      parameters: []
+      responses:
+        '200':
+          description: ''
+          schema:
+            type: array
+            items:
+              $ref: '#/definitions/Permission'
+      tags:
+      - api
+    parameters: []
+  /api/accounts/token/:
+    post:
+      operationId: api_accounts_token_create
+      description: ''
+      parameters:
+      - name: data
+        in: body
+        required: true
+        schema:
+          $ref: '#/definitions/TokenObtainPair'
+      responses:
+        '201':
+          description: ''
+          schema:
+            $ref: '#/definitions/TokenObtainPair'
+      tags:
+      - api
+    parameters: []
+  /api/accounts/token/refresh/:
+    post:
+      operationId: api_accounts_token_refresh_create
+      description: ''
+      parameters:
+      - name: data
+        in: body
+        required: true
+        schema:
+          $ref: '#/definitions/TokenRefresh'
+      responses:
+        '201':
+          description: ''
+          schema:
+            $ref: '#/definitions/TokenRefresh'
+      tags:
+      - api
+    parameters: []
+  /api/accounts/users/:
+    get:
+      operationId: api_accounts_users_list
+      description: Retrieve a list of users
+      parameters: []
+      responses:
+        '200':
+          description: ''
+          schema:
+            type: array
+            items:
+              $ref: '#/definitions/User'
+      tags:
+      - api
+    post:
+      operationId: api_accounts_users_create
+      description: Create a new user
+      parameters:
+      - name: data
+        in: body
+        required: true
+        schema:
+          $ref: '#/definitions/User'
+      responses:
+        '201':
+          description: ''
+          schema:
+            $ref: '#/definitions/User'
+      tags:
+      - api
+    parameters: []
+  /api/accounts/users/me/:
+    get:
+      operationId: api_accounts_users_me
+      description: Get active user information
+      parameters: []
+      responses:
+        '200':
+          description: ''
+          schema:
+            type: array
+            items:
+              $ref: '#/definitions/User'
+      tags:
+      - api
+    parameters: []
+  /api/accounts/users/{id}/:
+    get:
+      operationId: api_accounts_users_read
+      description: Retrieve a specific user by ID
+      parameters: []
+      responses:
+        '200':
+          description: ''
+          schema:
+            $ref: '#/definitions/User'
+      tags:
+      - api
+    put:
+      operationId: api_accounts_users_update
+      description: Update a user
+      parameters:
+      - name: data
+        in: body
+        required: true
+        schema:
+          $ref: '#/definitions/User'
+      responses:
+        '200':
+          description: ''
+          schema:
+            $ref: '#/definitions/User'
+      tags:
+      - api
+    patch:
+      operationId: api_accounts_users_partial_update
+      description: Handles CRUD operations for Users
+      parameters:
+      - name: data
+        in: body
+        required: true
+        schema:
+          $ref: '#/definitions/User'
+      responses:
+        '200':
+          description: ''
+          schema:
+            $ref: '#/definitions/User'
+      tags:
+      - api
+    delete:
+      operationId: api_accounts_users_delete
+      description: Delete a user
+      parameters: []
+      responses:
+        '204':
+          description: ''
+      tags:
+      - api
+    parameters:
+    - name: id
+      in: path
+      description: A unique integer value identifying this user.
+      required: true
+      type: integer
+  /api/backups/:
+    get:
+      operationId: api_backups_list
+      description: List all available backup files.
+      parameters: []
+      responses:
+        '200':
+          description: ''
+      tags:
+      - api
+    parameters: []
+  /api/backups/create/:
+    post:
+      operationId: api_backups_create_create
+      description: Create a new backup (async via Celery).
+      parameters: []
+      responses:
+        '201':
+          description: ''
+      tags:
+      - api
+    parameters: []
+  /api/backups/schedule/:
+    get:
+      operationId: api_backups_schedule_list
+      description: Get backup schedule settings.
+      parameters: []
+      responses:
+        '200':
+          description: ''
+      tags:
+      - api
+    parameters: []
+  /api/backups/schedule/update/:
+    put:
+      operationId: api_backups_schedule_update_update
+      description: Update backup schedule settings.
+      parameters: []
+      responses:
+        '200':
+          description: ''
+      tags:
+      - api
+    parameters: []
+  /api/backups/status/{task_id}/:
+    get:
+      operationId: api_backups_status_read
+      summary: Check the status of a backup/restore task.
+      description: |-
+        Requires either:
+        - Valid admin authentication, OR
+        - Valid task_token query parameter
+      parameters: []
+      responses:
+        '200':
+          description: ''
+      tags:
+      - api
+    parameters:
+    - name: task_id
+      in: path
+      required: true
+      type: string
+  /api/backups/upload/:
+    post:
+      operationId: api_backups_upload_create
+      description: Upload a backup file for restoration.
+      parameters: []
+      responses:
+        '201':
+          description: ''
+      consumes:
+      - multipart/form-data
+      - application/x-www-form-urlencoded
+      tags:
+      - api
+    parameters: []
+  /api/backups/{filename}/delete/:
+    delete:
+      operationId: api_backups_delete_delete
+      description: Delete a backup file.
+      parameters: []
+      responses:
+        '204':
+          description: ''
+      tags:
+      - api
+    parameters:
+    - name: filename
+      in: path
+      required: true
+      type: string
+  /api/backups/{filename}/download-token/:
+    get:
+      operationId: api_backups_download-token_list
+      description: Get a signed token for downloading a backup file.
+      parameters: []
+      responses:
+        '200':
+          description: ''
+      tags:
+      - api
+    parameters:
+    - name: filename
+      in: path
+      required: true
+      type: string
+  /api/backups/{filename}/download/:
+    get:
+      operationId: api_backups_download_list
+      summary: Download a backup file.
+      description: |-
+        Requires either:
+        - Valid admin authentication, OR
+        - Valid download_token query parameter
+      parameters: []
+      responses:
+        '200':
+          description: ''
+      tags:
+      - api
+    parameters:
+    - name: filename
+      in: path
+      required: true
+      type: string
+  /api/backups/{filename}/restore/:
+    post:
+      operationId: api_backups_restore_create
+      description: 'Restore from a backup file (async via Celery). WARNING: This will
+        flush the database!'
+      parameters: []
+      responses:
+        '201':
+          description: ''
+      tags:
+      - api
+    parameters:
+    - name: filename
+      in: path
+      required: true
+      type: string
+  /api/channels/channels/:
+    get:
+      operationId: api_channels_channels_list
+      description: ''
+      parameters:
+      - name: name
+        in: query
+        description: ''
+        required: false
+        type: string
+      - name: channel_group
+        in: query
+        description: ''
+        required: false
+        type: string
+      - name: epg
+        in: query
+        description: ''
+        required: false
+        type: string
+      - name: search
+        in: query
+        description: A search term.
+        required: false
+        type: string
+      - name: ordering
+        in: query
+        description: Which field to use when ordering the results.
+        required: false
+        type: string
+      - name: page
+        in: query
+        description: A page number within the paginated result set.
+        required: false
+        type: integer
+      - name: page_size
+        in: query
+        description: Number of results to return per page.
+        required: false
+        type: integer
+      responses:
+        '200':
+          description: ''
+          schema:
+            required:
+            - count
+            - results
+            type: object
+            properties:
+              count:
+                type: integer
+              next:
+                type: string
+                format: uri
+                x-nullable: true
+              previous:
+                type: string
+                format: uri
+                x-nullable: true
+              results:
+                type: array
+                items:
+                  $ref: '#/definitions/Channel'
+      tags:
+      - api
+    post:
+      operationId: api_channels_channels_create
+      description: ''
+      parameters:
+      - name: data
+        in: body
+        required: true
+        schema:
+          $ref: '#/definitions/Channel'
+      responses:
+        '201':
+          description: ''
+          schema:
+            $ref: '#/definitions/Channel'
+      tags:
+      - api
+    parameters: []
+  /api/channels/channels/assign/:
+    post:
+      operationId: api_channels_channels_assign
+      description: Auto-assign channel_number in bulk by an ordered list of channel
+        IDs.
+      parameters:
+      - name: data
+        in: body
+        required: true
+        schema:
+          required:
+          - channel_ids
+          type: object
+          properties:
+            starting_number:
+              description: Starting channel number to assign (can be decimal)
+              type: number
+            channel_ids:
+              description: Channel IDs to assign
+              type: array
+              items:
+                type: integer
+      responses:
+        '200':
+          description: Channels have been auto-assigned!
+      tags:
+      - api
+    parameters: []
+  /api/channels/channels/batch-set-epg/:
+    post:
+      operationId: api_channels_channels_batch_set_epg
+      description: Associate multiple channels with EPG data without triggering a
+        full refresh
+      parameters:
+      - name: data
+        in: body
+        required: true
+        schema:
+          type: object
+          properties:
+            associations:
+              type: array
+              items:
+                type: object
+                properties:
+                  channel_id:
+                    type: integer
+                  epg_data_id:
+                    type: integer
+      responses:
+        '200':
+          description: EPG data linked for multiple channels
+      tags:
+      - api
+    parameters: []
+  /api/channels/channels/bulk-delete/:
+    delete:
+      operationId: api_channels_channels_bulk-delete_delete
+      description: Bulk delete channels by ID
+      parameters:
+      - name: data
+        in: body
+        required: true
+        schema:
+          required:
+          - channel_ids
+          type: object
+          properties:
+            channel_ids:
+              description: Channel IDs to delete
+              type: array
+              items:
+                type: integer
+      responses:
+        '204':
+          description: Channels deleted
+      tags:
+      - api
+    parameters: []
+  /api/channels/channels/edit/bulk/:
+    patch:
+      operationId: api_channels_channels_edit_edit_bulk
+      description: |-
+        Bulk edit channels efficiently.
+        Validates all updates first, then applies in a single transaction.
+      parameters:
+      - name: data
+        in: body
+        required: true
+        schema:
+          $ref: '#/definitions/Channel'
+      responses:
+        '200':
+          description: ''
+          schema:
+            $ref: '#/definitions/Channel'
+      tags:
+      - api
+    parameters: []
+  /api/channels/channels/from-stream/:
+    post:
+      operationId: api_channels_channels_from_stream
+      description: Create a new channel from an existing stream. If 'channel_number'
+        is provided, it will be used (if available); otherwise, the next available
+        channel number is assigned. If 'channel_profile_ids' is provided, the channel
+        will only be added to those profiles. Accepts either a single ID or an array
+        of IDs.
+      parameters:
+      - name: data
+        in: body
+        required: true
+        schema:
+          required:
+          - stream_id
+          type: object
+          properties:
+            stream_id:
+              description: ID of the stream to link
+              type: integer
+            channel_number:
+              description: (Optional) Desired channel number. Must not be in use.
+              type: number
+            name:
+              description: Desired channel name
+              type: string
+            channel_profile_ids:
+              description: (Optional) Channel profile ID(s) to add the channel to.
+                Can be a single ID or array of IDs. If not provided, channel is added
+                to all profiles.
+              type: array
+              items:
+                type: integer
+      responses:
+        '201':
+          description: ''
+          schema:
+            $ref: '#/definitions/Channel'
+      tags:
+      - api
+    parameters: []
+  /api/channels/channels/from-stream/bulk/:
+    post:
+      operationId: api_channels_channels_from-stream_from_stream_bulk
+      description: Asynchronously bulk create channels from stream IDs. Returns a
+        task ID to track progress via WebSocket. This is the recommended approach
+        for large bulk operations.
+      parameters:
+      - name: data
+        in: body
+        required: true
+        schema:
+          required:
+          - stream_ids
+          type: object
+          properties:
+            stream_ids:
+              description: List of stream IDs to create channels from
+              type: array
+              items:
+                type: integer
+            channel_profile_ids:
+              description: (Optional) Channel profile ID(s) to add the channels to.
+                If not provided, channels are added to all profiles.
+              type: array
+              items:
+                type: integer
+            starting_channel_number:
+              description: '(Optional) Starting channel number mode: null=use provider
+                numbers, 0=lowest available, other=start from specified number'
+              type: integer
+      responses:
+        '202':
+          description: Task started successfully
+      tags:
+      - api
+    parameters: []
+  /api/channels/channels/ids/:
+    get:
+      operationId: api_channels_channels_get_ids
+      description: ''
+      parameters:
+      - name: name
+        in: query
+        description: ''
+        required: false
+        type: string
+      - name: channel_group
+        in: query
+        description: ''
+        required: false
+        type: string
+      - name: epg
+        in: query
+        description: ''
+        required: false
+        type: string
+      - name: search
+        in: query
+        description: A search term.
+        required: false
+        type: string
+      - name: ordering
+        in: query
+        description: Which field to use when ordering the results.
+        required: false
+        type: string
+      - name: page
+        in: query
+        description: A page number within the paginated result set.
+        required: false
+        type: integer
+      - name: page_size
+        in: query
+        description: Number of results to return per page.
+        required: false
+        type: integer
+      responses:
+        '200':
+          description: ''
+          schema:
+            required:
+            - count
+            - results
+            type: object
+            properties:
+              count:
+                type: integer
+              next:
+                type: string
+                format: uri
+                x-nullable: true
+              previous:
+                type: string
+                format: uri
+                x-nullable: true
+              results:
+                type: array
+                items:
+                  $ref: '#/definitions/Channel'
+      tags:
+      - api
+    parameters: []
+  /api/channels/channels/match-epg/:
+    post:
+      operationId: api_channels_channels_match_epg
+      description: Kick off a Celery task that tries to fuzzy-match channels with
+        EPG data. If channel_ids are provided, only those channels will be processed.
+      parameters:
+      - name: data
+        in: body
+        required: true
+        schema:
+          type: object
+          properties:
+            channel_ids:
+              description: List of channel IDs to process. If empty or not provided,
+                all channels without EPG will be processed.
+              type: array
+              items:
+                type: integer
+      responses:
+        '202':
+          description: EPG matching task initiated
+      tags:
+      - api
+    parameters: []
+  /api/channels/channels/set-logos-from-epg/:
+    post:
+      operationId: api_channels_channels_set_logos_from_epg
+      description: Trigger a Celery task to set channel logos from EPG data
+      parameters:
+      - name: data
+        in: body
+        required: true
+        schema:
+          $ref: '#/definitions/Channel'
+      responses:
+        '201':
+          description: ''
+          schema:
+            $ref: '#/definitions/Channel'
+      tags:
+      - api
+    parameters: []
+  /api/channels/channels/set-names-from-epg/:
+    post:
+      operationId: api_channels_channels_set_names_from_epg
+      description: Trigger a Celery task to set channel names from EPG data
+      parameters:
+      - name: data
+        in: body
+        required: true
+        schema:
+          $ref: '#/definitions/Channel'
+      responses:
+        '201':
+          description: ''
+          schema:
+            $ref: '#/definitions/Channel'
+      tags:
+      - api
+    parameters: []
+  /api/channels/channels/set-tvg-ids-from-epg/:
+    post:
+      operationId: api_channels_channels_set_tvg_ids_from_epg
+      description: Trigger a Celery task to set channel TVG-IDs from EPG data
+      parameters:
+      - name: data
+        in: body
+        required: true
+        schema:
+          $ref: '#/definitions/Channel'
+      responses:
+        '201':
+          description: ''
+          schema:
+            $ref: '#/definitions/Channel'
+      tags:
+      - api
+    parameters: []
+  /api/channels/channels/{channel_id}/streams/:
+    get:
+      operationId: api_channels_channels_streams_list
+      description: ''
+      parameters: []
+      responses:
+        '200':
+          description: ''
+      tags:
+      - api
+    parameters:
+    - name: channel_id
+      in: path
+      required: true
+      type: string
+  /api/channels/channels/{id}/:
+    get:
+      operationId: api_channels_channels_read
+      description: ''
+      parameters: []
+      responses:
+        '200':
+          description: ''
+          schema:
+            $ref: '#/definitions/Channel'
+      tags:
+      - api
+    put:
+      operationId: api_channels_channels_update
+      description: ''
+      parameters:
+      - name: data
+        in: body
+        required: true
+        schema:
+          $ref: '#/definitions/Channel'
+      responses:
+        '200':
+          description: ''
+          schema:
+            $ref: '#/definitions/Channel'
+      tags:
+      - api
+    patch:
+      operationId: api_channels_channels_partial_update
+      description: ''
+      parameters:
+      - name: data
+        in: body
+        required: true
+        schema:
+          $ref: '#/definitions/Channel'
+      responses:
+        '200':
+          description: ''
+          schema:
+            $ref: '#/definitions/Channel'
+      tags:
+      - api
+    delete:
+      operationId: api_channels_channels_delete
+      description: ''
+      parameters: []
+      responses:
+        '204':
+          description: ''
+      tags:
+      - api
+    parameters:
+    - name: id
+      in: path
+      description: A unique integer value identifying this channel.
+      required: true
+      type: integer
+  /api/channels/channels/{id}/match-epg/:
+    post:
+      operationId: api_channels_channels_match_channel_epg
+      description: Try to auto-match this specific channel with EPG data.
+      parameters:
+      - name: data
+        in: body
+        required: true
+        schema:
+          $ref: '#/definitions/Channel'
+      responses:
+        '200':
+          description: EPG matching completed
+        '202':
+          description: EPG matching task initiated
+      tags:
+      - api
+    parameters:
+    - name: id
+      in: path
+      description: A unique integer value identifying this channel.
+      required: true
+      type: integer
+  /api/channels/channels/{id}/set-epg/:
+    post:
+      operationId: api_channels_channels_set_epg
+      description: Set EPG data for a channel and refresh program data
+      parameters:
+      - name: data
+        in: body
+        required: true
+        schema:
+          required:
+          - epg_data_id
+          type: object
+          properties:
+            epg_data_id:
+              description: EPG data ID to link
+              type: integer
+      responses:
+        '200':
+          description: EPG data linked and refresh triggered
+      tags:
+      - api
+    parameters:
+    - name: id
+      in: path
+      description: A unique integer value identifying this channel.
+      required: true
+      type: integer
+  /api/channels/dvr/comskip-config/:
+    get:
+      operationId: api_channels_dvr_comskip-config_list
+      description: Upload or inspect the custom comskip.ini used by DVR processing.
+      parameters: []
+      responses:
+        '200':
+          description: ''
+      consumes:
+      - multipart/form-data
+      - application/x-www-form-urlencoded
+      tags:
+      - api
+    post:
+      operationId: api_channels_dvr_comskip-config_create
+      description: Upload or inspect the custom comskip.ini used by DVR processing.
+      parameters: []
+      responses:
+        '201':
+          description: ''
+      consumes:
+      - multipart/form-data
+      - application/x-www-form-urlencoded
+      tags:
+      - api
+    parameters: []
+  /api/channels/groups/:
+    get:
+      operationId: api_channels_groups_list
+      description: ''
+      parameters: []
+      responses:
+        '200':
+          description: ''
+          schema:
+            type: array
+            items:
+              $ref: '#/definitions/ChannelGroup'
+      tags:
+      - api
+    post:
+      operationId: api_channels_groups_create
+      description: ''
+      parameters:
+      - name: data
+        in: body
+        required: true
+        schema:
+          $ref: '#/definitions/ChannelGroup'
+      responses:
+        '201':
+          description: ''
+          schema:
+            $ref: '#/definitions/ChannelGroup'
+      tags:
+      - api
+    parameters: []
+  /api/channels/groups/cleanup/:
+    post:
+      operationId: api_channels_groups_cleanup_unused_groups
+      description: Delete all channel groups that have no associations (no channels
+        or M3U accounts)
+      parameters:
+      - name: data
+        in: body
+        required: true
+        schema:
+          $ref: '#/definitions/ChannelGroup'
+      responses:
+        '200':
+          description: Cleanup completed
+      tags:
+      - api
+    parameters: []
+  /api/channels/groups/{id}/:
+    get:
+      operationId: api_channels_groups_read
+      description: ''
+      parameters: []
+      responses:
+        '200':
+          description: ''
+          schema:
+            $ref: '#/definitions/ChannelGroup'
+      tags:
+      - api
+    put:
+      operationId: api_channels_groups_update
+      description: Override update to check M3U associations
+      parameters:
+      - name: data
+        in: body
+        required: true
+        schema:
+          $ref: '#/definitions/ChannelGroup'
+      responses:
+        '200':
+          description: ''
+          schema:
+            $ref: '#/definitions/ChannelGroup'
+      tags:
+      - api
+    patch:
+      operationId: api_channels_groups_partial_update
+      description: Override partial_update to check M3U associations
+      parameters:
+      - name: data
+        in: body
+        required: true
+        schema:
+          $ref: '#/definitions/ChannelGroup'
+      responses:
+        '200':
+          description: ''
+          schema:
+            $ref: '#/definitions/ChannelGroup'
+      tags:
+      - api
+    delete:
+      operationId: api_channels_groups_delete
+      description: Override destroy to check for associations before deletion
+      parameters: []
+      responses:
+        '204':
+          description: ''
+      tags:
+      - api
+    parameters:
+    - name: id
+      in: path
+      description: A unique integer value identifying this channel group.
+      required: true
+      type: integer
+  /api/channels/logos/:
+    get:
+      operationId: api_channels_logos_list
+      description: ''
+      parameters:
+      - name: page
+        in: query
+        description: A page number within the paginated result set.
+        required: false
+        type: integer
+      - name: page_size
+        in: query
+        description: Number of results to return per page.
+        required: false
+        type: integer
+      responses:
+        '200':
+          description: ''
+          schema:
+            required:
+            - count
+            - results
+            type: object
+            properties:
+              count:
+                type: integer
+              next:
+                type: string
+                format: uri
+                x-nullable: true
+              previous:
+                type: string
+                format: uri
+                x-nullable: true
+              results:
+                type: array
+                items:
+                  $ref: '#/definitions/Logo'
+      tags:
+      - api
+    post:
+      operationId: api_channels_logos_create
+      description: Create a new logo entry
+      parameters:
+      - name: data
+        in: body
+        required: true
+        schema:
+          $ref: '#/definitions/Logo'
+      responses:
+        '201':
+          description: ''
+          schema:
+            $ref: '#/definitions/Logo'
+      tags:
+      - api
+    parameters: []
+  /api/channels/logos/bulk-delete/:
+    delete:
+      operationId: api_channels_logos_bulk-delete_delete
+      description: Bulk delete logos by ID
+      parameters:
+      - name: data
+        in: body
+        required: true
+        schema:
+          required:
+          - logo_ids
+          type: object
+          properties:
+            logo_ids:
+              description: Logo IDs to delete
+              type: array
+              items:
+                type: integer
+      responses:
+        '204':
+          description: Logos deleted
+      tags:
+      - api
+    parameters: []
+  /api/channels/logos/cleanup/:
+    post:
+      operationId: api_channels_logos_cleanup_create
+      description: Delete all channel logos that are not used by any channels
+      parameters:
+      - name: data
+        in: body
+        required: true
+        schema:
+          type: object
+          properties:
+            delete_files:
+              description: Whether to delete local logo files from disk
+              type: boolean
+              default: false
+      responses:
+        '200':
+          description: Cleanup completed
+      tags:
+      - api
+    parameters: []
+  /api/channels/logos/upload/:
+    post:
+      operationId: api_channels_logos_upload
+      description: ''
+      parameters:
+      - name: data
+        in: body
+        required: true
+        schema:
+          $ref: '#/definitions/Logo'
+      responses:
+        '201':
+          description: ''
+          schema:
+            $ref: '#/definitions/Logo'
+      tags:
+      - api
+    parameters: []
+  /api/channels/logos/{id}/:
+    get:
+      operationId: api_channels_logos_read
+      description: ''
+      parameters: []
+      responses:
+        '200':
+          description: ''
+          schema:
+            $ref: '#/definitions/Logo'
+      tags:
+      - api
+    put:
+      operationId: api_channels_logos_update
+      description: Update an existing logo
+      parameters:
+      - name: data
+        in: body
+        required: true
+        schema:
+          $ref: '#/definitions/Logo'
+      responses:
+        '200':
+          description: ''
+          schema:
+            $ref: '#/definitions/Logo'
+      tags:
+      - api
+    patch:
+      operationId: api_channels_logos_partial_update
+      description: ''
+      parameters:
+      - name: data
+        in: body
+        required: true
+        schema:
+          $ref: '#/definitions/Logo'
+      responses:
+        '200':
+          description: ''
+          schema:
+            $ref: '#/definitions/Logo'
+      tags:
+      - api
+    delete:
+      operationId: api_channels_logos_delete
+      description: Delete a logo and remove it from any channels using it
+      parameters: []
+      responses:
+        '204':
+          description: ''
+      tags:
+      - api
+    parameters:
+    - name: id
+      in: path
+      description: A unique integer value identifying this logo.
+      required: true
+      type: integer
+  /api/channels/logos/{id}/cache/:
+    get:
+      operationId: api_channels_logos_cache
+      description: Streams the logo file, whether it's local or remote.
+      parameters: []
+      responses:
+        '200':
+          description: ''
+          schema:
+            $ref: '#/definitions/Logo'
+      tags:
+      - api
+    parameters:
+    - name: id
+      in: path
+      description: A unique integer value identifying this logo.
+      required: true
+      type: integer
+  /api/channels/profiles/:
+    get:
+      operationId: api_channels_profiles_list
+      description: ''
+      parameters: []
+      responses:
+        '200':
+          description: ''
+          schema:
+            type: array
+            items:
+              $ref: '#/definitions/ChannelProfile'
+      tags:
+      - api
+    post:
+      operationId: api_channels_profiles_create
+      description: ''
+      parameters:
+      - name: data
+        in: body
+        required: true
+        schema:
+          $ref: '#/definitions/ChannelProfile'
+      responses:
+        '201':
+          description: ''
+          schema:
+            $ref: '#/definitions/ChannelProfile'
+      tags:
+      - api
+    parameters: []
+  /api/channels/profiles/{id}/:
+    get:
+      operationId: api_channels_profiles_read
+      description: ''
+      parameters: []
+      responses:
+        '200':
+          description: ''
+          schema:
+            $ref: '#/definitions/ChannelProfile'
+      tags:
+      - api
+    put:
+      operationId: api_channels_profiles_update
+      description: ''
+      parameters:
+      - name: data
+        in: body
+        required: true
+        schema:
+          $ref: '#/definitions/ChannelProfile'
+      responses:
+        '200':
+          description: ''
+          schema:
+            $ref: '#/definitions/ChannelProfile'
+      tags:
+      - api
+    patch:
+      operationId: api_channels_profiles_partial_update
+      description: ''
+      parameters:
+      - name: data
+        in: body
+        required: true
+        schema:
+          $ref: '#/definitions/ChannelProfile'
+      responses:
+        '200':
+          description: ''
+          schema:
+            $ref: '#/definitions/ChannelProfile'
+      tags:
+      - api
+    delete:
+      operationId: api_channels_profiles_delete
+      description: ''
+      parameters: []
+      responses:
+        '204':
+          description: ''
+      tags:
+      - api
+    parameters:
+    - name: id
+      in: path
+      description: A unique integer value identifying this channel profile.
+      required: true
+      type: integer
+  /api/channels/profiles/{profile_id}/channels/bulk-update/:
+    patch:
+      operationId: api_channels_profiles_channels_bulk-update_partial_update
+      description: Bulk enable or disable channels for a specific profile
+      parameters: []
+      responses:
+        '200':
+          description: ''
+      tags:
+      - api
+    parameters:
+    - name: profile_id
+      in: path
+      required: true
+      type: string
+  /api/channels/profiles/{profile_id}/channels/{channel_id}/:
+    patch:
+      operationId: api_channels_profiles_channels_partial_update
+      description: Enable or disable a channel for a specific group
+      parameters: []
+      responses:
+        '200':
+          description: ''
+      tags:
+      - api
+    parameters:
+    - name: profile_id
+      in: path
+      required: true
+      type: string
+    - name: channel_id
+      in: path
+      required: true
+      type: string
+  /api/channels/recordings/:
+    get:
+      operationId: api_channels_recordings_list
+      description: ''
+      parameters: []
+      responses:
+        '200':
+          description: ''
+          schema:
+            type: array
+            items:
+              $ref: '#/definitions/Recording'
+      tags:
+      - api
+    post:
+      operationId: api_channels_recordings_create
+      description: ''
+      parameters:
+      - name: data
+        in: body
+        required: true
+        schema:
+          $ref: '#/definitions/Recording'
+      responses:
+        '201':
+          description: ''
+          schema:
+            $ref: '#/definitions/Recording'
+      tags:
+      - api
+    parameters: []
+  /api/channels/recordings/bulk-delete-upcoming/:
+    post:
+      operationId: api_channels_recordings_bulk-delete-upcoming_create
+      description: Delete all upcoming (future) recordings.
+      parameters: []
+      responses:
+        '201':
+          description: ''
+      tags:
+      - api
+    parameters: []
+  /api/channels/recordings/{id}/:
+    get:
+      operationId: api_channels_recordings_read
+      description: ''
+      parameters: []
+      responses:
+        '200':
+          description: ''
+          schema:
+            $ref: '#/definitions/Recording'
+      tags:
+      - api
+    put:
+      operationId: api_channels_recordings_update
+      description: ''
+      parameters:
+      - name: data
+        in: body
+        required: true
+        schema:
+          $ref: '#/definitions/Recording'
+      responses:
+        '200':
+          description: ''
+          schema:
+            $ref: '#/definitions/Recording'
+      tags:
+      - api
+    patch:
+      operationId: api_channels_recordings_partial_update
+      description: ''
+      parameters:
+      - name: data
+        in: body
+        required: true
+        schema:
+          $ref: '#/definitions/Recording'
+      responses:
+        '200':
+          description: ''
+          schema:
+            $ref: '#/definitions/Recording'
+      tags:
+      - api
+    delete:
+      operationId: api_channels_recordings_delete
+      summary: Delete the Recording and ensure any active DVR client connection is
+        closed.
+      description: Also removes the associated file(s) from disk if present.
+      parameters: []
+      responses:
+        '204':
+          description: ''
+      tags:
+      - api
+    parameters:
+    - name: id
+      in: path
+      description: A unique integer value identifying this recording.
+      required: true
+      type: integer
+  /api/channels/recordings/{id}/comskip/:
+    post:
+      operationId: api_channels_recordings_comskip
+      description: Trigger comskip processing for this recording.
+      parameters:
+      - name: data
+        in: body
+        required: true
+        schema:
+          $ref: '#/definitions/Recording'
+      responses:
+        '201':
+          description: ''
+          schema:
+            $ref: '#/definitions/Recording'
+      tags:
+      - api
+    parameters:
+    - name: id
+      in: path
+      description: A unique integer value identifying this recording.
+      required: true
+      type: integer
+  /api/channels/recordings/{id}/file/:
+    get:
+      operationId: api_channels_recordings_file
+      description: Stream a recorded file with HTTP Range support for seeking.
+      parameters: []
+      responses:
+        '200':
+          description: ''
+          schema:
+            $ref: '#/definitions/Recording'
+      tags:
+      - api
+    parameters:
+    - name: id
+      in: path
+      description: A unique integer value identifying this recording.
+      required: true
+      type: integer
+  /api/channels/recurring-rules/:
+    get:
+      operationId: api_channels_recurring-rules_list
+      description: ''
+      parameters: []
+      responses:
+        '200':
+          description: ''
+          schema:
+            type: array
+            items:
+              $ref: '#/definitions/RecurringRecordingRule'
+      tags:
+      - api
+    post:
+      operationId: api_channels_recurring-rules_create
+      description: ''
+      parameters:
+      - name: data
+        in: body
+        required: true
+        schema:
+          $ref: '#/definitions/RecurringRecordingRule'
+      responses:
+        '201':
+          description: ''
+          schema:
+            $ref: '#/definitions/RecurringRecordingRule'
+      tags:
+      - api
+    parameters: []
+  /api/channels/recurring-rules/{id}/:
+    get:
+      operationId: api_channels_recurring-rules_read
+      description: ''
+      parameters: []
+      responses:
+        '200':
+          description: ''
+          schema:
+            $ref: '#/definitions/RecurringRecordingRule'
+      tags:
+      - api
+    put:
+      operationId: api_channels_recurring-rules_update
+      description: ''
+      parameters:
+      - name: data
+        in: body
+        required: true
+        schema:
+          $ref: '#/definitions/RecurringRecordingRule'
+      responses:
+        '200':
+          description: ''
+          schema:
+            $ref: '#/definitions/RecurringRecordingRule'
+      tags:
+      - api
+    patch:
+      operationId: api_channels_recurring-rules_partial_update
+      description: ''
+      parameters:
+      - name: data
+        in: body
+        required: true
+        schema:
+          $ref: '#/definitions/RecurringRecordingRule'
+      responses:
+        '200':
+          description: ''
+          schema:
+            $ref: '#/definitions/RecurringRecordingRule'
+      tags:
+      - api
+    delete:
+      operationId: api_channels_recurring-rules_delete
+      description: ''
+      parameters: []
+      responses:
+        '204':
+          description: ''
+      tags:
+      - api
+    parameters:
+    - name: id
+      in: path
+      description: A unique integer value identifying this recurring recording rule.
+      required: true
+      type: integer
+  /api/channels/series-rules/:
+    get:
+      operationId: api_channels_series-rules_list
+      description: Manage DVR series recording rules (list/add).
+      parameters: []
+      responses:
+        '200':
+          description: ''
+      tags:
+      - api
+    post:
+      operationId: api_channels_series-rules_create
+      description: Manage DVR series recording rules (list/add).
+      parameters: []
+      responses:
+        '201':
+          description: ''
+      tags:
+      - api
+    parameters: []
+  /api/channels/series-rules/bulk-remove/:
+    post:
+      operationId: api_channels_series-rules_bulk-remove_create
+      summary: Bulk remove scheduled recordings for a series rule.
+      description: |-
+        POST body:
+          - tvg_id: required (EPG channel id)
+          - title: optional (series title)
+          - scope: 'title' (default) or 'channel'
+      parameters: []
+      responses:
+        '201':
+          description: ''
+      tags:
+      - api
+    parameters: []
+  /api/channels/series-rules/evaluate/:
+    post:
+      operationId: api_channels_series-rules_evaluate_create
+      description: ''
+      parameters: []
+      responses:
+        '201':
+          description: ''
+      tags:
+      - api
+    parameters: []
+  /api/channels/series-rules/{tvg_id}/:
+    delete:
+      operationId: api_channels_series-rules_delete
+      description: ''
+      parameters: []
+      responses:
+        '204':
+          description: ''
+      tags:
+      - api
+    parameters:
+    - name: tvg_id
+      in: path
+      required: true
+      type: string
+  /api/channels/streams/:
+    get:
+      operationId: api_channels_streams_list
+      description: ''
+      parameters:
+      - name: name
+        in: query
+        description: ''
+        required: false
+        type: string
+      - name: channel_group_name
+        in: query
+        description: ''
+        required: false
+        type: string
+      - name: m3u_account
+        in: query
+        description: ''
+        required: false
+        type: string
+      - name: m3u_account_name
+        in: query
+        description: ''
+        required: false
+        type: string
+      - name: m3u_account_is_active
+        in: query
+        description: ''
+        required: false
+        type: string
+      - name: search
+        in: query
+        description: A search term.
+        required: false
+        type: string
+      - name: ordering
+        in: query
+        description: Which field to use when ordering the results.
+        required: false
+        type: string
+      - name: page
+        in: query
+        description: A page number within the paginated result set.
+        required: false
+        type: integer
+      - name: page_size
+        in: query
+        description: Number of results to return per page.
+        required: false
+        type: integer
+      responses:
+        '200':
+          description: ''
+          schema:
+            required:
+            - count
+            - results
+            type: object
+            properties:
+              count:
+                type: integer
+              next:
+                type: string
+                format: uri
+                x-nullable: true
+              previous:
+                type: string
+                format: uri
+                x-nullable: true
+              results:
+                type: array
+                items:
+                  $ref: '#/definitions/Stream'
+      tags:
+      - api
+    post:
+      operationId: api_channels_streams_create
+      description: ''
+      parameters:
+      - name: data
+        in: body
+        required: true
+        schema:
+          $ref: '#/definitions/Stream'
+      responses:
+        '201':
+          description: ''
+          schema:
+            $ref: '#/definitions/Stream'
+      tags:
+      - api
+    parameters: []
+  /api/channels/streams/bulk-delete/:
+    delete:
+      operationId: api_channels_streams_bulk-delete_delete
+      description: Bulk delete streams by ID
+      parameters:
+      - name: data
+        in: body
+        required: true
+        schema:
+          required:
+          - stream_ids
+          type: object
+          properties:
+            stream_ids:
+              description: Stream IDs to delete
+              type: array
+              items:
+                type: integer
+      responses:
+        '204':
+          description: Streams deleted
+      tags:
+      - api
+    parameters: []
+  /api/channels/streams/by-ids/:
+    post:
+      operationId: api_channels_streams_get_by_ids
+      description: Retrieve streams by a list of IDs using POST to avoid URL length
+        limitations
+      parameters:
+      - name: data
+        in: body
+        required: true
+        schema:
+          required:
+          - ids
+          type: object
+          properties:
+            ids:
+              description: List of stream IDs to retrieve
+              type: array
+              items:
+                type: integer
+      responses:
+        '200':
+          description: ''
+          schema:
+            type: array
+            items:
+              $ref: '#/definitions/Stream'
+      tags:
+      - api
+    parameters: []
+  /api/channels/streams/groups/:
+    get:
+      operationId: api_channels_streams_get_groups
+      description: ''
+      parameters:
+      - name: name
+        in: query
+        description: ''
+        required: false
+        type: string
+      - name: channel_group_name
+        in: query
+        description: ''
+        required: false
+        type: string
+      - name: m3u_account
+        in: query
+        description: ''
+        required: false
+        type: string
+      - name: m3u_account_name
+        in: query
+        description: ''
+        required: false
+        type: string
+      - name: m3u_account_is_active
+        in: query
+        description: ''
+        required: false
+        type: string
+      - name: search
+        in: query
+        description: A search term.
+        required: false
+        type: string
+      - name: ordering
+        in: query
+        description: Which field to use when ordering the results.
+        required: false
+        type: string
+      - name: page
+        in: query
+        description: A page number within the paginated result set.
+        required: false
+        type: integer
+      - name: page_size
+        in: query
+        description: Number of results to return per page.
+        required: false
+        type: integer
+      responses:
+        '200':
+          description: ''
+          schema:
+            required:
+            - count
+            - results
+            type: object
+            properties:
+              count:
+                type: integer
+              next:
+                type: string
+                format: uri
+                x-nullable: true
+              previous:
+                type: string
+                format: uri
+                x-nullable: true
+              results:
+                type: array
+                items:
+                  $ref: '#/definitions/Stream'
+      tags:
+      - api
+    parameters: []
+  /api/channels/streams/ids/:
+    get:
+      operationId: api_channels_streams_get_ids
+      description: ''
+      parameters:
+      - name: name
+        in: query
+        description: ''
+        required: false
+        type: string
+      - name: channel_group_name
+        in: query
+        description: ''
+        required: false
+        type: string
+      - name: m3u_account
+        in: query
+        description: ''
+        required: false
+        type: string
+      - name: m3u_account_name
+        in: query
+        description: ''
+        required: false
+        type: string
+      - name: m3u_account_is_active
+        in: query
+        description: ''
+        required: false
+        type: string
+      - name: search
+        in: query
+        description: A search term.
+        required: false
+        type: string
+      - name: ordering
+        in: query
+        description: Which field to use when ordering the results.
+        required: false
+        type: string
+      - name: page
+        in: query
+        description: A page number within the paginated result set.
+        required: false
+        type: integer
+      - name: page_size
+        in: query
+        description: Number of results to return per page.
+        required: false
+        type: integer
+      responses:
+        '200':
+          description: ''
+          schema:
+            required:
+            - count
+            - results
+            type: object
+            properties:
+              count:
+                type: integer
+              next:
+                type: string
+                format: uri
+                x-nullable: true
+              previous:
+                type: string
+                format: uri
+                x-nullable: true
+              results:
+                type: array
+                items:
+                  $ref: '#/definitions/Stream'
+      tags:
+      - api
+    parameters: []
+  /api/channels/streams/{id}/:
+    get:
+      operationId: api_channels_streams_read
+      description: ''
+      parameters: []
+      responses:
+        '200':
+          description: ''
+          schema:
+            $ref: '#/definitions/Stream'
+      tags:
+      - api
+    put:
+      operationId: api_channels_streams_update
+      description: ''
+      parameters:
+      - name: data
+        in: body
+        required: true
+        schema:
+          $ref: '#/definitions/Stream'
+      responses:
+        '200':
+          description: ''
+          schema:
+            $ref: '#/definitions/Stream'
+      tags:
+      - api
+    patch:
+      operationId: api_channels_streams_partial_update
+      description: ''
+      parameters:
+      - name: data
+        in: body
+        required: true
+        schema:
+          $ref: '#/definitions/Stream'
+      responses:
+        '200':
+          description: ''
+          schema:
+            $ref: '#/definitions/Stream'
+      tags:
+      - api
+    delete:
+      operationId: api_channels_streams_delete
+      description: ''
+      parameters: []
+      responses:
+        '204':
+          description: ''
+      tags:
+      - api
+    parameters:
+    - name: id
+      in: path
+      description: A unique integer value identifying this Stream.
+      required: true
+      type: integer
+  /api/core/rehash-streams/:
+    post:
+      operationId: api_core_rehash-streams_create
+      description: Trigger rehashing of all streams
+      parameters: []
+      responses:
+        '200':
+          description: Rehash task started
+      tags:
+      - api
+    parameters: []
+  /api/core/settings/:
+    get:
+      operationId: api_core_settings_list
+      description: |-
+        API endpoint for editing core settings.
+        This is treated as a singleton: only one instance should exist.
+      parameters: []
+      responses:
+        '200':
+          description: ''
+          schema:
+            type: array
+            items:
+              $ref: '#/definitions/CoreSettings'
+      tags:
+      - api
+    post:
+      operationId: api_core_settings_create
+      description: |-
+        API endpoint for editing core settings.
+        This is treated as a singleton: only one instance should exist.
+      parameters:
+      - name: data
+        in: body
+        required: true
+        schema:
+          $ref: '#/definitions/CoreSettings'
+      responses:
+        '201':
+          description: ''
+          schema:
+            $ref: '#/definitions/CoreSettings'
+      tags:
+      - api
+    parameters: []
+  /api/core/settings/check/:
+    post:
+      operationId: api_core_settings_check
+      description: |-
+        API endpoint for editing core settings.
+        This is treated as a singleton: only one instance should exist.
+      parameters:
+      - name: data
+        in: body
+        required: true
+        schema:
+          $ref: '#/definitions/CoreSettings'
+      responses:
+        '201':
+          description: ''
+          schema:
+            $ref: '#/definitions/CoreSettings'
+      tags:
+      - api
+    parameters: []
+  /api/core/settings/env/:
+    get:
+      operationId: api_core_settings_env_list
+      description: Endpoint for environment details
+      parameters: []
+      responses:
+        '200':
+          description: Environment variables
+      tags:
+      - api
+    parameters: []
+  /api/core/settings/{id}/:
+    get:
+      operationId: api_core_settings_read
+      description: |-
+        API endpoint for editing core settings.
+        This is treated as a singleton: only one instance should exist.
+      parameters: []
+      responses:
+        '200':
+          description: ''
+          schema:
+            $ref: '#/definitions/CoreSettings'
+      tags:
+      - api
+    put:
+      operationId: api_core_settings_update
+      description: |-
+        API endpoint for editing core settings.
+        This is treated as a singleton: only one instance should exist.
+      parameters:
+      - name: data
+        in: body
+        required: true
+        schema:
+          $ref: '#/definitions/CoreSettings'
+      responses:
+        '200':
+          description: ''
+          schema:
+            $ref: '#/definitions/CoreSettings'
+      tags:
+      - api
+    patch:
+      operationId: api_core_settings_partial_update
+      description: |-
+        API endpoint for editing core settings.
+        This is treated as a singleton: only one instance should exist.
+      parameters:
+      - name: data
+        in: body
+        required: true
+        schema:
+          $ref: '#/definitions/CoreSettings'
+      responses:
+        '200':
+          description: ''
+          schema:
+            $ref: '#/definitions/CoreSettings'
+      tags:
+      - api
+    delete:
+      operationId: api_core_settings_delete
+      description: |-
+        API endpoint for editing core settings.
+        This is treated as a singleton: only one instance should exist.
+      parameters: []
+      responses:
+        '204':
+          description: ''
+      tags:
+      - api
+    parameters:
+    - name: id
+      in: path
+      description: A unique integer value identifying this core settings.
+      required: true
+      type: integer
+  /api/core/streamprofiles/:
+    get:
+      operationId: api_core_streamprofiles_list
+      description: API endpoint that allows stream profiles to be viewed, created,
+        edited, or deleted.
+      parameters: []
+      responses:
+        '200':
+          description: ''
+          schema:
+            type: array
+            items:
+              $ref: '#/definitions/StreamProfile'
+      tags:
+      - api
+    post:
+      operationId: api_core_streamprofiles_create
+      description: API endpoint that allows stream profiles to be viewed, created,
+        edited, or deleted.
+      parameters:
+      - name: data
+        in: body
+        required: true
+        schema:
+          $ref: '#/definitions/StreamProfile'
+      responses:
+        '201':
+          description: ''
+          schema:
+            $ref: '#/definitions/StreamProfile'
+      tags:
+      - api
+    parameters: []
+  /api/core/streamprofiles/{id}/:
+    get:
+      operationId: api_core_streamprofiles_read
+      description: API endpoint that allows stream profiles to be viewed, created,
+        edited, or deleted.
+      parameters: []
+      responses:
+        '200':
+          description: ''
+          schema:
+            $ref: '#/definitions/StreamProfile'
+      tags:
+      - api
+    put:
+      operationId: api_core_streamprofiles_update
+      description: API endpoint that allows stream profiles to be viewed, created,
+        edited, or deleted.
+      parameters:
+      - name: data
+        in: body
+        required: true
+        schema:
+          $ref: '#/definitions/StreamProfile'
+      responses:
+        '200':
+          description: ''
+          schema:
+            $ref: '#/definitions/StreamProfile'
+      tags:
+      - api
+    patch:
+      operationId: api_core_streamprofiles_partial_update
+      description: API endpoint that allows stream profiles to be viewed, created,
+        edited, or deleted.
+      parameters:
+      - name: data
+        in: body
+        required: true
+        schema:
+          $ref: '#/definitions/StreamProfile'
+      responses:
+        '200':
+          description: ''
+          schema:
+            $ref: '#/definitions/StreamProfile'
+      tags:
+      - api
+    delete:
+      operationId: api_core_streamprofiles_delete
+      description: API endpoint that allows stream profiles to be viewed, created,
+        edited, or deleted.
+      parameters: []
+      responses:
+        '204':
+          description: ''
+      tags:
+      - api
+    parameters:
+    - name: id
+      in: path
+      description: A unique integer value identifying this stream profile.
+      required: true
+      type: integer
+  /api/core/system-events/:
+    get:
+      operationId: api_core_system-events_list
+      summary: Get recent system events (channel start/stop, buffering, client connections,
+        etc.)
+      description: |-
+        Query Parameters:
+            limit: Number of events to return per page (default: 100, max: 1000)
+            offset: Number of events to skip (for pagination, default: 0)
+            event_type: Filter by specific event type (optional)
+      parameters: []
+      responses:
+        '200':
+          description: ''
+      tags:
+      - api
+    parameters: []
+  /api/core/timezones/:
+    get:
+      operationId: api_core_timezones_list
+      description: Get list of all supported timezones
+      parameters: []
+      responses:
+        '200':
+          description: List of timezones with grouping by region
+      tags:
+      - api
+    parameters: []
+  /api/core/useragents/:
+    get:
+      operationId: api_core_useragents_list
+      description: API endpoint that allows user agents to be viewed, created, edited,
+        or deleted.
+      parameters: []
+      responses:
+        '200':
+          description: ''
+          schema:
+            type: array
+            items:
+              $ref: '#/definitions/UserAgent'
+      tags:
+      - api
+    post:
+      operationId: api_core_useragents_create
+      description: API endpoint that allows user agents to be viewed, created, edited,
+        or deleted.
+      parameters:
+      - name: data
+        in: body
+        required: true
+        schema:
+          $ref: '#/definitions/UserAgent'
+      responses:
+        '201':
+          description: ''
+          schema:
+            $ref: '#/definitions/UserAgent'
+      tags:
+      - api
+    parameters: []
+  /api/core/useragents/{id}/:
+    get:
+      operationId: api_core_useragents_read
+      description: API endpoint that allows user agents to be viewed, created, edited,
+        or deleted.
+      parameters: []
+      responses:
+        '200':
+          description: ''
+          schema:
+            $ref: '#/definitions/UserAgent'
+      tags:
+      - api
+    put:
+      operationId: api_core_useragents_update
+      description: API endpoint that allows user agents to be viewed, created, edited,
+        or deleted.
+      parameters:
+      - name: data
+        in: body
+        required: true
+        schema:
+          $ref: '#/definitions/UserAgent'
+      responses:
+        '200':
+          description: ''
+          schema:
+            $ref: '#/definitions/UserAgent'
+      tags:
+      - api
+    patch:
+      operationId: api_core_useragents_partial_update
+      description: API endpoint that allows user agents to be viewed, created, edited,
+        or deleted.
+      parameters:
+      - name: data
+        in: body
+        required: true
+        schema:
+          $ref: '#/definitions/UserAgent'
+      responses:
+        '200':
+          description: ''
+          schema:
+            $ref: '#/definitions/UserAgent'
+      tags:
+      - api
+    delete:
+      operationId: api_core_useragents_delete
+      description: API endpoint that allows user agents to be viewed, created, edited,
+        or deleted.
+      parameters: []
+      responses:
+        '204':
+          description: ''
+      tags:
+      - api
+    parameters:
+    - name: id
+      in: path
+      description: A unique integer value identifying this user agent.
+      required: true
+      type: integer
+  /api/core/version/:
+    get:
+      operationId: api_core_version_list
+      description: Get application version information
+      parameters: []
+      responses:
+        '200':
+          description: Version information
+      tags:
+      - api
+    parameters: []
+  /api/epg/epgdata/:
+    get:
+      operationId: api_epg_epgdata_list
+      description: API endpoint that allows EPGData objects to be viewed.
+      parameters: []
+      responses:
+        '200':
+          description: ''
+          schema:
+            type: array
+            items:
+              $ref: '#/definitions/EPGData'
+      tags:
+      - api
+    parameters: []
+  /api/epg/epgdata/{id}/:
+    get:
+      operationId: api_epg_epgdata_read
+      description: API endpoint that allows EPGData objects to be viewed.
+      parameters: []
+      responses:
+        '200':
+          description: ''
+          schema:
+            $ref: '#/definitions/EPGData'
+      tags:
+      - api
+    parameters:
+    - name: id
+      in: path
+      description: A unique integer value identifying this epg data.
+      required: true
+      type: integer
+  /api/epg/grid/:
+    get:
+      operationId: api_epg_grid_list
+      description: Retrieve programs from the previous hour, currently running and
+        upcoming for the next 24 hours
+      parameters: []
+      responses:
+        '200':
+          description: ''
+          schema:
+            type: array
+            items:
+              $ref: '#/definitions/ProgramData'
+      tags:
+      - api
+    parameters: []
+  /api/epg/import/:
+    post:
+      operationId: api_epg_import_create
+      description: Triggers an EPG data import
+      parameters: []
+      responses:
+        '202':
+          description: EPG data import initiated
+      tags:
+      - api
+    parameters: []
+  /api/epg/programs/:
+    get:
+      operationId: api_epg_programs_list
+      description: Handles CRUD operations for EPG programs
+      parameters: []
+      responses:
+        '200':
+          description: ''
+          schema:
+            type: array
+            items:
+              $ref: '#/definitions/ProgramData'
+      tags:
+      - api
+    post:
+      operationId: api_epg_programs_create
+      description: Handles CRUD operations for EPG programs
+      parameters:
+      - name: data
+        in: body
+        required: true
+        schema:
+          $ref: '#/definitions/ProgramData'
+      responses:
+        '201':
+          description: ''
+          schema:
+            $ref: '#/definitions/ProgramData'
+      tags:
+      - api
+    parameters: []
+  /api/epg/programs/{id}/:
+    get:
+      operationId: api_epg_programs_read
+      description: Handles CRUD operations for EPG programs
+      parameters: []
+      responses:
+        '200':
+          description: ''
+          schema:
+            $ref: '#/definitions/ProgramData'
+      tags:
+      - api
+    put:
+      operationId: api_epg_programs_update
+      description: Handles CRUD operations for EPG programs
+      parameters:
+      - name: data
+        in: body
+        required: true
+        schema:
+          $ref: '#/definitions/ProgramData'
+      responses:
+        '200':
+          description: ''
+          schema:
+            $ref: '#/definitions/ProgramData'
+      tags:
+      - api
+    patch:
+      operationId: api_epg_programs_partial_update
+      description: Handles CRUD operations for EPG programs
+      parameters:
+      - name: data
+        in: body
+        required: true
+        schema:
+          $ref: '#/definitions/ProgramData'
+      responses:
+        '200':
+          description: ''
+          schema:
+            $ref: '#/definitions/ProgramData'
+      tags:
+      - api
+    delete:
+      operationId: api_epg_programs_delete
+      description: Handles CRUD operations for EPG programs
+      parameters: []
+      responses:
+        '204':
+          description: ''
+      tags:
+      - api
+    parameters:
+    - name: id
+      in: path
+      description: A unique integer value identifying this program data.
+      required: true
+      type: integer
+  /api/epg/sources/:
+    get:
+      operationId: api_epg_sources_list
+      description: API endpoint that allows EPG sources to be viewed or edited.
+      parameters: []
+      responses:
+        '200':
+          description: ''
+          schema:
+            type: array
+            items:
+              $ref: '#/definitions/EPGSource'
+      tags:
+      - api
+    post:
+      operationId: api_epg_sources_create
+      description: API endpoint that allows EPG sources to be viewed or edited.
+      parameters:
+      - name: data
+        in: body
+        required: true
+        schema:
+          $ref: '#/definitions/EPGSource'
+      responses:
+        '201':
+          description: ''
+          schema:
+            $ref: '#/definitions/EPGSource'
+      tags:
+      - api
+    parameters: []
+  /api/epg/sources/upload/:
+    post:
+      operationId: api_epg_sources_upload
+      description: API endpoint that allows EPG sources to be viewed or edited.
+      parameters:
+      - name: data
+        in: body
+        required: true
+        schema:
+          $ref: '#/definitions/EPGSource'
+      responses:
+        '201':
+          description: ''
+          schema:
+            $ref: '#/definitions/EPGSource'
+      tags:
+      - api
+    parameters: []
+  /api/epg/sources/{id}/:
+    get:
+      operationId: api_epg_sources_read
+      description: API endpoint that allows EPG sources to be viewed or edited.
+      parameters: []
+      responses:
+        '200':
+          description: ''
+          schema:
+            $ref: '#/definitions/EPGSource'
+      tags:
+      - api
+    put:
+      operationId: api_epg_sources_update
+      description: API endpoint that allows EPG sources to be viewed or edited.
+      parameters:
+      - name: data
+        in: body
+        required: true
+        schema:
+          $ref: '#/definitions/EPGSource'
+      responses:
+        '200':
+          description: ''
+          schema:
+            $ref: '#/definitions/EPGSource'
+      tags:
+      - api
+    patch:
+      operationId: api_epg_sources_partial_update
+      description: Handle partial updates with special logic for is_active field
+      parameters:
+      - name: data
+        in: body
+        required: true
+        schema:
+          $ref: '#/definitions/EPGSource'
+      responses:
+        '200':
+          description: ''
+          schema:
+            $ref: '#/definitions/EPGSource'
+      tags:
+      - api
+    delete:
+      operationId: api_epg_sources_delete
+      description: API endpoint that allows EPG sources to be viewed or edited.
+      parameters: []
+      responses:
+        '204':
+          description: ''
+      tags:
+      - api
+    parameters:
+    - name: id
+      in: path
+      description: A unique integer value identifying this epg source.
+      required: true
+      type: integer
+  /api/hdhr/device.xml:
+    get:
+      operationId: api_hdhr_device.xml_list
+      description: Retrieve the HDHomeRun device XML configuration
+      parameters: []
+      responses:
+        '200':
+          description: HDHR Device XML
+      tags:
+      - api
+    parameters: []
+  /api/hdhr/devices/:
+    get:
+      operationId: api_hdhr_devices_list
+      description: Handles CRUD operations for HDHomeRun devices
+      parameters: []
+      responses:
+        '200':
+          description: ''
+          schema:
+            type: array
+            items:
+              $ref: '#/definitions/HDHRDevice'
+      tags:
+      - api
+    post:
+      operationId: api_hdhr_devices_create
+      description: Handles CRUD operations for HDHomeRun devices
+      parameters:
+      - name: data
+        in: body
+        required: true
+        schema:
+          $ref: '#/definitions/HDHRDevice'
+      responses:
+        '201':
+          description: ''
+          schema:
+            $ref: '#/definitions/HDHRDevice'
+      tags:
+      - api
+    parameters: []
+  /api/hdhr/devices/{id}/:
+    get:
+      operationId: api_hdhr_devices_read
+      description: Handles CRUD operations for HDHomeRun devices
+      parameters: []
+      responses:
+        '200':
+          description: ''
+          schema:
+            $ref: '#/definitions/HDHRDevice'
+      tags:
+      - api
+    put:
+      operationId: api_hdhr_devices_update
+      description: Handles CRUD operations for HDHomeRun devices
+      parameters:
+      - name: data
+        in: body
+        required: true
+        schema:
+          $ref: '#/definitions/HDHRDevice'
+      responses:
+        '200':
+          description: ''
+          schema:
+            $ref: '#/definitions/HDHRDevice'
+      tags:
+      - api
+    patch:
+      operationId: api_hdhr_devices_partial_update
+      description: Handles CRUD operations for HDHomeRun devices
+      parameters:
+      - name: data
+        in: body
+        required: true
+        schema:
+          $ref: '#/definitions/HDHRDevice'
+      responses:
+        '200':
+          description: ''
+          schema:
+            $ref: '#/definitions/HDHRDevice'
+      tags:
+      - api
+    delete:
+      operationId: api_hdhr_devices_delete
+      description: Handles CRUD operations for HDHomeRun devices
+      parameters: []
+      responses:
+        '204':
+          description: ''
+      tags:
+      - api
+    parameters:
+    - name: id
+      in: path
+      description: A unique integer value identifying this hdhr device.
+      required: true
+      type: integer
+  /api/hdhr/discover.json:
+    get:
+      operationId: api_hdhr_discover.json_list
+      description: Retrieve HDHomeRun device discovery information
+      parameters: []
+      responses:
+        '200':
+          description: HDHR Discovery JSON
+      tags:
+      - api
+    parameters: []
+  /api/hdhr/lineup.json:
+    get:
+      operationId: api_hdhr_lineup.json_list
+      description: Retrieve the available channel lineup
+      parameters: []
+      responses:
+        '200':
+          description: Channel Lineup JSON
+      tags:
+      - api
+    parameters: []
+  /api/hdhr/lineup_status.json:
+    get:
+      operationId: api_hdhr_lineup_status.json_list
+      description: Retrieve the HDHomeRun lineup status
+      parameters: []
+      responses:
+        '200':
+          description: Lineup Status JSON
+      tags:
+      - api
+    parameters: []
+  /api/m3u/accounts/:
+    get:
+      operationId: api_m3u_accounts_list
+      description: Handles CRUD operations for M3U accounts
+      parameters: []
+      responses:
+        '200':
+          description: ''
+          schema:
+            type: array
+            items:
+              $ref: '#/definitions/M3UAccount'
+      tags:
+      - api
+    post:
+      operationId: api_m3u_accounts_create
+      description: Handles CRUD operations for M3U accounts
+      parameters:
+      - name: data
+        in: body
+        required: true
+        schema:
+          $ref: '#/definitions/M3UAccount'
+      responses:
+        '201':
+          description: ''
+          schema:
+            $ref: '#/definitions/M3UAccount'
+      tags:
+      - api
+    parameters: []
+  /api/m3u/accounts/{account_id}/filters/:
+    get:
+      operationId: api_m3u_accounts_filters_list
+      description: ''
+      parameters: []
+      responses:
+        '200':
+          description: ''
+          schema:
+            type: array
+            items:
+              $ref: '#/definitions/M3UFilter'
+      tags:
+      - api
+    post:
+      operationId: api_m3u_accounts_filters_create
+      description: ''
+      parameters:
+      - name: data
+        in: body
+        required: true
+        schema:
+          $ref: '#/definitions/M3UFilter'
+      responses:
+        '201':
+          description: ''
+          schema:
+            $ref: '#/definitions/M3UFilter'
+      tags:
+      - api
+    parameters:
+    - name: account_id
+      in: path
+      required: true
+      type: string
+  /api/m3u/accounts/{account_id}/filters/{id}/:
+    get:
+      operationId: api_m3u_accounts_filters_read
+      description: ''
+      parameters: []
+      responses:
+        '200':
+          description: ''
+          schema:
+            $ref: '#/definitions/M3UFilter'
+      tags:
+      - api
+    put:
+      operationId: api_m3u_accounts_filters_update
+      description: ''
+      parameters:
+      - name: data
+        in: body
+        required: true
+        schema:
+          $ref: '#/definitions/M3UFilter'
+      responses:
+        '200':
+          description: ''
+          schema:
+            $ref: '#/definitions/M3UFilter'
+      tags:
+      - api
+    patch:
+      operationId: api_m3u_accounts_filters_partial_update
+      description: ''
+      parameters:
+      - name: data
+        in: body
+        required: true
+        schema:
+          $ref: '#/definitions/M3UFilter'
+      responses:
+        '200':
+          description: ''
+          schema:
+            $ref: '#/definitions/M3UFilter'
+      tags:
+      - api
+    delete:
+      operationId: api_m3u_accounts_filters_delete
+      description: ''
+      parameters: []
+      responses:
+        '204':
+          description: ''
+      tags:
+      - api
+    parameters:
+    - name: account_id
+      in: path
+      required: true
+      type: string
+    - name: id
+      in: path
+      description: A unique integer value identifying this m3u filter.
+      required: true
+      type: integer
+  /api/m3u/accounts/{account_id}/profiles/:
+    get:
+      operationId: api_m3u_accounts_profiles_list
+      description: ''
+      parameters: []
+      responses:
+        '200':
+          description: ''
+          schema:
+            type: array
+            items:
+              $ref: '#/definitions/M3UAccountProfile'
+      tags:
+      - api
+    post:
+      operationId: api_m3u_accounts_profiles_create
+      description: ''
+      parameters:
+      - name: data
+        in: body
+        required: true
+        schema:
+          $ref: '#/definitions/M3UAccountProfile'
+      responses:
+        '201':
+          description: ''
+          schema:
+            $ref: '#/definitions/M3UAccountProfile'
+      tags:
+      - api
+    parameters:
+    - name: account_id
+      in: path
+      required: true
+      type: string
+  /api/m3u/accounts/{account_id}/profiles/{id}/:
+    get:
+      operationId: api_m3u_accounts_profiles_read
+      description: ''
+      parameters: []
+      responses:
+        '200':
+          description: ''
+          schema:
+            $ref: '#/definitions/M3UAccountProfile'
+      tags:
+      - api
+    put:
+      operationId: api_m3u_accounts_profiles_update
+      description: ''
+      parameters:
+      - name: data
+        in: body
+        required: true
+        schema:
+          $ref: '#/definitions/M3UAccountProfile'
+      responses:
+        '200':
+          description: ''
+          schema:
+            $ref: '#/definitions/M3UAccountProfile'
+      tags:
+      - api
+    patch:
+      operationId: api_m3u_accounts_profiles_partial_update
+      description: ''
+      parameters:
+      - name: data
+        in: body
+        required: true
+        schema:
+          $ref: '#/definitions/M3UAccountProfile'
+      responses:
+        '200':
+          description: ''
+          schema:
+            $ref: '#/definitions/M3UAccountProfile'
+      tags:
+      - api
+    delete:
+      operationId: api_m3u_accounts_profiles_delete
+      description: ''
+      parameters: []
+      responses:
+        '204':
+          description: ''
+      tags:
+      - api
+    parameters:
+    - name: account_id
+      in: path
+      required: true
+      type: string
+    - name: id
+      in: path
+      description: A unique integer value identifying this m3u account profile.
+      required: true
+      type: integer
+  /api/m3u/accounts/{id}/:
+    get:
+      operationId: api_m3u_accounts_read
+      description: Handles CRUD operations for M3U accounts
+      parameters: []
+      responses:
+        '200':
+          description: ''
+          schema:
+            $ref: '#/definitions/M3UAccount'
+      tags:
+      - api
+    put:
+      operationId: api_m3u_accounts_update
+      description: Handles CRUD operations for M3U accounts
+      parameters:
+      - name: data
+        in: body
+        required: true
+        schema:
+          $ref: '#/definitions/M3UAccount'
+      responses:
+        '200':
+          description: ''
+          schema:
+            $ref: '#/definitions/M3UAccount'
+      tags:
+      - api
+    patch:
+      operationId: api_m3u_accounts_partial_update
+      description: Handle partial updates with special logic for is_active field
+      parameters:
+      - name: data
+        in: body
+        required: true
+        schema:
+          $ref: '#/definitions/M3UAccount'
+      responses:
+        '200':
+          description: ''
+          schema:
+            $ref: '#/definitions/M3UAccount'
+      tags:
+      - api
+    delete:
+      operationId: api_m3u_accounts_delete
+      description: Handles CRUD operations for M3U accounts
+      parameters: []
+      responses:
+        '204':
+          description: ''
+      tags:
+      - api
+    parameters:
+    - name: id
+      in: path
+      description: A unique integer value identifying this m3u account.
+      required: true
+      type: integer
+  /api/m3u/accounts/{id}/group-settings/:
+    patch:
+      operationId: api_m3u_accounts_update_group_settings
+      description: Update auto channel sync settings for M3U account groups
+      parameters:
+      - name: data
+        in: body
+        required: true
+        schema:
+          $ref: '#/definitions/M3UAccount'
+      responses:
+        '200':
+          description: ''
+          schema:
+            $ref: '#/definitions/M3UAccount'
+      tags:
+      - api
+    parameters:
+    - name: id
+      in: path
+      description: A unique integer value identifying this m3u account.
+      required: true
+      type: integer
+  /api/m3u/accounts/{id}/refresh-vod/:
+    post:
+      operationId: api_m3u_accounts_refresh_vod
+      description: Trigger VOD content refresh for XtreamCodes accounts
+      parameters:
+      - name: data
+        in: body
+        required: true
+        schema:
+          $ref: '#/definitions/M3UAccount'
+      responses:
+        '201':
+          description: ''
+          schema:
+            $ref: '#/definitions/M3UAccount'
+      tags:
+      - api
+    parameters:
+    - name: id
+      in: path
+      description: A unique integer value identifying this m3u account.
+      required: true
+      type: integer
+  /api/m3u/refresh-account-info/{profile_id}/:
+    post:
+      operationId: api_m3u_refresh-account-info_create
+      description: Triggers a refresh of account information for a specific M3U profile
+      parameters: []
+      responses:
+        '202':
+          description: Account info refresh initiated
+        '400':
+          description: Profile not found or not XtreamCodes
+      tags:
+      - api
+    parameters:
+    - name: profile_id
+      in: path
+      required: true
+      type: string
+  /api/m3u/refresh/:
+    post:
+      operationId: api_m3u_refresh_create
+      description: Triggers a refresh of all active M3U accounts
+      parameters: []
+      responses:
+        '202':
+          description: M3U refresh initiated
+      tags:
+      - api
+    parameters: []
+  /api/m3u/refresh/{account_id}/:
+    post:
+      operationId: api_m3u_refresh_create
+      description: Triggers a refresh of a single M3U account
+      parameters: []
+      responses:
+        '202':
+          description: M3U account refresh initiated
+      tags:
+      - api
+    parameters:
+    - name: account_id
+      in: path
+      required: true
+      type: string
+  /api/m3u/server-groups/:
+    get:
+      operationId: api_m3u_server-groups_list
+      description: Handles CRUD operations for Server Groups
+      parameters: []
+      responses:
+        '200':
+          description: ''
+          schema:
+            type: array
+            items:
+              $ref: '#/definitions/ServerGroup'
+      tags:
+      - api
+    post:
+      operationId: api_m3u_server-groups_create
+      description: Handles CRUD operations for Server Groups
+      parameters:
+      - name: data
+        in: body
+        required: true
+        schema:
+          $ref: '#/definitions/ServerGroup'
+      responses:
+        '201':
+          description: ''
+          schema:
+            $ref: '#/definitions/ServerGroup'
+      tags:
+      - api
+    parameters: []
+  /api/m3u/server-groups/{id}/:
+    get:
+      operationId: api_m3u_server-groups_read
+      description: Handles CRUD operations for Server Groups
+      parameters: []
+      responses:
+        '200':
+          description: ''
+          schema:
+            $ref: '#/definitions/ServerGroup'
+      tags:
+      - api
+    put:
+      operationId: api_m3u_server-groups_update
+      description: Handles CRUD operations for Server Groups
+      parameters:
+      - name: data
+        in: body
+        required: true
+        schema:
+          $ref: '#/definitions/ServerGroup'
+      responses:
+        '200':
+          description: ''
+          schema:
+            $ref: '#/definitions/ServerGroup'
+      tags:
+      - api
+    patch:
+      operationId: api_m3u_server-groups_partial_update
+      description: Handles CRUD operations for Server Groups
+      parameters:
+      - name: data
+        in: body
+        required: true
+        schema:
+          $ref: '#/definitions/ServerGroup'
+      responses:
+        '200':
+          description: ''
+          schema:
+            $ref: '#/definitions/ServerGroup'
+      tags:
+      - api
+    delete:
+      operationId: api_m3u_server-groups_delete
+      description: Handles CRUD operations for Server Groups
+      parameters: []
+      responses:
+        '204':
+          description: ''
+      tags:
+      - api
+    parameters:
+    - name: id
+      in: path
+      description: A unique integer value identifying this server group.
+      required: true
+      type: integer
+  /api/plugins/plugins/:
+    get:
+      operationId: api_plugins_plugins_list
+      description: ''
+      parameters: []
+      responses:
+        '200':
+          description: ''
+      tags:
+      - api
+    parameters: []
+  /api/plugins/plugins/import/:
+    post:
+      operationId: api_plugins_plugins_import_create
+      description: ''
+      parameters: []
+      responses:
+        '201':
+          description: ''
+      tags:
+      - api
+    parameters: []
+  /api/plugins/plugins/reload/:
+    post:
+      operationId: api_plugins_plugins_reload_create
+      description: ''
+      parameters: []
+      responses:
+        '201':
+          description: ''
+      tags:
+      - api
+    parameters: []
+  /api/plugins/plugins/{key}/delete/:
+    delete:
+      operationId: api_plugins_plugins_delete_delete
+      description: ''
+      parameters: []
+      responses:
+        '204':
+          description: ''
+      tags:
+      - api
+    parameters:
+    - name: key
+      in: path
+      required: true
+      type: string
+  /api/plugins/plugins/{key}/enabled/:
+    post:
+      operationId: api_plugins_plugins_enabled_create
+      description: ''
+      parameters: []
+      responses:
+        '201':
+          description: ''
+      tags:
+      - api
+    parameters:
+    - name: key
+      in: path
+      required: true
+      type: string
+  /api/plugins/plugins/{key}/run/:
+    post:
+      operationId: api_plugins_plugins_run_create
+      description: ''
+      parameters: []
+      responses:
+        '201':
+          description: ''
+      tags:
+      - api
+    parameters:
+    - name: key
+      in: path
+      required: true
+      type: string
+  /api/plugins/plugins/{key}/settings/:
+    post:
+      operationId: api_plugins_plugins_settings_create
+      description: ''
+      parameters: []
+      responses:
+        '201':
+          description: ''
+      tags:
+      - api
+    parameters:
+    - name: key
+      in: path
+      required: true
+      type: string
+  /api/vod/all/:
+    get:
+      operationId: api_vod_all_list
+      description: Override list to handle unified content properly - database-level
+        approach
+      parameters:
+      - name: search
+        in: query
+        description: A search term.
+        required: false
+        type: string
+      - name: ordering
+        in: query
+        description: Which field to use when ordering the results.
+        required: false
+        type: string
+      - name: page
+        in: query
+        description: A page number within the paginated result set.
+        required: false
+        type: integer
+      - name: page_size
+        in: query
+        description: Number of results to return per page.
+        required: false
+        type: integer
+      responses:
+        '200':
+          description: ''
+          schema:
+            required:
+            - count
+            - results
+            type: object
+            properties:
+              count:
+                type: integer
+              next:
+                type: string
+                format: uri
+                x-nullable: true
+              previous:
+                type: string
+                format: uri
+                x-nullable: true
+              results:
+                type: array
+                items:
+                  $ref: '#/definitions/Movie'
+      tags:
+      - api
+    parameters: []
+  /api/vod/all/{id}/:
+    get:
+      operationId: api_vod_all_read
+      description: ViewSet that combines Movies and Series for unified 'All' view
+      parameters: []
+      responses:
+        '200':
+          description: ''
+          schema:
+            $ref: '#/definitions/Movie'
+      tags:
+      - api
+    parameters:
+    - name: id
+      in: path
+      description: A unique integer value identifying this Movie.
+      required: true
+      type: integer
+  /api/vod/categories/:
+    get:
+      operationId: api_vod_categories_list
+      description: Override list to ensure Uncategorized categories and relations
+        exist for all XC accounts with VOD enabled
+      parameters:
+      - name: name
+        in: query
+        description: ''
+        required: false
+        type: string
+      - name: category_type
+        in: query
+        description: ''
+        required: false
+        type: string
+      - name: m3u_account
+        in: query
+        description: ''
+        required: false
+        type: string
+      - name: search
+        in: query
+        description: A search term.
+        required: false
+        type: string
+      - name: ordering
+        in: query
+        description: Which field to use when ordering the results.
+        required: false
+        type: string
+      responses:
+        '200':
+          description: ''
+          schema:
+            type: array
+            items:
+              $ref: '#/definitions/VODCategory'
+      tags:
+      - api
+    parameters: []
+  /api/vod/categories/{id}/:
+    get:
+      operationId: api_vod_categories_read
+      description: ViewSet for VOD Categories
+      parameters: []
+      responses:
+        '200':
+          description: ''
+          schema:
+            $ref: '#/definitions/VODCategory'
+      tags:
+      - api
+    parameters:
+    - name: id
+      in: path
+      description: A unique integer value identifying this VOD Category.
+      required: true
+      type: integer
+  /api/vod/episodes/:
+    get:
+      operationId: api_vod_episodes_list
+      description: ViewSet for Episode content
+      parameters:
+      - name: name
+        in: query
+        description: ''
+        required: false
+        type: string
+      - name: series
+        in: query
+        description: ''
+        required: false
+        type: string
+      - name: m3u_account
+        in: query
+        description: ''
+        required: false
+        type: string
+      - name: season_number
+        in: query
+        description: ''
+        required: false
+        type: string
+      - name: episode_number
+        in: query
+        description: ''
+        required: false
+        type: string
+      - name: search
+        in: query
+        description: A search term.
+        required: false
+        type: string
+      - name: ordering
+        in: query
+        description: Which field to use when ordering the results.
+        required: false
+        type: string
+      - name: page
+        in: query
+        description: A page number within the paginated result set.
+        required: false
+        type: integer
+      - name: page_size
+        in: query
+        description: Number of results to return per page.
+        required: false
+        type: integer
+      responses:
+        '200':
+          description: ''
+          schema:
+            required:
+            - count
+            - results
+            type: object
+            properties:
+              count:
+                type: integer
+              next:
+                type: string
+                format: uri
+                x-nullable: true
+              previous:
+                type: string
+                format: uri
+                x-nullable: true
+              results:
+                type: array
+                items:
+                  $ref: '#/definitions/Episode'
+      tags:
+      - api
+    parameters: []
+  /api/vod/episodes/{id}/:
+    get:
+      operationId: api_vod_episodes_read
+      description: ViewSet for Episode content
+      parameters: []
+      responses:
+        '200':
+          description: ''
+          schema:
+            $ref: '#/definitions/Episode'
+      tags:
+      - api
+    parameters:
+    - name: id
+      in: path
+      description: A unique integer value identifying this Episode.
+      required: true
+      type: integer
+  /api/vod/movies/:
+    get:
+      operationId: api_vod_movies_list
+      description: ViewSet for Movie content
+      parameters:
+      - name: name
+        in: query
+        description: ''
+        required: false
+        type: string
+      - name: m3u_account
+        in: query
+        description: ''
+        required: false
+        type: string
+      - name: category
+        in: query
+        description: ''
+        required: false
+        type: string
+      - name: year
+        in: query
+        description: ''
+        required: false
+        type: string
+      - name: year_gte
+        in: query
+        description: ''
+        required: false
+        type: string
+      - name: year_lte
+        in: query
+        description: ''
+        required: false
+        type: string
+      - name: search
+        in: query
+        description: A search term.
+        required: false
+        type: string
+      - name: ordering
+        in: query
+        description: Which field to use when ordering the results.
+        required: false
+        type: string
+      - name: page
+        in: query
+        description: A page number within the paginated result set.
+        required: false
+        type: integer
+      - name: page_size
+        in: query
+        description: Number of results to return per page.
+        required: false
+        type: integer
+      responses:
+        '200':
+          description: ''
+          schema:
+            required:
+            - count
+            - results
+            type: object
+            properties:
+              count:
+                type: integer
+              next:
+                type: string
+                format: uri
+                x-nullable: true
+              previous:
+                type: string
+                format: uri
+                x-nullable: true
+              results:
+                type: array
+                items:
+                  $ref: '#/definitions/Movie'
+      tags:
+      - api
+    parameters: []
+  /api/vod/movies/{id}/:
+    get:
+      operationId: api_vod_movies_read
+      description: ViewSet for Movie content
+      parameters: []
+      responses:
+        '200':
+          description: ''
+          schema:
+            $ref: '#/definitions/Movie'
+      tags:
+      - api
+    parameters:
+    - name: id
+      in: path
+      description: A unique integer value identifying this Movie.
+      required: true
+      type: integer
+  /api/vod/movies/{id}/provider-info/:
+    get:
+      operationId: api_vod_movies_provider_info
+      description: Get detailed movie information from the original provider, throttled
+        to 24h.
+      parameters: []
+      responses:
+        '200':
+          description: ''
+          schema:
+            $ref: '#/definitions/Movie'
+      tags:
+      - api
+    parameters:
+    - name: id
+      in: path
+      description: A unique integer value identifying this Movie.
+      required: true
+      type: integer
+  /api/vod/movies/{id}/providers/:
+    get:
+      operationId: api_vod_movies_get_providers
+      description: Get all providers (M3U accounts) that have this movie
+      parameters: []
+      responses:
+        '200':
+          description: ''
+          schema:
+            $ref: '#/definitions/Movie'
+      tags:
+      - api
+    parameters:
+    - name: id
+      in: path
+      description: A unique integer value identifying this Movie.
+      required: true
+      type: integer
+  /api/vod/series/:
+    get:
+      operationId: api_vod_series_list
+      description: ViewSet for Series management
+      parameters:
+      - name: name
+        in: query
+        description: ''
+        required: false
+        type: string
+      - name: m3u_account
+        in: query
+        description: ''
+        required: false
+        type: string
+      - name: category
+        in: query
+        description: ''
+        required: false
+        type: string
+      - name: year
+        in: query
+        description: ''
+        required: false
+        type: string
+      - name: year_gte
+        in: query
+        description: ''
+        required: false
+        type: string
+      - name: year_lte
+        in: query
+        description: ''
+        required: false
+        type: string
+      - name: search
+        in: query
+        description: A search term.
+        required: false
+        type: string
+      - name: ordering
+        in: query
+        description: Which field to use when ordering the results.
+        required: false
+        type: string
+      - name: page
+        in: query
+        description: A page number within the paginated result set.
+        required: false
+        type: integer
+      - name: page_size
+        in: query
+        description: Number of results to return per page.
+        required: false
+        type: integer
+      responses:
+        '200':
+          description: ''
+          schema:
+            required:
+            - count
+            - results
+            type: object
+            properties:
+              count:
+                type: integer
+              next:
+                type: string
+                format: uri
+                x-nullable: true
+              previous:
+                type: string
+                format: uri
+                x-nullable: true
+              results:
+                type: array
+                items:
+                  $ref: '#/definitions/Series'
+      tags:
+      - api
+    parameters: []
+  /api/vod/series/{id}/:
+    get:
+      operationId: api_vod_series_read
+      description: ViewSet for Series management
+      parameters: []
+      responses:
+        '200':
+          description: ''
+          schema:
+            $ref: '#/definitions/Series'
+      tags:
+      - api
+    parameters:
+    - name: id
+      in: path
+      description: A unique integer value identifying this Series.
+      required: true
+      type: integer
+  /api/vod/series/{id}/episodes/:
+    get:
+      operationId: api_vod_series_get_episodes
+      description: Get episodes for this series with provider information
+      parameters: []
+      responses:
+        '200':
+          description: ''
+          schema:
+            $ref: '#/definitions/Series'
+      tags:
+      - api
+    parameters:
+    - name: id
+      in: path
+      description: A unique integer value identifying this Series.
+      required: true
+      type: integer
+  /api/vod/series/{id}/provider-info/:
+    get:
+      operationId: api_vod_series_series_info
+      description: Get detailed series information, refreshing from provider if needed
+      parameters: []
+      responses:
+        '200':
+          description: ''
+          schema:
+            $ref: '#/definitions/Series'
+      tags:
+      - api
+    parameters:
+    - name: id
+      in: path
+      description: A unique integer value identifying this Series.
+      required: true
+      type: integer
+  /api/vod/series/{id}/providers/:
+    get:
+      operationId: api_vod_series_get_providers
+      description: Get all providers (M3U accounts) that have this series
+      parameters: []
+      responses:
+        '200':
+          description: ''
+          schema:
+            $ref: '#/definitions/Series'
+      tags:
+      - api
+    parameters:
+    - name: id
+      in: path
+      description: A unique integer value identifying this Series.
+      required: true
+      type: integer
+  /api/vod/vodlogos/:
+    get:
+      operationId: api_vod_vodlogos_list
+      description: ViewSet for VOD Logo management
+      parameters:
+      - name: search
+        in: query
+        description: A search term.
+        required: false
+        type: string
+      - name: ordering
+        in: query
+        description: Which field to use when ordering the results.
+        required: false
+        type: string
+      - name: page
+        in: query
+        description: A page number within the paginated result set.
+        required: false
+        type: integer
+      - name: page_size
+        in: query
+        description: Number of results to return per page.
+        required: false
+        type: integer
+      responses:
+        '200':
+          description: ''
+          schema:
+            required:
+            - count
+            - results
+            type: object
+            properties:
+              count:
+                type: integer
+              next:
+                type: string
+                format: uri
+                x-nullable: true
+              previous:
+                type: string
+                format: uri
+                x-nullable: true
+              results:
+                type: array
+                items:
+                  $ref: '#/definitions/VODLogo'
+      tags:
+      - api
+    post:
+      operationId: api_vod_vodlogos_create
+      description: ViewSet for VOD Logo management
+      parameters:
+      - name: data
+        in: body
+        required: true
+        schema:
+          $ref: '#/definitions/VODLogo'
+      responses:
+        '201':
+          description: ''
+          schema:
+            $ref: '#/definitions/VODLogo'
+      tags:
+      - api
+    parameters: []
+  /api/vod/vodlogos/bulk-delete/:
+    delete:
+      operationId: api_vod_vodlogos_bulk_delete
+      description: Delete multiple VOD logos at once
+      parameters: []
+      responses:
+        '204':
+          description: ''
+      tags:
+      - api
+    parameters: []
+  /api/vod/vodlogos/cleanup/:
+    post:
+      operationId: api_vod_vodlogos_cleanup
+      description: Delete all VOD logos that are not used by any movies or series
+      parameters:
+      - name: data
+        in: body
+        required: true
+        schema:
+          $ref: '#/definitions/VODLogo'
+      responses:
+        '201':
+          description: ''
+          schema:
+            $ref: '#/definitions/VODLogo'
+      tags:
+      - api
+    parameters: []
+  /api/vod/vodlogos/{id}/:
+    get:
+      operationId: api_vod_vodlogos_read
+      description: ViewSet for VOD Logo management
+      parameters: []
+      responses:
+        '200':
+          description: ''
+          schema:
+            $ref: '#/definitions/VODLogo'
+      tags:
+      - api
+    put:
+      operationId: api_vod_vodlogos_update
+      description: ViewSet for VOD Logo management
+      parameters:
+      - name: data
+        in: body
+        required: true
+        schema:
+          $ref: '#/definitions/VODLogo'
+      responses:
+        '200':
+          description: ''
+          schema:
+            $ref: '#/definitions/VODLogo'
+      tags:
+      - api
+    patch:
+      operationId: api_vod_vodlogos_partial_update
+      description: ViewSet for VOD Logo management
+      parameters:
+      - name: data
+        in: body
+        required: true
+        schema:
+          $ref: '#/definitions/VODLogo'
+      responses:
+        '200':
+          description: ''
+          schema:
+            $ref: '#/definitions/VODLogo'
+      tags:
+      - api
+    delete:
+      operationId: api_vod_vodlogos_delete
+      description: ViewSet for VOD Logo management
+      parameters: []
+      responses:
+        '204':
+          description: ''
+      tags:
+      - api
+    parameters:
+    - name: id
+      in: path
+      description: A unique integer value identifying this VOD Logo.
+      required: true
+      type: integer
+  /api/vod/vodlogos/{id}/cache/:
+    get:
+      operationId: api_vod_vodlogos_cache
+      description: Streams the VOD logo file, whether it's local or remote.
+      parameters: []
+      responses:
+        '200':
+          description: ''
+          schema:
+            $ref: '#/definitions/VODLogo'
+      tags:
+      - api
+    parameters:
+    - name: id
+      in: path
+      description: A unique integer value identifying this VOD Logo.
+      required: true
+      type: integer
+  /hdhr/device.xml:
+    get:
+      operationId: hdhr_device.xml_list
+      description: Retrieve the HDHomeRun device XML configuration
+      parameters: []
+      responses:
+        '200':
+          description: HDHR Device XML
+      tags:
+      - hdhr
+    parameters: []
+  /hdhr/devices/:
+    get:
+      operationId: hdhr_devices_list
+      description: Handles CRUD operations for HDHomeRun devices
+      parameters: []
+      responses:
+        '200':
+          description: ''
+          schema:
+            type: array
+            items:
+              $ref: '#/definitions/HDHRDevice'
+      tags:
+      - hdhr
+    post:
+      operationId: hdhr_devices_create
+      description: Handles CRUD operations for HDHomeRun devices
+      parameters:
+      - name: data
+        in: body
+        required: true
+        schema:
+          $ref: '#/definitions/HDHRDevice'
+      responses:
+        '201':
+          description: ''
+          schema:
+            $ref: '#/definitions/HDHRDevice'
+      tags:
+      - hdhr
+    parameters: []
+  /hdhr/devices/{id}/:
+    get:
+      operationId: hdhr_devices_read
+      description: Handles CRUD operations for HDHomeRun devices
+      parameters: []
+      responses:
+        '200':
+          description: ''
+          schema:
+            $ref: '#/definitions/HDHRDevice'
+      tags:
+      - hdhr
+    put:
+      operationId: hdhr_devices_update
+      description: Handles CRUD operations for HDHomeRun devices
+      parameters:
+      - name: data
+        in: body
+        required: true
+        schema:
+          $ref: '#/definitions/HDHRDevice'
+      responses:
+        '200':
+          description: ''
+          schema:
+            $ref: '#/definitions/HDHRDevice'
+      tags:
+      - hdhr
+    patch:
+      operationId: hdhr_devices_partial_update
+      description: Handles CRUD operations for HDHomeRun devices
+      parameters:
+      - name: data
+        in: body
+        required: true
+        schema:
+          $ref: '#/definitions/HDHRDevice'
+      responses:
+        '200':
+          description: ''
+          schema:
+            $ref: '#/definitions/HDHRDevice'
+      tags:
+      - hdhr
+    delete:
+      operationId: hdhr_devices_delete
+      description: Handles CRUD operations for HDHomeRun devices
+      parameters: []
+      responses:
+        '204':
+          description: ''
+      tags:
+      - hdhr
+    parameters:
+    - name: id
+      in: path
+      description: A unique integer value identifying this hdhr device.
+      required: true
+      type: integer
+  /hdhr/discover.json:
+    get:
+      operationId: hdhr_discover.json_list
+      description: Retrieve HDHomeRun device discovery information
+      parameters: []
+      responses:
+        '200':
+          description: HDHR Discovery JSON
+      tags:
+      - hdhr
+    parameters: []
+  /hdhr/lineup.json:
+    get:
+      operationId: hdhr_lineup.json_list
+      description: Retrieve the available channel lineup
+      parameters: []
+      responses:
+        '200':
+          description: Channel Lineup JSON
+      tags:
+      - hdhr
+    parameters: []
+  /hdhr/lineup_status.json:
+    get:
+      operationId: hdhr_lineup_status.json_list
+      description: Retrieve the HDHomeRun lineup status
+      parameters: []
+      responses:
+        '200':
+          description: Lineup Status JSON
+      tags:
+      - hdhr
+    parameters: []
+  /hdhr/{profile}/discover.json:
+    get:
+      operationId: hdhr_discover.json_list
+      description: Retrieve HDHomeRun device discovery information
+      parameters: []
+      responses:
+        '200':
+          description: HDHR Discovery JSON
+      tags:
+      - hdhr
+    parameters:
+    - name: profile
+      in: path
+      required: true
+      type: string
+  /hdhr/{profile}/lineup.json:
+    get:
+      operationId: hdhr_lineup.json_list
+      description: Retrieve the available channel lineup
+      parameters: []
+      responses:
+        '200':
+          description: Channel Lineup JSON
+      tags:
+      - hdhr
+    parameters:
+    - name: profile
+      in: path
+      required: true
+      type: string
+  /hdhr/{profile}/lineup_status.json:
+    get:
+      operationId: hdhr_lineup_status.json_list
+      description: Retrieve the HDHomeRun lineup status
+      parameters: []
+      responses:
+        '200':
+          description: Lineup Status JSON
+      tags:
+      - hdhr
+    parameters:
+    - name: profile
+      in: path
+      required: true
+      type: string
+  /live/{username}/{password}/{channel_id}:
+    get:
+      operationId: live_read
+      description: ''
+      parameters: []
+      responses:
+        '200':
+          description: ''
+      tags:
+      - live
+    parameters:
+    - name: username
+      in: path
+      required: true
+      type: string
+    - name: password
+      in: path
+      required: true
+      type: string
+    - name: channel_id
+      in: path
+      required: true
+      type: string
+  /proxy/ts/change_stream/{channel_id}:
+    post:
+      operationId: proxy_ts_change_stream_create
+      description: Change stream URL for existing channel with enhanced diagnostics
+      parameters: []
+      responses:
+        '201':
+          description: ''
+      tags:
+      - proxy
+    parameters:
+    - name: channel_id
+      in: path
+      required: true
+      type: string
+  /proxy/ts/next_stream/{channel_id}:
+    post:
+      operationId: proxy_ts_next_stream_create
+      description: Switch to the next available stream for a channel
+      parameters: []
+      responses:
+        '201':
+          description: ''
+      tags:
+      - proxy
+    parameters:
+    - name: channel_id
+      in: path
+      required: true
+      type: string
+  /proxy/ts/status:
+    get:
+      operationId: proxy_ts_status_list
+      description: |-
+        Returns status information about channels with detail level based on request:
+        - /status/ returns basic summary of all channels
+        - /status/{channel_id} returns detailed info about specific channel
+      parameters: []
+      responses:
+        '200':
+          description: ''
+      tags:
+      - proxy
+    parameters: []
+  /proxy/ts/status/{channel_id}:
+    get:
+      operationId: proxy_ts_status_read
+      description: |-
+        Returns status information about channels with detail level based on request:
+        - /status/ returns basic summary of all channels
+        - /status/{channel_id} returns detailed info about specific channel
+      parameters: []
+      responses:
+        '200':
+          description: ''
+      tags:
+      - proxy
+    parameters:
+    - name: channel_id
+      in: path
+      required: true
+      type: string
+  /proxy/ts/stop/{channel_id}:
+    post:
+      operationId: proxy_ts_stop_create
+      description: Stop a channel and release all associated resources using PubSub
+        events
+      parameters: []
+      responses:
+        '201':
+          description: ''
+      tags:
+      - proxy
+    delete:
+      operationId: proxy_ts_stop_delete
+      description: Stop a channel and release all associated resources using PubSub
+        events
+      parameters: []
+      responses:
+        '204':
+          description: ''
+      tags:
+      - proxy
+    parameters:
+    - name: channel_id
+      in: path
+      required: true
+      type: string
+  /proxy/ts/stop_client/{channel_id}:
+    post:
+      operationId: proxy_ts_stop_client_create
+      description: Stop a specific client connection using existing client management
+      parameters: []
+      responses:
+        '201':
+          description: ''
+      tags:
+      - proxy
+    parameters:
+    - name: channel_id
+      in: path
+      required: true
+      type: string
+  /proxy/ts/stream/{channel_id}:
+    get:
+      operationId: proxy_ts_stream_read
+      description: ''
+      parameters: []
+      responses:
+        '200':
+          description: ''
+      tags:
+      - proxy
+    parameters:
+    - name: channel_id
+      in: path
+      required: true
+      type: string
+  /proxy/vod/stop_client/:
+    post:
+      operationId: proxy_vod_stop_client_create
+      description: Stop a specific VOD client connection using stop signal mechanism
+      parameters: []
+      responses:
+        '201':
+          description: ''
+      tags:
+      - proxy
+    parameters: []
+  /{username}/{password}/{channel_id}:
+    get:
+      operationId: read
+      description: ''
+      parameters: []
+      responses:
+        '200':
+          description: ''
+      tags:
+      - read
+    parameters:
+    - name: username
+      in: path
+      required: true
+      type: string
+    - name: password
+      in: path
+      required: true
+      type: string
+    - name: channel_id
+      in: path
+      required: true
+      type: string
+definitions:
+  Group:
+    required:
+    - name
+    - permissions
+    type: object
+    properties:
+      id:
+        title: ID
+        type: integer
+        readOnly: true
+      name:
+        title: Name
+        type: string
+        maxLength: 150
+        minLength: 1
+      permissions:
+        type: array
+        items:
+          type: integer
+        uniqueItems: true
+  Permission:
+    required:
+    - name
+    - codename
+    type: object
+    properties:
+      id:
+        title: ID
+        type: integer
+        readOnly: true
+      name:
+        title: Name
+        type: string
+        maxLength: 255
+        minLength: 1
+      codename:
+        title: Codename
+        type: string
+        maxLength: 100
+        minLength: 1
+  TokenObtainPair:
+    required:
+    - username
+    - password
+    type: object
+    properties:
+      username:
+        title: Username
+        type: string
+        minLength: 1
+      password:
+        title: Password
+        type: string
+        minLength: 1
+  TokenRefresh:
+    required:
+    - refresh
+    type: object
+    properties:
+      refresh:
+        title: Refresh
+        type: string
+        minLength: 1
+      access:
+        title: Access
+        type: string
+        readOnly: true
+        minLength: 1
+  User:
+    required:
+    - username
+    - password
+    type: object
+    properties:
+      id:
+        title: ID
+        type: integer
+        readOnly: true
+      username:
+        title: Username
+        description: Required. 150 characters or fewer. Letters, digits and @/./+/-/_
+          only.
+        type: string
+        pattern: ^[\w.@+-]+$
+        maxLength: 150
+        minLength: 1
+      email:
+        title: Email address
+        type: string
+        format: email
+        maxLength: 254
+      user_level:
+        title: User level
+        type: integer
+        maximum: 2147483647
+        minimum: -2147483648
+      password:
+        title: Password
+        type: string
+        minLength: 1
+      channel_profiles:
+        type: array
+        items:
+          type: integer
+        uniqueItems: true
+      custom_properties:
+        title: Custom properties
+        type: object
+        x-nullable: true
+      avatar_config:
+        title: Avatar config
+        type: object
+        x-nullable: true
+      is_active:
+        title: Active
+        description: Designates whether this user should be treated as active. Unselect
+          this instead of deleting accounts.
+        type: boolean
+      is_staff:
+        title: Staff status
+        description: Designates whether the user can log into this admin site.
+        type: boolean
+      is_superuser:
+        title: Superuser status
+        description: Designates that this user has all permissions without explicitly
+          assigning them.
+        type: boolean
+      last_login:
+        title: Last login
+        type: string
+        format: date-time
+        x-nullable: true
+      date_joined:
+        title: Date joined
+        type: string
+        format: date-time
+      first_name:
+        title: First name
+        type: string
+        maxLength: 150
+      last_name:
+        title: Last name
+        type: string
+        maxLength: 150
+  Channel:
+    required:
+    - name
+    type: object
+    properties:
+      id:
+        title: ID
+        type: integer
+        readOnly: true
+      channel_number:
+        title: Channel number
+        type: number
+        x-nullable: true
+      name:
+        title: Name
+        type: string
+        maxLength: 255
+        minLength: 1
+      channel_group_id:
+        title: Channel group id
+        type: integer
+      tvg_id:
+        title: Tvg id
+        type: string
+        maxLength: 255
+        x-nullable: true
+      tvc_guide_stationid:
+        title: Tvc guide stationid
+        type: string
+        maxLength: 255
+        x-nullable: true
+      epg_data_id:
+        title: Epg data id
+        type: integer
+        x-nullable: true
+      streams:
+        type: array
+        items:
+          type: integer
+        uniqueItems: true
+      stream_profile_id:
+        title: Stream profile id
+        type: integer
+        x-nullable: true
+      uuid:
+        title: Uuid
+        type: string
+        format: uuid
+        readOnly: true
+      logo_id:
+        title: Logo id
+        type: integer
+        x-nullable: true
+      user_level:
+        title: User level
+        type: integer
+        maximum: 2147483647
+        minimum: -2147483648
+      auto_created:
+        title: Auto created
+        description: Whether this channel was automatically created via M3U auto channel
+          sync
+        type: boolean
+      auto_created_by:
+        title: Auto created by
+        description: The M3U account that auto-created this channel
+        type: integer
+        x-nullable: true
+      auto_created_by_name:
+        title: Auto created by name
+        type: string
+        readOnly: true
+  ChannelGroupM3UAccount:
+    required:
+    - channel_group
+    - enabled
+    type: object
+    properties:
+      m3u_accounts:
+        title: M3u accounts
+        type: integer
+        readOnly: true
+      channel_group:
+        title: Channel group
+        type: integer
+      enabled:
+        title: Enabled
+        type: boolean
+      auto_channel_sync:
+        title: Auto channel sync
+        type: boolean
+        default: false
+      auto_sync_channel_start:
+        title: Auto sync channel start
+        type: number
+        x-nullable: true
+      custom_properties:
+        title: Custom properties
+        type: object
+  ChannelGroup:
+    required:
+    - name
+    type: object
+    properties:
+      id:
+        title: ID
+        type: integer
+        readOnly: true
+      name:
+        title: Name
+        type: string
+        minLength: 1
+      channel_count:
+        title: Channel count
+        type: integer
+        readOnly: true
+      m3u_account_count:
+        title: M3u account count
+        type: integer
+        readOnly: true
+      m3u_accounts:
+        type: array
+        items:
+          $ref: '#/definitions/ChannelGroupM3UAccount'
+        readOnly: true
+  Logo:
+    required:
+    - name
+    - url
+    type: object
+    properties:
+      id:
+        title: ID
+        type: integer
+        readOnly: true
+      name:
+        title: Name
+        type: string
+        maxLength: 255
+        minLength: 1
+      url:
+        title: Url
+        type: string
+        minLength: 1
+      cache_url:
+        title: Cache url
+        type: string
+        readOnly: true
+      channel_count:
+        title: Channel count
+        type: string
+        readOnly: true
+      is_used:
+        title: Is used
+        type: string
+        readOnly: true
+      channel_names:
+        title: Channel names
+        type: string
+        readOnly: true
+  ChannelProfile:
+    required:
+    - name
+    type: object
+    properties:
+      id:
+        title: ID
+        type: integer
+        readOnly: true
+      name:
+        title: Name
+        type: string
+        maxLength: 100
+        minLength: 1
+      channels:
+        title: Channels
+        type: string
+        readOnly: true
+  Recording:
+    required:
+    - start_time
+    - end_time
+    - channel
+    type: object
+    properties:
+      id:
+        title: ID
+        type: integer
+        readOnly: true
+      start_time:
+        title: Start time
+        type: string
+        format: date-time
+      end_time:
+        title: End time
+        type: string
+        format: date-time
+      task_id:
+        title: Task id
+        type: string
+        readOnly: true
+        minLength: 1
+        x-nullable: true
+      custom_properties:
+        title: Custom properties
+        type: object
+        x-nullable: true
+      channel:
+        title: Channel
+        type: integer
+  RecurringRecordingRule:
+    required:
+    - start_time
+    - end_time
+    - channel
+    type: object
+    properties:
+      id:
+        title: ID
+        type: integer
+        readOnly: true
+      days_of_week:
+        title: Days of week
+        type: object
+      start_time:
+        title: Start time
+        type: string
+      end_time:
+        title: End time
+        type: string
+      enabled:
+        title: Enabled
+        type: boolean
+      name:
+        title: Name
+        type: string
+        maxLength: 255
+      start_date:
+        title: Start date
+        type: string
+        format: date
+        x-nullable: true
+      end_date:
+        title: End date
+        type: string
+        format: date
+        x-nullable: true
+      created_at:
+        title: Created at
+        type: string
+        format: date-time
+        readOnly: true
+      updated_at:
+        title: Updated at
+        type: string
+        format: date-time
+        readOnly: true
+      channel:
+        title: Channel
+        type: integer
+  Stream:
+    type: object
+    properties:
+      id:
+        title: ID
+        type: integer
+        readOnly: true
+      name:
+        title: Name
+        type: string
+        maxLength: 255
+        minLength: 1
+      url:
+        title: Url
+        type: string
+        x-nullable: true
+      m3u_account:
+        title: M3u account
+        type: integer
+        x-nullable: true
+      logo_url:
+        title: Logo url
+        type: string
+        x-nullable: true
+      tvg_id:
+        title: Tvg id
+        type: string
+        maxLength: 255
+        x-nullable: true
+      local_file:
+        title: Local file
+        type: string
+        readOnly: true
+        x-nullable: true
+        format: uri
+      current_viewers:
+        title: Current viewers
+        type: integer
+        maximum: 2147483647
+        minimum: 0
+      updated_at:
+        title: Updated at
+        type: string
+        format: date-time
+        readOnly: true
+      last_seen:
+        title: Last seen
+        type: string
+        format: date-time
+      stream_profile_id:
+        title: Stream profile id
+        type: integer
+        x-nullable: true
+      is_custom:
+        title: Is custom
+        description: Whether this is a user-created stream or from an M3U account
+        type: boolean
+      channel_group:
+        title: Channel group
+        type: integer
+        x-nullable: true
+      stream_hash:
+        title: Stream hash
+        description: Unique hash for this stream from the M3U account
+        type: string
+        maxLength: 255
+        minLength: 1
+        x-nullable: true
+      stream_stats:
+        title: Stream stats
+        description: JSON object containing stream statistics like video codec, resolution,
+          etc.
+        type: object
+        x-nullable: true
+      stream_stats_updated_at:
+        title: Stream stats updated at
+        description: When stream statistics were last updated
+        type: string
+        format: date-time
+        x-nullable: true
+  CoreSettings:
+    required:
+    - key
+    - name
+    - value
+    type: object
+    properties:
+      id:
+        title: ID
+        type: integer
+        readOnly: true
+      key:
+        title: Key
+        type: string
+        maxLength: 255
+        minLength: 1
+      name:
+        title: Name
+        type: string
+        maxLength: 255
+        minLength: 1
+      value:
+        title: Value
+        type: string
+        maxLength: 255
+        minLength: 1
+  StreamProfile:
+    required:
+    - name
+    type: object
+    properties:
+      id:
+        title: ID
+        type: integer
+        readOnly: true
+      name:
+        title: Name
+        description: Name of the stream profile
+        type: string
+        maxLength: 255
+        minLength: 1
+      command:
+        title: Command
+        description: Command to execute (e.g., 'yt.sh', 'streamlink', or 'vlc')
+        type: string
+        maxLength: 255
+      parameters:
+        title: Parameters
+        description: Command-line parameters. Use {userAgent} and {streamUrl} as placeholders.
+        type: string
+      is_active:
+        title: Is active
+        description: Whether this profile is active
+        type: boolean
+      user_agent:
+        title: User agent
+        description: Optional user agent to use. If not set, you can fall back to
+          a default.
+        type: integer
+        x-nullable: true
+      locked:
+        title: Locked
+        description: Protected - can't be deleted or modified
+        type: boolean
+  UserAgent:
+    required:
+    - name
+    - user_agent
+    type: object
+    properties:
+      id:
+        title: ID
+        type: integer
+        readOnly: true
+      name:
+        title: Name
+        description: The User-Agent name.
+        type: string
+        maxLength: 512
+        minLength: 1
+      user_agent:
+        title: User agent
+        description: The complete User-Agent string sent by the client.
+        type: string
+        maxLength: 512
+        minLength: 1
+      description:
+        title: Description
+        description: An optional description of the client or device type.
+        type: string
+        maxLength: 255
+      is_active:
+        title: Is active
+        description: Whether this user agent is currently allowed/recognized.
+        type: boolean
+      created_at:
+        title: Created at
+        type: string
+        format: date-time
+        readOnly: true
+      updated_at:
+        title: Updated at
+        type: string
+        format: date-time
+        readOnly: true
+  EPGData:
+    required:
+    - name
+    type: object
+    properties:
+      id:
+        title: ID
+        type: integer
+        readOnly: true
+      tvg_id:
+        title: Tvg id
+        type: string
+        maxLength: 255
+        x-nullable: true
+      name:
+        title: Name
+        type: string
+        maxLength: 255
+        minLength: 1
+      icon_url:
+        title: Icon url
+        type: string
+        format: uri
+        maxLength: 500
+        x-nullable: true
+      epg_source:
+        title: Epg source
+        type: integer
+        x-nullable: true
+  ProgramData:
+    required:
+    - start_time
+    - end_time
+    - title
+    type: object
+    properties:
+      id:
+        title: ID
+        type: integer
+        readOnly: true
+      start_time:
+        title: Start time
+        type: string
+        format: date-time
+      end_time:
+        title: End time
+        type: string
+        format: date-time
+      title:
+        title: Title
+        type: string
+        maxLength: 255
+        minLength: 1
+      sub_title:
+        title: Sub title
+        type: string
+        x-nullable: true
+      description:
+        title: Description
+        type: string
+        x-nullable: true
+      tvg_id:
+        title: Tvg id
+        type: string
+        maxLength: 255
+        x-nullable: true
+  EPGSource:
+    required:
+    - name
+    - source_type
+    type: object
+    properties:
+      id:
+        title: ID
+        type: integer
+        readOnly: true
+      name:
+        title: Name
+        type: string
+        maxLength: 255
+        minLength: 1
+      source_type:
+        title: Source type
+        type: string
+        enum:
+        - xmltv
+        - schedules_direct
+        - dummy
+      url:
+        title: Url
+        type: string
+        x-nullable: true
+      api_key:
+        title: Api key
+        type: string
+        maxLength: 255
+        x-nullable: true
+      is_active:
+        title: Is active
+        type: boolean
+      file_path:
+        title: File path
+        type: string
+        maxLength: 1024
+        x-nullable: true
+      refresh_interval:
+        title: Refresh interval
+        type: integer
+        maximum: 2147483647
+        minimum: -2147483648
+      priority:
+        title: Priority
+        description: Priority for EPG matching (higher numbers = higher priority).
+          Used when multiple EPG sources have matching entries for a channel.
+        type: integer
+        maximum: 2147483647
+        minimum: 0
+      status:
+        title: Status
+        type: string
+        enum:
+        - idle
+        - fetching
+        - parsing
+        - error
+        - success
+        - disabled
+      last_message:
+        title: Last message
+        description: Last status message, including success results or error information
+        type: string
+        x-nullable: true
+      created_at:
+        title: Created at
+        description: Time when this source was created
+        type: string
+        format: date-time
+        readOnly: true
+      updated_at:
+        title: Updated at
+        description: Time when this source was last successfully refreshed
+        type: string
+        format: date-time
+        x-nullable: true
+      custom_properties:
+        title: Custom properties
+        description: Custom properties for dummy EPG configuration (regex patterns,
+          timezone, duration, etc.)
+        type: object
+        x-nullable: true
+      epg_data_count:
+        title: Epg data count
+        type: string
+        readOnly: true
+  HDHRDevice:
+    required:
+    - device_id
+    type: object
+    properties:
+      id:
+        title: ID
+        type: integer
+        readOnly: true
+      friendly_name:
+        title: Friendly name
+        type: string
+        maxLength: 100
+        minLength: 1
+      device_id:
+        title: Device id
+        type: string
+        maxLength: 32
+        minLength: 1
+      tuner_count:
+        title: Tuner count
+        type: integer
+        maximum: 2147483647
+        minimum: 0
+  M3UAccountProfile:
+    required:
+    - name
+    type: object
+    properties:
+      id:
+        title: ID
+        type: integer
+        readOnly: true
+      name:
+        title: Name
+        description: Name for the M3U account profile
+        type: string
+        maxLength: 255
+        minLength: 1
+      max_streams:
+        title: Max streams
+        description: Maximum number of concurrent streams (0 for unlimited)
+        type: integer
+        maximum: 2147483647
+        minimum: 0
+      is_active:
+        title: Is active
+        description: Set to false to deactivate this profile
+        type: boolean
+      is_default:
+        title: Is default
+        description: Set to false to deactivate this profile
+        type: boolean
+      current_viewers:
+        title: Current viewers
+        type: integer
+        maximum: 2147483647
+        minimum: 0
+      search_pattern:
+        title: Search pattern
+        type: string
+        maxLength: 255
+      replace_pattern:
+        title: Replace pattern
+        type: string
+        maxLength: 255
+      custom_properties:
+        title: Custom properties
+        description: Custom properties for storing account information from provider
+          (e.g., XC account details, expiration dates)
+        type: object
+        x-nullable: true
+      account:
+        title: Account
+        type: string
+        readOnly: true
+  M3UAccount:
+    required:
+    - name
+    type: object
+    properties:
+      id:
+        title: ID
+        type: integer
+        readOnly: true
+      name:
+        title: Name
+        description: Unique name for this M3U account
+        type: string
+        maxLength: 255
+        minLength: 1
+      server_url:
+        title: Server url
+        type: string
+        x-nullable: true
+      file_path:
+        title: File path
+        type: string
+        maxLength: 255
+        x-nullable: true
+      server_group:
+        title: Server group
+        description: The server group this M3U account belongs to
+        type: integer
+        x-nullable: true
+      max_streams:
+        title: Max streams
+        description: Maximum number of concurrent streams (0 for unlimited)
+        type: integer
+        maximum: 2147483647
+        minimum: 0
+      is_active:
+        title: Is active
+        description: Set to false to deactivate this M3U account
+        type: boolean
+      created_at:
+        title: Created at
+        description: Time when this account was created
+        type: string
+        format: date-time
+        readOnly: true
+      updated_at:
+        title: Updated at
+        description: Time when this account was last successfully refreshed
+        type: string
+        format: date-time
+        x-nullable: true
+      filters:
+        title: Filters
+        type: string
+        readOnly: true
+      user_agent:
+        title: User agent
+        type: integer
+        x-nullable: true
+      profiles:
+        type: array
+        items:
+          $ref: '#/definitions/M3UAccountProfile'
+        readOnly: true
+      locked:
+        title: Locked
+        description: Protected - can't be deleted or modified
+        type: boolean
+      channel_groups:
+        type: array
+        items:
+          $ref: '#/definitions/ChannelGroupM3UAccount'
+      refresh_interval:
+        title: Refresh interval
+        type: integer
+        maximum: 2147483647
+        minimum: -2147483648
+      custom_properties:
+        title: Custom properties
+        type: object
+        x-nullable: true
+      account_type:
+        title: Account type
+        type: string
+        enum:
+        - STD
+        - XC
+      username:
+        title: Username
+        type: string
+        maxLength: 255
+        x-nullable: true
+      password:
+        title: Password
+        type: string
+        maxLength: 255
+        x-nullable: true
+      stale_stream_days:
+        title: Stale stream days
+        description: Number of days after which a stream will be removed if not seen
+          in the M3U source.
+        type: integer
+        maximum: 2147483647
+        minimum: 0
+      priority:
+        title: Priority
+        description: Priority for VOD provider selection (higher numbers = higher
+          priority). Used when multiple providers offer the same content.
+        type: integer
+        maximum: 2147483647
+        minimum: 0
+      status:
+        title: Status
+        type: string
+        enum:
+        - idle
+        - fetching
+        - parsing
+        - error
+        - success
+        - pending_setup
+        - disabled
+      last_message:
+        title: Last message
+        description: Last status message, including success results or error information
+        type: string
+        x-nullable: true
+      enable_vod:
+        title: Enable vod
+        type: boolean
+      auto_enable_new_groups_live:
+        title: Auto enable new groups live
+        type: boolean
+      auto_enable_new_groups_vod:
+        title: Auto enable new groups vod
+        type: boolean
+      auto_enable_new_groups_series:
+        title: Auto enable new groups series
+        type: boolean
+  M3UFilter:
+    required:
+    - regex_pattern
+    type: object
+    properties:
+      id:
+        title: ID
+        type: integer
+        readOnly: true
+      filter_type:
+        title: Filter type
+        description: Filter based on either group title or stream name.
+        type: string
+        enum:
+        - group
+        - name
+        - url
+      regex_pattern:
+        title: Regex pattern
+        description: A regex pattern to match streams or groups.
+        type: string
+        maxLength: 200
+        minLength: 1
+      exclude:
+        title: Exclude
+        description: If True, matching items are excluded; if False, only matches
+          are included.
+        type: boolean
+      order:
+        title: Order
+        type: integer
+        maximum: 2147483647
+        minimum: 0
+      custom_properties:
+        title: Custom properties
+        type: object
+        x-nullable: true
+  ServerGroup:
+    required:
+    - name
+    type: object
+    properties:
+      id:
+        title: ID
+        type: integer
+        readOnly: true
+      name:
+        title: Name
+        description: Unique name for this server group.
+        type: string
+        maxLength: 100
+        minLength: 1
+  VODLogo:
+    required:
+    - name
+    - url
+    type: object
+    properties:
+      id:
+        title: ID
+        type: integer
+        readOnly: true
+      name:
+        title: Name
+        type: string
+        maxLength: 255
+        minLength: 1
+      url:
+        title: Url
+        type: string
+        minLength: 1
+      cache_url:
+        title: Cache url
+        type: string
+        readOnly: true
+      movie_count:
+        title: Movie count
+        type: string
+        readOnly: true
+      series_count:
+        title: Series count
+        type: string
+        readOnly: true
+      is_used:
+        title: Is used
+        type: string
+        readOnly: true
+      item_names:
+        title: Item names
+        type: string
+        readOnly: true
+  Movie:
+    required:
+    - name
+    type: object
+    properties:
+      id:
+        title: ID
+        type: integer
+        readOnly: true
+      logo:
+        $ref: '#/definitions/VODLogo'
+      uuid:
+        title: Uuid
+        type: string
+        format: uuid
+        readOnly: true
+      name:
+        title: Name
+        type: string
+        maxLength: 255
+        minLength: 1
+      description:
+        title: Description
+        type: string
+        x-nullable: true
+      year:
+        title: Year
+        type: integer
+        maximum: 2147483647
+        minimum: -2147483648
+        x-nullable: true
+      rating:
+        title: Rating
+        type: string
+        maxLength: 10
+        x-nullable: true
+      genre:
+        title: Genre
+        type: string
+        maxLength: 255
+        x-nullable: true
+      duration_secs:
+        title: Duration secs
+        description: Duration in seconds
+        type: integer
+        maximum: 2147483647
+        minimum: -2147483648
+        x-nullable: true
+      tmdb_id:
+        title: Tmdb id
+        description: TMDB ID for metadata
+        type: string
+        maxLength: 50
+        x-nullable: true
+      imdb_id:
+        title: Imdb id
+        description: IMDB ID for metadata
+        type: string
+        maxLength: 50
+        x-nullable: true
+      custom_properties:
+        title: Custom properties
+        description: Additional metadata and properties for the movie
+        type: object
+        x-nullable: true
+      created_at:
+        title: Created at
+        type: string
+        format: date-time
+        readOnly: true
+      updated_at:
+        title: Updated at
+        type: string
+        format: date-time
+        readOnly: true
+  M3UVODCategoryRelation:
+    required:
+    - category
+    - m3u_account
+    type: object
+    properties:
+      category:
+        title: Category
+        type: integer
+      m3u_account:
+        title: M3u account
+        type: integer
+      enabled:
+        title: Enabled
+        description: Set to false to deactivate this category for the M3U account
+        type: boolean
+  VODCategory:
+    required:
+    - name
+    type: object
+    properties:
+      id:
+        title: ID
+        type: integer
+        readOnly: true
+      name:
+        title: Name
+        type: string
+        maxLength: 255
+        minLength: 1
+      category_type:
+        title: Category type
+        description: Type of content this category contains
+        type: string
+        enum:
+        - movie
+        - series
+        default: movie
+      category_type_display:
+        title: Category type display
+        type: string
+        readOnly: true
+        minLength: 1
+      m3u_accounts:
+        type: array
+        items:
+          $ref: '#/definitions/M3UVODCategoryRelation'
+        readOnly: true
+  Series:
+    required:
+    - name
+    type: object
+    properties:
+      id:
+        title: ID
+        type: integer
+        readOnly: true
+      logo:
+        $ref: '#/definitions/VODLogo'
+      episode_count:
+        title: Episode count
+        type: string
+        readOnly: true
+      uuid:
+        title: Uuid
+        type: string
+        format: uuid
+        readOnly: true
+      name:
+        title: Name
+        type: string
+        maxLength: 255
+        minLength: 1
+      description:
+        title: Description
+        type: string
+        x-nullable: true
+      year:
+        title: Year
+        type: integer
+        maximum: 2147483647
+        minimum: -2147483648
+        x-nullable: true
+      rating:
+        title: Rating
+        type: string
+        maxLength: 10
+        x-nullable: true
+      genre:
+        title: Genre
+        type: string
+        maxLength: 255
+        x-nullable: true
+      tmdb_id:
+        title: Tmdb id
+        description: TMDB ID for metadata
+        type: string
+        maxLength: 50
+        x-nullable: true
+      imdb_id:
+        title: Imdb id
+        description: IMDB ID for metadata
+        type: string
+        maxLength: 50
+        x-nullable: true
+      custom_properties:
+        title: Custom properties
+        description: Additional metadata and properties for the series
+        type: object
+        x-nullable: true
+      created_at:
+        title: Created at
+        type: string
+        format: date-time
+        readOnly: true
+      updated_at:
+        title: Updated at
+        type: string
+        format: date-time
+        readOnly: true
+  Episode:
+    required:
+    - name
+    type: object
+    properties:
+      id:
+        title: ID
+        type: integer
+        readOnly: true
+      series:
+        $ref: '#/definitions/Series'
+      uuid:
+        title: Uuid
+        type: string
+        format: uuid
+        readOnly: true
+      name:
+        title: Name
+        type: string
+        maxLength: 255
+        minLength: 1
+      description:
+        title: Description
+        type: string
+        x-nullable: true
+      air_date:
+        title: Air date
+        type: string
+        format: date
+        x-nullable: true
+      rating:
+        title: Rating
+        type: string
+        maxLength: 10
+        x-nullable: true
+      duration_secs:
+        title: Duration secs
+        description: Duration in seconds
+        type: integer
+        maximum: 2147483647
+        minimum: -2147483648
+        x-nullable: true
+      season_number:
+        title: Season number
+        type: integer
+        maximum: 2147483647
+        minimum: -2147483648
+        x-nullable: true
+      episode_number:
+        title: Episode number
+        type: integer
+        maximum: 2147483647
+        minimum: -2147483648
+        x-nullable: true
+      tmdb_id:
+        title: Tmdb id
+        description: TMDB ID for metadata
+        type: string
+        maxLength: 50
+        x-nullable: true
+      imdb_id:
+        title: Imdb id
+        description: IMDB ID for metadata
+        type: string
+        maxLength: 50
+        x-nullable: true
+      custom_properties:
+        title: Custom properties
+        description: Custom properties for this episode
+        type: object
+        x-nullable: true
+      created_at:
+        title: Created at
+        type: string
+        format: date-time
+        readOnly: true
+      updated_at:
+        title: Updated at
+        type: string
+        format: date-time
+        readOnly: true
