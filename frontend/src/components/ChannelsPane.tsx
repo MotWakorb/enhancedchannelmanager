@@ -1214,23 +1214,20 @@ export function ChannelsPane({
 
 
   // Sync local channels with props
-  // In edit mode, we only sync when entering/exiting edit mode, not on every channels change
-  // This prevents the parent's state update (from channel creation) from overwriting our local changes
+  // In edit mode, we sync when:
+  // 1. Entering edit mode (to pick up latest channels)
+  // 2. When channels prop changes AND we're not actively dragging (for undo/redo)
+  // We DON'T sync during drag operations to preserve local reordering state
   useEffect(() => {
     if (!isEditMode) {
       // Not in edit mode - always sync with props
       setLocalChannels(channels);
-    }
-  }, [channels, isEditMode]);
-
-  // Sync when entering edit mode (to pick up latest channels)
-  useEffect(() => {
-    if (isEditMode) {
+    } else if (activeDragId === null) {
+      // In edit mode and not dragging - sync for undo/redo
       setLocalChannels(channels);
     }
-    // Only run when isEditMode changes, not when channels change
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isEditMode]);
+    // When actively dragging, don't sync to preserve drag state
+  }, [channels, isEditMode, activeDragId]);
 
   // Close dropdowns when clicking outside
   useEffect(() => {
