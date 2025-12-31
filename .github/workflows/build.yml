@@ -100,6 +100,8 @@ jobs:
           soft_fail: false
           output_format: cli
           download_external_modules: false
+          # Skip CKV2_GHA_1 - CodeQL requires security-events:write permission
+          skip_check: CKV2_GHA_1
 
   # DAST - Dynamic Application Security Testing
   dast-scan:

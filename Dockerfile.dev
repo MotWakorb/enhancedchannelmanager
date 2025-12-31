@@ -8,4 +8,11 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Don't copy code - we mount it as volume for hot reload
 EXPOSE 8000
 
+# Add healthcheck for development
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+  CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')" || exit 1
+
+# Run as non-root user (note: may need adjustment for volume mounts)
+USER 1000
+
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
