@@ -628,9 +628,9 @@ function App() {
           setChannelGroups(updatedGroups);
         }
 
-        // Create channels with streams
+        // Create channels with streams (include logo_url for auto-assignment)
         const result = await api.bulkCreateChannelsFromStreams(
-          streamsToCreate.map(s => ({ id: s.id, name: s.name })),
+          streamsToCreate.map(s => ({ id: s.id, name: s.name, logo_url: s.logo_url })),
           startingNumber,
           targetGroupId
         );
