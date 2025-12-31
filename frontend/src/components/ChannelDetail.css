@@ -1,0 +1,193 @@
+.channel-detail {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background-color: #252525;
+  border-left: 1px solid #333;
+  min-width: 300px;
+  max-width: 400px;
+}
+
+.detail-header {
+  display: flex;
+  align-items: flex-start;
+  padding: 1rem;
+  border-bottom: 1px solid #333;
+  gap: 0.75rem;
+}
+
+.close-btn {
+  background: none;
+  border: none;
+  color: #888;
+  font-size: 1.25rem;
+  cursor: pointer;
+  padding: 0.25rem 0.5rem;
+  border-radius: 4px;
+}
+
+.close-btn:hover {
+  background-color: #333;
+  color: #fff;
+}
+
+.channel-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.channel-number-row {
+  margin-bottom: 0.25rem;
+}
+
+.channel-number {
+  font-size: 0.9rem;
+  color: #888;
+  font-family: monospace;
+}
+
+.channel-number.editable {
+  cursor: pointer;
+  padding: 0.125rem 0.25rem;
+  border-radius: 3px;
+}
+
+.channel-number.editable:hover {
+  background-color: #333;
+  color: #fff;
+}
+
+.number-input {
+  width: 80px;
+  padding: 0.25rem 0.5rem;
+  background-color: #2d2d2d;
+  border: 1px solid #646cff;
+  border-radius: 4px;
+  color: #fff;
+  font-size: 0.9rem;
+  font-family: monospace;
+}
+
+.number-input:focus {
+  outline: none;
+}
+
+.channel-name {
+  font-size: 1.1rem;
+  font-weight: 500;
+  margin: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.detail-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 1rem;
+}
+
+.detail-content h4 {
+  font-size: 0.85rem;
+  color: #888;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin: 0 0 1rem 0;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.hint {
+  font-size: 0.7rem;
+  color: #555;
+  font-weight: normal;
+  text-transform: none;
+  letter-spacing: normal;
+}
+
+.loading,
+.empty-state {
+  text-align: center;
+  color: #666;
+  padding: 2rem 1rem;
+  font-size: 0.9rem;
+}
+
+.streams-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.stream-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.priority-number {
+  width: 1.5rem;
+  text-align: center;
+  font-size: 0.8rem;
+  color: #666;
+  font-family: monospace;
+}
+
+.stream-detail-item {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  padding: 0.5rem;
+  background-color: #2a2a2a;
+  border-radius: 4px;
+  gap: 0.5rem;
+}
+
+.stream-detail-item .drag-handle {
+  color: #555;
+  cursor: grab;
+  padding: 0 0.25rem;
+  user-select: none;
+}
+
+.stream-detail-item .drag-handle:active {
+  cursor: grabbing;
+}
+
+.stream-detail-item .stream-logo {
+  width: 24px;
+  height: 24px;
+  object-fit: contain;
+  border-radius: 3px;
+  background-color: #1a1a1a;
+}
+
+.stream-detail-item .stream-name {
+  flex: 1;
+  font-size: 0.9rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.remove-btn {
+  background: none;
+  border: none;
+  color: #666;
+  font-size: 0.9rem;
+  cursor: pointer;
+  padding: 0.25rem 0.5rem;
+  border-radius: 3px;
+  opacity: 0;
+  transition: opacity 0.15s, background-color 0.15s;
+}
+
+.stream-detail-item:hover .remove-btn {
+  opacity: 1;
+}
+
+.remove-btn:hover {
+  background-color: #f8717133;
+  color: #f87171;
+}

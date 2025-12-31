@@ -1,0 +1,329 @@
+/* Edit Mode Toggle Button */
+.edit-mode-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.375rem 0.75rem;
+  background-color: #333;
+  border: 1px solid #444;
+  color: #ccc;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.85rem;
+  transition: background-color 0.15s, border-color 0.15s, color 0.15s;
+}
+
+.edit-mode-toggle:hover:not(:disabled) {
+  background-color: #444;
+  color: #fff;
+}
+
+.edit-mode-toggle:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.edit-mode-toggle.active {
+  background-color: rgba(74, 222, 128, 0.2);
+  border-color: #4ade80;
+  color: #4ade80;
+}
+
+.edit-mode-toggle.active:hover:not(:disabled) {
+  background-color: rgba(74, 222, 128, 0.3);
+}
+
+.edit-mode-icon {
+  font-size: 18px;
+}
+
+.edit-mode-label {
+  font-weight: 500;
+}
+
+.edit-mode-count {
+  background-color: #4ade80;
+  color: #1a1a1a;
+  padding: 0.125rem 0.375rem;
+  border-radius: 8px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  min-width: 1.25rem;
+  text-align: center;
+}
+
+/* Edit Mode Banner */
+.edit-mode-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.5rem 1rem;
+  background-color: rgba(100, 108, 255, 0.15);
+  border-bottom: 1px solid rgba(100, 108, 255, 0.3);
+  color: #a5b4fc;
+}
+
+.edit-mode-banner.warning {
+  background-color: rgba(251, 191, 36, 0.15);
+  border-bottom-color: rgba(251, 191, 36, 0.3);
+}
+
+.edit-mode-banner-content {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.edit-mode-banner-icon {
+  font-size: 18px;
+}
+
+.edit-mode-banner-text {
+  font-weight: 500;
+}
+
+.edit-mode-banner-count {
+  color: #c7d2fe;
+}
+
+.edit-mode-banner-duration {
+  color: #818cf8;
+  font-size: 0.85rem;
+}
+
+.edit-mode-banner-warning {
+  color: #fbbf24;
+  font-size: 0.85rem;
+  font-style: italic;
+}
+
+.edit-mode-banner-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.edit-mode-banner-btn {
+  padding: 0.25rem 0.625rem;
+  border-radius: 3px;
+  font-size: 0.8rem;
+  font-weight: 500;
+  cursor: pointer;
+  border: none;
+  transition: background-color 0.15s;
+}
+
+.edit-mode-banner-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.edit-mode-banner-btn.discard {
+  display: flex;
+  align-items: center;
+  background-color: rgba(248, 113, 113, 0.2);
+  color: #f87171;
+}
+
+.edit-mode-banner-btn.discard:hover:not(:disabled) {
+  background-color: rgba(248, 113, 113, 0.35);
+}
+
+.edit-mode-banner-btn.apply {
+  background-color: rgba(74, 222, 128, 0.2);
+  color: #4ade80;
+}
+
+.edit-mode-banner-btn.apply:hover:not(:disabled) {
+  background-color: rgba(74, 222, 128, 0.35);
+}
+
+/* Exit Dialog Overlay */
+.edit-mode-dialog-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10000;
+}
+
+.edit-mode-dialog {
+  background-color: #2d2d2d;
+  border: 1px solid #404040;
+  border-radius: 8px;
+  width: 90%;
+  max-width: 450px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+}
+
+.edit-mode-dialog-header {
+  padding: 1rem 1.25rem;
+  border-bottom: 1px solid #3d3d3d;
+}
+
+.edit-mode-dialog-header h2 {
+  margin: 0;
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: #fff;
+}
+
+.edit-mode-dialog-content {
+  padding: 1.25rem;
+}
+
+.edit-mode-dialog-summary-intro {
+  margin: 0 0 0.75rem;
+  color: #ccc;
+}
+
+.edit-mode-dialog-summary {
+  margin: 0 0 1rem;
+  padding-left: 1.5rem;
+  color: #a8a8a8;
+}
+
+.edit-mode-dialog-summary li {
+  margin-bottom: 0.25rem;
+}
+
+.edit-mode-dialog-question {
+  margin: 0;
+  color: #fff;
+  font-weight: 500;
+}
+
+.edit-mode-dialog-no-changes {
+  margin: 0;
+  color: #888;
+  text-align: center;
+  font-style: italic;
+}
+
+/* Toggle button for showing details */
+.edit-mode-dialog-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  background: none;
+  border: none;
+  color: #818cf8;
+  font-size: 0.85rem;
+  cursor: pointer;
+  padding: 0.5rem 0;
+  margin: 0.5rem 0;
+}
+
+.edit-mode-dialog-toggle:hover {
+  color: #a5b4fc;
+}
+
+.edit-mode-dialog-toggle .toggle-icon {
+  font-size: 18px;
+}
+
+/* Detailed change list */
+.edit-mode-dialog-details {
+  max-height: 200px;
+  overflow-y: auto;
+  background-color: #252525;
+  border: 1px solid #3d3d3d;
+  border-radius: 4px;
+  padding: 0.5rem;
+  margin-bottom: 1rem;
+}
+
+.operation-detail {
+  display: flex;
+  gap: 0.5rem;
+  padding: 0.375rem 0.5rem;
+  font-size: 0.85rem;
+  border-bottom: 1px solid #333;
+}
+
+.operation-detail:last-child {
+  border-bottom: none;
+}
+
+.operation-number {
+  color: #666;
+  min-width: 1.5rem;
+  text-align: right;
+}
+
+.operation-description {
+  color: #ccc;
+  flex: 1;
+}
+
+.edit-mode-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  padding: 1rem 1.25rem;
+  border-top: 1px solid #3d3d3d;
+  background-color: #262626;
+  border-radius: 0 0 8px 8px;
+}
+
+.edit-mode-dialog-btn {
+  padding: 0.5rem 1rem;
+  border-radius: 4px;
+  font-size: 0.85rem;
+  font-weight: 500;
+  cursor: pointer;
+  border: none;
+  transition: background-color 0.15s;
+}
+
+.edit-mode-dialog-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.edit-mode-dialog-btn.secondary {
+  background-color: #404040;
+  color: #ccc;
+}
+
+.edit-mode-dialog-btn.secondary:hover:not(:disabled) {
+  background-color: #4a4a4a;
+}
+
+.edit-mode-dialog-btn.danger {
+  background-color: rgba(248, 113, 113, 0.2);
+  color: #f87171;
+}
+
+.edit-mode-dialog-btn.danger:hover:not(:disabled) {
+  background-color: rgba(248, 113, 113, 0.35);
+}
+
+.edit-mode-dialog-btn.primary {
+  background-color: #646cff;
+  color: #fff;
+}
+
+.edit-mode-dialog-btn.primary:hover:not(:disabled) {
+  background-color: #535bf2;
+}
+
+/* Modified channel indicator */
+.channel-modified {
+  position: relative;
+}
+
+.channel-modified::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  background-color: #646cff;
+}
