@@ -67,6 +67,8 @@ interface ChannelsPaneProps {
   onStageRemoveStream?: (channelId: number, streamId: number, description: string) => void;
   onStageReorderStreams?: (channelId: number, streamIds: number[], description: string) => void;
   onStageBulkAssignNumbers?: (channelIds: number[], startingNumber: number, description: string) => void;
+  onStartBatch?: (description: string) => void;
+  onEndBatch?: () => void;
   // Edit mode toggle props
   onEnterEditMode?: () => void;
   onExitEditMode?: () => void;
@@ -1073,6 +1075,8 @@ export function ChannelsPane({
   onStageRemoveStream,
   onStageReorderStreams,
   onStageBulkAssignNumbers: _onStageBulkAssignNumbers, // Handled in App.tsx for channel reorder
+  onStartBatch,
+  onEndBatch,
   // Edit mode toggle props
   onEnterEditMode,
   onExitEditMode,
@@ -2353,6 +2357,11 @@ export function ChannelsPane({
 
       // Stage individual updates for channels that need renaming
       if (isEditMode && onStageUpdateChannel) {
+        // Start a batch if there are multiple updates
+        if (channelUpdates.length > 1 && onStartBatch) {
+          onStartBatch(`Reorder channels within group`);
+        }
+
         for (const update of channelUpdates) {
           if (update.newName) {
             // Channel needs both number and name update
@@ -2364,6 +2373,11 @@ export function ChannelsPane({
             const description = `Changed channel number from ${ch?.channel_number ?? '-'} to ${update.newNumber}`;
             onStageUpdateChannel(update.id, { channel_number: update.newNumber }, description);
           }
+        }
+
+        // End the batch
+        if (channelUpdates.length > 1 && onEndBatch) {
+          onEndBatch();
         }
       } else {
         // Call API to persist the reorder (without auto-rename - server would need to handle it)
@@ -2446,6 +2460,11 @@ export function ChannelsPane({
 
       // Stage updates for all affected channels
       if (isEditMode && onStageUpdateChannel) {
+        // Start a batch if there are multiple updates
+        if (channelUpdates.length > 1 && onStartBatch) {
+          onStartBatch(`Move channel and shift others`);
+        }
+
         for (const update of channelUpdates) {
           const updateData: { channel_number: number; name?: string } = { channel_number: update.newNumber };
           let description: string;
@@ -2458,6 +2477,11 @@ export function ChannelsPane({
           }
 
           onStageUpdateChannel(update.id, updateData, description);
+        }
+
+        // End the batch
+        if (channelUpdates.length > 1 && onEndBatch) {
+          onEndBatch();
         }
       } else {
         // Normal mode - update via API (this path shouldn't happen since we block non-edit mode earlier)
@@ -2624,6 +2648,17 @@ export function ChannelsPane({
 
     // Stage the changes for moved channels
     if (onStageUpdateChannel) {
+      // Calculate total number of operations to batch
+      const totalOps = channelUpdates.length + shiftUpdates.length + sourceRenumberUpdates.length;
+
+      // Start a batch if there are multiple operations
+      if (totalOps > 1 && onStartBatch) {
+        const channelNames = channelsToMove.length <= 3
+          ? channelsToMove.map(ch => ch.name).join(', ')
+          : `${channelsToMove.length} channels`;
+        onStartBatch(`Move ${channelNames} from "${sourceGroupName}" to "${targetGroupName}"`);
+      }
+
       for (const update of channelUpdates) {
         const { channel, finalChannelNumber, finalName } = update;
         const updates: Partial<Channel> = { channel_group_id: targetGroupId };
@@ -2669,6 +2704,11 @@ export function ChannelsPane({
         }
 
         onStageUpdateChannel(channel.id, updates, description);
+      }
+
+      // End the batch
+      if (totalOps > 1 && onEndBatch) {
+        onEndBatch();
       }
     }
 
