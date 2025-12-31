@@ -10,6 +10,8 @@ A professional-grade web interface for managing TV channels, streams, and metada
 - **Channel Numbering** - Assign channel numbers (including decimal numbers like 4.1)
 - **Auto-Rename** - Optionally update channel names when numbers change (e.g., "101 | ESPN" becomes "102 | ESPN")
 - **Channel Groups** - Organize channels into groups for better organization
+- **Delete Groups** - Delete channel groups with option to also delete contained channels
+- **Bulk Delete** - Select multiple channels and delete them at once
 - **Search & Filter** - Search channels by name, filter by one or more groups
 - **Inline Stream Display** - View assigned streams directly in the channel list
 
@@ -36,9 +38,10 @@ A professional-grade web interface for managing TV channels, streams, and metada
 A unique workflow that lets you stage changes locally before committing to the server:
 
 - **Enter Edit Mode** - Start a new editing session
-- **Stage Changes** - All edits are queued locally
+- **Stage Changes** - All edits are queued locally (including deletes)
 - **Preview Changes** - See pending operations count
 - **Local Undo/Redo** - Undo/redo within your edit session (Ctrl+Z / Ctrl+Shift+Z)
+- **Undoable Deletes** - Channel and group deletions can be undone before committing
 - **Batch Operations** - Group related changes together
 - **Commit or Discard** - Apply all changes at once or discard everything
 - **Exit Dialog** - Review a summary of all changes before committing

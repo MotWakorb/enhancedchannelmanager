@@ -52,6 +52,8 @@ interface ChannelsPaneProps {
   onStageRemoveStream?: (channelId: number, streamId: number, description: string) => void;
   onStageReorderStreams?: (channelId: number, streamIds: number[], description: string) => void;
   onStageBulkAssignNumbers?: (channelIds: number[], startingNumber: number, description: string) => void;
+  onStageDeleteChannel?: (channelId: number, description: string) => void;
+  onStageDeleteChannelGroup?: (groupId: number, description: string) => void;
   onStartBatch?: (description: string) => void;
   onEndBatch?: () => void;
   isCommitting?: boolean;
@@ -1089,6 +1091,8 @@ export function ChannelsPane({
   onStageRemoveStream,
   onStageReorderStreams,
   onStageBulkAssignNumbers: _onStageBulkAssignNumbers, // Handled in App.tsx for channel reorder
+  onStageDeleteChannel,
+  onStageDeleteChannelGroup,
   onStartBatch,
   onEndBatch,
   isCommitting = false,
@@ -1189,6 +1193,7 @@ export function ChannelsPane({
   const [showDeleteGroupConfirm, setShowDeleteGroupConfirm] = useState(false);
   const [groupToDelete, setGroupToDelete] = useState<ChannelGroup | null>(null);
   const [deletingGroup, setDeletingGroup] = useState(false);
+  const [deleteGroupChannels, setDeleteGroupChannels] = useState(false);
 
   // Bulk delete channels state
   const [showBulkDeleteConfirm, setShowBulkDeleteConfirm] = useState(false);
@@ -1509,9 +1514,18 @@ export function ChannelsPane({
         );
       }
 
-      await onDeleteChannel(channelToDelete.id);
-      // Remove from local state
-      setLocalChannels((prev) => prev.filter((ch) => ch.id !== channelToDelete.id));
+      // In edit mode, stage the delete operation for undo support
+      if (isEditMode && onStageDeleteChannel) {
+        const description = `Delete channel "${channelToDelete.name}"`;
+        onStageDeleteChannel(channelToDelete.id, description);
+        // Local state is updated via displayChannels from working copy
+      } else {
+        // Not in edit mode, delete immediately via API
+        await onDeleteChannel(channelToDelete.id);
+        // Remove from local state
+        setLocalChannels((prev) => prev.filter((ch) => ch.id !== channelToDelete.id));
+      }
+
       // Clear selection if deleted channel was selected
       if (selectedChannelId === channelToDelete.id) {
         onChannelSelect(null);
@@ -1542,13 +1556,49 @@ export function ChannelsPane({
 
   // Handle confirming group deletion
   const handleConfirmDeleteGroup = async () => {
-    if (!groupToDelete || !onDeleteChannelGroup) return;
+    if (!groupToDelete) return;
 
     setDeletingGroup(true);
     try {
-      await onDeleteChannelGroup(groupToDelete.id);
+      // If "also delete channels" is checked, delete the channels first
+      if (deleteGroupChannels && groupToDelete.channel_count > 0) {
+        // Find all channels in this group
+        const channelsInGroup = channels.filter((ch) => ch.channel_group_id === groupToDelete.id);
+
+        if (isEditMode && onStageDeleteChannel && onStartBatch && onEndBatch) {
+          // In edit mode, stage all channel deletes as a batch
+          onStartBatch(`Delete group "${groupToDelete.name}" and ${channelsInGroup.length} channels`);
+          for (const channel of channelsInGroup) {
+            onStageDeleteChannel(channel.id, `Delete channel "${channel.name}"`);
+          }
+          // Stage the group delete
+          if (onStageDeleteChannelGroup) {
+            onStageDeleteChannelGroup(groupToDelete.id, `Delete group "${groupToDelete.name}"`);
+          }
+          onEndBatch();
+        } else {
+          // Not in edit mode, delete channels immediately via API
+          for (const channel of channelsInGroup) {
+            await onDeleteChannel(channel.id);
+          }
+          // Then delete the group
+          if (onDeleteChannelGroup) {
+            await onDeleteChannelGroup(groupToDelete.id);
+          }
+        }
+      } else {
+        // Just delete the group (channels will be moved to ungrouped)
+        if (isEditMode && onStageDeleteChannelGroup) {
+          const description = `Delete group "${groupToDelete.name}"`;
+          onStageDeleteChannelGroup(groupToDelete.id, description);
+        } else if (onDeleteChannelGroup) {
+          await onDeleteChannelGroup(groupToDelete.id);
+        }
+      }
+
       setShowDeleteGroupConfirm(false);
       setGroupToDelete(null);
+      setDeleteGroupChannels(false);
     } catch (err) {
       console.error('Failed to delete group:', err);
     } finally {
@@ -1560,6 +1610,7 @@ export function ChannelsPane({
   const handleCancelDeleteGroup = () => {
     setShowDeleteGroupConfirm(false);
     setGroupToDelete(null);
+    setDeleteGroupChannels(false);
   };
 
   // Handle bulk delete channels
@@ -1573,14 +1624,27 @@ export function ChannelsPane({
 
     setBulkDeleting(true);
     try {
-      // Delete channels one by one
       const channelIdsToDelete = Array.from(selectedChannelIds);
-      for (const channelId of channelIdsToDelete) {
-        await onDeleteChannel(channelId);
-      }
 
-      // Update local state
-      setLocalChannels((prev) => prev.filter((ch) => !selectedChannelIds.has(ch.id)));
+      // In edit mode, stage the delete operations for undo support
+      if (isEditMode && onStageDeleteChannel && onStartBatch && onEndBatch) {
+        // Use batch to group all deletes as a single undo operation
+        onStartBatch(`Delete ${channelIdsToDelete.length} channels`);
+        for (const channelId of channelIdsToDelete) {
+          const channel = channels.find((ch) => ch.id === channelId);
+          const description = `Delete channel "${channel?.name || channelId}"`;
+          onStageDeleteChannel(channelId, description);
+        }
+        onEndBatch();
+        // Local state is updated via displayChannels from working copy
+      } else {
+        // Not in edit mode, delete immediately via API
+        for (const channelId of channelIdsToDelete) {
+          await onDeleteChannel(channelId);
+        }
+        // Update local state
+        setLocalChannels((prev) => prev.filter((ch) => !selectedChannelIds.has(ch.id)));
+      }
 
       // Clear selection
       if (onClearChannelSelection) {
@@ -3471,13 +3535,28 @@ export function ChannelsPane({
                 <strong>{groupToDelete.name}</strong>?
               </p>
               {groupToDelete.channel_count > 0 && (
-                <p className="delete-warning">
-                  This group contains {groupToDelete.channel_count} channel{groupToDelete.channel_count !== 1 ? 's' : ''}.
-                  The channels will be moved to "Ungrouped".
-                </p>
+                <>
+                  <p className="delete-warning">
+                    This group contains {groupToDelete.channel_count} channel{groupToDelete.channel_count !== 1 ? 's' : ''}.
+                    {!deleteGroupChannels && ' The channels will be moved to "Ungrouped".'}
+                  </p>
+                  <div className="delete-group-option">
+                    <label className="delete-channels-checkbox">
+                      <input
+                        type="checkbox"
+                        checked={deleteGroupChannels}
+                        onChange={(e) => setDeleteGroupChannels(e.target.checked)}
+                        disabled={deletingGroup}
+                      />
+                      <span>Also delete the {groupToDelete.channel_count} channel{groupToDelete.channel_count !== 1 ? 's' : ''}</span>
+                    </label>
+                  </div>
+                </>
               )}
               <p className="delete-info">
-                This action cannot be undone.
+                {isEditMode
+                  ? 'Changes can be undone until you click Done.'
+                  : 'This action cannot be undone.'}
               </p>
             </div>
             <div className="modal-actions">
