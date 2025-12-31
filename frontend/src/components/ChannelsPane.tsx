@@ -1160,6 +1160,12 @@ export function ChannelsPane({
 
   // Drag overlay state
   const [activeDragId, setActiveDragId] = useState<number | null>(null);
+  // Drop indicator state - tracks where to show the drop indicator line
+  const [dropIndicator, setDropIndicator] = useState<{
+    channelId: number;
+    position: 'before' | 'after';
+    groupId: number | 'ungrouped';
+  } | null>(null);
 
   // Stream reorder sensors (separate from channel reorder)
   const streamSensors = useSensors(
@@ -1982,13 +1988,80 @@ export function ChannelsPane({
     }
   };
 
-  const handleDragOver = (_event: DragOverEvent) => {
-    // Could add drop zone preview here
+  const handleDragOver = (event: DragOverEvent) => {
+    if (!isEditMode) {
+      setDropIndicator(null);
+      return;
+    }
+
+    const { active, over } = event;
+
+    if (!over) {
+      setDropIndicator(null);
+      return;
+    }
+
+    const activeChannel = localChannels.find((c) => c.id === active.id);
+    if (!activeChannel) {
+      setDropIndicator(null);
+      return;
+    }
+
+    const overId = String(over.id);
+
+    // If hovering over a group header, don't show channel drop indicator
+    if (overId.startsWith('group-')) {
+      setDropIndicator(null);
+      return;
+    }
+
+    // Find the channel being hovered over
+    const overChannel = localChannels.find((c) => c.id === over.id);
+    if (!overChannel) {
+      setDropIndicator(null);
+      return;
+    }
+
+    // Don't show indicator if hovering over the same channel being dragged
+    if (activeChannel.id === overChannel.id) {
+      setDropIndicator(null);
+      return;
+    }
+
+    // Determine the group
+    const groupId = overChannel.channel_group_id ?? 'ungrouped';
+
+    // Determine if we're in the same group or a different group
+    const isSameGroup = activeChannel.channel_group_id === overChannel.channel_group_id;
+
+    // Get group channels to determine position
+    const groupChannels = channelsByGroup[groupId] || [];
+    const overIndex = groupChannels.findIndex((c) => c.id === over.id);
+
+    if (isSameGroup) {
+      // Within same group - determine if dropping before or after based on indices
+      const activeIndex = groupChannels.findIndex((c) => c.id === active.id);
+      const position = overIndex > activeIndex ? 'after' : 'before';
+
+      setDropIndicator({
+        channelId: overChannel.id,
+        position,
+        groupId,
+      });
+    } else {
+      // Cross-group move - show indicator before the target channel
+      setDropIndicator({
+        channelId: overChannel.id,
+        position: 'before',
+        groupId,
+      });
+    }
   };
 
   const handleDragEnd = (event: DragEndEvent) => {
     // Clear drag overlay state
     setActiveDragId(null);
+    setDropIndicator(null);
 
     // Block channel reordering when not in edit mode
     if (!isEditMode) return;
@@ -2388,8 +2461,25 @@ export function ChannelsPane({
               strategy={verticalListSortingStrategy}
             >
               <div className="group-channels">
-                {groupChannels.map((channel) => (
+                {groupChannels.map((channel) => {
+                  // Check if drop indicator should show before this channel
+                  const showIndicatorBefore = dropIndicator &&
+                    dropIndicator.channelId === channel.id &&
+                    dropIndicator.position === 'before' &&
+                    dropIndicator.groupId === groupId;
+                  // Check if drop indicator should show after this channel
+                  const showIndicatorAfter = dropIndicator &&
+                    dropIndicator.channelId === channel.id &&
+                    dropIndicator.position === 'after' &&
+                    dropIndicator.groupId === groupId;
+
+                  return (
                   <div key={channel.id} className="channel-wrapper">
+                    {showIndicatorBefore && (
+                      <div className="channel-drop-indicator">
+                        <div className="drop-indicator-line" />
+                      </div>
+                    )}
                     <SortableChannel
                       channel={channel}
                       isSelected={selectedChannelId === channel.id}
@@ -2457,8 +2547,14 @@ export function ChannelsPane({
                         )}
                       </div>
                     )}
+                    {showIndicatorAfter && (
+                      <div className="channel-drop-indicator">
+                        <div className="drop-indicator-line" />
+                      </div>
+                    )}
                   </div>
-                ))}
+                  );
+                })}
               </div>
             </SortableContext>
         )}
