@@ -773,7 +773,7 @@ export function useEditMode({
     onError,
   ]);
 
-  // Compute edit mode duration with live updates
+  // Compute edit mode duration with live updates (in seconds)
   const [editModeDuration, setEditModeDuration] = useState<number | null>(null);
 
   useEffect(() => {
@@ -782,12 +782,12 @@ export function useEditMode({
       return;
     }
 
-    // Update immediately
-    setEditModeDuration(Date.now() - state.enteredAt);
+    // Update immediately (convert ms to seconds)
+    setEditModeDuration(Math.floor((Date.now() - state.enteredAt) / 1000));
 
     // Update every second
     const interval = setInterval(() => {
-      setEditModeDuration(Date.now() - state.enteredAt!);
+      setEditModeDuration(Math.floor((Date.now() - state.enteredAt!) / 1000));
     }, 1000);
 
     return () => clearInterval(interval);
