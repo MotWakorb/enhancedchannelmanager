@@ -1,0 +1,17 @@
+services:
+  # Production mode - single container with settings stored in config volume
+  ecm:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "6100:8000"
+    volumes:
+      - ecm-config:/config
+    environment:
+      - CONFIG_DIR=/config
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+volumes:
+  ecm-config:

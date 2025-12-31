@@ -1,0 +1,196 @@
+.history-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.history-btn {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.375rem 0.625rem;
+  background-color: #333;
+  border: 1px solid #444;
+  color: #ccc;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.85rem;
+  transition: background-color 0.15s, opacity 0.15s;
+}
+
+.history-btn:hover:not(:disabled) {
+  background-color: #444;
+  color: #fff;
+}
+
+.history-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.history-icon {
+  font-size: 18px;
+  line-height: 1;
+}
+
+.history-count {
+  font-size: 0.7rem;
+  background-color: #555;
+  padding: 0.125rem 0.375rem;
+  border-radius: 8px;
+  min-width: 1.25rem;
+  text-align: center;
+}
+
+.history-divider {
+  width: 1px;
+  height: 1.5rem;
+  background-color: #444;
+  margin: 0 0.25rem;
+}
+
+.save-point-btn {
+  background-color: rgba(100, 108, 255, 0.2);
+  border-color: #646cff;
+}
+
+.save-point-btn:hover:not(:disabled) {
+  background-color: rgba(100, 108, 255, 0.35);
+}
+
+.save-point-icon {
+  font-size: 18px;
+}
+
+.save-points-dropdown {
+  position: relative;
+}
+
+.dropdown-trigger {
+  min-width: 120px;
+}
+
+.dropdown-arrow {
+  font-size: 0.6rem;
+  margin-left: 0.25rem;
+}
+
+.save-points-menu {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  margin-top: 4px;
+  background-color: #2d2d2d;
+  border: 1px solid #404040;
+  border-radius: 4px;
+  min-width: 250px;
+  max-height: 300px;
+  overflow-y: auto;
+  z-index: 1000;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
+.save-point-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid #3d3d3d;
+}
+
+.save-point-item:last-child {
+  border-bottom: none;
+}
+
+.save-point-item:hover {
+  background-color: #363636;
+}
+
+.save-point-info {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+}
+
+.save-point-name {
+  font-size: 0.85rem;
+  color: #ddd;
+}
+
+.save-point-time {
+  font-size: 0.7rem;
+  color: #888;
+}
+
+.save-point-actions {
+  display: flex;
+  gap: 0.375rem;
+}
+
+.save-point-action {
+  padding: 0.25rem 0.5rem;
+  font-size: 0.75rem;
+  border-radius: 3px;
+  cursor: pointer;
+  border: none;
+  transition: background-color 0.15s;
+}
+
+.save-point-action.revert {
+  background-color: rgba(74, 222, 128, 0.2);
+  color: #4ade80;
+}
+
+.save-point-action.revert:hover {
+  background-color: rgba(74, 222, 128, 0.35);
+}
+
+.save-point-action.delete {
+  background-color: transparent;
+  color: #666;
+  padding: 0.125rem 0.25rem;
+  display: flex;
+  align-items: center;
+}
+
+.save-point-action.delete .material-icons {
+  font-size: 16px;
+}
+
+.save-point-action.delete:hover {
+  background-color: rgba(248, 113, 113, 0.2);
+  color: #f87171;
+}
+
+.unsaved-indicator {
+  color: #f59e0b;
+  font-size: 12px;
+  line-height: 1;
+  animation: pulse 2s infinite;
+}
+
+@keyframes pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+
+.pending-indicator {
+  color: #888;
+  font-size: 0.85rem;
+  animation: blink 1s infinite;
+}
+
+@keyframes blink {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.3;
+  }
+}
