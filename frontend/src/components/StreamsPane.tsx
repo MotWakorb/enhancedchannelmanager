@@ -60,6 +60,8 @@ interface StreamsPaneProps {
   ) => Promise<void>;
   // Appearance settings
   showStreamUrls?: boolean;
+  // Refresh streams (bypasses cache)
+  onRefreshStreams?: () => void;
 }
 
 export function StreamsPane({
@@ -84,6 +86,7 @@ export function StreamsPane({
   onExternalTriggerHandled,
   onBulkCreateFromGroup,
   showStreamUrls = true,
+  onRefreshStreams,
 }: StreamsPaneProps) {
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
 
@@ -651,7 +654,19 @@ export function StreamsPane({
   return (
     <div className="streams-pane">
       <div className="pane-header">
-        <h2>Streams</h2>
+        <h2>
+          Streams
+          {onRefreshStreams && (
+            <button
+              className="refresh-streams-btn"
+              onClick={onRefreshStreams}
+              title="Refresh streams from Dispatcharr"
+              disabled={loading}
+            >
+              <span className={`material-icons${loading ? ' spinning' : ''}`}>sync</span>
+            </button>
+          )}
+        </h2>
         {selectedCount > 0 && (
           <div className="selection-info">
             <span className="selection-count">

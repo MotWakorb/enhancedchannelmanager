@@ -139,6 +139,7 @@ export async function getStreams(params?: {
   search?: string;
   channelGroup?: string;
   m3uAccount?: number;
+  bypassCache?: boolean;
 }): Promise<PaginatedResponse<Stream>> {
   const searchParams = new URLSearchParams();
   if (params?.page) searchParams.set('page', String(params.page));
@@ -146,13 +147,24 @@ export async function getStreams(params?: {
   if (params?.search) searchParams.set('search', params.search);
   if (params?.channelGroup) searchParams.set('channel_group_name', params.channelGroup);
   if (params?.m3uAccount) searchParams.set('m3u_account', String(params.m3uAccount));
+  if (params?.bypassCache) searchParams.set('bypass_cache', 'true');
 
   const query = searchParams.toString();
   return fetchJson(`${API_BASE}/streams${query ? `?${query}` : ''}`);
 }
 
-export async function getStreamGroups(): Promise<string[]> {
-  return fetchJson(`${API_BASE}/stream-groups`);
+export async function getStreamGroups(bypassCache?: boolean): Promise<string[]> {
+  const params = bypassCache ? '?bypass_cache=true' : '';
+  return fetchJson(`${API_BASE}/stream-groups${params}`);
+}
+
+export async function invalidateCache(prefix?: string): Promise<{ message: string }> {
+  const params = prefix ? `?prefix=${encodeURIComponent(prefix)}` : '';
+  return fetchJson(`${API_BASE}/cache/invalidate${params}`, { method: 'POST' });
+}
+
+export async function getCacheStats(): Promise<{ entry_count: number; entries: Array<{ key: string; age_seconds: number }> }> {
+  return fetchJson(`${API_BASE}/cache/stats`);
 }
 
 // M3U Accounts (Providers)

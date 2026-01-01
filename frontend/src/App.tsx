@@ -462,7 +462,7 @@ function App() {
     }
   };
 
-  const loadStreams = async () => {
+  const loadStreams = async (bypassCache: boolean = false) => {
     setStreamsLoading(true);
     try {
       // Fetch all pages of streams (like channels)
@@ -477,6 +477,7 @@ function App() {
           search: streamSearch || undefined,
           m3uAccount: streamProviderFilter ?? undefined,
           channelGroup: streamGroupFilter ?? undefined,
+          bypassCache,
         });
         allStreams.push(...response.results);
         hasMore = response.next !== null;
@@ -490,6 +491,11 @@ function App() {
       setStreamsLoading(false);
     }
   };
+
+  // Force refresh streams from Dispatcharr (bypassing cache)
+  const refreshStreams = useCallback(() => {
+    loadStreams(true);
+  }, [streamSearch, streamProviderFilter, streamGroupFilter]);
 
   // Reload channels when search changes
   useEffect(() => {
@@ -1121,6 +1127,9 @@ function App() {
 
               // Appearance settings
               showStreamUrls={showStreamUrls}
+
+              // Refresh streams (bypasses cache)
+              onRefreshStreams={refreshStreams}
             />
           )}
           {activeTab === 'm3u-manager' && <M3UManagerTab />}
