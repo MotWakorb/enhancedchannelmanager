@@ -111,6 +111,7 @@ function App() {
     onChannelsChange: setChannels,
     onCommitComplete: () => {
       loadChannels(); // Refresh from server
+      loadChannelGroups(); // Refresh groups (for deleted groups)
     },
     onError: setError,
   });
