@@ -885,17 +885,19 @@ export function StreamsPane({
                           onClick={(e) => handleItemClick(e, stream)}
                           onDragStart={(e) => handleDragStart(e, stream)}
                         >
-                          <span
-                            className="selection-checkbox"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              toggleSelect(stream.id);
-                            }}
-                          >
-                            <span className="material-icons">
-                              {isSelected(stream.id) ? 'check_box' : 'check_box_outline_blank'}
+                          {isEditMode && (
+                            <span
+                              className="selection-checkbox"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                toggleSelect(stream.id);
+                              }}
+                            >
+                              <span className="material-icons">
+                                {isSelected(stream.id) ? 'check_box' : 'check_box_outline_blank'}
+                              </span>
                             </span>
-                          </span>
+                          )}
                           {stream.logo_url && (
                             <img
                               src={stream.logo_url}
