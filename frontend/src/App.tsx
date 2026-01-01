@@ -251,8 +251,9 @@ function App() {
 
   const handleDeleteChannelGroup = async (groupId: number) => {
     await api.deleteChannelGroup(groupId);
-    // Reload channel groups and channels after deletion
-    await loadChannelGroups();
+    // Immediately update local state to reflect deletion
+    setChannelGroups((prev) => prev.filter((g) => g.id !== groupId));
+    // Also reload channels since they may have been moved to ungrouped
     await loadChannels();
   };
 
