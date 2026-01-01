@@ -17,7 +17,10 @@ export function SettingsModal({ isOpen, onClose, onSaved }: SettingsModalProps) 
   const [includeChannelNumberInName, setIncludeChannelNumberInName] = useState(false);
   const [channelNumberSeparator, setChannelNumberSeparator] = useState('-');
   const [removeCountryPrefix, setRemoveCountryPrefix] = useState(false);
+  const [includeCountryInName, setIncludeCountryInName] = useState(false);
+  const [countrySeparator, setCountrySeparator] = useState('|');
   const [timezonePreference, setTimezonePreference] = useState('both');
+  const [showStreamUrls, setShowStreamUrls] = useState(true);
   const [loading, setLoading] = useState(false);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
@@ -45,7 +48,10 @@ export function SettingsModal({ isOpen, onClose, onSaved }: SettingsModalProps) 
       setIncludeChannelNumberInName(settings.include_channel_number_in_name);
       setChannelNumberSeparator(settings.channel_number_separator);
       setRemoveCountryPrefix(settings.remove_country_prefix);
+      setIncludeCountryInName(settings.include_country_in_name);
+      setCountrySeparator(settings.country_separator);
       setTimezonePreference(settings.timezone_preference);
+      setShowStreamUrls(settings.show_stream_urls);
       setTestResult(null);
       setError(null);
     } catch (err) {
@@ -102,7 +108,10 @@ export function SettingsModal({ isOpen, onClose, onSaved }: SettingsModalProps) 
         include_channel_number_in_name: includeChannelNumberInName,
         channel_number_separator: channelNumberSeparator,
         remove_country_prefix: removeCountryPrefix,
+        include_country_in_name: includeCountryInName,
+        country_separator: countrySeparator,
         timezone_preference: timezonePreference,
+        show_stream_urls: showStreamUrls,
       });
       onSaved();
       onClose();

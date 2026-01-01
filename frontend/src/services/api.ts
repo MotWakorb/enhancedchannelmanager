@@ -178,6 +178,8 @@ export interface SettingsResponse {
   include_channel_number_in_name: boolean;
   channel_number_separator: string;
   remove_country_prefix: boolean;
+  include_country_in_name: boolean;
+  country_separator: string;
   timezone_preference: string;
   show_stream_urls: boolean;
 }
@@ -199,6 +201,8 @@ export async function saveSettings(settings: {
   include_channel_number_in_name: boolean;
   channel_number_separator: string;
   remove_country_prefix: boolean;
+  include_country_in_name: boolean;
+  country_separator: string;
   timezone_preference: string;
   show_stream_urls?: boolean;  // Optional - defaults to true
 }): Promise<{ status: string; configured: boolean }> {
