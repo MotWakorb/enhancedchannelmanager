@@ -202,22 +202,28 @@
 }
 
 .selection-checkbox {
-  font-size: 1rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-right: 0.25rem;
   color: #555;
-  margin-right: 0.5rem;
-  user-select: none;
   cursor: pointer;
-  padding: 0.125rem;
-  border-radius: 2px;
-  transition: background-color 0.1s;
+}
+
+.selection-checkbox .material-icons {
+  font-size: 1.1rem;
 }
 
 .selection-checkbox:hover {
-  background-color: rgba(100, 108, 255, 0.2);
+  color: #888;
 }
 
 .stream-item.selected .selection-checkbox {
   color: #646cff;
+}
+
+.stream-item.selected .selection-checkbox:hover {
+  color: #535bf2;
 }
 
 .stream-item:active {
