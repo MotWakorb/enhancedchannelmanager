@@ -43,6 +43,7 @@ export function BulkEPGAssignModal({
   const [conflictResolutions, setConflictResolutions] = useState<Map<number, EPGData | null>>(new Map());
   const [autoMatchedExpanded, setAutoMatchedExpanded] = useState(true);
   const [unmatchedExpanded, setUnmatchedExpanded] = useState(true);
+  const [currentConflictIndex, setCurrentConflictIndex] = useState(0);
 
   // Track if we've already analyzed for this modal session
   const hasAnalyzedRef = useRef(false);
@@ -56,6 +57,7 @@ export function BulkEPGAssignModal({
       setConflictResolutions(new Map());
       setAutoMatchedExpanded(true);
       setUnmatchedExpanded(true);
+      setCurrentConflictIndex(0);
       hasAnalyzedRef.current = false;
       return;
     }
@@ -114,6 +116,22 @@ export function BulkEPGAssignModal({
       next.set(channelId, epgData);
       return next;
     });
+  }, []);
+
+  // Navigate to next/previous conflict
+  const handleNextConflict = useCallback(() => {
+    setCurrentConflictIndex(prev => Math.min(prev + 1, conflicts.length - 1));
+  }, [conflicts.length]);
+
+  const handlePrevConflict = useCallback(() => {
+    setCurrentConflictIndex(prev => Math.max(prev - 1, 0));
+  }, []);
+
+  // Get recommended EPG for a result (first match with matching country, or first match)
+  const getRecommendedEpg = useCallback((result: EPGMatchResult): EPGData | null => {
+    if (result.matches.length === 0) return null;
+    // matches are already sorted with matching country first
+    return result.matches[0];
   }, []);
 
   // Count how many assignments will be made
@@ -206,19 +224,44 @@ export function BulkEPGAssignModal({
 
               {/* Conflicts Section */}
               {conflicts.length > 0 && (
-                <div className="bulk-epg-section">
-                  <h3 className="section-header">
-                    <span className="material-icons">help</span>
-                    Needs Review ({conflicts.length})
-                  </h3>
+                <div className="bulk-epg-section conflicts-section">
+                  <div className="section-header conflicts-header">
+                    <div className="conflicts-title">
+                      <span className="material-icons">help</span>
+                      Needs Review ({conflicts.length})
+                    </div>
+                    <div className="conflicts-nav">
+                      <button
+                        className="nav-btn"
+                        onClick={handlePrevConflict}
+                        disabled={currentConflictIndex === 0}
+                        title="Previous"
+                      >
+                        <span className="material-icons">chevron_left</span>
+                      </button>
+                      <span className="nav-counter">{currentConflictIndex + 1} / {conflicts.length}</span>
+                      <button
+                        className="nav-btn"
+                        onClick={handleNextConflict}
+                        disabled={currentConflictIndex === conflicts.length - 1}
+                        title="Next"
+                      >
+                        <span className="material-icons">chevron_right</span>
+                      </button>
+                    </div>
+                  </div>
                   <div className="conflicts-list">
-                    {conflicts.map(result => (
+                    {conflicts.map((result, index) => (
                       <ConflictItem
                         key={result.channel.id}
                         result={result}
                         epgSources={epgSources}
                         selectedEpg={conflictResolutions.get(result.channel.id)}
                         onSelect={epg => handleConflictSelect(result.channel.id, epg)}
+                        isExpanded={index === currentConflictIndex}
+                        onToggle={() => setCurrentConflictIndex(index)}
+                        recommendedEpg={getRecommendedEpg(result)}
+                        isResolved={conflictResolutions.has(result.channel.id)}
                       />
                     ))}
                   </div>
@@ -315,49 +358,76 @@ interface ConflictItemProps {
   epgSources: EPGSource[];
   selectedEpg: EPGData | null | undefined;
   onSelect: (epg: EPGData | null) => void;
+  isExpanded: boolean;
+  onToggle: () => void;
+  recommendedEpg: EPGData | null;
+  isResolved: boolean;
 }
 
-function ConflictItem({ result, epgSources, selectedEpg, onSelect }: ConflictItemProps) {
+function ConflictItem({ result, epgSources, selectedEpg, onSelect, isExpanded, onToggle, recommendedEpg, isResolved }: ConflictItemProps) {
   return (
-    <div className="conflict-item">
-      <div className="conflict-channel">
-        <span className="channel-name">{result.channel.name}</span>
-        {result.detectedCountry && (
-          <span className="country-badge">{result.detectedCountry.toUpperCase()}</span>
-        )}
-        <span className="normalized-label">Normalized: "{result.normalizedName}"</span>
-      </div>
-      <div className="conflict-options">
-        {result.matches.map(epg => (
-          <label key={epg.id} className="conflict-option">
-            <input
-              type="radio"
-              name={`conflict-${result.channel.id}`}
-              checked={selectedEpg?.id === epg.id}
-              onChange={() => onSelect(epg)}
-            />
-            <div className="option-content">
-              {epg.icon_url && (
-                <img src={epg.icon_url} alt="" className="epg-icon" />
-              )}
-              <div className="option-info">
-                <span className="epg-name">{epg.name}</span>
-                <span className="epg-tvgid">{epg.tvg_id}</span>
-                <span className="epg-source">{getEPGSourceName(epg, epgSources)}</span>
-              </div>
-            </div>
-          </label>
-        ))}
-        <label className="conflict-option skip-option">
-          <input
-            type="radio"
-            name={`conflict-${result.channel.id}`}
-            checked={selectedEpg === null}
-            onChange={() => onSelect(null)}
-          />
-          <span className="skip-label">Skip this channel</span>
-        </label>
-      </div>
+    <div className={`conflict-item ${isExpanded ? 'expanded' : 'collapsed'} ${isResolved ? 'resolved' : ''}`}>
+      <button className="conflict-header" onClick={onToggle}>
+        <div className="conflict-channel">
+          <span className="channel-name">{result.channel.name}</span>
+          {result.detectedCountry && (
+            <span className="country-badge">{result.detectedCountry.toUpperCase()}</span>
+          )}
+          {isResolved && (
+            <span className="resolved-badge">
+              <span className="material-icons">check</span>
+            </span>
+          )}
+        </div>
+        <span className="material-icons expand-icon">
+          {isExpanded ? 'expand_less' : 'expand_more'}
+        </span>
+      </button>
+      {isExpanded && (
+        <div className="conflict-body">
+          <div className="normalized-label">Normalized: "{result.normalizedName}"</div>
+          <div className="conflict-options">
+            {result.matches.map(epg => {
+              const isRecommended = recommendedEpg?.id === epg.id;
+              return (
+                <label
+                  key={epg.id}
+                  className={`conflict-option ${isRecommended ? 'recommended' : ''}`}
+                >
+                  <input
+                    type="radio"
+                    name={`conflict-${result.channel.id}`}
+                    checked={selectedEpg?.id === epg.id}
+                    onChange={() => onSelect(epg)}
+                  />
+                  <div className="option-content">
+                    {epg.icon_url && (
+                      <img src={epg.icon_url} alt="" className="epg-icon" />
+                    )}
+                    <div className="option-info">
+                      <span className="epg-name">
+                        {epg.name}
+                        {isRecommended && <span className="recommended-tag">Recommended</span>}
+                      </span>
+                      <span className="epg-tvgid">{epg.tvg_id}</span>
+                      <span className="epg-source">{getEPGSourceName(epg, epgSources)}</span>
+                    </div>
+                  </div>
+                </label>
+              );
+            })}
+            <label className="conflict-option skip-option">
+              <input
+                type="radio"
+                name={`conflict-${result.channel.id}`}
+                checked={selectedEpg === null}
+                onChange={() => onSelect(null)}
+              />
+              <span className="skip-label">Skip this channel</span>
+            </label>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

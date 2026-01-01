@@ -153,31 +153,136 @@
   color: #888;
 }
 
+/* Conflicts section header with navigation */
+.conflicts-section .conflicts-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.conflicts-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.conflicts-nav {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.nav-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  background: #3d3d3d;
+  border: none;
+  border-radius: 4px;
+  color: #fff;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.nav-btn:hover:not(:disabled) {
+  background: #4d4d4d;
+}
+
+.nav-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.nav-btn .material-icons {
+  font-size: 20px;
+}
+
+.nav-counter {
+  font-size: 0.85rem;
+  color: #888;
+  min-width: 50px;
+  text-align: center;
+}
+
 /* Conflicts list */
 .conflicts-list {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 8px;
   padding: 12px;
+  max-height: 400px;
+  overflow-y: auto;
 }
 
 .conflict-item {
   background: #1e1e1e;
   border-radius: 6px;
-  padding: 12px;
+  overflow: hidden;
+  border: 1px solid transparent;
+  transition: border-color 0.15s;
+}
+
+.conflict-item.expanded {
+  border-color: #646cff;
+}
+
+.conflict-item.resolved .conflict-header {
+  background: rgba(74, 222, 128, 0.1);
+}
+
+.conflict-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  width: 100%;
+  padding: 10px 12px;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.15s;
+}
+
+.conflict-header:hover {
+  background: #2d2d2d;
+}
+
+.conflict-header .expand-icon {
+  color: #888;
+  font-size: 20px;
 }
 
 .conflict-channel {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin-bottom: 10px;
   flex-wrap: wrap;
 }
 
 .conflict-channel .channel-name {
   font-weight: 500;
   color: #fff;
+}
+
+.resolved-badge {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  background: #4ade80;
+  border-radius: 50%;
+}
+
+.resolved-badge .material-icons {
+  font-size: 14px;
+  color: #1e1e1e;
+}
+
+.conflict-body {
+  padding: 0 12px 12px 12px;
 }
 
 .country-badge {
@@ -274,6 +379,24 @@
   font-size: 0.9rem;
   color: #888;
   font-style: italic;
+}
+
+/* Recommended option */
+.conflict-option.recommended {
+  border: 1px solid #646cff;
+  background: rgba(100, 108, 255, 0.1);
+}
+
+.recommended-tag {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 2px 6px;
+  font-size: 0.65rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  background: #646cff;
+  color: white;
+  border-radius: 3px;
 }
 
 /* Matched list */
