@@ -578,6 +578,14 @@
   flex: 1;
   overflow-y: auto;
   padding: 0.5rem;
+  transition: background-color 0.2s, border-color 0.2s;
+}
+
+/* Stream group drop target styling */
+.pane-content.stream-group-drop-target {
+  background-color: rgba(34, 211, 238, 0.1);
+  outline: 2px dashed #22d3ee;
+  outline-offset: -2px;
 }
 
 .loading {

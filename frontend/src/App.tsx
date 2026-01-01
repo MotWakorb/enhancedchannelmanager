@@ -97,6 +97,9 @@ function App() {
   const [activeTab, setActiveTab] = useState<TabId>('channel-manager');
   const [pendingTabChange, setPendingTabChange] = useState<TabId | null>(null);
 
+  // Stream group drop trigger (for opening bulk create modal from channels pane)
+  const [droppedStreamGroupName, setDroppedStreamGroupName] = useState<string | null>(null);
+
   // Edit mode for staging changes
   const {
     isEditMode,
@@ -772,6 +775,17 @@ function App() {
     [isEditMode, addChannelToWorkingCopy, trackNewlyCreatedGroup]
   );
 
+  // Handle stream group drop on channels pane (triggers bulk create modal in streams pane)
+  const handleStreamGroupDrop = useCallback((groupName: string, _streamIds: number[]) => {
+    // Set the dropped group name - StreamsPane will react to this and open the modal
+    setDroppedStreamGroupName(groupName);
+  }, []);
+
+  // Clear the dropped stream group trigger after it's been handled
+  const handleStreamGroupTriggerHandled = useCallback(() => {
+    setDroppedStreamGroupName(null);
+  }, []);
+
   // Filter streams based on multi-select filters (client-side)
   const filteredStreams = useMemo(() => {
     let result = streams;
@@ -1072,6 +1086,9 @@ function App() {
 
               // Bulk Create
               channelDefaults={channelDefaults}
+              externalTriggerGroupName={droppedStreamGroupName}
+              onExternalTriggerHandled={handleStreamGroupTriggerHandled}
+              onStreamGroupDrop={handleStreamGroupDrop}
               onBulkCreateFromGroup={handleBulkCreateFromGroup}
 
               // Dispatcharr URL for channel stream URLs
