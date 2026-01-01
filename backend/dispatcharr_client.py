@@ -349,20 +349,30 @@ class DispatcharrClient:
         response.raise_for_status()
 
     async def refresh_epg_source(self, source_id: int) -> dict:
-        """Refresh a single EPG source by triggering global import.
+        """Refresh a single EPG source.
 
-        Note: Dispatcharr doesn't have a per-source refresh endpoint.
-        This triggers a full import of all active EPG sources.
+        Dispatcharr's /api/epg/import/ endpoint expects the EPG source ID
+        in the request body as {"id": source_id}.
         """
-        response = await self._request("POST", "/api/epg/import/")
+        # Send POST to /api/epg/import/ with the source ID in the body
+        response = await self._request(
+            "POST",
+            "/api/epg/import/",
+            json={"id": source_id}
+        )
         response.raise_for_status()
-        return response.json() if response.content else {}
+        return response.json() if response.content else {"success": True, "message": "Refresh initiated"}
 
     async def trigger_epg_import(self) -> dict:
-        """Trigger an EPG data import for all sources."""
+        """Trigger an EPG data import for all active sources.
+
+        Dispatcharr's /api/epg/import/ endpoint with no ID triggers refresh
+        for all active non-dummy sources.
+        """
+        # Call import endpoint with no ID to refresh all sources
         response = await self._request("POST", "/api/epg/import/")
         response.raise_for_status()
-        return response.json() if response.content else {}
+        return response.json() if response.content else {"success": True, "message": "EPG import initiated"}
 
     # -------------------------------------------------------------------------
     # EPG Data

@@ -20,7 +20,7 @@ from config import (
 app = FastAPI(
     title="Enhanced Channel Manager",
     description="Drag-and-drop channel management for Dispatcharr",
-    version="0.2.20005",
+    version="0.2.20006",
 )
 
 # CORS for development

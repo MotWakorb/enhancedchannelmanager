@@ -434,8 +434,16 @@ export function EPGManagerTab() {
   const handleRefreshSource = async (source: EPGSource) => {
     try {
       await api.refreshEPGSource(source.id);
+      // Immediately show we're refreshing by updating local state
+      setSources(prev => prev.map(s =>
+        s.id === source.id ? { ...s, status: 'fetching' } : s
+      ));
       // Start polling for status updates
-      setTimeout(loadSources, 2000);
+      const pollInterval = setInterval(async () => {
+        await loadSources();
+      }, 3000);
+      // Stop polling after 2 minutes
+      setTimeout(() => clearInterval(pollInterval), 120000);
     } catch (err) {
       setError('Failed to refresh EPG source');
     }
@@ -462,7 +470,16 @@ export function EPGManagerTab() {
   const handleRefreshAll = async () => {
     try {
       await api.triggerEPGImport();
-      setTimeout(loadSources, 2000);
+      // Mark all active non-dummy sources as fetching
+      setSources(prev => prev.map(s =>
+        s.is_active && s.source_type !== 'dummy' ? { ...s, status: 'fetching' } : s
+      ));
+      // Start polling for status updates
+      const pollInterval = setInterval(async () => {
+        await loadSources();
+      }, 3000);
+      // Stop polling after 5 minutes
+      setTimeout(() => clearInterval(pollInterval), 300000);
     } catch (err) {
       setError('Failed to trigger EPG import');
     }
