@@ -44,6 +44,7 @@ export function BulkEPGAssignModal({
   const [autoMatchedExpanded, setAutoMatchedExpanded] = useState(true);
   const [unmatchedExpanded, setUnmatchedExpanded] = useState(true);
   const [currentConflictIndex, setCurrentConflictIndex] = useState(0);
+  const [showConflictReview, setShowConflictReview] = useState(false);
 
   // Track if we've already analyzed for this modal session
   const hasAnalyzedRef = useRef(false);
@@ -58,6 +59,7 @@ export function BulkEPGAssignModal({
       setAutoMatchedExpanded(true);
       setUnmatchedExpanded(true);
       setCurrentConflictIndex(0);
+      setShowConflictReview(false);
       hasAnalyzedRef.current = false;
       return;
     }
@@ -133,6 +135,28 @@ export function BulkEPGAssignModal({
     // matches are already sorted with matching country first
     return result.matches[0];
   }, []);
+
+  // Accept all recommended matches for unresolved conflicts
+  const handleAcceptAllRecommended = useCallback(() => {
+    setConflictResolutions(prev => {
+      const next = new Map(prev);
+      for (const result of conflicts) {
+        // Only set if not already resolved
+        if (!next.has(result.channel.id)) {
+          const recommended = result.matches[0]; // First match is recommended
+          if (recommended) {
+            next.set(result.channel.id, recommended);
+          }
+        }
+      }
+      return next;
+    });
+  }, [conflicts]);
+
+  // Count unresolved conflicts
+  const unresolvedCount = useMemo(() => {
+    return conflicts.filter(c => !conflictResolutions.has(c.channel.id)).length;
+  }, [conflicts, conflictResolutions]);
 
   // Count how many assignments will be made
   const assignmentCount = useMemo(() => {
@@ -222,32 +246,73 @@ export function BulkEPGAssignModal({
                 </div>
               )}
 
-              {/* Conflicts Section */}
-              {conflicts.length > 0 && (
+              {/* Choice prompt when there are conflicts and user hasn't chosen yet */}
+              {conflicts.length > 0 && !showConflictReview && (
+                <div className="bulk-epg-choice">
+                  <p>There are {conflicts.length} channels with multiple EPG matches. How would you like to proceed?</p>
+                  <div className="choice-buttons">
+                    <button
+                      className="choice-btn choice-review"
+                      onClick={() => setShowConflictReview(true)}
+                    >
+                      <span className="material-icons">rate_review</span>
+                      <div className="choice-content">
+                        <span className="choice-title">Review Changes</span>
+                        <span className="choice-desc">Manually select the best match for each channel</span>
+                      </div>
+                    </button>
+                    <button
+                      className="choice-btn choice-accept"
+                      onClick={handleAcceptAllRecommended}
+                    >
+                      <span className="material-icons">done_all</span>
+                      <div className="choice-content">
+                        <span className="choice-title">Accept Best Guesses</span>
+                        <span className="choice-desc">Use the recommended match for all conflicts</span>
+                      </div>
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Conflicts Section - only show when reviewing */}
+              {conflicts.length > 0 && showConflictReview && (
                 <div className="bulk-epg-section conflicts-section">
                   <div className="section-header conflicts-header">
                     <div className="conflicts-title">
                       <span className="material-icons">help</span>
                       Needs Review ({conflicts.length})
                     </div>
-                    <div className="conflicts-nav">
-                      <button
-                        className="nav-btn"
-                        onClick={handlePrevConflict}
-                        disabled={currentConflictIndex === 0}
-                        title="Previous"
-                      >
-                        <span className="material-icons">chevron_left</span>
-                      </button>
-                      <span className="nav-counter">{currentConflictIndex + 1} / {conflicts.length}</span>
-                      <button
-                        className="nav-btn"
-                        onClick={handleNextConflict}
-                        disabled={currentConflictIndex === conflicts.length - 1}
-                        title="Next"
-                      >
-                        <span className="material-icons">chevron_right</span>
-                      </button>
+                    <div className="conflicts-actions">
+                      {unresolvedCount > 0 && (
+                        <button
+                          className="accept-all-btn"
+                          onClick={handleAcceptAllRecommended}
+                          title="Accept recommended match for all unresolved conflicts"
+                        >
+                          <span className="material-icons">done_all</span>
+                          Accept All
+                        </button>
+                      )}
+                      <div className="conflicts-nav">
+                        <button
+                          className="nav-btn"
+                          onClick={handlePrevConflict}
+                          disabled={currentConflictIndex === 0}
+                          title="Previous"
+                        >
+                          <span className="material-icons">chevron_left</span>
+                        </button>
+                        <span className="nav-counter">{currentConflictIndex + 1} / {conflicts.length}</span>
+                        <button
+                          className="nav-btn"
+                          onClick={handleNextConflict}
+                          disabled={currentConflictIndex === conflicts.length - 1}
+                          title="Next"
+                        >
+                          <span className="material-icons">chevron_right</span>
+                        </button>
+                      </div>
                     </div>
                   </div>
                   <div className="conflicts-list">

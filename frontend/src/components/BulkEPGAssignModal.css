@@ -153,6 +153,85 @@
   color: #888;
 }
 
+/* Choice prompt */
+.bulk-epg-choice {
+  padding: 20px;
+  text-align: center;
+}
+
+.bulk-epg-choice p {
+  margin: 0 0 16px 0;
+  color: #ccc;
+  font-size: 0.95rem;
+}
+
+.choice-buttons {
+  display: flex;
+  gap: 16px;
+  justify-content: center;
+}
+
+.choice-btn {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 16px 20px;
+  background: #2d2d2d;
+  border: 1px solid #404040;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.15s;
+  text-align: left;
+  min-width: 200px;
+}
+
+.choice-btn:hover {
+  background: #3d3d3d;
+  border-color: #555;
+}
+
+.choice-btn .material-icons {
+  font-size: 28px;
+  color: #888;
+}
+
+.choice-btn:hover .material-icons {
+  color: #fff;
+}
+
+.choice-content {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.choice-title {
+  font-size: 0.95rem;
+  font-weight: 500;
+  color: #fff;
+}
+
+.choice-desc {
+  font-size: 0.8rem;
+  color: #888;
+}
+
+.choice-review:hover {
+  border-color: #646cff;
+}
+
+.choice-review:hover .material-icons {
+  color: #646cff;
+}
+
+.choice-accept:hover {
+  border-color: #4ade80;
+}
+
+.choice-accept:hover .material-icons {
+  color: #4ade80;
+}
+
 /* Conflicts section header with navigation */
 .conflicts-section .conflicts-header {
   display: flex;
@@ -164,6 +243,34 @@
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+.conflicts-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.accept-all-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  background: rgba(74, 222, 128, 0.15);
+  border: 1px solid #4ade80;
+  border-radius: 4px;
+  color: #4ade80;
+  font-size: 0.85rem;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.accept-all-btn:hover {
+  background: rgba(74, 222, 128, 0.25);
+}
+
+.accept-all-btn .material-icons {
+  font-size: 18px;
 }
 
 .conflicts-nav {
