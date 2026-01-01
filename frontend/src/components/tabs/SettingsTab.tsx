@@ -21,6 +21,8 @@ export function SettingsTab({ onSaved }: SettingsTabProps) {
   const [includeChannelNumberInName, setIncludeChannelNumberInName] = useState(false);
   const [channelNumberSeparator, setChannelNumberSeparator] = useState('-');
   const [removeCountryPrefix, setRemoveCountryPrefix] = useState(false);
+  const [includeCountryInName, setIncludeCountryInName] = useState(false);
+  const [countrySeparator, setCountrySeparator] = useState('|');
   const [timezonePreference, setTimezonePreference] = useState('both');
 
   // Appearance settings
@@ -53,6 +55,8 @@ export function SettingsTab({ onSaved }: SettingsTabProps) {
       setIncludeChannelNumberInName(settings.include_channel_number_in_name);
       setChannelNumberSeparator(settings.channel_number_separator);
       setRemoveCountryPrefix(settings.remove_country_prefix);
+      setIncludeCountryInName(settings.include_country_in_name);
+      setCountrySeparator(settings.country_separator);
       setTimezonePreference(settings.timezone_preference);
       setShowStreamUrls(settings.show_stream_urls);
       setTestResult(null);
@@ -113,6 +117,8 @@ export function SettingsTab({ onSaved }: SettingsTabProps) {
         include_channel_number_in_name: includeChannelNumberInName,
         channel_number_separator: channelNumberSeparator,
         remove_country_prefix: removeCountryPrefix,
+        include_country_in_name: includeCountryInName,
+        country_separator: countrySeparator,
         timezone_preference: timezonePreference,
         show_stream_urls: showStreamUrls,
       });
@@ -343,7 +349,13 @@ export function SettingsTab({ onSaved }: SettingsTabProps) {
             id="removeCountry"
             type="checkbox"
             checked={removeCountryPrefix}
-            onChange={(e) => setRemoveCountryPrefix(e.target.checked)}
+            onChange={(e) => {
+              setRemoveCountryPrefix(e.target.checked);
+              // If enabling remove, disable include
+              if (e.target.checked) {
+                setIncludeCountryInName(false);
+              }
+            }}
           />
           <div className="checkbox-content">
             <label htmlFor="removeCountry">Remove country prefix from names</label>
@@ -352,6 +364,42 @@ export function SettingsTab({ onSaved }: SettingsTabProps) {
             </p>
           </div>
         </div>
+
+        <div className="checkbox-group">
+          <input
+            id="includeCountry"
+            type="checkbox"
+            checked={includeCountryInName}
+            onChange={(e) => {
+              setIncludeCountryInName(e.target.checked);
+              // If enabling include, disable remove
+              if (e.target.checked) {
+                setRemoveCountryPrefix(false);
+              }
+            }}
+          />
+          <div className="checkbox-content">
+            <label htmlFor="includeCountry">Include country prefix in name (normalized)</label>
+            <p>
+              Keep country codes in channel names with a consistent separator (e.g., "US | Sports Channel").
+            </p>
+          </div>
+        </div>
+
+        {includeCountryInName && (
+          <div className="form-group indent">
+            <label htmlFor="countrySeparator">Country separator</label>
+            <select
+              id="countrySeparator"
+              value={countrySeparator}
+              onChange={(e) => setCountrySeparator(e.target.value)}
+            >
+              <option value="-">Hyphen (US - Channel)</option>
+              <option value=":">Colon (US: Channel)</option>
+              <option value="|">Pipe (US | Channel)</option>
+            </select>
+          </div>
+        )}
       </div>
 
       <div className="settings-section">
