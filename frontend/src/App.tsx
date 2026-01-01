@@ -12,6 +12,7 @@ import type { Channel, ChannelGroup, Stream, M3UAccount, M3UGroupSetting, Logo, 
 import './App.css';
 
 // Lazy load non-primary tabs
+const M3UManagerTab = lazy(() => import('./components/tabs/M3UManagerTab').then(m => ({ default: m.M3UManagerTab })));
 const EPGManagerTab = lazy(() => import('./components/tabs/EPGManagerTab').then(m => ({ default: m.EPGManagerTab })));
 const LogoManagerTab = lazy(() => import('./components/tabs/LogoManagerTab').then(m => ({ default: m.LogoManagerTab })));
 const SettingsTab = lazy(() => import('./components/tabs/SettingsTab').then(m => ({ default: m.SettingsTab })));
@@ -1062,6 +1063,7 @@ function App() {
               onBulkCreateFromGroup={handleBulkCreateFromGroup}
             />
           )}
+          {activeTab === 'm3u-manager' && <M3UManagerTab />}
           {activeTab === 'epg-manager' && <EPGManagerTab />}
           {activeTab === 'logo-manager' && <LogoManagerTab />}
           {activeTab === 'settings' && <SettingsTab onSaved={handleSettingsSaved} />}

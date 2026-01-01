@@ -4,8 +4,9 @@ A professional-grade web interface for managing IPTV configurations with Dispatc
 
 ## Application Tabs
 
-- **Channel Manager** - Full-featured channel and stream management with split-pane layout
+- **M3U Manager** - M3U playlist management (coming soon)
 - **EPG Manager** - EPG data management (coming soon)
+- **Channel Manager** - Full-featured channel and stream management with split-pane layout
 - **Logo Manager** - Logo management (coming soon)
 - **Settings** - Configure Dispatcharr connection and channel defaults with sidebar navigation
 

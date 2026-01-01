@@ -1,6 +1,6 @@
 import './TabNavigation.css';
 
-export type TabId = 'channel-manager' | 'epg-manager' | 'logo-manager' | 'settings';
+export type TabId = 'm3u-manager' | 'epg-manager' | 'channel-manager' | 'logo-manager' | 'settings';
 
 interface Tab {
   id: TabId;
@@ -16,8 +16,9 @@ interface TabNavigationProps {
 }
 
 const TABS: Tab[] = [
-  { id: 'channel-manager', label: 'Channel Manager', icon: 'tv' },
+  { id: 'm3u-manager', label: 'M3U Manager', icon: 'playlist_play' },
   { id: 'epg-manager', label: 'EPG Manager', icon: 'schedule' },
+  { id: 'channel-manager', label: 'Channel Manager', icon: 'tv' },
   { id: 'logo-manager', label: 'Logo Manager', icon: 'image' },
   { id: 'settings', label: 'Settings', icon: 'settings' },
 ];

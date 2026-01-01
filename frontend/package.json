@@ -1,7 +1,7 @@
 {
   "name": "dispatcharr-manager-next",
   "private": true,
-  "version": "0.2.20001",
+  "version": "0.2.20002",
   "type": "module",
   "scripts": {
     "dev": "vite",

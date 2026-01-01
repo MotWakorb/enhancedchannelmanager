@@ -309,7 +309,7 @@ export function SettingsTab({ onSaved }: SettingsTabProps) {
         </div>
 
         <div className="form-group">
-          <label htmlFor="timezone">Default timezone for regional variants</label>
+          <label htmlFor="timezone">Default timezone for regional channel variants</label>
           <select
             id="timezone"
             value={timezonePreference}
