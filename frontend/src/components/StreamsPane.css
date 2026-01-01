@@ -158,6 +158,37 @@
   border: 1px solid #646cff44;
 }
 
+/* Draggable stream group header styling */
+.stream-group-header[draggable="true"] {
+  cursor: grab;
+}
+
+.stream-group-header[draggable="true"]:active {
+  cursor: grabbing;
+}
+
+.group-drag-handle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #444;
+  cursor: grab;
+  transition: color 0.15s;
+  margin-right: 0.25rem;
+}
+
+.group-drag-handle .material-icons {
+  font-size: 1.2rem;
+}
+
+.group-drag-handle:hover {
+  color: #22d3ee;
+}
+
+.stream-group-header[draggable="true"]:active .group-drag-handle {
+  cursor: grabbing;
+}
+
 .group-selection-checkbox {
   display: flex;
   align-items: center;

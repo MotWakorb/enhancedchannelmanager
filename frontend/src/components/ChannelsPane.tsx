@@ -97,6 +97,8 @@ interface ChannelsPaneProps {
   onSelectChannelRange?: (fromId: number, toId: number, groupChannelIds: number[]) => void;
   // Dispatcharr URL for constructing channel stream URLs
   dispatcharrUrl?: string;
+  // Stream group drop callback (for bulk channel creation)
+  onStreamGroupDrop?: (groupName: string, streamIds: number[]) => void;
 }
 
 interface GroupState {
@@ -1177,6 +1179,8 @@ export function ChannelsPane({
   onSelectChannelRange,
   // Dispatcharr URL
   dispatcharrUrl = '',
+  // Stream group drop
+  onStreamGroupDrop,
 }: ChannelsPaneProps) {
   // Suppress unused variable warnings - these are passed through but handled in parent
   void _onStageAddStream;
@@ -1227,6 +1231,9 @@ export function ChannelsPane({
   // Edit channel modal state
   const [showEditChannelModal, setShowEditChannelModal] = useState(false);
   const [channelToEdit, setChannelToEdit] = useState<Channel | null>(null);
+
+  // Stream group drop state (for bulk channel creation)
+  const [streamGroupDragOver, setStreamGroupDragOver] = useState(false);
 
   // Create channel group modal state
   const [showCreateGroupModal, setShowCreateGroupModal] = useState(false);
@@ -2205,6 +2212,43 @@ export function ChannelsPane({
     const streamId = e.dataTransfer.getData('streamId');
     if (streamId) {
       onChannelDrop(channelId, parseInt(streamId, 10));
+    }
+  };
+
+  // Handle stream group drag over the pane (for bulk channel creation)
+  const handlePaneDragOver = (e: React.DragEvent) => {
+    // Check if this is a stream group drag
+    if (e.dataTransfer.types.includes('streamgroupdrag')) {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'copy';
+      setStreamGroupDragOver(true);
+    }
+  };
+
+  const handlePaneDragLeave = (e: React.DragEvent) => {
+    // Only trigger if leaving the pane (not entering a child element)
+    if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+      setStreamGroupDragOver(false);
+    }
+  };
+
+  const handlePaneDrop = (e: React.DragEvent) => {
+    setStreamGroupDragOver(false);
+
+    // Check for stream group drop
+    const isStreamGroupDrag = e.dataTransfer.getData('streamGroupDrag');
+    if (isStreamGroupDrag === 'true' && isEditMode && onStreamGroupDrop) {
+      e.preventDefault();
+      const groupName = e.dataTransfer.getData('streamGroupName');
+      const streamIdsJson = e.dataTransfer.getData('streamGroupStreamIds');
+      if (groupName && streamIdsJson) {
+        try {
+          const streamIds = JSON.parse(streamIdsJson) as number[];
+          onStreamGroupDrop(groupName, streamIds);
+        } catch {
+          console.error('Failed to parse stream IDs from stream group drop');
+        }
+      }
     }
   };
 
@@ -4272,7 +4316,12 @@ export function ChannelsPane({
         </div>
       </div>
 
-      <div className="pane-content">
+      <div
+        className={`pane-content ${streamGroupDragOver ? 'stream-group-drop-target' : ''}`}
+        onDragOver={handlePaneDragOver}
+        onDragLeave={handlePaneDragLeave}
+        onDrop={handlePaneDrop}
+      >
         {loading ? (
           <div className="loading">Loading channels...</div>
         ) : (

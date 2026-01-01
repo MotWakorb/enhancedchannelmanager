@@ -106,6 +106,10 @@ export interface ChannelManagerTabProps {
 
   // Bulk Create
   channelDefaults?: ChannelDefaults;
+  // Stream group drop (for opening bulk create modal)
+  externalTriggerGroupName?: string | null;
+  onExternalTriggerHandled?: () => void;
+  onStreamGroupDrop?: (groupName: string, streamIds: number[]) => void;
   onBulkCreateFromGroup: (
     streams: Stream[],
     startingNumber: number,
@@ -225,6 +229,9 @@ export function ChannelManagerTab({
 
   // Bulk Create
   channelDefaults,
+  externalTriggerGroupName,
+  onExternalTriggerHandled,
+  onStreamGroupDrop,
   onBulkCreateFromGroup,
 }: ChannelManagerTabProps) {
   return (
@@ -293,6 +300,7 @@ export function ChannelManagerTab({
           onClearChannelSelection={onClearChannelSelection}
           onSelectChannelRange={onSelectChannelRange}
           dispatcharrUrl={dispatcharrUrl}
+          onStreamGroupDrop={onStreamGroupDrop}
         />
       }
       right={
@@ -314,6 +322,8 @@ export function ChannelManagerTab({
           isEditMode={isEditMode}
           channelGroups={channelGroups}
           channelDefaults={channelDefaults}
+          externalTriggerGroupName={externalTriggerGroupName}
+          onExternalTriggerHandled={onExternalTriggerHandled}
           onBulkCreateFromGroup={onBulkCreateFromGroup}
         />
       }

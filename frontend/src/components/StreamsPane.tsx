@@ -39,6 +39,9 @@ interface StreamsPaneProps {
   isEditMode?: boolean;
   channelGroups?: ChannelGroup[];
   channelDefaults?: ChannelDefaults;
+  // External trigger to open bulk create modal for a stream group (set by dropping on channels pane)
+  externalTriggerGroupName?: string | null;
+  onExternalTriggerHandled?: () => void;
   onBulkCreateFromGroup?: (
     streams: Stream[],
     startingNumber: number,
@@ -73,6 +76,8 @@ export function StreamsPane({
   isEditMode = false,
   channelGroups = [],
   channelDefaults,
+  externalTriggerGroupName = null,
+  onExternalTriggerHandled,
   onBulkCreateFromGroup,
 }: StreamsPaneProps) {
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
@@ -289,6 +294,35 @@ export function StreamsPane({
     [handleSelect]
   );
 
+  // Handle dragging a stream group header (for drop onto channels pane)
+  const handleGroupDragStart = useCallback(
+    (e: React.DragEvent, group: StreamGroup) => {
+      // Set data to identify this as a stream group drag
+      e.dataTransfer.setData('streamGroupDrag', 'true');
+      e.dataTransfer.setData('streamGroupName', group.name);
+      e.dataTransfer.setData('streamGroupStreamIds', JSON.stringify(group.streams.map(s => s.id)));
+      e.dataTransfer.effectAllowed = 'copy';
+
+      // Custom drag image showing group info
+      const dragEl = document.createElement('div');
+      dragEl.className = 'drag-preview';
+      dragEl.textContent = `${group.name} (${group.streams.length} streams)`;
+      dragEl.style.cssText = `
+        position: absolute;
+        top: -1000px;
+        background: #22d3ee;
+        color: #1e1e1e;
+        padding: 8px 16px;
+        border-radius: 4px;
+        font-weight: 500;
+      `;
+      document.body.appendChild(dragEl);
+      e.dataTransfer.setDragImage(dragEl, 50, 20);
+      setTimeout(() => document.body.removeChild(dragEl), 0);
+    },
+    []
+  );
+
   // Bulk create handlers - apply settings defaults
   const openBulkCreateModal = useCallback((group: StreamGroup) => {
     setBulkCreateGroup(group);
@@ -342,6 +376,19 @@ export function StreamsPane({
     setBulkCreateGroups([]);
     setBulkCreateStreams([]);
   }, []);
+
+  // Handle external trigger to open bulk create modal (from dropping stream group on channels pane)
+  useEffect(() => {
+    if (externalTriggerGroupName && onBulkCreateFromGroup) {
+      // Find the matching stream group
+      const matchingGroup = groupedStreams.find(g => g.name === externalTriggerGroupName);
+      if (matchingGroup) {
+        openBulkCreateModal(matchingGroup);
+      }
+      // Signal that we've handled the trigger
+      onExternalTriggerHandled?.();
+    }
+  }, [externalTriggerGroupName, groupedStreams, openBulkCreateModal, onBulkCreateFromGroup, onExternalTriggerHandled]);
 
   // Toggle group selection (select/deselect all streams in group)
   const toggleGroupSelection = useCallback((group: StreamGroup) => {
@@ -782,7 +829,18 @@ export function StreamsPane({
                   <div
                     className="stream-group-header"
                     onClick={() => toggleGroup(group.name)}
+                    draggable={isEditMode && !!onBulkCreateFromGroup}
+                    onDragStart={(e) => {
+                      if (isEditMode && onBulkCreateFromGroup) {
+                        handleGroupDragStart(e, group);
+                      }
+                    }}
                   >
+                    {isEditMode && onBulkCreateFromGroup && (
+                      <span className="group-drag-handle" title="Drag to Channels pane to bulk create">
+                        <span className="material-icons">drag_indicator</span>
+                      </span>
+                    )}
                     {isEditMode && onBulkCreateFromGroup && (
                       <span
                         className="group-selection-checkbox"
