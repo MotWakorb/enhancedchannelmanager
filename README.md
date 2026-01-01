@@ -28,6 +28,7 @@ A professional-grade web interface for managing TV channels, streams, and metada
 
 - **Create from Stream Group** - Create multiple channels from an entire M3U stream group at once
 - **Auto-Assign Streams** - Each created channel automatically gets its source stream assigned
+- **Merge Duplicate Names** - Streams with identical names from different M3U providers are merged into a single channel with all streams assigned (provides multi-provider redundancy)
 - **Custom Starting Number** - Choose the starting channel number for sequential assignment
 - **Flexible Group Options** - Create in same-named group, select existing group, or create new group
 - **Preview Before Creating** - See a preview of channels that will be created

@@ -321,53 +321,75 @@ async function getOrCreateLogo(name: string, url: string, logoCache: Map<string,
 }
 
 // Bulk Channel Creation
+// Groups streams with identical names into the same channel (merging streams from different M3Us)
 export async function bulkCreateChannelsFromStreams(
   streams: { id: number; name: string; logo_url?: string | null }[],
   startingNumber: number,
   channelGroupId: number | null
-): Promise<{ created: Channel[]; errors: string[] }> {
+): Promise<{ created: Channel[]; errors: string[]; mergedCount: number }> {
   const created: Channel[] = [];
   const errors: string[] = [];
   // Cache logos to avoid repeated lookups for the same URL
   const logoCache = new Map<string, Logo>();
 
-  for (let i = 0; i < streams.length; i++) {
-    const stream = streams[i];
-    const channelNumber = startingNumber + i;
+  // Group streams by name to merge identical names from different M3Us
+  const streamsByName = new Map<string, { id: number; name: string; logo_url?: string | null }[]>();
+  for (const stream of streams) {
+    const existing = streamsByName.get(stream.name);
+    if (existing) {
+      existing.push(stream);
+    } else {
+      streamsByName.set(stream.name, [stream]);
+    }
+  }
+
+  // Count how many streams were merged (total streams - unique names)
+  const mergedCount = streams.length - streamsByName.size;
+
+  // Create one channel per unique name
+  let channelIndex = 0;
+  for (const [name, groupedStreams] of streamsByName) {
+    const channelNumber = startingNumber + channelIndex;
+    channelIndex++;
 
     try {
       // Create the channel
       const channel = await createChannel({
-        name: stream.name,
+        name: name,
         channel_number: channelNumber,
         channel_group_id: channelGroupId ?? undefined,
       });
 
-      // Add the stream to the channel
-      try {
-        await addStreamToChannel(channel.id, stream.id);
-      } catch (streamError) {
-        errors.push(`Channel "${stream.name}" created but stream assignment failed: ${streamError}`);
+      // Add all streams with this name to the channel (provides multi-provider redundancy)
+      const addedStreamIds: number[] = [];
+      for (const stream of groupedStreams) {
+        try {
+          await addStreamToChannel(channel.id, stream.id);
+          addedStreamIds.push(stream.id);
+        } catch (streamError) {
+          errors.push(`Channel "${name}" created but stream assignment failed for stream ${stream.id}: ${streamError}`);
+        }
       }
 
-      // If the stream has a logo, get or create it and assign to the channel
-      if (stream.logo_url) {
+      // Use the first stream's logo if available
+      const logoUrl = groupedStreams.find((s) => s.logo_url)?.logo_url;
+      if (logoUrl) {
         try {
-          const logo = await getOrCreateLogo(stream.name, stream.logo_url, logoCache);
+          const logo = await getOrCreateLogo(name, logoUrl, logoCache);
           await updateChannel(channel.id, { logo_id: logo.id });
-          created.push({ ...channel, streams: [stream.id], logo_id: logo.id });
+          created.push({ ...channel, streams: addedStreamIds, logo_id: logo.id });
         } catch (logoError) {
           // Logo assignment failed, but channel was still created
-          errors.push(`Channel "${stream.name}" created but logo assignment failed: ${logoError}`);
-          created.push({ ...channel, streams: [stream.id] });
+          errors.push(`Channel "${name}" created but logo assignment failed: ${logoError}`);
+          created.push({ ...channel, streams: addedStreamIds });
         }
       } else {
-        created.push({ ...channel, streams: [stream.id] });
+        created.push({ ...channel, streams: addedStreamIds });
       }
     } catch (error) {
-      errors.push(`Failed to create channel "${stream.name}": ${error}`);
+      errors.push(`Failed to create channel "${name}": ${error}`);
     }
   }
 
-  return { created, errors };
+  return { created, errors, mergedCount };
 }

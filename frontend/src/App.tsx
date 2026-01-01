@@ -657,10 +657,13 @@ function App() {
         }
 
         // Show results
+        const mergeInfo = result.mergedCount > 0
+          ? `\n(${result.mergedCount} streams merged from duplicate names)`
+          : '';
         if (result.errors.length > 0) {
-          alert(`Created ${result.created.length} channels.\n\nErrors:\n${result.errors.join('\n')}`);
+          alert(`Created ${result.created.length} channels.${mergeInfo}\n\nErrors:\n${result.errors.join('\n')}`);
         } else {
-          alert(`Successfully created ${result.created.length} channels!`);
+          alert(`Successfully created ${result.created.length} channels!${mergeInfo}`);
         }
 
         // Refresh channel groups to update counts
