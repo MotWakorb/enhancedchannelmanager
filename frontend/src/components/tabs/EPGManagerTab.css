@@ -178,7 +178,7 @@
 
 .list-header {
   display: grid;
-  grid-template-columns: 40px 60px 50px 1fr 140px 160px 140px;
+  grid-template-columns: 40px 60px 80px 1fr 140px 160px 140px;
   gap: 1rem;
   padding: 0.75rem 1rem;
   background-color: #2a2a2a;
@@ -192,7 +192,7 @@
 
 .epg-source-row {
   display: grid;
-  grid-template-columns: 40px 60px 50px 1fr 140px 160px 140px;
+  grid-template-columns: 40px 60px 80px 1fr 140px 160px 140px;
   gap: 1rem;
   padding: 1rem;
   border-bottom: 1px solid #333;
@@ -239,12 +239,21 @@
 
 .source-status {
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
+  gap: 0.25rem;
 }
 
 .source-status .material-icons {
   font-size: 20px;
+}
+
+.source-status .status-label {
+  font-size: 0.7rem;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
 }
 
 .status-success {
@@ -259,7 +268,7 @@
   color: #f59e0b;
 }
 
-.status-pending .material-icons {
+.status-pending .spinning {
   animation: spin 1s linear infinite;
 }
 
@@ -273,6 +282,21 @@
 
 .source-info {
   min-width: 0;
+}
+
+.source-message {
+  font-size: 0.75rem;
+  color: #f59e0b;
+  margin-top: 0.25rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 300px;
+}
+
+.status-error .source-message,
+.epg-source-row:has(.status-error) .source-message {
+  color: #f87171;
 }
 
 .source-name {

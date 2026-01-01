@@ -48,7 +48,7 @@ function SortableEPGSourceRow({ source, onEdit, onDelete, onRefresh, onToggleAct
     switch (status) {
       case 'success': return 'check_circle';
       case 'error': return 'error';
-      case 'fetching': return 'sync';
+      case 'fetching': return 'cloud_download';
       case 'parsing': return 'hourglass_empty';
       case 'disabled': return 'block';
       default: return 'schedule';
@@ -63,6 +63,17 @@ function SortableEPGSourceRow({ source, onEdit, onDelete, onRefresh, onToggleAct
       case 'parsing': return 'status-pending';
       case 'disabled': return 'status-disabled';
       default: return 'status-idle';
+    }
+  };
+
+  const getStatusLabel = (status: EPGSource['status']) => {
+    switch (status) {
+      case 'success': return 'Ready';
+      case 'error': return 'Error';
+      case 'fetching': return 'Downloading...';
+      case 'parsing': return 'Parsing...';
+      case 'disabled': return 'Disabled';
+      default: return 'Idle';
     }
   };
 
@@ -94,8 +105,11 @@ function SortableEPGSourceRow({ source, onEdit, onDelete, onRefresh, onToggleAct
         {source.priority}
       </div>
 
-      <div className={`source-status ${getStatusClass(source.status)}`}>
-        <span className="material-icons">{getStatusIcon(source.status)}</span>
+      <div className={`source-status ${getStatusClass(source.status)}`} title={source.last_message || ''}>
+        <span className={`material-icons ${(source.status === 'fetching' || source.status === 'parsing') ? 'spinning' : ''}`}>
+          {getStatusIcon(source.status)}
+        </span>
+        <span className="status-label">{getStatusLabel(source.status)}</span>
       </div>
 
       <div className="source-info">
@@ -104,6 +118,11 @@ function SortableEPGSourceRow({ source, onEdit, onDelete, onRefresh, onToggleAct
           <span className="source-type">{getSourceTypeLabel(source.source_type)}</span>
           {source.url && <span className="source-url" title={source.url}>{source.url}</span>}
         </div>
+        {source.last_message && (source.status === 'fetching' || source.status === 'parsing' || source.status === 'error') && (
+          <div className="source-message" title={source.last_message}>
+            {source.last_message}
+          </div>
+        )}
       </div>
 
       <div className="source-stats">
@@ -438,12 +457,18 @@ export function EPGManagerTab() {
       setSources(prev => prev.map(s =>
         s.id === source.id ? { ...s, status: 'fetching' } : s
       ));
-      // Start polling for status updates
+      // Start polling for status updates every 2 seconds
       const pollInterval = setInterval(async () => {
-        await loadSources();
-      }, 3000);
-      // Stop polling after 2 minutes
-      setTimeout(() => clearInterval(pollInterval), 120000);
+        const updatedSources = await api.getEPGSources();
+        const updatedSource = updatedSources.find(s => s.id === source.id);
+        setSources(updatedSources.filter(s => s.source_type !== 'dummy').sort((a, b) => b.priority - a.priority));
+        // Stop polling when refresh completes
+        if (updatedSource && (updatedSource.status === 'success' || updatedSource.status === 'error')) {
+          clearInterval(pollInterval);
+        }
+      }, 2000);
+      // Stop polling after 5 minutes max
+      setTimeout(() => clearInterval(pollInterval), 300000);
     } catch (err) {
       setError('Failed to refresh EPG source');
     }
@@ -474,12 +499,19 @@ export function EPGManagerTab() {
       setSources(prev => prev.map(s =>
         s.is_active && s.source_type !== 'dummy' ? { ...s, status: 'fetching' } : s
       ));
-      // Start polling for status updates
+      // Start polling for status updates every 2 seconds
       const pollInterval = setInterval(async () => {
-        await loadSources();
-      }, 3000);
-      // Stop polling after 5 minutes
-      setTimeout(() => clearInterval(pollInterval), 300000);
+        const updatedSources = await api.getEPGSources();
+        const standardSources = updatedSources.filter(s => s.source_type !== 'dummy').sort((a, b) => b.priority - a.priority);
+        setSources(standardSources);
+        // Stop polling when all sources are done (no fetching/parsing)
+        const stillRefreshing = standardSources.some(s => s.status === 'fetching' || s.status === 'parsing');
+        if (!stillRefreshing) {
+          clearInterval(pollInterval);
+        }
+      }, 2000);
+      // Stop polling after 10 minutes max
+      setTimeout(() => clearInterval(pollInterval), 600000);
     } catch (err) {
       setError('Failed to trigger EPG import');
     }
