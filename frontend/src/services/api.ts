@@ -182,6 +182,7 @@ export interface SettingsResponse {
   country_separator: string;
   timezone_preference: string;
   show_stream_urls: boolean;
+  hide_auto_sync_groups: boolean;
 }
 
 export interface TestConnectionResult {
@@ -205,6 +206,7 @@ export async function saveSettings(settings: {
   country_separator: string;
   timezone_preference: string;
   show_stream_urls?: boolean;  // Optional - defaults to true
+  hide_auto_sync_groups?: boolean;  // Optional - defaults to false
 }): Promise<{ status: string; configured: boolean }> {
   return fetchJson(`${API_BASE}/settings`, {
     method: 'POST',
