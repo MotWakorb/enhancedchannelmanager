@@ -6,9 +6,9 @@
 }
 
 .header {
-  background-color: #1a1a1a;
+  background-color: var(--bg-tertiary);
   padding: 1rem;
-  border-bottom: 1px solid #333;
+  border-bottom: 1px solid var(--border-primary);
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -26,9 +26,9 @@
 }
 
 .settings-btn {
-  background-color: #333;
-  border: 1px solid #444;
-  color: #ccc;
+  background-color: var(--border-primary);
+  border: 1px solid var(--border-secondary);
+  color: var(--button-text);
   padding: 0.5rem 1rem;
   border-radius: 4px;
   cursor: pointer;
@@ -38,7 +38,7 @@
 
 .settings-btn:hover {
   background-color: #444;
-  color: #fff;
+  color: var(--text-primary);
 }
 
 /* Edit Mode Header Styles */
@@ -56,7 +56,7 @@
 .edit-mode-label {
   display: flex;
   align-items: center;
-  color: #a5b4fc;
+  color: var(--accent-secondary);
   font-weight: 500;
   font-size: 0.9rem;
 }
@@ -68,7 +68,7 @@
 }
 
 .edit-mode-timer {
-  color: #a5b4fc;
+  color: var(--accent-secondary);
   font-size: 0.85rem;
 }
 
@@ -87,7 +87,7 @@
   padding: 0 0.75rem;
   background-color: rgba(74, 222, 128, 0.2);
   border: 1px solid #4ade80;
-  color: #4ade80;
+  color: var(--success);
   border-radius: 4px;
   font-size: 0.85rem;
   font-weight: 500;
@@ -106,7 +106,7 @@
 
 .edit-mode-done-count {
   background-color: #16a34a;
-  color: #ffffff;
+  color: var(--text-primary)fff;
   padding: 0.125rem 0.375rem;
   border-radius: 8px;
   font-size: 0.7rem;
@@ -123,8 +123,8 @@
   height: 32px;
   padding: 0 0.75rem;
   background-color: transparent;
-  border: 1px solid #555;
-  color: #aaa;
+  border: 1px solid var(--border-secondary);
+  color: var(--text-secondary);
   border-radius: 4px;
   font-size: 0.85rem;
   font-weight: 500;
@@ -134,8 +134,8 @@
 
 .edit-mode-cancel-btn:hover:not(:disabled) {
   background-color: rgba(248, 113, 113, 0.15);
-  border-color: #f87171;
-  color: #f87171;
+  border-color: var(--error);
+  color: var(--error);
 }
 
 .edit-mode-cancel-btn:disabled {
@@ -147,9 +147,9 @@
   display: flex;
   align-items: center;
   padding: 0.5rem 0.75rem;
-  background-color: #333;
-  border: 1px solid #444;
-  color: #ccc;
+  background-color: var(--border-primary);
+  border: 1px solid var(--border-secondary);
+  color: var(--button-text);
   border-radius: 4px;
   font-size: 0.9rem;
   font-weight: 500;
@@ -159,7 +159,7 @@
 
 .enter-edit-mode-btn:hover {
   background-color: #444;
-  color: #fff;
+  color: var(--text-primary);
 }
 
 .main {
@@ -171,7 +171,7 @@
 .pane h2 {
   font-size: 1.1rem;
   margin-bottom: 1rem;
-  color: #888;
+  color: var(--text-secondary);
   text-transform: uppercase;
   letter-spacing: 0.05em;
 }
@@ -180,11 +180,11 @@
   display: flex;
   justify-content: space-between;
   align-items: center;
-  background-color: #1a1a1a;
+  background-color: var(--bg-tertiary);
   padding: 0.5rem 1rem;
-  border-top: 1px solid #333;
+  border-top: 1px solid var(--border-primary);
   font-size: 0.8rem;
-  color: #666;
+  color: var(--text-muted);
 }
 
 .footer-left {
@@ -199,15 +199,15 @@
 }
 
 .footer .status {
-  color: #4ade80;
+  color: var(--success);
 }
 
 .footer .error {
-  color: #f87171;
+  color: var(--error);
 }
 
 .footer .version {
-  color: #888;
+  color: var(--text-secondary);
 }
 
 /* Tab Loading Styles */
@@ -218,7 +218,7 @@
   justify-content: center;
   height: 100%;
   width: 100%;
-  color: #888;
+  color: var(--text-secondary);
   gap: 1rem;
 }
 
