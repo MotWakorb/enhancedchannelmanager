@@ -110,6 +110,7 @@ class SettingsRequest(BaseModel):
     country_separator: str = "|"
     timezone_preference: str = "both"
     show_stream_urls: bool = True
+    hide_auto_sync_groups: bool = False
 
 
 class SettingsResponse(BaseModel):
@@ -124,6 +125,7 @@ class SettingsResponse(BaseModel):
     country_separator: str
     timezone_preference: str
     show_stream_urls: bool
+    hide_auto_sync_groups: bool
 
 
 class TestConnectionRequest(BaseModel):
@@ -148,6 +150,7 @@ async def get_current_settings():
         country_separator=settings.country_separator,
         timezone_preference=settings.timezone_preference,
         show_stream_urls=settings.show_stream_urls,
+        hide_auto_sync_groups=settings.hide_auto_sync_groups,
     )
 
 
@@ -183,6 +186,7 @@ async def update_settings(request: SettingsRequest):
         country_separator=request.country_separator,
         timezone_preference=request.timezone_preference,
         show_stream_urls=request.show_stream_urls,
+        hide_auto_sync_groups=request.hide_auto_sync_groups,
     )
     save_settings(new_settings)
     clear_settings_cache()

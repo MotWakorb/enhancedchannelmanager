@@ -21,6 +21,7 @@ export function SettingsModal({ isOpen, onClose, onSaved }: SettingsModalProps) 
   const [countrySeparator, setCountrySeparator] = useState('|');
   const [timezonePreference, setTimezonePreference] = useState('both');
   const [showStreamUrls, setShowStreamUrls] = useState(true);
+  const [hideAutoSyncGroups, setHideAutoSyncGroups] = useState(false);
   const [loading, setLoading] = useState(false);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
@@ -52,6 +53,7 @@ export function SettingsModal({ isOpen, onClose, onSaved }: SettingsModalProps) 
       setCountrySeparator(settings.country_separator);
       setTimezonePreference(settings.timezone_preference);
       setShowStreamUrls(settings.show_stream_urls);
+      setHideAutoSyncGroups(settings.hide_auto_sync_groups);
       setTestResult(null);
       setError(null);
     } catch (err) {
@@ -112,6 +114,7 @@ export function SettingsModal({ isOpen, onClose, onSaved }: SettingsModalProps) 
         country_separator: countrySeparator,
         timezone_preference: timezonePreference,
         show_stream_urls: showStreamUrls,
+        hide_auto_sync_groups: hideAutoSyncGroups,
       });
       onSaved();
       onClose();

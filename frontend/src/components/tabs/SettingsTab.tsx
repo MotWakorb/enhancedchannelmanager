@@ -27,6 +27,7 @@ export function SettingsTab({ onSaved }: SettingsTabProps) {
 
   // Appearance settings
   const [showStreamUrls, setShowStreamUrls] = useState(true);
+  const [hideAutoSyncGroups, setHideAutoSyncGroups] = useState(false);
 
   // UI state
   const [loading, setLoading] = useState(false);
@@ -59,6 +60,7 @@ export function SettingsTab({ onSaved }: SettingsTabProps) {
       setCountrySeparator(settings.country_separator);
       setTimezonePreference(settings.timezone_preference);
       setShowStreamUrls(settings.show_stream_urls);
+      setHideAutoSyncGroups(settings.hide_auto_sync_groups);
       setTestResult(null);
       setError(null);
     } catch (err) {
@@ -121,6 +123,7 @@ export function SettingsTab({ onSaved }: SettingsTabProps) {
         country_separator: countrySeparator,
         timezone_preference: timezonePreference,
         show_stream_urls: showStreamUrls,
+        hide_auto_sync_groups: hideAutoSyncGroups,
       });
       setOriginalUrl(url);
       setOriginalUsername(username);
@@ -256,6 +259,22 @@ export function SettingsTab({ onSaved }: SettingsTabProps) {
             <p>
               Display the full stream URL below each stream and channel. Disable this for cleaner
               screenshots or to hide sensitive URL information.
+            </p>
+          </div>
+        </div>
+
+        <div className="checkbox-group">
+          <input
+            id="hideAutoSyncGroups"
+            type="checkbox"
+            checked={hideAutoSyncGroups}
+            onChange={(e) => setHideAutoSyncGroups(e.target.checked)}
+          />
+          <div className="checkbox-content">
+            <label htmlFor="hideAutoSyncGroups">Hide auto-sync groups by default</label>
+            <p>
+              Automatically hide channel groups that are managed by Dispatcharr's M3U auto-sync feature.
+              You can still show them using the filter in the Channel Manager tab.
             </p>
           </div>
         </div>

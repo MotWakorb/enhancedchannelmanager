@@ -29,6 +29,7 @@ class DispatcharrSettings(BaseModel):
     timezone_preference: str = "both"
     # Appearance settings
     show_stream_urls: bool = True  # Show stream URLs in the UI (can hide for screenshots)
+    hide_auto_sync_groups: bool = False  # Hide auto-sync channel groups by default
 
     def is_configured(self) -> bool:
         return bool(self.url and self.username and self.password)

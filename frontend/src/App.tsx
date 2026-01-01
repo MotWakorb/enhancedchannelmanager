@@ -232,6 +232,14 @@ function App() {
           timezonePreference: settings.timezone_preference,
         });
 
+        // Apply hide_auto_sync_groups setting to channelListFilters
+        if (settings.hide_auto_sync_groups) {
+          setChannelListFilters(prev => ({
+            ...prev,
+            showAutoChannelGroups: false,
+          }));
+        }
+
         if (!settings.configured) {
           setSettingsOpen(true);
           return;
@@ -294,6 +302,14 @@ function App() {
         countrySeparator: settings.country_separator,
         timezonePreference: settings.timezone_preference,
       });
+
+      // Apply hide_auto_sync_groups setting to channelListFilters
+      if (settings.hide_auto_sync_groups) {
+        setChannelListFilters(prev => ({
+          ...prev,
+          showAutoChannelGroups: false,
+        }));
+      }
     } catch (err) {
       console.error('Failed to reload settings:', err);
     }
