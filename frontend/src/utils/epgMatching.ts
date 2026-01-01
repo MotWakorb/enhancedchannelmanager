@@ -137,17 +137,71 @@ export function parseTvgId(tvgId: string): [string, string | null] {
 }
 
 /**
- * Find EPG matches for a channel based on name similarity and country filtering.
- *
- * @param channel - The channel to find matches for
- * @param channelStreams - Streams associated with this channel
- * @param epgData - All available EPG data entries
- * @returns Match result with categorized matches
+ * Pre-processed EPG lookup structure for fast matching.
+ * Built once per batch operation, then used for O(1) lookups.
  */
-export function findEPGMatches(
+interface EPGLookup {
+  // Map from normalized name -> array of EPG entries
+  byNormalizedTvgId: Map<string, EPGData[]>;
+  byNormalizedName: Map<string, EPGData[]>;
+  byCallSign: Map<string, EPGData[]>;
+  // Pre-parsed country codes for sorting
+  countryByEpgId: Map<number, string | null>;
+}
+
+/**
+ * Build lookup maps from EPG data for fast matching.
+ * This is O(n) where n = EPG entries, done once per batch.
+ */
+function buildEPGLookup(epgData: EPGData[]): EPGLookup {
+  const byNormalizedTvgId = new Map<string, EPGData[]>();
+  const byNormalizedName = new Map<string, EPGData[]>();
+  const byCallSign = new Map<string, EPGData[]>();
+  const countryByEpgId = new Map<number, string | null>();
+
+  for (const epg of epgData) {
+    // Parse and normalize TVG-ID
+    const [epgNormalizedTvgId, country] = parseTvgId(epg.tvg_id);
+    countryByEpgId.set(epg.id, country);
+
+    // Add to TVG-ID lookup
+    if (epgNormalizedTvgId) {
+      const existing = byNormalizedTvgId.get(epgNormalizedTvgId) || [];
+      existing.push(epg);
+      byNormalizedTvgId.set(epgNormalizedTvgId, existing);
+    }
+
+    // Add to name lookup
+    const epgNormalizedName = normalizeForEPGMatch(epg.name);
+    if (epgNormalizedName) {
+      const existing = byNormalizedName.get(epgNormalizedName) || [];
+      existing.push(epg);
+      byNormalizedName.set(epgNormalizedName, existing);
+    }
+
+    // Extract and add call sign if present
+    const callSignMatch = epg.tvg_id.match(/\(([^)]+)\)/);
+    if (callSignMatch) {
+      const callSign = callSignMatch[1].toLowerCase().replace(/[^a-z0-9]/g, '');
+      if (callSign) {
+        const existing = byCallSign.get(callSign) || [];
+        existing.push(epg);
+        byCallSign.set(callSign, existing);
+      }
+    }
+  }
+
+  return { byNormalizedTvgId, byNormalizedName, byCallSign, countryByEpgId };
+}
+
+/**
+ * Find EPG matches for a channel using pre-built lookup maps.
+ * This is O(1) per channel instead of O(n) where n = EPG entries.
+ */
+function findEPGMatchesWithLookup(
   channel: Channel,
   channelStreams: Stream[],
-  epgData: EPGData[]
+  lookup: EPGLookup
 ): EPGMatchResult {
   // Detect country from streams
   const detectedCountry = detectCountryFromStreams(channelStreams);
@@ -165,35 +219,34 @@ export function findEPGMatches(
     };
   }
 
-  // Find matching EPG entries
-  // Match against: TVG-ID name, call sign from TVG-ID, or EPG name field
-  const exactNameMatches: EPGData[] = [];
+  // Collect matches from all lookup maps (using Set to dedupe by EPG id)
+  const matchSet = new Map<number, EPGData>();
 
-  for (const epg of epgData) {
-    const [epgNormalizedTvgId] = parseTvgId(epg.tvg_id);
-    const epgNormalizedName = normalizeForEPGMatch(epg.name);
-
-    // Extract call sign from TVG-ID if present (e.g., "CNN" from "CableNewsNetwork(CNN).us")
-    const callSignMatch = epg.tvg_id.match(/\(([^)]+)\)/);
-    const epgCallSign = callSignMatch ? callSignMatch[1].toLowerCase().replace(/[^a-z0-9]/g, '') : null;
-
-    // Match if channel name matches:
-    // 1. The normalized TVG-ID name part
-    // 2. The call sign from the TVG-ID
-    // 3. The normalized EPG name field
-    const matches = normalizedName === epgNormalizedTvgId ||
-                   (epgCallSign && normalizedName === epgCallSign) ||
-                   normalizedName === epgNormalizedName;
-
-    if (matches) {
-      exactNameMatches.push(epg);
-    }
+  // Check TVG-ID matches
+  const tvgIdMatches = lookup.byNormalizedTvgId.get(normalizedName) || [];
+  for (const epg of tvgIdMatches) {
+    matchSet.set(epg.id, epg);
   }
 
-  // Sort exact matches to put the matching country first (if we detected one)
-  const matches = exactNameMatches.sort((a, b) => {
-    const [, aCountry] = parseTvgId(a.tvg_id);
-    const [, bCountry] = parseTvgId(b.tvg_id);
+  // Check name matches
+  const nameMatches = lookup.byNormalizedName.get(normalizedName) || [];
+  for (const epg of nameMatches) {
+    matchSet.set(epg.id, epg);
+  }
+
+  // Check call sign matches
+  const callSignMatches = lookup.byCallSign.get(normalizedName) || [];
+  for (const epg of callSignMatches) {
+    matchSet.set(epg.id, epg);
+  }
+
+  // Convert to array and sort
+  const matchArray = Array.from(matchSet.values());
+
+  // Sort matches to put the matching country first (if we detected one)
+  const matches = matchArray.sort((a, b) => {
+    const aCountry = lookup.countryByEpgId.get(a.id);
+    const bCountry = lookup.countryByEpgId.get(b.id);
 
     // Matching country goes first
     if (detectedCountry) {
@@ -225,7 +278,28 @@ export function findEPGMatches(
 }
 
 /**
+ * Find EPG matches for a channel based on name similarity and country filtering.
+ * NOTE: For batch operations, use batchFindEPGMatches instead for better performance.
+ *
+ * @param channel - The channel to find matches for
+ * @param channelStreams - Streams associated with this channel
+ * @param epgData - All available EPG data entries
+ * @returns Match result with categorized matches
+ */
+export function findEPGMatches(
+  channel: Channel,
+  channelStreams: Stream[],
+  epgData: EPGData[]
+): EPGMatchResult {
+  // For single channel, build lookup and use it
+  const lookup = buildEPGLookup(epgData);
+  return findEPGMatchesWithLookup(channel, channelStreams, lookup);
+}
+
+/**
  * Process multiple channels for EPG matching.
+ * Uses pre-built lookup maps for O(n + m) performance instead of O(n * m)
+ * where n = channels and m = EPG entries.
  *
  * @param channels - Channels to match
  * @param allStreams - All available streams
@@ -237,17 +311,31 @@ export function batchFindEPGMatches(
   allStreams: Stream[],
   epgData: EPGData[]
 ): EPGMatchResult[] {
+  console.log('[EPGMatching] Building lookup maps...');
+  const startLookup = performance.now();
+
+  // Build lookup maps ONCE for all EPG data
+  const epgLookup = buildEPGLookup(epgData);
+
   // Create a lookup map for streams by ID
   const streamMap = new Map(allStreams.map(s => [s.id, s]));
 
-  return channels.map(channel => {
+  console.log(`[EPGMatching] Lookup maps built in ${(performance.now() - startLookup).toFixed(0)}ms`);
+  console.log('[EPGMatching] Matching channels...');
+  const startMatch = performance.now();
+
+  const results = channels.map(channel => {
     // Get streams associated with this channel
     const channelStreams = channel.streams
       .map(id => streamMap.get(id))
       .filter((s): s is Stream => s !== undefined);
 
-    return findEPGMatches(channel, channelStreams, epgData);
+    return findEPGMatchesWithLookup(channel, channelStreams, epgLookup);
   });
+
+  console.log(`[EPGMatching] Matched ${channels.length} channels in ${(performance.now() - startMatch).toFixed(0)}ms`);
+
+  return results;
 }
 
 /**
