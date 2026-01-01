@@ -547,6 +547,8 @@ export function detectRegionalVariants(streams: { name: string }[]): boolean {
 export interface NormalizeOptions {
   timezonePreference?: TimezonePreference;
   stripCountryPrefix?: boolean;
+  keepCountryPrefix?: boolean;       // Keep and normalize country prefix format
+  countrySeparator?: NumberSeparator; // Separator to use when keeping country prefix
 }
 
 // Normalize a stream name for matching purposes
@@ -556,22 +558,37 @@ export interface NormalizeOptions {
 // - 'east': prefer East timezone - merge West into base name, treat non-suffixed as East
 // - 'west': prefer West timezone - merge East/non-suffixed into base, keep West
 // stripCountryPrefix: if true, removes country prefix (e.g., "US: Sports Channel" -> "Sports Channel")
+// keepCountryPrefix: if true, keeps country prefix but normalizes format (e.g., "US: Sports Channel" -> "US | Sports Channel")
 export function normalizeStreamName(name: string, timezonePreferenceOrOptions: TimezonePreference | NormalizeOptions = 'both'): string {
   // Handle both old signature (just TimezonePreference) and new signature (NormalizeOptions)
   let timezonePreference: TimezonePreference = 'both';
   let stripCountry = false;
+  let keepCountry = false;
+  let countrySeparator: NumberSeparator = '|';
 
   if (typeof timezonePreferenceOrOptions === 'object') {
     timezonePreference = timezonePreferenceOrOptions.timezonePreference ?? 'both';
     stripCountry = timezonePreferenceOrOptions.stripCountryPrefix ?? false;
+    keepCountry = timezonePreferenceOrOptions.keepCountryPrefix ?? false;
+    countrySeparator = timezonePreferenceOrOptions.countrySeparator ?? '|';
   } else {
     timezonePreference = timezonePreferenceOrOptions;
   }
 
   let normalized = name.trim();
 
-  // Strip country prefix if requested (do this first, before other normalization)
-  if (stripCountry) {
+  // Handle country prefix based on options
+  // keepCountryPrefix takes precedence over stripCountryPrefix if both are set
+  if (keepCountry) {
+    // Keep the country prefix but normalize its format
+    const countryCode = getCountryPrefix(normalized);
+    if (countryCode) {
+      // Strip the existing prefix (with whatever separator it had)
+      const nameWithoutPrefix = stripCountryPrefix(normalized);
+      // Re-add it with the chosen separator
+      normalized = `${countryCode} ${countrySeparator} ${nameWithoutPrefix}`;
+    }
+  } else if (stripCountry) {
     normalized = stripCountryPrefix(normalized);
   }
 
@@ -634,13 +651,15 @@ export function filterStreamsByTimezone<T extends { name: string }>(
   });
 }
 
-// Separator types for channel number prefix
+// Separator types for channel number prefix and country prefix
 export type NumberSeparator = '-' | ':' | '|';
 
 // Options for bulk channel creation
 export interface BulkCreateOptions {
   timezonePreference?: TimezonePreference;
   stripCountryPrefix?: boolean;
+  keepCountryPrefix?: boolean;       // Keep and normalize country prefix (e.g., "US: ESPN" -> "US | ESPN")
+  countrySeparator?: NumberSeparator; // Separator for country prefix when keeping
   addChannelNumber?: boolean;
   numberSeparator?: NumberSeparator;
 }
@@ -656,12 +675,16 @@ export async function bulkCreateChannelsFromStreams(
   // Handle both old signature (just TimezonePreference) and new signature (BulkCreateOptions)
   let timezonePreference: TimezonePreference = 'both';
   let stripCountry = false;
+  let keepCountry = false;
+  let countrySeparator: NumberSeparator = '|';
   let addChannelNumber = false;
   let numberSeparator: NumberSeparator = '|';
 
   if (typeof timezonePreferenceOrOptions === 'object') {
     timezonePreference = timezonePreferenceOrOptions.timezonePreference ?? 'both';
     stripCountry = timezonePreferenceOrOptions.stripCountryPrefix ?? false;
+    keepCountry = timezonePreferenceOrOptions.keepCountryPrefix ?? false;
+    countrySeparator = timezonePreferenceOrOptions.countrySeparator ?? '|';
     addChannelNumber = timezonePreferenceOrOptions.addChannelNumber ?? false;
     numberSeparator = timezonePreferenceOrOptions.numberSeparator ?? '|';
   } else {
@@ -683,6 +706,8 @@ export async function bulkCreateChannelsFromStreams(
     const normalizedName = normalizeStreamName(stream.name, {
       timezonePreference,
       stripCountryPrefix: stripCountry,
+      keepCountryPrefix: keepCountry,
+      countrySeparator,
     });
     const existing = streamsByNormalizedName.get(normalizedName);
     if (existing) {

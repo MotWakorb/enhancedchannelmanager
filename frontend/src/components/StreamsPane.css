@@ -875,6 +875,18 @@
   margin-top: 0.25rem;
 }
 
+.option-hint.radio-hint {
+  margin-bottom: 0.75rem;
+}
+
+.country-prefix-options {
+  margin-top: 0.5rem;
+}
+
+.country-separator {
+  margin-bottom: 0.25rem;
+}
+
 .separator-options {
   display: flex;
   align-items: center;
