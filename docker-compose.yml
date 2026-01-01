@@ -5,7 +5,7 @@ services:
       context: .
       dockerfile: Dockerfile
     ports:
-      - "6100:8000"
+      - "6100:6100"
     volumes:
       - ecm-config:/config
     environment:
