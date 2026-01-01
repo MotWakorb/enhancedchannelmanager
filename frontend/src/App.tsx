@@ -866,7 +866,7 @@ function App() {
   return (
     <div className="app">
       <header className={`header ${isEditMode ? 'edit-mode-active' : ''}`}>
-        <h1>Dispatcharr Manager Next</h1>
+        <h1>Enhanced Channel Manager</h1>
         <div className="header-actions">
           {/* Edit Mode Controls - only show on Channel Manager tab */}
           {activeTab === 'channel-manager' && (
