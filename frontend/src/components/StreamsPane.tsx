@@ -711,6 +711,18 @@ export function StreamsPane({
                               </span>
                             )}
                           </div>
+                          {stream.url && (
+                            <button
+                              className="copy-url-btn"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                navigator.clipboard.writeText(stream.url!);
+                              }}
+                              title="Copy stream URL"
+                            >
+                              <span className="material-icons">content_copy</span>
+                            </button>
+                          )}
                           <span className="drag-handle">⋮⋮</span>
                         </div>
                       ))}

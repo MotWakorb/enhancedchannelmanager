@@ -1026,6 +1026,43 @@
   color: #f87171;
 }
 
+/* Copy URL button styles */
+.copy-url-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.25rem;
+  background: transparent;
+  border: none;
+  color: #555;
+  cursor: pointer;
+  border-radius: 4px;
+  transition: color 0.15s, background 0.15s, opacity 0.15s;
+  opacity: 0;
+}
+
+.copy-url-btn:hover {
+  color: #646cff;
+  background: rgba(100, 108, 255, 0.1);
+}
+
+.copy-url-btn .material-icons {
+  font-size: 1rem;
+}
+
+.inline-stream-item:hover .copy-url-btn {
+  opacity: 1;
+}
+
+.channel-item:hover .channel-copy-url-btn {
+  opacity: 1;
+}
+
+.channel-copy-url-btn {
+  margin-left: auto;
+  margin-right: 0.25rem;
+}
+
 /* Modal styles */
 .modal-overlay {
   position: fixed;
