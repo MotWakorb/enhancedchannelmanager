@@ -177,11 +177,25 @@
 }
 
 .footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
   background-color: #1a1a1a;
   padding: 0.5rem 1rem;
   border-top: 1px solid #333;
   font-size: 0.8rem;
   color: #666;
+}
+
+.footer-left {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.footer-right {
+  display: flex;
+  align-items: center;
 }
 
 .footer .status {
@@ -190,6 +204,10 @@
 
 .footer .error {
   color: #f87171;
+}
+
+.footer .version {
+  color: #888;
 }
 
 /* Tab Loading Styles */
