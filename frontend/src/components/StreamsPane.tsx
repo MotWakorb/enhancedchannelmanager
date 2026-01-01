@@ -851,6 +851,7 @@ export function StreamsPane({
                           e.stopPropagation();
                           toggleGroupSelection(group);
                         }}
+                        onPointerDown={(e) => e.stopPropagation()}
                         title={isGroupFullySelected(group) ? 'Deselect all streams in group' : 'Select all streams in group'}
                       >
                         <span className="material-icons">
@@ -895,6 +896,7 @@ export function StreamsPane({
                                 e.stopPropagation();
                                 toggleSelect(stream.id);
                               }}
+                              onPointerDown={(e) => e.stopPropagation()}
                             >
                               <span className="material-icons">
                                 {isSelected(stream.id) ? 'check_box' : 'check_box_outline_blank'}
