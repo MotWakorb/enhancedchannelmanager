@@ -349,10 +349,12 @@ class DispatcharrClient:
         response.raise_for_status()
 
     async def refresh_epg_source(self, source_id: int) -> dict:
-        """Refresh a single EPG source by triggering import with source_id."""
-        # Try to trigger import for just this source
-        # If the API doesn't support filtering, it will import all sources
-        response = await self._request("POST", "/api/epg/import/", json={"source_id": source_id})
+        """Refresh a single EPG source by triggering global import.
+
+        Note: Dispatcharr doesn't have a per-source refresh endpoint.
+        This triggers a full import of all active EPG sources.
+        """
+        response = await self._request("POST", "/api/epg/import/")
         response.raise_for_status()
         return response.json() if response.content else {}
 
