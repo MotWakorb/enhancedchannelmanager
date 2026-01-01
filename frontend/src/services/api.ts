@@ -292,6 +292,34 @@ export async function getStreamProfiles(): Promise<StreamProfile[]> {
   return fetchJson(`${API_BASE}/stream-profiles`);
 }
 
+// Helper function to get or create a logo by URL
+// Dispatcharr enforces unique URLs, so we try to create first, then search if it already exists
+async function getOrCreateLogo(name: string, url: string, logoCache: Map<string, Logo>): Promise<Logo> {
+  // Check cache first
+  const cached = logoCache.get(url);
+  if (cached) {
+    return cached;
+  }
+
+  try {
+    // Try to create the logo
+    const logo = await createLogo({ name, url });
+    logoCache.set(url, logo);
+    return logo;
+  } catch (error) {
+    // If creation failed, the logo might already exist - search for it
+    // Fetch all logos and find by URL (search param may not support exact URL match)
+    const allLogos = await getLogos({ pageSize: 10000 });
+    const existingLogo = allLogos.results.find((l) => l.url === url);
+    if (existingLogo) {
+      logoCache.set(url, existingLogo);
+      return existingLogo;
+    }
+    // If we still can't find it, re-throw the original error
+    throw error;
+  }
+}
+
 // Bulk Channel Creation
 export async function bulkCreateChannelsFromStreams(
   streams: { id: number; name: string; logo_url?: string | null }[],
@@ -300,6 +328,8 @@ export async function bulkCreateChannelsFromStreams(
 ): Promise<{ created: Channel[]; errors: string[] }> {
   const created: Channel[] = [];
   const errors: string[] = [];
+  // Cache logos to avoid repeated lookups for the same URL
+  const logoCache = new Map<string, Logo>();
 
   for (let i = 0; i < streams.length; i++) {
     const stream = streams[i];
@@ -320,10 +350,10 @@ export async function bulkCreateChannelsFromStreams(
         errors.push(`Channel "${stream.name}" created but stream assignment failed: ${streamError}`);
       }
 
-      // If the stream has a logo, create it and assign to the channel
+      // If the stream has a logo, get or create it and assign to the channel
       if (stream.logo_url) {
         try {
-          const logo = await createLogo({ name: stream.name, url: stream.logo_url });
+          const logo = await getOrCreateLogo(stream.name, stream.logo_url, logoCache);
           await updateChannel(channel.id, { logo_id: logo.id });
           created.push({ ...channel, streams: [stream.id], logo_id: logo.id });
         } catch (logoError) {

@@ -296,6 +296,9 @@ class DispatcharrClient:
     async def create_logo(self, data: dict) -> dict:
         """Create a new logo."""
         response = await self._request("POST", "/api/channels/logos/", json=data)
+        if response.status_code >= 400:
+            import sys
+            print(f"Logo creation error - Status: {response.status_code}, Body: {response.text}", file=sys.stderr, flush=True)
         response.raise_for_status()
         return response.json()
 
