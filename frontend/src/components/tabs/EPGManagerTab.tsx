@@ -71,11 +71,14 @@ function SortableEPGSourceRow({ source, onEdit, onDelete, onRefresh, onToggleAct
       case 'success': return 'Ready';
       case 'error': return 'Error';
       case 'fetching': return 'Downloading...';
-      case 'parsing': return 'Parsing...';
+      case 'parsing': return 'Processing...';
       case 'disabled': return 'Disabled';
       default: return 'Idle';
     }
   };
+
+  // Check if source is actively being refreshed
+  const isRefreshing = source.status === 'fetching' || source.status === 'parsing';
 
   const getSourceTypeLabel = (type: EPGSourceType) => {
     switch (type) {
@@ -106,10 +109,13 @@ function SortableEPGSourceRow({ source, onEdit, onDelete, onRefresh, onToggleAct
       </div>
 
       <div className={`source-status ${getStatusClass(source.status)}`} title={source.last_message || ''}>
-        <span className={`material-icons ${(source.status === 'fetching' || source.status === 'parsing') ? 'spinning' : ''}`}>
+        <span className={`material-icons ${isRefreshing ? 'spinning' : ''}`}>
           {getStatusIcon(source.status)}
         </span>
         <span className="status-label">{getStatusLabel(source.status)}</span>
+        {isRefreshing && (
+          <span className="status-hint">See Dispatcharr for progress</span>
+        )}
       </div>
 
       <div className="source-info">
@@ -118,7 +124,7 @@ function SortableEPGSourceRow({ source, onEdit, onDelete, onRefresh, onToggleAct
           <span className="source-type">{getSourceTypeLabel(source.source_type)}</span>
           {source.url && <span className="source-url" title={source.url}>{source.url}</span>}
         </div>
-        {source.last_message && (source.status === 'fetching' || source.status === 'parsing' || source.status === 'error') && (
+        {source.last_message && source.status === 'error' && (
           <div className="source-message" title={source.last_message}>
             {source.last_message}
           </div>

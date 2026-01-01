@@ -256,6 +256,12 @@
   letter-spacing: 0.02em;
 }
 
+.source-status .status-hint {
+  font-size: 0.65rem;
+  color: #666;
+  font-style: italic;
+}
+
 .status-success {
   color: #22c55e;
 }

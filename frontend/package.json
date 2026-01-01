@@ -1,7 +1,7 @@
 {
-  "name": "dispatcharr-manager-next",
+  "name": "enhanced-channel-manager",
   "private": true,
-  "version": "0.2.20007",
+  "version": "0.2.20008",
   "type": "module",
   "scripts": {
     "dev": "vite",
