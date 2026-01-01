@@ -593,11 +593,11 @@ export function EPGManagerTab() {
         <div className="epg-sources-list">
           <div className="list-header">
             <span className="col-drag"></span>
-            <span className="col-priority">Priority</span>
-            <span className="col-status">Status</span>
-            <span className="col-info">Source</span>
-            <span className="col-stats">Stats</span>
-            <span className="col-updated">Last Updated</span>
+            <span className="col-priority" title="Higher priority number = matches first for EPG channel matching">Priority</span>
+            <span className="col-status" title="Current refresh status. Idle and Ready are normal states.">Status</span>
+            <span className="col-info" title="EPG source name, type, and URL">Source</span>
+            <span className="col-stats" title="Number of channels matched to this EPG and total programs parsed">Stats</span>
+            <span className="col-updated" title="Last time this EPG source was refreshed">Last Updated</span>
             <span className="col-actions">Actions</span>
           </div>
 
