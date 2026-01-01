@@ -77,6 +77,29 @@
   font-size: 16px;
 }
 
+.bulk-reorder-btn {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  background-color: rgba(74, 222, 128, 0.15);
+  border: 1px solid #4ade80;
+  color: #4ade80;
+  padding: 0.375rem 0.75rem;
+  border-radius: 4px;
+  font-size: 0.85rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color 0.15s;
+}
+
+.bulk-reorder-btn:hover {
+  background-color: rgba(74, 222, 128, 0.25);
+}
+
+.bulk-reorder-btn .material-icons {
+  font-size: 16px;
+}
+
 .bulk-delete-btn {
   display: flex;
   align-items: center;
