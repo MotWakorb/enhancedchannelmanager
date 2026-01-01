@@ -153,7 +153,7 @@ services:
   ecm:
     image: ghcr.io/motwakorb/enhancedchannelmanager:latest
     ports:
-      - "8080:8000"
+      - "6100:6100"
     volumes:
       - ./config:/config
 ```
