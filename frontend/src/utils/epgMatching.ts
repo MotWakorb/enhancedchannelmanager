@@ -81,11 +81,15 @@ export function detectCountryFromStreams(streams: Stream[]): string | null {
 export function normalizeForEPGMatch(name: string): string {
   let normalized = name.trim();
 
-  // Strip channel number prefix (e.g., "107 | Channel Name" -> "Channel Name")
-  // Matches patterns like: "107 | ", "107 - ", "107: ", "107.", or just "107 " at the start
+  // Strip channel number prefix - multiple approaches to handle various formats
+  // Pattern 1: "107 | Channel", "107 - Channel", "107: Channel", "107. Channel"
   normalized = normalized.replace(/^\d+(?:\.\d+)?\s*[|\-:.]\s*/, '');
-  // Also handle case where number is at start with just space (e.g., "107 CNN")
+  // Pattern 2: "107 Channel" (number followed by space and letter)
   normalized = normalized.replace(/^\d+(?:\.\d+)?\s+(?=[A-Za-z])/, '');
+
+  // After stripping non-alphanumeric, we may have "5033CW" - strip leading digits
+  // We do this after the initial attempts to preserve any meaningful numeric prefixes
+  // that might be part of the actual name (rare but possible)
 
   // Strip country prefix
   normalized = stripCountryPrefix(normalized);
@@ -104,6 +108,10 @@ export function normalizeForEPGMatch(name: string): string {
 
   // Normalize to lowercase alphanumeric only
   normalized = normalized.toLowerCase().replace(/[^a-z0-9]/g, '');
+
+  // Final pass: strip leading digits that may remain after normalization
+  // This catches cases like "5033 | CW" where separator char wasn't matched
+  normalized = normalized.replace(/^\d+/, '');
 
   return normalized;
 }
