@@ -254,6 +254,16 @@
   text-overflow: ellipsis;
 }
 
+.stream-url {
+  font-size: 0.7rem;
+  color: #888;
+  margin-top: 0.125rem;
+  font-family: monospace;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .stream-provider {
   font-size: 0.75rem;
   color: #666;

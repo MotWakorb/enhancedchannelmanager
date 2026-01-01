@@ -705,6 +705,11 @@ export function StreamsPane({
                           )}
                           <div className="stream-info">
                             <span className="stream-name">{stream.name}</span>
+                            {stream.url && (
+                              <span className="stream-url" title={stream.url}>
+                                {stream.url}
+                              </span>
+                            )}
                             {stream.m3u_account && (
                               <span className="stream-provider">
                                 {providers.find((p) => p.id === stream.m3u_account)?.name || 'Unknown'}
