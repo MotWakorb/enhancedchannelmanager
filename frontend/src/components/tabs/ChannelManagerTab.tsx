@@ -114,7 +114,8 @@ export interface ChannelManagerTabProps {
     numberSeparator?: NumberSeparator,
     keepCountryPrefix?: boolean,
     countrySeparator?: NumberSeparator,
-    prefixOrder?: PrefixOrder
+    prefixOrder?: PrefixOrder,
+    stripNetworkPrefix?: boolean
   ) => Promise<void>;
 }
 
