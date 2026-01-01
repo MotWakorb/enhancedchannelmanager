@@ -624,7 +624,8 @@ function App() {
       streamsToCreate: Stream[],
       startingNumber: number,
       channelGroupId: number | null,
-      newGroupName?: string
+      newGroupName?: string,
+      timezonePreference?: api.TimezonePreference
     ) => {
       try {
         // If we need to create a new group first
@@ -643,7 +644,8 @@ function App() {
         const result = await api.bulkCreateChannelsFromStreams(
           streamsToCreate.map(s => ({ id: s.id, name: s.name, logo_url: s.logo_url })),
           startingNumber,
-          targetGroupId
+          targetGroupId,
+          timezonePreference ?? 'both'
         );
 
         // Update channels state with new channels
