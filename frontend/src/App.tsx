@@ -58,6 +58,7 @@ function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [autoRenameChannelNumber, setAutoRenameChannelNumber] = useState(false);
   const [dispatcharrUrl, setDispatcharrUrl] = useState('');
+  const [showStreamUrls, setShowStreamUrls] = useState(true);
   const [channelDefaults, setChannelDefaults] = useState({
     includeChannelNumberInName: false,
     channelNumberSeparator: '-',
@@ -219,6 +220,7 @@ function App() {
         const settings = await api.getSettings();
         setAutoRenameChannelNumber(settings.auto_rename_channel_number);
         setDispatcharrUrl(settings.url);
+        setShowStreamUrls(settings.show_stream_urls);
         setChannelDefaults({
           includeChannelNumberInName: settings.include_channel_number_in_name,
           channelNumberSeparator: settings.channel_number_separator,
@@ -279,6 +281,7 @@ function App() {
       const settings = await api.getSettings();
       setAutoRenameChannelNumber(settings.auto_rename_channel_number);
       setDispatcharrUrl(settings.url);
+      setShowStreamUrls(settings.show_stream_urls);
       setChannelDefaults({
         includeChannelNumberInName: settings.include_channel_number_in_name,
         channelNumberSeparator: settings.channel_number_separator,
@@ -1093,6 +1096,9 @@ function App() {
 
               // Dispatcharr URL for channel stream URLs
               dispatcharrUrl={dispatcharrUrl}
+
+              // Appearance settings
+              showStreamUrls={showStreamUrls}
             />
           )}
           {activeTab === 'm3u-manager' && <M3UManagerTab />}

@@ -179,6 +179,7 @@ export interface SettingsResponse {
   channel_number_separator: string;
   remove_country_prefix: boolean;
   timezone_preference: string;
+  show_stream_urls: boolean;
 }
 
 export interface TestConnectionResult {
@@ -199,6 +200,7 @@ export async function saveSettings(settings: {
   channel_number_separator: string;
   remove_country_prefix: boolean;
   timezone_preference: string;
+  show_stream_urls?: boolean;  // Optional - defaults to true
 }): Promise<{ status: string; configured: boolean }> {
   return fetchJson(`${API_BASE}/settings`, {
     method: 'POST',

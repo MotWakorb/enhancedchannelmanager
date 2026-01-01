@@ -104,6 +104,9 @@ export interface ChannelManagerTabProps {
   // Dispatcharr URL (for constructing channel stream URLs)
   dispatcharrUrl: string;
 
+  // Appearance settings
+  showStreamUrls?: boolean;
+
   // Bulk Create
   channelDefaults?: ChannelDefaults;
   // Stream group drop (for opening bulk create modal)
@@ -227,6 +230,9 @@ export function ChannelManagerTab({
   // Dispatcharr URL
   dispatcharrUrl,
 
+  // Appearance settings
+  showStreamUrls = true,
+
   // Bulk Create
   channelDefaults,
   externalTriggerGroupName,
@@ -301,6 +307,7 @@ export function ChannelManagerTab({
           onSelectChannelRange={onSelectChannelRange}
           dispatcharrUrl={dispatcharrUrl}
           onStreamGroupDrop={onStreamGroupDrop}
+          showStreamUrls={showStreamUrls}
         />
       }
       right={
@@ -325,6 +332,7 @@ export function ChannelManagerTab({
           externalTriggerGroupName={externalTriggerGroupName}
           onExternalTriggerHandled={onExternalTriggerHandled}
           onBulkCreateFromGroup={onBulkCreateFromGroup}
+          showStreamUrls={showStreamUrls}
         />
       }
     />

@@ -99,6 +99,8 @@ interface ChannelsPaneProps {
   dispatcharrUrl?: string;
   // Stream group drop callback (for bulk channel creation)
   onStreamGroupDrop?: (groupName: string, streamIds: number[]) => void;
+  // Appearance settings
+  showStreamUrls?: boolean;
 }
 
 interface GroupState {
@@ -137,6 +139,7 @@ interface SortableChannelProps {
   onEditChannel: () => void;
   onCopyChannelUrl?: () => void;
   channelUrl?: string;
+  showStreamUrls?: boolean;
 }
 
 interface SortableStreamItemProps {
@@ -145,9 +148,10 @@ interface SortableStreamItemProps {
   isEditMode: boolean;
   onRemove: (streamId: number) => void;
   onCopyUrl?: () => void;
+  showStreamUrls?: boolean;
 }
 
-function SortableStreamItem({ stream, providerName, isEditMode, onRemove, onCopyUrl }: SortableStreamItemProps) {
+function SortableStreamItem({ stream, providerName, isEditMode, onRemove, onCopyUrl, showStreamUrls = true }: SortableStreamItemProps) {
   const {
     attributes,
     listeners,
@@ -184,7 +188,7 @@ function SortableStreamItem({ stream, providerName, isEditMode, onRemove, onCopy
       )}
       <div className="inline-stream-info">
         <span className="inline-stream-name">{stream.name}</span>
-        {stream.url && (
+        {showStreamUrls && stream.url && (
           <span className="inline-stream-url" title={stream.url}>
             {stream.url}
           </span>
@@ -251,6 +255,7 @@ function SortableChannel({
   onEditChannel,
   onCopyChannelUrl,
   channelUrl,
+  showStreamUrls = true,
 }: SortableChannelProps) {
   const {
     attributes,
@@ -389,7 +394,7 @@ function SortableChannel({
           {channel.name}
         </span>
       )}
-      {channelUrl && (
+      {showStreamUrls && channelUrl && (
         <span className="channel-url" title={channelUrl}>
           {channelUrl}
         </span>
@@ -1181,6 +1186,8 @@ export function ChannelsPane({
   dispatcharrUrl = '',
   // Stream group drop
   onStreamGroupDrop,
+  // Appearance settings
+  showStreamUrls = true,
 }: ChannelsPaneProps) {
   // Suppress unused variable warnings - these are passed through but handled in parent
   void _onStageAddStream;
@@ -3285,6 +3292,7 @@ export function ChannelsPane({
                       onEditChannel={() => handleEditChannel(channel)}
                       onCopyChannelUrl={dispatcharrUrl && channel.uuid ? () => navigator.clipboard.writeText(`${dispatcharrUrl}/proxy/ts/stream/${channel.uuid}`) : undefined}
                       channelUrl={dispatcharrUrl && channel.uuid ? `${dispatcharrUrl}/proxy/ts/stream/${channel.uuid}` : undefined}
+                      showStreamUrls={showStreamUrls}
                     />
                     {selectedChannelId === channel.id && (
                       <div className="inline-streams">
@@ -3314,6 +3322,7 @@ export function ChannelsPane({
                                       isEditMode={isEditMode}
                                       onRemove={handleRemoveStream}
                                       onCopyUrl={stream.url ? () => navigator.clipboard.writeText(stream.url!) : undefined}
+                                      showStreamUrls={showStreamUrls}
                                     />
                                   </div>
                                 ))}

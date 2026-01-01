@@ -23,6 +23,9 @@ export function SettingsTab({ onSaved }: SettingsTabProps) {
   const [removeCountryPrefix, setRemoveCountryPrefix] = useState(false);
   const [timezonePreference, setTimezonePreference] = useState('both');
 
+  // Appearance settings
+  const [showStreamUrls, setShowStreamUrls] = useState(true);
+
   // UI state
   const [loading, setLoading] = useState(false);
   const [testing, setTesting] = useState(false);
@@ -51,6 +54,7 @@ export function SettingsTab({ onSaved }: SettingsTabProps) {
       setChannelNumberSeparator(settings.channel_number_separator);
       setRemoveCountryPrefix(settings.remove_country_prefix);
       setTimezonePreference(settings.timezone_preference);
+      setShowStreamUrls(settings.show_stream_urls);
       setTestResult(null);
       setError(null);
     } catch (err) {
@@ -110,6 +114,7 @@ export function SettingsTab({ onSaved }: SettingsTabProps) {
         channel_number_separator: channelNumberSeparator,
         remove_country_prefix: removeCountryPrefix,
         timezone_preference: timezonePreference,
+        show_stream_urls: showStreamUrls,
       });
       setOriginalUrl(url);
       setOriginalUsername(username);
@@ -205,6 +210,53 @@ export function SettingsTab({ onSaved }: SettingsTabProps) {
             {testing ? 'Testing...' : 'Test Connection'}
           </button>
         </div>
+        <button className="btn-primary" onClick={handleSave} disabled={loading}>
+          <span className="material-icons">save</span>
+          {loading ? 'Saving...' : 'Save Settings'}
+        </button>
+      </div>
+    </div>
+  );
+
+  const renderAppearancePage = () => (
+    <div className="settings-page">
+      <div className="settings-page-header">
+        <h2>Appearance</h2>
+        <p>Customize how the app displays information.</p>
+      </div>
+
+      {saveSuccess && (
+        <div className="save-success">
+          <span className="material-icons">check_circle</span>
+          Settings saved successfully
+        </div>
+      )}
+
+      <div className="settings-section">
+        <div className="settings-section-header">
+          <span className="material-icons">visibility</span>
+          <h3>Display Options</h3>
+        </div>
+
+        <div className="checkbox-group">
+          <input
+            id="showStreamUrls"
+            type="checkbox"
+            checked={showStreamUrls}
+            onChange={(e) => setShowStreamUrls(e.target.checked)}
+          />
+          <div className="checkbox-content">
+            <label htmlFor="showStreamUrls">Show stream URLs in the UI</label>
+            <p>
+              Display the full stream URL below each stream and channel. Disable this for cleaner
+              screenshots or to hide sensitive URL information.
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <div className="settings-actions">
+        <div className="settings-actions-left" />
         <button className="btn-primary" onClick={handleSave} disabled={loading}>
           <span className="material-icons">save</span>
           {loading ? 'Saving...' : 'Save Settings'}
@@ -353,7 +405,10 @@ export function SettingsTab({ onSaved }: SettingsTabProps) {
             <span className="material-icons">tv</span>
             Channel Defaults
           </li>
-          <li className="settings-nav-item disabled">
+          <li
+            className={`settings-nav-item ${activePage === 'appearance' ? 'active' : ''}`}
+            onClick={() => setActivePage('appearance')}
+          >
             <span className="material-icons">palette</span>
             Appearance
           </li>
@@ -367,6 +422,7 @@ export function SettingsTab({ onSaved }: SettingsTabProps) {
       <div className="settings-content">
         {activePage === 'general' && renderGeneralPage()}
         {activePage === 'channel-defaults' && renderChannelDefaultsPage()}
+        {activePage === 'appearance' && renderAppearancePage()}
       </div>
     </div>
   );

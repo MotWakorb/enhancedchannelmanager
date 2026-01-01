@@ -25,6 +25,8 @@ class DispatcharrSettings(BaseModel):
     remove_country_prefix: bool = False
     # Timezone preference: "east", "west", or "both"
     timezone_preference: str = "both"
+    # Appearance settings
+    show_stream_urls: bool = True  # Show stream URLs in the UI (can hide for screenshots)
 
     def is_configured(self) -> bool:
         return bool(self.url and self.username and self.password)
