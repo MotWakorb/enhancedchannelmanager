@@ -219,9 +219,10 @@
 .conflict-item {
   background: #3a3a3a;
   border-radius: 6px;
-  overflow: hidden;
+  overflow: visible;
   border: 1px solid #555;
   transition: border-color 0.15s, background 0.15s;
+  min-height: 42px;
 }
 
 .conflict-item.expanded {
