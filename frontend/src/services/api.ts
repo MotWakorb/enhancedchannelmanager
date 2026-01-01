@@ -532,10 +532,15 @@ export function filterStreamsByTimezone<T extends { name: string }>(
   });
 }
 
+// Separator types for channel number prefix
+export type NumberSeparator = '-' | ':' | '|';
+
 // Options for bulk channel creation
 export interface BulkCreateOptions {
   timezonePreference?: TimezonePreference;
   stripCountryPrefix?: boolean;
+  addChannelNumber?: boolean;
+  numberSeparator?: NumberSeparator;
 }
 
 // Bulk Channel Creation
@@ -549,10 +554,14 @@ export async function bulkCreateChannelsFromStreams(
   // Handle both old signature (just TimezonePreference) and new signature (BulkCreateOptions)
   let timezonePreference: TimezonePreference = 'both';
   let stripCountry = false;
+  let addChannelNumber = false;
+  let numberSeparator: NumberSeparator = '|';
 
   if (typeof timezonePreferenceOrOptions === 'object') {
     timezonePreference = timezonePreferenceOrOptions.timezonePreference ?? 'both';
     stripCountry = timezonePreferenceOrOptions.stripCountryPrefix ?? false;
+    addChannelNumber = timezonePreferenceOrOptions.addChannelNumber ?? false;
+    numberSeparator = timezonePreferenceOrOptions.numberSeparator ?? '|';
   } else {
     timezonePreference = timezonePreferenceOrOptions;
   }
@@ -591,7 +600,10 @@ export async function bulkCreateChannelsFromStreams(
     channelIndex++;
 
     // Use the normalized name as the channel name (cleaner, without quality suffix)
-    const channelName = normalizedName;
+    // Optionally prepend channel number with separator
+    const channelName = addChannelNumber
+      ? `${channelNumber} ${numberSeparator} ${normalizedName}`
+      : normalizedName;
 
     try {
       // Create the channel
