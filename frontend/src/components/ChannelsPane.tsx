@@ -134,6 +134,7 @@ interface SortableChannelProps {
   onDelete: () => void;
   onEditChannel: () => void;
   onCopyChannelUrl?: () => void;
+  channelUrl?: string;
 }
 
 interface SortableStreamItemProps {
@@ -247,6 +248,7 @@ function SortableChannel({
   onDelete,
   onEditChannel,
   onCopyChannelUrl,
+  channelUrl,
 }: SortableChannelProps) {
   const {
     attributes,
@@ -383,6 +385,11 @@ function SortableChannel({
           title={isEditMode ? 'Double-click to edit name' : 'Enter Edit Mode to change channel name'}
         >
           {channel.name}
+        </span>
+      )}
+      {channelUrl && (
+        <span className="channel-url" title={channelUrl}>
+          {channelUrl}
         </span>
       )}
       <span className="channel-streams-count">
@@ -3233,6 +3240,7 @@ export function ChannelsPane({
                       onDelete={() => handleDeleteChannelClick(channel)}
                       onEditChannel={() => handleEditChannel(channel)}
                       onCopyChannelUrl={dispatcharrUrl && channel.uuid ? () => navigator.clipboard.writeText(`${dispatcharrUrl}/proxy/ts/stream/${channel.uuid}`) : undefined}
+                      channelUrl={dispatcharrUrl && channel.uuid ? `${dispatcharrUrl}/proxy/ts/stream/${channel.uuid}` : undefined}
                     />
                     {selectedChannelId === channel.id && (
                       <div className="inline-streams">
