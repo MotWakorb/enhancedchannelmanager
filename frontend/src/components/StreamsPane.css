@@ -16,11 +16,50 @@
 }
 
 .pane-header h2 {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
   font-size: 1.1rem;
   color: #888;
   text-transform: uppercase;
   letter-spacing: 0.05em;
   margin: 0;
+}
+
+.refresh-streams-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  color: #888;
+  cursor: pointer;
+  padding: 0.25rem;
+  border-radius: 4px;
+  transition: color 0.15s, background-color 0.15s;
+}
+
+.refresh-streams-btn:hover:not(:disabled) {
+  color: #646cff;
+  background-color: rgba(100, 108, 255, 0.15);
+}
+
+.refresh-streams-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.refresh-streams-btn .material-icons {
+  font-size: 1.1rem;
+}
+
+.refresh-streams-btn .material-icons.spinning {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
 }
 
 .selection-info {

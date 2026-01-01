@@ -107,6 +107,9 @@ export interface ChannelManagerTabProps {
   // Appearance settings
   showStreamUrls?: boolean;
 
+  // Refresh streams (bypasses cache)
+  onRefreshStreams?: () => void;
+
   // Bulk Create
   channelDefaults?: ChannelDefaults;
   // Stream group drop (for opening bulk create modal)
@@ -233,6 +236,9 @@ export function ChannelManagerTab({
   // Appearance settings
   showStreamUrls = true,
 
+  // Refresh streams
+  onRefreshStreams,
+
   // Bulk Create
   channelDefaults,
   externalTriggerGroupName,
@@ -333,6 +339,7 @@ export function ChannelManagerTab({
           onExternalTriggerHandled={onExternalTriggerHandled}
           onBulkCreateFromGroup={onBulkCreateFromGroup}
           showStreamUrls={showStreamUrls}
+          onRefreshStreams={onRefreshStreams}
         />
       }
     />
