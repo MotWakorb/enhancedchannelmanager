@@ -181,6 +181,11 @@ function SortableStreamItem({ stream, providerName, isEditMode, onRemove, onCopy
       )}
       <div className="inline-stream-info">
         <span className="inline-stream-name">{stream.name}</span>
+        {stream.url && (
+          <span className="inline-stream-url" title={stream.url}>
+            {stream.url}
+          </span>
+        )}
         {providerName && <span className="inline-stream-provider">{providerName}</span>}
       </div>
       {onCopyUrl && (
