@@ -286,7 +286,7 @@ export function StreamsPane({
   }, [streamsToCreate]);
 
   // Compute unique stream names and duplicate count for the modal display
-  // Uses normalized names to match quality variants (e.g., "ESPN" and "ESPN FHD" become one channel)
+  // Uses normalized names to match quality variants (e.g., "Sports Channel" and "Sports Channel FHD" become one channel)
   // Also applies timezone filtering when a preference is selected
   const bulkCreateStats = useMemo(() => {
     // Filter streams based on timezone preference first
@@ -758,7 +758,7 @@ export function StreamsPane({
                   <label>Timezone Preference</label>
                   <div className="timezone-info">
                     <span className="material-icons">schedule</span>
-                    <span>Some channels have East/West variants (e.g., HBO, HBO West)</span>
+                    <span>Some channels have East/West variants (e.g., Movies Channel, Movies Channel West)</span>
                   </div>
                   <div className="radio-group">
                     <label className="radio-option">
@@ -835,7 +835,7 @@ export function StreamsPane({
                           />
                           <span>Remove country prefix from channel names</span>
                         </label>
-                        <span className="option-hint">e.g., "US: ESPN" becomes "ESPN"</span>
+                        <span className="option-hint">e.g., "US: Sports Channel" becomes "Sports Channel"</span>
                       </div>
                     )}
 
@@ -875,7 +875,7 @@ export function StreamsPane({
                               |
                             </button>
                           </div>
-                          <span className="option-hint">e.g., "100 {bulkCreateSeparator} ESPN"</span>
+                          <span className="option-hint">e.g., "100 {bulkCreateSeparator} Sports Channel"</span>
                         </>
                       )}
                     </div>

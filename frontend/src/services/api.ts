@@ -453,7 +453,7 @@ export interface NormalizeOptions {
 // - 'both': keep East/West as separate channels (don't merge regional variants)
 // - 'east': prefer East timezone - merge West into base name, treat non-suffixed as East
 // - 'west': prefer West timezone - merge East/non-suffixed into base, keep West
-// stripCountryPrefix: if true, removes country prefix (e.g., "US: ESPN" -> "ESPN")
+// stripCountryPrefix: if true, removes country prefix (e.g., "US: Sports Channel" -> "Sports Channel")
 export function normalizeStreamName(name: string, timezonePreferenceOrOptions: TimezonePreference | NormalizeOptions = 'both'): string {
   // Handle both old signature (just TimezonePreference) and new signature (NormalizeOptions)
   let timezonePreference: TimezonePreference = 'both';

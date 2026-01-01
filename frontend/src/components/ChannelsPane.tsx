@@ -3269,7 +3269,7 @@ export function ChannelsPane({
                   type="text"
                   value={newChannelName}
                   onChange={(e) => setNewChannelName(e.target.value)}
-                  placeholder="e.g., ESPN HD"
+                  placeholder="e.g., Sports Channel HD"
                   autoFocus
                 />
               </label>

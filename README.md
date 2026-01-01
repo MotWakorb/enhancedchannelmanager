@@ -8,7 +8,7 @@ A professional-grade web interface for managing TV channels, streams, and metada
 
 - **Create, Edit, Delete Channels** - Full CRUD operations for channel management
 - **Channel Numbering** - Assign channel numbers (including decimal numbers like 4.1)
-- **Auto-Rename** - Optionally update channel names when numbers change (e.g., "101 | ESPN" becomes "102 | ESPN")
+- **Auto-Rename** - Optionally update channel names when numbers change (e.g., "101 | Sports Channel" becomes "102 | Sports Channel")
 - **Channel Groups** - Organize channels into groups for better organization
 - **Delete Groups** - Delete channel groups with option to also delete contained channels
 - **Bulk Delete** - Select multiple channels and delete them at once
@@ -30,9 +30,9 @@ A professional-grade web interface for managing TV channels, streams, and metada
 - **Auto-Assign Streams** - Each created channel automatically gets its source stream assigned
 - **Merge Duplicate Names** - Streams with identical names from different M3U providers are merged into a single channel with all streams assigned (provides multi-provider redundancy)
 - **Quality Variant Normalization** - Streams with quality suffixes (FHD, UHD, HD, SD, 4K, 1080P, etc.) are automatically merged into one channel
-- **East/West Timezone Preference** - When streams have regional variants (e.g., "HBO" and "HBO West"), choose to create East feeds only, West feeds only, or keep both as separate channels
-- **Country Prefix Removal** - Option to remove country prefixes (US, UK, CA, etc.) from channel names (e.g., "US: ESPN" becomes "ESPN")
-- **Channel Number Prefix** - Option to prepend channel numbers to names with configurable separator (-, :, or |), e.g., "100 | ESPN"
+- **East/West Timezone Preference** - When streams have regional variants (e.g., "Movies Channel" and "Movies Channel West"), choose to create East feeds only, West feeds only, or keep both as separate channels
+- **Country Prefix Removal** - Option to remove country prefixes (US, UK, CA, etc.) from channel names (e.g., "US: Sports Channel" becomes "Sports Channel")
+- **Channel Number Prefix** - Option to prepend channel numbers to names with configurable separator (-, :, or |), e.g., "100 | Sports Channel"
 - **Custom Starting Number** - Choose the starting channel number for sequential assignment
 - **Flexible Group Options** - Create in same-named group, select existing group, or create new group
 - **Preview Before Creating** - See a preview of channels that will be created with merged stream counts
@@ -72,7 +72,7 @@ A unique workflow that lets you stage changes locally before committing to the s
 
 - **Alphabetical Sorting** - Sort channels within a group A-Z
 - **Sequential Renumbering** - Assign sequential numbers starting from any value
-- **Smart Name Sorting** - Option to ignore channel numbers in names when sorting (e.g., "101 | ESPN" sorts as "ESPN")
+- **Smart Name Sorting** - Option to ignore channel numbers in names when sorting (e.g., "101 | Sports Channel" sorts as "Sports Channel")
 - **Preview** - See the result before applying
 - **Batch Undo** - Entire sort/renumber operation undoes as one action
 
