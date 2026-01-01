@@ -81,6 +81,34 @@ export function useSelection<T extends number | string>(items: { id: T }[]) {
     });
   }, []);
 
+  // Select multiple items at once (used for group selection)
+  const selectMultiple = useCallback((ids: T[]) => {
+    setSelection((prev) => {
+      const newSelectedIds = new Set(prev.selectedIds);
+      for (const id of ids) {
+        newSelectedIds.add(id);
+      }
+      return {
+        selectedIds: newSelectedIds,
+        lastSelectedId: ids.length > 0 ? ids[ids.length - 1] : prev.lastSelectedId,
+      };
+    });
+  }, []);
+
+  // Deselect multiple items at once (used for group deselection)
+  const deselectMultiple = useCallback((ids: T[]) => {
+    setSelection((prev) => {
+      const newSelectedIds = new Set(prev.selectedIds);
+      for (const id of ids) {
+        newSelectedIds.delete(id);
+      }
+      return {
+        selectedIds: newSelectedIds,
+        lastSelectedId: prev.lastSelectedId,
+      };
+    });
+  }, []);
+
   const isSelected = useCallback(
     (id: T) => selection.selectedIds.has(id),
     [selection.selectedIds]
@@ -95,6 +123,8 @@ export function useSelection<T extends number | string>(items: { id: T }[]) {
     selectedCount: selection.selectedIds.size,
     handleSelect,
     toggleSelect,
+    selectMultiple,
+    deselectMultiple,
     selectAll,
     clearSelection,
     isSelected,
