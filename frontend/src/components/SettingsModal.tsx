@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import * as api from '../services/api';
+import type { Theme } from '../services/api';
 import './SettingsModal.css';
 
 interface SettingsModalProps {
@@ -22,6 +23,7 @@ export function SettingsModal({ isOpen, onClose, onSaved }: SettingsModalProps) 
   const [timezonePreference, setTimezonePreference] = useState('both');
   const [showStreamUrls, setShowStreamUrls] = useState(true);
   const [hideAutoSyncGroups, setHideAutoSyncGroups] = useState(false);
+  const [theme, setTheme] = useState<Theme>('dark');
   const [loading, setLoading] = useState(false);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
@@ -54,6 +56,7 @@ export function SettingsModal({ isOpen, onClose, onSaved }: SettingsModalProps) 
       setTimezonePreference(settings.timezone_preference);
       setShowStreamUrls(settings.show_stream_urls);
       setHideAutoSyncGroups(settings.hide_auto_sync_groups);
+      setTheme(settings.theme || 'dark');
       setTestResult(null);
       setError(null);
     } catch (err) {
@@ -115,6 +118,7 @@ export function SettingsModal({ isOpen, onClose, onSaved }: SettingsModalProps) 
         timezone_preference: timezonePreference,
         show_stream_urls: showStreamUrls,
         hide_auto_sync_groups: hideAutoSyncGroups,
+        theme: theme,
       });
       onSaved();
       onClose();

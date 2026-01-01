@@ -30,6 +30,7 @@ class DispatcharrSettings(BaseModel):
     # Appearance settings
     show_stream_urls: bool = True  # Show stream URLs in the UI (can hide for screenshots)
     hide_auto_sync_groups: bool = False  # Hide auto-sync channel groups by default
+    theme: str = "dark"  # Theme: "dark", "light", or "high-contrast"
 
     def is_configured(self) -> bool:
         return bool(self.url and self.username and self.password)

@@ -155,7 +155,12 @@ Default options applied when using bulk channel creation:
 These defaults are pre-loaded when opening the bulk create modal, with a "(from settings)" indicator shown.
 
 #### Appearance
+- **Theme** - Choose from three themes:
+  - **Dark** (default) - Dark theme for low-light environments
+  - **Light** - Bright theme for well-lit environments
+  - **High Contrast** - Maximum contrast for accessibility
 - **Show Stream URLs** - Toggle visibility of stream URLs in the UI (useful for screenshots or hiding sensitive information)
+- **Hide Auto-Sync Groups** - Automatically hide channel groups managed by M3U auto-sync on app load
 
 ### Channel List Filters
 

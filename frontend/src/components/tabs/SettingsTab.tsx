@@ -1,14 +1,16 @@
 import { useState, useEffect } from 'react';
 import * as api from '../../services/api';
+import type { Theme } from '../../services/api';
 import './SettingsTab.css';
 
 interface SettingsTabProps {
   onSaved: () => void;
+  onThemeChange?: (theme: Theme) => void;
 }
 
 type SettingsPage = 'general' | 'channel-defaults' | 'appearance' | 'about';
 
-export function SettingsTab({ onSaved }: SettingsTabProps) {
+export function SettingsTab({ onSaved, onThemeChange }: SettingsTabProps) {
   const [activePage, setActivePage] = useState<SettingsPage>('general');
 
   // Connection settings
@@ -28,6 +30,7 @@ export function SettingsTab({ onSaved }: SettingsTabProps) {
   // Appearance settings
   const [showStreamUrls, setShowStreamUrls] = useState(true);
   const [hideAutoSyncGroups, setHideAutoSyncGroups] = useState(false);
+  const [theme, setTheme] = useState<Theme>('dark');
 
   // UI state
   const [loading, setLoading] = useState(false);
@@ -61,11 +64,20 @@ export function SettingsTab({ onSaved }: SettingsTabProps) {
       setTimezonePreference(settings.timezone_preference);
       setShowStreamUrls(settings.show_stream_urls);
       setHideAutoSyncGroups(settings.hide_auto_sync_groups);
+      setTheme(settings.theme || 'dark');
       setTestResult(null);
       setError(null);
     } catch (err) {
       console.error('Failed to load settings:', err);
     }
+  };
+
+  // Handle theme change with immediate preview
+  const handleThemeChange = (newTheme: Theme) => {
+    setTheme(newTheme);
+    // Apply theme immediately for preview
+    document.documentElement.setAttribute('data-theme', newTheme === 'dark' ? '' : newTheme);
+    onThemeChange?.(newTheme);
   };
 
   const handleTest = async () => {
@@ -124,6 +136,7 @@ export function SettingsTab({ onSaved }: SettingsTabProps) {
         timezone_preference: timezonePreference,
         show_stream_urls: showStreamUrls,
         hide_auto_sync_groups: hideAutoSyncGroups,
+        theme: theme,
       });
       setOriginalUrl(url);
       setOriginalUsername(username);
@@ -240,6 +253,60 @@ export function SettingsTab({ onSaved }: SettingsTabProps) {
           Settings saved successfully
         </div>
       )}
+
+      <div className="settings-section">
+        <div className="settings-section-header">
+          <span className="material-icons">palette</span>
+          <h3>Theme</h3>
+        </div>
+
+        <div className="theme-selector">
+          <label className={`theme-option ${theme === 'dark' ? 'active' : ''}`}>
+            <input
+              type="radio"
+              name="theme"
+              value="dark"
+              checked={theme === 'dark'}
+              onChange={() => handleThemeChange('dark')}
+            />
+            <span className="theme-preview dark-preview">
+              <span className="material-icons">dark_mode</span>
+            </span>
+            <span className="theme-label">Dark</span>
+            <span className="theme-description">Default dark theme for low-light environments</span>
+          </label>
+
+          <label className={`theme-option ${theme === 'light' ? 'active' : ''}`}>
+            <input
+              type="radio"
+              name="theme"
+              value="light"
+              checked={theme === 'light'}
+              onChange={() => handleThemeChange('light')}
+            />
+            <span className="theme-preview light-preview">
+              <span className="material-icons">light_mode</span>
+            </span>
+            <span className="theme-label">Light</span>
+            <span className="theme-description">Bright theme for well-lit environments</span>
+          </label>
+
+          <label className={`theme-option ${theme === 'high-contrast' ? 'active' : ''}`}>
+            <input
+              type="radio"
+              name="theme"
+              value="high-contrast"
+              checked={theme === 'high-contrast'}
+              onChange={() => handleThemeChange('high-contrast')}
+            />
+            <span className="theme-preview high-contrast-preview">
+              <span className="material-icons">contrast</span>
+            </span>
+            <span className="theme-label">High Contrast</span>
+            <span className="theme-description">Maximum contrast for accessibility</span>
+          </label>
+        </div>
+      </div>
 
       <div className="settings-section">
         <div className="settings-section-header">
