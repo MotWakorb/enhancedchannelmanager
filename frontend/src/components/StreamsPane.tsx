@@ -830,7 +830,7 @@ export function StreamsPane({
           <>
             <div className="streams-list">
               {groupedStreams.map((group) => (
-                <div key={group.name} className={`stream-group ${isGroupFullySelected(group) ? 'group-selected' : ''}`}>
+                <div key={group.name} className={`stream-group ${isGroupFullySelected(group) && isEditMode ? 'group-selected' : ''}`}>
                   <div
                     className="stream-group-header"
                     onClick={() => toggleGroup(group.name)}
@@ -890,7 +890,7 @@ export function StreamsPane({
                       {group.streams.map((stream) => (
                         <div
                           key={stream.id}
-                          className={`stream-item ${isSelected(stream.id) ? 'selected' : ''}`}
+                          className={`stream-item ${isSelected(stream.id) && isEditMode ? 'selected' : ''}`}
                           draggable
                           onClick={(e) => handleItemClick(e, stream)}
                           onDragStart={(e) => handleDragStart(e, stream)}

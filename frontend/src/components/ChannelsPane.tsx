@@ -292,7 +292,7 @@ function SortableChannel({
     <div
       ref={setNodeRef}
       style={style}
-      className={`channel-item ${isSelected ? 'selected' : ''} ${isMultiSelected ? 'multi-selected' : ''} ${isDragOver ? 'drag-over' : ''} ${isDragging ? 'dragging' : ''} ${isModified ? 'channel-modified' : ''}`}
+      className={`channel-item ${isSelected && isEditMode ? 'selected' : ''} ${isMultiSelected ? 'multi-selected' : ''} ${isDragOver ? 'drag-over' : ''} ${isDragging ? 'dragging' : ''} ${isModified ? 'channel-modified' : ''}`}
       onClick={onClick}
       onDragOver={onStreamDragOver}
       onDragLeave={onStreamDragLeave}
