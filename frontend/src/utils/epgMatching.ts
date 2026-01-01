@@ -72,7 +72,7 @@ export function detectCountryFromStreams(streams: Stream[]): string | null {
 
 /**
  * Normalize a channel/EPG name for matching purposes.
- * Strips country prefix, quality suffixes, timezone suffixes,
+ * Strips channel number prefix, country prefix, quality suffixes, timezone suffixes,
  * and normalizes to lowercase alphanumeric only.
  *
  * @param name - Channel or EPG name to normalize
@@ -80,6 +80,12 @@ export function detectCountryFromStreams(streams: Stream[]): string | null {
  */
 export function normalizeForEPGMatch(name: string): string {
   let normalized = name.trim();
+
+  // Strip channel number prefix (e.g., "107 | Channel Name" -> "Channel Name")
+  // Matches patterns like: "107 | ", "107 - ", "107: ", "107.", or just "107 " at the start
+  normalized = normalized.replace(/^\d+(?:\.\d+)?\s*[|\-:.]\s*/, '');
+  // Also handle case where number is at start with just space (e.g., "107 CNN")
+  normalized = normalized.replace(/^\d+(?:\.\d+)?\s+(?=[A-Za-z])/, '');
 
   // Strip country prefix
   normalized = stripCountryPrefix(normalized);
@@ -159,50 +165,32 @@ export function findEPGMatches(
     };
   }
 
-  // Find matching EPG entries
-  const exactCountryMatches: EPGData[] = [];
-  const exactNoCountryMatches: EPGData[] = [];
-  const partialMatches: EPGData[] = [];
+  // Find matching EPG entries - only exact name matches (partial matching is too loose)
+  const exactNameMatches: EPGData[] = [];
 
   for (const epg of epgData) {
-    const [epgNormalizedName, epgCountry] = parseTvgId(epg.tvg_id);
+    const [epgNormalizedName] = parseTvgId(epg.tvg_id);
 
-    // Check if names match
-    const namesMatch = normalizedName === epgNormalizedName;
-    const nameContains = epgNormalizedName.includes(normalizedName) ||
-                         normalizedName.includes(epgNormalizedName);
-
-    if (namesMatch) {
-      // Exact name match
-      if (detectedCountry && epgCountry === detectedCountry) {
-        // Exact match with matching country - highest priority
-        exactCountryMatches.push(epg);
-      } else if (!detectedCountry || !epgCountry) {
-        // Exact match but no country info on one or both sides
-        exactNoCountryMatches.push(epg);
-      } else {
-        // Exact name match but different country - still include as option
-        partialMatches.push(epg);
-      }
-    } else if (nameContains && (!detectedCountry || !epgCountry || epgCountry === detectedCountry)) {
-      // Partial name match with compatible country
-      partialMatches.push(epg);
+    // Only exact name matches - partial matching caused false positives
+    if (normalizedName === epgNormalizedName) {
+      exactNameMatches.push(epg);
     }
   }
 
-  // Combine matches with priority: exact+country > exact+noCountry > partial
-  let matches: EPGData[] = [];
+  // Sort exact matches to put the matching country first (if we detected one)
+  const matches = exactNameMatches.sort((a, b) => {
+    const [, aCountry] = parseTvgId(a.tvg_id);
+    const [, bCountry] = parseTvgId(b.tvg_id);
 
-  if (exactCountryMatches.length > 0) {
-    // We have exact matches with the right country
-    matches = exactCountryMatches;
-  } else if (exactNoCountryMatches.length > 0) {
-    // Exact name matches without country filtering
-    matches = exactNoCountryMatches;
-  } else if (partialMatches.length > 0) {
-    // Fall back to partial matches
-    matches = partialMatches;
-  }
+    // Matching country goes first
+    if (detectedCountry) {
+      if (aCountry === detectedCountry && bCountry !== detectedCountry) return -1;
+      if (bCountry === detectedCountry && aCountry !== detectedCountry) return 1;
+    }
+
+    // Then sort by name
+    return a.name.localeCompare(b.name);
+  });
 
   // Determine status
   let status: 'exact' | 'multiple' | 'none';

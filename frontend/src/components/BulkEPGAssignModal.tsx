@@ -5,7 +5,7 @@
  * Features country-aware matching and conflict resolution.
  */
 
-import { useState, useEffect, useMemo, useCallback } from 'react';
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import type { Channel, Stream, EPGData, EPGSource } from '../types';
 import {
   batchFindEPGMatches,
@@ -41,8 +41,11 @@ export function BulkEPGAssignModal({
   const [phase, setPhase] = useState<Phase>('analyzing');
   const [matchResults, setMatchResults] = useState<EPGMatchResult[]>([]);
   const [conflictResolutions, setConflictResolutions] = useState<Map<number, EPGData | null>>(new Map());
-  const [autoMatchedExpanded, setAutoMatchedExpanded] = useState(false);
-  const [unmatchedExpanded, setUnmatchedExpanded] = useState(false);
+  const [autoMatchedExpanded, setAutoMatchedExpanded] = useState(true);
+  const [unmatchedExpanded, setUnmatchedExpanded] = useState(true);
+
+  // Track if we've already analyzed for this modal session
+  const hasAnalyzedRef = useRef(false);
 
   // Run matching when modal opens
   useEffect(() => {
@@ -51,17 +54,33 @@ export function BulkEPGAssignModal({
       setPhase('analyzing');
       setMatchResults([]);
       setConflictResolutions(new Map());
-      setAutoMatchedExpanded(false);
-      setUnmatchedExpanded(false);
+      setAutoMatchedExpanded(true);
+      setUnmatchedExpanded(true);
+      hasAnalyzedRef.current = false;
+      return;
+    }
+
+    // Only run analysis once per modal open
+    if (hasAnalyzedRef.current) {
       return;
     }
 
     // Start analysis
     setPhase('analyzing');
+    hasAnalyzedRef.current = true;
 
     // Use setTimeout to allow UI to render "analyzing" state
     const timer = setTimeout(() => {
+      console.log('[BulkEPGAssign] Running analysis...');
+      console.log('[BulkEPGAssign] Selected channels:', selectedChannels.length);
+      console.log('[BulkEPGAssign] Available streams:', streams.length);
+      console.log('[BulkEPGAssign] EPG data entries:', epgData.length);
       const results = batchFindEPGMatches(selectedChannels, streams, epgData);
+      console.log('[BulkEPGAssign] Match results:', results);
+      const autoCount = results.filter(r => r.status === 'exact').length;
+      const conflictCount = results.filter(r => r.status === 'multiple').length;
+      const unmatchedCount = results.filter(r => r.status === 'none').length;
+      console.log(`[BulkEPGAssign] Summary: ${autoCount} auto, ${conflictCount} conflicts, ${unmatchedCount} unmatched`);
       setMatchResults(results);
       setPhase('review');
     }, 100);
