@@ -654,6 +654,9 @@ export function filterStreamsByTimezone<T extends { name: string }>(
 // Separator types for channel number prefix and country prefix
 export type NumberSeparator = '-' | ':' | '|';
 
+// Prefix order when both country and number are enabled
+export type PrefixOrder = 'number-first' | 'country-first';
+
 // Options for bulk channel creation
 export interface BulkCreateOptions {
   timezonePreference?: TimezonePreference;
@@ -662,6 +665,7 @@ export interface BulkCreateOptions {
   countrySeparator?: NumberSeparator; // Separator for country prefix when keeping
   addChannelNumber?: boolean;
   numberSeparator?: NumberSeparator;
+  prefixOrder?: PrefixOrder;         // Order of prefixes: 'number-first' (100 | US | Name) or 'country-first' (US | 100 | Name)
 }
 
 // Bulk Channel Creation
@@ -679,6 +683,7 @@ export async function bulkCreateChannelsFromStreams(
   let countrySeparator: NumberSeparator = '|';
   let addChannelNumber = false;
   let numberSeparator: NumberSeparator = '|';
+  let prefixOrder: PrefixOrder = 'number-first';
 
   if (typeof timezonePreferenceOrOptions === 'object') {
     timezonePreference = timezonePreferenceOrOptions.timezonePreference ?? 'both';
@@ -687,6 +692,7 @@ export async function bulkCreateChannelsFromStreams(
     countrySeparator = timezonePreferenceOrOptions.countrySeparator ?? '|';
     addChannelNumber = timezonePreferenceOrOptions.addChannelNumber ?? false;
     numberSeparator = timezonePreferenceOrOptions.numberSeparator ?? '|';
+    prefixOrder = timezonePreferenceOrOptions.prefixOrder ?? 'number-first';
   } else {
     timezonePreference = timezonePreferenceOrOptions;
   }
@@ -727,10 +733,34 @@ export async function bulkCreateChannelsFromStreams(
     channelIndex++;
 
     // Use the normalized name as the channel name (cleaner, without quality suffix)
-    // Optionally prepend channel number with separator
-    const channelName = addChannelNumber
-      ? `${channelNumber} ${numberSeparator} ${normalizedName}`
-      : normalizedName;
+    // Optionally prepend channel number and/or country prefix based on prefixOrder
+    // normalizedName already has country prefix if keepCountry is true (e.g., "US | Sports Channel")
+    // We need to extract it to reorder if needed
+    let channelName = normalizedName;
+
+    if (addChannelNumber && keepCountry) {
+      // Both number and country enabled - need to consider order
+      // normalizedName is currently: "US | Sports Channel" (country already normalized)
+      // Extract country from the normalized name to reorder
+      const countryMatch = normalizedName.match(new RegExp(`^([A-Z]{2,6})\\s*[${countrySeparator}]\\s*(.+)$`));
+      if (countryMatch) {
+        const [, countryCode, baseName] = countryMatch;
+        if (prefixOrder === 'country-first') {
+          // Country first: "US | 100 | Sports Channel"
+          channelName = `${countryCode} ${countrySeparator} ${channelNumber} ${numberSeparator} ${baseName}`;
+        } else {
+          // Number first (default): "100 | US | Sports Channel"
+          channelName = `${channelNumber} ${numberSeparator} ${countryCode} ${countrySeparator} ${baseName}`;
+        }
+      } else {
+        // No country found in name, just add number
+        channelName = `${channelNumber} ${numberSeparator} ${normalizedName}`;
+      }
+    } else if (addChannelNumber) {
+      // Only number, no country
+      channelName = `${channelNumber} ${numberSeparator} ${normalizedName}`;
+    }
+    // else: normalizedName is already correct (with or without country prefix)
 
     try {
       // Create the channel

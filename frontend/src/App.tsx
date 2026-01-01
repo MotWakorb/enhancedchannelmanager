@@ -686,7 +686,8 @@ function App() {
       addChannelNumber?: boolean,
       numberSeparator?: api.NumberSeparator,
       keepCountryPrefix?: boolean,
-      countrySeparator?: api.NumberSeparator
+      countrySeparator?: api.NumberSeparator,
+      prefixOrder?: api.PrefixOrder
     ) => {
       try {
         // If we need to create a new group first
@@ -713,6 +714,7 @@ function App() {
             countrySeparator: countrySeparator ?? '|',
             addChannelNumber: addChannelNumber ?? false,
             numberSeparator: numberSeparator ?? '|',
+            prefixOrder: prefixOrder ?? 'number-first',
           }
         );
 

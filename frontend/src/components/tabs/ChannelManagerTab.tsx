@@ -1,6 +1,6 @@
 import { SplitPane, ChannelsPane, StreamsPane } from '../';
 import type { Channel, ChannelGroup, Stream, M3UAccount, Logo, EPGData, EPGSource, StreamProfile, M3UGroupSetting, ChannelListFilterSettings, ChangeInfo, SavePoint, ChangeRecord } from '../../types';
-import type { TimezonePreference, NumberSeparator } from '../../services/api';
+import type { TimezonePreference, NumberSeparator, PrefixOrder } from '../../services/api';
 import type { ChannelDefaults } from '../StreamsPane';
 
 export interface ChannelManagerTabProps {
@@ -113,7 +113,8 @@ export interface ChannelManagerTabProps {
     addChannelNumber?: boolean,
     numberSeparator?: NumberSeparator,
     keepCountryPrefix?: boolean,
-    countrySeparator?: NumberSeparator
+    countrySeparator?: NumberSeparator,
+    prefixOrder?: PrefixOrder
   ) => Promise<void>;
 }
 
