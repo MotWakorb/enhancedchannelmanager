@@ -462,14 +462,79 @@ export function getStreamQualityPriority(streamName: string): number {
 
 /**
  * Sort streams by quality priority (highest quality first).
- * Maintains stable sort for streams with same quality.
+ * Within each quality tier, alternates between providers for failover redundancy.
+ *
+ * Example with 4 streams:
+ * - "US: ESPN FHD" on Provider 1
+ * - "US: ESPN" on Provider 1
+ * - "US: ESPN FHD" on Provider 2
+ * - "US: ESPN" on Provider 2
+ *
+ * Result order:
+ * 1. Provider 1 "US: ESPN FHD" (FHD tier, provider 1)
+ * 2. Provider 2 "US: ESPN FHD" (FHD tier, provider 2)
+ * 3. Provider 1 "US: ESPN" (HD tier, provider 1)
+ * 4. Provider 2 "US: ESPN" (HD tier, provider 2)
  */
-export function sortStreamsByQuality<T extends { name: string }>(streams: T[]): T[] {
-  return [...streams].sort((a, b) => {
-    const priorityA = getStreamQualityPriority(a.name);
-    const priorityB = getStreamQualityPriority(b.name);
-    return priorityA - priorityB;
-  });
+export function sortStreamsByQuality<T extends { name: string; m3u_account?: number | null }>(streams: T[]): T[] {
+  // Group streams by quality tier
+  const qualityGroups = new Map<number, T[]>();
+
+  for (const stream of streams) {
+    const priority = getStreamQualityPriority(stream.name);
+    if (!qualityGroups.has(priority)) {
+      qualityGroups.set(priority, []);
+    }
+    qualityGroups.get(priority)!.push(stream);
+  }
+
+  // Sort quality tiers (lowest priority number = highest quality = first)
+  const sortedPriorities = [...qualityGroups.keys()].sort((a, b) => a - b);
+
+  const result: T[] = [];
+
+  for (const priority of sortedPriorities) {
+    const tierStreams = qualityGroups.get(priority)!;
+
+    // Group by provider within this quality tier
+    const providerGroups = new Map<number | null, T[]>();
+    for (const stream of tierStreams) {
+      const providerId = stream.m3u_account ?? null;
+      if (!providerGroups.has(providerId)) {
+        providerGroups.set(providerId, []);
+      }
+      providerGroups.get(providerId)!.push(stream);
+    }
+
+    // Sort provider IDs to ensure consistent ordering
+    const sortedProviderIds = [...providerGroups.keys()].sort((a, b) => {
+      if (a === null) return 1;
+      if (b === null) return -1;
+      return a - b;
+    });
+
+    // Interleave streams from different providers (round-robin)
+    // This ensures failover: Provider1-FHD, Provider2-FHD, Provider3-FHD, etc.
+    const providerIterators = sortedProviderIds.map(id => ({
+      id,
+      streams: providerGroups.get(id)!,
+      index: 0
+    }));
+
+    let hasMore = true;
+    while (hasMore) {
+      hasMore = false;
+      for (const iter of providerIterators) {
+        if (iter.index < iter.streams.length) {
+          result.push(iter.streams[iter.index]);
+          iter.index++;
+          hasMore = true;
+        }
+      }
+    }
+  }
+
+  return result;
 }
 
 export type TimezonePreference = 'east' | 'west' | 'both';
