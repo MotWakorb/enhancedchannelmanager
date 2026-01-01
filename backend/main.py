@@ -8,6 +8,7 @@ import os
 import re
 import sys
 import traceback
+import logging
 
 from dispatcharr_client import get_client, reset_client
 from config import (
@@ -15,7 +16,17 @@ from config import (
     save_settings,
     clear_settings_cache,
     DispatcharrSettings,
+    log_config_status,
+    CONFIG_DIR,
+    CONFIG_FILE,
 )
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 app = FastAPI(
     title="Enhanced Channel Manager",
@@ -31,6 +42,31 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.on_event("startup")
+async def startup_event():
+    """Log configuration status on startup."""
+    logger.info("=" * 60)
+    logger.info("Enhanced Channel Manager starting up")
+    logger.info(f"CONFIG_DIR: {CONFIG_DIR}")
+    logger.info(f"CONFIG_FILE: {CONFIG_FILE}")
+    logger.info(f"CONFIG_DIR exists: {CONFIG_DIR.exists()}")
+    logger.info(f"CONFIG_FILE exists: {CONFIG_FILE.exists()}")
+
+    if CONFIG_DIR.exists():
+        try:
+            contents = list(CONFIG_DIR.iterdir())
+            logger.info(f"CONFIG_DIR contents: {[str(p) for p in contents]}")
+        except Exception as e:
+            logger.error(f"Failed to list CONFIG_DIR: {e}")
+
+    # Load settings to log status
+    settings = get_settings()
+    logger.info(f"Settings configured: {settings.is_configured()}")
+    if settings.url:
+        logger.info(f"Dispatcharr URL: {settings.url}")
+    logger.info("=" * 60)
 
 
 # Request models
