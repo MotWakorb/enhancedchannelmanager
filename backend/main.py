@@ -20,7 +20,7 @@ from config import (
 app = FastAPI(
     title="Enhanced Channel Manager",
     description="Drag-and-drop channel management for Dispatcharr",
-    version="0.2.20003",
+    version="0.2.20004",
 )
 
 # CORS for development
@@ -516,6 +516,45 @@ async def get_epg_source(source_id: int):
     client = get_client()
     try:
         return await client.get_epg_source(source_id)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/epg/sources")
+async def create_epg_source(request: Request):
+    client = get_client()
+    try:
+        data = await request.json()
+        return await client.create_epg_source(data)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.patch("/api/epg/sources/{source_id}")
+async def update_epg_source(source_id: int, request: Request):
+    client = get_client()
+    try:
+        data = await request.json()
+        return await client.update_epg_source(source_id, data)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/api/epg/sources/{source_id}")
+async def delete_epg_source(source_id: int):
+    client = get_client()
+    try:
+        await client.delete_epg_source(source_id)
+        return {"status": "deleted"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/epg/import")
+async def trigger_epg_import():
+    client = get_client()
+    try:
+        return await client.trigger_epg_import()
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

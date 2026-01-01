@@ -231,7 +231,7 @@ function EPGSourceModal({ isOpen, source, onClose, onSave }: EPGSourceModalProps
     <div className="modal-overlay" onClick={onClose}>
       <div className="epg-modal-content" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
-          <h2>{source ? 'Edit EPG Source' : 'Add EPG Source'}</h2>
+          <h2>{source ? 'Edit EPG Source' : 'Add Standard EPG'}</h2>
           <button className="close-btn" onClick={onClose}>&times;</button>
         </div>
 
@@ -336,7 +336,7 @@ function EPGSourceModal({ isOpen, source, onClose, onSave }: EPGSourceModalProps
               Cancel
             </button>
             <button type="submit" className="btn-primary" disabled={saving}>
-              {saving ? 'Saving...' : source ? 'Save Changes' : 'Add Source'}
+              {saving ? 'Saving...' : source ? 'Save Changes' : 'Add EPG'}
             </button>
           </div>
         </form>
@@ -431,14 +431,9 @@ export function EPGManagerTab() {
     }
   };
 
-  const handleRefreshSource = async (source: EPGSource) => {
-    try {
-      await api.refreshEPGSource(source.id);
-      // Start polling for status updates
-      setTimeout(loadSources, 2000);
-    } catch (err) {
-      setError('Failed to refresh EPG source');
-    }
+  const handleRefreshSource = async (_source: EPGSource) => {
+    // No individual refresh endpoint - use global import instead
+    await handleRefreshAll();
   };
 
   const handleToggleActive = async (source: EPGSource) => {
@@ -495,7 +490,7 @@ export function EPGManagerTab() {
           </button>
           <button className="btn-primary" onClick={handleAddSource}>
             <span className="material-icons">add</span>
-            Add Source
+            Add Standard EPG
           </button>
         </div>
       </div>
@@ -515,7 +510,7 @@ export function EPGManagerTab() {
           <p>Add an EPG source to get program guide data for your channels.</p>
           <button className="btn-primary" onClick={handleAddSource}>
             <span className="material-icons">add</span>
-            Add EPG Source
+            Add Standard EPG
           </button>
         </div>
       ) : (
