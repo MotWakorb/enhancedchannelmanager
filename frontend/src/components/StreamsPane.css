@@ -660,6 +660,41 @@
   cursor: help;
 }
 
+/* Timezone preference styling */
+.timezone-info {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  background-color: #f59e0b22;
+  border: 1px solid #f59e0b44;
+  border-radius: 6px;
+  margin-bottom: 0.75rem;
+}
+
+.timezone-info .material-icons {
+  font-size: 1.1rem;
+  color: #f59e0b;
+}
+
+.timezone-info span {
+  font-size: 0.85rem;
+  color: #ccc;
+}
+
+.timezone-hint {
+  font-size: 0.75rem;
+  color: #888;
+  margin-left: 0.5rem;
+}
+
+.timezone-excluded {
+  margin-top: 0.5rem;
+  font-size: 0.8rem;
+  color: #f59e0b;
+  font-style: italic;
+}
+
 .preview-more {
   padding: 0.5rem 0.75rem;
   font-size: 0.8rem;

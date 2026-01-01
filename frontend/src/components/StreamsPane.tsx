@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import type { Stream, M3UAccount, ChannelGroup } from '../types';
 import { useSelection } from '../hooks';
-import { normalizeStreamName } from '../services/api';
+import { normalizeStreamName, detectRegionalVariants, filterStreamsByTimezone, type TimezonePreference } from '../services/api';
 import './StreamsPane.css';
 
 interface StreamGroup {
@@ -34,7 +34,8 @@ interface StreamsPaneProps {
     streams: Stream[],
     startingNumber: number,
     channelGroupId: number | null,
-    newGroupName?: string
+    newGroupName?: string,
+    timezonePreference?: TimezonePreference
   ) => Promise<void>;
 }
 
@@ -78,6 +79,7 @@ export function StreamsPane({
   const [bulkCreateSelectedGroupId, setBulkCreateSelectedGroupId] = useState<number | null>(null);
   const [bulkCreateNewGroupName, setBulkCreateNewGroupName] = useState('');
   const [bulkCreateLoading, setBulkCreateLoading] = useState(false);
+  const [bulkCreateTimezone, setBulkCreateTimezone] = useState<TimezonePreference>('both');
 
   // Dropdown state
   const [providerDropdownOpen, setProviderDropdownOpen] = useState(false);
@@ -226,6 +228,7 @@ export function StreamsPane({
     setBulkCreateGroupOption('same');
     setBulkCreateSelectedGroupId(null);
     setBulkCreateNewGroupName('');
+    setBulkCreateTimezone('both'); // Reset timezone preference
     setBulkCreateModalOpen(true);
   }, []);
 
@@ -238,6 +241,7 @@ export function StreamsPane({
     setBulkCreateGroupOption('existing'); // Default to existing group for selections
     setBulkCreateSelectedGroupId(null);
     setBulkCreateNewGroupName('');
+    setBulkCreateTimezone('both'); // Reset timezone preference
     setBulkCreateModalOpen(true);
   }, [streams, selectedIds]);
 
@@ -251,12 +255,21 @@ export function StreamsPane({
   const streamsToCreate = bulkCreateGroup ? bulkCreateGroup.streams : bulkCreateStreams;
   const isFromGroup = !!bulkCreateGroup;
 
+  // Detect if streams have regional variants (East/West)
+  const hasRegionalVariants = useMemo(() => {
+    return detectRegionalVariants(streamsToCreate);
+  }, [streamsToCreate]);
+
   // Compute unique stream names and duplicate count for the modal display
   // Uses normalized names to match quality variants (e.g., "ESPN" and "ESPN FHD" become one channel)
+  // Also applies timezone filtering when a preference is selected
   const bulkCreateStats = useMemo(() => {
+    // Filter streams based on timezone preference first
+    const filteredStreams = filterStreamsByTimezone(streamsToCreate, bulkCreateTimezone);
+
     const streamsByNormalizedName = new Map<string, Stream[]>();
-    for (const stream of streamsToCreate) {
-      const normalizedName = normalizeStreamName(stream.name);
+    for (const stream of filteredStreams) {
+      const normalizedName = normalizeStreamName(stream.name, bulkCreateTimezone);
       const existing = streamsByNormalizedName.get(normalizedName);
       if (existing) {
         existing.push(stream);
@@ -265,10 +278,11 @@ export function StreamsPane({
       }
     }
     const uniqueCount = streamsByNormalizedName.size;
-    const duplicateCount = streamsToCreate.length - uniqueCount;
+    const duplicateCount = filteredStreams.length - uniqueCount;
     const hasDuplicates = duplicateCount > 0;
-    return { uniqueCount, duplicateCount, hasDuplicates, streamsByNormalizedName };
-  }, [streamsToCreate]);
+    const excludedCount = streamsToCreate.length - filteredStreams.length;
+    return { uniqueCount, duplicateCount, hasDuplicates, streamsByNormalizedName, excludedCount };
+  }, [streamsToCreate, bulkCreateTimezone]);
 
   const handleBulkCreate = useCallback(async () => {
     if (streamsToCreate.length === 0 || !onBulkCreateFromGroup) return;
@@ -308,7 +322,8 @@ export function StreamsPane({
         streamsToCreate,
         startingNum,
         groupId,
-        newGroupName
+        newGroupName,
+        bulkCreateTimezone
       );
 
       // Clear selection after successful creation
@@ -331,6 +346,7 @@ export function StreamsPane({
     bulkCreateGroupOption,
     bulkCreateSelectedGroupId,
     bulkCreateNewGroupName,
+    bulkCreateTimezone,
     channelGroups,
     onBulkCreateFromGroup,
     clearSelection,
@@ -698,6 +714,54 @@ export function StreamsPane({
                   )}
                 </div>
               </div>
+
+              {/* Timezone preference - only show if regional variants detected */}
+              {hasRegionalVariants && (
+                <div className="form-group">
+                  <label>Timezone Preference</label>
+                  <div className="timezone-info">
+                    <span className="material-icons">schedule</span>
+                    <span>Some channels have East/West variants (e.g., HBO, HBO West)</span>
+                  </div>
+                  <div className="radio-group">
+                    <label className="radio-option">
+                      <input
+                        type="radio"
+                        name="timezoneOption"
+                        checked={bulkCreateTimezone === 'east'}
+                        onChange={() => setBulkCreateTimezone('east')}
+                      />
+                      <span>East Coast</span>
+                      <span className="timezone-hint">Use East feeds, skip West variants</span>
+                    </label>
+                    <label className="radio-option">
+                      <input
+                        type="radio"
+                        name="timezoneOption"
+                        checked={bulkCreateTimezone === 'west'}
+                        onChange={() => setBulkCreateTimezone('west')}
+                      />
+                      <span>West Coast</span>
+                      <span className="timezone-hint">Use West feeds only</span>
+                    </label>
+                    <label className="radio-option">
+                      <input
+                        type="radio"
+                        name="timezoneOption"
+                        checked={bulkCreateTimezone === 'both'}
+                        onChange={() => setBulkCreateTimezone('both')}
+                      />
+                      <span>Keep Both</span>
+                      <span className="timezone-hint">Create separate East and West channels</span>
+                    </label>
+                  </div>
+                  {bulkCreateStats.excludedCount > 0 && (
+                    <div className="timezone-excluded">
+                      {bulkCreateStats.excludedCount} stream{bulkCreateStats.excludedCount !== 1 ? 's' : ''} excluded based on timezone preference
+                    </div>
+                  )}
+                </div>
+              )}
 
               <div className="bulk-create-preview">
                 <label>Preview (first 10 channels)</label>

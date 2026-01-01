@@ -328,19 +328,86 @@ const QUALITY_SUFFIXES = [
   'HEVC', 'H264', 'H265',
 ];
 
+export type TimezonePreference = 'east' | 'west' | 'both';
+
+// Check if a stream name has a regional suffix (East or West)
+export function getRegionalSuffix(name: string): 'east' | 'west' | null {
+  // Check for East/West at the end with optional separator
+  if (/[\s\-_|:]+EAST\s*$/i.test(name)) return 'east';
+  if (/[\s\-_|:]+WEST\s*$/i.test(name)) return 'west';
+  return null;
+}
+
+// Strip regional suffix from a name
+function stripRegionalSuffix(name: string): string {
+  return name.replace(/[\s\-_|:]+(?:EAST|WEST)\s*$/i, '').trim();
+}
+
+// Detect if a list of streams has regional variants (both East and West versions, or base + West)
+export function detectRegionalVariants(streams: { name: string }[]): boolean {
+  // Build a set of base names (without regional suffix) and track which variants exist
+  const baseNames = new Map<string, Set<'east' | 'west' | 'none'>>();
+
+  for (const stream of streams) {
+    // First strip quality suffixes to get consistent base comparison
+    let nameWithoutQuality = stream.name.trim();
+    for (const suffix of QUALITY_SUFFIXES) {
+      const pattern = new RegExp(`[\\s\\-_|:]*${suffix}\\s*$`, 'i');
+      nameWithoutQuality = nameWithoutQuality.replace(pattern, '');
+    }
+    nameWithoutQuality = nameWithoutQuality.replace(/\s+/g, ' ').trim();
+
+    const regional = getRegionalSuffix(nameWithoutQuality);
+    const baseName = stripRegionalSuffix(nameWithoutQuality).toLowerCase();
+
+    if (!baseNames.has(baseName)) {
+      baseNames.set(baseName, new Set());
+    }
+    baseNames.get(baseName)!.add(regional ?? 'none');
+  }
+
+  // Check if any base name has regional variants
+  // A variant exists if we have: (East or none) AND West
+  // "none" is treated as East (default timezone)
+  for (const [, variants] of baseNames) {
+    const hasEastOrNone = variants.has('east') || variants.has('none');
+    const hasWest = variants.has('west');
+    if (hasEastOrNone && hasWest) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 // Normalize a stream name for matching purposes
 // Strips quality suffixes and normalizes whitespace
-export function normalizeStreamName(name: string): string {
+// timezonePreference controls how regional variants are handled:
+// - 'both': keep East/West as separate channels (don't merge regional variants)
+// - 'east': prefer East timezone - merge West into base name, treat non-suffixed as East
+// - 'west': prefer West timezone - merge East/non-suffixed into base, keep West
+export function normalizeStreamName(name: string, timezonePreference: TimezonePreference = 'both'): string {
   let normalized = name.trim();
 
   // Build a regex that matches quality suffixes at the end of the name
   // Handle various separators: space, dash, underscore, pipe, colon
-  // Also handle suffixes that appear with no separator (e.g., "ESPN FHD" or "ESPNFHD")
   for (const suffix of QUALITY_SUFFIXES) {
     // Match suffix at end with optional separator before it
     // Case insensitive
     const pattern = new RegExp(`[\\s\\-_|:]*${suffix}\\s*$`, 'i');
     normalized = normalized.replace(pattern, '');
+  }
+
+  // Handle regional suffixes based on timezone preference
+  if (timezonePreference !== 'both') {
+    const regional = getRegionalSuffix(normalized);
+
+    // For either preference, we merge by stripping the regional suffix
+    // The difference is which streams get included (handled by caller filtering)
+    if (regional === 'east' || regional === 'west') {
+      normalized = stripRegionalSuffix(normalized);
+    }
+    // Non-suffixed names stay as-is (they represent the base channel)
   }
 
   // Normalize multiple spaces to single space and trim
@@ -349,23 +416,59 @@ export function normalizeStreamName(name: string): string {
   return normalized;
 }
 
+// Filter streams based on timezone preference
+// - 'east': include streams without suffix OR with East suffix, exclude West
+// - 'west': include streams with West suffix, exclude East and non-suffixed
+// - 'both': include all streams
+export function filterStreamsByTimezone<T extends { name: string }>(
+  streams: T[],
+  timezonePreference: TimezonePreference
+): T[] {
+  if (timezonePreference === 'both') {
+    return streams;
+  }
+
+  return streams.filter((stream) => {
+    // First normalize quality to check regional suffix properly
+    let nameWithoutQuality = stream.name.trim();
+    for (const suffix of QUALITY_SUFFIXES) {
+      const pattern = new RegExp(`[\\s\\-_|:]*${suffix}\\s*$`, 'i');
+      nameWithoutQuality = nameWithoutQuality.replace(pattern, '');
+    }
+
+    const regional = getRegionalSuffix(nameWithoutQuality);
+
+    if (timezonePreference === 'east') {
+      // Include East or no suffix (which is treated as East)
+      return regional === 'east' || regional === null;
+    } else {
+      // West preference: include West suffix only
+      return regional === 'west';
+    }
+  });
+}
+
 // Bulk Channel Creation
 // Groups streams with normalized names into the same channel (merging streams from different M3Us and quality variants)
 export async function bulkCreateChannelsFromStreams(
   streams: { id: number; name: string; logo_url?: string | null }[],
   startingNumber: number,
-  channelGroupId: number | null
+  channelGroupId: number | null,
+  timezonePreference: TimezonePreference = 'both'
 ): Promise<{ created: Channel[]; errors: string[]; mergedCount: number }> {
   const created: Channel[] = [];
   const errors: string[] = [];
   // Cache logos to avoid repeated lookups for the same URL
   const logoCache = new Map<string, Logo>();
 
+  // Filter streams based on timezone preference first
+  const filteredStreams = filterStreamsByTimezone(streams, timezonePreference);
+
   // Group streams by normalized name to merge identical channels from different M3Us and quality variants
   // The normalized name is used as the key, but we track original names for the channel name selection
   const streamsByNormalizedName = new Map<string, { id: number; name: string; logo_url?: string | null }[]>();
-  for (const stream of streams) {
-    const normalizedName = normalizeStreamName(stream.name);
+  for (const stream of filteredStreams) {
+    const normalizedName = normalizeStreamName(stream.name, timezonePreference);
     const existing = streamsByNormalizedName.get(normalizedName);
     if (existing) {
       existing.push(stream);
@@ -374,8 +477,8 @@ export async function bulkCreateChannelsFromStreams(
     }
   }
 
-  // Count how many streams were merged (total streams - unique normalized names)
-  const mergedCount = streams.length - streamsByNormalizedName.size;
+  // Count how many streams were merged (filtered streams - unique normalized names)
+  const mergedCount = filteredStreams.length - streamsByNormalizedName.size;
 
   // Create one channel per unique normalized name
   let channelIndex = 0;
