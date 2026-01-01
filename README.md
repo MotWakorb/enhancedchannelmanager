@@ -5,7 +5,7 @@ A professional-grade web interface for managing IPTV configurations with Dispatc
 ## Application Tabs
 
 - **M3U Manager** - M3U playlist management (coming soon)
-- **EPG Manager** - EPG data management (coming soon)
+- **EPG Manager** - Manage EPG sources with drag-and-drop priority ordering
 - **Channel Manager** - Full-featured channel and stream management with split-pane layout
 - **Logo Manager** - Logo management (coming soon)
 - **Settings** - Configure Dispatcharr connection and channel defaults with sidebar navigation
@@ -31,6 +31,16 @@ A professional-grade web interface for managing IPTV configurations with Dispatc
 - **Multi-Select** - Select multiple streams and bulk-add to channels
 - **Filter by Provider** - Filter streams by M3U account
 - **Filter by Group** - Filter streams by their source group
+
+### EPG Management
+
+- **Add EPG Sources** - Configure XMLTV URLs or Schedules Direct accounts
+- **Drag-and-Drop Priority** - Reorder EPG sources to set matching priority (higher priority sources take precedence)
+- **Source Status** - View status of each source (success, error, fetching, parsing)
+- **Refresh Sources** - Manually refresh individual sources or all at once
+- **Enable/Disable** - Toggle sources active/inactive without deleting
+- **Channel Count** - See how many EPG channels each source provides
+- **Last Updated** - Track when each source was last refreshed
 
 ### Bulk Channel Creation
 
