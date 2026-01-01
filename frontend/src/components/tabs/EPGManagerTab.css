@@ -346,6 +346,11 @@
   font-weight: 500;
 }
 
+.program-count {
+  color: #22c55e;
+  font-weight: 500;
+}
+
 .source-updated {
   display: flex;
   flex-direction: column;

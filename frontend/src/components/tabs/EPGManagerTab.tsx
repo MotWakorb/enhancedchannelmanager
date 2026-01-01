@@ -80,6 +80,15 @@ function SortableEPGSourceRow({ source, onEdit, onDelete, onRefresh, onToggleAct
   // Check if source is actively being refreshed
   const isRefreshing = source.status === 'fetching' || source.status === 'parsing';
 
+  // Parse program count from last_message (e.g., "Parsed 96,514 programs for 278 channels")
+  const getProgramCount = (message: string | null): string | null => {
+    if (!message) return null;
+    const match = message.match(/Parsed ([\d,]+) programs/i);
+    return match ? match[1] : null;
+  };
+
+  const programCount = getProgramCount(source.last_message);
+
   const getSourceTypeLabel = (type: EPGSourceType) => {
     switch (type) {
       case 'xmltv': return 'XMLTV';
@@ -133,7 +142,8 @@ function SortableEPGSourceRow({ source, onEdit, onDelete, onRefresh, onToggleAct
 
       <div className="source-stats">
         <span className="epg-count">{source.epg_data_count} channels</span>
-        <span className="refresh-interval">{source.refresh_interval}h refresh</span>
+        {programCount && <span className="program-count">{programCount} programs</span>}
+        {!programCount && <span className="refresh-interval">{source.refresh_interval}h refresh</span>}
       </div>
 
       <div className="source-updated">
