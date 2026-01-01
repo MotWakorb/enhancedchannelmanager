@@ -320,8 +320,37 @@ async function getOrCreateLogo(name: string, url: string, logoCache: Map<string,
   }
 }
 
+// Quality suffixes to strip when normalizing stream names for matching
+// These are common quality/resolution indicators that don't change the channel identity
+const QUALITY_SUFFIXES = [
+  'FHD', 'UHD', '4K', 'HD', 'SD',
+  '1080P', '1080I', '720P', '480P', '2160P',
+  'HEVC', 'H264', 'H265',
+];
+
+// Normalize a stream name for matching purposes
+// Strips quality suffixes and normalizes whitespace
+export function normalizeStreamName(name: string): string {
+  let normalized = name.trim();
+
+  // Build a regex that matches quality suffixes at the end of the name
+  // Handle various separators: space, dash, underscore, pipe, colon
+  // Also handle suffixes that appear with no separator (e.g., "ESPN FHD" or "ESPNFHD")
+  for (const suffix of QUALITY_SUFFIXES) {
+    // Match suffix at end with optional separator before it
+    // Case insensitive
+    const pattern = new RegExp(`[\\s\\-_|:]*${suffix}\\s*$`, 'i');
+    normalized = normalized.replace(pattern, '');
+  }
+
+  // Normalize multiple spaces to single space and trim
+  normalized = normalized.replace(/\s+/g, ' ').trim();
+
+  return normalized;
+}
+
 // Bulk Channel Creation
-// Groups streams with identical names into the same channel (merging streams from different M3Us)
+// Groups streams with normalized names into the same channel (merging streams from different M3Us and quality variants)
 export async function bulkCreateChannelsFromStreams(
   streams: { id: number; name: string; logo_url?: string | null }[],
   startingNumber: number,
@@ -332,62 +361,67 @@ export async function bulkCreateChannelsFromStreams(
   // Cache logos to avoid repeated lookups for the same URL
   const logoCache = new Map<string, Logo>();
 
-  // Group streams by name to merge identical names from different M3Us
-  const streamsByName = new Map<string, { id: number; name: string; logo_url?: string | null }[]>();
+  // Group streams by normalized name to merge identical channels from different M3Us and quality variants
+  // The normalized name is used as the key, but we track original names for the channel name selection
+  const streamsByNormalizedName = new Map<string, { id: number; name: string; logo_url?: string | null }[]>();
   for (const stream of streams) {
-    const existing = streamsByName.get(stream.name);
+    const normalizedName = normalizeStreamName(stream.name);
+    const existing = streamsByNormalizedName.get(normalizedName);
     if (existing) {
       existing.push(stream);
     } else {
-      streamsByName.set(stream.name, [stream]);
+      streamsByNormalizedName.set(normalizedName, [stream]);
     }
   }
 
-  // Count how many streams were merged (total streams - unique names)
-  const mergedCount = streams.length - streamsByName.size;
+  // Count how many streams were merged (total streams - unique normalized names)
+  const mergedCount = streams.length - streamsByNormalizedName.size;
 
-  // Create one channel per unique name
+  // Create one channel per unique normalized name
   let channelIndex = 0;
-  for (const [name, groupedStreams] of streamsByName) {
+  for (const [normalizedName, groupedStreams] of streamsByNormalizedName) {
     const channelNumber = startingNumber + channelIndex;
     channelIndex++;
+
+    // Use the normalized name as the channel name (cleaner, without quality suffix)
+    const channelName = normalizedName;
 
     try {
       // Create the channel
       const channel = await createChannel({
-        name: name,
+        name: channelName,
         channel_number: channelNumber,
         channel_group_id: channelGroupId ?? undefined,
       });
 
-      // Add all streams with this name to the channel (provides multi-provider redundancy)
+      // Add all streams with this normalized name to the channel (provides multi-provider/quality redundancy)
       const addedStreamIds: number[] = [];
       for (const stream of groupedStreams) {
         try {
           await addStreamToChannel(channel.id, stream.id);
           addedStreamIds.push(stream.id);
         } catch (streamError) {
-          errors.push(`Channel "${name}" created but stream assignment failed for stream ${stream.id}: ${streamError}`);
+          errors.push(`Channel "${channelName}" created but stream assignment failed for stream ${stream.id}: ${streamError}`);
         }
       }
 
       // Use the first stream's logo if available
-      const logoUrl = groupedStreams.find((s) => s.logo_url)?.logo_url;
+      const logoUrl = groupedStreams.find((s: { logo_url?: string | null }) => s.logo_url)?.logo_url;
       if (logoUrl) {
         try {
-          const logo = await getOrCreateLogo(name, logoUrl, logoCache);
+          const logo = await getOrCreateLogo(channelName, logoUrl, logoCache);
           await updateChannel(channel.id, { logo_id: logo.id });
           created.push({ ...channel, streams: addedStreamIds, logo_id: logo.id });
         } catch (logoError) {
           // Logo assignment failed, but channel was still created
-          errors.push(`Channel "${name}" created but logo assignment failed: ${logoError}`);
+          errors.push(`Channel "${channelName}" created but logo assignment failed: ${logoError}`);
           created.push({ ...channel, streams: addedStreamIds });
         }
       } else {
         created.push({ ...channel, streams: addedStreamIds });
       }
     } catch (error) {
-      errors.push(`Failed to create channel "${name}": ${error}`);
+      errors.push(`Failed to create channel "${channelName}": ${error}`);
     }
   }
 

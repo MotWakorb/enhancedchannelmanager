@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import type { Stream, M3UAccount, ChannelGroup } from '../types';
 import { useSelection } from '../hooks';
+import { normalizeStreamName } from '../services/api';
 import './StreamsPane.css';
 
 interface StreamGroup {
@@ -251,20 +252,22 @@ export function StreamsPane({
   const isFromGroup = !!bulkCreateGroup;
 
   // Compute unique stream names and duplicate count for the modal display
+  // Uses normalized names to match quality variants (e.g., "ESPN" and "ESPN FHD" become one channel)
   const bulkCreateStats = useMemo(() => {
-    const streamsByName = new Map<string, Stream[]>();
+    const streamsByNormalizedName = new Map<string, Stream[]>();
     for (const stream of streamsToCreate) {
-      const existing = streamsByName.get(stream.name);
+      const normalizedName = normalizeStreamName(stream.name);
+      const existing = streamsByNormalizedName.get(normalizedName);
       if (existing) {
         existing.push(stream);
       } else {
-        streamsByName.set(stream.name, [stream]);
+        streamsByNormalizedName.set(normalizedName, [stream]);
       }
     }
-    const uniqueCount = streamsByName.size;
+    const uniqueCount = streamsByNormalizedName.size;
     const duplicateCount = streamsToCreate.length - uniqueCount;
     const hasDuplicates = duplicateCount > 0;
-    return { uniqueCount, duplicateCount, hasDuplicates, streamsByName };
+    return { uniqueCount, duplicateCount, hasDuplicates, streamsByNormalizedName };
   }, [streamsToCreate]);
 
   const handleBulkCreate = useCallback(async () => {
@@ -697,20 +700,25 @@ export function StreamsPane({
               </div>
 
               <div className="bulk-create-preview">
-                <label>Preview (first 10)</label>
+                <label>Preview (first 10 channels)</label>
                 <div className="preview-list">
-                  {streamsToCreate.slice(0, 10).map((stream, idx) => {
+                  {Array.from(bulkCreateStats.streamsByNormalizedName.entries()).slice(0, 10).map(([normalizedName, groupedStreams], idx) => {
                     const num = bulkCreateStartingNumber ? parseInt(bulkCreateStartingNumber, 10) + idx : '?';
                     return (
-                      <div key={stream.id} className="preview-item">
+                      <div key={normalizedName} className="preview-item">
                         <span className="preview-number">{num}</span>
-                        <span className="preview-name">{stream.name}</span>
+                        <span className="preview-name">{normalizedName}</span>
+                        {groupedStreams.length > 1 && (
+                          <span className="preview-stream-count" title={groupedStreams.map(s => s.name).join('\n')}>
+                            {groupedStreams.length} streams
+                          </span>
+                        )}
                       </div>
                     );
                   })}
-                  {streamsToCreate.length > 10 && (
+                  {bulkCreateStats.streamsByNormalizedName.size > 10 && (
                     <div className="preview-more">
-                      ... and {streamsToCreate.length - 10} more
+                      ... and {bulkCreateStats.streamsByNormalizedName.size - 10} more channels
                     </div>
                   )}
                 </div>

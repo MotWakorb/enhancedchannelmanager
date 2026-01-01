@@ -647,6 +647,17 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  flex: 1;
+}
+
+.preview-stream-count {
+  font-size: 0.75rem;
+  padding: 0.125rem 0.375rem;
+  background-color: #22d3ee22;
+  border-radius: 4px;
+  color: #22d3ee;
+  white-space: nowrap;
+  cursor: help;
 }
 
 .preview-more {
