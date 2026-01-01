@@ -20,7 +20,7 @@ from config import (
 app = FastAPI(
     title="Enhanced Channel Manager",
     description="Drag-and-drop channel management for Dispatcharr",
-    version="0.2.20004",
+    version="0.2.20005",
 )
 
 # CORS for development
@@ -546,6 +546,15 @@ async def delete_epg_source(source_id: int):
     try:
         await client.delete_epg_source(source_id)
         return {"status": "deleted"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/epg/sources/{source_id}/refresh")
+async def refresh_epg_source(source_id: int):
+    client = get_client()
+    try:
+        return await client.refresh_epg_source(source_id)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

@@ -431,9 +431,14 @@ export function EPGManagerTab() {
     }
   };
 
-  const handleRefreshSource = async (_source: EPGSource) => {
-    // No individual refresh endpoint - use global import instead
-    await handleRefreshAll();
+  const handleRefreshSource = async (source: EPGSource) => {
+    try {
+      await api.refreshEPGSource(source.id);
+      // Start polling for status updates
+      setTimeout(loadSources, 2000);
+    } catch (err) {
+      setError('Failed to refresh EPG source');
+    }
   };
 
   const handleToggleActive = async (source: EPGSource) => {
