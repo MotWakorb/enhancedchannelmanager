@@ -403,6 +403,7 @@ export function EPGManagerTab() {
   const [error, setError] = useState<string | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
   const [editingSource, setEditingSource] = useState<EPGSource | null>(null);
+  const [refreshingAll, setRefreshingAll] = useState(false);
 
   const sensors = useSensors(
     useSensor(PointerSensor),
@@ -526,8 +527,12 @@ export function EPGManagerTab() {
   };
 
   const handleRefreshAll = async () => {
+    console.log('[EPGManagerTab] handleRefreshAll called!');
+    setRefreshingAll(true);
     try {
+      console.log('[EPGManagerTab] Triggering EPG import...');
       await api.triggerEPGImport();
+      console.log('[EPGManagerTab] EPG import triggered successfully');
       // Mark all active non-dummy sources as fetching
       setSources(prev => prev.map(s =>
         s.is_active && s.source_type !== 'dummy' ? { ...s, status: 'fetching' } : s
@@ -541,12 +546,18 @@ export function EPGManagerTab() {
         const stillRefreshing = standardSources.some(s => s.status === 'fetching' || s.status === 'parsing');
         if (!stillRefreshing) {
           clearInterval(pollInterval);
+          setRefreshingAll(false);
         }
       }, 2000);
       // Stop polling after 10 minutes max
-      setTimeout(() => clearInterval(pollInterval), 600000);
+      setTimeout(() => {
+        clearInterval(pollInterval);
+        setRefreshingAll(false);
+      }, 600000);
     } catch (err) {
+      console.error('[EPGManagerTab] Failed to trigger EPG import:', err);
       setError('Failed to trigger EPG import');
+      setRefreshingAll(false);
     }
   };
 
@@ -571,9 +582,9 @@ export function EPGManagerTab() {
           </p>
         </div>
         <div className="header-actions">
-          <button className="btn-secondary" onClick={handleRefreshAll}>
-            <span className="material-icons">sync</span>
-            Refresh All
+          <button className="btn-secondary" onClick={handleRefreshAll} disabled={refreshingAll}>
+            <span className={`material-icons ${refreshingAll ? 'spinning' : ''}`}>sync</span>
+            {refreshingAll ? 'Refreshing...' : 'Refresh All'}
           </button>
           <button className="btn-primary" onClick={handleAddSource}>
             <span className="material-icons">add</span>
