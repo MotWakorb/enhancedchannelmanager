@@ -219,10 +219,8 @@
 .conflict-item {
   background: #3a3a3a;
   border-radius: 6px;
-  overflow: visible;
   border: 1px solid #555;
   transition: border-color 0.15s, background 0.15s;
-  min-height: 42px;
 }
 
 .conflict-item.expanded {
@@ -551,7 +549,7 @@
 /* Spinning animation */
 @keyframes spin {
   from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
+  to { transform: rotate(-360deg); }
 }
 
 .bulk-epg-analyzing .spinning {
