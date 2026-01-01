@@ -154,6 +154,9 @@ Default options applied when using bulk channel creation:
 
 These defaults are pre-loaded when opening the bulk create modal, with a "(from settings)" indicator shown.
 
+#### Appearance
+- **Show Stream URLs** - Toggle visibility of stream URLs in the UI (useful for screenshots or hiding sensitive information)
+
 ### Channel List Filters
 
 Fine-tune which groups appear in the channel list:
