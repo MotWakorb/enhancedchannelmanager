@@ -20,6 +20,7 @@ from config import (
     CONFIG_DIR,
     CONFIG_FILE,
 )
+from cache import get_cache
 
 # Configure logging
 logging.basicConfig(
@@ -499,7 +500,18 @@ async def get_streams(
     search: Optional[str] = None,
     channel_group_name: Optional[str] = None,
     m3u_account: Optional[int] = None,
+    bypass_cache: bool = False,
 ):
+    cache = get_cache()
+    cache_key = f"streams:p{page}:ps{page_size}:s{search or ''}:g{channel_group_name or ''}:m{m3u_account or ''}"
+
+    # Try cache first (unless bypassed)
+    if not bypass_cache:
+        cached = cache.get(cache_key)
+        if cached is not None:
+            logger.debug(f"Returning cached streams for {cache_key}")
+            return cached
+
     client = get_client()
     try:
         result = await client.get_streams(
@@ -510,8 +522,12 @@ async def get_streams(
             m3u_account=m3u_account,
         )
 
-        # Get channel groups for name lookup
-        groups = await client.get_channel_groups()
+        # Get channel groups for name lookup (also cached)
+        groups_cache_key = "channel_groups"
+        groups = cache.get(groups_cache_key)
+        if groups is None:
+            groups = await client.get_channel_groups()
+            cache.set(groups_cache_key, groups)
         group_map = {g["id"]: g["name"] for g in groups}
 
         # Add channel_group_name to each stream
@@ -519,18 +535,50 @@ async def get_streams(
             group_id = stream.get("channel_group")
             stream["channel_group_name"] = group_map.get(group_id) if group_id else None
 
+        # Cache the result
+        cache.set(cache_key, result)
         return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.get("/api/stream-groups")
-async def get_stream_groups():
+async def get_stream_groups(bypass_cache: bool = False):
+    cache = get_cache()
+    cache_key = "stream_groups"
+
+    # Try cache first (unless bypassed)
+    if not bypass_cache:
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return cached
+
     client = get_client()
     try:
-        return await client.get_stream_groups()
+        result = await client.get_stream_groups()
+        cache.set(cache_key, result)
+        return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/cache/invalidate")
+async def invalidate_cache(prefix: Optional[str] = None):
+    """Invalidate cached data. If prefix is provided, only invalidate matching keys."""
+    cache = get_cache()
+    if prefix:
+        count = cache.invalidate_prefix(prefix)
+        return {"message": f"Invalidated {count} cache entries with prefix '{prefix}'"}
+    else:
+        count = cache.clear()
+        return {"message": f"Cleared entire cache ({count} entries)"}
+
+
+@app.get("/api/cache/stats")
+async def cache_stats():
+    """Get cache statistics."""
+    cache = get_cache()
+    return cache.stats()
 
 
 # Providers (M3U Accounts)
