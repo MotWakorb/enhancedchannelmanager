@@ -101,7 +101,9 @@ jobs:
           output_format: cli
           download_external_modules: false
           # Skip CKV2_GHA_1 - CodeQL requires security-events:write permission
-          skip_check: CKV2_GHA_1
+          # Skip CKV_DOCKER_3 - We use gosu in entrypoint to drop to non-root user after fixing volume permissions
+          # Skip CKV_DOCKER_8 - Same reason, entrypoint starts as root then switches to appuser
+          skip_check: CKV2_GHA_1,CKV_DOCKER_3,CKV_DOCKER_8
 
   # DAST - Dynamic Application Security Testing
   dast-scan:
@@ -126,13 +128,13 @@ jobs:
 
       - name: Start application container
         run: |
-          docker run -d --name ecm-dast -p 8000:8000 \
+          docker run -d --name ecm-dast -p 6100:6100 \
             -e DISPATCHARR_URL=http://localhost:9999 \
             ecm:dast-test
           # Wait for the app to be ready
           echo "Waiting for application to start..."
           for i in {1..30}; do
-            if curl -s http://localhost:8000/api/health > /dev/null 2>&1; then
+            if curl -s http://localhost:6100/api/health > /dev/null 2>&1; then
               echo "Application is ready!"
               break
             fi
@@ -143,7 +145,7 @@ jobs:
       - name: Run OWASP ZAP Baseline Scan
         uses: zaproxy/action-baseline@v0.14.0
         with:
-          target: 'http://localhost:8000'
+          target: 'http://localhost:6100'
           rules_file_name: '.zap/rules.tsv'
           allow_issue_writing: false
           # fail_action: false means only actual FAIL alerts fail the build
