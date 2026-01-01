@@ -182,6 +182,8 @@ export async function getHealth(): Promise<{ status: string; service: string }> 
 }
 
 // Settings
+export type Theme = 'dark' | 'light' | 'high-contrast';
+
 export interface SettingsResponse {
   url: string;
   username: string;
@@ -195,6 +197,7 @@ export interface SettingsResponse {
   timezone_preference: string;
   show_stream_urls: boolean;
   hide_auto_sync_groups: boolean;
+  theme: Theme;
 }
 
 export interface TestConnectionResult {
@@ -219,6 +222,7 @@ export async function saveSettings(settings: {
   timezone_preference: string;
   show_stream_urls?: boolean;  // Optional - defaults to true
   hide_auto_sync_groups?: boolean;  // Optional - defaults to false
+  theme?: Theme;  // Optional - defaults to 'dark'
 }): Promise<{ status: string; configured: boolean }> {
   return fetchJson(`${API_BASE}/settings`, {
     method: 'POST',

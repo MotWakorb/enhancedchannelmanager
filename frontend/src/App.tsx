@@ -240,6 +240,11 @@ function App() {
           }));
         }
 
+        // Apply theme setting
+        if (settings.theme && settings.theme !== 'dark') {
+          document.documentElement.setAttribute('data-theme', settings.theme);
+        }
+
         if (!settings.configured) {
           setSettingsOpen(true);
           return;
