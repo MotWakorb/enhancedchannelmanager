@@ -29,9 +29,11 @@ A professional-grade web interface for managing TV channels, streams, and metada
 - **Create from Stream Group** - Create multiple channels from an entire M3U stream group at once
 - **Auto-Assign Streams** - Each created channel automatically gets its source stream assigned
 - **Merge Duplicate Names** - Streams with identical names from different M3U providers are merged into a single channel with all streams assigned (provides multi-provider redundancy)
+- **Quality Variant Normalization** - Streams with quality suffixes (FHD, UHD, HD, SD, 4K, 1080P, etc.) are automatically merged into one channel
+- **East/West Timezone Preference** - When streams have regional variants (e.g., "HBO" and "HBO West"), choose to create East feeds only, West feeds only, or keep both as separate channels
 - **Custom Starting Number** - Choose the starting channel number for sequential assignment
 - **Flexible Group Options** - Create in same-named group, select existing group, or create new group
-- **Preview Before Creating** - See a preview of channels that will be created
+- **Preview Before Creating** - See a preview of channels that will be created with merged stream counts
 - **Edit Mode Integration** - Requires edit mode, button visible on stream group headers on hover
 
 ### Edit Mode (Staged Editing)
