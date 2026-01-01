@@ -9,6 +9,7 @@ import { ChannelManagerTab } from './components/tabs/ChannelManagerTab';
 import { useChangeHistory, useEditMode } from './hooks';
 import * as api from './services/api';
 import type { Channel, ChannelGroup, Stream, M3UAccount, M3UGroupSetting, Logo, ChangeInfo, EPGData, StreamProfile, EPGSource, ChannelListFilterSettings } from './types';
+import packageJson from '../package.json';
 import './App.css';
 
 // Lazy load non-primary tabs
@@ -1085,12 +1086,17 @@ function App() {
       </main>
 
       <footer className="footer">
-        {error && <span className="error">API Error: {error}</span>}
-        {health && (
-          <span className="status">
-            API: {health.status} | Service: {health.service}
-          </span>
-        )}
+        <div className="footer-left">
+          {error && <span className="error">API Error: {error}</span>}
+          {health && (
+            <span className="status">
+              API: {health.status} | Service: {health.service}
+            </span>
+          )}
+        </div>
+        <div className="footer-right">
+          <span className="version">v{packageJson.version}</span>
+        </div>
       </footer>
     </div>
   );
