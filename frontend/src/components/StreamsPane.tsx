@@ -15,6 +15,8 @@ export interface ChannelDefaults {
   includeChannelNumberInName: boolean;
   channelNumberSeparator: string;
   removeCountryPrefix: boolean;
+  includeCountryInName: boolean;
+  countrySeparator: string;
   timezonePreference: string;
 }
 
@@ -337,8 +339,8 @@ export function StreamsPane({
     // Apply settings defaults
     setBulkCreateTimezone((channelDefaults?.timezonePreference as TimezonePreference) || 'both');
     setBulkCreateStripCountry(channelDefaults?.removeCountryPrefix ?? false);
-    setBulkCreateKeepCountry(false); // Default to not keeping country prefix
-    setBulkCreateCountrySeparator('|'); // Default separator for country prefix
+    setBulkCreateKeepCountry(channelDefaults?.includeCountryInName ?? false);
+    setBulkCreateCountrySeparator((channelDefaults?.countrySeparator as NumberSeparator) || '|');
     setBulkCreateAddNumber(channelDefaults?.includeChannelNumberInName ?? false);
     setBulkCreateSeparator((channelDefaults?.channelNumberSeparator as NumberSeparator) || '|');
     setBulkCreatePrefixOrder('number-first'); // Default to number first
@@ -361,8 +363,8 @@ export function StreamsPane({
     // Apply settings defaults
     setBulkCreateTimezone((channelDefaults?.timezonePreference as TimezonePreference) || 'both');
     setBulkCreateStripCountry(channelDefaults?.removeCountryPrefix ?? false);
-    setBulkCreateKeepCountry(false); // Default to not keeping country prefix
-    setBulkCreateCountrySeparator('|'); // Default separator for country prefix
+    setBulkCreateKeepCountry(channelDefaults?.includeCountryInName ?? false);
+    setBulkCreateCountrySeparator((channelDefaults?.countrySeparator as NumberSeparator) || '|');
     setBulkCreateAddNumber(channelDefaults?.includeChannelNumberInName ?? false);
     setBulkCreateSeparator((channelDefaults?.channelNumberSeparator as NumberSeparator) || '|');
     setBulkCreatePrefixOrder('number-first'); // Default to number first
@@ -448,8 +450,8 @@ export function StreamsPane({
     // Apply settings defaults
     setBulkCreateTimezone((channelDefaults?.timezonePreference as TimezonePreference) || 'both');
     setBulkCreateStripCountry(channelDefaults?.removeCountryPrefix ?? false);
-    setBulkCreateKeepCountry(false);
-    setBulkCreateCountrySeparator('|');
+    setBulkCreateKeepCountry(channelDefaults?.includeCountryInName ?? false);
+    setBulkCreateCountrySeparator((channelDefaults?.countrySeparator as NumberSeparator) || '|');
     setBulkCreateAddNumber(channelDefaults?.includeChannelNumberInName ?? false);
     setBulkCreateSeparator((channelDefaults?.channelNumberSeparator as NumberSeparator) || '|');
     setBulkCreatePrefixOrder('number-first');

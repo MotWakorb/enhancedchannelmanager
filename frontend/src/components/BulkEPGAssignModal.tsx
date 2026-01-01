@@ -108,7 +108,7 @@ export function BulkEPGAssignModal({
     return () => clearTimeout(timer);
   }, [isOpen, selectedChannels, streams, epgData]);
 
-  // Categorize results
+  // Categorize results and sort A-Z by channel name
   const { autoMatched, conflicts, unmatched } = useMemo(() => {
     const auto: EPGMatchResult[] = [];
     const conf: EPGMatchResult[] = [];
@@ -124,7 +124,15 @@ export function BulkEPGAssignModal({
       }
     }
 
-    return { autoMatched: auto, conflicts: conf, unmatched: none };
+    // Sort each category alphabetically by channel name (A-Z)
+    const sortByChannelName = (a: EPGMatchResult, b: EPGMatchResult) =>
+      a.channel.name.localeCompare(b.channel.name);
+
+    return {
+      autoMatched: auto.sort(sortByChannelName),
+      conflicts: conf.sort(sortByChannelName),
+      unmatched: none.sort(sortByChannelName),
+    };
   }, [matchResults]);
 
   // Handle conflict resolution selection

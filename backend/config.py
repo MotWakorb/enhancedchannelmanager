@@ -23,6 +23,8 @@ class DispatcharrSettings(BaseModel):
     include_channel_number_in_name: bool = False
     channel_number_separator: str = "-"  # "-", ":", or "|"
     remove_country_prefix: bool = False
+    include_country_in_name: bool = False  # Keep country prefix normalized in channel name
+    country_separator: str = "|"  # Separator for country prefix: "-", ":", or "|"
     # Timezone preference: "east", "west", or "both"
     timezone_preference: str = "both"
     # Appearance settings

@@ -63,6 +63,8 @@ function App() {
     includeChannelNumberInName: false,
     channelNumberSeparator: '-',
     removeCountryPrefix: false,
+    includeCountryInName: false,
+    countrySeparator: '|',
     timezonePreference: 'both',
   });
 
@@ -225,6 +227,8 @@ function App() {
           includeChannelNumberInName: settings.include_channel_number_in_name,
           channelNumberSeparator: settings.channel_number_separator,
           removeCountryPrefix: settings.remove_country_prefix,
+          includeCountryInName: settings.include_country_in_name,
+          countrySeparator: settings.country_separator,
           timezonePreference: settings.timezone_preference,
         });
 
@@ -286,6 +290,8 @@ function App() {
         includeChannelNumberInName: settings.include_channel_number_in_name,
         channelNumberSeparator: settings.channel_number_separator,
         removeCountryPrefix: settings.remove_country_prefix,
+        includeCountryInName: settings.include_country_in_name,
+        countrySeparator: settings.country_separator,
         timezonePreference: settings.timezone_preference,
       });
     } catch (err) {
