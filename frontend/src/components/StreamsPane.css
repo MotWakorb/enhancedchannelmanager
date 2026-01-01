@@ -206,6 +206,14 @@
   color: #555;
   margin-right: 0.5rem;
   user-select: none;
+  cursor: pointer;
+  padding: 0.125rem;
+  border-radius: 2px;
+  transition: background-color 0.1s;
+}
+
+.selection-checkbox:hover {
+  background-color: rgba(100, 108, 255, 0.2);
 }
 
 .stream-item.selected .selection-checkbox {

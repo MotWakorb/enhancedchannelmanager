@@ -60,6 +60,7 @@ export function StreamsPane({
     selectedIds,
     selectedCount,
     handleSelect,
+    toggleSelect,
     selectAll,
     clearSelection,
     isSelected,
@@ -540,7 +541,13 @@ export function StreamsPane({
                           onClick={(e) => handleItemClick(e, stream)}
                           onDragStart={(e) => handleDragStart(e, stream)}
                         >
-                          <span className="selection-checkbox">
+                          <span
+                            className="selection-checkbox"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              toggleSelect(stream.id);
+                            }}
+                          >
                             {isSelected(stream.id) ? '☑' : '☐'}
                           </span>
                           {stream.logo_url && (
