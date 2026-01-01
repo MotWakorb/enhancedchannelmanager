@@ -548,7 +548,9 @@ export function StreamsPane({
                               toggleSelect(stream.id);
                             }}
                           >
-                            {isSelected(stream.id) ? '☑' : '☐'}
+                            <span className="material-icons">
+                              {isSelected(stream.id) ? 'check_box' : 'check_box_outline_blank'}
+                            </span>
                           </span>
                           {stream.logo_url && (
                             <img
