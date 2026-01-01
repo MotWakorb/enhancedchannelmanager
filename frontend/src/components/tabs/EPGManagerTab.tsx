@@ -87,6 +87,12 @@ function SortableEPGSourceRow({ source, onEdit, onDelete, onRefresh, onToggleAct
     return match ? match[1] : null;
   };
 
+  // Format number with commas (e.g., 51589 -> "51,589")
+  const formatNumber = (value: string | number): string => {
+    const num = typeof value === 'string' ? parseInt(value.replace(/,/g, ''), 10) : value;
+    return isNaN(num) ? String(value) : num.toLocaleString();
+  };
+
   const programCount = getProgramCount(source.last_message);
 
   const getSourceTypeLabel = (type: EPGSourceType) => {
@@ -141,7 +147,7 @@ function SortableEPGSourceRow({ source, onEdit, onDelete, onRefresh, onToggleAct
       </div>
 
       <div className="source-stats">
-        <span className="epg-count">{source.epg_data_count} channels</span>
+        <span className="epg-count">{formatNumber(source.epg_data_count)} channels</span>
         {programCount && <span className="program-count">{programCount} programs</span>}
         {!programCount && <span className="refresh-interval">{source.refresh_interval}h refresh</span>}
       </div>
