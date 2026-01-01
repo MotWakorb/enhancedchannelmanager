@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import type { Stream, M3UAccount, ChannelGroup } from '../types';
 import { useSelection } from '../hooks';
-import { normalizeStreamName, detectRegionalVariants, filterStreamsByTimezone, detectCountryPrefixes, getUniqueCountryPrefixes, type TimezonePreference, type NormalizeOptions, type NumberSeparator, type PrefixOrder } from '../services/api';
+import { normalizeStreamName, detectRegionalVariants, filterStreamsByTimezone, detectCountryPrefixes, getUniqueCountryPrefixes, detectNetworkPrefixes, type TimezonePreference, type NormalizeOptions, type NumberSeparator, type PrefixOrder } from '../services/api';
 import './StreamsPane.css';
 
 interface StreamGroup {
@@ -50,7 +50,8 @@ interface StreamsPaneProps {
     numberSeparator?: NumberSeparator,
     keepCountryPrefix?: boolean,
     countrySeparator?: NumberSeparator,
-    prefixOrder?: PrefixOrder
+    prefixOrder?: PrefixOrder,
+    stripNetworkPrefix?: boolean
   ) => Promise<void>;
 }
 
@@ -137,6 +138,7 @@ export function StreamsPane({
   const [bulkCreateAddNumber, setBulkCreateAddNumber] = useState(false);
   const [bulkCreateSeparator, setBulkCreateSeparator] = useState<NumberSeparator>('|');
   const [bulkCreatePrefixOrder, setBulkCreatePrefixOrder] = useState<PrefixOrder>('number-first');
+  const [bulkCreateStripNetwork, setBulkCreateStripNetwork] = useState(false);
   const [namingOptionsExpanded, setNamingOptionsExpanded] = useState(false);
   const [channelGroupExpanded, setChannelGroupExpanded] = useState(false);
   const [timezoneExpanded, setTimezoneExpanded] = useState(false);
@@ -296,6 +298,7 @@ export function StreamsPane({
     setBulkCreateAddNumber(channelDefaults?.includeChannelNumberInName ?? false);
     setBulkCreateSeparator((channelDefaults?.channelNumberSeparator as NumberSeparator) || '|');
     setBulkCreatePrefixOrder('number-first'); // Default to number first
+    setBulkCreateStripNetwork(false); // Default to not stripping network prefixes
     setNamingOptionsExpanded(false); // Collapse naming options
     setChannelGroupExpanded(false); // Collapse channel group options
     setTimezoneExpanded(false); // Collapse timezone options
@@ -319,6 +322,7 @@ export function StreamsPane({
     setBulkCreateAddNumber(channelDefaults?.includeChannelNumberInName ?? false);
     setBulkCreateSeparator((channelDefaults?.channelNumberSeparator as NumberSeparator) || '|');
     setBulkCreatePrefixOrder('number-first'); // Default to number first
+    setBulkCreateStripNetwork(false); // Default to not stripping network prefixes
     setNamingOptionsExpanded(false); // Collapse naming options
     setChannelGroupExpanded(false); // Collapse channel group options
     setTimezoneExpanded(false); // Collapse timezone options
@@ -345,6 +349,11 @@ export function StreamsPane({
     return detectCountryPrefixes(streamsToCreate);
   }, [streamsToCreate]);
 
+  // Detect if streams have network prefixes (CHAMP, PPV, etc.)
+  const hasNetworkPrefixes = useMemo(() => {
+    return detectNetworkPrefixes(streamsToCreate);
+  }, [streamsToCreate]);
+
   // Get unique country prefixes for display
   const uniqueCountryPrefixes = useMemo(() => {
     return getUniqueCountryPrefixes(streamsToCreate);
@@ -363,6 +372,7 @@ export function StreamsPane({
       stripCountryPrefix: bulkCreateStripCountry,
       keepCountryPrefix: bulkCreateKeepCountry,
       countrySeparator: bulkCreateCountrySeparator,
+      stripNetworkPrefix: bulkCreateStripNetwork,
     };
 
     const streamsByNormalizedName = new Map<string, Stream[]>();
@@ -380,7 +390,7 @@ export function StreamsPane({
     const hasDuplicates = duplicateCount > 0;
     const excludedCount = streamsToCreate.length - filteredStreams.length;
     return { uniqueCount, duplicateCount, hasDuplicates, streamsByNormalizedName, excludedCount };
-  }, [streamsToCreate, bulkCreateTimezone, bulkCreateStripCountry, bulkCreateKeepCountry, bulkCreateCountrySeparator]);
+  }, [streamsToCreate, bulkCreateTimezone, bulkCreateStripCountry, bulkCreateKeepCountry, bulkCreateCountrySeparator, bulkCreateStripNetwork]);
 
   const handleBulkCreate = useCallback(async () => {
     if (streamsToCreate.length === 0 || !onBulkCreateFromGroup) return;
@@ -427,7 +437,8 @@ export function StreamsPane({
         bulkCreateSeparator,
         bulkCreateKeepCountry,
         bulkCreateCountrySeparator,
-        bulkCreatePrefixOrder
+        bulkCreatePrefixOrder,
+        bulkCreateStripNetwork
       );
 
       // Clear selection after successful creation
@@ -457,6 +468,7 @@ export function StreamsPane({
     bulkCreateAddNumber,
     bulkCreateSeparator,
     bulkCreatePrefixOrder,
+    bulkCreateStripNetwork,
     channelGroups,
     onBulkCreateFromGroup,
     clearSelection,
@@ -929,6 +941,7 @@ export function StreamsPane({
                   <span className="naming-options-summary">
                     {(() => {
                       const options: string[] = [];
+                      if (bulkCreateStripNetwork) options.push('Strip network');
                       if (bulkCreateStripCountry) options.push('Remove country');
                       if (bulkCreateKeepCountry) options.push(`Keep country (${bulkCreateCountrySeparator})`);
                       if (bulkCreateAddNumber) options.push(`Add numbers (${bulkCreateSeparator})`);
@@ -946,6 +959,21 @@ export function StreamsPane({
 
                 {namingOptionsExpanded && (
                   <div className="naming-options-content">
+                    {/* Network prefix option - only show if network prefixes detected */}
+                    {hasNetworkPrefixes && (
+                      <div className="naming-option-group">
+                        <label className="checkbox-option">
+                          <input
+                            type="checkbox"
+                            checked={bulkCreateStripNetwork}
+                            onChange={(e) => setBulkCreateStripNetwork(e.target.checked)}
+                          />
+                          <span>Strip network prefixes</span>
+                        </label>
+                        <span className="option-hint">e.g., "CHAMP | Queens Park Rangers" → "Queens Park Rangers"</span>
+                      </div>
+                    )}
+
                     {/* Country prefix option - only show if country prefixes detected */}
                     {hasCountryPrefixes && (
                       <div className="naming-option-group">
