@@ -331,6 +331,29 @@ class DispatcharrClient:
         response.raise_for_status()
         return response.json()
 
+    async def create_epg_source(self, data: dict) -> dict:
+        """Create a new EPG source."""
+        response = await self._request("POST", "/api/epg/sources/", json=data)
+        response.raise_for_status()
+        return response.json()
+
+    async def update_epg_source(self, source_id: int, data: dict) -> dict:
+        """Update an EPG source."""
+        response = await self._request("PATCH", f"/api/epg/sources/{source_id}/", json=data)
+        response.raise_for_status()
+        return response.json()
+
+    async def delete_epg_source(self, source_id: int) -> None:
+        """Delete an EPG source."""
+        response = await self._request("DELETE", f"/api/epg/sources/{source_id}/")
+        response.raise_for_status()
+
+    async def trigger_epg_import(self) -> dict:
+        """Trigger an EPG data import for all sources."""
+        response = await self._request("POST", "/api/epg/import/")
+        response.raise_for_status()
+        return response.json() if response.content else {}
+
     # -------------------------------------------------------------------------
     # EPG Data
     # -------------------------------------------------------------------------

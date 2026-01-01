@@ -306,12 +306,6 @@ export async function deleteEPGSource(id: number): Promise<void> {
   await fetch(`${API_BASE}/epg/sources/${id}`, { method: 'DELETE' });
 }
 
-export async function refreshEPGSource(id: number): Promise<void> {
-  return fetchJson(`${API_BASE}/epg/sources/${id}/refresh`, {
-    method: 'POST',
-  });
-}
-
 export async function triggerEPGImport(): Promise<void> {
   return fetchJson(`${API_BASE}/epg/import`, {
     method: 'POST',
