@@ -10,6 +10,14 @@ interface StreamGroup {
   expanded: boolean;
 }
 
+// Channel defaults from settings
+export interface ChannelDefaults {
+  includeChannelNumberInName: boolean;
+  channelNumberSeparator: string;
+  removeCountryPrefix: boolean;
+  timezonePreference: string;
+}
+
 interface StreamsPaneProps {
   streams: Stream[];
   providers: M3UAccount[];
@@ -30,6 +38,7 @@ interface StreamsPaneProps {
   // Bulk channel creation
   isEditMode?: boolean;
   channelGroups?: ChannelGroup[];
+  channelDefaults?: ChannelDefaults;
   onBulkCreateFromGroup?: (
     streams: Stream[],
     startingNumber: number,
@@ -59,6 +68,7 @@ export function StreamsPane({
   onSelectedStreamGroupsChange,
   isEditMode = false,
   channelGroups = [],
+  channelDefaults,
   onBulkCreateFromGroup,
 }: StreamsPaneProps) {
   const {
@@ -229,7 +239,7 @@ export function StreamsPane({
     [handleSelect]
   );
 
-  // Bulk create handlers
+  // Bulk create handlers - apply settings defaults
   const openBulkCreateModal = useCallback((group: StreamGroup) => {
     setBulkCreateGroup(group);
     setBulkCreateStreams([]);
@@ -237,15 +247,16 @@ export function StreamsPane({
     setBulkCreateGroupOption('same');
     setBulkCreateSelectedGroupId(null);
     setBulkCreateNewGroupName('');
-    setBulkCreateTimezone('both'); // Reset timezone preference
-    setBulkCreateStripCountry(false); // Reset country prefix option
-    setBulkCreateAddNumber(false); // Reset channel number prefix option
-    setBulkCreateSeparator('|'); // Reset separator
+    // Apply settings defaults
+    setBulkCreateTimezone((channelDefaults?.timezonePreference as TimezonePreference) || 'both');
+    setBulkCreateStripCountry(channelDefaults?.removeCountryPrefix ?? false);
+    setBulkCreateAddNumber(channelDefaults?.includeChannelNumberInName ?? false);
+    setBulkCreateSeparator((channelDefaults?.channelNumberSeparator as NumberSeparator) || '|');
     setNamingOptionsExpanded(false); // Collapse naming options
     setChannelGroupExpanded(false); // Collapse channel group options
     setTimezoneExpanded(false); // Collapse timezone options
     setBulkCreateModalOpen(true);
-  }, []);
+  }, [channelDefaults]);
 
   const openBulkCreateModalForSelection = useCallback(() => {
     // Get selected streams in order
@@ -256,15 +267,16 @@ export function StreamsPane({
     setBulkCreateGroupOption('existing'); // Default to existing group for selections
     setBulkCreateSelectedGroupId(null);
     setBulkCreateNewGroupName('');
-    setBulkCreateTimezone('both'); // Reset timezone preference
-    setBulkCreateStripCountry(false); // Reset country prefix option
-    setBulkCreateAddNumber(false); // Reset channel number prefix option
-    setBulkCreateSeparator('|'); // Reset separator
+    // Apply settings defaults
+    setBulkCreateTimezone((channelDefaults?.timezonePreference as TimezonePreference) || 'both');
+    setBulkCreateStripCountry(channelDefaults?.removeCountryPrefix ?? false);
+    setBulkCreateAddNumber(channelDefaults?.includeChannelNumberInName ?? false);
+    setBulkCreateSeparator((channelDefaults?.channelNumberSeparator as NumberSeparator) || '|');
     setNamingOptionsExpanded(false); // Collapse naming options
     setChannelGroupExpanded(false); // Collapse channel group options
     setTimezoneExpanded(false); // Collapse timezone options
     setBulkCreateModalOpen(true);
-  }, [streams, selectedIds]);
+  }, [streams, selectedIds, channelDefaults]);
 
   const closeBulkCreateModal = useCallback(() => {
     setBulkCreateModalOpen(false);
@@ -798,6 +810,7 @@ export function StreamsPane({
                     <span className="collapsible-title">Timezone Preference</span>
                     <span className="collapsible-summary">
                       {bulkCreateTimezone === 'east' ? 'East Coast' : bulkCreateTimezone === 'west' ? 'West Coast' : 'Keep Both'}
+                      {channelDefaults?.timezonePreference && channelDefaults.timezonePreference !== 'both' && ' (from settings)'}
                       {bulkCreateStats.excludedCount > 0 && ` (${bulkCreateStats.excludedCount} excluded)`}
                     </span>
                   </div>
@@ -863,7 +876,14 @@ export function StreamsPane({
                       const options: string[] = [];
                       if (bulkCreateStripCountry) options.push('Strip country');
                       if (bulkCreateAddNumber) options.push(`Add numbers (${bulkCreateSeparator})`);
-                      return options.length > 0 ? options.join(', ') : 'Default';
+                      const hasDefaults = channelDefaults && (
+                        channelDefaults.removeCountryPrefix ||
+                        channelDefaults.includeChannelNumberInName
+                      );
+                      if (options.length > 0) {
+                        return hasDefaults ? `${options.join(', ')} (from settings)` : options.join(', ');
+                      }
+                      return 'Default';
                     })()}
                   </span>
                 </div>

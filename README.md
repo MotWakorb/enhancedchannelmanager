@@ -7,7 +7,7 @@ A professional-grade web interface for managing IPTV configurations with Dispatc
 - **Channel Manager** - Full-featured channel and stream management with split-pane layout
 - **EPG Manager** - EPG data management (coming soon)
 - **Logo Manager** - Logo management (coming soon)
-- **Settings** - Configure Dispatcharr connection and preferences
+- **Settings** - Configure Dispatcharr connection and channel defaults with sidebar navigation
 
 ## Features
 
@@ -113,6 +113,25 @@ Separate from edit mode, provides session-wide history:
 - **Undo/Redo** - Revert or reapply changes (Ctrl+Z / Ctrl+Shift+Z)
 - **Save Points** - Create named checkpoints to revert to later
 - **Change Tracking** - See descriptions of recent changes
+
+### Settings
+
+The Settings tab features sidebar navigation with multiple sections:
+
+#### General Settings
+- **Dispatcharr Connection** - Configure server URL, username, and password
+- **Test Connection** - Verify connectivity before saving
+
+#### Channel Defaults
+Default options applied when using bulk channel creation:
+
+- **Auto-Rename on Number Change** - Update channel names when numbers change
+- **Include Channel Number in Name** - Add number prefix to channel names (e.g., "101 - Sports Channel")
+- **Number Separator** - Choose hyphen (-), colon (:), or pipe (|) for number prefix
+- **Remove Country Prefix** - Strip country codes (US, UK, CA, etc.) from names
+- **Timezone Preference** - Default handling for East/West regional variants
+
+These defaults are pre-loaded when opening the bulk create modal, with a "(from settings)" indicator shown.
 
 ### Channel List Filters
 

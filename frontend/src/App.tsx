@@ -55,6 +55,12 @@ function App() {
   // Settings state
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [autoRenameChannelNumber, setAutoRenameChannelNumber] = useState(false);
+  const [channelDefaults, setChannelDefaults] = useState({
+    includeChannelNumberInName: false,
+    channelNumberSeparator: '-',
+    removeCountryPrefix: false,
+    timezonePreference: 'both',
+  });
 
   // Provider group settings (for identifying auto channel sync groups)
   const [providerGroupSettings, setProviderGroupSettings] = useState<Record<number, M3UGroupSetting>>({});
@@ -206,6 +212,12 @@ function App() {
       try {
         const settings = await api.getSettings();
         setAutoRenameChannelNumber(settings.auto_rename_channel_number);
+        setChannelDefaults({
+          includeChannelNumberInName: settings.include_channel_number_in_name,
+          channelNumberSeparator: settings.channel_number_separator,
+          removeCountryPrefix: settings.remove_country_prefix,
+          timezonePreference: settings.timezone_preference,
+        });
 
         if (!settings.configured) {
           setSettingsOpen(true);
@@ -255,10 +267,16 @@ function App() {
 
   const handleSettingsSaved = async () => {
     setError(null);
-    // Reload settings to get updated auto_rename_channel_number
+    // Reload settings to get updated values
     try {
       const settings = await api.getSettings();
       setAutoRenameChannelNumber(settings.auto_rename_channel_number);
+      setChannelDefaults({
+        includeChannelNumberInName: settings.include_channel_number_in_name,
+        channelNumberSeparator: settings.channel_number_separator,
+        removeCountryPrefix: settings.remove_country_prefix,
+        timezonePreference: settings.timezone_preference,
+      });
     } catch (err) {
       console.error('Failed to reload settings:', err);
     }
@@ -1040,6 +1058,7 @@ function App() {
               onSelectedStreamGroupsChange={setSelectedStreamGroupFilters}
 
               // Bulk Create
+              channelDefaults={channelDefaults}
               onBulkCreateFromGroup={handleBulkCreateFromGroup}
             />
           )}

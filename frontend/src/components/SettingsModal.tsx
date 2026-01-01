@@ -13,6 +13,11 @@ export function SettingsModal({ isOpen, onClose, onSaved }: SettingsModalProps) 
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [autoRenameChannelNumber, setAutoRenameChannelNumber] = useState(false);
+  // Channel defaults (stored but not edited in this modal - use Settings tab)
+  const [includeChannelNumberInName, setIncludeChannelNumberInName] = useState(false);
+  const [channelNumberSeparator, setChannelNumberSeparator] = useState('-');
+  const [removeCountryPrefix, setRemoveCountryPrefix] = useState(false);
+  const [timezonePreference, setTimezonePreference] = useState('both');
   const [loading, setLoading] = useState(false);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
@@ -37,6 +42,10 @@ export function SettingsModal({ isOpen, onClose, onSaved }: SettingsModalProps) 
       setOriginalUsername(settings.username);
       setPassword(''); // Never load password from server
       setAutoRenameChannelNumber(settings.auto_rename_channel_number);
+      setIncludeChannelNumberInName(settings.include_channel_number_in_name);
+      setChannelNumberSeparator(settings.channel_number_separator);
+      setRemoveCountryPrefix(settings.remove_country_prefix);
+      setTimezonePreference(settings.timezone_preference);
       setTestResult(null);
       setError(null);
     } catch (err) {
@@ -90,6 +99,10 @@ export function SettingsModal({ isOpen, onClose, onSaved }: SettingsModalProps) 
         // Only send password if it was entered
         ...(password ? { password } : {}),
         auto_rename_channel_number: autoRenameChannelNumber,
+        include_channel_number_in_name: includeChannelNumberInName,
+        channel_number_separator: channelNumberSeparator,
+        remove_country_prefix: removeCountryPrefix,
+        timezone_preference: timezonePreference,
       });
       onSaved();
       onClose();

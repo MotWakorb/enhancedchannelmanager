@@ -20,7 +20,7 @@ from config import (
 app = FastAPI(
     title="Enhanced Channel Manager",
     description="Drag-and-drop channel management for Dispatcharr",
-    version="0.2.2",
+    version="0.2.20001",
 )
 
 # CORS for development
@@ -67,6 +67,10 @@ class SettingsRequest(BaseModel):
     username: str
     password: Optional[str] = None  # Optional - only required if changing auth settings
     auto_rename_channel_number: bool = False
+    include_channel_number_in_name: bool = False
+    channel_number_separator: str = "-"
+    remove_country_prefix: bool = False
+    timezone_preference: str = "both"
 
 
 class SettingsResponse(BaseModel):
@@ -74,6 +78,10 @@ class SettingsResponse(BaseModel):
     username: str
     configured: bool
     auto_rename_channel_number: bool
+    include_channel_number_in_name: bool
+    channel_number_separator: str
+    remove_country_prefix: bool
+    timezone_preference: str
 
 
 class TestConnectionRequest(BaseModel):
@@ -91,6 +99,10 @@ async def get_current_settings():
         username=settings.username,
         configured=settings.is_configured(),
         auto_rename_channel_number=settings.auto_rename_channel_number,
+        include_channel_number_in_name=settings.include_channel_number_in_name,
+        channel_number_separator=settings.channel_number_separator,
+        remove_country_prefix=settings.remove_country_prefix,
+        timezone_preference=settings.timezone_preference,
     )
 
 
@@ -119,6 +131,10 @@ async def update_settings(request: SettingsRequest):
         username=request.username,
         password=password,
         auto_rename_channel_number=request.auto_rename_channel_number,
+        include_channel_number_in_name=request.include_channel_number_in_name,
+        channel_number_separator=request.channel_number_separator,
+        remove_country_prefix=request.remove_country_prefix,
+        timezone_preference=request.timezone_preference,
     )
     save_settings(new_settings)
     clear_settings_cache()

@@ -14,7 +14,13 @@ class DispatcharrSettings(BaseModel):
     url: str = ""
     username: str = ""
     password: str = ""
+    # Channel naming defaults
     auto_rename_channel_number: bool = False
+    include_channel_number_in_name: bool = False
+    channel_number_separator: str = "-"  # "-", ":", or "|"
+    remove_country_prefix: bool = False
+    # Timezone preference: "east", "west", or "both"
+    timezone_preference: str = "both"
 
     def is_configured(self) -> bool:
         return bool(self.url and self.username and self.password)

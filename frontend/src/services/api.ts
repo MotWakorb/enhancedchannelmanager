@@ -175,6 +175,10 @@ export interface SettingsResponse {
   username: string;
   configured: boolean;
   auto_rename_channel_number: boolean;
+  include_channel_number_in_name: boolean;
+  channel_number_separator: string;
+  remove_country_prefix: boolean;
+  timezone_preference: string;
 }
 
 export interface TestConnectionResult {
@@ -191,6 +195,10 @@ export async function saveSettings(settings: {
   username: string;
   password?: string;  // Optional - only required when changing URL or username
   auto_rename_channel_number: boolean;
+  include_channel_number_in_name: boolean;
+  channel_number_separator: string;
+  remove_country_prefix: boolean;
+  timezone_preference: string;
 }): Promise<{ status: string; configured: boolean }> {
   return fetchJson(`${API_BASE}/settings`, {
     method: 'POST',

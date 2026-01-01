@@ -1,6 +1,7 @@
 import { SplitPane, ChannelsPane, StreamsPane } from '../';
 import type { Channel, ChannelGroup, Stream, M3UAccount, Logo, EPGData, EPGSource, StreamProfile, M3UGroupSetting, ChannelListFilterSettings, ChangeInfo, SavePoint, ChangeRecord } from '../../types';
 import type { TimezonePreference, NumberSeparator } from '../../services/api';
+import type { ChannelDefaults } from '../StreamsPane';
 
 export interface ChannelManagerTabProps {
   // Channel Groups
@@ -101,6 +102,7 @@ export interface ChannelManagerTabProps {
   onSelectedStreamGroupsChange: (groups: string[]) => void;
 
   // Bulk Create
+  channelDefaults?: ChannelDefaults;
   onBulkCreateFromGroup: (
     streams: Stream[],
     startingNumber: number,
@@ -212,6 +214,7 @@ export function ChannelManagerTab({
   onSelectedStreamGroupsChange,
 
   // Bulk Create
+  channelDefaults,
   onBulkCreateFromGroup,
 }: ChannelManagerTabProps) {
   return (
@@ -299,6 +302,7 @@ export function ChannelManagerTab({
           onSelectedStreamGroupsChange={onSelectedStreamGroupsChange}
           isEditMode={isEditMode}
           channelGroups={channelGroups}
+          channelDefaults={channelDefaults}
           onBulkCreateFromGroup={onBulkCreateFromGroup}
         />
       }
