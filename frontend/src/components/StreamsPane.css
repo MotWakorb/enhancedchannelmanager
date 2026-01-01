@@ -695,6 +695,54 @@
   font-style: italic;
 }
 
+/* Country prefix styling */
+.country-prefix-info {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  background-color: #3b82f622;
+  border: 1px solid #3b82f644;
+  border-radius: 6px;
+  margin-bottom: 0.75rem;
+}
+
+.country-prefix-info .material-icons {
+  font-size: 1.1rem;
+  color: #3b82f6;
+}
+
+.country-prefix-info span {
+  font-size: 0.85rem;
+  color: #ccc;
+}
+
+.checkbox-option {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0;
+  cursor: pointer;
+  color: #ccc;
+  font-size: 0.9rem;
+}
+
+.checkbox-option input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  accent-color: #646cff;
+  cursor: pointer;
+}
+
+.country-prefix-hint {
+  font-size: 0.75rem;
+  color: #888;
+  width: 100%;
+  margin-left: 1.5rem;
+  margin-top: -0.25rem;
+}
+
 .preview-more {
   padding: 0.5rem 0.75rem;
   font-size: 0.8rem;

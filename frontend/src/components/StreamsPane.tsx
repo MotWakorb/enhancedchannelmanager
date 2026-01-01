@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import type { Stream, M3UAccount, ChannelGroup } from '../types';
 import { useSelection } from '../hooks';
-import { normalizeStreamName, detectRegionalVariants, filterStreamsByTimezone, type TimezonePreference } from '../services/api';
+import { normalizeStreamName, detectRegionalVariants, filterStreamsByTimezone, detectCountryPrefixes, getUniqueCountryPrefixes, type TimezonePreference, type NormalizeOptions } from '../services/api';
 import './StreamsPane.css';
 
 interface StreamGroup {
@@ -35,7 +35,8 @@ interface StreamsPaneProps {
     startingNumber: number,
     channelGroupId: number | null,
     newGroupName?: string,
-    timezonePreference?: TimezonePreference
+    timezonePreference?: TimezonePreference,
+    stripCountryPrefix?: boolean
   ) => Promise<void>;
 }
 
@@ -80,6 +81,7 @@ export function StreamsPane({
   const [bulkCreateNewGroupName, setBulkCreateNewGroupName] = useState('');
   const [bulkCreateLoading, setBulkCreateLoading] = useState(false);
   const [bulkCreateTimezone, setBulkCreateTimezone] = useState<TimezonePreference>('both');
+  const [bulkCreateStripCountry, setBulkCreateStripCountry] = useState(false);
 
   // Dropdown state
   const [providerDropdownOpen, setProviderDropdownOpen] = useState(false);
@@ -229,6 +231,7 @@ export function StreamsPane({
     setBulkCreateSelectedGroupId(null);
     setBulkCreateNewGroupName('');
     setBulkCreateTimezone('both'); // Reset timezone preference
+    setBulkCreateStripCountry(false); // Reset country prefix option
     setBulkCreateModalOpen(true);
   }, []);
 
@@ -242,6 +245,7 @@ export function StreamsPane({
     setBulkCreateSelectedGroupId(null);
     setBulkCreateNewGroupName('');
     setBulkCreateTimezone('both'); // Reset timezone preference
+    setBulkCreateStripCountry(false); // Reset country prefix option
     setBulkCreateModalOpen(true);
   }, [streams, selectedIds]);
 
@@ -260,6 +264,16 @@ export function StreamsPane({
     return detectRegionalVariants(streamsToCreate);
   }, [streamsToCreate]);
 
+  // Detect if streams have country prefixes (US, UK, CA, etc.)
+  const hasCountryPrefixes = useMemo(() => {
+    return detectCountryPrefixes(streamsToCreate);
+  }, [streamsToCreate]);
+
+  // Get unique country prefixes for display
+  const uniqueCountryPrefixes = useMemo(() => {
+    return getUniqueCountryPrefixes(streamsToCreate);
+  }, [streamsToCreate]);
+
   // Compute unique stream names and duplicate count for the modal display
   // Uses normalized names to match quality variants (e.g., "ESPN" and "ESPN FHD" become one channel)
   // Also applies timezone filtering when a preference is selected
@@ -267,9 +281,15 @@ export function StreamsPane({
     // Filter streams based on timezone preference first
     const filteredStreams = filterStreamsByTimezone(streamsToCreate, bulkCreateTimezone);
 
+    // Build normalize options
+    const normalizeOptions: NormalizeOptions = {
+      timezonePreference: bulkCreateTimezone,
+      stripCountryPrefix: bulkCreateStripCountry,
+    };
+
     const streamsByNormalizedName = new Map<string, Stream[]>();
     for (const stream of filteredStreams) {
-      const normalizedName = normalizeStreamName(stream.name, bulkCreateTimezone);
+      const normalizedName = normalizeStreamName(stream.name, normalizeOptions);
       const existing = streamsByNormalizedName.get(normalizedName);
       if (existing) {
         existing.push(stream);
@@ -282,7 +302,7 @@ export function StreamsPane({
     const hasDuplicates = duplicateCount > 0;
     const excludedCount = streamsToCreate.length - filteredStreams.length;
     return { uniqueCount, duplicateCount, hasDuplicates, streamsByNormalizedName, excludedCount };
-  }, [streamsToCreate, bulkCreateTimezone]);
+  }, [streamsToCreate, bulkCreateTimezone, bulkCreateStripCountry]);
 
   const handleBulkCreate = useCallback(async () => {
     if (streamsToCreate.length === 0 || !onBulkCreateFromGroup) return;
@@ -323,7 +343,8 @@ export function StreamsPane({
         startingNum,
         groupId,
         newGroupName,
-        bulkCreateTimezone
+        bulkCreateTimezone,
+        bulkCreateStripCountry
       );
 
       // Clear selection after successful creation
@@ -347,6 +368,7 @@ export function StreamsPane({
     bulkCreateSelectedGroupId,
     bulkCreateNewGroupName,
     bulkCreateTimezone,
+    bulkCreateStripCountry,
     channelGroups,
     onBulkCreateFromGroup,
     clearSelection,
@@ -760,6 +782,26 @@ export function StreamsPane({
                       {bulkCreateStats.excludedCount} stream{bulkCreateStats.excludedCount !== 1 ? 's' : ''} excluded based on timezone preference
                     </div>
                   )}
+                </div>
+              )}
+
+              {/* Country prefix option - only show if country prefixes detected */}
+              {hasCountryPrefixes && (
+                <div className="form-group">
+                  <label>Country Prefix</label>
+                  <div className="country-prefix-info">
+                    <span className="material-icons">public</span>
+                    <span>Some channels have country prefixes ({uniqueCountryPrefixes.slice(0, 5).join(', ')}{uniqueCountryPrefixes.length > 5 ? ', ...' : ''})</span>
+                  </div>
+                  <label className="checkbox-option">
+                    <input
+                      type="checkbox"
+                      checked={bulkCreateStripCountry}
+                      onChange={(e) => setBulkCreateStripCountry(e.target.checked)}
+                    />
+                    <span>Remove country prefix from channel names</span>
+                    <span className="country-prefix-hint">e.g., "US: ESPN" becomes "ESPN"</span>
+                  </label>
                 </div>
               )}
 
