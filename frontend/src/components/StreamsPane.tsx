@@ -87,6 +87,8 @@ export function StreamsPane({
   const [bulkCreateAddNumber, setBulkCreateAddNumber] = useState(false);
   const [bulkCreateSeparator, setBulkCreateSeparator] = useState<NumberSeparator>('|');
   const [namingOptionsExpanded, setNamingOptionsExpanded] = useState(false);
+  const [channelGroupExpanded, setChannelGroupExpanded] = useState(false);
+  const [timezoneExpanded, setTimezoneExpanded] = useState(false);
 
   // Dropdown state
   const [providerDropdownOpen, setProviderDropdownOpen] = useState(false);
@@ -240,6 +242,8 @@ export function StreamsPane({
     setBulkCreateAddNumber(false); // Reset channel number prefix option
     setBulkCreateSeparator('|'); // Reset separator
     setNamingOptionsExpanded(false); // Collapse naming options
+    setChannelGroupExpanded(false); // Collapse channel group options
+    setTimezoneExpanded(false); // Collapse timezone options
     setBulkCreateModalOpen(true);
   }, []);
 
@@ -257,6 +261,8 @@ export function StreamsPane({
     setBulkCreateAddNumber(false); // Reset channel number prefix option
     setBulkCreateSeparator('|'); // Reset separator
     setNamingOptionsExpanded(false); // Collapse naming options
+    setChannelGroupExpanded(false); // Collapse channel group options
+    setTimezoneExpanded(false); // Collapse timezone options
     setBulkCreateModalOpen(true);
   }, [streams, selectedIds]);
 
@@ -688,113 +694,157 @@ export function StreamsPane({
                 )}
               </div>
 
-              <div className="form-group">
-                <label>Channel Group</label>
-                <div className="radio-group">
-                  {/* Only show "same name" option when creating from a group */}
-                  {isFromGroup && bulkCreateGroup && (
-                    <label className="radio-option">
-                      <input
-                        type="radio"
-                        name="groupOption"
-                        checked={bulkCreateGroupOption === 'same'}
-                        onChange={() => setBulkCreateGroupOption('same')}
-                      />
-                      <span>Use same name "{bulkCreateGroup.name}"</span>
-                      {channelGroups.find(g => g.name === bulkCreateGroup.name) ? (
-                        <span className="group-exists-badge">exists</span>
-                      ) : (
-                        <span className="group-new-badge">will create</span>
-                      )}
-                    </label>
-                  )}
-
-                  <label className="radio-option">
-                    <input
-                      type="radio"
-                      name="groupOption"
-                      checked={bulkCreateGroupOption === 'existing'}
-                      onChange={() => setBulkCreateGroupOption('existing')}
-                    />
-                    <span>Select existing group</span>
-                  </label>
-                  {bulkCreateGroupOption === 'existing' && (
-                    <select
-                      value={bulkCreateSelectedGroupId ?? ''}
-                      onChange={(e) => setBulkCreateSelectedGroupId(e.target.value ? parseInt(e.target.value, 10) : null)}
-                      className="form-select"
-                    >
-                      <option value="">-- Select a group --</option>
-                      {channelGroups.map((g) => (
-                        <option key={g.id} value={g.id}>{g.name}</option>
-                      ))}
-                    </select>
-                  )}
-
-                  <label className="radio-option">
-                    <input
-                      type="radio"
-                      name="groupOption"
-                      checked={bulkCreateGroupOption === 'new'}
-                      onChange={() => setBulkCreateGroupOption('new')}
-                    />
-                    <span>Create new group</span>
-                  </label>
-                  {bulkCreateGroupOption === 'new' && (
-                    <input
-                      type="text"
-                      value={bulkCreateNewGroupName}
-                      onChange={(e) => setBulkCreateNewGroupName(e.target.value)}
-                      placeholder="New group name"
-                      className="form-input"
-                    />
-                  )}
+              {/* Channel Group - Collapsible Section */}
+              <div className="form-group collapsible-section">
+                <div
+                  className="collapsible-header"
+                  onClick={() => setChannelGroupExpanded(!channelGroupExpanded)}
+                >
+                  <span className="expand-icon">{channelGroupExpanded ? '▼' : '▶'}</span>
+                  <span className="collapsible-title">Channel Group</span>
+                  <span className="collapsible-summary">
+                    {(() => {
+                      if (bulkCreateGroupOption === 'same' && bulkCreateGroup) {
+                        return `"${bulkCreateGroup.name}"`;
+                      } else if (bulkCreateGroupOption === 'existing' && bulkCreateSelectedGroupId) {
+                        const group = channelGroups.find(g => g.id === bulkCreateSelectedGroupId);
+                        return group ? `"${group.name}"` : 'Select group';
+                      } else if (bulkCreateGroupOption === 'new' && bulkCreateNewGroupName) {
+                        return `New: "${bulkCreateNewGroupName}"`;
+                      } else if (bulkCreateGroupOption === 'new') {
+                        return 'New group';
+                      } else if (bulkCreateGroupOption === 'existing') {
+                        return 'Select group';
+                      }
+                      return 'Same as stream group';
+                    })()}
+                  </span>
                 </div>
+
+                {channelGroupExpanded && (
+                  <div className="collapsible-content">
+                    <div className="radio-group">
+                      {/* Only show "same name" option when creating from a group */}
+                      {isFromGroup && bulkCreateGroup && (
+                        <label className="radio-option">
+                          <input
+                            type="radio"
+                            name="groupOption"
+                            checked={bulkCreateGroupOption === 'same'}
+                            onChange={() => setBulkCreateGroupOption('same')}
+                          />
+                          <span>Use same name "{bulkCreateGroup.name}"</span>
+                          {channelGroups.find(g => g.name === bulkCreateGroup.name) ? (
+                            <span className="group-exists-badge">exists</span>
+                          ) : (
+                            <span className="group-new-badge">will create</span>
+                          )}
+                        </label>
+                      )}
+
+                      <label className="radio-option">
+                        <input
+                          type="radio"
+                          name="groupOption"
+                          checked={bulkCreateGroupOption === 'existing'}
+                          onChange={() => setBulkCreateGroupOption('existing')}
+                        />
+                        <span>Select existing group</span>
+                      </label>
+                      {bulkCreateGroupOption === 'existing' && (
+                        <select
+                          value={bulkCreateSelectedGroupId ?? ''}
+                          onChange={(e) => setBulkCreateSelectedGroupId(e.target.value ? parseInt(e.target.value, 10) : null)}
+                          className="form-select"
+                        >
+                          <option value="">-- Select a group --</option>
+                          {channelGroups.map((g) => (
+                            <option key={g.id} value={g.id}>{g.name}</option>
+                          ))}
+                        </select>
+                      )}
+
+                      <label className="radio-option">
+                        <input
+                          type="radio"
+                          name="groupOption"
+                          checked={bulkCreateGroupOption === 'new'}
+                          onChange={() => setBulkCreateGroupOption('new')}
+                        />
+                        <span>Create new group</span>
+                      </label>
+                      {bulkCreateGroupOption === 'new' && (
+                        <input
+                          type="text"
+                          value={bulkCreateNewGroupName}
+                          onChange={(e) => setBulkCreateNewGroupName(e.target.value)}
+                          placeholder="New group name"
+                          className="form-input"
+                        />
+                      )}
+                    </div>
+                  </div>
+                )}
               </div>
 
-              {/* Timezone preference - only show if regional variants detected */}
+              {/* Timezone preference - Collapsible, only show if regional variants detected */}
               {hasRegionalVariants && (
-                <div className="form-group">
-                  <label>Timezone Preference</label>
-                  <div className="timezone-info">
-                    <span className="material-icons">schedule</span>
-                    <span>Some channels have East/West variants (e.g., Movies Channel, Movies Channel West)</span>
+                <div className="form-group collapsible-section">
+                  <div
+                    className="collapsible-header"
+                    onClick={() => setTimezoneExpanded(!timezoneExpanded)}
+                  >
+                    <span className="expand-icon">{timezoneExpanded ? '▼' : '▶'}</span>
+                    <span className="collapsible-title">Timezone Preference</span>
+                    <span className="collapsible-summary">
+                      {bulkCreateTimezone === 'east' ? 'East Coast' : bulkCreateTimezone === 'west' ? 'West Coast' : 'Keep Both'}
+                      {bulkCreateStats.excludedCount > 0 && ` (${bulkCreateStats.excludedCount} excluded)`}
+                    </span>
                   </div>
-                  <div className="radio-group">
-                    <label className="radio-option">
-                      <input
-                        type="radio"
-                        name="timezoneOption"
-                        checked={bulkCreateTimezone === 'east'}
-                        onChange={() => setBulkCreateTimezone('east')}
-                      />
-                      <span>East Coast</span>
-                      <span className="timezone-hint">Use East feeds, skip West variants</span>
-                    </label>
-                    <label className="radio-option">
-                      <input
-                        type="radio"
-                        name="timezoneOption"
-                        checked={bulkCreateTimezone === 'west'}
-                        onChange={() => setBulkCreateTimezone('west')}
-                      />
-                      <span>West Coast</span>
-                      <span className="timezone-hint">Use West feeds only</span>
-                    </label>
-                    <label className="radio-option">
-                      <input
-                        type="radio"
-                        name="timezoneOption"
-                        checked={bulkCreateTimezone === 'both'}
-                        onChange={() => setBulkCreateTimezone('both')}
-                      />
-                      <span>Keep Both</span>
-                      <span className="timezone-hint">Create separate East and West channels</span>
-                    </label>
-                  </div>
-                  {bulkCreateStats.excludedCount > 0 && (
-                    <div className="timezone-excluded">
-                      {bulkCreateStats.excludedCount} stream{bulkCreateStats.excludedCount !== 1 ? 's' : ''} excluded based on timezone preference
+
+                  {timezoneExpanded && (
+                    <div className="collapsible-content">
+                      <div className="timezone-info">
+                        <span className="material-icons">schedule</span>
+                        <span>Some channels have East/West variants (e.g., Movies Channel, Movies Channel West)</span>
+                      </div>
+                      <div className="radio-group">
+                        <label className="radio-option">
+                          <input
+                            type="radio"
+                            name="timezoneOption"
+                            checked={bulkCreateTimezone === 'east'}
+                            onChange={() => setBulkCreateTimezone('east')}
+                          />
+                          <span>East Coast</span>
+                          <span className="timezone-hint">Use East feeds, skip West variants</span>
+                        </label>
+                        <label className="radio-option">
+                          <input
+                            type="radio"
+                            name="timezoneOption"
+                            checked={bulkCreateTimezone === 'west'}
+                            onChange={() => setBulkCreateTimezone('west')}
+                          />
+                          <span>West Coast</span>
+                          <span className="timezone-hint">Use West feeds only</span>
+                        </label>
+                        <label className="radio-option">
+                          <input
+                            type="radio"
+                            name="timezoneOption"
+                            checked={bulkCreateTimezone === 'both'}
+                            onChange={() => setBulkCreateTimezone('both')}
+                          />
+                          <span>Keep Both</span>
+                          <span className="timezone-hint">Create separate East and West channels</span>
+                        </label>
+                      </div>
+                      {bulkCreateStats.excludedCount > 0 && (
+                        <div className="timezone-excluded">
+                          {bulkCreateStats.excludedCount} stream{bulkCreateStats.excludedCount !== 1 ? 's' : ''} excluded based on timezone preference
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>

@@ -743,7 +743,66 @@
   margin-top: -0.25rem;
 }
 
-/* Naming Options Section */
+/* Collapsible Section Styles (generic) */
+.collapsible-section {
+  margin-bottom: 1rem;
+}
+
+.collapsible-header {
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  padding: 0.625rem 0.75rem;
+  background-color: #2a2a2a;
+  border: 1px solid #3a3a3a;
+  border-radius: 6px;
+  transition: background-color 0.15s, border-color 0.15s;
+}
+
+.collapsible-header:hover {
+  background-color: #333;
+  border-color: #444;
+}
+
+.collapsible-header .expand-icon {
+  font-size: 0.7rem;
+  color: #666;
+  margin-right: 0.5rem;
+  width: 1rem;
+}
+
+.collapsible-title {
+  font-weight: 500;
+  color: #ccc;
+  font-size: 0.9rem;
+}
+
+.collapsible-summary {
+  margin-left: auto;
+  font-size: 0.8rem;
+  color: #888;
+  background-color: #333;
+  padding: 0.125rem 0.5rem;
+  border-radius: 4px;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.collapsible-content {
+  padding: 0.75rem;
+  border: 1px solid #3a3a3a;
+  border-top: none;
+  border-radius: 0 0 6px 6px;
+  background-color: #252525;
+}
+
+.collapsible-content .timezone-info {
+  margin-bottom: 0.75rem;
+}
+
+/* Naming Options Section (extends collapsible) */
 .naming-options-section {
   margin-bottom: 1rem;
 }
