@@ -165,14 +165,27 @@ export function findEPGMatches(
     };
   }
 
-  // Find matching EPG entries - only exact name matches (partial matching is too loose)
+  // Find matching EPG entries
+  // Match against: TVG-ID name, call sign from TVG-ID, or EPG name field
   const exactNameMatches: EPGData[] = [];
 
   for (const epg of epgData) {
-    const [epgNormalizedName] = parseTvgId(epg.tvg_id);
+    const [epgNormalizedTvgId] = parseTvgId(epg.tvg_id);
+    const epgNormalizedName = normalizeForEPGMatch(epg.name);
 
-    // Only exact name matches - partial matching caused false positives
-    if (normalizedName === epgNormalizedName) {
+    // Extract call sign from TVG-ID if present (e.g., "CNN" from "CableNewsNetwork(CNN).us")
+    const callSignMatch = epg.tvg_id.match(/\(([^)]+)\)/);
+    const epgCallSign = callSignMatch ? callSignMatch[1].toLowerCase().replace(/[^a-z0-9]/g, '') : null;
+
+    // Match if channel name matches:
+    // 1. The normalized TVG-ID name part
+    // 2. The call sign from the TVG-ID
+    // 3. The normalized EPG name field
+    const matches = normalizedName === epgNormalizedTvgId ||
+                   (epgCallSign && normalizedName === epgCallSign) ||
+                   normalizedName === epgNormalizedName;
+
+    if (matches) {
       exactNameMatches.push(epg);
     }
   }
