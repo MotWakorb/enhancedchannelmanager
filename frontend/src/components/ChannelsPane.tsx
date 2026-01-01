@@ -337,14 +337,7 @@ function SortableChannel({
         {isExpanded ? '▼' : '▶'}
       </span>
       <div
-        className={`channel-logo-container ${isEditMode ? 'editable' : ''}`}
-        onClick={(e) => {
-          e.stopPropagation();
-          if (isEditMode) {
-            onEditChannel();
-          }
-        }}
-        title={isEditMode ? 'Click to edit channel logo' : 'Enter Edit Mode to change logo'}
+        className="channel-logo-container"
       >
         {logoUrl ? (
           <img
@@ -422,16 +415,28 @@ function SortableChannel({
         </button>
       )}
       {isEditMode && (
-        <button
-          className="channel-row-delete-btn"
-          onClick={(e) => {
-            e.stopPropagation();
-            onDelete();
-          }}
-          title="Delete channel"
-        >
-          <span className="material-icons">delete</span>
-        </button>
+        <>
+          <button
+            className="channel-row-edit-btn"
+            onClick={(e) => {
+              e.stopPropagation();
+              onEditChannel();
+            }}
+            title="Edit channel"
+          >
+            <span className="material-icons">edit</span>
+          </button>
+          <button
+            className="channel-row-delete-btn"
+            onClick={(e) => {
+              e.stopPropagation();
+              onDelete();
+            }}
+            title="Delete channel"
+          >
+            <span className="material-icons">delete</span>
+          </button>
+        </>
       )}
     </div>
   );

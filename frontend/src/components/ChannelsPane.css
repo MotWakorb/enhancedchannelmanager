@@ -869,6 +869,35 @@
   flex-shrink: 0;
 }
 
+/* Hover edit button on channel row (edit mode only) */
+.channel-row-edit-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  color: #555;
+  cursor: pointer;
+  padding: 0.25rem;
+  margin-left: 0.5rem;
+  border-radius: 3px;
+  opacity: 0;
+  transition: opacity 0.15s, background-color 0.15s, color 0.15s;
+}
+
+.channel-item:hover .channel-row-edit-btn {
+  opacity: 1;
+}
+
+.channel-row-edit-btn:hover {
+  background-color: rgba(100, 108, 255, 0.2);
+  color: #646cff;
+}
+
+.channel-row-edit-btn .material-icons {
+  font-size: 18px;
+}
+
 /* Hover delete button on channel row (edit mode only) */
 .channel-row-delete-btn {
   display: flex;
@@ -879,7 +908,7 @@
   color: #555;
   cursor: pointer;
   padding: 0.25rem;
-  margin-left: 0.5rem;
+  margin-left: 0.25rem;
   border-radius: 3px;
   opacity: 0;
   transition: opacity 0.15s, background-color 0.15s, color 0.15s;
@@ -1504,14 +1533,6 @@
   transition: background-color 0.15s, transform 0.15s;
 }
 
-.channel-logo-container.editable {
-  cursor: pointer;
-}
-
-.channel-logo-container.editable:hover {
-  background-color: #3d3d3d;
-  transform: scale(1.05);
-}
 
 .channel-logo {
   width: 100%;
@@ -1532,9 +1553,6 @@
   font-size: 18px;
 }
 
-.channel-logo-container.editable .channel-logo-placeholder:hover {
-  color: #888;
-}
 
 /* Edit Channel Modal */
 .edit-channel-modal-overlay {
