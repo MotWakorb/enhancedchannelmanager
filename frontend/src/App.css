@@ -191,3 +191,29 @@
 .footer .error {
   color: #f87171;
 }
+
+/* Tab Loading Styles */
+.tab-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  width: 100%;
+  color: #888;
+  gap: 1rem;
+}
+
+.tab-loading .material-icons {
+  font-size: 2rem;
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}

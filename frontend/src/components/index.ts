@@ -6,3 +6,4 @@ export { HistoryToolbar } from './HistoryToolbar';
 export { EditModeToggle } from './EditModeToggle';
 export { EditModeBanner } from './EditModeBanner';
 export { EditModeExitDialog } from './EditModeExitDialog';
+export { TabNavigation, type TabId } from './TabNavigation';

@@ -1,15 +1,20 @@
-import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo, Suspense, lazy } from 'react';
 import {
-  ChannelsPane,
-  StreamsPane,
   SettingsModal,
-  SplitPane,
   EditModeExitDialog,
+  TabNavigation,
+  type TabId,
 } from './components';
+import { ChannelManagerTab } from './components/tabs/ChannelManagerTab';
 import { useChangeHistory, useEditMode } from './hooks';
 import * as api from './services/api';
 import type { Channel, ChannelGroup, Stream, M3UAccount, M3UGroupSetting, Logo, ChangeInfo, EPGData, StreamProfile, EPGSource, ChannelListFilterSettings } from './types';
 import './App.css';
+
+// Lazy load non-primary tabs
+const EPGManagerTab = lazy(() => import('./components/tabs/EPGManagerTab').then(m => ({ default: m.EPGManagerTab })));
+const LogoManagerTab = lazy(() => import('./components/tabs/LogoManagerTab').then(m => ({ default: m.LogoManagerTab })));
+const SettingsTab = lazy(() => import('./components/tabs/SettingsTab').then(m => ({ default: m.SettingsTab })));
 
 function App() {
   // Health check
@@ -79,6 +84,10 @@ function App() {
   // Edit mode exit dialog state
   const [showExitDialog, setShowExitDialog] = useState(false);
 
+  // Tab navigation state
+  const [activeTab, setActiveTab] = useState<TabId>('channel-manager');
+  const [pendingTabChange, setPendingTabChange] = useState<TabId | null>(null);
+
   // Edit mode for staging changes
   const {
     isEditMode,
@@ -129,16 +138,44 @@ function App() {
   const handleApplyChanges = useCallback(async () => {
     await commit();
     setShowExitDialog(false);
-  }, [commit]);
+    // Switch to pending tab if there was one
+    if (pendingTabChange) {
+      setActiveTab(pendingTabChange);
+      setPendingTabChange(null);
+    }
+  }, [commit, pendingTabChange]);
 
   const handleDiscardChanges = useCallback(() => {
     discard();
     setShowExitDialog(false);
-  }, [discard]);
+    // Switch to pending tab if there was one
+    if (pendingTabChange) {
+      setActiveTab(pendingTabChange);
+      setPendingTabChange(null);
+    }
+  }, [discard, pendingTabChange]);
 
   const handleKeepEditing = useCallback(() => {
     setShowExitDialog(false);
+    setPendingTabChange(null);
   }, []);
+
+  // Handle tab change - check for edit mode with pending changes
+  const handleTabChange = useCallback((newTab: TabId) => {
+    if (isEditMode && stagedOperationCount > 0 && newTab !== 'channel-manager') {
+      // Show confirmation dialog and store pending tab change
+      setShowExitDialog(true);
+      setPendingTabChange(newTab);
+      return;
+    }
+
+    if (isEditMode && newTab !== 'channel-manager') {
+      // Exit edit mode when leaving Channel Manager
+      rawExitEditMode();
+    }
+
+    setActiveTab(newTab);
+  }, [isEditMode, stagedOperationCount, rawExitEditMode]);
 
   // Change history for undo/redo
   const {
@@ -810,72 +847,81 @@ function App() {
   return (
     <div className="app">
       <header className={`header ${isEditMode ? 'edit-mode-active' : ''}`}>
-        <h1>Enhanced Channel Manager</h1>
+        <h1>Dispatcharr Manager Next</h1>
         <div className="header-actions">
-          {/* Edit Mode Controls */}
-          {isEditMode ? (
-            <div className="edit-mode-header-controls">
-              <span className="edit-mode-label">
-                <span className="material-icons" style={{ fontSize: '18px', marginRight: '4px' }}>edit</span>
-                Edit Mode
-              </span>
-              {stagedOperationCount > 0 && (
-                <span className="edit-mode-changes">
-                  {stagedOperationCount} change{stagedOperationCount !== 1 ? 's' : ''}
-                </span>
-              )}
-              {editModeDuration !== null && (
-                <span className="edit-mode-timer">
-                  ({formatDuration(editModeDuration)})
-                </span>
-              )}
-              <div className="edit-mode-buttons">
-                <button
-                  className="edit-mode-done-btn"
-                  onClick={handleExitEditMode}
-                  disabled={isCommitting}
-                  title="Apply changes"
-                >
-                  <span className="material-icons" style={{ fontSize: '16px', marginRight: '4px' }}>check</span>
-                  Done
+          {/* Edit Mode Controls - only show on Channel Manager tab */}
+          {activeTab === 'channel-manager' && (
+            <>
+              {isEditMode ? (
+                <div className="edit-mode-header-controls">
+                  <span className="edit-mode-label">
+                    <span className="material-icons" style={{ fontSize: '18px', marginRight: '4px' }}>edit</span>
+                    Edit Mode
+                  </span>
                   {stagedOperationCount > 0 && (
-                    <span className="edit-mode-done-count">{stagedOperationCount}</span>
+                    <span className="edit-mode-changes">
+                      {stagedOperationCount} change{stagedOperationCount !== 1 ? 's' : ''}
+                    </span>
                   )}
-                </button>
+                  {editModeDuration !== null && (
+                    <span className="edit-mode-timer">
+                      ({formatDuration(editModeDuration)})
+                    </span>
+                  )}
+                  <div className="edit-mode-buttons">
+                    <button
+                      className="edit-mode-done-btn"
+                      onClick={handleExitEditMode}
+                      disabled={isCommitting}
+                      title="Apply changes"
+                    >
+                      <span className="material-icons" style={{ fontSize: '16px', marginRight: '4px' }}>check</span>
+                      Done
+                      {stagedOperationCount > 0 && (
+                        <span className="edit-mode-done-count">{stagedOperationCount}</span>
+                      )}
+                    </button>
+                    <button
+                      className="edit-mode-cancel-btn"
+                      onClick={() => {
+                        if (stagedOperationCount > 0) {
+                          if (confirm(`You have ${stagedOperationCount} pending change${stagedOperationCount !== 1 ? 's' : ''} that will be lost. Are you sure you want to cancel?`)) {
+                            discard();
+                          }
+                        } else {
+                          discard();
+                        }
+                      }}
+                      disabled={isCommitting}
+                      title="Cancel and discard changes"
+                    >
+                      <span className="material-icons" style={{ fontSize: '16px', marginRight: '4px' }}>close</span>
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              ) : (
                 <button
-                  className="edit-mode-cancel-btn"
-                  onClick={() => {
-                    if (stagedOperationCount > 0) {
-                      if (confirm(`You have ${stagedOperationCount} pending change${stagedOperationCount !== 1 ? 's' : ''} that will be lost. Are you sure you want to cancel?`)) {
-                        discard();
-                      }
-                    } else {
-                      discard();
-                    }
-                  }}
-                  disabled={isCommitting}
-                  title="Cancel and discard changes"
+                  className="enter-edit-mode-btn"
+                  onClick={enterEditMode}
+                  title="Enter Edit Mode to make changes"
                 >
-                  <span className="material-icons" style={{ fontSize: '16px', marginRight: '4px' }}>close</span>
-                  Cancel
+                  <span className="material-icons" style={{ fontSize: '16px', marginRight: '4px' }}>edit</span>
+                  Edit Mode
                 </button>
-              </div>
-            </div>
-          ) : (
-            <button
-              className="enter-edit-mode-btn"
-              onClick={enterEditMode}
-              title="Enter Edit Mode to make changes"
-            >
-              <span className="material-icons" style={{ fontSize: '16px', marginRight: '4px' }}>edit</span>
-              Edit Mode
-            </button>
+              )}
+            </>
           )}
-          <button className="settings-btn" onClick={() => setSettingsOpen(true)}>
-            Settings
-          </button>
         </div>
       </header>
+
+      <TabNavigation
+        activeTab={activeTab}
+        onTabChange={handleTabChange}
+        disabled={isCommitting}
+        editModeActive={isEditMode}
+      />
+
       <EditModeExitDialog
         isOpen={showExitDialog}
         summary={getSummary()}
@@ -884,19 +930,25 @@ function App() {
         onKeepEditing={handleKeepEditing}
         isCommitting={isCommitting}
       />
+
+      {/* Keep SettingsModal for first-run configuration */}
       <SettingsModal
         isOpen={settingsOpen}
         onClose={() => setSettingsOpen(false)}
         onSaved={handleSettingsSaved}
       />
+
       <main className="main">
-        <SplitPane
-          left={
-            <ChannelsPane
+        <Suspense fallback={<div className="tab-loading"><span className="material-icons">hourglass_empty</span> Loading...</div>}>
+          {activeTab === 'channel-manager' && (
+            <ChannelManagerTab
+              // Channel Groups
               channelGroups={channelGroups}
+              onChannelGroupsChange={loadChannelGroups}
+              onDeleteChannelGroup={handleDeleteChannelGroup}
+
+              // Channels
               channels={displayChannels}
-              streams={streams}
-              providers={providers}
               selectedChannelId={selectedChannel?.id ?? null}
               onChannelSelect={handleChannelSelect}
               onChannelUpdate={handleChannelUpdate}
@@ -905,13 +957,27 @@ function App() {
               onChannelReorder={handleChannelReorder}
               onCreateChannel={handleCreateChannel}
               onDeleteChannel={handleDeleteChannel}
-              searchTerm={channelSearch}
-              onSearchChange={setChannelSearch}
+              channelsLoading={channelsLoading}
+
+              // Channel Search & Filter
+              channelSearch={channelSearch}
+              onChannelSearchChange={setChannelSearch}
               selectedGroups={channelGroupFilter}
               onSelectedGroupsChange={setChannelGroupFilter}
-              loading={channelsLoading}
+
+              // Multi-select
+              selectedChannelIds={selectedChannelIds}
+              lastSelectedChannelId={lastSelectedChannelId}
+              onToggleChannelSelection={handleToggleChannelSelection}
+              onClearChannelSelection={handleClearChannelSelection}
+              onSelectChannelRange={handleSelectChannelRange}
+
+              // Auto-rename
               autoRenameChannelNumber={autoRenameChannelNumber}
+
+              // Edit Mode
               isEditMode={isEditMode}
+              isCommitting={isCommitting}
               modifiedChannelIds={modifiedChannelIds}
               onStageUpdateChannel={stageUpdateChannel}
               onStageAddStream={stageAddStream}
@@ -922,8 +988,8 @@ function App() {
               onStageDeleteChannelGroup={stageDeleteChannelGroup}
               onStartBatch={startBatch}
               onEndBatch={endBatch}
-              isCommitting={isCommitting}
-              // History toolbar props
+
+              // History
               canUndo={isEditMode ? canLocalUndo : canUndo}
               canRedo={isEditMode ? canLocalRedo : canRedo}
               undoCount={isEditMode ? stagedOperationCount : undoCount}
@@ -937,52 +1003,52 @@ function App() {
               onCreateSavePoint={createSavePoint}
               onRevertToSavePoint={revertToSavePoint}
               onDeleteSavePoint={deleteSavePoint}
+
+              // Logos
               logos={logos}
               onLogosChange={loadLogos}
-              onChannelGroupsChange={loadChannelGroups}
-              onDeleteChannelGroup={handleDeleteChannelGroup}
-              // EPG and Stream Profile props
+
+              // EPG & Stream Profiles
               epgData={epgData}
               epgSources={epgSources}
               streamProfiles={streamProfiles}
               epgDataLoading={epgDataLoading}
-              // Channel list filter props
+
+              // Provider & Filter Settings
               providerGroupSettings={providerGroupSettings}
               channelListFilters={channelListFilters}
               onChannelListFiltersChange={updateChannelListFilters}
               newlyCreatedGroupIds={newlyCreatedGroupIds}
               onTrackNewlyCreatedGroup={trackNewlyCreatedGroup}
-              // Multi-select props
-              selectedChannelIds={selectedChannelIds}
-              lastSelectedChannelId={lastSelectedChannelId}
-              onToggleChannelSelection={handleToggleChannelSelection}
-              onClearChannelSelection={handleClearChannelSelection}
-              onSelectChannelRange={handleSelectChannelRange}
-            />
-          }
-          right={
-            <StreamsPane
+
+              // Streams
               streams={filteredStreams}
               providers={providers}
               streamGroups={streamGroups}
-              searchTerm={streamSearch}
-              onSearchChange={setStreamSearch}
-              providerFilter={streamProviderFilter}
-              onProviderFilterChange={setStreamProviderFilter}
-              groupFilter={streamGroupFilter}
-              onGroupFilterChange={setStreamGroupFilter}
-              loading={streamsLoading}
+              streamsLoading={streamsLoading}
+
+              // Stream Search & Filter
+              streamSearch={streamSearch}
+              onStreamSearchChange={setStreamSearch}
+              streamProviderFilter={streamProviderFilter}
+              onStreamProviderFilterChange={setStreamProviderFilter}
+              streamGroupFilter={streamGroupFilter}
+              onStreamGroupFilterChange={setStreamGroupFilter}
               selectedProviders={selectedProviderFilters}
               onSelectedProvidersChange={setSelectedProviderFilters}
               selectedStreamGroups={selectedStreamGroupFilters}
               onSelectedStreamGroupsChange={setSelectedStreamGroupFilters}
-              isEditMode={isEditMode}
-              channelGroups={channelGroups}
+
+              // Bulk Create
               onBulkCreateFromGroup={handleBulkCreateFromGroup}
             />
-          }
-        />
+          )}
+          {activeTab === 'epg-manager' && <EPGManagerTab />}
+          {activeTab === 'logo-manager' && <LogoManagerTab />}
+          {activeTab === 'settings' && <SettingsTab onSaved={handleSettingsSaved} />}
+        </Suspense>
       </main>
+
       <footer className="footer">
         {error && <span className="error">API Error: {error}</span>}
         {health && (
