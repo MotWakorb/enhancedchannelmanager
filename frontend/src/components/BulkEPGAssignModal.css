@@ -217,23 +217,20 @@
 }
 
 .conflict-item {
-  background: #1e1e1e;
+  background: #3a3a3a;
   border-radius: 6px;
   overflow: hidden;
-  border: 1px solid #404040;
+  border: 1px solid #555;
   transition: border-color 0.15s, background 0.15s;
 }
 
-.conflict-item.collapsed {
-  background: #2d2d2d;
-}
-
 .conflict-item.expanded {
+  background: #1e1e1e;
   border-color: #646cff;
 }
 
 .conflict-item.resolved .conflict-header {
-  background: rgba(74, 222, 128, 0.1);
+  background: rgba(74, 222, 128, 0.15);
 }
 
 .conflict-header {
@@ -251,7 +248,7 @@
 }
 
 .conflict-header:hover {
-  background: #3d3d3d;
+  background: #4a4a4a;
 }
 
 .conflict-header .expand-icon {
