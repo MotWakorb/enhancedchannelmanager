@@ -108,6 +108,12 @@ A unique workflow that lets you stage changes locally before committing to the s
 - **Multiple EPG Sources** - Support for multiple EPG data sources
 - **Search EPG Data** - Search for programs by name
 - **Assign EPG** - Map EPG data to channels
+- **Bulk EPG Assignment** - Assign EPG to multiple selected channels at once with intelligent matching:
+  - **Country-Aware Matching** - Detects country from stream names (e.g., "US: Sports Channel") and matches to appropriate EPG entries (e.g., `SportsChannel.us` not `SportsChannel.mx`)
+  - **Auto-Match** - Channels with a single matching EPG entry are automatically assigned
+  - **Conflict Resolution** - When multiple EPG entries match, review and select the correct one
+  - **Unmatched List** - See which channels couldn't be matched for manual assignment later
+  - **Batch Undo** - All assignments from a bulk operation undo as a single action
 - **TVG ID Support** - Set TVG IDs for Kodi/XMLTV compatibility
 - **TVC Guide Station ID** - Support for TVC guide integration
 
