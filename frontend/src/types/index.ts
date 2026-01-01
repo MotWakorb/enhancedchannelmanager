@@ -15,11 +15,25 @@ export interface Channel {
   auto_created_by_name: string | null;
 }
 
+export type EPGSourceType = 'xmltv' | 'schedules_direct' | 'dummy';
+export type EPGSourceStatus = 'idle' | 'fetching' | 'parsing' | 'error' | 'success' | 'disabled';
+
 export interface EPGSource {
   id: number;
   name: string;
-  url: string;
+  source_type: EPGSourceType;
+  url: string | null;
+  api_key: string | null;
   is_active: boolean;
+  file_path: string | null;
+  refresh_interval: number;
+  priority: number;
+  status: EPGSourceStatus;
+  last_message: string | null;
+  created_at: string;
+  updated_at: string | null;
+  custom_properties: Record<string, unknown> | null;
+  epg_data_count: string;
 }
 
 export interface EPGData {

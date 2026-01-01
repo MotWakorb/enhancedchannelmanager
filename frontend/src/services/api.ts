@@ -278,6 +278,46 @@ export async function getEPGSources(): Promise<EPGSource[]> {
   return fetchJson(`${API_BASE}/epg/sources`);
 }
 
+export interface CreateEPGSourceRequest {
+  name: string;
+  source_type: 'xmltv' | 'schedules_direct' | 'dummy';
+  url?: string | null;
+  api_key?: string | null;
+  is_active?: boolean;
+  refresh_interval?: number;
+  priority?: number;
+}
+
+export async function createEPGSource(data: CreateEPGSourceRequest): Promise<EPGSource> {
+  return fetchJson(`${API_BASE}/epg/sources`, {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
+export async function updateEPGSource(id: number, data: Partial<EPGSource>): Promise<EPGSource> {
+  return fetchJson(`${API_BASE}/epg/sources/${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify(data),
+  });
+}
+
+export async function deleteEPGSource(id: number): Promise<void> {
+  await fetch(`${API_BASE}/epg/sources/${id}`, { method: 'DELETE' });
+}
+
+export async function refreshEPGSource(id: number): Promise<void> {
+  return fetchJson(`${API_BASE}/epg/sources/${id}/refresh`, {
+    method: 'POST',
+  });
+}
+
+export async function triggerEPGImport(): Promise<void> {
+  return fetchJson(`${API_BASE}/epg/import`, {
+    method: 'POST',
+  });
+}
+
 // EPG Data
 export async function getEPGData(params?: {
   search?: string;
