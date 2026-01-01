@@ -51,6 +51,7 @@ A professional-grade web interface for managing IPTV configurations with Dispatc
 - **East/West Timezone Preference** - When streams have regional variants (e.g., "Movies Channel" and "Movies Channel West"), choose to create East feeds only, West feeds only, or keep both as separate channels
 - **Country Prefix Options** - Choose to remove country prefixes (e.g., "US: Sports Channel" → "Sports Channel") or keep them with normalized formatting (e.g., "US: Sports Channel" → "US | Sports Channel") with configurable separator
 - **Channel Number Prefix** - Option to prepend channel numbers to names with configurable separator (-, :, or |), e.g., "100 | Sports Channel"
+- **Prefix Order Choice** - When both country and channel number are enabled, choose the order: "Number first" (100 | US | Sports Channel) or "Country first" (US | 100 | Sports Channel)
 - **Custom Starting Number** - Choose the starting channel number for sequential assignment
 - **Flexible Group Options** - Create in same-named group, select existing group, or create new group
 - **Preview Before Creating** - See a preview of channels that will be created with merged stream counts

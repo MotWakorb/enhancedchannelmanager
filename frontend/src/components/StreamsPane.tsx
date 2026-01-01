@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import type { Stream, M3UAccount, ChannelGroup } from '../types';
 import { useSelection } from '../hooks';
-import { normalizeStreamName, detectRegionalVariants, filterStreamsByTimezone, detectCountryPrefixes, getUniqueCountryPrefixes, type TimezonePreference, type NormalizeOptions, type NumberSeparator } from '../services/api';
+import { normalizeStreamName, detectRegionalVariants, filterStreamsByTimezone, detectCountryPrefixes, getUniqueCountryPrefixes, type TimezonePreference, type NormalizeOptions, type NumberSeparator, type PrefixOrder } from '../services/api';
 import './StreamsPane.css';
 
 interface StreamGroup {
@@ -49,7 +49,8 @@ interface StreamsPaneProps {
     addChannelNumber?: boolean,
     numberSeparator?: NumberSeparator,
     keepCountryPrefix?: boolean,
-    countrySeparator?: NumberSeparator
+    countrySeparator?: NumberSeparator,
+    prefixOrder?: PrefixOrder
   ) => Promise<void>;
 }
 
@@ -135,6 +136,7 @@ export function StreamsPane({
   const [bulkCreateCountrySeparator, setBulkCreateCountrySeparator] = useState<NumberSeparator>('|');
   const [bulkCreateAddNumber, setBulkCreateAddNumber] = useState(false);
   const [bulkCreateSeparator, setBulkCreateSeparator] = useState<NumberSeparator>('|');
+  const [bulkCreatePrefixOrder, setBulkCreatePrefixOrder] = useState<PrefixOrder>('number-first');
   const [namingOptionsExpanded, setNamingOptionsExpanded] = useState(false);
   const [channelGroupExpanded, setChannelGroupExpanded] = useState(false);
   const [timezoneExpanded, setTimezoneExpanded] = useState(false);
@@ -293,6 +295,7 @@ export function StreamsPane({
     setBulkCreateCountrySeparator('|'); // Default separator for country prefix
     setBulkCreateAddNumber(channelDefaults?.includeChannelNumberInName ?? false);
     setBulkCreateSeparator((channelDefaults?.channelNumberSeparator as NumberSeparator) || '|');
+    setBulkCreatePrefixOrder('number-first'); // Default to number first
     setNamingOptionsExpanded(false); // Collapse naming options
     setChannelGroupExpanded(false); // Collapse channel group options
     setTimezoneExpanded(false); // Collapse timezone options
@@ -315,6 +318,7 @@ export function StreamsPane({
     setBulkCreateCountrySeparator('|'); // Default separator for country prefix
     setBulkCreateAddNumber(channelDefaults?.includeChannelNumberInName ?? false);
     setBulkCreateSeparator((channelDefaults?.channelNumberSeparator as NumberSeparator) || '|');
+    setBulkCreatePrefixOrder('number-first'); // Default to number first
     setNamingOptionsExpanded(false); // Collapse naming options
     setChannelGroupExpanded(false); // Collapse channel group options
     setTimezoneExpanded(false); // Collapse timezone options
@@ -422,7 +426,8 @@ export function StreamsPane({
         bulkCreateAddNumber,
         bulkCreateSeparator,
         bulkCreateKeepCountry,
-        bulkCreateCountrySeparator
+        bulkCreateCountrySeparator,
+        bulkCreatePrefixOrder
       );
 
       // Clear selection after successful creation
@@ -451,6 +456,7 @@ export function StreamsPane({
     bulkCreateCountrySeparator,
     bulkCreateAddNumber,
     bulkCreateSeparator,
+    bulkCreatePrefixOrder,
     channelGroups,
     onBulkCreateFromGroup,
     clearSelection,
@@ -1047,6 +1053,35 @@ export function StreamsPane({
                         </>
                       )}
                     </div>
+
+                    {/* Prefix order option - only show when both country and number are enabled */}
+                    {bulkCreateKeepCountry && bulkCreateAddNumber && (
+                      <div className="naming-option-group prefix-order-group">
+                        <div className="prefix-order-label">Prefix Order:</div>
+                        <div className="prefix-order-options">
+                          <label className="radio-option">
+                            <input
+                              type="radio"
+                              name="prefixOrder"
+                              checked={bulkCreatePrefixOrder === 'number-first'}
+                              onChange={() => setBulkCreatePrefixOrder('number-first')}
+                            />
+                            <span>Number first</span>
+                          </label>
+                          <span className="option-hint radio-hint">e.g., "100 {bulkCreateSeparator} US {bulkCreateCountrySeparator} Sports Channel"</span>
+                          <label className="radio-option">
+                            <input
+                              type="radio"
+                              name="prefixOrder"
+                              checked={bulkCreatePrefixOrder === 'country-first'}
+                              onChange={() => setBulkCreatePrefixOrder('country-first')}
+                            />
+                            <span>Country first</span>
+                          </label>
+                          <span className="option-hint radio-hint">e.g., "US {bulkCreateCountrySeparator} 100 {bulkCreateSeparator} Sports Channel"</span>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
@@ -1056,9 +1091,24 @@ export function StreamsPane({
                 <div className="preview-list">
                   {Array.from(bulkCreateStats.streamsByNormalizedName.entries()).slice(0, 10).map(([normalizedName, groupedStreams], idx) => {
                     const num = bulkCreateStartingNumber ? parseInt(bulkCreateStartingNumber, 10) + idx : '?';
-                    const displayName = bulkCreateAddNumber
-                      ? `${num} ${bulkCreateSeparator} ${normalizedName}`
-                      : normalizedName;
+                    // Build display name based on options and prefix order
+                    let displayName = normalizedName;
+                    if (bulkCreateAddNumber && bulkCreateKeepCountry) {
+                      // Both enabled - extract country from normalized name and apply order
+                      const countryMatch = normalizedName.match(new RegExp(`^([A-Z]{2,6})\\s*[${bulkCreateCountrySeparator}]\\s*(.+)$`));
+                      if (countryMatch) {
+                        const [, countryCode, baseName] = countryMatch;
+                        if (bulkCreatePrefixOrder === 'country-first') {
+                          displayName = `${countryCode} ${bulkCreateCountrySeparator} ${num} ${bulkCreateSeparator} ${baseName}`;
+                        } else {
+                          displayName = `${num} ${bulkCreateSeparator} ${countryCode} ${bulkCreateCountrySeparator} ${baseName}`;
+                        }
+                      } else {
+                        displayName = `${num} ${bulkCreateSeparator} ${normalizedName}`;
+                      }
+                    } else if (bulkCreateAddNumber) {
+                      displayName = `${num} ${bulkCreateSeparator} ${normalizedName}`;
+                    }
                     return (
                       <div key={normalizedName} className="preview-item">
                         <span className="preview-number">{num}</span>
