@@ -160,7 +160,7 @@ export function SettingsModal({ isOpen, onClose, onSaved }: SettingsModalProps) 
             </label>
             <p className="form-help">
               When enabled, if a channel name contains the old channel number, it will be
-              automatically updated to the new number (e.g., "101 ESPN" → "102 ESPN").
+              automatically updated to the new number (e.g., "101 Sports Channel" → "102 Sports Channel").
             </p>
           </div>
 

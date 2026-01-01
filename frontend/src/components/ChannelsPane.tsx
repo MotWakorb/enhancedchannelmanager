@@ -25,21 +25,6 @@ import * as api from '../services/api';
 import { HistoryToolbar } from './HistoryToolbar';
 import './ChannelsPane.css';
 
-// Helper to format duration for display
-function formatDuration(ms: number): string {
-  const seconds = Math.floor(ms / 1000);
-  const minutes = Math.floor(seconds / 60);
-  const hours = Math.floor(minutes / 60);
-
-  if (hours > 0) {
-    return `${hours}h ${minutes % 60}m`;
-  }
-  if (minutes > 0) {
-    return `${minutes}m ${seconds % 60}s`;
-  }
-  return `${seconds}s`;
-}
-
 interface ChannelsPaneProps {
   channelGroups: ChannelGroup[];
   channels: Channel[];
@@ -67,15 +52,11 @@ interface ChannelsPaneProps {
   onStageRemoveStream?: (channelId: number, streamId: number, description: string) => void;
   onStageReorderStreams?: (channelId: number, streamIds: number[], description: string) => void;
   onStageBulkAssignNumbers?: (channelIds: number[], startingNumber: number, description: string) => void;
+  onStageDeleteChannel?: (channelId: number, description: string) => void;
+  onStageDeleteChannelGroup?: (groupId: number, description: string) => void;
   onStartBatch?: (description: string) => void;
   onEndBatch?: () => void;
-  // Edit mode toggle props
-  onEnterEditMode?: () => void;
-  onExitEditMode?: () => void;
-  onCancelEditMode?: () => void;
   isCommitting?: boolean;
-  stagedOperationCount?: number;
-  editModeDuration?: number | null;
   // History toolbar props (only shown in edit mode)
   canUndo?: boolean;
   canRedo?: boolean;
@@ -95,6 +76,7 @@ interface ChannelsPaneProps {
   onLogosChange?: () => void;
   // Channel group callback
   onChannelGroupsChange?: () => void;
+  onDeleteChannelGroup?: (groupId: number) => Promise<void>;
   // EPG and Stream Profile props
   epgData?: EPGData[];
   epgSources?: EPGSource[];
@@ -408,8 +390,10 @@ interface DroppableGroupHeaderProps {
   isExpanded: boolean;
   isEditMode: boolean;
   isAutoSync: boolean;
+  isManualGroup: boolean;
   onToggle: () => void;
   onSortAndRenumber?: () => void;
+  onDeleteGroup?: () => void;
 }
 
 function DroppableGroupHeader({
@@ -420,8 +404,10 @@ function DroppableGroupHeader({
   isExpanded,
   isEditMode,
   isAutoSync,
+  isManualGroup,
   onToggle,
   onSortAndRenumber,
+  onDeleteGroup,
 }: DroppableGroupHeaderProps) {
   const droppableId = `group-${groupId}`;
   const { isOver, setNodeRef } = useDroppable({
@@ -434,6 +420,11 @@ function DroppableGroupHeader({
     onSortAndRenumber?.();
   };
 
+  const handleDeleteClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    onDeleteGroup?.();
+  };
+
   return (
     <div
       ref={setNodeRef}
@@ -444,7 +435,7 @@ function DroppableGroupHeader({
       <span className="group-name">{groupName}</span>
       {isAutoSync && (
         <span className="group-auto-sync-badge" title="Auto-populated by channel sync">
-          <span className="material-icons">sync</span>
+          Auto-Sync
         </span>
       )}
       <span className="group-count">{channelCount}</span>
@@ -456,6 +447,15 @@ function DroppableGroupHeader({
           title="Sort alphabetically and renumber channels"
         >
           <span className="material-icons">sort_by_alpha</span>
+        </button>
+      )}
+      {isEditMode && isManualGroup && onDeleteGroup && (
+        <button
+          className="group-delete-btn"
+          onClick={handleDeleteClick}
+          title="Delete this group"
+        >
+          <span className="material-icons">delete</span>
         </button>
       )}
     </div>
@@ -1091,15 +1091,11 @@ export function ChannelsPane({
   onStageRemoveStream,
   onStageReorderStreams,
   onStageBulkAssignNumbers: _onStageBulkAssignNumbers, // Handled in App.tsx for channel reorder
+  onStageDeleteChannel,
+  onStageDeleteChannelGroup,
   onStartBatch,
   onEndBatch,
-  // Edit mode toggle props
-  onEnterEditMode,
-  onExitEditMode,
-  onCancelEditMode,
   isCommitting = false,
-  stagedOperationCount = 0,
-  editModeDuration = null,
   // History toolbar props
   canUndo = false,
   canRedo = false,
@@ -1119,6 +1115,7 @@ export function ChannelsPane({
   onLogosChange,
   // Channel group callback
   onChannelGroupsChange,
+  onDeleteChannelGroup,
   // EPG and Stream Profile props
   epgData = [],
   epgSources = [],
@@ -1187,13 +1184,20 @@ export function ChannelsPane({
   const [showEditChannelModal, setShowEditChannelModal] = useState(false);
   const [channelToEdit, setChannelToEdit] = useState<Channel | null>(null);
 
-  // Cancel edit mode confirmation state
-  const [showCancelEditModeConfirm, setShowCancelEditModeConfirm] = useState(false);
-
   // Create channel group modal state
   const [showCreateGroupModal, setShowCreateGroupModal] = useState(false);
   const [newGroupName, setNewGroupName] = useState('');
   const [creatingGroup, setCreatingGroup] = useState(false);
+
+  // Delete group state
+  const [showDeleteGroupConfirm, setShowDeleteGroupConfirm] = useState(false);
+  const [groupToDelete, setGroupToDelete] = useState<ChannelGroup | null>(null);
+  const [deletingGroup, setDeletingGroup] = useState(false);
+  const [deleteGroupChannels, setDeleteGroupChannels] = useState(false);
+
+  // Bulk delete channels state
+  const [showBulkDeleteConfirm, setShowBulkDeleteConfirm] = useState(false);
+  const [bulkDeleting, setBulkDeleting] = useState(false);
 
   // Cross-group move modal state
   const [showCrossGroupMoveModal, setShowCrossGroupMoveModal] = useState(false);
@@ -1510,9 +1514,18 @@ export function ChannelsPane({
         );
       }
 
-      await onDeleteChannel(channelToDelete.id);
-      // Remove from local state
-      setLocalChannels((prev) => prev.filter((ch) => ch.id !== channelToDelete.id));
+      // In edit mode, stage the delete operation for undo support
+      if (isEditMode && onStageDeleteChannel) {
+        const description = `Delete channel "${channelToDelete.name}"`;
+        onStageDeleteChannel(channelToDelete.id, description);
+        // Local state is updated via displayChannels from working copy
+      } else {
+        // Not in edit mode, delete immediately via API
+        await onDeleteChannel(channelToDelete.id);
+        // Remove from local state
+        setLocalChannels((prev) => prev.filter((ch) => ch.id !== channelToDelete.id));
+      }
+
       // Clear selection if deleted channel was selected
       if (selectedChannelId === channelToDelete.id) {
         onChannelSelect(null);
@@ -1533,6 +1546,126 @@ export function ChannelsPane({
     setChannelToDelete(null);
     setSubsequentChannels([]);
     setRenumberAfterDelete(true);
+  };
+
+  // Handle initiating group deletion
+  const handleDeleteGroupClick = (group: ChannelGroup) => {
+    setGroupToDelete(group);
+    setShowDeleteGroupConfirm(true);
+  };
+
+  // Handle confirming group deletion
+  const handleConfirmDeleteGroup = async () => {
+    if (!groupToDelete) return;
+
+    setDeletingGroup(true);
+    try {
+      // If "also delete channels" is checked, delete the channels first
+      if (deleteGroupChannels && groupToDelete.channel_count > 0) {
+        // Find all channels in this group
+        const channelsInGroup = channels.filter((ch) => ch.channel_group_id === groupToDelete.id);
+
+        if (isEditMode && onStageDeleteChannel && onStartBatch && onEndBatch) {
+          // In edit mode, stage all channel deletes as a batch
+          onStartBatch(`Delete group "${groupToDelete.name}" and ${channelsInGroup.length} channels`);
+          for (const channel of channelsInGroup) {
+            onStageDeleteChannel(channel.id, `Delete channel "${channel.name}"`);
+          }
+          // Stage the group delete
+          if (onStageDeleteChannelGroup) {
+            onStageDeleteChannelGroup(groupToDelete.id, `Delete group "${groupToDelete.name}"`);
+          }
+          onEndBatch();
+        } else {
+          // Not in edit mode, delete channels immediately via API
+          for (const channel of channelsInGroup) {
+            await onDeleteChannel(channel.id);
+          }
+          // Then delete the group
+          if (onDeleteChannelGroup) {
+            await onDeleteChannelGroup(groupToDelete.id);
+          }
+        }
+      } else {
+        // Just delete the group (channels will be moved to ungrouped)
+        if (isEditMode && onStageDeleteChannelGroup) {
+          const description = `Delete group "${groupToDelete.name}"`;
+          onStageDeleteChannelGroup(groupToDelete.id, description);
+        } else if (onDeleteChannelGroup) {
+          await onDeleteChannelGroup(groupToDelete.id);
+        }
+      }
+
+      setShowDeleteGroupConfirm(false);
+      setGroupToDelete(null);
+      setDeleteGroupChannels(false);
+    } catch (err) {
+      console.error('Failed to delete group:', err);
+    } finally {
+      setDeletingGroup(false);
+    }
+  };
+
+  // Handle canceling group deletion
+  const handleCancelDeleteGroup = () => {
+    setShowDeleteGroupConfirm(false);
+    setGroupToDelete(null);
+    setDeleteGroupChannels(false);
+  };
+
+  // Handle bulk delete channels
+  const handleBulkDeleteClick = () => {
+    if (selectedChannelIds.size === 0) return;
+    setShowBulkDeleteConfirm(true);
+  };
+
+  const handleConfirmBulkDelete = async () => {
+    if (selectedChannelIds.size === 0) return;
+
+    setBulkDeleting(true);
+    try {
+      const channelIdsToDelete = Array.from(selectedChannelIds);
+
+      // In edit mode, stage the delete operations for undo support
+      if (isEditMode && onStageDeleteChannel && onStartBatch && onEndBatch) {
+        // Use batch to group all deletes as a single undo operation
+        onStartBatch(`Delete ${channelIdsToDelete.length} channels`);
+        for (const channelId of channelIdsToDelete) {
+          const channel = channels.find((ch) => ch.id === channelId);
+          const description = `Delete channel "${channel?.name || channelId}"`;
+          onStageDeleteChannel(channelId, description);
+        }
+        onEndBatch();
+        // Local state is updated via displayChannels from working copy
+      } else {
+        // Not in edit mode, delete immediately via API
+        for (const channelId of channelIdsToDelete) {
+          await onDeleteChannel(channelId);
+        }
+        // Update local state
+        setLocalChannels((prev) => prev.filter((ch) => !selectedChannelIds.has(ch.id)));
+      }
+
+      // Clear selection
+      if (onClearChannelSelection) {
+        onClearChannelSelection();
+      }
+
+      // Clear selected channel if it was deleted
+      if (selectedChannelId && selectedChannelIds.has(selectedChannelId)) {
+        onChannelSelect(null);
+      }
+
+      setShowBulkDeleteConfirm(false);
+    } catch (err) {
+      console.error('Failed to bulk delete channels:', err);
+    } finally {
+      setBulkDeleting(false);
+    }
+  };
+
+  const handleCancelBulkDelete = () => {
+    setShowBulkDeleteConfirm(false);
   };
 
   // Handle reordering streams within the channel
@@ -2908,6 +3041,14 @@ export function ChannelsPane({
     const isExpanded = expandedGroups[numericGroupId] === true;
     const isAutoSync = groupId !== 'ungrouped' && autoSyncRelatedGroups.has(groupId);
 
+    // Determine if this is a manual group (not linked to any M3U provider and not auto-sync related)
+    const groupIdStr = String(groupId);
+    const isProviderGroup = groupId !== 'ungrouped' && groupIdStr in (providerSettingsMap ?? {});
+    const isManualGroup = groupId !== 'ungrouped' && !isProviderGroup && !isAutoSync;
+
+    // Find the group object for deletion
+    const group = groupId !== 'ungrouped' ? channelGroups.find(g => g.id === groupId) : null;
+
     return (
       <div key={groupId} className={`channel-group ${isEmpty ? 'empty-group' : ''}`}>
         <DroppableGroupHeader
@@ -2918,8 +3059,10 @@ export function ChannelsPane({
           isExpanded={isExpanded}
           isEditMode={isEditMode}
           isAutoSync={isAutoSync}
+          isManualGroup={isManualGroup}
           onToggle={() => toggleGroup(numericGroupId)}
           onSortAndRenumber={() => handleOpenSortRenumber(groupId, groupName, groupChannels)}
+          onDeleteGroup={group ? () => handleDeleteGroupClick(group) : undefined}
         />
         {isExpanded && isEmpty && (
           <div className="group-channels empty-group-placeholder">
@@ -3046,38 +3189,30 @@ export function ChannelsPane({
     );
   };
 
-  // Handle cancel edit mode click
-  const handleCancelEditModeClick = () => {
-    if (stagedOperationCount > 0) {
-      setShowCancelEditModeConfirm(true);
-    } else {
-      onCancelEditMode?.();
-    }
-  };
-
-  const handleConfirmCancelEditMode = () => {
-    setShowCancelEditModeConfirm(false);
-    onCancelEditMode?.();
-  };
-
   return (
     <div className="channels-pane">
       <div className={`pane-header ${isEditMode ? 'edit-mode' : ''}`}>
         <div className="pane-header-title">
-          <h2>{isEditMode ? 'Editing Channels' : 'Channels'}</h2>
-          {isEditMode && (
-            <span className="edit-mode-info">
-              {stagedOperationCount > 0 && (
-                <span className="edit-mode-count">
-                  {stagedOperationCount} change{stagedOperationCount !== 1 ? 's' : ''}
-                </span>
-              )}
-              {editModeDuration !== null && (
-                <span className="edit-mode-duration">
-                  ({formatDuration(editModeDuration)})
-                </span>
-              )}
-            </span>
+          <h2>Channels</h2>
+          {isEditMode && selectedChannelIds.size > 0 && (
+            <div className="selection-info">
+              <span className="selection-count">{selectedChannelIds.size} selected</span>
+              <button
+                className="bulk-delete-btn"
+                onClick={handleBulkDeleteClick}
+                title="Delete selected channels"
+              >
+                <span className="material-icons">delete</span>
+                Delete
+              </button>
+              <button
+                className="clear-selection-btn"
+                onClick={onClearChannelSelection}
+                title="Clear selection"
+              >
+                Clear
+              </button>
+            </div>
           )}
         </div>
         <div className="pane-header-actions">
@@ -3119,78 +3254,8 @@ export function ChannelsPane({
               </button>
             </>
           )}
-          {/* Edit Mode: Done and Cancel buttons */}
-          {isEditMode && onExitEditMode && onCancelEditMode && (
-            <div className="edit-mode-buttons">
-              <button
-                className="edit-mode-done-btn"
-                onClick={onExitEditMode}
-                disabled={isCommitting}
-                title="Apply changes"
-              >
-                <span className="material-icons" style={{ fontSize: '16px', marginRight: '4px' }}>check</span>
-                Done
-                {stagedOperationCount > 0 && (
-                  <span className="edit-mode-done-count">{stagedOperationCount}</span>
-                )}
-              </button>
-              <button
-                className="edit-mode-cancel-btn"
-                onClick={handleCancelEditModeClick}
-                disabled={isCommitting}
-                title="Cancel and discard changes"
-              >
-                <span className="material-icons" style={{ fontSize: '16px', marginRight: '4px' }}>close</span>
-                Cancel
-              </button>
-            </div>
-          )}
-          {/* Not in Edit Mode: Enter Edit Mode button */}
-          {!isEditMode && onEnterEditMode && (
-            <button
-              className="enter-edit-mode-btn"
-              onClick={onEnterEditMode}
-              title="Enter Edit Mode"
-            >
-              <span className="material-icons" style={{ fontSize: '16px', marginRight: '4px' }}>edit</span>
-              Edit Mode
-            </button>
-          )}
         </div>
       </div>
-
-      {/* Cancel Edit Mode Confirmation Dialog */}
-      {showCancelEditModeConfirm && (
-        <div className="edit-mode-dialog-overlay" onClick={() => setShowCancelEditModeConfirm(false)}>
-          <div className="edit-mode-dialog" onClick={(e) => e.stopPropagation()}>
-            <div className="edit-mode-dialog-header">
-              <h2>Discard Changes?</h2>
-            </div>
-            <div className="edit-mode-dialog-content">
-              <p className="edit-mode-dialog-summary-intro">
-                You have <strong>{stagedOperationCount}</strong> pending change{stagedOperationCount !== 1 ? 's' : ''} that will be lost.
-              </p>
-              <p className="edit-mode-dialog-question">
-                Are you sure you want to cancel Edit Mode and discard all changes?
-              </p>
-            </div>
-            <div className="edit-mode-dialog-actions">
-              <button
-                className="edit-mode-dialog-btn secondary"
-                onClick={() => setShowCancelEditModeConfirm(false)}
-              >
-                Keep Editing
-              </button>
-              <button
-                className="edit-mode-dialog-btn danger"
-                onClick={handleConfirmCancelEditMode}
-              >
-                Discard Changes
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* Create Channel Modal */}
       {showCreateModal && (
@@ -3204,7 +3269,7 @@ export function ChannelsPane({
                   type="text"
                   value={newChannelName}
                   onChange={(e) => setNewChannelName(e.target.value)}
-                  placeholder="e.g., ESPN HD"
+                  placeholder="e.g., Sports Channel HD"
                   autoFocus
                 />
               </label>
@@ -3394,8 +3459,10 @@ export function ChannelsPane({
                 Are you sure you want to delete channel{' '}
                 <strong>{channelToDelete.channel_number} - {channelToDelete.name}</strong>?
               </p>
-              <p className="delete-warning">
-                This action cannot be undone. The channel and all its stream assignments will be permanently removed.
+              <p className={isEditMode ? "delete-info" : "delete-warning"}>
+                {isEditMode
+                  ? 'Changes can be undone while in edit mode.'
+                  : 'This action cannot be undone. The channel and all its stream assignments will be permanently removed.'}
               </p>
             </div>
             {subsequentChannels.length > 0 && (
@@ -3453,6 +3520,97 @@ export function ChannelsPane({
                 disabled={deleting}
               >
                 {deleting ? 'Deleting...' : 'Delete'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Group Confirmation Dialog */}
+      {showDeleteGroupConfirm && groupToDelete && (
+        <div className="modal-overlay" onClick={handleCancelDeleteGroup}>
+          <div className="modal-content delete-dialog" onClick={(e) => e.stopPropagation()}>
+            <h3>Delete Group</h3>
+            <div className="delete-message">
+              <p>
+                Are you sure you want to delete the group{' '}
+                <strong>{groupToDelete.name}</strong>?
+              </p>
+              {groupToDelete.channel_count > 0 && (
+                <>
+                  <p className="delete-warning">
+                    This group contains {groupToDelete.channel_count} channel{groupToDelete.channel_count !== 1 ? 's' : ''}.
+                    {!deleteGroupChannels && ' The channels will be moved to "Ungrouped".'}
+                  </p>
+                  <div className="delete-group-option">
+                    <label className="delete-channels-checkbox">
+                      <input
+                        type="checkbox"
+                        checked={deleteGroupChannels}
+                        onChange={(e) => setDeleteGroupChannels(e.target.checked)}
+                        disabled={deletingGroup}
+                      />
+                      <span>Also delete the {groupToDelete.channel_count} channel{groupToDelete.channel_count !== 1 ? 's' : ''}</span>
+                    </label>
+                  </div>
+                </>
+              )}
+              <p className="delete-info">
+                {isEditMode
+                  ? 'Changes can be undone while in edit mode.'
+                  : 'This action cannot be undone.'}
+              </p>
+            </div>
+            <div className="modal-actions">
+              <button
+                className="modal-btn cancel"
+                onClick={handleCancelDeleteGroup}
+                disabled={deletingGroup}
+              >
+                Cancel
+              </button>
+              <button
+                className="modal-btn danger"
+                onClick={handleConfirmDeleteGroup}
+                disabled={deletingGroup}
+              >
+                {deletingGroup ? 'Deleting...' : 'Delete'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Bulk Delete Channels Confirmation Dialog */}
+      {showBulkDeleteConfirm && selectedChannelIds.size > 0 && (
+        <div className="modal-overlay" onClick={handleCancelBulkDelete}>
+          <div className="modal-content delete-dialog" onClick={(e) => e.stopPropagation()}>
+            <h3>Delete {selectedChannelIds.size} Channel{selectedChannelIds.size !== 1 ? 's' : ''}</h3>
+            <div className="delete-message">
+              <p>
+                Are you sure you want to delete{' '}
+                <strong>{selectedChannelIds.size} selected channel{selectedChannelIds.size !== 1 ? 's' : ''}</strong>?
+              </p>
+              <p className={isEditMode ? "delete-info" : "delete-warning"}>
+                {isEditMode
+                  ? 'Changes can be undone while in edit mode.'
+                  : 'This action cannot be undone. All selected channels and their stream assignments will be permanently removed.'}
+              </p>
+            </div>
+            <div className="modal-actions">
+              <button
+                className="modal-btn cancel"
+                onClick={handleCancelBulkDelete}
+                disabled={bulkDeleting}
+              >
+                Cancel
+              </button>
+              <button
+                className="modal-btn danger"
+                onClick={handleConfirmBulkDelete}
+                disabled={bulkDeleting}
+              >
+                {bulkDeleting ? 'Deleting...' : `Delete ${selectedChannelIds.size} Channel${selectedChannelIds.size !== 1 ? 's' : ''}`}
               </button>
             </div>
           </div>

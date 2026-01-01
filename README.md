@@ -8,8 +8,10 @@ A professional-grade web interface for managing TV channels, streams, and metada
 
 - **Create, Edit, Delete Channels** - Full CRUD operations for channel management
 - **Channel Numbering** - Assign channel numbers (including decimal numbers like 4.1)
-- **Auto-Rename** - Optionally update channel names when numbers change (e.g., "101 | ESPN" becomes "102 | ESPN")
+- **Auto-Rename** - Optionally update channel names when numbers change (e.g., "101 | Sports Channel" becomes "102 | Sports Channel")
 - **Channel Groups** - Organize channels into groups for better organization
+- **Delete Groups** - Delete channel groups with option to also delete contained channels
+- **Bulk Delete** - Select multiple channels and delete them at once
 - **Search & Filter** - Search channels by name, filter by one or more groups
 - **Inline Stream Display** - View assigned streams directly in the channel list
 
@@ -22,14 +24,29 @@ A professional-grade web interface for managing TV channels, streams, and metada
 - **Filter by Provider** - Filter streams by M3U account
 - **Filter by Group** - Filter streams by their source group
 
+### Bulk Channel Creation
+
+- **Create from Stream Group** - Create multiple channels from an entire M3U stream group at once
+- **Auto-Assign Streams** - Each created channel automatically gets its source stream assigned
+- **Merge Duplicate Names** - Streams with identical names from different M3U providers are merged into a single channel with all streams assigned (provides multi-provider redundancy)
+- **Quality Variant Normalization** - Streams with quality suffixes (FHD, UHD, HD, SD, 4K, 1080P, etc.) are automatically merged into one channel
+- **East/West Timezone Preference** - When streams have regional variants (e.g., "Movies Channel" and "Movies Channel West"), choose to create East feeds only, West feeds only, or keep both as separate channels
+- **Country Prefix Removal** - Option to remove country prefixes (US, UK, CA, etc.) from channel names (e.g., "US: Sports Channel" becomes "Sports Channel")
+- **Channel Number Prefix** - Option to prepend channel numbers to names with configurable separator (-, :, or |), e.g., "100 | Sports Channel"
+- **Custom Starting Number** - Choose the starting channel number for sequential assignment
+- **Flexible Group Options** - Create in same-named group, select existing group, or create new group
+- **Preview Before Creating** - See a preview of channels that will be created with merged stream counts
+- **Edit Mode Integration** - Requires edit mode, button visible on stream group headers on hover
+
 ### Edit Mode (Staged Editing)
 
 A unique workflow that lets you stage changes locally before committing to the server:
 
 - **Enter Edit Mode** - Start a new editing session
-- **Stage Changes** - All edits are queued locally
+- **Stage Changes** - All edits are queued locally (including deletes)
 - **Preview Changes** - See pending operations count
 - **Local Undo/Redo** - Undo/redo within your edit session (Ctrl+Z / Ctrl+Shift+Z)
+- **Undoable Deletes** - Channel and group deletions can be undone before committing
 - **Batch Operations** - Group related changes together
 - **Commit or Discard** - Apply all changes at once or discard everything
 - **Exit Dialog** - Review a summary of all changes before committing
@@ -55,7 +72,7 @@ A unique workflow that lets you stage changes locally before committing to the s
 
 - **Alphabetical Sorting** - Sort channels within a group A-Z
 - **Sequential Renumbering** - Assign sequential numbers starting from any value
-- **Smart Name Sorting** - Option to ignore channel numbers in names when sorting (e.g., "101 | ESPN" sorts as "ESPN")
+- **Smart Name Sorting** - Option to ignore channel numbers in names when sorting (e.g., "101 | Sports Channel" sorts as "Sports Channel")
 - **Preview** - See the result before applying
 - **Batch Undo** - Entire sort/renumber operation undoes as one action
 

@@ -6,6 +6,8 @@ from pydantic import BaseModel
 from typing import Optional
 import os
 import re
+import sys
+import traceback
 
 from dispatcharr_client import get_client, reset_client
 from config import (
@@ -18,7 +20,7 @@ from config import (
 app = FastAPI(
     title="Enhanced Channel Manager",
     description="Drag-and-drop channel management for Dispatcharr",
-    version="0.1.0",
+    version="0.1.8",
 )
 
 # CORS for development
@@ -226,8 +228,14 @@ async def get_logo(logo_id: int):
 async def create_logo(request: CreateLogoRequest):
     client = get_client()
     try:
-        return await client.create_logo({"name": request.name, "url": request.url})
+        print(f"Creating logo: name={request.name}, url={request.url}", file=sys.stderr, flush=True)
+        result = await client.create_logo({"name": request.name, "url": request.url})
+        print(f"Logo created successfully: {result}", file=sys.stderr, flush=True)
+        return result
     except Exception as e:
+        print(f"Logo creation failed: {e}", file=sys.stderr, flush=True)
+        traceback.print_exc(file=sys.stderr)
+        sys.stderr.flush()
         raise HTTPException(status_code=500, detail=str(e))
 
 

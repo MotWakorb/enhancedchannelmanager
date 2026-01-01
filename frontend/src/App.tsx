@@ -96,6 +96,8 @@ function App() {
     stageRemoveStream,
     stageReorderStreams,
     stageBulkAssignNumbers,
+    stageDeleteChannel,
+    stageDeleteChannelGroup,
     addChannelToWorkingCopy,
     getSummary,
     commit,
@@ -109,6 +111,7 @@ function App() {
     onChannelsChange: setChannels,
     onCommitComplete: () => {
       loadChannels(); // Refresh from server
+      loadChannelGroups(); // Refresh groups (for deleted groups)
     },
     onError: setError,
   });
@@ -245,6 +248,14 @@ function App() {
     } catch (err) {
       console.error('Failed to load channel groups:', err);
     }
+  };
+
+  const handleDeleteChannelGroup = async (groupId: number) => {
+    await api.deleteChannelGroup(groupId);
+    // Immediately update local state to reflect deletion
+    setChannelGroups((prev) => prev.filter((g) => g.id !== groupId));
+    // Also reload channels since they may have been moved to ungrouped
+    await loadChannels();
   };
 
   const loadProviderGroupSettings = async () => {
@@ -608,6 +619,91 @@ function App() {
     [isEditMode, addChannelToWorkingCopy]
   );
 
+  const handleBulkCreateFromGroup = useCallback(
+    async (
+      streamsToCreate: Stream[],
+      startingNumber: number,
+      channelGroupId: number | null,
+      newGroupName?: string,
+      timezonePreference?: api.TimezonePreference,
+      stripCountryPrefix?: boolean,
+      addChannelNumber?: boolean,
+      numberSeparator?: api.NumberSeparator
+    ) => {
+      try {
+        // If we need to create a new group first
+        let targetGroupId = channelGroupId;
+        let newGroupCreated = false;
+        if (newGroupName) {
+          const newGroup = await api.createChannelGroup(newGroupName);
+          targetGroupId = newGroup.id;
+          newGroupCreated = true;
+          // Refresh channel groups
+          const updatedGroups = await api.getChannelGroups();
+          setChannelGroups(updatedGroups);
+        }
+
+        // Create channels with streams (include logo_url for auto-assignment)
+        const result = await api.bulkCreateChannelsFromStreams(
+          streamsToCreate.map(s => ({ id: s.id, name: s.name, logo_url: s.logo_url })),
+          startingNumber,
+          targetGroupId,
+          {
+            timezonePreference: timezonePreference ?? 'both',
+            stripCountryPrefix: stripCountryPrefix ?? false,
+            addChannelNumber: addChannelNumber ?? false,
+            numberSeparator: numberSeparator ?? '|',
+          }
+        );
+
+        // Update channels state with new channels
+        if (result.created.length > 0) {
+          setChannels((prev) => [...prev, ...result.created]);
+
+          // In edit mode, also add to working copy
+          if (isEditMode) {
+            result.created.forEach(ch => addChannelToWorkingCopy(ch));
+          }
+        }
+
+        // Show results
+        const mergeInfo = result.mergedCount > 0
+          ? `\n(${result.mergedCount} streams merged from duplicate names)`
+          : '';
+        if (result.errors.length > 0) {
+          alert(`Created ${result.created.length} channels.${mergeInfo}\n\nErrors:\n${result.errors.join('\n')}`);
+        } else {
+          alert(`Successfully created ${result.created.length} channels!${mergeInfo}`);
+        }
+
+        // Refresh channel groups to update counts
+        const updatedGroups = await api.getChannelGroups();
+        setChannelGroups(updatedGroups);
+
+        // If a new group was created or we used an existing group, add it to the visible filter
+        if (targetGroupId !== null) {
+          setChannelGroupFilter((prev) => {
+            if (!prev.includes(targetGroupId!)) {
+              return [...prev, targetGroupId!];
+            }
+            return prev;
+          });
+        }
+
+        // Track as newly created if it was a new group
+        if (newGroupCreated && targetGroupId !== null) {
+          trackNewlyCreatedGroup(targetGroupId);
+        }
+
+      } catch (err) {
+        console.error('Bulk create failed:', err);
+        setError('Failed to bulk create channels');
+        throw err;
+      }
+    },
+    [isEditMode, addChannelToWorkingCopy, trackNewlyCreatedGroup]
+  );
+
   // Filter streams based on multi-select filters (client-side)
   const filteredStreams = useMemo(() => {
     let result = streams;
@@ -703,13 +799,82 @@ function App() {
     [channels, displayChannels, isEditMode, stageBulkAssignNumbers, recordChange]
   );
 
+  // Format duration for display
+  const formatDuration = (seconds: number): string => {
+    if (seconds < 60) return `${seconds}s`;
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return secs > 0 ? `${mins}m ${secs}s` : `${mins}m`;
+  };
+
   return (
     <div className="app">
-      <header className="header">
+      <header className={`header ${isEditMode ? 'edit-mode-active' : ''}`}>
         <h1>Enhanced Channel Manager</h1>
-        <button className="settings-btn" onClick={() => setSettingsOpen(true)}>
-          Settings
-        </button>
+        <div className="header-actions">
+          {/* Edit Mode Controls */}
+          {isEditMode ? (
+            <div className="edit-mode-header-controls">
+              <span className="edit-mode-label">
+                <span className="material-icons" style={{ fontSize: '18px', marginRight: '4px' }}>edit</span>
+                Edit Mode
+              </span>
+              {stagedOperationCount > 0 && (
+                <span className="edit-mode-changes">
+                  {stagedOperationCount} change{stagedOperationCount !== 1 ? 's' : ''}
+                </span>
+              )}
+              {editModeDuration !== null && (
+                <span className="edit-mode-timer">
+                  ({formatDuration(editModeDuration)})
+                </span>
+              )}
+              <div className="edit-mode-buttons">
+                <button
+                  className="edit-mode-done-btn"
+                  onClick={handleExitEditMode}
+                  disabled={isCommitting}
+                  title="Apply changes"
+                >
+                  <span className="material-icons" style={{ fontSize: '16px', marginRight: '4px' }}>check</span>
+                  Done
+                  {stagedOperationCount > 0 && (
+                    <span className="edit-mode-done-count">{stagedOperationCount}</span>
+                  )}
+                </button>
+                <button
+                  className="edit-mode-cancel-btn"
+                  onClick={() => {
+                    if (stagedOperationCount > 0) {
+                      if (confirm(`You have ${stagedOperationCount} pending change${stagedOperationCount !== 1 ? 's' : ''} that will be lost. Are you sure you want to cancel?`)) {
+                        discard();
+                      }
+                    } else {
+                      discard();
+                    }
+                  }}
+                  disabled={isCommitting}
+                  title="Cancel and discard changes"
+                >
+                  <span className="material-icons" style={{ fontSize: '16px', marginRight: '4px' }}>close</span>
+                  Cancel
+                </button>
+              </div>
+            </div>
+          ) : (
+            <button
+              className="enter-edit-mode-btn"
+              onClick={enterEditMode}
+              title="Enter Edit Mode to make changes"
+            >
+              <span className="material-icons" style={{ fontSize: '16px', marginRight: '4px' }}>edit</span>
+              Edit Mode
+            </button>
+          )}
+          <button className="settings-btn" onClick={() => setSettingsOpen(true)}>
+            Settings
+          </button>
+        </div>
       </header>
       <EditModeExitDialog
         isOpen={showExitDialog}
@@ -753,15 +918,11 @@ function App() {
               onStageRemoveStream={stageRemoveStream}
               onStageReorderStreams={stageReorderStreams}
               onStageBulkAssignNumbers={stageBulkAssignNumbers}
+              onStageDeleteChannel={stageDeleteChannel}
+              onStageDeleteChannelGroup={stageDeleteChannelGroup}
               onStartBatch={startBatch}
               onEndBatch={endBatch}
-              // Edit mode toggle props
-              onEnterEditMode={enterEditMode}
-              onExitEditMode={handleExitEditMode}
-              onCancelEditMode={discard}
               isCommitting={isCommitting}
-              stagedOperationCount={stagedOperationCount}
-              editModeDuration={editModeDuration}
               // History toolbar props
               canUndo={isEditMode ? canLocalUndo : canUndo}
               canRedo={isEditMode ? canLocalRedo : canRedo}
@@ -779,6 +940,7 @@ function App() {
               logos={logos}
               onLogosChange={loadLogos}
               onChannelGroupsChange={loadChannelGroups}
+              onDeleteChannelGroup={handleDeleteChannelGroup}
               // EPG and Stream Profile props
               epgData={epgData}
               epgSources={epgSources}
@@ -814,6 +976,9 @@ function App() {
               onSelectedProvidersChange={setSelectedProviderFilters}
               selectedStreamGroups={selectedStreamGroupFilters}
               onSelectedStreamGroupsChange={setSelectedStreamGroupFilters}
+              isEditMode={isEditMode}
+              channelGroups={channelGroups}
+              onBulkCreateFromGroup={handleBulkCreateFromGroup}
             />
           }
         />

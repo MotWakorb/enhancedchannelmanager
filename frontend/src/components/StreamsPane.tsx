@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import type { Stream, M3UAccount } from '../types';
+import type { Stream, M3UAccount, ChannelGroup } from '../types';
 import { useSelection } from '../hooks';
+import { normalizeStreamName, detectRegionalVariants, filterStreamsByTimezone, detectCountryPrefixes, getUniqueCountryPrefixes, type TimezonePreference, type NormalizeOptions, type NumberSeparator } from '../services/api';
 import './StreamsPane.css';
 
 interface StreamGroup {
@@ -26,6 +27,19 @@ interface StreamsPaneProps {
   onSelectedProvidersChange?: (providerIds: number[]) => void;
   selectedStreamGroups?: string[];
   onSelectedStreamGroupsChange?: (groups: string[]) => void;
+  // Bulk channel creation
+  isEditMode?: boolean;
+  channelGroups?: ChannelGroup[];
+  onBulkCreateFromGroup?: (
+    streams: Stream[],
+    startingNumber: number,
+    channelGroupId: number | null,
+    newGroupName?: string,
+    timezonePreference?: TimezonePreference,
+    stripCountryPrefix?: boolean,
+    addChannelNumber?: boolean,
+    numberSeparator?: NumberSeparator
+  ) => Promise<void>;
 }
 
 export function StreamsPane({
@@ -43,17 +57,38 @@ export function StreamsPane({
   onSelectedProvidersChange,
   selectedStreamGroups = [],
   onSelectedStreamGroupsChange,
+  isEditMode = false,
+  channelGroups = [],
+  onBulkCreateFromGroup,
 }: StreamsPaneProps) {
   const {
     selectedIds,
     selectedCount,
     handleSelect,
+    toggleSelect,
     selectAll,
     clearSelection,
     isSelected,
   } = useSelection(streams);
 
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
+
+  // Bulk create modal state
+  const [bulkCreateModalOpen, setBulkCreateModalOpen] = useState(false);
+  const [bulkCreateGroup, setBulkCreateGroup] = useState<StreamGroup | null>(null);
+  const [bulkCreateStreams, setBulkCreateStreams] = useState<Stream[]>([]); // For selected streams
+  const [bulkCreateStartingNumber, setBulkCreateStartingNumber] = useState<string>('');
+  const [bulkCreateGroupOption, setBulkCreateGroupOption] = useState<'same' | 'existing' | 'new'>('same');
+  const [bulkCreateSelectedGroupId, setBulkCreateSelectedGroupId] = useState<number | null>(null);
+  const [bulkCreateNewGroupName, setBulkCreateNewGroupName] = useState('');
+  const [bulkCreateLoading, setBulkCreateLoading] = useState(false);
+  const [bulkCreateTimezone, setBulkCreateTimezone] = useState<TimezonePreference>('both');
+  const [bulkCreateStripCountry, setBulkCreateStripCountry] = useState(false);
+  const [bulkCreateAddNumber, setBulkCreateAddNumber] = useState(false);
+  const [bulkCreateSeparator, setBulkCreateSeparator] = useState<NumberSeparator>('|');
+  const [namingOptionsExpanded, setNamingOptionsExpanded] = useState(false);
+  const [channelGroupExpanded, setChannelGroupExpanded] = useState(false);
+  const [timezoneExpanded, setTimezoneExpanded] = useState(false);
 
   // Dropdown state
   const [providerDropdownOpen, setProviderDropdownOpen] = useState(false);
@@ -194,6 +229,173 @@ export function StreamsPane({
     [handleSelect]
   );
 
+  // Bulk create handlers
+  const openBulkCreateModal = useCallback((group: StreamGroup) => {
+    setBulkCreateGroup(group);
+    setBulkCreateStreams([]);
+    setBulkCreateStartingNumber('');
+    setBulkCreateGroupOption('same');
+    setBulkCreateSelectedGroupId(null);
+    setBulkCreateNewGroupName('');
+    setBulkCreateTimezone('both'); // Reset timezone preference
+    setBulkCreateStripCountry(false); // Reset country prefix option
+    setBulkCreateAddNumber(false); // Reset channel number prefix option
+    setBulkCreateSeparator('|'); // Reset separator
+    setNamingOptionsExpanded(false); // Collapse naming options
+    setChannelGroupExpanded(false); // Collapse channel group options
+    setTimezoneExpanded(false); // Collapse timezone options
+    setBulkCreateModalOpen(true);
+  }, []);
+
+  const openBulkCreateModalForSelection = useCallback(() => {
+    // Get selected streams in order
+    const selectedStreamsList = streams.filter(s => selectedIds.has(s.id));
+    setBulkCreateGroup(null);
+    setBulkCreateStreams(selectedStreamsList);
+    setBulkCreateStartingNumber('');
+    setBulkCreateGroupOption('existing'); // Default to existing group for selections
+    setBulkCreateSelectedGroupId(null);
+    setBulkCreateNewGroupName('');
+    setBulkCreateTimezone('both'); // Reset timezone preference
+    setBulkCreateStripCountry(false); // Reset country prefix option
+    setBulkCreateAddNumber(false); // Reset channel number prefix option
+    setBulkCreateSeparator('|'); // Reset separator
+    setNamingOptionsExpanded(false); // Collapse naming options
+    setChannelGroupExpanded(false); // Collapse channel group options
+    setTimezoneExpanded(false); // Collapse timezone options
+    setBulkCreateModalOpen(true);
+  }, [streams, selectedIds]);
+
+  const closeBulkCreateModal = useCallback(() => {
+    setBulkCreateModalOpen(false);
+    setBulkCreateGroup(null);
+    setBulkCreateStreams([]);
+  }, []);
+
+  // Get the streams to create channels from (either from group or selection)
+  const streamsToCreate = bulkCreateGroup ? bulkCreateGroup.streams : bulkCreateStreams;
+  const isFromGroup = !!bulkCreateGroup;
+
+  // Detect if streams have regional variants (East/West)
+  const hasRegionalVariants = useMemo(() => {
+    return detectRegionalVariants(streamsToCreate);
+  }, [streamsToCreate]);
+
+  // Detect if streams have country prefixes (US, UK, CA, etc.)
+  const hasCountryPrefixes = useMemo(() => {
+    return detectCountryPrefixes(streamsToCreate);
+  }, [streamsToCreate]);
+
+  // Get unique country prefixes for display
+  const uniqueCountryPrefixes = useMemo(() => {
+    return getUniqueCountryPrefixes(streamsToCreate);
+  }, [streamsToCreate]);
+
+  // Compute unique stream names and duplicate count for the modal display
+  // Uses normalized names to match quality variants (e.g., "Sports Channel" and "Sports Channel FHD" become one channel)
+  // Also applies timezone filtering when a preference is selected
+  const bulkCreateStats = useMemo(() => {
+    // Filter streams based on timezone preference first
+    const filteredStreams = filterStreamsByTimezone(streamsToCreate, bulkCreateTimezone);
+
+    // Build normalize options
+    const normalizeOptions: NormalizeOptions = {
+      timezonePreference: bulkCreateTimezone,
+      stripCountryPrefix: bulkCreateStripCountry,
+    };
+
+    const streamsByNormalizedName = new Map<string, Stream[]>();
+    for (const stream of filteredStreams) {
+      const normalizedName = normalizeStreamName(stream.name, normalizeOptions);
+      const existing = streamsByNormalizedName.get(normalizedName);
+      if (existing) {
+        existing.push(stream);
+      } else {
+        streamsByNormalizedName.set(normalizedName, [stream]);
+      }
+    }
+    const uniqueCount = streamsByNormalizedName.size;
+    const duplicateCount = filteredStreams.length - uniqueCount;
+    const hasDuplicates = duplicateCount > 0;
+    const excludedCount = streamsToCreate.length - filteredStreams.length;
+    return { uniqueCount, duplicateCount, hasDuplicates, streamsByNormalizedName, excludedCount };
+  }, [streamsToCreate, bulkCreateTimezone, bulkCreateStripCountry]);
+
+  const handleBulkCreate = useCallback(async () => {
+    if (streamsToCreate.length === 0 || !onBulkCreateFromGroup) return;
+
+    const startingNum = parseInt(bulkCreateStartingNumber, 10);
+    if (isNaN(startingNum) || startingNum < 0) {
+      alert('Please enter a valid starting channel number');
+      return;
+    }
+
+    setBulkCreateLoading(true);
+
+    try {
+      let groupId: number | null = null;
+      let newGroupName: string | undefined;
+
+      if (bulkCreateGroupOption === 'same' && bulkCreateGroup) {
+        // Find existing group with same name, or create new
+        const existingGroup = channelGroups.find(g => g.name === bulkCreateGroup.name);
+        if (existingGroup) {
+          groupId = existingGroup.id;
+        } else {
+          newGroupName = bulkCreateGroup.name;
+        }
+      } else if (bulkCreateGroupOption === 'existing') {
+        groupId = bulkCreateSelectedGroupId;
+      } else if (bulkCreateGroupOption === 'new') {
+        if (!bulkCreateNewGroupName.trim()) {
+          alert('Please enter a name for the new group');
+          setBulkCreateLoading(false);
+          return;
+        }
+        newGroupName = bulkCreateNewGroupName.trim();
+      }
+
+      await onBulkCreateFromGroup(
+        streamsToCreate,
+        startingNum,
+        groupId,
+        newGroupName,
+        bulkCreateTimezone,
+        bulkCreateStripCountry,
+        bulkCreateAddNumber,
+        bulkCreateSeparator
+      );
+
+      // Clear selection after successful creation
+      if (!isFromGroup) {
+        clearSelection();
+      }
+
+      closeBulkCreateModal();
+    } catch (error) {
+      console.error('Bulk create failed:', error);
+      alert(`Bulk create failed: ${error}`);
+    } finally {
+      setBulkCreateLoading(false);
+    }
+  }, [
+    streamsToCreate,
+    isFromGroup,
+    bulkCreateGroup,
+    bulkCreateStartingNumber,
+    bulkCreateGroupOption,
+    bulkCreateSelectedGroupId,
+    bulkCreateNewGroupName,
+    bulkCreateTimezone,
+    bulkCreateStripCountry,
+    bulkCreateAddNumber,
+    bulkCreateSeparator,
+    channelGroups,
+    onBulkCreateFromGroup,
+    clearSelection,
+    closeBulkCreateModal,
+  ]);
+
   return (
     <div className="streams-pane">
       <div className="pane-header">
@@ -201,6 +403,16 @@ export function StreamsPane({
         {selectedCount > 0 && (
           <div className="selection-info">
             <span className="selection-count">{selectedCount} selected</span>
+            {isEditMode && onBulkCreateFromGroup && (
+              <button
+                className="create-channels-btn"
+                onClick={openBulkCreateModalForSelection}
+                title="Create channels from selected streams"
+              >
+                <span className="material-icons">playlist_add</span>
+                Create
+              </button>
+            )}
             <button className="clear-selection-btn" onClick={clearSelection}>
               Clear
             </button>
@@ -368,6 +580,18 @@ export function StreamsPane({
                     <span className="expand-icon">{group.expanded ? '▼' : '▶'}</span>
                     <span className="group-name">{group.name}</span>
                     <span className="group-count">{group.streams.length}</span>
+                    {isEditMode && onBulkCreateFromGroup && (
+                      <button
+                        className="bulk-create-btn"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          openBulkCreateModal(group);
+                        }}
+                        title="Create channels from this group"
+                      >
+                        <span className="material-icons">playlist_add</span>
+                      </button>
+                    )}
                   </div>
                   {group.expanded && (
                     <div className="stream-group-items">
@@ -379,8 +603,16 @@ export function StreamsPane({
                           onClick={(e) => handleItemClick(e, stream)}
                           onDragStart={(e) => handleDragStart(e, stream)}
                         >
-                          <span className="selection-checkbox">
-                            {isSelected(stream.id) ? '☑' : '☐'}
+                          <span
+                            className="selection-checkbox"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              toggleSelect(stream.id);
+                            }}
+                          >
+                            <span className="material-icons">
+                              {isSelected(stream.id) ? 'check_box' : 'check_box_outline_blank'}
+                            </span>
                           </span>
                           {stream.logo_url && (
                             <img
@@ -411,6 +643,350 @@ export function StreamsPane({
           </>
         )}
       </div>
+
+      {/* Bulk Create Modal */}
+      {bulkCreateModalOpen && streamsToCreate.length > 0 && (
+        <div className="modal-overlay" onClick={closeBulkCreateModal}>
+          <div className="bulk-create-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>
+                {isFromGroup
+                  ? `Create Channels from "${bulkCreateGroup!.name}"`
+                  : `Create Channels from ${streamsToCreate.length} Selected Streams`
+                }
+              </h3>
+              <button className="modal-close-btn" onClick={closeBulkCreateModal}>
+                <span className="material-icons">close</span>
+              </button>
+            </div>
+
+            <div className="modal-body">
+              <div className="bulk-create-info">
+                <span className="material-icons">info</span>
+                {bulkCreateStats.hasDuplicates ? (
+                  <span>
+                    <strong>{bulkCreateStats.uniqueCount}</strong> channels will be created from {streamsToCreate.length} streams
+                    <br />
+                    <span className="duplicate-info">
+                      ({bulkCreateStats.duplicateCount} duplicate names will be merged — same-name streams from different providers get assigned to one channel)
+                    </span>
+                  </span>
+                ) : (
+                  <span>{streamsToCreate.length} channels will be created, each with its stream assigned</span>
+                )}
+              </div>
+
+              <div className="form-group">
+                <label>Starting Channel Number</label>
+                <input
+                  type="number"
+                  min="0"
+                  value={bulkCreateStartingNumber}
+                  onChange={(e) => setBulkCreateStartingNumber(e.target.value)}
+                  placeholder="e.g., 100"
+                  className="form-input"
+                  autoFocus
+                />
+                {bulkCreateStartingNumber && !isNaN(parseInt(bulkCreateStartingNumber, 10)) && (
+                  <div className="number-range-preview">
+                    Channels {bulkCreateStartingNumber} - {parseInt(bulkCreateStartingNumber, 10) + bulkCreateStats.uniqueCount - 1}
+                  </div>
+                )}
+              </div>
+
+              {/* Channel Group - Collapsible Section */}
+              <div className="form-group collapsible-section">
+                <div
+                  className="collapsible-header"
+                  onClick={() => setChannelGroupExpanded(!channelGroupExpanded)}
+                >
+                  <span className="expand-icon">{channelGroupExpanded ? '▼' : '▶'}</span>
+                  <span className="collapsible-title">Channel Group</span>
+                  <span className="collapsible-summary">
+                    {(() => {
+                      if (bulkCreateGroupOption === 'same' && bulkCreateGroup) {
+                        return `"${bulkCreateGroup.name}"`;
+                      } else if (bulkCreateGroupOption === 'existing' && bulkCreateSelectedGroupId) {
+                        const group = channelGroups.find(g => g.id === bulkCreateSelectedGroupId);
+                        return group ? `"${group.name}"` : 'Select group';
+                      } else if (bulkCreateGroupOption === 'new' && bulkCreateNewGroupName) {
+                        return `New: "${bulkCreateNewGroupName}"`;
+                      } else if (bulkCreateGroupOption === 'new') {
+                        return 'New group';
+                      } else if (bulkCreateGroupOption === 'existing') {
+                        return 'Select group';
+                      }
+                      return 'Same as stream group';
+                    })()}
+                  </span>
+                </div>
+
+                {channelGroupExpanded && (
+                  <div className="collapsible-content">
+                    <div className="radio-group">
+                      {/* Only show "same name" option when creating from a group */}
+                      {isFromGroup && bulkCreateGroup && (
+                        <label className="radio-option">
+                          <input
+                            type="radio"
+                            name="groupOption"
+                            checked={bulkCreateGroupOption === 'same'}
+                            onChange={() => setBulkCreateGroupOption('same')}
+                          />
+                          <span>Use same name "{bulkCreateGroup.name}"</span>
+                          {channelGroups.find(g => g.name === bulkCreateGroup.name) ? (
+                            <span className="group-exists-badge">exists</span>
+                          ) : (
+                            <span className="group-new-badge">will create</span>
+                          )}
+                        </label>
+                      )}
+
+                      <label className="radio-option">
+                        <input
+                          type="radio"
+                          name="groupOption"
+                          checked={bulkCreateGroupOption === 'existing'}
+                          onChange={() => setBulkCreateGroupOption('existing')}
+                        />
+                        <span>Select existing group</span>
+                      </label>
+                      {bulkCreateGroupOption === 'existing' && (
+                        <select
+                          value={bulkCreateSelectedGroupId ?? ''}
+                          onChange={(e) => setBulkCreateSelectedGroupId(e.target.value ? parseInt(e.target.value, 10) : null)}
+                          className="form-select"
+                        >
+                          <option value="">-- Select a group --</option>
+                          {channelGroups.map((g) => (
+                            <option key={g.id} value={g.id}>{g.name}</option>
+                          ))}
+                        </select>
+                      )}
+
+                      <label className="radio-option">
+                        <input
+                          type="radio"
+                          name="groupOption"
+                          checked={bulkCreateGroupOption === 'new'}
+                          onChange={() => setBulkCreateGroupOption('new')}
+                        />
+                        <span>Create new group</span>
+                      </label>
+                      {bulkCreateGroupOption === 'new' && (
+                        <input
+                          type="text"
+                          value={bulkCreateNewGroupName}
+                          onChange={(e) => setBulkCreateNewGroupName(e.target.value)}
+                          placeholder="New group name"
+                          className="form-input"
+                        />
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Timezone preference - Collapsible, only show if regional variants detected */}
+              {hasRegionalVariants && (
+                <div className="form-group collapsible-section">
+                  <div
+                    className="collapsible-header"
+                    onClick={() => setTimezoneExpanded(!timezoneExpanded)}
+                  >
+                    <span className="expand-icon">{timezoneExpanded ? '▼' : '▶'}</span>
+                    <span className="collapsible-title">Timezone Preference</span>
+                    <span className="collapsible-summary">
+                      {bulkCreateTimezone === 'east' ? 'East Coast' : bulkCreateTimezone === 'west' ? 'West Coast' : 'Keep Both'}
+                      {bulkCreateStats.excludedCount > 0 && ` (${bulkCreateStats.excludedCount} excluded)`}
+                    </span>
+                  </div>
+
+                  {timezoneExpanded && (
+                    <div className="collapsible-content">
+                      <div className="timezone-info">
+                        <span className="material-icons">schedule</span>
+                        <span>Some channels have East/West variants (e.g., Movies Channel, Movies Channel West)</span>
+                      </div>
+                      <div className="radio-group">
+                        <label className="radio-option">
+                          <input
+                            type="radio"
+                            name="timezoneOption"
+                            checked={bulkCreateTimezone === 'east'}
+                            onChange={() => setBulkCreateTimezone('east')}
+                          />
+                          <span>East Coast</span>
+                          <span className="timezone-hint">Use East feeds, skip West variants</span>
+                        </label>
+                        <label className="radio-option">
+                          <input
+                            type="radio"
+                            name="timezoneOption"
+                            checked={bulkCreateTimezone === 'west'}
+                            onChange={() => setBulkCreateTimezone('west')}
+                          />
+                          <span>West Coast</span>
+                          <span className="timezone-hint">Use West feeds only</span>
+                        </label>
+                        <label className="radio-option">
+                          <input
+                            type="radio"
+                            name="timezoneOption"
+                            checked={bulkCreateTimezone === 'both'}
+                            onChange={() => setBulkCreateTimezone('both')}
+                          />
+                          <span>Keep Both</span>
+                          <span className="timezone-hint">Create separate East and West channels</span>
+                        </label>
+                      </div>
+                      {bulkCreateStats.excludedCount > 0 && (
+                        <div className="timezone-excluded">
+                          {bulkCreateStats.excludedCount} stream{bulkCreateStats.excludedCount !== 1 ? 's' : ''} excluded based on timezone preference
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Naming Options - Collapsible Section */}
+              <div className="form-group naming-options-section">
+                <div
+                  className="naming-options-header"
+                  onClick={() => setNamingOptionsExpanded(!namingOptionsExpanded)}
+                >
+                  <span className="expand-icon">{namingOptionsExpanded ? '▼' : '▶'}</span>
+                  <span className="naming-options-title">Naming Options</span>
+                  <span className="naming-options-summary">
+                    {(() => {
+                      const options: string[] = [];
+                      if (bulkCreateStripCountry) options.push('Strip country');
+                      if (bulkCreateAddNumber) options.push(`Add numbers (${bulkCreateSeparator})`);
+                      return options.length > 0 ? options.join(', ') : 'Default';
+                    })()}
+                  </span>
+                </div>
+
+                {namingOptionsExpanded && (
+                  <div className="naming-options-content">
+                    {/* Country prefix option - only show if country prefixes detected */}
+                    {hasCountryPrefixes && (
+                      <div className="naming-option-group">
+                        <div className="country-prefix-info">
+                          <span className="material-icons">public</span>
+                          <span>Country prefixes detected: {uniqueCountryPrefixes.slice(0, 5).join(', ')}{uniqueCountryPrefixes.length > 5 ? ', ...' : ''}</span>
+                        </div>
+                        <label className="checkbox-option">
+                          <input
+                            type="checkbox"
+                            checked={bulkCreateStripCountry}
+                            onChange={(e) => setBulkCreateStripCountry(e.target.checked)}
+                          />
+                          <span>Remove country prefix from channel names</span>
+                        </label>
+                        <span className="option-hint">e.g., "US: Sports Channel" becomes "Sports Channel"</span>
+                      </div>
+                    )}
+
+                    {/* Channel number prefix option */}
+                    <div className="naming-option-group">
+                      <label className="checkbox-option">
+                        <input
+                          type="checkbox"
+                          checked={bulkCreateAddNumber}
+                          onChange={(e) => setBulkCreateAddNumber(e.target.checked)}
+                        />
+                        <span>Add channel number to name</span>
+                      </label>
+                      {bulkCreateAddNumber && (
+                        <>
+                          <div className="separator-options">
+                            <span className="separator-label">Separator:</span>
+                            <button
+                              type="button"
+                              className={`separator-btn ${bulkCreateSeparator === '-' ? 'active' : ''}`}
+                              onClick={() => setBulkCreateSeparator('-')}
+                            >
+                              -
+                            </button>
+                            <button
+                              type="button"
+                              className={`separator-btn ${bulkCreateSeparator === ':' ? 'active' : ''}`}
+                              onClick={() => setBulkCreateSeparator(':')}
+                            >
+                              :
+                            </button>
+                            <button
+                              type="button"
+                              className={`separator-btn ${bulkCreateSeparator === '|' ? 'active' : ''}`}
+                              onClick={() => setBulkCreateSeparator('|')}
+                            >
+                              |
+                            </button>
+                          </div>
+                          <span className="option-hint">e.g., "100 {bulkCreateSeparator} Sports Channel"</span>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <div className="bulk-create-preview">
+                <label>Preview (first 10 channels)</label>
+                <div className="preview-list">
+                  {Array.from(bulkCreateStats.streamsByNormalizedName.entries()).slice(0, 10).map(([normalizedName, groupedStreams], idx) => {
+                    const num = bulkCreateStartingNumber ? parseInt(bulkCreateStartingNumber, 10) + idx : '?';
+                    const displayName = bulkCreateAddNumber
+                      ? `${num} ${bulkCreateSeparator} ${normalizedName}`
+                      : normalizedName;
+                    return (
+                      <div key={normalizedName} className="preview-item">
+                        <span className="preview-number">{num}</span>
+                        <span className="preview-name">{displayName}</span>
+                        {groupedStreams.length > 1 && (
+                          <span className="preview-stream-count" title={groupedStreams.map(s => s.name).join('\n')}>
+                            {groupedStreams.length} streams
+                          </span>
+                        )}
+                      </div>
+                    );
+                  })}
+                  {bulkCreateStats.streamsByNormalizedName.size > 10 && (
+                    <div className="preview-more">
+                      ... and {bulkCreateStats.streamsByNormalizedName.size - 10} more channels
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            <div className="modal-footer">
+              <button className="btn-cancel" onClick={closeBulkCreateModal}>
+                Cancel
+              </button>
+              <button
+                className="btn-create"
+                onClick={handleBulkCreate}
+                disabled={bulkCreateLoading || !bulkCreateStartingNumber}
+              >
+                {bulkCreateLoading ? (
+                  <>
+                    <span className="material-icons spinning">sync</span>
+                    Creating...
+                  </>
+                ) : (
+                  <>
+                    <span className="material-icons">add</span>
+                    Create {bulkCreateStats.uniqueCount} Channels
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
