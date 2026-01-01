@@ -75,18 +75,34 @@ export function BulkEPGAssignModal({
 
     // Use setTimeout to allow UI to render "analyzing" state
     const timer = setTimeout(() => {
-      console.log('[BulkEPGAssign] Running analysis...');
-      console.log('[BulkEPGAssign] Selected channels:', selectedChannels.length);
-      console.log('[BulkEPGAssign] Available streams:', streams.length);
-      console.log('[BulkEPGAssign] EPG data entries:', epgData.length);
-      const results = batchFindEPGMatches(selectedChannels, streams, epgData);
-      console.log('[BulkEPGAssign] Match results:', results);
-      const autoCount = results.filter(r => r.status === 'exact').length;
-      const conflictCount = results.filter(r => r.status === 'multiple').length;
-      const unmatchedCount = results.filter(r => r.status === 'none').length;
-      console.log(`[BulkEPGAssign] Summary: ${autoCount} auto, ${conflictCount} conflicts, ${unmatchedCount} unmatched`);
-      setMatchResults(results);
-      setPhase('review');
+      try {
+        console.log('[BulkEPGAssign] Running analysis...');
+        console.log('[BulkEPGAssign] Selected channels:', selectedChannels.length);
+        console.log('[BulkEPGAssign] Available streams:', streams.length);
+        console.log('[BulkEPGAssign] EPG data entries:', epgData.length);
+
+        // Early exit if no channels selected
+        if (selectedChannels.length === 0) {
+          console.log('[BulkEPGAssign] No channels selected, skipping analysis');
+          setMatchResults([]);
+          setPhase('review');
+          return;
+        }
+
+        const results = batchFindEPGMatches(selectedChannels, streams, epgData);
+        console.log('[BulkEPGAssign] Match results:', results);
+        const autoCount = results.filter(r => r.status === 'exact').length;
+        const conflictCount = results.filter(r => r.status === 'multiple').length;
+        const unmatchedCount = results.filter(r => r.status === 'none').length;
+        console.log(`[BulkEPGAssign] Summary: ${autoCount} auto, ${conflictCount} conflicts, ${unmatchedCount} unmatched`);
+        setMatchResults(results);
+        setPhase('review');
+      } catch (error) {
+        console.error('[BulkEPGAssign] Analysis failed:', error);
+        // Still transition to review phase so UI doesn't hang
+        setMatchResults([]);
+        setPhase('review');
+      }
     }, 100);
 
     return () => clearTimeout(timer);
