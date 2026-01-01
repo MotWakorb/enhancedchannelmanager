@@ -101,6 +101,9 @@ export interface ChannelManagerTabProps {
   selectedStreamGroups: string[];
   onSelectedStreamGroupsChange: (groups: string[]) => void;
 
+  // Dispatcharr URL (for constructing channel stream URLs)
+  dispatcharrUrl: string;
+
   // Bulk Create
   channelDefaults?: ChannelDefaults;
   onBulkCreateFromGroup: (
@@ -217,6 +220,9 @@ export function ChannelManagerTab({
   selectedStreamGroups,
   onSelectedStreamGroupsChange,
 
+  // Dispatcharr URL
+  dispatcharrUrl,
+
   // Bulk Create
   channelDefaults,
   onBulkCreateFromGroup,
@@ -286,6 +292,7 @@ export function ChannelManagerTab({
           onToggleChannelSelection={onToggleChannelSelection}
           onClearChannelSelection={onClearChannelSelection}
           onSelectChannelRange={onSelectChannelRange}
+          dispatcharrUrl={dispatcharrUrl}
         />
       }
       right={

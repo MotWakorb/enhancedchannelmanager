@@ -56,6 +56,7 @@ function App() {
   // Settings state
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [autoRenameChannelNumber, setAutoRenameChannelNumber] = useState(false);
+  const [dispatcharrUrl, setDispatcharrUrl] = useState('');
   const [channelDefaults, setChannelDefaults] = useState({
     includeChannelNumberInName: false,
     channelNumberSeparator: '-',
@@ -213,6 +214,7 @@ function App() {
       try {
         const settings = await api.getSettings();
         setAutoRenameChannelNumber(settings.auto_rename_channel_number);
+        setDispatcharrUrl(settings.url);
         setChannelDefaults({
           includeChannelNumberInName: settings.include_channel_number_in_name,
           channelNumberSeparator: settings.channel_number_separator,
@@ -272,6 +274,7 @@ function App() {
     try {
       const settings = await api.getSettings();
       setAutoRenameChannelNumber(settings.auto_rename_channel_number);
+      setDispatcharrUrl(settings.url);
       setChannelDefaults({
         includeChannelNumberInName: settings.include_channel_number_in_name,
         channelNumberSeparator: settings.channel_number_separator,
@@ -1069,6 +1072,9 @@ function App() {
               // Bulk Create
               channelDefaults={channelDefaults}
               onBulkCreateFromGroup={handleBulkCreateFromGroup}
+
+              // Dispatcharr URL for channel stream URLs
+              dispatcharrUrl={dispatcharrUrl}
             />
           )}
           {activeTab === 'm3u-manager' && <M3UManagerTab />}

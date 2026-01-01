@@ -95,6 +95,8 @@ interface ChannelsPaneProps {
   onToggleChannelSelection?: (channelId: number, addToSelection: boolean) => void;
   onClearChannelSelection?: () => void;
   onSelectChannelRange?: (fromId: number, toId: number, groupChannelIds: number[]) => void;
+  // Dispatcharr URL for constructing channel stream URLs
+  dispatcharrUrl?: string;
 }
 
 interface GroupState {
@@ -131,6 +133,7 @@ interface SortableChannelProps {
   onStreamDrop: (e: React.DragEvent) => void;
   onDelete: () => void;
   onEditChannel: () => void;
+  onCopyChannelUrl?: () => void;
 }
 
 interface SortableStreamItemProps {
@@ -138,9 +141,10 @@ interface SortableStreamItemProps {
   providerName: string | null;
   isEditMode: boolean;
   onRemove: (streamId: number) => void;
+  onCopyUrl?: () => void;
 }
 
-function SortableStreamItem({ stream, providerName, isEditMode, onRemove }: SortableStreamItemProps) {
+function SortableStreamItem({ stream, providerName, isEditMode, onRemove, onCopyUrl }: SortableStreamItemProps) {
   const {
     attributes,
     listeners,
@@ -179,6 +183,18 @@ function SortableStreamItem({ stream, providerName, isEditMode, onRemove }: Sort
         <span className="inline-stream-name">{stream.name}</span>
         {providerName && <span className="inline-stream-provider">{providerName}</span>}
       </div>
+      {onCopyUrl && (
+        <button
+          className="copy-url-btn"
+          onClick={(e) => {
+            e.stopPropagation();
+            onCopyUrl();
+          }}
+          title="Copy stream URL"
+        >
+          <span className="material-icons">content_copy</span>
+        </button>
+      )}
       {isEditMode && (
         <button
           className="remove-stream-btn"
@@ -225,6 +241,7 @@ function SortableChannel({
   onStreamDrop,
   onDelete,
   onEditChannel,
+  onCopyChannelUrl,
 }: SortableChannelProps) {
   const {
     attributes,
@@ -366,6 +383,18 @@ function SortableChannel({
       <span className="channel-streams-count">
         {channel.streams.length} stream{channel.streams.length !== 1 ? 's' : ''}
       </span>
+      {onCopyChannelUrl && (
+        <button
+          className="copy-url-btn channel-copy-url-btn"
+          onClick={(e) => {
+            e.stopPropagation();
+            onCopyChannelUrl();
+          }}
+          title="Copy channel stream URL"
+        >
+          <span className="material-icons">content_copy</span>
+        </button>
+      )}
       {isEditMode && (
         <button
           className="channel-row-delete-btn"
@@ -1134,6 +1163,8 @@ export function ChannelsPane({
   onToggleChannelSelection,
   onClearChannelSelection,
   onSelectChannelRange,
+  // Dispatcharr URL
+  dispatcharrUrl = '',
 }: ChannelsPaneProps) {
   // Suppress unused variable warnings - these are passed through but handled in parent
   void _onStageAddStream;
@@ -3196,6 +3227,7 @@ export function ChannelsPane({
                       onStreamDrop={(e) => handleStreamDrop(e, channel.id)}
                       onDelete={() => handleDeleteChannelClick(channel)}
                       onEditChannel={() => handleEditChannel(channel)}
+                      onCopyChannelUrl={dispatcharrUrl && channel.uuid ? () => navigator.clipboard.writeText(`${dispatcharrUrl}/proxy/ts/stream/${channel.uuid}`) : undefined}
                     />
                     {selectedChannelId === channel.id && (
                       <div className="inline-streams">
@@ -3224,6 +3256,7 @@ export function ChannelsPane({
                                       providerName={providers.find((p) => p.id === stream.m3u_account)?.name ?? null}
                                       isEditMode={isEditMode}
                                       onRemove={handleRemoveStream}
+                                      onCopyUrl={stream.url ? () => navigator.clipboard.writeText(stream.url!) : undefined}
                                     />
                                   </div>
                                 ))}
