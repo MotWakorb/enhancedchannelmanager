@@ -22,6 +22,7 @@ A professional-grade web interface for managing IPTV configurations with Dispatc
 - **Bulk Delete** - Select multiple channels and delete them at once
 - **Search & Filter** - Search channels by name, filter by one or more groups
 - **Inline Stream Display** - View assigned streams directly in the channel list
+- **Copy Channel URL** - Click copy button on any channel to copy its Dispatcharr proxy stream URL
 
 ### Stream Management
 
@@ -31,6 +32,7 @@ A professional-grade web interface for managing IPTV configurations with Dispatc
 - **Multi-Select** - Select multiple streams and bulk-add to channels
 - **Filter by Provider** - Filter streams by M3U account
 - **Filter by Group** - Filter streams by their source group
+- **Copy Stream URL** - Click copy button on any stream to copy its direct URL
 
 ### EPG Management
 
