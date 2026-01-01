@@ -56,6 +56,8 @@ interface StreamsPaneProps {
     prefixOrder?: PrefixOrder,
     stripNetworkPrefix?: boolean
   ) => Promise<void>;
+  // Appearance settings
+  showStreamUrls?: boolean;
 }
 
 export function StreamsPane({
@@ -79,6 +81,7 @@ export function StreamsPane({
   externalTriggerGroupName = null,
   onExternalTriggerHandled,
   onBulkCreateFromGroup,
+  showStreamUrls = true,
 }: StreamsPaneProps) {
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
 
@@ -910,7 +913,7 @@ export function StreamsPane({
                           )}
                           <div className="stream-info">
                             <span className="stream-name">{stream.name}</span>
-                            {stream.url && (
+                            {showStreamUrls && stream.url && (
                               <span className="stream-url" title={stream.url}>
                                 {stream.url}
                               </span>
