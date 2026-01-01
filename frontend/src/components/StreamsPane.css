@@ -887,6 +887,24 @@
   margin-bottom: 0.25rem;
 }
 
+/* Prefix Order Section */
+.prefix-order-group {
+  margin-top: 1rem;
+  padding-top: 1rem;
+  border-top: 1px solid #333;
+}
+
+.prefix-order-label {
+  font-size: 0.9rem;
+  color: #ccc;
+  margin-bottom: 0.5rem;
+  font-weight: 500;
+}
+
+.prefix-order-options {
+  margin-left: 0.5rem;
+}
+
 .separator-options {
   display: flex;
   align-items: center;
