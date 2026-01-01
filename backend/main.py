@@ -107,6 +107,7 @@ class SettingsRequest(BaseModel):
     channel_number_separator: str = "-"
     remove_country_prefix: bool = False
     timezone_preference: str = "both"
+    show_stream_urls: bool = True
 
 
 class SettingsResponse(BaseModel):
@@ -118,6 +119,7 @@ class SettingsResponse(BaseModel):
     channel_number_separator: str
     remove_country_prefix: bool
     timezone_preference: str
+    show_stream_urls: bool
 
 
 class TestConnectionRequest(BaseModel):
@@ -139,6 +141,7 @@ async def get_current_settings():
         channel_number_separator=settings.channel_number_separator,
         remove_country_prefix=settings.remove_country_prefix,
         timezone_preference=settings.timezone_preference,
+        show_stream_urls=settings.show_stream_urls,
     )
 
 
@@ -171,6 +174,7 @@ async def update_settings(request: SettingsRequest):
         channel_number_separator=request.channel_number_separator,
         remove_country_prefix=request.remove_country_prefix,
         timezone_preference=request.timezone_preference,
+        show_stream_urls=request.show_stream_urls,
     )
     save_settings(new_settings)
     clear_settings_cache()
