@@ -302,6 +302,7 @@ function SortableChannel({
         <span
           className={`channel-select-indicator ${isMultiSelected ? 'selected' : ''}`}
           onClick={onToggleSelect}
+          onPointerDown={(e) => e.stopPropagation()}
           title="Click to select/deselect"
         >
           {isMultiSelected ? (
