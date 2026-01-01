@@ -10,6 +10,11 @@ RUN npm run build
 FROM python:3.12-slim
 WORKDIR /app
 
+# Install gosu for proper user switching and create non-root user
+RUN apt-get update && apt-get install -y --no-install-recommends gosu \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd --create-home --shell /bin/bash appuser
+
 # Install Python dependencies
 COPY backend/requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
@@ -20,8 +25,11 @@ COPY backend/ ./
 # Copy built frontend to static directory
 COPY --from=frontend-builder /app/frontend/dist ./static
 
-# Create config directory
-RUN mkdir -p /config
+# Create config directory and set ownership
+RUN mkdir -p /config && chown -R appuser:appuser /config /app
+
+# Make entrypoint executable
+RUN chmod +x /app/entrypoint.sh
 
 # Environment
 ENV CONFIG_DIR=/config
@@ -33,5 +41,5 @@ EXPOSE 6100
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
   CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:6100/api/health')" || exit 1
 
-# Run the application
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "6100"]
+# Entrypoint fixes volume permissions then drops to non-root user via gosu
+ENTRYPOINT ["/app/entrypoint.sh"]
