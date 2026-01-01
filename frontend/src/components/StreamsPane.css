@@ -499,6 +499,12 @@
   color: #ccc;
 }
 
+.bulk-create-info .duplicate-info {
+  font-size: 0.8rem;
+  color: #22d3ee;
+  font-style: italic;
+}
+
 .form-group {
   margin-bottom: 1.25rem;
 }

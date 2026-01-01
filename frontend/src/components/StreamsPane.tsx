@@ -249,6 +249,23 @@ export function StreamsPane({
   const streamsToCreate = bulkCreateGroup ? bulkCreateGroup.streams : bulkCreateStreams;
   const isFromGroup = !!bulkCreateGroup;
 
+  // Compute unique stream names and duplicate count for the modal display
+  const bulkCreateStats = useMemo(() => {
+    const streamsByName = new Map<string, Stream[]>();
+    for (const stream of streamsToCreate) {
+      const existing = streamsByName.get(stream.name);
+      if (existing) {
+        existing.push(stream);
+      } else {
+        streamsByName.set(stream.name, [stream]);
+      }
+    }
+    const uniqueCount = streamsByName.size;
+    const duplicateCount = streamsToCreate.length - uniqueCount;
+    const hasDuplicates = duplicateCount > 0;
+    return { uniqueCount, duplicateCount, hasDuplicates, streamsByName };
+  }, [streamsToCreate]);
+
   const handleBulkCreate = useCallback(async () => {
     if (streamsToCreate.length === 0 || !onBulkCreateFromGroup) return;
 
@@ -575,7 +592,17 @@ export function StreamsPane({
             <div className="modal-body">
               <div className="bulk-create-info">
                 <span className="material-icons">info</span>
-                <span>{streamsToCreate.length} channels will be created, each with its stream assigned</span>
+                {bulkCreateStats.hasDuplicates ? (
+                  <span>
+                    <strong>{bulkCreateStats.uniqueCount}</strong> channels will be created from {streamsToCreate.length} streams
+                    <br />
+                    <span className="duplicate-info">
+                      ({bulkCreateStats.duplicateCount} duplicate names will be merged — same-name streams from different providers get assigned to one channel)
+                    </span>
+                  </span>
+                ) : (
+                  <span>{streamsToCreate.length} channels will be created, each with its stream assigned</span>
+                )}
               </div>
 
               <div className="form-group">
@@ -591,7 +618,7 @@ export function StreamsPane({
                 />
                 {bulkCreateStartingNumber && !isNaN(parseInt(bulkCreateStartingNumber, 10)) && (
                   <div className="number-range-preview">
-                    Channels {bulkCreateStartingNumber} - {parseInt(bulkCreateStartingNumber, 10) + streamsToCreate.length - 1}
+                    Channels {bulkCreateStartingNumber} - {parseInt(bulkCreateStartingNumber, 10) + bulkCreateStats.uniqueCount - 1}
                   </div>
                 )}
               </div>
@@ -698,7 +725,7 @@ export function StreamsPane({
                 ) : (
                   <>
                     <span className="material-icons">add</span>
-                    Create {streamsToCreate.length} Channels
+                    Create {bulkCreateStats.uniqueCount} Channels
                   </>
                 )}
               </button>
