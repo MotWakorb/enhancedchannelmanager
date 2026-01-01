@@ -111,7 +111,9 @@ export interface ChannelManagerTabProps {
     timezonePreference?: TimezonePreference,
     stripCountryPrefix?: boolean,
     addChannelNumber?: boolean,
-    numberSeparator?: NumberSeparator
+    numberSeparator?: NumberSeparator,
+    keepCountryPrefix?: boolean,
+    countrySeparator?: NumberSeparator
   ) => Promise<void>;
 }
 

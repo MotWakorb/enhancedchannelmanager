@@ -49,7 +49,7 @@ A professional-grade web interface for managing IPTV configurations with Dispatc
 - **Merge Duplicate Names** - Streams with identical names from different M3U providers are merged into a single channel with all streams assigned (provides multi-provider redundancy)
 - **Quality Variant Normalization** - Streams with quality suffixes (FHD, UHD, HD, SD, 4K, 1080P, etc.) are automatically merged into one channel
 - **East/West Timezone Preference** - When streams have regional variants (e.g., "Movies Channel" and "Movies Channel West"), choose to create East feeds only, West feeds only, or keep both as separate channels
-- **Country Prefix Removal** - Option to remove country prefixes (US, UK, CA, etc.) from channel names (e.g., "US: Sports Channel" becomes "Sports Channel")
+- **Country Prefix Options** - Choose to remove country prefixes (e.g., "US: Sports Channel" → "Sports Channel") or keep them with normalized formatting (e.g., "US: Sports Channel" → "US | Sports Channel") with configurable separator
 - **Channel Number Prefix** - Option to prepend channel numbers to names with configurable separator (-, :, or |), e.g., "100 | Sports Channel"
 - **Custom Starting Number** - Choose the starting channel number for sequential assignment
 - **Flexible Group Options** - Create in same-named group, select existing group, or create new group
@@ -145,7 +145,7 @@ Default options applied when using bulk channel creation:
 - **Auto-Rename on Number Change** - Update channel names when numbers change
 - **Include Channel Number in Name** - Add number prefix to channel names (e.g., "101 - Sports Channel")
 - **Number Separator** - Choose hyphen (-), colon (:), or pipe (|) for number prefix
-- **Remove Country Prefix** - Strip country codes (US, UK, CA, etc.) from names
+- **Remove Country Prefix** - Strip country codes (US, UK, CA, etc.) from names (the bulk create modal also offers a "Keep" option with normalized formatting)
 - **Timezone Preference** - Default handling for East/West regional variants
 
 These defaults are pre-loaded when opening the bulk create modal, with a "(from settings)" indicator shown.

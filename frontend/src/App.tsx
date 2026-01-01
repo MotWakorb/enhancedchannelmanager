@@ -684,7 +684,9 @@ function App() {
       timezonePreference?: api.TimezonePreference,
       stripCountryPrefix?: boolean,
       addChannelNumber?: boolean,
-      numberSeparator?: api.NumberSeparator
+      numberSeparator?: api.NumberSeparator,
+      keepCountryPrefix?: boolean,
+      countrySeparator?: api.NumberSeparator
     ) => {
       try {
         // If we need to create a new group first
@@ -707,6 +709,8 @@ function App() {
           {
             timezonePreference: timezonePreference ?? 'both',
             stripCountryPrefix: stripCountryPrefix ?? false,
+            keepCountryPrefix: keepCountryPrefix ?? false,
+            countrySeparator: countrySeparator ?? '|',
             addChannelNumber: addChannelNumber ?? false,
             numberSeparator: numberSeparator ?? '|',
           }
