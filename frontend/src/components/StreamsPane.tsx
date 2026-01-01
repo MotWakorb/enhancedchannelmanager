@@ -71,6 +71,43 @@ export function StreamsPane({
   channelDefaults,
   onBulkCreateFromGroup,
 }: StreamsPaneProps) {
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
+
+  // Compute streams in display order (grouped and sorted alphabetically)
+  // This must be computed before useSelection so shift-click works correctly
+  const displayOrderStreams = useMemo((): Stream[] => {
+    const groups = new Map<string, Stream[]>();
+
+    // Group streams by channel_group_name
+    streams.forEach((stream) => {
+      const groupName = stream.channel_group_name || 'Ungrouped';
+      if (!groups.has(groupName)) {
+        groups.set(groupName, []);
+      }
+      groups.get(groupName)!.push(stream);
+    });
+
+    // Sort streams within each group alphabetically
+    groups.forEach((groupStreams) => {
+      groupStreams.sort((a, b) => a.name.localeCompare(b.name));
+    });
+
+    // Sort groups alphabetically (Ungrouped at end) and flatten
+    const sortedGroupNames = Array.from(groups.keys()).sort((a, b) => {
+      if (a === 'Ungrouped') return 1;
+      if (b === 'Ungrouped') return -1;
+      return a.localeCompare(b);
+    });
+
+    // Flatten to single array in display order
+    const result: Stream[] = [];
+    for (const groupName of sortedGroupNames) {
+      result.push(...groups.get(groupName)!);
+    }
+    return result;
+  }, [streams]);
+
+  // Use display order for selection so shift-click works correctly
   const {
     selectedIds,
     selectedCount,
@@ -79,9 +116,7 @@ export function StreamsPane({
     selectAll,
     clearSelection,
     isSelected,
-  } = useSelection(streams);
-
-  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
+  } = useSelection(displayOrderStreams);
 
   // Bulk create modal state
   const [bulkCreateModalOpen, setBulkCreateModalOpen] = useState(false);
