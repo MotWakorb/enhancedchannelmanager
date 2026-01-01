@@ -32,6 +32,7 @@ A professional-grade web interface for managing TV channels, streams, and metada
 - **Quality Variant Normalization** - Streams with quality suffixes (FHD, UHD, HD, SD, 4K, 1080P, etc.) are automatically merged into one channel
 - **East/West Timezone Preference** - When streams have regional variants (e.g., "HBO" and "HBO West"), choose to create East feeds only, West feeds only, or keep both as separate channels
 - **Country Prefix Removal** - Option to remove country prefixes (US, UK, CA, etc.) from channel names (e.g., "US: ESPN" becomes "ESPN")
+- **Channel Number Prefix** - Option to prepend channel numbers to names with configurable separator (-, :, or |), e.g., "100 | ESPN"
 - **Custom Starting Number** - Choose the starting channel number for sequential assignment
 - **Flexible Group Options** - Create in same-named group, select existing group, or create new group
 - **Preview Before Creating** - See a preview of channels that will be created with merged stream counts

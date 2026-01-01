@@ -626,7 +626,9 @@ function App() {
       channelGroupId: number | null,
       newGroupName?: string,
       timezonePreference?: api.TimezonePreference,
-      stripCountryPrefix?: boolean
+      stripCountryPrefix?: boolean,
+      addChannelNumber?: boolean,
+      numberSeparator?: api.NumberSeparator
     ) => {
       try {
         // If we need to create a new group first
@@ -649,6 +651,8 @@ function App() {
           {
             timezonePreference: timezonePreference ?? 'both',
             stripCountryPrefix: stripCountryPrefix ?? false,
+            addChannelNumber: addChannelNumber ?? false,
+            numberSeparator: numberSeparator ?? '|',
           }
         );
 

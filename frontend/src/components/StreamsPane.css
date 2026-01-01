@@ -743,6 +743,116 @@
   margin-top: -0.25rem;
 }
 
+/* Naming Options Section */
+.naming-options-section {
+  margin-bottom: 1rem;
+}
+
+.naming-options-header {
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  padding: 0.625rem 0.75rem;
+  background-color: #2a2a2a;
+  border: 1px solid #3a3a3a;
+  border-radius: 6px;
+  transition: background-color 0.15s, border-color 0.15s;
+}
+
+.naming-options-header:hover {
+  background-color: #333;
+  border-color: #444;
+}
+
+.naming-options-header .expand-icon {
+  font-size: 0.7rem;
+  color: #666;
+  margin-right: 0.5rem;
+  width: 1rem;
+}
+
+.naming-options-title {
+  font-weight: 500;
+  color: #ccc;
+  font-size: 0.9rem;
+}
+
+.naming-options-summary {
+  margin-left: auto;
+  font-size: 0.8rem;
+  color: #888;
+  background-color: #333;
+  padding: 0.125rem 0.5rem;
+  border-radius: 4px;
+}
+
+.naming-options-content {
+  padding: 0.75rem;
+  border: 1px solid #3a3a3a;
+  border-top: none;
+  border-radius: 0 0 6px 6px;
+  background-color: #252525;
+}
+
+.naming-option-group {
+  padding: 0.5rem 0;
+}
+
+.naming-option-group:not(:last-child) {
+  border-bottom: 1px solid #333;
+  margin-bottom: 0.5rem;
+  padding-bottom: 0.75rem;
+}
+
+.naming-option-group .country-prefix-info {
+  margin-bottom: 0.5rem;
+}
+
+.option-hint {
+  display: block;
+  font-size: 0.75rem;
+  color: #888;
+  margin-left: 1.5rem;
+  margin-top: 0.25rem;
+}
+
+.separator-options {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-left: 1.5rem;
+  margin-top: 0.5rem;
+}
+
+.separator-label {
+  font-size: 0.85rem;
+  color: #888;
+}
+
+.separator-btn {
+  padding: 0.375rem 0.75rem;
+  border: 1px solid #444;
+  border-radius: 4px;
+  background-color: #2d2d2d;
+  color: #ccc;
+  font-size: 0.9rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color 0.15s, border-color 0.15s, color 0.15s;
+  min-width: 2rem;
+}
+
+.separator-btn:hover {
+  background-color: #3d3d3d;
+  border-color: #555;
+}
+
+.separator-btn.active {
+  border-color: #646cff;
+  background-color: #646cff22;
+  color: #646cff;
+}
+
 .preview-more {
   padding: 0.5rem 0.75rem;
   font-size: 0.8rem;

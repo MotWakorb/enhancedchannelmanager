@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import type { Stream, M3UAccount, ChannelGroup } from '../types';
 import { useSelection } from '../hooks';
-import { normalizeStreamName, detectRegionalVariants, filterStreamsByTimezone, detectCountryPrefixes, getUniqueCountryPrefixes, type TimezonePreference, type NormalizeOptions } from '../services/api';
+import { normalizeStreamName, detectRegionalVariants, filterStreamsByTimezone, detectCountryPrefixes, getUniqueCountryPrefixes, type TimezonePreference, type NormalizeOptions, type NumberSeparator } from '../services/api';
 import './StreamsPane.css';
 
 interface StreamGroup {
@@ -36,7 +36,9 @@ interface StreamsPaneProps {
     channelGroupId: number | null,
     newGroupName?: string,
     timezonePreference?: TimezonePreference,
-    stripCountryPrefix?: boolean
+    stripCountryPrefix?: boolean,
+    addChannelNumber?: boolean,
+    numberSeparator?: NumberSeparator
   ) => Promise<void>;
 }
 
@@ -82,6 +84,9 @@ export function StreamsPane({
   const [bulkCreateLoading, setBulkCreateLoading] = useState(false);
   const [bulkCreateTimezone, setBulkCreateTimezone] = useState<TimezonePreference>('both');
   const [bulkCreateStripCountry, setBulkCreateStripCountry] = useState(false);
+  const [bulkCreateAddNumber, setBulkCreateAddNumber] = useState(false);
+  const [bulkCreateSeparator, setBulkCreateSeparator] = useState<NumberSeparator>('|');
+  const [namingOptionsExpanded, setNamingOptionsExpanded] = useState(false);
 
   // Dropdown state
   const [providerDropdownOpen, setProviderDropdownOpen] = useState(false);
@@ -232,6 +237,9 @@ export function StreamsPane({
     setBulkCreateNewGroupName('');
     setBulkCreateTimezone('both'); // Reset timezone preference
     setBulkCreateStripCountry(false); // Reset country prefix option
+    setBulkCreateAddNumber(false); // Reset channel number prefix option
+    setBulkCreateSeparator('|'); // Reset separator
+    setNamingOptionsExpanded(false); // Collapse naming options
     setBulkCreateModalOpen(true);
   }, []);
 
@@ -246,6 +254,9 @@ export function StreamsPane({
     setBulkCreateNewGroupName('');
     setBulkCreateTimezone('both'); // Reset timezone preference
     setBulkCreateStripCountry(false); // Reset country prefix option
+    setBulkCreateAddNumber(false); // Reset channel number prefix option
+    setBulkCreateSeparator('|'); // Reset separator
+    setNamingOptionsExpanded(false); // Collapse naming options
     setBulkCreateModalOpen(true);
   }, [streams, selectedIds]);
 
@@ -344,7 +355,9 @@ export function StreamsPane({
         groupId,
         newGroupName,
         bulkCreateTimezone,
-        bulkCreateStripCountry
+        bulkCreateStripCountry,
+        bulkCreateAddNumber,
+        bulkCreateSeparator
       );
 
       // Clear selection after successful creation
@@ -369,6 +382,8 @@ export function StreamsPane({
     bulkCreateNewGroupName,
     bulkCreateTimezone,
     bulkCreateStripCountry,
+    bulkCreateAddNumber,
+    bulkCreateSeparator,
     channelGroups,
     onBulkCreateFromGroup,
     clearSelection,
@@ -785,35 +800,101 @@ export function StreamsPane({
                 </div>
               )}
 
-              {/* Country prefix option - only show if country prefixes detected */}
-              {hasCountryPrefixes && (
-                <div className="form-group">
-                  <label>Country Prefix</label>
-                  <div className="country-prefix-info">
-                    <span className="material-icons">public</span>
-                    <span>Some channels have country prefixes ({uniqueCountryPrefixes.slice(0, 5).join(', ')}{uniqueCountryPrefixes.length > 5 ? ', ...' : ''})</span>
-                  </div>
-                  <label className="checkbox-option">
-                    <input
-                      type="checkbox"
-                      checked={bulkCreateStripCountry}
-                      onChange={(e) => setBulkCreateStripCountry(e.target.checked)}
-                    />
-                    <span>Remove country prefix from channel names</span>
-                    <span className="country-prefix-hint">e.g., "US: ESPN" becomes "ESPN"</span>
-                  </label>
+              {/* Naming Options - Collapsible Section */}
+              <div className="form-group naming-options-section">
+                <div
+                  className="naming-options-header"
+                  onClick={() => setNamingOptionsExpanded(!namingOptionsExpanded)}
+                >
+                  <span className="expand-icon">{namingOptionsExpanded ? '▼' : '▶'}</span>
+                  <span className="naming-options-title">Naming Options</span>
+                  <span className="naming-options-summary">
+                    {(() => {
+                      const options: string[] = [];
+                      if (bulkCreateStripCountry) options.push('Strip country');
+                      if (bulkCreateAddNumber) options.push(`Add numbers (${bulkCreateSeparator})`);
+                      return options.length > 0 ? options.join(', ') : 'Default';
+                    })()}
+                  </span>
                 </div>
-              )}
+
+                {namingOptionsExpanded && (
+                  <div className="naming-options-content">
+                    {/* Country prefix option - only show if country prefixes detected */}
+                    {hasCountryPrefixes && (
+                      <div className="naming-option-group">
+                        <div className="country-prefix-info">
+                          <span className="material-icons">public</span>
+                          <span>Country prefixes detected: {uniqueCountryPrefixes.slice(0, 5).join(', ')}{uniqueCountryPrefixes.length > 5 ? ', ...' : ''}</span>
+                        </div>
+                        <label className="checkbox-option">
+                          <input
+                            type="checkbox"
+                            checked={bulkCreateStripCountry}
+                            onChange={(e) => setBulkCreateStripCountry(e.target.checked)}
+                          />
+                          <span>Remove country prefix from channel names</span>
+                        </label>
+                        <span className="option-hint">e.g., "US: ESPN" becomes "ESPN"</span>
+                      </div>
+                    )}
+
+                    {/* Channel number prefix option */}
+                    <div className="naming-option-group">
+                      <label className="checkbox-option">
+                        <input
+                          type="checkbox"
+                          checked={bulkCreateAddNumber}
+                          onChange={(e) => setBulkCreateAddNumber(e.target.checked)}
+                        />
+                        <span>Add channel number to name</span>
+                      </label>
+                      {bulkCreateAddNumber && (
+                        <>
+                          <div className="separator-options">
+                            <span className="separator-label">Separator:</span>
+                            <button
+                              type="button"
+                              className={`separator-btn ${bulkCreateSeparator === '-' ? 'active' : ''}`}
+                              onClick={() => setBulkCreateSeparator('-')}
+                            >
+                              -
+                            </button>
+                            <button
+                              type="button"
+                              className={`separator-btn ${bulkCreateSeparator === ':' ? 'active' : ''}`}
+                              onClick={() => setBulkCreateSeparator(':')}
+                            >
+                              :
+                            </button>
+                            <button
+                              type="button"
+                              className={`separator-btn ${bulkCreateSeparator === '|' ? 'active' : ''}`}
+                              onClick={() => setBulkCreateSeparator('|')}
+                            >
+                              |
+                            </button>
+                          </div>
+                          <span className="option-hint">e.g., "100 {bulkCreateSeparator} ESPN"</span>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
 
               <div className="bulk-create-preview">
                 <label>Preview (first 10 channels)</label>
                 <div className="preview-list">
                   {Array.from(bulkCreateStats.streamsByNormalizedName.entries()).slice(0, 10).map(([normalizedName, groupedStreams], idx) => {
                     const num = bulkCreateStartingNumber ? parseInt(bulkCreateStartingNumber, 10) + idx : '?';
+                    const displayName = bulkCreateAddNumber
+                      ? `${num} ${bulkCreateSeparator} ${normalizedName}`
+                      : normalizedName;
                     return (
                       <div key={normalizedName} className="preview-item">
                         <span className="preview-number">{num}</span>
-                        <span className="preview-name">{normalizedName}</span>
+                        <span className="preview-name">{displayName}</span>
                         {groupedStreams.length > 1 && (
                           <span className="preview-stream-count" title={groupedStreams.map(s => s.name).join('\n')}>
                             {groupedStreams.length} streams
