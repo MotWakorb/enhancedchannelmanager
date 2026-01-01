@@ -376,6 +376,60 @@ const QUALITY_SUFFIXES = [
   'HEVC', 'H264', 'H265',
 ];
 
+// Quality priority for stream ordering (lower number = higher priority/quality)
+// Streams without quality indicators default to 720p position (priority 30)
+const QUALITY_PRIORITY: Record<string, number> = {
+  // Ultra HD / 4K (highest quality)
+  'UHD': 10,
+  '4K': 10,
+  '2160P': 10,
+  // Full HD
+  'FHD': 20,
+  '1080P': 20,
+  '1080I': 21, // Slightly lower than progressive
+  // HD (default level for unknown quality)
+  'HD': 30,
+  '720P': 30,
+  // Standard Definition (lowest)
+  'SD': 40,
+  '480P': 40,
+};
+
+// Default priority for streams without quality indicators (treated as HD/720p)
+const DEFAULT_QUALITY_PRIORITY = 30;
+
+/**
+ * Get the quality priority score for a stream name.
+ * Lower score = higher quality (should appear first in the list).
+ * Streams without quality indicators get DEFAULT_QUALITY_PRIORITY (HD level).
+ */
+export function getStreamQualityPriority(streamName: string): number {
+  const upperName = streamName.toUpperCase();
+
+  // Check for each quality indicator in the name
+  for (const [quality, priority] of Object.entries(QUALITY_PRIORITY)) {
+    // Match quality at word boundary or with common separators
+    const pattern = new RegExp(`(?:^|[\\s\\-_|:])${quality}(?:$|[\\s\\-_|:])`, 'i');
+    if (pattern.test(upperName)) {
+      return priority;
+    }
+  }
+
+  return DEFAULT_QUALITY_PRIORITY;
+}
+
+/**
+ * Sort streams by quality priority (highest quality first).
+ * Maintains stable sort for streams with same quality.
+ */
+export function sortStreamsByQuality<T extends { name: string }>(streams: T[]): T[] {
+  return [...streams].sort((a, b) => {
+    const priorityA = getStreamQualityPriority(a.name);
+    const priorityB = getStreamQualityPriority(b.name);
+    return priorityA - priorityB;
+  });
+}
+
 export type TimezonePreference = 'east' | 'west' | 'both';
 
 // Common country prefixes found in stream names
@@ -662,8 +716,10 @@ export async function bulkCreateChannelsFromStreams(
       });
 
       // Add all streams with this normalized name to the channel (provides multi-provider/quality redundancy)
+      // Sort streams by quality so highest quality (UHD/4K) appears first
+      const sortedStreams = sortStreamsByQuality(groupedStreams);
       const addedStreamIds: number[] = [];
-      for (const stream of groupedStreams) {
+      for (const stream of sortedStreams) {
         try {
           await addStreamToChannel(channel.id, stream.id);
           addedStreamIds.push(stream.id);
@@ -672,8 +728,8 @@ export async function bulkCreateChannelsFromStreams(
         }
       }
 
-      // Use the first stream's logo if available
-      const logoUrl = groupedStreams.find((s: { logo_url?: string | null }) => s.logo_url)?.logo_url;
+      // Use the first stream's logo if available (sorted streams, so highest quality first)
+      const logoUrl = sortedStreams.find((s: { logo_url?: string | null }) => s.logo_url)?.logo_url;
       if (logoUrl) {
         try {
           const logo = await getOrCreateLogo(channelName, logoUrl, logoCache);
