@@ -65,6 +65,22 @@ export function useSelection<T extends number | string>(items: { id: T }[]) {
     });
   }, []);
 
+  // Toggle selection for a single item (used by checkbox clicks)
+  const toggleSelect = useCallback((id: T) => {
+    setSelection((prev) => {
+      const newSelectedIds = new Set(prev.selectedIds);
+      if (newSelectedIds.has(id)) {
+        newSelectedIds.delete(id);
+      } else {
+        newSelectedIds.add(id);
+      }
+      return {
+        selectedIds: newSelectedIds,
+        lastSelectedId: id,
+      };
+    });
+  }, []);
+
   const isSelected = useCallback(
     (id: T) => selection.selectedIds.has(id),
     [selection.selectedIds]
@@ -78,6 +94,7 @@ export function useSelection<T extends number | string>(items: { id: T }[]) {
     selectedIds: selection.selectedIds,
     selectedCount: selection.selectedIds.size,
     handleSelect,
+    toggleSelect,
     selectAll,
     clearSelection,
     isSelected,

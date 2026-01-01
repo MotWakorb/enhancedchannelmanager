@@ -189,6 +189,16 @@ export function useEditMode({
           return workingCopy;
         }
 
+        case 'deleteChannel': {
+          return workingCopy.filter((ch) => ch.id !== apiCall.channelId);
+        }
+
+        case 'deleteChannelGroup': {
+          // Group deletion doesn't affect the working copy of channels
+          // It's a separate entity handled at commit time
+          return workingCopy;
+        }
+
         default:
           return workingCopy;
       }
@@ -357,6 +367,28 @@ export function useEditMode({
     [stageOperation, state.nextTempId]
   );
 
+  const stageDeleteChannel = useCallback(
+    (channelId: number, description: string) => {
+      stageOperation(
+        { type: 'deleteChannel', channelId },
+        description,
+        [channelId]
+      );
+    },
+    [stageOperation]
+  );
+
+  const stageDeleteChannelGroup = useCallback(
+    (groupId: number, description: string) => {
+      stageOperation(
+        { type: 'deleteChannelGroup', groupId },
+        description,
+        [] // No channels directly affected
+      );
+    },
+    [stageOperation]
+  );
+
   // Add a newly created channel to the working copy
   // This is used when a channel is created via API during edit mode
   const addChannelToWorkingCopy = useCallback(
@@ -451,6 +483,25 @@ export function useEditMode({
               channel_group_id: snapshot.channel_group_id,
               streams: [...snapshot.streams],
             };
+          } else if (operation.apiCall.type === 'deleteChannel') {
+            // If undoing a delete, restore the channel from baseline
+            const baselineChannel = prev.baselineSnapshot.find((s) => s.id === snapshot.id);
+            if (baselineChannel) {
+              // Find the original channel from baseline to get all fields
+              const originalChannel = realChannelsRef.current.find((ch) => ch.id === snapshot.id);
+              if (originalChannel) {
+                newWorkingCopy = [
+                  ...newWorkingCopy,
+                  {
+                    ...originalChannel,
+                    channel_number: baselineChannel.channel_number,
+                    name: baselineChannel.name,
+                    channel_group_id: baselineChannel.channel_group_id,
+                    streams: [...baselineChannel.streams],
+                  },
+                ];
+              }
+            }
           }
         }
 
@@ -553,6 +604,8 @@ export function useEditMode({
       channelNumberChanges: 0,
       channelNameChanges: 0,
       newChannels: 0,
+      deletedChannels: 0,
+      deletedGroups: 0,
       operationDetails: [],
     };
 
@@ -587,6 +640,12 @@ export function useEditMode({
           break;
         case 'createChannel':
           summary.newChannels++;
+          break;
+        case 'deleteChannel':
+          summary.deletedChannels++;
+          break;
+        case 'deleteChannelGroup':
+          summary.deletedGroups++;
           break;
       }
     }
@@ -713,6 +772,14 @@ export function useEditMode({
               }
               break;
             }
+
+            case 'deleteChannel':
+              await api.deleteChannel(resolveId(apiCall.channelId));
+              break;
+
+            case 'deleteChannelGroup':
+              await api.deleteChannelGroup(apiCall.groupId);
+              break;
           }
 
           result.operationsApplied++;
@@ -773,7 +840,7 @@ export function useEditMode({
     onError,
   ]);
 
-  // Compute edit mode duration with live updates
+  // Compute edit mode duration with live updates (in seconds)
   const [editModeDuration, setEditModeDuration] = useState<number | null>(null);
 
   useEffect(() => {
@@ -782,12 +849,12 @@ export function useEditMode({
       return;
     }
 
-    // Update immediately
-    setEditModeDuration(Date.now() - state.enteredAt);
+    // Update immediately (convert ms to seconds)
+    setEditModeDuration(Math.floor((Date.now() - state.enteredAt) / 1000));
 
     // Update every second
     const interval = setInterval(() => {
-      setEditModeDuration(Date.now() - state.enteredAt!);
+      setEditModeDuration(Math.floor((Date.now() - state.enteredAt!) / 1000));
     }, 1000);
 
     return () => clearInterval(interval);
@@ -818,6 +885,8 @@ export function useEditMode({
     stageReorderStreams,
     stageBulkAssignNumbers,
     stageCreateChannel,
+    stageDeleteChannel,
+    stageDeleteChannelGroup,
     addChannelToWorkingCopy,
 
     // Local undo/redo

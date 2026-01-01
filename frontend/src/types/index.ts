@@ -100,6 +100,13 @@ export interface PaginatedResponse<T> {
   results: T[];
 }
 
+export interface BulkChannelCreateRequest {
+  streams: Stream[];
+  startingNumber: number;
+  channelGroupId: number | null;
+  channelGroupName?: string; // For creating new group with this name
+}
+
 export interface ChannelWithStreams extends Channel {
   streamDetails?: Stream[];
 }
