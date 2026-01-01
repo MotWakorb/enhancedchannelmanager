@@ -330,6 +330,67 @@ const QUALITY_SUFFIXES = [
 
 export type TimezonePreference = 'east' | 'west' | 'both';
 
+// Common country prefixes found in stream names
+// These typically appear at the start of the name followed by a separator
+const COUNTRY_PREFIXES = [
+  'US', 'USA', 'UK', 'CA', 'AU', 'NZ', 'IE', 'IN', 'PH', 'MX', 'BR', 'DE', 'FR', 'ES', 'IT', 'NL', 'BE', 'CH', 'AT', 'PL', 'SE', 'NO', 'DK', 'FI', 'PT', 'GR', 'TR', 'RU', 'JP', 'KR', 'CN', 'TW', 'HK', 'SG', 'MY', 'TH', 'ID', 'VN', 'PK', 'BD', 'LK', 'ZA', 'EG', 'NG', 'KE', 'GH', 'AR', 'CL', 'CO', 'PE', 'VE', 'EC', 'PR', 'DO', 'CU', 'JM', 'TT', 'BB', 'CR', 'PA', 'HN', 'SV', 'GT', 'NI', 'BZ', 'IL', 'AE', 'SA', 'QA', 'KW', 'BH', 'OM', 'JO', 'LB', 'IR', 'IQ', 'AF', 'LATAM', 'LATINO', 'LATIN',
+];
+
+// Detect if a stream name has a country prefix
+// Returns the country code if found, null otherwise
+export function getCountryPrefix(name: string): string | null {
+  const trimmedName = name.trim();
+
+  // Check for each country prefix at the start of the name
+  // Must be followed by a separator (space, colon, hyphen, pipe, etc.) or end of match
+  for (const prefix of COUNTRY_PREFIXES) {
+    // Pattern: prefix at start, followed by separator
+    const pattern = new RegExp(`^${prefix}(?:[\\s:\\-|/]+)`, 'i');
+    if (pattern.test(trimmedName)) {
+      return prefix.toUpperCase();
+    }
+  }
+
+  return null;
+}
+
+// Strip country prefix and any trailing punctuation from a name
+export function stripCountryPrefix(name: string): string {
+  const trimmedName = name.trim();
+
+  // Try to match and remove country prefix with separator
+  for (const prefix of COUNTRY_PREFIXES) {
+    const pattern = new RegExp(`^${prefix}[\\s:\\-|/]+`, 'i');
+    if (pattern.test(trimmedName)) {
+      return trimmedName.replace(pattern, '').trim();
+    }
+  }
+
+  return trimmedName;
+}
+
+// Detect if a list of streams has country prefixes
+export function detectCountryPrefixes(streams: { name: string }[]): boolean {
+  for (const stream of streams) {
+    if (getCountryPrefix(stream.name) !== null) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// Get all unique country prefixes found in a list of streams
+export function getUniqueCountryPrefixes(streams: { name: string }[]): string[] {
+  const prefixes = new Set<string>();
+  for (const stream of streams) {
+    const prefix = getCountryPrefix(stream.name);
+    if (prefix) {
+      prefixes.add(prefix);
+    }
+  }
+  return Array.from(prefixes).sort();
+}
+
 // Check if a stream name has a regional suffix (East or West)
 export function getRegionalSuffix(name: string): 'east' | 'west' | null {
   // Check for East/West at the end with optional separator
@@ -380,14 +441,37 @@ export function detectRegionalVariants(streams: { name: string }[]): boolean {
   return false;
 }
 
+// Options for normalizing stream names
+export interface NormalizeOptions {
+  timezonePreference?: TimezonePreference;
+  stripCountryPrefix?: boolean;
+}
+
 // Normalize a stream name for matching purposes
 // Strips quality suffixes and normalizes whitespace
 // timezonePreference controls how regional variants are handled:
 // - 'both': keep East/West as separate channels (don't merge regional variants)
 // - 'east': prefer East timezone - merge West into base name, treat non-suffixed as East
 // - 'west': prefer West timezone - merge East/non-suffixed into base, keep West
-export function normalizeStreamName(name: string, timezonePreference: TimezonePreference = 'both'): string {
+// stripCountryPrefix: if true, removes country prefix (e.g., "US: ESPN" -> "ESPN")
+export function normalizeStreamName(name: string, timezonePreferenceOrOptions: TimezonePreference | NormalizeOptions = 'both'): string {
+  // Handle both old signature (just TimezonePreference) and new signature (NormalizeOptions)
+  let timezonePreference: TimezonePreference = 'both';
+  let stripCountry = false;
+
+  if (typeof timezonePreferenceOrOptions === 'object') {
+    timezonePreference = timezonePreferenceOrOptions.timezonePreference ?? 'both';
+    stripCountry = timezonePreferenceOrOptions.stripCountryPrefix ?? false;
+  } else {
+    timezonePreference = timezonePreferenceOrOptions;
+  }
+
   let normalized = name.trim();
+
+  // Strip country prefix if requested (do this first, before other normalization)
+  if (stripCountry) {
+    normalized = stripCountryPrefix(normalized);
+  }
 
   // Build a regex that matches quality suffixes at the end of the name
   // Handle various separators: space, dash, underscore, pipe, colon
@@ -448,14 +532,31 @@ export function filterStreamsByTimezone<T extends { name: string }>(
   });
 }
 
+// Options for bulk channel creation
+export interface BulkCreateOptions {
+  timezonePreference?: TimezonePreference;
+  stripCountryPrefix?: boolean;
+}
+
 // Bulk Channel Creation
 // Groups streams with normalized names into the same channel (merging streams from different M3Us and quality variants)
 export async function bulkCreateChannelsFromStreams(
   streams: { id: number; name: string; logo_url?: string | null }[],
   startingNumber: number,
   channelGroupId: number | null,
-  timezonePreference: TimezonePreference = 'both'
+  timezonePreferenceOrOptions: TimezonePreference | BulkCreateOptions = 'both'
 ): Promise<{ created: Channel[]; errors: string[]; mergedCount: number }> {
+  // Handle both old signature (just TimezonePreference) and new signature (BulkCreateOptions)
+  let timezonePreference: TimezonePreference = 'both';
+  let stripCountry = false;
+
+  if (typeof timezonePreferenceOrOptions === 'object') {
+    timezonePreference = timezonePreferenceOrOptions.timezonePreference ?? 'both';
+    stripCountry = timezonePreferenceOrOptions.stripCountryPrefix ?? false;
+  } else {
+    timezonePreference = timezonePreferenceOrOptions;
+  }
+
   const created: Channel[] = [];
   const errors: string[] = [];
   // Cache logos to avoid repeated lookups for the same URL
@@ -468,7 +569,10 @@ export async function bulkCreateChannelsFromStreams(
   // The normalized name is used as the key, but we track original names for the channel name selection
   const streamsByNormalizedName = new Map<string, { id: number; name: string; logo_url?: string | null }[]>();
   for (const stream of filteredStreams) {
-    const normalizedName = normalizeStreamName(stream.name, timezonePreference);
+    const normalizedName = normalizeStreamName(stream.name, {
+      timezonePreference,
+      stripCountryPrefix: stripCountry,
+    });
     const existing = streamsByNormalizedName.get(normalizedName);
     if (existing) {
       existing.push(stream);

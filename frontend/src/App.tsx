@@ -625,7 +625,8 @@ function App() {
       startingNumber: number,
       channelGroupId: number | null,
       newGroupName?: string,
-      timezonePreference?: api.TimezonePreference
+      timezonePreference?: api.TimezonePreference,
+      stripCountryPrefix?: boolean
     ) => {
       try {
         // If we need to create a new group first
@@ -645,7 +646,10 @@ function App() {
           streamsToCreate.map(s => ({ id: s.id, name: s.name, logo_url: s.logo_url })),
           startingNumber,
           targetGroupId,
-          timezonePreference ?? 'both'
+          {
+            timezonePreference: timezonePreference ?? 'both',
+            stripCountryPrefix: stripCountryPrefix ?? false,
+          }
         );
 
         // Update channels state with new channels
