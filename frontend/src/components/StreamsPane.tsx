@@ -849,9 +849,13 @@ export function StreamsPane({
                         className="group-selection-checkbox"
                         onClick={(e) => {
                           e.stopPropagation();
+                          e.preventDefault();
                           toggleGroupSelection(group);
                         }}
                         onPointerDown={(e) => e.stopPropagation()}
+                        onMouseDown={(e) => e.stopPropagation()}
+                        onTouchStart={(e) => e.stopPropagation()}
+                        draggable={false}
                         title={isGroupFullySelected(group) ? 'Deselect all streams in group' : 'Select all streams in group'}
                       >
                         <span className="material-icons">
@@ -894,9 +898,13 @@ export function StreamsPane({
                               className="selection-checkbox"
                               onClick={(e) => {
                                 e.stopPropagation();
+                                e.preventDefault();
                                 toggleSelect(stream.id);
                               }}
                               onPointerDown={(e) => e.stopPropagation()}
+                              onMouseDown={(e) => e.stopPropagation()}
+                              onTouchStart={(e) => e.stopPropagation()}
+                              draggable={false}
                             >
                               <span className="material-icons">
                                 {isSelected(stream.id) ? 'check_box' : 'check_box_outline_blank'}

@@ -301,8 +301,14 @@ function SortableChannel({
       {isEditMode && (
         <span
           className={`channel-select-indicator ${isMultiSelected ? 'selected' : ''}`}
-          onClick={onToggleSelect}
+          onClick={(e) => {
+            e.stopPropagation();
+            e.preventDefault();
+            onToggleSelect(e);
+          }}
           onPointerDown={(e) => e.stopPropagation()}
+          onMouseDown={(e) => e.stopPropagation()}
+          onTouchStart={(e) => e.stopPropagation()}
           title="Click to select/deselect"
         >
           {isMultiSelected ? (
