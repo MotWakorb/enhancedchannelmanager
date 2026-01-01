@@ -158,6 +158,17 @@ function SortableEPGSourceRow({ source, onEdit, onDelete, onRefresh, onToggleAct
       </div>
 
       <div className="source-actions">
+        {source.url && (
+          <button
+            className="action-btn"
+            onClick={() => {
+              navigator.clipboard.writeText(source.url!);
+            }}
+            title="Copy URL"
+          >
+            <span className="material-icons">content_copy</span>
+          </button>
+        )}
         <button
           className="action-btn"
           onClick={() => onToggleActive(source)}
