@@ -54,6 +54,29 @@
   font-weight: 500;
 }
 
+.bulk-epg-btn {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  background-color: rgba(100, 108, 255, 0.15);
+  border: 1px solid #646cff;
+  color: #646cff;
+  padding: 0.375rem 0.75rem;
+  border-radius: 4px;
+  font-size: 0.85rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color 0.15s;
+}
+
+.bulk-epg-btn:hover {
+  background-color: rgba(100, 108, 255, 0.25);
+}
+
+.bulk-epg-btn .material-icons {
+  font-size: 16px;
+}
+
 .bulk-delete-btn {
   display: flex;
   align-items: center;

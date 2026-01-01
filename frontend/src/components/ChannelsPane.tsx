@@ -23,6 +23,7 @@ import { CSS } from '@dnd-kit/utilities';
 import type { Channel, ChannelGroup, Stream, M3UAccount, M3UGroupSetting, Logo, ChangeInfo, ChangeRecord, SavePoint, EPGData, EPGSource, StreamProfile, ChannelListFilterSettings } from '../types';
 import * as api from '../services/api';
 import { HistoryToolbar } from './HistoryToolbar';
+import { BulkEPGAssignModal, type EPGAssignment } from './BulkEPGAssignModal';
 import './ChannelsPane.css';
 
 interface ChannelsPaneProps {
@@ -1199,6 +1200,9 @@ export function ChannelsPane({
   const [showBulkDeleteConfirm, setShowBulkDeleteConfirm] = useState(false);
   const [bulkDeleting, setBulkDeleting] = useState(false);
 
+  // Bulk EPG assignment modal state
+  const [showBulkEPGModal, setShowBulkEPGModal] = useState(false);
+
   // Cross-group move modal state
   const [showCrossGroupMoveModal, setShowCrossGroupMoveModal] = useState(false);
   const [crossGroupMoveData, setCrossGroupMoveData] = useState<{
@@ -1666,6 +1670,30 @@ export function ChannelsPane({
 
   const handleCancelBulkDelete = () => {
     setShowBulkDeleteConfirm(false);
+  };
+
+  // Handle bulk EPG assignment
+  const handleBulkEPGAssign = (assignments: EPGAssignment[]) => {
+    if (!isEditMode || !onStageUpdateChannel || !onStartBatch || !onEndBatch) {
+      return;
+    }
+
+    // Use batch to group all assignments as a single undo operation
+    onStartBatch(`Assign EPG to ${assignments.length} channels`);
+    for (const assignment of assignments) {
+      const description = `Assign EPG "${assignment.tvg_id}" to "${assignment.channelName}"`;
+      onStageUpdateChannel(assignment.channelId, {
+        tvg_id: assignment.tvg_id,
+        epg_data_id: assignment.epg_data_id,
+      }, description);
+    }
+    onEndBatch();
+
+    // Close modal and clear selection
+    setShowBulkEPGModal(false);
+    if (onClearChannelSelection) {
+      onClearChannelSelection();
+    }
   };
 
   // Handle reordering streams within the channel
@@ -3198,6 +3226,14 @@ export function ChannelsPane({
             <div className="selection-info">
               <span className="selection-count">{selectedChannelIds.size} selected</span>
               <button
+                className="bulk-epg-btn"
+                onClick={() => setShowBulkEPGModal(true)}
+                title="Assign EPG to selected channels"
+              >
+                <span className="material-icons">live_tv</span>
+                EPG
+              </button>
+              <button
                 className="bulk-delete-btn"
                 onClick={handleBulkDeleteClick}
                 title="Delete selected channels"
@@ -3616,6 +3652,17 @@ export function ChannelsPane({
           </div>
         </div>
       )}
+
+      {/* Bulk EPG Assignment Modal */}
+      <BulkEPGAssignModal
+        isOpen={showBulkEPGModal && selectedChannelIds.size > 0}
+        selectedChannels={channels.filter(c => selectedChannelIds.has(c.id))}
+        streams={allStreams}
+        epgData={epgData || []}
+        epgSources={epgSources || []}
+        onClose={() => setShowBulkEPGModal(false)}
+        onAssign={handleBulkEPGAssign}
+      />
 
       {/* Edit Channel Modal */}
       {showEditChannelModal && channelToEdit && (
