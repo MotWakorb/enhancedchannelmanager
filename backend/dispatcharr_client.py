@@ -366,13 +366,45 @@ class DispatcharrClient:
     async def trigger_epg_import(self) -> dict:
         """Trigger an EPG data import for all active sources.
 
-        Dispatcharr's /api/epg/import/ endpoint with no ID triggers refresh
-        for all active non-dummy sources.
+        Dispatcharr's /api/epg/import/ endpoint requires an ID in the body,
+        so we need to iterate over all active non-dummy sources and trigger
+        each one individually.
         """
-        # Call import endpoint with no ID to refresh all sources
-        response = await self._request("POST", "/api/epg/import/")
-        response.raise_for_status()
-        return response.json() if response.content else {"success": True, "message": "EPG import initiated"}
+        # Get all EPG sources
+        sources = await self.get_epg_sources()
+
+        # Filter to active non-dummy sources
+        active_sources = [
+            s for s in sources
+            if s.get("source_type") != "dummy" and s.get("is_active", True)
+        ]
+
+        if not active_sources:
+            return {"success": True, "message": "No active EPG sources to refresh"}
+
+        # Trigger refresh for each active source
+        refreshed = []
+        errors = []
+        for source in active_sources:
+            try:
+                await self.refresh_epg_source(source["id"])
+                refreshed.append(source["name"])
+            except Exception as e:
+                errors.append(f"{source['name']}: {str(e)}")
+
+        if errors:
+            return {
+                "success": len(refreshed) > 0,
+                "message": f"Refreshed {len(refreshed)} sources, {len(errors)} failed",
+                "refreshed": refreshed,
+                "errors": errors
+            }
+
+        return {
+            "success": True,
+            "message": f"EPG import initiated for {len(refreshed)} sources",
+            "refreshed": refreshed
+        }
 
     # -------------------------------------------------------------------------
     # EPG Data
