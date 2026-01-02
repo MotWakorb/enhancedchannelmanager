@@ -333,7 +333,8 @@ function findEPGMatchesWithLookup(
   // Sort matches with priority:
   // 1. Exact matches over prefix matches
   // 2. Matching country over non-matching country
-  // 3. Alphabetically by name
+  // 3. HD variants over non-HD (prefer higher quality)
+  // 4. Alphabetically by name
   const matches = matchArray.sort((a, b) => {
     const aQuality = matchQuality.get(a.id) || 'prefix';
     const bQuality = matchQuality.get(b.id) || 'prefix';
@@ -349,6 +350,12 @@ function findEPGMatchesWithLookup(
       if (aCountry === detectedCountry && bCountry !== detectedCountry) return -1;
       if (bCountry === detectedCountry && aCountry !== detectedCountry) return 1;
     }
+
+    // Prefer HD variants over non-HD (check TVG-ID for HD suffix in call sign)
+    const aHasHD = /hd\)?\./i.test(a.tvg_id) || /HD$/i.test(a.name);
+    const bHasHD = /hd\)?\./i.test(b.tvg_id) || /HD$/i.test(b.name);
+    if (aHasHD && !bHasHD) return -1;
+    if (bHasHD && !aHasHD) return 1;
 
     // Then alphabetically by name
     return a.name.localeCompare(b.name);
