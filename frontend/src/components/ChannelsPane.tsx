@@ -503,8 +503,6 @@ function DroppableGroupHeader({
 
 
   const handleStreamDragOver = (e: React.DragEvent) => {
-    if (!isEditMode) return;
-
     const types = e.dataTransfer.types.map(t => t.toLowerCase());
     if (types.includes('streamid')) {
       e.preventDefault();
@@ -521,8 +519,6 @@ function DroppableGroupHeader({
   const handleStreamDrop = (e: React.DragEvent) => {
     e.stopPropagation();
     setStreamDragOver(false);
-
-    if (!isEditMode) return;
 
     e.preventDefault();
     const streamId = e.dataTransfer.getData('streamId');
@@ -1932,6 +1928,25 @@ export function ChannelsPane({
     return sourceChannels.some((ch) => ch.channel_number === num);
   };
 
+  // Handle stream dropped on group header - creates new channel with stream name
+  const handleStreamDropOnGroup = (groupId: number | 'ungrouped', streamId: number) => {
+    const stream = allStreams.find((s: Stream) => s.id === streamId);
+    if (!stream) return;
+
+    // Use stream name as the channel name
+    setNewChannelName(stream.name);
+
+    // Set the group (handle 'ungrouped' case)
+    if (groupId === 'ungrouped') {
+      setNewChannelGroup('');
+    } else {
+      setNewChannelGroup(groupId);
+    }
+
+    // Open the create modal
+    setShowCreateModal(true);
+  };
+
   // Handle creating a new channel - checks for conflicts first
   const handleCreateChannel = async () => {
     if (!newChannelName.trim() || !newChannelNumber.trim()) return;
@@ -3295,6 +3310,7 @@ export function ChannelsPane({
           onSortAndRenumber={() => handleOpenSortRenumber(groupId, groupName, groupChannels)}
           onDeleteGroup={group ? () => handleDeleteGroupClick(group) : undefined}
           onSelectAll={handleSelectAllInGroup}
+          onStreamDropOnGroup={handleStreamDropOnGroup}
         />
         {isExpanded && isEmpty && (
           <div className="group-channels empty-group-placeholder">
