@@ -19,6 +19,7 @@ export type ApiCallSpec =
   | { type: 'bulkAssignChannelNumbers'; channelIds: number[]; startingNumber?: number }
   | { type: 'createChannel'; name: string; channelNumber?: number; groupId?: number }
   | { type: 'deleteChannel'; channelId: number }
+  | { type: 'createGroup'; name: string }
   | { type: 'deleteChannelGroup'; groupId: number };
 
 /**
@@ -68,6 +69,7 @@ export interface EditModeSummary {
   channelNameChanges: number;
   newChannels: number;
   deletedChannels: number;
+  newGroups: number;
   deletedGroups: number;
   // Detailed list of all operations with descriptions
   operationDetails: OperationDetail[];
@@ -156,6 +158,7 @@ export interface UseEditModeReturn {
   stageBulkAssignNumbers: (channelIds: number[], startingNumber: number, description: string) => void;
   stageCreateChannel: (name: string, channelNumber?: number, groupId?: number) => number; // returns temp ID
   stageDeleteChannel: (channelId: number, description: string) => void;
+  stageCreateGroup: (name: string) => void;
   stageDeleteChannelGroup: (groupId: number, description: string) => void;
   addChannelToWorkingCopy: (channel: Channel) => void; // Add a newly created channel to working copy
 

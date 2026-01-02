@@ -201,6 +201,12 @@ export function useEditMode({
           return workingCopy.filter((ch) => ch.id !== apiCall.channelId);
         }
 
+        case 'createGroup': {
+          // Group creation doesn't affect the working copy of channels
+          // It's a separate entity handled at commit time
+          return workingCopy;
+        }
+
         case 'deleteChannelGroup': {
           // Group deletion doesn't affect the working copy of channels
           // It's a separate entity handled at commit time
@@ -383,6 +389,17 @@ export function useEditMode({
         { type: 'deleteChannel', channelId },
         description,
         [channelId]
+      );
+    },
+    [stageOperation]
+  );
+
+  const stageCreateGroup = useCallback(
+    (name: string) => {
+      stageOperation(
+        { type: 'createGroup', name },
+        `Create group "${name}"`,
+        [] // No channels directly affected
       );
     },
     [stageOperation]
@@ -615,6 +632,7 @@ export function useEditMode({
       channelNameChanges: 0,
       newChannels: 0,
       deletedChannels: 0,
+      newGroups: 0,
       deletedGroups: 0,
       operationDetails: [],
     };
@@ -653,6 +671,9 @@ export function useEditMode({
           break;
         case 'deleteChannel':
           summary.deletedChannels++;
+          break;
+        case 'createGroup':
+          summary.newGroups++;
           break;
         case 'deleteChannelGroup':
           summary.deletedGroups++;
@@ -787,6 +808,10 @@ export function useEditMode({
               await api.deleteChannel(resolveId(apiCall.channelId));
               break;
 
+            case 'createGroup':
+              await api.createChannelGroup(apiCall.name);
+              break;
+
             case 'deleteChannelGroup':
               await api.deleteChannelGroup(apiCall.groupId);
               break;
@@ -896,6 +921,7 @@ export function useEditMode({
     stageBulkAssignNumbers,
     stageCreateChannel,
     stageDeleteChannel,
+    stageCreateGroup,
     stageDeleteChannelGroup,
     addChannelToWorkingCopy,
 

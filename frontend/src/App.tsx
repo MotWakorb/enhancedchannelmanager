@@ -838,8 +838,8 @@ function App() {
           return;
         }
 
-        // If we need to create a new group first, create it immediately
-        // (Groups are just metadata containers, so it's safe to create them before committing)
+        // If we need to create a new group, create it immediately
+        // (We need the group ID to assign channels to it during staging)
         let targetGroupId = channelGroupId;
         let newGroupCreated = false;
         if (newGroupName) {
