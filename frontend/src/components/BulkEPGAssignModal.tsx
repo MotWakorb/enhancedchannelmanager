@@ -51,8 +51,8 @@ export function BulkEPGAssignModal({
   // Track if we've already analyzed for this modal session
   const hasAnalyzedRef = useRef(false);
 
-  // Ref for scrolling conflicts list to top when navigating
-  const conflictsListRef = useRef<HTMLDivElement>(null);
+  // Refs for scrolling to current conflict item when navigating
+  const conflictItemRefs = useRef<Map<number, HTMLDivElement>>(new Map());
 
   // Run matching when modal opens
   useEffect(() => {
@@ -146,12 +146,17 @@ export function BulkEPGAssignModal({
     };
   }, [matchResults]);
 
-  // Scroll conflicts list to top when navigating between conflicts
+  // Scroll current conflict item into view when navigating
   useEffect(() => {
-    if (conflictsListRef.current) {
-      conflictsListRef.current.scrollTop = 0;
+    if (conflicts.length === 0) return;
+    const currentConflict = conflicts[currentConflictIndex];
+    if (!currentConflict) return;
+
+    const element = conflictItemRefs.current.get(currentConflict.channel.id);
+    if (element) {
+      element.scrollIntoView({ behavior: 'smooth', block: 'start' });
     }
-  }, [currentConflictIndex]);
+  }, [currentConflictIndex, conflicts]);
 
   // Pre-select recommended matches for all conflicts when entering review phase
   useEffect(() => {
@@ -391,7 +396,7 @@ export function BulkEPGAssignModal({
                       </div>
                     </div>
                   </div>
-                  <div className="conflicts-list" ref={conflictsListRef}>
+                  <div className="conflicts-list">
                     {conflicts.map((result, index) => (
                       <ConflictItem
                         key={result.channel.id}
@@ -403,6 +408,13 @@ export function BulkEPGAssignModal({
                         onToggle={() => setCurrentConflictIndex(index)}
                         recommendedEpg={getRecommendedEpg(result)}
                         isResolved={conflictResolutions.has(result.channel.id)}
+                        itemRef={el => {
+                          if (el) {
+                            conflictItemRefs.current.set(result.channel.id, el);
+                          } else {
+                            conflictItemRefs.current.delete(result.channel.id);
+                          }
+                        }}
                       />
                     ))}
                   </div>
@@ -503,11 +515,12 @@ interface ConflictItemProps {
   onToggle: () => void;
   recommendedEpg: EPGData | null;
   isResolved: boolean;
+  itemRef: (el: HTMLDivElement | null) => void;
 }
 
-function ConflictItem({ result, epgSources, selectedEpg, onSelect, isExpanded, onToggle, recommendedEpg, isResolved }: ConflictItemProps) {
+function ConflictItem({ result, epgSources, selectedEpg, onSelect, isExpanded, onToggle, recommendedEpg, isResolved, itemRef }: ConflictItemProps) {
   return (
-    <div className={`conflict-item ${isExpanded ? 'expanded' : 'collapsed'} ${isResolved ? 'resolved' : ''}`}>
+    <div ref={itemRef} className={`conflict-item ${isExpanded ? 'expanded' : 'collapsed'} ${isResolved ? 'resolved' : ''}`}>
       <button className="conflict-header" onClick={onToggle}>
         <div className="conflict-channel">
           <span className="channel-name">{result.channel.name}</span>
