@@ -214,6 +214,18 @@ function buildEPGLookup(epgData: EPGData[]): EPGLookup {
         const existing = byCallSign.get(callSign) || [];
         existing.push(epg);
         byCallSign.set(callSign, existing);
+
+        // Also index call sign without common suffixes (HD, SD, FHD, UHD)
+        // This allows "AWE" to match "AWEHD" call sign
+        const suffixPattern = /(hd|sd|fhd|uhd)$/;
+        if (suffixPattern.test(callSign)) {
+          const baseCallSign = callSign.replace(suffixPattern, '');
+          if (baseCallSign && baseCallSign !== callSign) {
+            const baseExisting = byCallSign.get(baseCallSign) || [];
+            baseExisting.push(epg);
+            byCallSign.set(baseCallSign, baseExisting);
+          }
+        }
       }
     }
   }
