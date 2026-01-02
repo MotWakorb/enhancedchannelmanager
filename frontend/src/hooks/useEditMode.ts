@@ -99,12 +99,18 @@ export function useEditMode({
 
   // Track real channels for conflict detection
   const realChannelsRef = useRef<Channel[]>(channels);
+
+  // Use a ref for next temp ID to avoid React batching issues when creating multiple channels in a loop
+  const nextTempIdRef = useRef(-1);
   realChannelsRef.current = channels;
 
   // Enter edit mode - snapshot current state
   const enterEditMode = useCallback(() => {
     const snapshot = channels.map(createSnapshot);
     const workingCopy = channels.map((ch) => ({ ...ch, streams: [...ch.streams] }));
+
+    // Reset temp ID ref
+    nextTempIdRef.current = -1;
 
     setState({
       isActive: true,
@@ -123,11 +129,13 @@ export function useEditMode({
 
   // Exit edit mode (discards changes)
   const exitEditMode = useCallback(() => {
+    nextTempIdRef.current = -1; // Reset temp ID ref
     setState(createInitialState());
   }, []);
 
   // Discard all staged changes
   const discard = useCallback(() => {
+    nextTempIdRef.current = -1; // Reset temp ID ref
     setState(createInitialState());
   }, []);
 
@@ -356,7 +364,9 @@ export function useEditMode({
 
   const stageCreateChannel = useCallback(
     (name: string, channelNumber?: number, groupId?: number): number => {
-      const tempId = state.nextTempId;
+      // Use ref to get unique temp ID even when called in a loop (React batching issue)
+      const tempId = nextTempIdRef.current;
+      nextTempIdRef.current -= 1; // Decrement immediately for next call
       stageOperation(
         { type: 'createChannel', name, channelNumber, groupId },
         `Create channel "${name}"`,
@@ -364,7 +374,7 @@ export function useEditMode({
       );
       return tempId;
     },
-    [stageOperation, state.nextTempId]
+    [stageOperation]
   );
 
   const stageDeleteChannel = useCallback(
