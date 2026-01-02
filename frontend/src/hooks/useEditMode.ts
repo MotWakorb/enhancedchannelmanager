@@ -78,6 +78,9 @@ function createInitialState(): EditModeState {
     nextTempId: -1,
     tempIdMap: new Map(),
     currentBatch: null,
+    stagedGroups: new Map(),
+    newGroupNameToTempId: new Map(),
+    nextTempGroupId: -1000, // Start at -1000 to distinguish from channel temp IDs
   };
 }
 
@@ -104,13 +107,17 @@ export function useEditMode({
   const nextTempIdRef = useRef(-1);
   realChannelsRef.current = channels;
 
+  // Use a ref for next temp group ID to avoid React batching issues
+  const nextTempGroupIdRef = useRef(-1000);
+
   // Enter edit mode - snapshot current state
   const enterEditMode = useCallback(() => {
     const snapshot = channels.map(createSnapshot);
     const workingCopy = channels.map((ch) => ({ ...ch, streams: [...ch.streams] }));
 
-    // Reset temp ID ref
+    // Reset temp ID refs
     nextTempIdRef.current = -1;
+    nextTempGroupIdRef.current = -1000;
 
     setState({
       isActive: true,
@@ -124,6 +131,9 @@ export function useEditMode({
       nextTempId: -1,
       tempIdMap: new Map(),
       currentBatch: null,
+      stagedGroups: new Map(),
+      newGroupNameToTempId: new Map(),
+      nextTempGroupId: -1000,
     });
   }, [channels]);
 
@@ -244,14 +254,50 @@ export function useEditMode({
         // Apply to working copy
         let newWorkingCopy = applyOperationToWorkingCopy(prev.workingCopy, operation);
 
+        // Track new staged groups and their temp IDs
+        let newStagedGroups = prev.stagedGroups;
+        let newGroupNameToTempId = prev.newGroupNameToTempId;
+        let newNextTempGroupId = prev.nextTempGroupId;
+
         // Handle create channel specially
         if (apiCall.type === 'createChannel') {
           const tempId = prev.nextTempId;
+
+          // Determine channel_group_id: use existing groupId, or create/reuse a temp group for newGroupName
+          let channelGroupId: number | null = apiCall.groupId ?? null;
+
+          if (apiCall.newGroupName) {
+            // Check if we already have a temp ID for this group name
+            if (prev.newGroupNameToTempId.has(apiCall.newGroupName)) {
+              channelGroupId = prev.newGroupNameToTempId.get(apiCall.newGroupName)!;
+            } else {
+              // Create a new staged group
+              const tempGroupId = nextTempGroupIdRef.current;
+              nextTempGroupIdRef.current -= 1;
+
+              const newGroup = {
+                id: tempGroupId,
+                name: apiCall.newGroupName,
+                channel_count: 0, // Will be updated as channels are added
+              };
+
+              // Update maps (need to create new Map instances for immutability)
+              newStagedGroups = new Map(prev.stagedGroups);
+              newStagedGroups.set(tempGroupId, newGroup);
+
+              newGroupNameToTempId = new Map(prev.newGroupNameToTempId);
+              newGroupNameToTempId.set(apiCall.newGroupName, tempGroupId);
+
+              newNextTempGroupId = tempGroupId - 1;
+              channelGroupId = tempGroupId;
+            }
+          }
+
           const newChannel: Channel = {
             id: tempId,
             channel_number: apiCall.channelNumber ?? null,
             name: apiCall.name,
-            channel_group_id: apiCall.groupId ?? null,
+            channel_group_id: channelGroupId,
             tvg_id: null,
             tvc_guide_stationid: null,
             epg_data_id: null,
@@ -310,6 +356,9 @@ export function useEditMode({
           modifiedChannelIds: newModifiedIds,
           nextTempId: apiCall.type === 'createChannel' ? prev.nextTempId - 1 : prev.nextTempId,
           currentBatch: newCurrentBatch,
+          stagedGroups: newStagedGroups,
+          newGroupNameToTempId: newGroupNameToTempId,
+          nextTempGroupId: newNextTempGroupId,
         };
       });
     },
@@ -962,6 +1011,9 @@ export function useEditMode({
   // Determine which channels to display
   const displayChannels = state.isActive ? state.workingCopy : channels;
 
+  // Convert stagedGroups Map to array for consumers
+  const stagedGroupsArray = state.isActive ? Array.from(state.stagedGroups.values()) : [];
+
   return {
     // State
     isEditMode: state.isActive,
@@ -969,6 +1021,7 @@ export function useEditMode({
     stagedOperationCount: state.localUndoStack.length,
     modifiedChannelIds: state.modifiedChannelIds,
     displayChannels,
+    stagedGroups: stagedGroupsArray,
     canLocalUndo: state.localUndoStack.length > 0,
     canLocalRedo: state.localRedoStack.length > 0,
     editModeDuration,

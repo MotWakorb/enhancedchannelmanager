@@ -5,7 +5,7 @@
  * Changes are queued as operations and can be reviewed before applying.
  */
 
-import type { Channel, ChannelSnapshot } from './index';
+import type { Channel, ChannelSnapshot, ChannelGroup } from './index';
 
 /**
  * API operation specifications - discriminated union of all API calls
@@ -115,6 +115,15 @@ export interface EditModeState {
     description: string;
     operations: StagedOperation[];
   } | null;
+
+  // Staged groups (new groups being created, keyed by temp ID)
+  stagedGroups: Map<number, ChannelGroup>;
+
+  // Map of new group names to temp group IDs
+  newGroupNameToTempId: Map<string, number>;
+
+  // Next temp ID for groups (negative numbers, separate from channel temp IDs)
+  nextTempGroupId: number;
 }
 
 /**
@@ -142,6 +151,7 @@ export interface UseEditModeReturn {
   stagedOperationCount: number;
   modifiedChannelIds: Set<number>;
   displayChannels: Channel[]; // working copy if in edit mode, else real channels
+  stagedGroups: ChannelGroup[]; // new groups being staged (empty array if not in edit mode)
   canLocalUndo: boolean;
   canLocalRedo: boolean;
   editModeDuration: number | null; // milliseconds since entering edit mode

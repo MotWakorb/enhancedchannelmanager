@@ -110,6 +110,7 @@ function App() {
     stagedOperationCount,
     modifiedChannelIds,
     displayChannels,
+    stagedGroups,
     canLocalUndo,
     canLocalRedo,
     editModeDuration,
@@ -1059,6 +1060,11 @@ function App() {
     return secs > 0 ? `${mins}m ${secs}s` : `${mins}m`;
   };
 
+  // Merge real channel groups with staged groups when in edit mode
+  const displayChannelGroups = isEditMode && stagedGroups.length > 0
+    ? [...channelGroups, ...stagedGroups]
+    : channelGroups;
+
   return (
     <div className="app">
       <header className={`header ${isEditMode ? 'edit-mode-active' : ''}`}>
@@ -1158,7 +1164,7 @@ function App() {
           {activeTab === 'channel-manager' && (
             <ChannelManagerTab
               // Channel Groups
-              channelGroups={channelGroups}
+              channelGroups={displayChannelGroups}
               onChannelGroupsChange={loadChannelGroups}
               onDeleteChannelGroup={handleDeleteChannelGroup}
 
