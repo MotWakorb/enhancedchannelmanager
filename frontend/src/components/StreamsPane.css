@@ -385,7 +385,8 @@
   color: var(--text-muted);
   cursor: pointer;
   border-radius: 4px;
-  transition: color 0.15s, background 0.15s;
+  transition: color 0.15s, background 0.15s, opacity 0.15s;
+  opacity: 0;
 }
 
 .copy-url-btn:hover {
@@ -395,6 +396,10 @@
 
 .copy-url-btn .material-icons {
   font-size: 1rem;
+}
+
+.stream-item:hover .copy-url-btn {
+  opacity: 1;
 }
 
 .drag-handle {
