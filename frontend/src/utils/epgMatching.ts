@@ -155,6 +155,10 @@ interface EPGLookup {
   byCallSign: Map<string, EPGData[]>;
   // Pre-parsed country codes for sorting
   countryByEpgId: Map<number, string | null>;
+  // For prefix matching: list of all normalized TVG-IDs with their EPG entries
+  allNormalizedTvgIds: Array<{ normalized: string; epg: EPGData }>;
+  // For prefix matching: list of all normalized names with their EPG entries
+  allNormalizedNames: Array<{ normalized: string; epg: EPGData }>;
 }
 
 /**
@@ -166,6 +170,8 @@ function buildEPGLookup(epgData: EPGData[]): EPGLookup {
   const byNormalizedName = new Map<string, EPGData[]>();
   const byCallSign = new Map<string, EPGData[]>();
   const countryByEpgId = new Map<number, string | null>();
+  const allNormalizedTvgIds: Array<{ normalized: string; epg: EPGData }> = [];
+  const allNormalizedNames: Array<{ normalized: string; epg: EPGData }> = [];
 
   for (const epg of epgData) {
     // Parse and normalize TVG-ID
@@ -177,6 +183,8 @@ function buildEPGLookup(epgData: EPGData[]): EPGLookup {
       const existing = byNormalizedTvgId.get(epgNormalizedTvgId) || [];
       existing.push(epg);
       byNormalizedTvgId.set(epgNormalizedTvgId, existing);
+      // Also add to prefix matching list
+      allNormalizedTvgIds.push({ normalized: epgNormalizedTvgId, epg });
     }
 
     // Add to name lookup
@@ -185,6 +193,8 @@ function buildEPGLookup(epgData: EPGData[]): EPGLookup {
       const existing = byNormalizedName.get(epgNormalizedName) || [];
       existing.push(epg);
       byNormalizedName.set(epgNormalizedName, existing);
+      // Also add to prefix matching list
+      allNormalizedNames.push({ normalized: epgNormalizedName, epg });
     }
 
     // Extract and add call sign if present
@@ -199,20 +209,38 @@ function buildEPGLookup(epgData: EPGData[]): EPGLookup {
     }
   }
 
-  return { byNormalizedTvgId, byNormalizedName, byCallSign, countryByEpgId };
+  return {
+    byNormalizedTvgId,
+    byNormalizedName,
+    byCallSign,
+    countryByEpgId,
+    allNormalizedTvgIds,
+    allNormalizedNames,
+  };
 }
+
+// Minimum length for prefix matching to avoid too many false positives
+const MIN_PREFIX_LENGTH = 4;
 
 /**
  * Find EPG matches for a channel using pre-built lookup maps.
- * This is O(1) per channel instead of O(n) where n = EPG entries.
+ * Uses exact matching first, then falls back to prefix/fuzzy matching.
  */
 function findEPGMatchesWithLookup(
   channel: Channel,
   channelStreams: Stream[],
   lookup: EPGLookup
 ): EPGMatchResult {
-  // Detect country from streams
-  const detectedCountry = detectCountryFromStreams(channelStreams);
+  // Detect country from streams or channel name
+  let detectedCountry = detectCountryFromStreams(channelStreams);
+
+  // Also try to detect country from channel name if not found in streams
+  if (!detectedCountry) {
+    const channelNameCountry = channel.name.match(/^([A-Z]{2})\s*[|:]/);
+    if (channelNameCountry) {
+      detectedCountry = channelNameCountry[1].toLowerCase();
+    }
+  }
 
   // Normalize the channel name
   const normalizedName = normalizeForEPGMatch(channel.name);
@@ -227,42 +255,81 @@ function findEPGMatchesWithLookup(
     };
   }
 
-  // Collect matches from all lookup maps (using Set to dedupe by EPG id)
+  // Track match quality for sorting: exact matches are better than prefix matches
+  const matchQuality = new Map<number, 'exact' | 'prefix'>();
+
+  // Collect matches from all lookup maps (using Map to dedupe by EPG id)
   const matchSet = new Map<number, EPGData>();
 
-  // Check TVG-ID matches
+  // Check exact TVG-ID matches
   const tvgIdMatches = lookup.byNormalizedTvgId.get(normalizedName) || [];
   for (const epg of tvgIdMatches) {
     matchSet.set(epg.id, epg);
+    matchQuality.set(epg.id, 'exact');
   }
 
-  // Check name matches
+  // Check exact name matches
   const nameMatches = lookup.byNormalizedName.get(normalizedName) || [];
   for (const epg of nameMatches) {
     matchSet.set(epg.id, epg);
+    matchQuality.set(epg.id, 'exact');
   }
 
   // Check call sign matches
   const callSignMatches = lookup.byCallSign.get(normalizedName) || [];
   for (const epg of callSignMatches) {
     matchSet.set(epg.id, epg);
+    matchQuality.set(epg.id, 'exact');
+  }
+
+  // If no exact matches found and name is long enough, try prefix matching
+  if (matchSet.size === 0 && normalizedName.length >= MIN_PREFIX_LENGTH) {
+    // Check if channel name is a prefix of any EPG TVG-ID
+    for (const { normalized, epg } of lookup.allNormalizedTvgIds) {
+      // Channel name starts with EPG name, or EPG name starts with channel name
+      if (normalized.startsWith(normalizedName) || normalizedName.startsWith(normalized)) {
+        if (!matchSet.has(epg.id)) {
+          matchSet.set(epg.id, epg);
+          matchQuality.set(epg.id, 'prefix');
+        }
+      }
+    }
+
+    // Also check prefix matches in EPG names
+    for (const { normalized, epg } of lookup.allNormalizedNames) {
+      if (normalized.startsWith(normalizedName) || normalizedName.startsWith(normalized)) {
+        if (!matchSet.has(epg.id)) {
+          matchSet.set(epg.id, epg);
+          matchQuality.set(epg.id, 'prefix');
+        }
+      }
+    }
   }
 
   // Convert to array and sort
   const matchArray = Array.from(matchSet.values());
 
-  // Sort matches to put the matching country first (if we detected one)
+  // Sort matches with priority:
+  // 1. Exact matches over prefix matches
+  // 2. Matching country over non-matching country
+  // 3. Alphabetically by name
   const matches = matchArray.sort((a, b) => {
+    const aQuality = matchQuality.get(a.id) || 'prefix';
+    const bQuality = matchQuality.get(b.id) || 'prefix';
     const aCountry = lookup.countryByEpgId.get(a.id);
     const bCountry = lookup.countryByEpgId.get(b.id);
 
-    // Matching country goes first
+    // Exact matches first
+    if (aQuality === 'exact' && bQuality !== 'exact') return -1;
+    if (bQuality === 'exact' && aQuality !== 'exact') return 1;
+
+    // Then matching country
     if (detectedCountry) {
       if (aCountry === detectedCountry && bCountry !== detectedCountry) return -1;
       if (bCountry === detectedCountry && aCountry !== detectedCountry) return 1;
     }
 
-    // Then sort by name
+    // Then alphabetically by name
     return a.name.localeCompare(b.name);
   });
 
