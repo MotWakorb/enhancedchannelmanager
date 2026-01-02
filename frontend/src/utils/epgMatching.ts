@@ -361,10 +361,16 @@ function findEPGMatchesWithLookup(
       if (bCountry === detectedCountry && aCountry !== detectedCountry) return 1;
     }
 
-    // Prefer EPG names that are closer in length to the channel name
-    // This prevents short matches like "E" from being preferred over "EbonyTVbyLionsgate"
+    // Prefer matches where channel name is a prefix of EPG name (not the reverse)
+    // "ebonytv" matching "ebonytvbylionsgate" is better than "e" matching "ebonytv"
     const aNormalized = lookup.normalizedTvgIdByEpgId.get(a.id) || '';
     const bNormalized = lookup.normalizedTvgIdByEpgId.get(b.id) || '';
+    const aChannelIsPrefix = aNormalized.startsWith(normalizedName);
+    const bChannelIsPrefix = bNormalized.startsWith(normalizedName);
+    // Prefer matches where channel name is prefix of EPG name
+    if (aChannelIsPrefix && !bChannelIsPrefix) return -1;
+    if (bChannelIsPrefix && !aChannelIsPrefix) return 1;
+    // Among same type of matches, prefer EPG names closer in length to channel name
     const aLengthDiff = Math.abs(aNormalized.length - normalizedName.length);
     const bLengthDiff = Math.abs(bNormalized.length - normalizedName.length);
     if (aLengthDiff !== bLengthDiff) {
