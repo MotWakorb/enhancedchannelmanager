@@ -803,7 +803,7 @@ function App() {
   );
 
   const handleCreateChannel = useCallback(
-    async (name: string, channelNumber?: number, groupId?: number) => {
+    async (name: string, channelNumber?: number, groupId?: number, logoId?: number) => {
       try {
         if (isEditMode) {
           // In edit mode, stage the creation without calling Dispatcharr API
@@ -821,7 +821,7 @@ function App() {
             streams: [],
             stream_profile_id: null,
             uuid: `temp-${tempId}`,
-            logo_id: null,
+            logo_id: logoId ?? null,
             auto_created: false,
             auto_created_by: null,
             auto_created_by_name: null,
@@ -833,6 +833,7 @@ function App() {
             name,
             channel_number: channelNumber,
             channel_group_id: groupId,
+            logo_id: logoId,
           });
           setChannels((prev) => [...prev, newChannel]);
           return newChannel;

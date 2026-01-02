@@ -38,7 +38,7 @@ interface ChannelsPaneProps {
   onChannelDrop: (channelId: number, streamId: number) => void;
   onBulkStreamDrop: (channelId: number, streamIds: number[]) => void;
   onChannelReorder: (channelIds: number[], startingNumber: number) => void;
-  onCreateChannel: (name: string, channelNumber?: number, groupId?: number) => Promise<Channel>;
+  onCreateChannel: (name: string, channelNumber?: number, groupId?: number, logoId?: number) => Promise<Channel>;
   onDeleteChannel: (channelId: number) => Promise<void>;
   searchTerm: string;
   onSearchChange: (term: string) => void;
@@ -1280,6 +1280,7 @@ export function ChannelsPane({
   const [newChannelName, setNewChannelName] = useState('');
   const [newChannelNumber, setNewChannelNumber] = useState('');
   const [newChannelGroup, setNewChannelGroup] = useState<number | ''>('');
+  const [newChannelLogoId, setNewChannelLogoId] = useState<number | null>(null); // Logo from dropped stream
   const [groupSearchText, setGroupSearchText] = useState('');
   const [showGroupDropdown, setShowGroupDropdown] = useState(false);
   const [creating, setCreating] = useState(false);
@@ -1927,6 +1928,7 @@ export function ChannelsPane({
     setNewChannelName('');
     setNewChannelNumber('');
     setNewChannelGroup('');
+    setNewChannelLogoId(null);
     setGroupSearchText('');
     setShowGroupDropdown(false);
   };
@@ -1963,6 +1965,16 @@ export function ChannelsPane({
 
     // Use stream name as the channel name
     setNewChannelName(stream.name);
+
+    // Find matching logo by URL if stream has a logo_url
+    if (stream.logo_url) {
+      const matchingLogo = logos.find(
+        (logo) => logo.url === stream.logo_url || logo.cache_url === stream.logo_url
+      );
+      setNewChannelLogoId(matchingLogo?.id ?? null);
+    } else {
+      setNewChannelLogoId(null);
+    }
 
     // Set the group (handle 'ungrouped' case)
     if (groupId === 'ungrouped') {
@@ -2008,7 +2020,8 @@ export function ChannelsPane({
       const newChannel = await onCreateChannel(
         newChannelName.trim(),
         channelNum,
-        newChannelGroup !== '' ? newChannelGroup : undefined
+        newChannelGroup !== '' ? newChannelGroup : undefined,
+        newChannelLogoId ?? undefined
       );
       // In edit mode, we need to manually add the new channel to localChannels
       // since we disabled the automatic sync from parent state
