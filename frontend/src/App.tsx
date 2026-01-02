@@ -308,29 +308,6 @@ function App() {
     channelGroupFilterInitialized.current = true;
   }, [channels, channelGroups, providerGroupSettings, channelListFilters.showAutoChannelGroups]);
 
-  // When showAutoChannelGroups filter changes to false, remove auto-sync groups from selection
-  useEffect(() => {
-    if (channelListFilters.showAutoChannelGroups !== false) return;
-
-    // Build set of auto-sync related groups
-    const autoSyncRelatedGroups = new Set<number>();
-    const settingsMap = providerGroupSettings as unknown as Record<string, M3UGroupSetting> | undefined;
-    if (settingsMap) {
-      for (const setting of Object.values(settingsMap)) {
-        if (setting.auto_channel_sync) {
-          autoSyncRelatedGroups.add(setting.channel_group);
-          if (setting.custom_properties?.group_override) {
-            autoSyncRelatedGroups.add(setting.custom_properties.group_override);
-          }
-        }
-      }
-    }
-
-    if (autoSyncRelatedGroups.size > 0) {
-      setChannelGroupFilter(prev => prev.filter(id => !autoSyncRelatedGroups.has(id)));
-    }
-  }, [channelListFilters.showAutoChannelGroups, providerGroupSettings]);
-
   const handleSettingsSaved = async () => {
     setError(null);
     // Reload settings to get updated values
