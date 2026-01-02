@@ -143,6 +143,25 @@ export function BulkEPGAssignModal({
     };
   }, [matchResults]);
 
+  // Pre-select recommended matches for all conflicts when entering review phase
+  useEffect(() => {
+    if (phase !== 'review' || conflicts.length === 0) return;
+
+    // Only pre-select if we haven't set any resolutions yet (fresh review)
+    if (conflictResolutions.size > 0) return;
+
+    const preselected = new Map<number, EPGData | null>();
+    for (const result of conflicts) {
+      if (result.matches.length > 0) {
+        // First match is the recommended one (already sorted by country priority)
+        preselected.set(result.channel.id, result.matches[0]);
+      }
+    }
+    if (preselected.size > 0) {
+      setConflictResolutions(preselected);
+    }
+  }, [phase, conflicts, conflictResolutions.size]);
+
   // Handle conflict resolution selection
   const handleConflictSelect = useCallback((channelId: number, epgData: EPGData | null) => {
     setConflictResolutions(prev => {
