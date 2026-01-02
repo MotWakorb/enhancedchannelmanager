@@ -305,6 +305,15 @@ export function findEPGMatches(
 }
 
 /**
+ * Progress callback for batch matching
+ */
+export interface BatchMatchProgress {
+  current: number;
+  total: number;
+  channelName: string;
+}
+
+/**
  * Process multiple channels for EPG matching.
  * Uses pre-built lookup maps for O(n + m) performance instead of O(n * m)
  * where n = channels and m = EPG entries.
@@ -312,12 +321,14 @@ export function findEPGMatches(
  * @param channels - Channels to match
  * @param allStreams - All available streams
  * @param epgData - All available EPG data
+ * @param onProgress - Optional callback for progress updates
  * @returns Array of match results
  */
 export function batchFindEPGMatches(
   channels: Channel[],
   allStreams: Stream[],
-  epgData: EPGData[]
+  epgData: EPGData[],
+  onProgress?: (progress: BatchMatchProgress) => void
 ): EPGMatchResult[] {
   console.log('[EPGMatching] Building lookup maps...');
   const startLookup = performance.now();
@@ -332,14 +343,77 @@ export function batchFindEPGMatches(
   console.log('[EPGMatching] Matching channels...');
   const startMatch = performance.now();
 
-  const results = channels.map(channel => {
+  const results: EPGMatchResult[] = [];
+  const total = channels.length;
+
+  for (let i = 0; i < channels.length; i++) {
+    const channel = channels[i];
+
+    // Report progress
+    if (onProgress) {
+      onProgress({ current: i + 1, total, channelName: channel.name });
+    }
+
     // Get streams associated with this channel
     const channelStreams = channel.streams
       .map(id => streamMap.get(id))
       .filter((s): s is Stream => s !== undefined);
 
-    return findEPGMatchesWithLookup(channel, channelStreams, epgLookup);
-  });
+    results.push(findEPGMatchesWithLookup(channel, channelStreams, epgLookup));
+  }
+
+  console.log(`[EPGMatching] Matched ${channels.length} channels in ${(performance.now() - startMatch).toFixed(0)}ms`);
+
+  return results;
+}
+
+/**
+ * Process multiple channels for EPG matching with async progress updates.
+ * Yields control periodically to allow UI updates.
+ */
+export async function batchFindEPGMatchesAsync(
+  channels: Channel[],
+  allStreams: Stream[],
+  epgData: EPGData[],
+  onProgress?: (progress: BatchMatchProgress) => void
+): Promise<EPGMatchResult[]> {
+  console.log('[EPGMatching] Building lookup maps...');
+  const startLookup = performance.now();
+
+  // Build lookup maps ONCE for all EPG data
+  const epgLookup = buildEPGLookup(epgData);
+
+  // Create a lookup map for streams by ID
+  const streamMap = new Map(allStreams.map(s => [s.id, s]));
+
+  console.log(`[EPGMatching] Lookup maps built in ${(performance.now() - startLookup).toFixed(0)}ms`);
+  console.log('[EPGMatching] Matching channels...');
+  const startMatch = performance.now();
+
+  const results: EPGMatchResult[] = [];
+  const total = channels.length;
+  const BATCH_SIZE = 10; // Process 10 channels before yielding
+
+  for (let i = 0; i < channels.length; i++) {
+    const channel = channels[i];
+
+    // Report progress
+    if (onProgress) {
+      onProgress({ current: i + 1, total, channelName: channel.name });
+    }
+
+    // Get streams associated with this channel
+    const channelStreams = channel.streams
+      .map(id => streamMap.get(id))
+      .filter((s): s is Stream => s !== undefined);
+
+    results.push(findEPGMatchesWithLookup(channel, channelStreams, epgLookup));
+
+    // Yield control every BATCH_SIZE channels to allow UI updates
+    if ((i + 1) % BATCH_SIZE === 0) {
+      await new Promise(resolve => setTimeout(resolve, 0));
+    }
+  }
 
   console.log(`[EPGMatching] Matched ${channels.length} channels in ${(performance.now() - startMatch).toFixed(0)}ms`);
 

@@ -8,10 +8,11 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import type { Channel, Stream, EPGData, EPGSource } from '../types';
 import {
-  batchFindEPGMatches,
+  batchFindEPGMatchesAsync,
   getEPGSourceName,
   type EPGMatchResult,
   type EPGAssignment,
+  type BatchMatchProgress,
 } from '../utils/epgMatching';
 import './BulkEPGAssignModal.css';
 
@@ -45,6 +46,7 @@ export function BulkEPGAssignModal({
   const [unmatchedExpanded, setUnmatchedExpanded] = useState(true);
   const [currentConflictIndex, setCurrentConflictIndex] = useState(0);
   const [showConflictReview, setShowConflictReview] = useState(false);
+  const [progress, setProgress] = useState<BatchMatchProgress | null>(null);
 
   // Track if we've already analyzed for this modal session
   const hasAnalyzedRef = useRef(false);
@@ -60,6 +62,7 @@ export function BulkEPGAssignModal({
       setUnmatchedExpanded(true);
       setCurrentConflictIndex(0);
       setShowConflictReview(false);
+      setProgress(null);
       hasAnalyzedRef.current = false;
       return;
     }
@@ -73,8 +76,8 @@ export function BulkEPGAssignModal({
     setPhase('analyzing');
     hasAnalyzedRef.current = true;
 
-    // Use setTimeout to allow UI to render "analyzing" state
-    const timer = setTimeout(() => {
+    // Run async analysis
+    const runAnalysis = async () => {
       try {
         console.log('[BulkEPGAssign] Running analysis...');
         console.log('[BulkEPGAssign] Selected channels:', selectedChannels.length);
@@ -89,7 +92,12 @@ export function BulkEPGAssignModal({
           return;
         }
 
-        const results = batchFindEPGMatches(selectedChannels, streams, epgData);
+        const results = await batchFindEPGMatchesAsync(
+          selectedChannels,
+          streams,
+          epgData,
+          (prog) => setProgress(prog)
+        );
         console.log('[BulkEPGAssign] Match results:', results);
         const autoCount = results.filter(r => r.status === 'exact').length;
         const conflictCount = results.filter(r => r.status === 'multiple').length;
@@ -103,9 +111,9 @@ export function BulkEPGAssignModal({
         setMatchResults([]);
         setPhase('review');
       }
-    }, 100);
+    };
 
-    return () => clearTimeout(timer);
+    runAnalysis();
   }, [isOpen, selectedChannels, streams, epgData]);
 
   // Categorize results and sort A-Z by channel name
@@ -242,7 +250,22 @@ export function BulkEPGAssignModal({
           {phase === 'analyzing' ? (
             <div className="bulk-epg-analyzing">
               <span className="material-icons spinning">sync</span>
-              <p>Analyzing {selectedChannels.length} channels...</p>
+              <div className="analyzing-text">
+                <p>Analyzing {selectedChannels.length} channels...</p>
+                {progress && (
+                  <div className="analyzing-progress">
+                    <div className="progress-bar">
+                      <div
+                        className="progress-fill"
+                        style={{ width: `${(progress.current / progress.total) * 100}%` }}
+                      />
+                    </div>
+                    <p className="progress-detail">
+                      {progress.current} / {progress.total}: {progress.channelName}
+                    </p>
+                  </div>
+                )}
+              </div>
             </div>
           ) : (
             <>

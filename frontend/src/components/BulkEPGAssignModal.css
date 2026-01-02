@@ -653,12 +653,61 @@
   cursor: not-allowed;
 }
 
-/* Spinning animation - clockwise for refresh icon */
+/* Spinning animation - counter-clockwise to match sync icon arrows */
 @keyframes spin {
   from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
+  to { transform: rotate(-360deg); }
 }
 
 .bulk-epg-analyzing .spinning {
   animation: spin 1s linear infinite;
+}
+
+/* Progress bar styles */
+.bulk-epg-analyzing {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1rem;
+}
+
+.analyzing-text {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.75rem;
+  width: 100%;
+  max-width: 400px;
+}
+
+.analyzing-progress {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.progress-bar {
+  width: 100%;
+  height: 8px;
+  background-color: var(--bg-tertiary);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  background-color: var(--accent-primary);
+  border-radius: 4px;
+  transition: width 0.1s ease-out;
+}
+
+.progress-detail {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
 }
