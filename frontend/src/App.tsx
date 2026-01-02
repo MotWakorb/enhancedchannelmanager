@@ -277,6 +277,20 @@ function App() {
     if (channelGroupFilterInitialized.current) return;
     if (channels.length === 0 || channelGroups.length === 0) return;
 
+    // Build set of auto-sync related groups (same logic as ChannelsPane)
+    const autoSyncRelatedGroups = new Set<number>();
+    const settingsMap = providerGroupSettings as unknown as Record<string, M3UGroupSetting> | undefined;
+    if (settingsMap) {
+      for (const setting of Object.values(settingsMap)) {
+        if (setting.auto_channel_sync) {
+          autoSyncRelatedGroups.add(setting.channel_group);
+          if (setting.custom_properties?.group_override) {
+            autoSyncRelatedGroups.add(setting.custom_properties.group_override);
+          }
+        }
+      }
+    }
+
     // Get unique group IDs from channels
     const groupsWithChannels = new Set<number>();
     channels.forEach((ch) => {
@@ -285,11 +299,37 @@ function App() {
       }
     });
 
-    // Auto-select groups that have channels
-    const groupIds = Array.from(groupsWithChannels);
+    // Auto-select groups that have channels, respecting showAutoChannelGroups filter
+    let groupIds = Array.from(groupsWithChannels);
+    if (channelListFilters.showAutoChannelGroups === false) {
+      groupIds = groupIds.filter(id => !autoSyncRelatedGroups.has(id));
+    }
     setChannelGroupFilter(groupIds);
     channelGroupFilterInitialized.current = true;
-  }, [channels, channelGroups]);
+  }, [channels, channelGroups, providerGroupSettings, channelListFilters.showAutoChannelGroups]);
+
+  // When showAutoChannelGroups filter changes to false, remove auto-sync groups from selection
+  useEffect(() => {
+    if (channelListFilters.showAutoChannelGroups !== false) return;
+
+    // Build set of auto-sync related groups
+    const autoSyncRelatedGroups = new Set<number>();
+    const settingsMap = providerGroupSettings as unknown as Record<string, M3UGroupSetting> | undefined;
+    if (settingsMap) {
+      for (const setting of Object.values(settingsMap)) {
+        if (setting.auto_channel_sync) {
+          autoSyncRelatedGroups.add(setting.channel_group);
+          if (setting.custom_properties?.group_override) {
+            autoSyncRelatedGroups.add(setting.custom_properties.group_override);
+          }
+        }
+      }
+    }
+
+    if (autoSyncRelatedGroups.size > 0) {
+      setChannelGroupFilter(prev => prev.filter(id => !autoSyncRelatedGroups.has(id)));
+    }
+  }, [channelListFilters.showAutoChannelGroups, providerGroupSettings]);
 
   const handleSettingsSaved = async () => {
     setError(null);
@@ -309,6 +349,7 @@ function App() {
       });
 
       // Apply hide_auto_sync_groups setting to channelListFilters
+      // The useEffect watching showAutoChannelGroups will handle removing groups from selection
       if (settings.hide_auto_sync_groups) {
         setChannelListFilters(prev => ({
           ...prev,
