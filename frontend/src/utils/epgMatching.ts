@@ -457,19 +457,28 @@ function findEPGMatchesWithLookup(
     if (bHasHD && !aHasHD) return 1;
 
     // Prefer EPG entries where call sign matches channel name
-    // "FOXSOUL(FOXSOUL).us" should be preferred over "FOXSoul(VIZFXSL).us" for channel "FOX Soul"
+    // Priority: exact match > base match (after stripping HD/SD suffix) > no match
+    // "FYI(FYI).us" should be preferred over "FYI(FYISD).us" for channel "FYI"
     const aCallSignMatch = a.tvg_id.match(/\(([^)]+)\)/);
     const bCallSignMatch = b.tvg_id.match(/\(([^)]+)\)/);
     if (aCallSignMatch && bCallSignMatch) {
       const aCallSign = aCallSignMatch[1].toLowerCase().replace(/[^a-z0-9]/g, '');
       const bCallSign = bCallSignMatch[1].toLowerCase().replace(/[^a-z0-9]/g, '');
-      // Strip HD suffix from call signs for comparison
-      const aCallSignBase = aCallSign.replace(/(hd|sd|fhd|uhd)$/, '');
-      const bCallSignBase = bCallSign.replace(/(hd|sd|fhd|uhd)$/, '');
-      const aCallSignMatches = aCallSignBase === normalizedName || aCallSign === normalizedName;
-      const bCallSignMatches = bCallSignBase === normalizedName || bCallSign === normalizedName;
-      if (aCallSignMatches && !bCallSignMatches) return -1;
-      if (bCallSignMatches && !aCallSignMatches) return 1;
+      // Check for exact call sign match
+      const aExactMatch = aCallSign === normalizedName;
+      const bExactMatch = bCallSign === normalizedName;
+      // Prefer exact match over non-exact
+      if (aExactMatch && !bExactMatch) return -1;
+      if (bExactMatch && !aExactMatch) return 1;
+      // If neither is exact, check base match (after stripping suffix)
+      if (!aExactMatch && !bExactMatch) {
+        const aCallSignBase = aCallSign.replace(/(hd|sd|fhd|uhd)$/, '');
+        const bCallSignBase = bCallSign.replace(/(hd|sd|fhd|uhd)$/, '');
+        const aBaseMatch = aCallSignBase === normalizedName;
+        const bBaseMatch = bCallSignBase === normalizedName;
+        if (aBaseMatch && !bBaseMatch) return -1;
+        if (bBaseMatch && !aBaseMatch) return 1;
+      }
     }
 
     // Then alphabetically by name
