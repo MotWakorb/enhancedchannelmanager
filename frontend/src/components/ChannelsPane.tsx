@@ -1937,10 +1937,17 @@ export function ChannelsPane({
     setNewChannelName(stream.name);
 
     // Set the group (handle 'ungrouped' case)
-    const numericGroupId = groupId === 'ungrouped' ? '' : groupId;
-    setNewChannelGroup(numericGroupId);
+    if (groupId === 'ungrouped') {
+      setNewChannelGroup('');
+      setGroupSearchText('');
+    } else {
+      const group = channelGroups.find((g) => g.id === groupId);
+      setNewChannelGroup(groupId);
+      setGroupSearchText(group?.name || '');
+    }
 
     // Set the next available channel number for this group
+    const numericGroupId = groupId === 'ungrouped' ? '' : groupId;
     const nextNumber = getNextChannelNumberForGroup(numericGroupId);
     setNewChannelNumber(nextNumber.toString());
 
