@@ -316,8 +316,14 @@ function findEPGMatchesWithLookup(
     matchQuality.set(epg.id, 'exact');
   }
 
-  // If no exact matches found and name is long enough, try prefix matching
-  if (matchSet.size === 0 && normalizedName.length >= MIN_PREFIX_LENGTH) {
+  // Try prefix matching if:
+  // 1. No exact matches found and name is long enough, OR
+  // 2. Name is very short (1-2 chars) - single letters are too generic, need more context
+  const shouldTryPrefixMatching =
+    (matchSet.size === 0 && normalizedName.length >= MIN_PREFIX_LENGTH) ||
+    (normalizedName.length <= 2);
+
+  if (shouldTryPrefixMatching) {
     // Check if channel name is a prefix of any EPG TVG-ID
     for (const { normalized, epg } of lookup.allNormalizedTvgIds) {
       // Channel name starts with EPG name, or EPG name starts with channel name
@@ -343,21 +349,39 @@ function findEPGMatchesWithLookup(
   // Convert to array and sort
   const matchArray = Array.from(matchSet.values());
 
+  // Extract special punctuation from original channel name for matching
+  // This helps "E!" prefer "E!Entertainment" over just "E"
+  const channelSpecialChars = channel.name.match(/[!@#$%^*]/g) || [];
+
   // Sort matches with priority:
-  // 1. Exact matches over prefix matches
-  // 2. Matching country over non-matching country
-  // 3. Name similarity (prefer EPG names closer in length to channel name)
-  // 4. HD variants over non-HD (prefer higher quality)
-  // 5. Alphabetically by name
+  // 1. Exact matches over prefix matches (but not for very short names)
+  // 2. Matching special punctuation (e.g., "!" in channel name matches "!" in EPG)
+  // 3. Matching country over non-matching country
+  // 4. Name similarity (prefer EPG names closer in length to channel name)
+  // 5. HD variants over non-HD (prefer higher quality)
+  // 6. Alphabetically by name
   const matches = matchArray.sort((a, b) => {
     const aQuality = matchQuality.get(a.id) || 'prefix';
     const bQuality = matchQuality.get(b.id) || 'prefix';
     const aCountry = lookup.countryByEpgId.get(a.id);
     const bCountry = lookup.countryByEpgId.get(b.id);
 
-    // Exact matches first
-    if (aQuality === 'exact' && bQuality !== 'exact') return -1;
-    if (bQuality === 'exact' && aQuality !== 'exact') return 1;
+    // For short names (1-2 chars), don't prioritize exact matches over prefix
+    // because single letters are too generic
+    if (normalizedName.length > 2) {
+      // Exact matches first
+      if (aQuality === 'exact' && bQuality !== 'exact') return -1;
+      if (bQuality === 'exact' && aQuality !== 'exact') return 1;
+    }
+
+    // Prefer EPG entries that share special punctuation with channel name
+    // This helps "E!" match "E!Entertainment" over "E"
+    if (channelSpecialChars.length > 0) {
+      const aHasSpecialChar = channelSpecialChars.some(char => a.tvg_id.includes(char) || a.name.includes(char));
+      const bHasSpecialChar = channelSpecialChars.some(char => b.tvg_id.includes(char) || b.name.includes(char));
+      if (aHasSpecialChar && !bHasSpecialChar) return -1;
+      if (bHasSpecialChar && !aHasSpecialChar) return 1;
+    }
 
     // Then matching country
     if (detectedCountry) {
