@@ -459,6 +459,7 @@ interface DroppableGroupHeaderProps {
   onSortAndRenumber?: () => void;
   onDeleteGroup?: () => void;
   onSelectAll?: () => void;
+  onStreamDropOnGroup?: (groupId: number | 'ungrouped', streamId: number) => void;
 }
 
 function DroppableGroupHeader({
@@ -475,12 +476,15 @@ function DroppableGroupHeader({
   onSortAndRenumber,
   onDeleteGroup,
   onSelectAll,
+  onStreamDropOnGroup,
 }: DroppableGroupHeaderProps) {
   const droppableId = `group-${groupId}`;
   const { isOver, setNodeRef } = useDroppable({
     id: droppableId,
     disabled: !isEditMode,
   });
+
+  const [streamDragOver, setStreamDragOver] = useState(false);
 
   const handleSortClick = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -497,6 +501,36 @@ function DroppableGroupHeader({
     onSelectAll?.();
   };
 
+
+  const handleStreamDragOver = (e: React.DragEvent) => {
+    if (!isEditMode) return;
+
+    const types = e.dataTransfer.types.map(t => t.toLowerCase());
+    if (types.includes('streamid')) {
+      e.preventDefault();
+      e.stopPropagation();
+      setStreamDragOver(true);
+    }
+  };
+
+  const handleStreamDragLeave = (e: React.DragEvent) => {
+    e.stopPropagation();
+    setStreamDragOver(false);
+  };
+
+  const handleStreamDrop = (e: React.DragEvent) => {
+    e.stopPropagation();
+    setStreamDragOver(false);
+
+    if (!isEditMode) return;
+
+    e.preventDefault();
+    const streamId = e.dataTransfer.getData('streamId');
+    if (streamId && onStreamDropOnGroup) {
+      onStreamDropOnGroup(groupId, parseInt(streamId, 10));
+    }
+  };
+
   // Determine checkbox state: all selected, some selected, or none selected
   const allSelected = channelCount > 0 && selectedCount === channelCount;
   const someSelected = selectedCount > 0 && selectedCount < channelCount;
@@ -504,8 +538,11 @@ function DroppableGroupHeader({
   return (
     <div
       ref={setNodeRef}
-      className={`group-header ${isOver && isEditMode ? 'drop-target' : ''}`}
+      className={`group-header ${isOver && isEditMode ? 'drop-target' : ''} ${streamDragOver ? 'stream-drag-over' : ''}`}
       onClick={onToggle}
+      onDragOver={handleStreamDragOver}
+      onDragLeave={handleStreamDragLeave}
+      onDrop={handleStreamDrop}
     >
       {isEditMode && !isEmpty && (
         <span
