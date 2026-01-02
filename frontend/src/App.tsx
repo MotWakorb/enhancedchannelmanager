@@ -624,6 +624,24 @@ function App() {
     setLastSelectedChannelId(toId);
   }, []);
 
+  const handleSelectGroupChannels = useCallback((channelIds: number[], select: boolean) => {
+    setSelectedChannelIds((prev) => {
+      const newSet = new Set(prev);
+      if (select) {
+        // Add all channels in the group
+        channelIds.forEach((id) => newSet.add(id));
+      } else {
+        // Remove all channels in the group
+        channelIds.forEach((id) => newSet.delete(id));
+      }
+      return newSet;
+    });
+    // Set last selected to the first channel in the group if selecting
+    if (select && channelIds.length > 0) {
+      setLastSelectedChannelId(channelIds[0]);
+    }
+  }, []);
+
   const handleChannelUpdate = useCallback(
     (updatedChannel: Channel, changeInfo?: ChangeInfo) => {
       const originalChannel = channels.find((ch) => ch.id === updatedChannel.id);
@@ -1052,6 +1070,7 @@ function App() {
               onToggleChannelSelection={handleToggleChannelSelection}
               onClearChannelSelection={handleClearChannelSelection}
               onSelectChannelRange={handleSelectChannelRange}
+              onSelectGroupChannels={handleSelectGroupChannels}
 
               // Auto-rename
               autoRenameChannelNumber={autoRenameChannelNumber}

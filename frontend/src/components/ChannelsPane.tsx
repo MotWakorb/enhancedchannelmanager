@@ -95,6 +95,7 @@ interface ChannelsPaneProps {
   onToggleChannelSelection?: (channelId: number, addToSelection: boolean) => void;
   onClearChannelSelection?: () => void;
   onSelectChannelRange?: (fromId: number, toId: number, groupChannelIds: number[]) => void;
+  onSelectGroupChannels?: (channelIds: number[], select: boolean) => void;
   // Dispatcharr URL for constructing channel stream URLs
   dispatcharrUrl?: string;
   // Stream group drop callback (for bulk channel creation)
@@ -452,9 +453,11 @@ interface DroppableGroupHeaderProps {
   isEditMode: boolean;
   isAutoSync: boolean;
   isManualGroup: boolean;
+  selectedCount: number;
   onToggle: () => void;
   onSortAndRenumber?: () => void;
   onDeleteGroup?: () => void;
+  onSelectAll?: () => void;
 }
 
 function DroppableGroupHeader({
@@ -466,9 +469,11 @@ function DroppableGroupHeader({
   isEditMode,
   isAutoSync,
   isManualGroup,
+  selectedCount,
   onToggle,
   onSortAndRenumber,
   onDeleteGroup,
+  onSelectAll,
 }: DroppableGroupHeaderProps) {
   const droppableId = `group-${groupId}`;
   const { isOver, setNodeRef } = useDroppable({
@@ -486,12 +491,32 @@ function DroppableGroupHeader({
     onDeleteGroup?.();
   };
 
+  const handleCheckboxClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    onSelectAll?.();
+  };
+
+  // Determine checkbox state: all selected, some selected, or none selected
+  const allSelected = channelCount > 0 && selectedCount === channelCount;
+  const someSelected = selectedCount > 0 && selectedCount < channelCount;
+
   return (
     <div
       ref={setNodeRef}
       className={`group-header ${isOver && isEditMode ? 'drop-target' : ''}`}
       onClick={onToggle}
     >
+      {isEditMode && !isEmpty && (
+        <span
+          className={`group-checkbox ${allSelected ? 'checked' : ''} ${someSelected ? 'indeterminate' : ''}`}
+          onClick={handleCheckboxClick}
+          title={allSelected ? 'Deselect all channels in group' : 'Select all channels in group'}
+        >
+          <span className="material-icons">
+            {allSelected ? 'check_box' : someSelected ? 'indeterminate_check_box' : 'check_box_outline_blank'}
+          </span>
+        </span>
+      )}
       <span className="group-toggle">{isExpanded ? '▼' : '▶'}</span>
       <span className="group-name">{groupName}</span>
       {isAutoSync && (
@@ -1194,6 +1219,7 @@ export function ChannelsPane({
   onToggleChannelSelection,
   onClearChannelSelection,
   onSelectChannelRange,
+  onSelectGroupChannels,
   // Dispatcharr URL
   dispatcharrUrl = '',
   // Stream group drop
@@ -3244,6 +3270,18 @@ export function ChannelsPane({
     // Find the group object for deletion
     const group = groupId !== 'ungrouped' ? channelGroups.find(g => g.id === groupId) : null;
 
+    // Calculate how many channels in this group are selected
+    const selectedCountInGroup = groupChannels.filter(ch => selectedChannelIds.has(ch.id)).length;
+    const allGroupChannelIds = groupChannels.map(ch => ch.id);
+
+    // Handler to select/deselect all channels in this group
+    const handleSelectAllInGroup = () => {
+      if (!onSelectGroupChannels) return;
+      const allSelected = selectedCountInGroup === groupChannels.length;
+      // If all are selected, deselect all; otherwise select all
+      onSelectGroupChannels(allGroupChannelIds, !allSelected);
+    };
+
     return (
       <div key={groupId} className={`channel-group ${isEmpty ? 'empty-group' : ''}`}>
         <DroppableGroupHeader
@@ -3255,9 +3293,11 @@ export function ChannelsPane({
           isEditMode={isEditMode}
           isAutoSync={isAutoSync}
           isManualGroup={isManualGroup}
+          selectedCount={selectedCountInGroup}
           onToggle={() => toggleGroup(numericGroupId)}
           onSortAndRenumber={() => handleOpenSortRenumber(groupId, groupName, groupChannels)}
           onDeleteGroup={group ? () => handleDeleteGroupClick(group) : undefined}
+          onSelectAll={handleSelectAllInGroup}
         />
         {isExpanded && isEmpty && (
           <div className="group-channels empty-group-placeholder">

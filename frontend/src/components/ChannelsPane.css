@@ -619,6 +619,32 @@
   background-color: var(--input-bg);
 }
 
+.group-checkbox {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  margin-right: 0.25rem;
+  color: var(--text-muted);
+  transition: color 0.15s ease;
+}
+
+.group-checkbox:hover {
+  color: var(--accent-primary);
+}
+
+.group-checkbox .material-icons {
+  font-size: 1.25rem;
+}
+
+.group-checkbox.checked {
+  color: var(--accent-primary);
+}
+
+.group-checkbox.indeterminate {
+  color: var(--accent-primary);
+}
+
 .group-header.drop-target {
   background-color: rgba(100, 108, 255, 0.2);
   border: 2px dashed var(--accent-primary);

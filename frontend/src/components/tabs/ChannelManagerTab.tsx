@@ -33,6 +33,7 @@ export interface ChannelManagerTabProps {
   onToggleChannelSelection: (channelId: number, addToSelection: boolean) => void;
   onClearChannelSelection: () => void;
   onSelectChannelRange: (fromId: number, toId: number, groupChannelIds: number[]) => void;
+  onSelectGroupChannels: (channelIds: number[], select: boolean) => void;
 
   // Auto-rename
   autoRenameChannelNumber: boolean;
@@ -162,6 +163,7 @@ export function ChannelManagerTab({
   onToggleChannelSelection,
   onClearChannelSelection,
   onSelectChannelRange,
+  onSelectGroupChannels,
 
   // Auto-rename
   autoRenameChannelNumber,
@@ -311,6 +313,7 @@ export function ChannelManagerTab({
           onToggleChannelSelection={onToggleChannelSelection}
           onClearChannelSelection={onClearChannelSelection}
           onSelectChannelRange={onSelectChannelRange}
+          onSelectGroupChannels={onSelectGroupChannels}
           dispatcharrUrl={dispatcharrUrl}
           onStreamGroupDrop={onStreamGroupDrop}
           showStreamUrls={showStreamUrls}
