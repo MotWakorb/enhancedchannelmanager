@@ -79,6 +79,7 @@ A unique workflow that lets you stage changes locally before committing to the s
 
 - **Add Streams** - Drag streams onto channels to add them
 - **Bulk Add** - Drag multiple selected streams at once
+- **Create from Stream** - Drag a stream onto a group header (not a channel) to create a new channel with the stream name pre-populated
 - **Reorder Channels** - Drag channels to reorder within a group (edit mode)
 - **Move Between Groups** - Drag channels to different groups with confirmation modal
 - **Reorder Streams** - Drag to reorder streams within a channel
