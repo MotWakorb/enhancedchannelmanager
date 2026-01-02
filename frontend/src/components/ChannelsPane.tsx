@@ -2332,7 +2332,15 @@ export function ChannelsPane({
     });
 
   // All groups sorted alphabetically (for filter dropdown - includes empty groups)
-  const allGroupsSorted = [...channelGroups].sort((a, b) => a.name.localeCompare(b.name));
+  // Filter out auto-sync groups when showAutoChannelGroups is false
+  const allGroupsSorted = [...channelGroups]
+    .filter((g) => {
+      if (channelListFilters?.showAutoChannelGroups === false && autoSyncRelatedGroups.has(g.id)) {
+        return false;
+      }
+      return true;
+    })
+    .sort((a, b) => a.name.localeCompare(b.name));
 
   // Helper function to determine if a group should be visible based on filter settings
   const shouldShowGroup = (groupId: number): boolean => {
