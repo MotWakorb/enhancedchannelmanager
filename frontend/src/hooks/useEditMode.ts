@@ -369,12 +369,12 @@ export function useEditMode({
   );
 
   const stageCreateChannel = useCallback(
-    (name: string, channelNumber?: number, groupId?: number): number => {
+    (name: string, channelNumber?: number, groupId?: number, newGroupName?: string): number => {
       // Use ref to get unique temp ID even when called in a loop (React batching issue)
       const tempId = nextTempIdRef.current;
       nextTempIdRef.current -= 1; // Decrement immediately for next call
       stageOperation(
-        { type: 'createChannel', name, channelNumber, groupId },
+        { type: 'createChannel', name, channelNumber, groupId, newGroupName },
         `Create channel "${name}"`,
         []
       );
@@ -756,8 +756,44 @@ export function useEditMode({
 
     // Copy the temp ID map for tracking new channel IDs
     const tempIdMap = new Map<number, number>();
+    // Map for new group names to their created IDs
+    const newGroupIdMap = new Map<string, number>();
 
     try {
+      // First pass: collect all new group names that need to be created
+      // (from createChannel operations with newGroupName)
+      const newGroupNames = new Set<string>();
+      for (const operation of state.stagedOperations) {
+        if (operation.apiCall.type === 'createChannel' && operation.apiCall.newGroupName) {
+          newGroupNames.add(operation.apiCall.newGroupName);
+        }
+      }
+
+      // Create all new groups first
+      for (const groupName of newGroupNames) {
+        try {
+          const newGroup = await api.createChannelGroup(groupName);
+          newGroupIdMap.set(groupName, newGroup.id);
+          result.operationsApplied++;
+        } catch (err) {
+          console.error('Failed to create group:', groupName, err);
+          result.success = false;
+          result.operationsFailed++;
+          result.errors.push({
+            operationId: `create-group-${groupName}`,
+            error: err instanceof Error ? err.message : 'Unknown error',
+          });
+          // Stop on first failure
+          break;
+        }
+      }
+
+      // If group creation failed, don't proceed with other operations
+      if (!result.success) {
+        setIsCommitting(false);
+        return result;
+      }
+
       // Execute operations sequentially
       for (const operation of state.stagedOperations) {
         try {
@@ -791,10 +827,15 @@ export function useEditMode({
               break;
 
             case 'createChannel': {
+              // Resolve group ID: use newGroupName mapping if present, otherwise use groupId
+              let groupId = apiCall.groupId;
+              if (apiCall.newGroupName && newGroupIdMap.has(apiCall.newGroupName)) {
+                groupId = newGroupIdMap.get(apiCall.newGroupName);
+              }
               const newChannel = await api.createChannel({
                 name: apiCall.name,
                 channel_number: apiCall.channelNumber,
-                channel_group_id: apiCall.groupId,
+                channel_group_id: groupId,
               });
               // Track the mapping from temp ID to real ID
               const tempId = operation.afterSnapshot[0]?.id;
