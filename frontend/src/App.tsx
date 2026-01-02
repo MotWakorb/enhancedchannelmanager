@@ -308,6 +308,51 @@ function App() {
     channelGroupFilterInitialized.current = true;
   }, [channels, channelGroups, providerGroupSettings, channelListFilters.showAutoChannelGroups]);
 
+  // Track previous showAutoChannelGroups value to detect changes
+  const prevShowAutoChannelGroups = useRef(channelListFilters.showAutoChannelGroups);
+
+  // When showAutoChannelGroups filter is toggled, update the group selection
+  useEffect(() => {
+    // Skip if this is the initial render or value hasn't changed
+    if (prevShowAutoChannelGroups.current === channelListFilters.showAutoChannelGroups) return;
+    prevShowAutoChannelGroups.current = channelListFilters.showAutoChannelGroups;
+
+    // Build set of auto-sync related groups
+    const autoSyncRelatedGroups = new Set<number>();
+    const settingsMap = providerGroupSettings as unknown as Record<string, M3UGroupSetting> | undefined;
+    if (settingsMap) {
+      for (const setting of Object.values(settingsMap)) {
+        if (setting.auto_channel_sync) {
+          autoSyncRelatedGroups.add(setting.channel_group);
+          if (setting.custom_properties?.group_override) {
+            autoSyncRelatedGroups.add(setting.custom_properties.group_override);
+          }
+        }
+      }
+    }
+    if (autoSyncRelatedGroups.size === 0) return;
+
+    // Get auto-sync groups that have channels
+    const autoSyncGroupsWithChannels = new Set<number>();
+    channels.forEach((ch) => {
+      if (ch.channel_group_id !== null && autoSyncRelatedGroups.has(ch.channel_group_id)) {
+        autoSyncGroupsWithChannels.add(ch.channel_group_id);
+      }
+    });
+
+    if (channelListFilters.showAutoChannelGroups) {
+      // Add auto-sync groups to selection
+      setChannelGroupFilter(prev => {
+        const newSet = new Set(prev);
+        autoSyncGroupsWithChannels.forEach(id => newSet.add(id));
+        return Array.from(newSet);
+      });
+    } else {
+      // Remove auto-sync groups from selection
+      setChannelGroupFilter(prev => prev.filter(id => !autoSyncRelatedGroups.has(id)));
+    }
+  }, [channelListFilters.showAutoChannelGroups, providerGroupSettings, channels]);
+
   const handleSettingsSaved = async () => {
     setError(null);
     // Reload settings to get updated values
