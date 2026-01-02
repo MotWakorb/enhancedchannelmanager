@@ -410,7 +410,8 @@ function findEPGMatchesWithLookup(
     // Handle regional variants (Pacific, East, West, etc.) in TVG-ID
     // If channel name contains a region hint, prefer matching region
     // Otherwise, deprioritize regional variants
-    const regionalPattern = /\((Pacific|East|West|Central|Mountain)\)/i;
+    // Pattern matches: (Pacific), (East), (West), (WestCoast), (WestCoastFeed), (EastFeed), etc.
+    const regionalPattern = /\((Pacific|East(?:ern)?(?:Feed)?|West(?:ern)?(?:Coast)?(?:Feed)?|Central|Mountain)\)/i;
     const aRegionalMatch = a.tvg_id.match(regionalPattern);
     const bRegionalMatch = b.tvg_id.match(regionalPattern);
     const aIsRegional = !!aRegionalMatch;
@@ -430,14 +431,16 @@ function findEPGMatchesWithLookup(
     const wantsMountain = channelWantsMountain;
 
     // Check if each EPG entry matches the wanted region
+    // West includes: Pacific, West, WestCoast, WestCoastFeed, Western, WesternFeed
+    // East includes: East, Eastern, EastFeed, EasternFeed
     const aMatchesWanted =
       (wantsWest && aRegionalMatch && /pacific|west/i.test(aRegionalMatch[1])) ||
-      (wantsEast && aRegionalMatch && /east/i.test(aRegionalMatch[1])) ||
+      (wantsEast && aRegionalMatch && /^east/i.test(aRegionalMatch[1])) ||
       (wantsCentral && aRegionalMatch && /central/i.test(aRegionalMatch[1])) ||
       (wantsMountain && aRegionalMatch && /mountain/i.test(aRegionalMatch[1]));
     const bMatchesWanted =
       (wantsWest && bRegionalMatch && /pacific|west/i.test(bRegionalMatch[1])) ||
-      (wantsEast && bRegionalMatch && /east/i.test(bRegionalMatch[1])) ||
+      (wantsEast && bRegionalMatch && /^east/i.test(bRegionalMatch[1])) ||
       (wantsCentral && bRegionalMatch && /central/i.test(bRegionalMatch[1])) ||
       (wantsMountain && bRegionalMatch && /mountain/i.test(bRegionalMatch[1]));
 
