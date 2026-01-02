@@ -48,6 +48,7 @@ export function BulkEPGAssignModal({
   const [currentConflictIndex, setCurrentConflictIndex] = useState(0);
   const [showConflictReview, setShowConflictReview] = useState(false);
   const [progress, setProgress] = useState<BatchMatchProgress | null>(null);
+  const [epgSearchFilter, setEpgSearchFilter] = useState('');
 
   // Track if we've already analyzed for this modal session
   const hasAnalyzedRef = useRef(false);
@@ -65,6 +66,7 @@ export function BulkEPGAssignModal({
       setCurrentConflictIndex(0);
       setShowConflictReview(false);
       setProgress(null);
+      setEpgSearchFilter('');
       hasAnalyzedRef.current = false;
       return;
     }
@@ -365,17 +367,7 @@ export function BulkEPGAssignModal({
                       )}
                     </div>
                   </div>
-                  {/* Single conflict card - show only current conflict */}
-                  {conflicts[currentConflictIndex] && (
-                    <ConflictCard
-                      result={conflicts[currentConflictIndex]}
-                      epgSources={epgSources}
-                      selectedEpg={conflictResolutions.get(conflicts[currentConflictIndex].channel.id)}
-                      onSelect={epg => handleConflictSelect(conflicts[currentConflictIndex].channel.id, epg)}
-                      recommendedEpg={getRecommendedEpg(conflicts[currentConflictIndex])}
-                    />
-                  )}
-                  {/* Navigation at bottom of card */}
+                  {/* Navigation above the card */}
                   <div className="conflict-card-nav">
                     <button
                       className="nav-btn"
@@ -397,6 +389,18 @@ export function BulkEPGAssignModal({
                       <span className="material-icons">chevron_right</span>
                     </button>
                   </div>
+                  {/* Single conflict card - show only current conflict */}
+                  {conflicts[currentConflictIndex] && (
+                    <ConflictCard
+                      result={conflicts[currentConflictIndex]}
+                      epgSources={epgSources}
+                      selectedEpg={conflictResolutions.get(conflicts[currentConflictIndex].channel.id)}
+                      onSelect={epg => handleConflictSelect(conflicts[currentConflictIndex].channel.id, epg)}
+                      recommendedEpg={getRecommendedEpg(conflicts[currentConflictIndex])}
+                      searchFilter={epgSearchFilter}
+                      onSearchChange={setEpgSearchFilter}
+                    />
+                  )}
                 </div>
               )}
 
@@ -491,9 +495,22 @@ interface ConflictCardProps {
   selectedEpg: EPGData | null | undefined;
   onSelect: (epg: EPGData | null) => void;
   recommendedEpg: EPGData | null;
+  searchFilter: string;
+  onSearchChange: (filter: string) => void;
 }
 
-function ConflictCard({ result, epgSources, selectedEpg, onSelect, recommendedEpg }: ConflictCardProps) {
+function ConflictCard({ result, epgSources, selectedEpg, onSelect, recommendedEpg, searchFilter, onSearchChange }: ConflictCardProps) {
+  // Filter matches based on search
+  const filteredMatches = useMemo(() => {
+    if (!searchFilter.trim()) return result.matches;
+    const lowerFilter = searchFilter.toLowerCase();
+    return result.matches.filter(epg =>
+      epg.name.toLowerCase().includes(lowerFilter) ||
+      epg.tvg_id.toLowerCase().includes(lowerFilter) ||
+      getEPGSourceName(epg, epgSources).toLowerCase().includes(lowerFilter)
+    );
+  }, [result.matches, searchFilter, epgSources]);
+
   return (
     <div className="conflict-card">
       <div className="conflict-card-header">
@@ -505,9 +522,23 @@ function ConflictCard({ result, epgSources, selectedEpg, onSelect, recommendedEp
         </div>
         <div className="normalized-label">Searching for: "{result.normalizedName}"</div>
       </div>
+      <div className="conflict-card-search">
+        <span className="material-icons">search</span>
+        <input
+          type="text"
+          placeholder="Filter EPG matches..."
+          value={searchFilter}
+          onChange={e => onSearchChange(e.target.value)}
+        />
+        {searchFilter && (
+          <button className="clear-search" onClick={() => onSearchChange('')}>
+            <span className="material-icons">close</span>
+          </button>
+        )}
+      </div>
       <div className="conflict-card-body">
         <div className="conflict-options">
-          {result.matches.map(epg => {
+          {filteredMatches.map(epg => {
             const isRecommended = recommendedEpg?.id === epg.id;
             return (
               <label
@@ -536,6 +567,9 @@ function ConflictCard({ result, epgSources, selectedEpg, onSelect, recommendedEp
               </label>
             );
           })}
+          {filteredMatches.length === 0 && searchFilter && (
+            <div className="no-matches">No matches found for "{searchFilter}"</div>
+          )}
           <label className={`conflict-option skip-option ${selectedEpg === null ? 'selected' : ''}`}>
             <input
               type="radio"

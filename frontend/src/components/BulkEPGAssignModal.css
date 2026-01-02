@@ -318,19 +318,23 @@
   background: var(--bg-secondary);
   border: 1px solid var(--accent-primary);
   border-radius: 8px;
-  margin: 12px 0;
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  max-height: 350px;
 }
 
 .conflict-card-header {
-  padding: 16px;
+  padding: 12px 16px;
   border-bottom: 1px solid var(--border-secondary);
+  flex-shrink: 0;
 }
 
 .conflict-card-header .conflict-channel {
   display: flex;
   align-items: center;
   gap: 10px;
-  margin-bottom: 6px;
+  margin-bottom: 4px;
 }
 
 .conflict-card-header .channel-name {
@@ -340,13 +344,66 @@
 }
 
 .conflict-card-header .normalized-label {
-  font-size: 0.85rem;
+  font-size: 0.8rem;
   color: var(--text-secondary);
   font-style: italic;
 }
 
+/* Search input in card */
+.conflict-card-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  background: var(--input-bg);
+  border-bottom: 1px solid var(--border-secondary);
+  flex-shrink: 0;
+}
+
+.conflict-card-search .material-icons {
+  font-size: 20px;
+  color: var(--text-secondary);
+}
+
+.conflict-card-search input {
+  flex: 1;
+  background: transparent;
+  border: none;
+  color: var(--text-primary);
+  font-size: 0.9rem;
+  outline: none;
+}
+
+.conflict-card-search input::placeholder {
+  color: var(--text-secondary);
+}
+
+.conflict-card-search .clear-search {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 4px;
+  color: var(--text-secondary);
+}
+
+.conflict-card-search .clear-search:hover {
+  background: #3d3d3d;
+  color: var(--text-primary);
+}
+
+.conflict-card-search .clear-search .material-icons {
+  font-size: 18px;
+}
+
 .conflict-card-body {
   padding: 12px 16px 16px;
+  overflow-y: auto;
+  flex: 1;
+  min-height: 0;
 }
 
 .conflict-card-body .conflict-options {
@@ -356,15 +413,19 @@
   margin: 0;
 }
 
-/* Navigation at bottom of card */
+.no-matches {
+  padding: 16px;
+  text-align: center;
+  color: var(--text-secondary);
+  font-style: italic;
+}
+
+/* Navigation above card */
 .conflict-card-nav {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 12px 16px;
-  background: var(--bg-secondary);
-  border-top: 1px solid var(--border-secondary);
-  border-radius: 0 0 6px 6px;
+  padding: 8px 0;
 }
 
 .conflict-card-nav .nav-btn {
