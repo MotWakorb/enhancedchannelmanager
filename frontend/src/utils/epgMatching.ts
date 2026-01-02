@@ -118,9 +118,13 @@ export function normalizeForEPGMatch(name: string): string {
   // This catches cases like "5033 | CW" where separator char wasn't matched
   normalized = normalized.replace(/^\d+/, '');
 
-  // Strip leading article prefixes (the, a, an)
+  // Strip leading article prefixes (the, a, an) only if remaining text is long enough
   // This allows "Bob Ross Channel" to match "TheBobRossChannel"
-  normalized = normalized.replace(/^(the|a|an)(?=[a-z])/, '');
+  // but prevents "AWE" from being reduced to "WE"
+  const articleMatch = normalized.match(/^(the|a|an)([a-z]+)$/);
+  if (articleMatch && articleMatch[2].length >= 4) {
+    normalized = articleMatch[2];
+  }
 
   return normalized;
 }
