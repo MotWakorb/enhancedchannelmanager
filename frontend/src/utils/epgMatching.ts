@@ -106,6 +106,11 @@ export function normalizeForEPGMatch(name: string): string {
     normalized = normalized.replace(pattern, '');
   }
 
+  // Convert special characters with semantic meaning before stripping
+  // This ensures "AMC+" matches "AMCPlus" or "AMCPLUS"
+  normalized = normalized.replace(/\+/g, 'plus');
+  normalized = normalized.replace(/&/g, 'and');
+
   // Normalize to lowercase alphanumeric only
   normalized = normalized.toLowerCase().replace(/[^a-z0-9]/g, '');
 
