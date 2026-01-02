@@ -51,6 +51,9 @@ export function BulkEPGAssignModal({
   // Track if we've already analyzed for this modal session
   const hasAnalyzedRef = useRef(false);
 
+  // Ref for scrolling conflicts list to top when navigating
+  const conflictsListRef = useRef<HTMLDivElement>(null);
+
   // Run matching when modal opens
   useEffect(() => {
     if (!isOpen) {
@@ -142,6 +145,13 @@ export function BulkEPGAssignModal({
       unmatched: none.sort(sortByChannelName),
     };
   }, [matchResults]);
+
+  // Scroll conflicts list to top when navigating between conflicts
+  useEffect(() => {
+    if (conflictsListRef.current) {
+      conflictsListRef.current.scrollTop = 0;
+    }
+  }, [currentConflictIndex]);
 
   // Pre-select recommended matches for all conflicts when entering review phase
   useEffect(() => {
@@ -381,7 +391,7 @@ export function BulkEPGAssignModal({
                       </div>
                     </div>
                   </div>
-                  <div className="conflicts-list">
+                  <div className="conflicts-list" ref={conflictsListRef}>
                     {conflicts.map((result, index) => (
                       <ConflictItem
                         key={result.channel.id}
