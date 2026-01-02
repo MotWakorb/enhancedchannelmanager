@@ -14,6 +14,7 @@ import {
   type EPGAssignment,
   type BatchMatchProgress,
 } from '../utils/epgMatching';
+import { naturalCompare } from '../utils/naturalSort';
 import './BulkEPGAssignModal.css';
 
 export type { EPGAssignment };
@@ -135,9 +136,9 @@ export function BulkEPGAssignModal({
       }
     }
 
-    // Sort each category alphabetically by channel name (A-Z)
+    // Sort each category alphabetically by channel name (A-Z) with natural sort
     const sortByChannelName = (a: EPGMatchResult, b: EPGMatchResult) =>
-      a.channel.name.localeCompare(b.channel.name);
+      naturalCompare(a.channel.name, b.channel.name);
 
     return {
       autoMatched: auto.sort(sortByChannelName),

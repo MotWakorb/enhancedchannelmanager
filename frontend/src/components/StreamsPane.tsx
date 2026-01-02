@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import type { Stream, M3UAccount, ChannelGroup } from '../types';
 import { useSelection } from '../hooks';
 import { normalizeStreamName, detectRegionalVariants, filterStreamsByTimezone, detectCountryPrefixes, getUniqueCountryPrefixes, detectNetworkPrefixes, type TimezonePreference, type NormalizeOptions, type NumberSeparator, type PrefixOrder } from '../services/api';
+import { naturalCompare } from '../utils/naturalSort';
 import './StreamsPane.css';
 
 interface StreamGroup {
@@ -104,16 +105,16 @@ export function StreamsPane({
       groups.get(groupName)!.push(stream);
     });
 
-    // Sort streams within each group alphabetically
+    // Sort streams within each group alphabetically with natural sort
     groups.forEach((groupStreams) => {
-      groupStreams.sort((a, b) => a.name.localeCompare(b.name));
+      groupStreams.sort((a, b) => naturalCompare(a.name, b.name));
     });
 
-    // Sort groups alphabetically (Ungrouped at end) and flatten
+    // Sort groups alphabetically with natural sort (Ungrouped at end) and flatten
     const sortedGroupNames = Array.from(groups.keys()).sort((a, b) => {
       if (a === 'Ungrouped') return 1;
       if (b === 'Ungrouped') return -1;
-      return a.localeCompare(b);
+      return naturalCompare(a, b);
     });
 
     // Flatten to single array in display order
@@ -200,17 +201,17 @@ export function StreamsPane({
       groups.get(groupName)!.push(stream);
     });
 
-    // Sort streams within each group alphabetically
+    // Sort streams within each group alphabetically with natural sort
     groups.forEach((groupStreams) => {
-      groupStreams.sort((a, b) => a.name.localeCompare(b.name));
+      groupStreams.sort((a, b) => naturalCompare(a.name, b.name));
     });
 
-    // Convert to array and sort groups alphabetically (Ungrouped at end)
+    // Convert to array and sort groups alphabetically with natural sort (Ungrouped at end)
     const sortedGroups = Array.from(groups.entries())
       .sort(([a], [b]) => {
         if (a === 'Ungrouped') return 1;
         if (b === 'Ungrouped') return -1;
-        return a.localeCompare(b);
+        return naturalCompare(a, b);
       })
       .map(([name, groupStreams]) => ({
         name,

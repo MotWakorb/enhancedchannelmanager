@@ -24,6 +24,7 @@ import type { Channel, ChannelGroup, Stream, M3UAccount, M3UGroupSetting, Logo, 
 import * as api from '../services/api';
 import { HistoryToolbar } from './HistoryToolbar';
 import { BulkEPGAssignModal, type EPGAssignment } from './BulkEPGAssignModal';
+import { naturalCompare } from '../utils/naturalSort';
 import './ChannelsPane.css';
 
 interface ChannelsPaneProps {
@@ -2331,8 +2332,8 @@ export function ChannelsPane({
       return aMin - bMin;
     });
 
-  // All groups sorted alphabetically (for filter dropdown - includes empty groups)
-  const allGroupsSorted = [...channelGroups].sort((a, b) => a.name.localeCompare(b.name));
+  // All groups sorted alphabetically with natural sort (for filter dropdown - includes empty groups)
+  const allGroupsSorted = [...channelGroups].sort((a, b) => naturalCompare(a.name, b.name));
 
   // Helper function to determine if a group should be visible based on filter settings
   const shouldShowGroup = (groupId: number): boolean => {
@@ -3168,12 +3169,12 @@ export function ChannelsPane({
     const startingNumber = parseInt(sortRenumberStartingNumber, 10);
     if (isNaN(startingNumber) || startingNumber < 1) return;
 
-    // Sort channels alphabetically by name (case-insensitive)
+    // Sort channels alphabetically by name (case-insensitive, natural sort for numbers)
     // If sortStripNumbers is enabled, strip channel numbers from names before comparing
     const sortedChannels = [...sortRenumberData.channels].sort((a, b) => {
       const nameA = sortStripNumbers ? getNameForSorting(a.name) : a.name;
       const nameB = sortStripNumbers ? getNameForSorting(b.name) : b.name;
-      return nameA.toLowerCase().localeCompare(nameB.toLowerCase());
+      return naturalCompare(nameA.toLowerCase(), nameB.toLowerCase());
     });
 
     // Start a batch for the entire operation
@@ -4151,7 +4152,7 @@ export function ChannelsPane({
                   .sort((a, b) => {
                     const nameA = sortStripNumbers ? getNameForSorting(a.name) : a.name;
                     const nameB = sortStripNumbers ? getNameForSorting(b.name) : b.name;
-                    return nameA.toLowerCase().localeCompare(nameB.toLowerCase());
+                    return naturalCompare(nameA.toLowerCase(), nameB.toLowerCase());
                   })
                   .slice(0, 5)
                   .map((ch, index) => {
@@ -4261,7 +4262,7 @@ export function ChannelsPane({
                     const bSelected = selectedGroups.includes(b.id);
                     if (aSelected && !bSelected) return -1;
                     if (!aSelected && bSelected) return 1;
-                    return a.name.localeCompare(b.name);
+                    return naturalCompare(a.name, b.name);
                   })
                   .map((group) => (
                     <label key={group.id} className="group-filter-option">
