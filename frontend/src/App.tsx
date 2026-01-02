@@ -141,6 +141,25 @@ function App() {
     onError: setError,
   });
 
+  // Auto-add staged groups to the channel group filter so they're visible
+  // Also clean up temp group IDs (negative) when edit mode ends
+  useEffect(() => {
+    if (stagedGroups.length > 0) {
+      // Add new staged groups to filter
+      const stagedGroupIds = stagedGroups.map(g => g.id);
+      setChannelGroupFilter((prev) => {
+        const newIds = stagedGroupIds.filter(id => !prev.includes(id));
+        if (newIds.length > 0) {
+          return [...prev, ...newIds];
+        }
+        return prev;
+      });
+    } else if (!isEditMode) {
+      // Edit mode ended - clean up any temp group IDs (negative numbers)
+      setChannelGroupFilter((prev) => prev.filter(id => id >= 0));
+    }
+  }, [stagedGroups, isEditMode]);
+
   // Wrap exit to show dialog if there are staged changes
   const handleExitEditMode = useCallback(() => {
     if (stagedOperationCount > 0) {
