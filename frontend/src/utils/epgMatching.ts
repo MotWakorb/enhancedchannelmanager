@@ -359,9 +359,9 @@ function findEPGMatchesWithLookup(
   // 3. Matching country over non-matching country
   // 4. Name similarity (prefer EPG names closer in length to channel name)
   // 5. Regional preference: match channel's region hint, or default to East
-  // 6. Call sign match quality (NOSEY > VIZNOSE for "Nosey", REELZHD > VIZREEL for "Reelz")
-  // 7. HD variants over non-HD (prefer higher quality)
-  // 8. Alphabetically by name
+  // 6. HD + call sign combined: prefer HD unless non-HD has much better call sign
+  //    (e.g., TVLandHD beats TVLand, but Nosey(NOSEY) beats Nosey(VIZNOSE)-HD)
+  // 7. Alphabetically by name
   const matches = matchArray.sort((a, b) => {
     const aQuality = matchQuality.get(a.id) || 'prefix';
     const bQuality = matchQuality.get(b.id) || 'prefix';
@@ -453,31 +453,31 @@ function findEPGMatchesWithLookup(
       if (aIsRegional && !bIsRegional) return 1;
     }
 
-    // Prefer EPG entries where call sign better matches the channel name
-    // This is important because call signs like NOSEY, REELZHD, PETCOLL contain
-    // the channel name, while VIZNOSE, VIZREEL, XALPTCL don't
+    // Combined HD + call sign scoring
+    // We want HD variants, but also want call signs that match the channel name.
+    // Strategy: Prefer HD variants unless the non-HD has a MUCH better call sign match
+    // (e.g., VIZNOSE vs NOSEY for "Nosey" - NOSEY is clearly better and worth preferring non-HD)
     const aCallSignMatch = a.tvg_id.match(/\(([^)]+)\)/);
     const bCallSignMatch = b.tvg_id.match(/\(([^)]+)\)/);
+    const aHasHD = /hd\)?\./i.test(a.tvg_id) || /HD$/i.test(a.name);
+    const bHasHD = /hd\)?\./i.test(b.tvg_id) || /HD$/i.test(b.name);
 
     // Score call sign match quality:
     // 3 = exact match (call sign equals normalized name)
-    // 2 = base match (call sign minus HD/SD suffix equals normalized name)
-    // 1 = partial match (call sign starts with normalized name, or normalized name starts with call sign base)
+    // 2 = call sign starts with channel name (e.g., REELZHD starts with REELZ for "Reelz")
+    // 1 = partial match (significant common prefix)
     // 0 = no meaningful match
     const scoreCallSign = (callSignRaw: string | null): number => {
       if (!callSignRaw) return 0;
       const callSign = callSignRaw.toLowerCase().replace(/[^a-z0-9]/g, '');
       const callSignBase = callSign.replace(/(hd|sd|fhd|uhd)$/, '');
 
-      // Exact match
+      // Exact match (after stripping HD suffix)
       if (callSign === normalizedName || callSignBase === normalizedName) return 3;
       // Call sign starts with channel name (e.g., REELZHD starts with REELZ for "Reelz")
       if (callSign.startsWith(normalizedName) || callSignBase.startsWith(normalizedName)) return 2;
-      // Channel name starts with call sign base (e.g., "tastemadetravel" starts with "tmtravel" - no wait, that's not right)
-      // Actually check if they share a common prefix of significant length
-      // This catches cases like PURSTHD for "pursuit" (both start with "purs")
+      // Check for significant common prefix
       if (normalizedName.length >= 4 && callSignBase.length >= 4) {
-        // Find longest common prefix
         let commonLen = 0;
         const minLen = Math.min(normalizedName.length, callSignBase.length);
         for (let i = 0; i < minLen; i++) {
@@ -498,15 +498,28 @@ function findEPGMatchesWithLookup(
     const aCallSignScore = scoreCallSign(aCallSignMatch?.[1] ?? null);
     const bCallSignScore = scoreCallSign(bCallSignMatch?.[1] ?? null);
 
+    // If one is HD and one isn't, we need to balance HD preference with call sign quality
+    if (aHasHD !== bHasHD) {
+      const hdScore = aHasHD ? aCallSignScore : bCallSignScore;
+      const nonHdScore = aHasHD ? bCallSignScore : aCallSignScore;
+
+      // Only prefer non-HD if it has a MUCH better call sign (score difference >= 2)
+      // AND the HD variant has a poor call sign (score <= 1)
+      // This means: NOSEY (score 3) beats VIZNOSE-HD (score 0) -- diff is 3, HD score is 0
+      // But: TVLAND (score 3) loses to TVLNDHD (score 2) -- diff is only 1
+      // And: FYI (score 3) loses to FYIHD (score 3) -- same score, HD wins
+      if (nonHdScore >= hdScore + 2 && hdScore <= 1) {
+        // Non-HD has much better call sign and HD has poor call sign
+        return aHasHD ? 1 : -1; // Prefer non-HD
+      }
+      // Otherwise prefer HD
+      return aHasHD ? -1 : 1;
+    }
+
+    // Both are HD or both are non-HD: prefer better call sign match
     if (aCallSignScore !== bCallSignScore) {
       return bCallSignScore - aCallSignScore; // Higher score = better match
     }
-
-    // Prefer HD variants over non-HD (check TVG-ID for HD suffix in call sign)
-    const aHasHD = /hd\)?\./i.test(a.tvg_id) || /HD$/i.test(a.name);
-    const bHasHD = /hd\)?\./i.test(b.tvg_id) || /HD$/i.test(b.name);
-    if (aHasHD && !bHasHD) return -1;
-    if (bHasHD && !aHasHD) return 1;
 
     // Then alphabetically by name
     return a.name.localeCompare(b.name);
