@@ -637,6 +637,9 @@ export function useEditMode({
       operationDetails: [],
     };
 
+    // Track new group names from createChannel operations (deduplicated)
+    const newGroupNamesFromChannels = new Set<string>();
+
     for (const op of state.stagedOperations) {
       // Add to operation details
       summary.operationDetails.push({
@@ -668,6 +671,10 @@ export function useEditMode({
           break;
         case 'createChannel':
           summary.newChannels++;
+          // Track new groups from createChannel operations
+          if (op.apiCall.newGroupName) {
+            newGroupNamesFromChannels.add(op.apiCall.newGroupName);
+          }
           break;
         case 'deleteChannel':
           summary.deletedChannels++;
@@ -679,6 +686,18 @@ export function useEditMode({
           summary.deletedGroups++;
           break;
       }
+    }
+
+    // Add unique new groups from createChannel operations to the count
+    summary.newGroups += newGroupNamesFromChannels.size;
+
+    // Add operation details for each new group from channels
+    for (const groupName of newGroupNamesFromChannels) {
+      summary.operationDetails.unshift({
+        id: `new-group-${groupName}`,
+        type: 'createGroup',
+        description: `Create group "${groupName}"`,
+      });
     }
 
     return summary;
@@ -764,10 +783,14 @@ export function useEditMode({
       // (from createChannel operations with newGroupName)
       const newGroupNames = new Set<string>();
       for (const operation of state.stagedOperations) {
-        if (operation.apiCall.type === 'createChannel' && operation.apiCall.newGroupName) {
-          newGroupNames.add(operation.apiCall.newGroupName);
+        if (operation.apiCall.type === 'createChannel') {
+          console.log('createChannel operation:', operation.apiCall);
+          if (operation.apiCall.newGroupName) {
+            newGroupNames.add(operation.apiCall.newGroupName);
+          }
         }
       }
+      console.log('New group names to create:', Array.from(newGroupNames));
 
       // Create all new groups first
       for (const groupName of newGroupNames) {
