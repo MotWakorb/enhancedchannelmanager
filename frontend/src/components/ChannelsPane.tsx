@@ -1328,6 +1328,7 @@ export function ChannelsPane({
   // Bulk delete channels state
   const [showBulkDeleteConfirm, setShowBulkDeleteConfirm] = useState(false);
   const [bulkDeleting, setBulkDeleting] = useState(false);
+  const [deleteEmptyGroups, setDeleteEmptyGroups] = useState(true); // Default to true since user is deleting all channels in group
 
   // Bulk EPG assignment modal state
   const [showBulkEPGModal, setShowBulkEPGModal] = useState(false);
@@ -1761,13 +1762,40 @@ export function ChannelsPane({
 
       // In edit mode, stage the delete operations for undo support
       if (isEditMode && onStageDeleteChannel && onStartBatch && onEndBatch) {
+        // Find groups that would be emptied by this delete (if checkbox is checked)
+        const groupsToDelete: ChannelGroup[] = [];
+        if (deleteEmptyGroups && onStageDeleteChannelGroup) {
+          for (const group of channelGroups) {
+            const channelsInGroup = channels.filter(ch => ch.channel_group_id === group.id);
+            if (channelsInGroup.length > 0) {
+              const allSelected = channelsInGroup.every(ch => selectedChannelIds.has(ch.id));
+              if (allSelected) {
+                groupsToDelete.push(group);
+              }
+            }
+          }
+        }
+
         // Use batch to group all deletes as a single undo operation
-        onStartBatch(`Delete ${channelIdsToDelete.length} channels`);
+        const batchDescription = groupsToDelete.length > 0
+          ? `Delete ${channelIdsToDelete.length} channels and ${groupsToDelete.length} group${groupsToDelete.length !== 1 ? 's' : ''}`
+          : `Delete ${channelIdsToDelete.length} channels`;
+        onStartBatch(batchDescription);
+
+        // Stage channel deletions
         for (const channelId of channelIdsToDelete) {
           const channel = channels.find((ch) => ch.id === channelId);
           const description = `Delete channel "${channel?.name || channelId}"`;
           onStageDeleteChannel(channelId, description);
         }
+
+        // Stage group deletions if checkbox is checked
+        if (deleteEmptyGroups && onStageDeleteChannelGroup) {
+          for (const group of groupsToDelete) {
+            onStageDeleteChannelGroup(group.id, `Delete group "${group.name}"`);
+          }
+        }
+
         onEndBatch();
         // Local state is updated via displayChannels from working copy
       } else {
@@ -3851,40 +3879,72 @@ export function ChannelsPane({
       )}
 
       {/* Bulk Delete Channels Confirmation Dialog */}
-      {showBulkDeleteConfirm && selectedChannelIds.size > 0 && (
-        <div className="modal-overlay" onClick={handleCancelBulkDelete}>
-          <div className="modal-content delete-dialog" onClick={(e) => e.stopPropagation()}>
-            <h3>Delete {selectedChannelIds.size} Channel{selectedChannelIds.size !== 1 ? 's' : ''}</h3>
-            <div className="delete-message">
-              <p>
-                Are you sure you want to delete{' '}
-                <strong>{selectedChannelIds.size} selected channel{selectedChannelIds.size !== 1 ? 's' : ''}</strong>?
-              </p>
-              <p className={isEditMode ? "delete-info" : "delete-warning"}>
-                {isEditMode
-                  ? 'Changes can be undone while in edit mode.'
-                  : 'This action cannot be undone. All selected channels and their stream assignments will be permanently removed.'}
-              </p>
-            </div>
-            <div className="modal-actions">
-              <button
-                className="modal-btn cancel"
-                onClick={handleCancelBulkDelete}
-                disabled={bulkDeleting}
-              >
-                Cancel
-              </button>
-              <button
-                className="modal-btn danger"
-                onClick={handleConfirmBulkDelete}
-                disabled={bulkDeleting}
-              >
-                {bulkDeleting ? 'Deleting...' : `Delete ${selectedChannelIds.size} Channel${selectedChannelIds.size !== 1 ? 's' : ''}`}
-              </button>
+      {showBulkDeleteConfirm && selectedChannelIds.size > 0 && (() => {
+        // Compute which groups would be emptied by this bulk delete
+        const groupsToEmpty: ChannelGroup[] = [];
+        if (isEditMode && onStageDeleteChannelGroup) {
+          // For each group, check if ALL its channels are selected for deletion
+          for (const group of channelGroups) {
+            const channelsInGroup = channels.filter(ch => ch.channel_group_id === group.id);
+            if (channelsInGroup.length > 0) {
+              const allSelected = channelsInGroup.every(ch => selectedChannelIds.has(ch.id));
+              if (allSelected) {
+                groupsToEmpty.push(group);
+              }
+            }
+          }
+        }
+
+        return (
+          <div className="modal-overlay" onClick={handleCancelBulkDelete}>
+            <div className="modal-content delete-dialog" onClick={(e) => e.stopPropagation()}>
+              <h3>Delete {selectedChannelIds.size} Channel{selectedChannelIds.size !== 1 ? 's' : ''}</h3>
+              <div className="delete-message">
+                <p>
+                  Are you sure you want to delete{' '}
+                  <strong>{selectedChannelIds.size} selected channel{selectedChannelIds.size !== 1 ? 's' : ''}</strong>?
+                </p>
+                <p className={isEditMode ? "delete-info" : "delete-warning"}>
+                  {isEditMode
+                    ? 'Changes can be undone while in edit mode.'
+                    : 'This action cannot be undone. All selected channels and their stream assignments will be permanently removed.'}
+                </p>
+                {/* Show checkbox to also delete groups that would be emptied */}
+                {groupsToEmpty.length > 0 && (
+                  <label className="delete-checkbox-label">
+                    <input
+                      type="checkbox"
+                      checked={deleteEmptyGroups}
+                      onChange={(e) => setDeleteEmptyGroups(e.target.checked)}
+                      disabled={bulkDeleting}
+                    />
+                    <span>
+                      Also delete {groupsToEmpty.length} empty group{groupsToEmpty.length !== 1 ? 's' : ''}:{' '}
+                      <strong>{groupsToEmpty.map(g => g.name).join(', ')}</strong>
+                    </span>
+                  </label>
+                )}
+              </div>
+              <div className="modal-actions">
+                <button
+                  className="modal-btn cancel"
+                  onClick={handleCancelBulkDelete}
+                  disabled={bulkDeleting}
+                >
+                  Cancel
+                </button>
+                <button
+                  className="modal-btn danger"
+                  onClick={handleConfirmBulkDelete}
+                  disabled={bulkDeleting}
+                >
+                  {bulkDeleting ? 'Deleting...' : `Delete ${selectedChannelIds.size} Channel${selectedChannelIds.size !== 1 ? 's' : ''}`}
+                </button>
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* Bulk EPG Assignment Modal */}
       <BulkEPGAssignModal

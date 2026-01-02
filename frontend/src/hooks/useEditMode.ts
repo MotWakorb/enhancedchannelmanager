@@ -234,7 +234,9 @@ export function useEditMode({
   const stageOperation = useCallback(
     (apiCall: ApiCallSpec, description: string, affectedChannelIds: number[]) => {
       setState((prev) => {
-        if (!prev.isActive) return prev;
+        if (!prev.isActive) {
+          return prev;
+        }
 
         // Get before snapshot from current working copy
         const beforeSnapshot = prev.workingCopy
@@ -347,7 +349,7 @@ export function useEditMode({
           newUndoStack = [...prev.localUndoStack, undoEntry];
         }
 
-        return {
+        const newState = {
           ...prev,
           workingCopy: newWorkingCopy,
           stagedOperations: [...prev.stagedOperations, operation],
@@ -360,6 +362,7 @@ export function useEditMode({
           newGroupNameToTempId: newGroupNameToTempId,
           nextTempGroupId: newNextTempGroupId,
         };
+        return newState;
       });
     },
     [applyOperationToWorkingCopy]
