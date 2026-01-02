@@ -24,6 +24,7 @@ import type { Channel, ChannelGroup, Stream, M3UAccount, M3UGroupSetting, Logo, 
 import * as api from '../services/api';
 import { HistoryToolbar } from './HistoryToolbar';
 import { BulkEPGAssignModal, type EPGAssignment } from './BulkEPGAssignModal';
+import { naturalCompare } from '../utils/naturalSort';
 import './ChannelsPane.css';
 
 interface ChannelsPaneProps {
@@ -95,6 +96,13 @@ interface ChannelsPaneProps {
   onToggleChannelSelection?: (channelId: number, addToSelection: boolean) => void;
   onClearChannelSelection?: () => void;
   onSelectChannelRange?: (fromId: number, toId: number, groupChannelIds: number[]) => void;
+  onSelectGroupChannels?: (channelIds: number[], select: boolean) => void;
+  // Dispatcharr URL for constructing channel stream URLs
+  dispatcharrUrl?: string;
+  // Stream group drop callback (for bulk channel creation)
+  onStreamGroupDrop?: (groupName: string, streamIds: number[]) => void;
+  // Appearance settings
+  showStreamUrls?: boolean;
 }
 
 interface GroupState {
@@ -131,6 +139,9 @@ interface SortableChannelProps {
   onStreamDrop: (e: React.DragEvent) => void;
   onDelete: () => void;
   onEditChannel: () => void;
+  onCopyChannelUrl?: () => void;
+  channelUrl?: string;
+  showStreamUrls?: boolean;
 }
 
 interface SortableStreamItemProps {
@@ -138,9 +149,11 @@ interface SortableStreamItemProps {
   providerName: string | null;
   isEditMode: boolean;
   onRemove: (streamId: number) => void;
+  onCopyUrl?: () => void;
+  showStreamUrls?: boolean;
 }
 
-function SortableStreamItem({ stream, providerName, isEditMode, onRemove }: SortableStreamItemProps) {
+function SortableStreamItem({ stream, providerName, isEditMode, onRemove, onCopyUrl, showStreamUrls = true }: SortableStreamItemProps) {
   const {
     attributes,
     listeners,
@@ -177,8 +190,25 @@ function SortableStreamItem({ stream, providerName, isEditMode, onRemove }: Sort
       )}
       <div className="inline-stream-info">
         <span className="inline-stream-name">{stream.name}</span>
+        {showStreamUrls && stream.url && (
+          <span className="inline-stream-url" title={stream.url}>
+            {stream.url}
+          </span>
+        )}
         {providerName && <span className="inline-stream-provider">{providerName}</span>}
       </div>
+      {onCopyUrl && (
+        <button
+          className="copy-url-btn"
+          onClick={(e) => {
+            e.stopPropagation();
+            onCopyUrl();
+          }}
+          title="Copy stream URL"
+        >
+          <span className="material-icons">content_copy</span>
+        </button>
+      )}
       {isEditMode && (
         <button
           className="remove-stream-btn"
@@ -225,6 +255,9 @@ function SortableChannel({
   onStreamDrop,
   onDelete,
   onEditChannel,
+  onCopyChannelUrl,
+  channelUrl,
+  showStreamUrls = true,
 }: SortableChannelProps) {
   const {
     attributes,
@@ -261,7 +294,7 @@ function SortableChannel({
     <div
       ref={setNodeRef}
       style={style}
-      className={`channel-item ${isSelected ? 'selected' : ''} ${isMultiSelected ? 'multi-selected' : ''} ${isDragOver ? 'drag-over' : ''} ${isDragging ? 'dragging' : ''} ${isModified ? 'channel-modified' : ''}`}
+      className={`channel-item ${isSelected && isEditMode ? 'selected' : ''} ${isMultiSelected ? 'multi-selected' : ''} ${isDragOver ? 'drag-over' : ''} ${isDragging ? 'dragging' : ''} ${isModified ? 'channel-modified' : ''}`}
       onClick={onClick}
       onDragOver={onStreamDragOver}
       onDragLeave={onStreamDragLeave}
@@ -270,7 +303,14 @@ function SortableChannel({
       {isEditMode && (
         <span
           className={`channel-select-indicator ${isMultiSelected ? 'selected' : ''}`}
-          onClick={onToggleSelect}
+          onClick={(e) => {
+            e.stopPropagation();
+            e.preventDefault();
+            onToggleSelect(e);
+          }}
+          onPointerDown={(e) => e.stopPropagation()}
+          onMouseDown={(e) => e.stopPropagation()}
+          onTouchStart={(e) => e.stopPropagation()}
           title="Click to select/deselect"
         >
           {isMultiSelected ? (
@@ -299,14 +339,7 @@ function SortableChannel({
         {isExpanded ? '▼' : '▶'}
       </span>
       <div
-        className={`channel-logo-container ${isEditMode ? 'editable' : ''}`}
-        onClick={(e) => {
-          e.stopPropagation();
-          if (isEditMode) {
-            onEditChannel();
-          }
-        }}
-        title={isEditMode ? 'Click to edit channel logo' : 'Enter Edit Mode to change logo'}
+        className="channel-logo-container"
       >
         {logoUrl ? (
           <img
@@ -363,20 +396,49 @@ function SortableChannel({
           {channel.name}
         </span>
       )}
+      {showStreamUrls && channelUrl && (
+        <span className="channel-url" title={channelUrl}>
+          {channelUrl}
+        </span>
+      )}
       <span className="channel-streams-count">
         {channel.streams.length} stream{channel.streams.length !== 1 ? 's' : ''}
       </span>
-      {isEditMode && (
+      {onCopyChannelUrl && (
         <button
-          className="channel-row-delete-btn"
+          className="copy-url-btn channel-copy-url-btn"
           onClick={(e) => {
             e.stopPropagation();
-            onDelete();
+            onCopyChannelUrl();
           }}
-          title="Delete channel"
+          title="Copy channel stream URL"
         >
-          <span className="material-icons">delete</span>
+          <span className="material-icons">content_copy</span>
         </button>
+      )}
+      {isEditMode && (
+        <>
+          <button
+            className="channel-row-edit-btn"
+            onClick={(e) => {
+              e.stopPropagation();
+              onEditChannel();
+            }}
+            title="Edit channel"
+          >
+            <span className="material-icons">edit</span>
+          </button>
+          <button
+            className="channel-row-delete-btn"
+            onClick={(e) => {
+              e.stopPropagation();
+              onDelete();
+            }}
+            title="Delete channel"
+          >
+            <span className="material-icons">delete</span>
+          </button>
+        </>
       )}
     </div>
   );
@@ -392,9 +454,11 @@ interface DroppableGroupHeaderProps {
   isEditMode: boolean;
   isAutoSync: boolean;
   isManualGroup: boolean;
+  selectedCount: number;
   onToggle: () => void;
   onSortAndRenumber?: () => void;
   onDeleteGroup?: () => void;
+  onSelectAll?: () => void;
 }
 
 function DroppableGroupHeader({
@@ -406,9 +470,11 @@ function DroppableGroupHeader({
   isEditMode,
   isAutoSync,
   isManualGroup,
+  selectedCount,
   onToggle,
   onSortAndRenumber,
   onDeleteGroup,
+  onSelectAll,
 }: DroppableGroupHeaderProps) {
   const droppableId = `group-${groupId}`;
   const { isOver, setNodeRef } = useDroppable({
@@ -426,12 +492,32 @@ function DroppableGroupHeader({
     onDeleteGroup?.();
   };
 
+  const handleCheckboxClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    onSelectAll?.();
+  };
+
+  // Determine checkbox state: all selected, some selected, or none selected
+  const allSelected = channelCount > 0 && selectedCount === channelCount;
+  const someSelected = selectedCount > 0 && selectedCount < channelCount;
+
   return (
     <div
       ref={setNodeRef}
       className={`group-header ${isOver && isEditMode ? 'drop-target' : ''}`}
       onClick={onToggle}
     >
+      {isEditMode && !isEmpty && (
+        <span
+          className={`group-checkbox ${allSelected ? 'checked' : ''} ${someSelected ? 'indeterminate' : ''}`}
+          onClick={handleCheckboxClick}
+          title={allSelected ? 'Deselect all channels in group' : 'Select all channels in group'}
+        >
+          <span className="material-icons">
+            {allSelected ? 'check_box' : someSelected ? 'indeterminate_check_box' : 'check_box_outline_blank'}
+          </span>
+        </span>
+      )}
       <span className="group-toggle">{isExpanded ? '▼' : '▶'}</span>
       <span className="group-name">{groupName}</span>
       {isAutoSync && (
@@ -1134,6 +1220,13 @@ export function ChannelsPane({
   onToggleChannelSelection,
   onClearChannelSelection,
   onSelectChannelRange,
+  onSelectGroupChannels,
+  // Dispatcharr URL
+  dispatcharrUrl = '',
+  // Stream group drop
+  onStreamGroupDrop,
+  // Appearance settings
+  showStreamUrls = true,
 }: ChannelsPaneProps) {
   // Suppress unused variable warnings - these are passed through but handled in parent
   void _onStageAddStream;
@@ -1184,6 +1277,9 @@ export function ChannelsPane({
   // Edit channel modal state
   const [showEditChannelModal, setShowEditChannelModal] = useState(false);
   const [channelToEdit, setChannelToEdit] = useState<Channel | null>(null);
+
+  // Stream group drop state (for bulk channel creation)
+  const [streamGroupDragOver, setStreamGroupDragOver] = useState(false);
 
   // Create channel group modal state
   const [showCreateGroupModal, setShowCreateGroupModal] = useState(false);
@@ -1930,10 +2026,24 @@ export function ChannelsPane({
 
     const newNumberStr = String(newNumber);
 
+    // Check for number in the middle: "US | 5034 - DABL" or "US | 5034: DABL"
+    // Pattern: PREFIX | NUMBER - SUFFIX (where PREFIX doesn't start with a digit)
+    const midMatch = channelName.match(/^([A-Za-z].+?\s*\|\s*)(\d+(?:\.\d+)?)\s*([-:]\s*.+)$/);
+    if (midMatch) {
+      const [, prefix, oldNum, suffix] = midMatch;
+      // If the number is already the new number, no change needed
+      if (oldNum === newNumberStr) {
+        return undefined;
+      }
+      // Replace the number in the middle
+      const newName = `${prefix}${newNumberStr} ${suffix}`;
+      return newName !== channelName ? newName : undefined;
+    }
+
     // Look for a number at the beginning of the channel name
-    // Pattern: "123 | Channel Name" or "123-Channel Name" or "123.Channel Name" or "123 Channel Name"
-    // This matches a number at the start followed by a separator (space, |, -, .)
-    const prefixMatch = channelName.match(/^(\d+(?:\.\d+)?)\s*([|\-.\s])\s*(.*)$/);
+    // Pattern: "123 | Channel Name" or "123 - Channel Name" or "123: Channel Name" or "123 Channel Name"
+    // This matches a number at the start followed by a separator (space, |, -, :, .)
+    const prefixMatch = channelName.match(/^(\d+(?:\.\d+)?)\s*([|\-:.\s])\s*(.*)$/);
 
     if (prefixMatch) {
       const [, oldPrefix, separator, rest] = prefixMatch;
@@ -1962,10 +2072,16 @@ export function ChannelsPane({
     return undefined;
   };
 
-  // Helper function to strip leading/trailing channel numbers from a name for sorting purposes
-  // Matches same patterns as computeAutoRename: "123 | Name", "123-Name", "123.Name", "123 Name", "Name | 123"
+  // Helper function to strip leading/trailing/middle channel numbers from a name for sorting purposes
+  // Matches same patterns as computeAutoRename: "123 | Name", "123-Name", "US | 5034 - Name", "Name | 123"
   const getNameForSorting = (channelName: string): string => {
-    // Try stripping prefix first: "123 | Name" or "123-Name" or "123.Name" or "123 Name"
+    // Try stripping mid-position number first: "US | 5034 - Name" -> "US - Name"
+    const midMatch = channelName.match(/^([A-Za-z].+?\s*\|\s*)\d+(?:\.\d+)?\s*([-:]\s*.+)$/);
+    if (midMatch) {
+      return (midMatch[1] + midMatch[2]).trim();
+    }
+
+    // Try stripping prefix: "123 | Name" or "123-Name" or "123.Name" or "123 Name"
     const prefixMatch = channelName.match(/^(\d+(?:\.\d+)?)\s*[|\-.\s]\s*(.+)$/);
     if (prefixMatch) {
       return prefixMatch[2].trim();
@@ -2124,6 +2240,43 @@ export function ChannelsPane({
     }
   };
 
+  // Handle stream group drag over the pane (for bulk channel creation)
+  const handlePaneDragOver = (e: React.DragEvent) => {
+    // Check if this is a stream group drag
+    if (e.dataTransfer.types.includes('streamgroupdrag')) {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'copy';
+      setStreamGroupDragOver(true);
+    }
+  };
+
+  const handlePaneDragLeave = (e: React.DragEvent) => {
+    // Only trigger if leaving the pane (not entering a child element)
+    if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+      setStreamGroupDragOver(false);
+    }
+  };
+
+  const handlePaneDrop = (e: React.DragEvent) => {
+    setStreamGroupDragOver(false);
+
+    // Check for stream group drop
+    const isStreamGroupDrag = e.dataTransfer.getData('streamGroupDrag');
+    if (isStreamGroupDrag === 'true' && isEditMode && onStreamGroupDrop) {
+      e.preventDefault();
+      const groupName = e.dataTransfer.getData('streamGroupName');
+      const streamIdsJson = e.dataTransfer.getData('streamGroupStreamIds');
+      if (groupName && streamIdsJson) {
+        try {
+          const streamIds = JSON.parse(streamIdsJson) as number[];
+          onStreamGroupDrop(groupName, streamIds);
+        } catch {
+          console.error('Failed to parse stream IDs from stream group drop');
+        }
+      }
+    }
+  };
+
   // Filter channels: show manual channels always, show auto-created only if their group is related to auto_channel_sync
   // Note: providerGroupSettings keys are strings from JSON even though typed as number
   const providerSettingsMap = providerGroupSettings as unknown as Record<string, M3UGroupSetting> | undefined;
@@ -2179,8 +2332,8 @@ export function ChannelsPane({
       return aMin - bMin;
     });
 
-  // All groups sorted alphabetically (for filter dropdown - includes empty groups)
-  const allGroupsSorted = [...channelGroups].sort((a, b) => a.name.localeCompare(b.name));
+  // All groups sorted alphabetically with natural sort (for filter dropdown - includes empty groups)
+  const allGroupsSorted = [...channelGroups].sort((a, b) => naturalCompare(a.name, b.name));
 
   // Helper function to determine if a group should be visible based on filter settings
   const shouldShowGroup = (groupId: number): boolean => {
@@ -3016,12 +3169,12 @@ export function ChannelsPane({
     const startingNumber = parseInt(sortRenumberStartingNumber, 10);
     if (isNaN(startingNumber) || startingNumber < 1) return;
 
-    // Sort channels alphabetically by name (case-insensitive)
+    // Sort channels alphabetically by name (case-insensitive, natural sort for numbers)
     // If sortStripNumbers is enabled, strip channel numbers from names before comparing
     const sortedChannels = [...sortRenumberData.channels].sort((a, b) => {
       const nameA = sortStripNumbers ? getNameForSorting(a.name) : a.name;
       const nameB = sortStripNumbers ? getNameForSorting(b.name) : b.name;
-      return nameA.toLowerCase().localeCompare(nameB.toLowerCase());
+      return naturalCompare(nameA.toLowerCase(), nameB.toLowerCase());
     });
 
     // Start a batch for the entire operation
@@ -3037,7 +3190,7 @@ export function ChannelsPane({
         let updates: Partial<Channel> = { channel_number: newNumber };
         if (autoRenameChannelNumber && channel.channel_number !== null) {
           const newName = computeAutoRename(channel.name, channel.channel_number, newNumber);
-          if (newName !== channel.name) {
+          if (newName && newName !== channel.name) {
             updates.name = newName;
           }
         }
@@ -3077,6 +3230,18 @@ export function ChannelsPane({
     // Find the group object for deletion
     const group = groupId !== 'ungrouped' ? channelGroups.find(g => g.id === groupId) : null;
 
+    // Calculate how many channels in this group are selected
+    const selectedCountInGroup = groupChannels.filter(ch => selectedChannelIds.has(ch.id)).length;
+    const allGroupChannelIds = groupChannels.map(ch => ch.id);
+
+    // Handler to select/deselect all channels in this group
+    const handleSelectAllInGroup = () => {
+      if (!onSelectGroupChannels) return;
+      const allSelected = selectedCountInGroup === groupChannels.length;
+      // If all are selected, deselect all; otherwise select all
+      onSelectGroupChannels(allGroupChannelIds, !allSelected);
+    };
+
     return (
       <div key={groupId} className={`channel-group ${isEmpty ? 'empty-group' : ''}`}>
         <DroppableGroupHeader
@@ -3088,9 +3253,11 @@ export function ChannelsPane({
           isEditMode={isEditMode}
           isAutoSync={isAutoSync}
           isManualGroup={isManualGroup}
+          selectedCount={selectedCountInGroup}
           onToggle={() => toggleGroup(numericGroupId)}
           onSortAndRenumber={() => handleOpenSortRenumber(groupId, groupName, groupChannels)}
           onDeleteGroup={group ? () => handleDeleteGroupClick(group) : undefined}
+          onSelectAll={handleSelectAllInGroup}
         />
         {isExpanded && isEmpty && (
           <div className="group-channels empty-group-placeholder">
@@ -3155,6 +3322,9 @@ export function ChannelsPane({
                       onStreamDrop={(e) => handleStreamDrop(e, channel.id)}
                       onDelete={() => handleDeleteChannelClick(channel)}
                       onEditChannel={() => handleEditChannel(channel)}
+                      onCopyChannelUrl={dispatcharrUrl && channel.uuid ? () => navigator.clipboard.writeText(`${dispatcharrUrl}/proxy/ts/stream/${channel.uuid}`) : undefined}
+                      channelUrl={dispatcharrUrl && channel.uuid ? `${dispatcharrUrl}/proxy/ts/stream/${channel.uuid}` : undefined}
+                      showStreamUrls={showStreamUrls}
                     />
                     {selectedChannelId === channel.id && (
                       <div className="inline-streams">
@@ -3183,6 +3353,8 @@ export function ChannelsPane({
                                       providerName={providers.find((p) => p.id === stream.m3u_account)?.name ?? null}
                                       isEditMode={isEditMode}
                                       onRemove={handleRemoveStream}
+                                      onCopyUrl={stream.url ? () => navigator.clipboard.writeText(stream.url!) : undefined}
+                                      showStreamUrls={showStreamUrls}
                                     />
                                   </div>
                                 ))}
@@ -3980,7 +4152,7 @@ export function ChannelsPane({
                   .sort((a, b) => {
                     const nameA = sortStripNumbers ? getNameForSorting(a.name) : a.name;
                     const nameB = sortStripNumbers ? getNameForSorting(b.name) : b.name;
-                    return nameA.toLowerCase().localeCompare(nameB.toLowerCase());
+                    return naturalCompare(nameA.toLowerCase(), nameB.toLowerCase());
                   })
                   .slice(0, 5)
                   .map((ch, index) => {
@@ -4090,7 +4262,7 @@ export function ChannelsPane({
                     const bSelected = selectedGroups.includes(b.id);
                     if (aSelected && !bSelected) return -1;
                     if (!aSelected && bSelected) return 1;
-                    return a.name.localeCompare(b.name);
+                    return naturalCompare(a.name, b.name);
                   })
                   .map((group) => (
                     <label key={group.id} className="group-filter-option">
@@ -4177,7 +4349,12 @@ export function ChannelsPane({
         </div>
       </div>
 
-      <div className="pane-content">
+      <div
+        className={`pane-content ${streamGroupDragOver ? 'stream-group-drop-target' : ''}`}
+        onDragOver={handlePaneDragOver}
+        onDragLeave={handlePaneDragLeave}
+        onDrop={handlePaneDrop}
+      >
         {loading ? (
           <div className="loading">Loading channels...</div>
         ) : (

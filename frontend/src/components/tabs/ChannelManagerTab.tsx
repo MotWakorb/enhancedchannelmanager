@@ -1,6 +1,6 @@
 import { SplitPane, ChannelsPane, StreamsPane } from '../';
 import type { Channel, ChannelGroup, Stream, M3UAccount, Logo, EPGData, EPGSource, StreamProfile, M3UGroupSetting, ChannelListFilterSettings, ChangeInfo, SavePoint, ChangeRecord } from '../../types';
-import type { TimezonePreference, NumberSeparator } from '../../services/api';
+import type { TimezonePreference, NumberSeparator, PrefixOrder } from '../../services/api';
 import type { ChannelDefaults } from '../StreamsPane';
 
 export interface ChannelManagerTabProps {
@@ -33,6 +33,7 @@ export interface ChannelManagerTabProps {
   onToggleChannelSelection: (channelId: number, addToSelection: boolean) => void;
   onClearChannelSelection: () => void;
   onSelectChannelRange: (fromId: number, toId: number, groupChannelIds: number[]) => void;
+  onSelectGroupChannels: (channelIds: number[], select: boolean) => void;
 
   // Auto-rename
   autoRenameChannelNumber: boolean;
@@ -101,8 +102,21 @@ export interface ChannelManagerTabProps {
   selectedStreamGroups: string[];
   onSelectedStreamGroupsChange: (groups: string[]) => void;
 
+  // Dispatcharr URL (for constructing channel stream URLs)
+  dispatcharrUrl: string;
+
+  // Appearance settings
+  showStreamUrls?: boolean;
+
+  // Refresh streams (bypasses cache)
+  onRefreshStreams?: () => void;
+
   // Bulk Create
   channelDefaults?: ChannelDefaults;
+  // Stream group drop (for opening bulk create modal)
+  externalTriggerGroupName?: string | null;
+  onExternalTriggerHandled?: () => void;
+  onStreamGroupDrop?: (groupName: string, streamIds: number[]) => void;
   onBulkCreateFromGroup: (
     streams: Stream[],
     startingNumber: number,
@@ -111,7 +125,11 @@ export interface ChannelManagerTabProps {
     timezonePreference?: TimezonePreference,
     stripCountryPrefix?: boolean,
     addChannelNumber?: boolean,
-    numberSeparator?: NumberSeparator
+    numberSeparator?: NumberSeparator,
+    keepCountryPrefix?: boolean,
+    countrySeparator?: NumberSeparator,
+    prefixOrder?: PrefixOrder,
+    stripNetworkPrefix?: boolean
   ) => Promise<void>;
 }
 
@@ -145,6 +163,7 @@ export function ChannelManagerTab({
   onToggleChannelSelection,
   onClearChannelSelection,
   onSelectChannelRange,
+  onSelectGroupChannels,
 
   // Auto-rename
   autoRenameChannelNumber,
@@ -213,8 +232,20 @@ export function ChannelManagerTab({
   selectedStreamGroups,
   onSelectedStreamGroupsChange,
 
+  // Dispatcharr URL
+  dispatcharrUrl,
+
+  // Appearance settings
+  showStreamUrls = true,
+
+  // Refresh streams
+  onRefreshStreams,
+
   // Bulk Create
   channelDefaults,
+  externalTriggerGroupName,
+  onExternalTriggerHandled,
+  onStreamGroupDrop,
   onBulkCreateFromGroup,
 }: ChannelManagerTabProps) {
   return (
@@ -282,6 +313,10 @@ export function ChannelManagerTab({
           onToggleChannelSelection={onToggleChannelSelection}
           onClearChannelSelection={onClearChannelSelection}
           onSelectChannelRange={onSelectChannelRange}
+          onSelectGroupChannels={onSelectGroupChannels}
+          dispatcharrUrl={dispatcharrUrl}
+          onStreamGroupDrop={onStreamGroupDrop}
+          showStreamUrls={showStreamUrls}
         />
       }
       right={
@@ -303,7 +338,11 @@ export function ChannelManagerTab({
           isEditMode={isEditMode}
           channelGroups={channelGroups}
           channelDefaults={channelDefaults}
+          externalTriggerGroupName={externalTriggerGroupName}
+          onExternalTriggerHandled={onExternalTriggerHandled}
           onBulkCreateFromGroup={onBulkCreateFromGroup}
+          showStreamUrls={showStreamUrls}
+          onRefreshStreams={onRefreshStreams}
         />
       }
     />
