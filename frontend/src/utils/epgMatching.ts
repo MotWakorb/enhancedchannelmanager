@@ -168,6 +168,8 @@ interface EPGLookup {
   byCallSign: Map<string, EPGData[]>;
   // Pre-parsed country codes for sorting
   countryByEpgId: Map<number, string | null>;
+  // Normalized TVG-ID name for each EPG entry (for sorting by name similarity)
+  normalizedTvgIdByEpgId: Map<number, string>;
   // For prefix matching: list of all normalized TVG-IDs with their EPG entries
   allNormalizedTvgIds: Array<{ normalized: string; epg: EPGData }>;
   // For prefix matching: list of all normalized names with their EPG entries
@@ -183,6 +185,7 @@ function buildEPGLookup(epgData: EPGData[]): EPGLookup {
   const byNormalizedName = new Map<string, EPGData[]>();
   const byCallSign = new Map<string, EPGData[]>();
   const countryByEpgId = new Map<number, string | null>();
+  const normalizedTvgIdByEpgId = new Map<number, string>();
   const allNormalizedTvgIds: Array<{ normalized: string; epg: EPGData }> = [];
   const allNormalizedNames: Array<{ normalized: string; epg: EPGData }> = [];
 
@@ -190,6 +193,7 @@ function buildEPGLookup(epgData: EPGData[]): EPGLookup {
     // Parse and normalize TVG-ID
     const [epgNormalizedTvgId, country] = parseTvgId(epg.tvg_id);
     countryByEpgId.set(epg.id, country);
+    normalizedTvgIdByEpgId.set(epg.id, epgNormalizedTvgId);
 
     // Add to TVG-ID lookup
     if (epgNormalizedTvgId) {
@@ -239,6 +243,7 @@ function buildEPGLookup(epgData: EPGData[]): EPGLookup {
     byNormalizedName,
     byCallSign,
     countryByEpgId,
+    normalizedTvgIdByEpgId,
     allNormalizedTvgIds,
     allNormalizedNames,
   };
@@ -337,8 +342,9 @@ function findEPGMatchesWithLookup(
   // Sort matches with priority:
   // 1. Exact matches over prefix matches
   // 2. Matching country over non-matching country
-  // 3. HD variants over non-HD (prefer higher quality)
-  // 4. Alphabetically by name
+  // 3. Name similarity (prefer EPG names closer in length to channel name)
+  // 4. HD variants over non-HD (prefer higher quality)
+  // 5. Alphabetically by name
   const matches = matchArray.sort((a, b) => {
     const aQuality = matchQuality.get(a.id) || 'prefix';
     const bQuality = matchQuality.get(b.id) || 'prefix';
@@ -353,6 +359,16 @@ function findEPGMatchesWithLookup(
     if (detectedCountry) {
       if (aCountry === detectedCountry && bCountry !== detectedCountry) return -1;
       if (bCountry === detectedCountry && aCountry !== detectedCountry) return 1;
+    }
+
+    // Prefer EPG names that are closer in length to the channel name
+    // This prevents short matches like "E" from being preferred over "EbonyTVbyLionsgate"
+    const aNormalized = lookup.normalizedTvgIdByEpgId.get(a.id) || '';
+    const bNormalized = lookup.normalizedTvgIdByEpgId.get(b.id) || '';
+    const aLengthDiff = Math.abs(aNormalized.length - normalizedName.length);
+    const bLengthDiff = Math.abs(bNormalized.length - normalizedName.length);
+    if (aLengthDiff !== bLengthDiff) {
+      return aLengthDiff - bLengthDiff; // Smaller difference = better match
     }
 
     // Prefer HD variants over non-HD (check TVG-ID for HD suffix in call sign)
