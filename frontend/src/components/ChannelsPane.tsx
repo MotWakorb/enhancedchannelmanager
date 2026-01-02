@@ -3184,7 +3184,7 @@ export function ChannelsPane({
         let updates: Partial<Channel> = { channel_number: newNumber };
         if (autoRenameChannelNumber && channel.channel_number !== null) {
           const newName = computeAutoRename(channel.name, channel.channel_number, newNumber);
-          if (newName !== channel.name) {
+          if (newName && newName !== channel.name) {
             updates.name = newName;
           }
         }
