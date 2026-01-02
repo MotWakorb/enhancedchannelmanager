@@ -119,29 +119,33 @@ export function normalizeForEPGMatch(name: string): string {
 /**
  * Parse a TVG-ID into its name and country components.
  * TVG-IDs typically follow the format: "ChannelName.country" or "ChannelName(variant).country"
+ * Call signs in parentheses are stripped to get the base channel name.
  *
- * @param tvgId - The TVG-ID to parse (e.g., "ESPN.us", "BBCNews(America).us")
+ * @param tvgId - The TVG-ID to parse (e.g., "ESPN.us", "BBCNews(America).us", "AdultSwim(ADSM).ca")
  * @returns Tuple of [normalizedName, countryCode] where countryCode may be null
  */
 export function parseTvgId(tvgId: string): [string, string | null] {
   const lowerTvgId = tvgId.toLowerCase();
   const lastDot = lowerTvgId.lastIndexOf('.');
 
-  if (lastDot === -1) {
-    // No dot, so no country suffix
-    return [normalizeForEPGMatch(tvgId), null];
+  let nameToNormalize = tvgId;
+  let country: string | null = null;
+
+  if (lastDot !== -1) {
+    const suffix = lowerTvgId.slice(lastDot + 1);
+
+    // Check if suffix looks like a country code (2-3 lowercase letters)
+    if (suffix.length >= 2 && suffix.length <= 3 && /^[a-z]+$/.test(suffix)) {
+      nameToNormalize = tvgId.slice(0, lastDot);
+      country = suffix;
+    }
   }
 
-  const suffix = lowerTvgId.slice(lastDot + 1);
+  // Strip call signs in parentheses before normalizing
+  // This converts "AdultSwim(ADSM)" or "AdultSwim(IPFeed)(ASIP)" to "AdultSwim"
+  nameToNormalize = nameToNormalize.replace(/\([^)]+\)/g, '');
 
-  // Check if suffix looks like a country code (2-3 lowercase letters)
-  if (suffix.length >= 2 && suffix.length <= 3 && /^[a-z]+$/.test(suffix)) {
-    const namepart = tvgId.slice(0, lastDot);
-    return [normalizeForEPGMatch(namepart), suffix];
-  }
-
-  // Suffix doesn't look like a country code
-  return [normalizeForEPGMatch(tvgId), null];
+  return [normalizeForEPGMatch(nameToNormalize), country];
 }
 
 /**
@@ -397,18 +401,11 @@ export function batchFindEPGMatches(
   epgData: EPGData[],
   onProgress?: (progress: BatchMatchProgress) => void
 ): EPGMatchResult[] {
-  console.log('[EPGMatching] Building lookup maps...');
-  const startLookup = performance.now();
-
   // Build lookup maps ONCE for all EPG data
   const epgLookup = buildEPGLookup(epgData);
 
   // Create a lookup map for streams by ID
   const streamMap = new Map(allStreams.map(s => [s.id, s]));
-
-  console.log(`[EPGMatching] Lookup maps built in ${(performance.now() - startLookup).toFixed(0)}ms`);
-  console.log('[EPGMatching] Matching channels...');
-  const startMatch = performance.now();
 
   const results: EPGMatchResult[] = [];
   const total = channels.length;
@@ -429,8 +426,6 @@ export function batchFindEPGMatches(
     results.push(findEPGMatchesWithLookup(channel, channelStreams, epgLookup));
   }
 
-  console.log(`[EPGMatching] Matched ${channels.length} channels in ${(performance.now() - startMatch).toFixed(0)}ms`);
-
   return results;
 }
 
@@ -444,18 +439,11 @@ export async function batchFindEPGMatchesAsync(
   epgData: EPGData[],
   onProgress?: (progress: BatchMatchProgress) => void
 ): Promise<EPGMatchResult[]> {
-  console.log('[EPGMatching] Building lookup maps...');
-  const startLookup = performance.now();
-
   // Build lookup maps ONCE for all EPG data
   const epgLookup = buildEPGLookup(epgData);
 
   // Create a lookup map for streams by ID
   const streamMap = new Map(allStreams.map(s => [s.id, s]));
-
-  console.log(`[EPGMatching] Lookup maps built in ${(performance.now() - startLookup).toFixed(0)}ms`);
-  console.log('[EPGMatching] Matching channels...');
-  const startMatch = performance.now();
 
   const results: EPGMatchResult[] = [];
   const total = channels.length;
@@ -481,8 +469,6 @@ export async function batchFindEPGMatchesAsync(
       await new Promise(resolve => setTimeout(resolve, 0));
     }
   }
-
-  console.log(`[EPGMatching] Matched ${channels.length} channels in ${(performance.now() - startMatch).toFixed(0)}ms`);
 
   return results;
 }
