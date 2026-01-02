@@ -832,7 +832,14 @@ function App() {
       stripNetworkPrefix?: boolean
     ) => {
       try {
-        // If we need to create a new group first
+        // Bulk creation requires edit mode
+        if (!isEditMode) {
+          setError('Bulk channel creation requires edit mode');
+          return;
+        }
+
+        // If we need to create a new group first, create it immediately
+        // (Groups are just metadata containers, so it's safe to create them before committing)
         let targetGroupId = channelGroupId;
         let newGroupCreated = false;
         if (newGroupName) {
@@ -844,144 +851,91 @@ function App() {
           setChannelGroups(updatedGroups);
         }
 
-        // In edit mode, create channels locally without calling Dispatcharr API
-        if (isEditMode) {
-          // Build options for filtering/grouping
-          const options: api.NormalizeOptions = {
-            timezonePreference: timezonePreference ?? 'both',
-            stripCountryPrefix: stripCountryPrefix ?? false,
-            keepCountryPrefix: keepCountryPrefix ?? false,
-            countrySeparator: countrySeparator ?? '|',
-            stripNetworkPrefix: stripNetworkPrefix ?? false,
-          };
+        // Create channels locally without calling Dispatcharr API (edit mode only)
+        // Build options for filtering/grouping
+        const options: api.NormalizeOptions = {
+          timezonePreference: timezonePreference ?? 'both',
+          stripCountryPrefix: stripCountryPrefix ?? false,
+          keepCountryPrefix: keepCountryPrefix ?? false,
+          countrySeparator: countrySeparator ?? '|',
+          stripNetworkPrefix: stripNetworkPrefix ?? false,
+        };
 
-          // Filter streams by timezone preference
-          const filteredStreams = api.filterStreamsByTimezone(streamsToCreate, timezonePreference ?? 'both');
+        // Filter streams by timezone preference
+        const filteredStreams = api.filterStreamsByTimezone(streamsToCreate, timezonePreference ?? 'both');
 
-          // Group streams by normalized name
-          const streamsByNormalizedName = new Map<string, Stream[]>();
-          for (const stream of filteredStreams) {
-            const normalizedName = api.normalizeStreamName(stream.name, options);
-            const existing = streamsByNormalizedName.get(normalizedName);
-            if (existing) {
-              existing.push(stream);
-            } else {
-              streamsByNormalizedName.set(normalizedName, [stream]);
-            }
+        // Group streams by normalized name
+        const streamsByNormalizedName = new Map<string, Stream[]>();
+        for (const stream of filteredStreams) {
+          const normalizedName = api.normalizeStreamName(stream.name, options);
+          const existing = streamsByNormalizedName.get(normalizedName);
+          if (existing) {
+            existing.push(stream);
+          } else {
+            streamsByNormalizedName.set(normalizedName, [stream]);
           }
+        }
 
-          const mergedCount = filteredStreams.length - streamsByNormalizedName.size;
+        const mergedCount = filteredStreams.length - streamsByNormalizedName.size;
 
-          // Start a batch for all channel creations
-          startBatch(`Create ${streamsByNormalizedName.size} channels from streams`);
+        // Start a batch for all channel creations
+        startBatch(`Create ${streamsByNormalizedName.size} channels from streams`);
 
-          // Create channels and assign streams
-          let channelIndex = 0;
-          for (const [normalizedName, groupedStreams] of streamsByNormalizedName) {
-            const channelNumber = startingNumber + channelIndex;
-            channelIndex++;
+        // Create channels and assign streams
+        let channelIndex = 0;
+        for (const [normalizedName, groupedStreams] of streamsByNormalizedName) {
+          const channelNumber = startingNumber + channelIndex;
+          channelIndex++;
 
-            // Build channel name with proper prefixes
-            let channelName = normalizedName;
-            if (addChannelNumber && keepCountryPrefix) {
-              const countryMatch = normalizedName.match(new RegExp(`^([A-Z]{2,6})\\s*[${countrySeparator ?? '|'}]\\s*(.+)$`));
-              if (countryMatch) {
-                const [, countryCode, baseName] = countryMatch;
-                if (prefixOrder === 'country-first') {
-                  channelName = `${countryCode} ${countrySeparator} ${channelNumber} ${numberSeparator} ${baseName}`;
-                } else {
-                  channelName = `${channelNumber} ${numberSeparator} ${countryCode} ${countrySeparator} ${baseName}`;
-                }
+          // Build channel name with proper prefixes
+          let channelName = normalizedName;
+          if (addChannelNumber && keepCountryPrefix) {
+            const countryMatch = normalizedName.match(new RegExp(`^([A-Z]{2,6})\\s*[${countrySeparator ?? '|'}]\\s*(.+)$`));
+            if (countryMatch) {
+              const [, countryCode, baseName] = countryMatch;
+              if (prefixOrder === 'country-first') {
+                channelName = `${countryCode} ${countrySeparator} ${channelNumber} ${numberSeparator} ${baseName}`;
               } else {
-                channelName = `${channelNumber} ${numberSeparator} ${normalizedName}`;
+                channelName = `${channelNumber} ${numberSeparator} ${countryCode} ${countrySeparator} ${baseName}`;
               }
-            } else if (addChannelNumber) {
+            } else {
               channelName = `${channelNumber} ${numberSeparator} ${normalizedName}`;
             }
+          } else if (addChannelNumber) {
+            channelName = `${channelNumber} ${numberSeparator} ${normalizedName}`;
+          }
 
-            // Create the channel (returns temp ID)
-            const tempChannelId = stageCreateChannel(channelName, channelNumber, targetGroupId ?? undefined);
+          // Create the channel (returns temp ID)
+          const tempChannelId = stageCreateChannel(channelName, channelNumber, targetGroupId ?? undefined);
 
-            // Assign all streams in this group to the new channel
-            for (const stream of groupedStreams) {
-              stageAddStream(tempChannelId, stream.id, `Assign stream to "${channelName}"`);
+          // Assign all streams in this group to the new channel
+          for (const stream of groupedStreams) {
+            stageAddStream(tempChannelId, stream.id, `Assign stream to "${channelName}"`);
+          }
+        }
+
+        // End the batch
+        endBatch();
+
+        // Show results
+        const mergeInfo = mergedCount > 0
+          ? `\n(${mergedCount} streams will be merged from duplicate names)`
+          : '';
+        alert(`Staged ${streamsByNormalizedName.size} channels for creation!${mergeInfo}\n\nThey will be created in Dispatcharr when you click "Done".`);
+
+        // If a new group was created or we used an existing group, add it to the visible filter
+        if (targetGroupId !== null) {
+          setChannelGroupFilter((prev) => {
+            if (!prev.includes(targetGroupId!)) {
+              return [...prev, targetGroupId!];
             }
-          }
+            return prev;
+          });
+        }
 
-          // End the batch
-          endBatch();
-
-          // Show results
-          const mergeInfo = mergedCount > 0
-            ? `\n(${mergedCount} streams will be merged from duplicate names)`
-            : '';
-          alert(`Staged ${streamsByNormalizedName.size} channels for creation!${mergeInfo}\n\nThey will be created in Dispatcharr when you click "Done".`);
-
-          // If a new group was created or we used an existing group, add it to the visible filter
-          if (targetGroupId !== null) {
-            setChannelGroupFilter((prev) => {
-              if (!prev.includes(targetGroupId!)) {
-                return [...prev, targetGroupId!];
-              }
-              return prev;
-            });
-          }
-
-          // Track as newly created if it was a new group
-          if (newGroupCreated && targetGroupId !== null) {
-            trackNewlyCreatedGroup(targetGroupId);
-          }
-        } else {
-          // Normal mode - create channels immediately via API
-          const result = await api.bulkCreateChannelsFromStreams(
-            streamsToCreate.map(s => ({ id: s.id, name: s.name, logo_url: s.logo_url })),
-            startingNumber,
-            targetGroupId,
-            {
-              timezonePreference: timezonePreference ?? 'both',
-              stripCountryPrefix: stripCountryPrefix ?? false,
-              keepCountryPrefix: keepCountryPrefix ?? false,
-              countrySeparator: countrySeparator ?? '|',
-              stripNetworkPrefix: stripNetworkPrefix ?? false,
-              addChannelNumber: addChannelNumber ?? false,
-              numberSeparator: numberSeparator ?? '|',
-              prefixOrder: prefixOrder ?? 'number-first',
-            }
-          );
-
-          // Update channels state with new channels
-          if (result.created.length > 0) {
-            setChannels((prev) => [...prev, ...result.created]);
-          }
-
-          // Show results
-          const mergeInfo = result.mergedCount > 0
-            ? `\n(${result.mergedCount} streams merged from duplicate names)`
-            : '';
-          if (result.errors.length > 0) {
-            alert(`Created ${result.created.length} channels.${mergeInfo}\n\nErrors:\n${result.errors.join('\n')}`);
-          } else {
-            alert(`Successfully created ${result.created.length} channels!${mergeInfo}`);
-          }
-
-          // Refresh channel groups to update counts
-          const updatedGroups = await api.getChannelGroups();
-          setChannelGroups(updatedGroups);
-
-          // If a new group was created or we used an existing group, add it to the visible filter
-          if (targetGroupId !== null) {
-            setChannelGroupFilter((prev) => {
-              if (!prev.includes(targetGroupId!)) {
-                return [...prev, targetGroupId!];
-              }
-              return prev;
-            });
-          }
-
-          // Track as newly created if it was a new group
-          if (newGroupCreated && targetGroupId !== null) {
-            trackNewlyCreatedGroup(targetGroupId);
-          }
+        // Track as newly created if it was a new group
+        if (newGroupCreated && targetGroupId !== null) {
+          trackNewlyCreatedGroup(targetGroupId);
         }
 
       } catch (err) {
