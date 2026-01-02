@@ -2040,6 +2040,20 @@ export function ChannelsPane({
 
     const newNumberStr = String(newNumber);
 
+    // Check for number in the middle: "US | 5034 - DABL" or "US | 5034: DABL"
+    // Pattern: PREFIX | NUMBER - SUFFIX (where PREFIX doesn't start with a digit)
+    const midMatch = channelName.match(/^([A-Za-z].+?\s*\|\s*)(\d+(?:\.\d+)?)\s*([-:]\s*.+)$/);
+    if (midMatch) {
+      const [, prefix, oldNum, suffix] = midMatch;
+      // If the number is already the new number, no change needed
+      if (oldNum === newNumberStr) {
+        return undefined;
+      }
+      // Replace the number in the middle
+      const newName = `${prefix}${newNumberStr} ${suffix}`;
+      return newName !== channelName ? newName : undefined;
+    }
+
     // Look for a number at the beginning of the channel name
     // Pattern: "123 | Channel Name" or "123 - Channel Name" or "123: Channel Name" or "123 Channel Name"
     // This matches a number at the start followed by a separator (space, |, -, :, .)
@@ -2072,10 +2086,16 @@ export function ChannelsPane({
     return undefined;
   };
 
-  // Helper function to strip leading/trailing channel numbers from a name for sorting purposes
-  // Matches same patterns as computeAutoRename: "123 | Name", "123-Name", "123.Name", "123 Name", "Name | 123"
+  // Helper function to strip leading/trailing/middle channel numbers from a name for sorting purposes
+  // Matches same patterns as computeAutoRename: "123 | Name", "123-Name", "US | 5034 - Name", "Name | 123"
   const getNameForSorting = (channelName: string): string => {
-    // Try stripping prefix first: "123 | Name" or "123-Name" or "123.Name" or "123 Name"
+    // Try stripping mid-position number first: "US | 5034 - Name" -> "US - Name"
+    const midMatch = channelName.match(/^([A-Za-z].+?\s*\|\s*)\d+(?:\.\d+)?\s*([-:]\s*.+)$/);
+    if (midMatch) {
+      return (midMatch[1] + midMatch[2]).trim();
+    }
+
+    // Try stripping prefix: "123 | Name" or "123-Name" or "123.Name" or "123 Name"
     const prefixMatch = channelName.match(/^(\d+(?:\.\d+)?)\s*[|\-.\s]\s*(.+)$/);
     if (prefixMatch) {
       return prefixMatch[2].trim();
