@@ -233,12 +233,10 @@ function App() {
         });
 
         // Apply hide_auto_sync_groups setting to channelListFilters
-        if (settings.hide_auto_sync_groups) {
-          setChannelListFilters(prev => ({
-            ...prev,
-            showAutoChannelGroups: false,
-          }));
-        }
+        setChannelListFilters(prev => ({
+          ...prev,
+          showAutoChannelGroups: !settings.hide_auto_sync_groups,
+        }));
 
         // Apply theme setting
         if (settings.theme && settings.theme !== 'dark') {
@@ -371,13 +369,11 @@ function App() {
       });
 
       // Apply hide_auto_sync_groups setting to channelListFilters
-      // The useEffect watching showAutoChannelGroups will handle removing groups from selection
-      if (settings.hide_auto_sync_groups) {
-        setChannelListFilters(prev => ({
-          ...prev,
-          showAutoChannelGroups: false,
-        }));
-      }
+      // The useEffect watching showAutoChannelGroups will handle updating group selection
+      setChannelListFilters(prev => ({
+        ...prev,
+        showAutoChannelGroups: !settings.hide_auto_sync_groups,
+      }));
     } catch (err) {
       console.error('Failed to reload settings:', err);
     }
