@@ -2041,9 +2041,9 @@ export function ChannelsPane({
     const newNumberStr = String(newNumber);
 
     // Look for a number at the beginning of the channel name
-    // Pattern: "123 | Channel Name" or "123-Channel Name" or "123.Channel Name" or "123 Channel Name"
-    // This matches a number at the start followed by a separator (space, |, -, .)
-    const prefixMatch = channelName.match(/^(\d+(?:\.\d+)?)\s*([|\-.\s])\s*(.*)$/);
+    // Pattern: "123 | Channel Name" or "123 - Channel Name" or "123: Channel Name" or "123 Channel Name"
+    // This matches a number at the start followed by a separator (space, |, -, :, .)
+    const prefixMatch = channelName.match(/^(\d+(?:\.\d+)?)\s*([|\-:.\s])\s*(.*)$/);
 
     if (prefixMatch) {
       const [, oldPrefix, separator, rest] = prefixMatch;
