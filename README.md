@@ -1,4 +1,4 @@
-# Dispatcharr Manager Next
+# Enhanced Channel Manager
 
 A professional-grade web interface for managing IPTV configurations with Dispatcharr. Features a tab-based interface for channel management, EPG data, logos, and more. Built with React + TypeScript frontend and Python FastAPI backend.
 
