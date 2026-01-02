@@ -1791,47 +1791,6 @@ export function ChannelsPane({
     }
   };
 
-  // Handle bulk reorder streams by quality for selected channels
-  const handleBulkReorderStreamsByQuality = () => {
-    if (!isEditMode || !onStageReorderStreams || !onStartBatch || !onEndBatch) {
-      return;
-    }
-
-    // Get selected channels that have multiple streams (only those need reordering)
-    const selectedChannels = channels.filter(c => selectedChannelIds.has(c.id) && c.streams.length > 1);
-    if (selectedChannels.length === 0) {
-      return;
-    }
-
-    // Use batch to group all reorders as a single undo operation
-    onStartBatch(`Reorder streams by quality for ${selectedChannels.length} channels`);
-
-    for (const channel of selectedChannels) {
-      // Get streams for this channel with their names
-      const channelStreamDetails = channel.streams
-        .map(id => allStreams.find(s => s.id === id))
-        .filter((s): s is Stream => s !== undefined);
-
-      // Sort by quality
-      const sortedStreams = api.sortStreamsByQuality(channelStreamDetails);
-      const sortedIds = sortedStreams.map(s => s.id);
-
-      // Only stage if the order actually changed
-      const orderChanged = sortedIds.some((id, index) => id !== channel.streams[index]);
-      if (orderChanged) {
-        const description = `Reorder streams by quality in "${channel.name}"`;
-        onStageReorderStreams(channel.id, sortedIds, description);
-      }
-    }
-
-    onEndBatch();
-
-    // Clear selection after operation
-    if (onClearChannelSelection) {
-      onClearChannelSelection();
-    }
-  };
-
   // Handle reordering streams within the channel
   const handleStreamDragEnd = async (event: DragEndEvent) => {
     if (!selectedChannelId) return;
@@ -3444,14 +3403,6 @@ export function ChannelsPane({
               >
                 <span className="material-icons">live_tv</span>
                 EPG
-              </button>
-              <button
-                className="bulk-reorder-btn"
-                onClick={handleBulkReorderStreamsByQuality}
-                title="Reorder streams by quality (UHD/4K first)"
-              >
-                <span className="material-icons">sort</span>
-                Sort
               </button>
               <button
                 className="bulk-delete-btn"
