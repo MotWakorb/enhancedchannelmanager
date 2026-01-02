@@ -22,7 +22,7 @@
 
 .split-pane-divider {
   width: 6px;
-  background-color: #2a2a2a;
+  background-color: var(--input-bg);
   cursor: col-resize;
   display: flex;
   align-items: center;
@@ -36,21 +36,21 @@
 }
 
 .split-pane-divider.dragging {
-  background-color: #646cff;
+  background-color: var(--accent-primary);
 }
 
 .divider-handle {
   width: 4px;
   height: 40px;
-  background-color: #444;
+  background-color: var(--border-secondary);
   border-radius: 2px;
   transition: background-color 0.15s;
 }
 
 .split-pane-divider:hover .divider-handle {
-  background-color: #666;
+  background-color: var(--text-muted);
 }
 
 .split-pane-divider.dragging .divider-handle {
-  background-color: #fff;
+  background-color: var(--text-primary);
 }

@@ -1,7 +1,8 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import type { Stream, M3UAccount, ChannelGroup } from '../types';
 import { useSelection } from '../hooks';
-import { normalizeStreamName, detectRegionalVariants, filterStreamsByTimezone, detectCountryPrefixes, getUniqueCountryPrefixes, type TimezonePreference, type NormalizeOptions, type NumberSeparator } from '../services/api';
+import { normalizeStreamName, detectRegionalVariants, filterStreamsByTimezone, detectCountryPrefixes, getUniqueCountryPrefixes, detectNetworkPrefixes, type TimezonePreference, type NormalizeOptions, type NumberSeparator, type PrefixOrder } from '../services/api';
+import { naturalCompare } from '../utils/naturalSort';
 import './StreamsPane.css';
 
 interface StreamGroup {
@@ -15,6 +16,8 @@ export interface ChannelDefaults {
   includeChannelNumberInName: boolean;
   channelNumberSeparator: string;
   removeCountryPrefix: boolean;
+  includeCountryInName: boolean;
+  countrySeparator: string;
   timezonePreference: string;
 }
 
@@ -39,6 +42,9 @@ interface StreamsPaneProps {
   isEditMode?: boolean;
   channelGroups?: ChannelGroup[];
   channelDefaults?: ChannelDefaults;
+  // External trigger to open bulk create modal for a stream group (set by dropping on channels pane)
+  externalTriggerGroupName?: string | null;
+  onExternalTriggerHandled?: () => void;
   onBulkCreateFromGroup?: (
     streams: Stream[],
     startingNumber: number,
@@ -47,8 +53,16 @@ interface StreamsPaneProps {
     timezonePreference?: TimezonePreference,
     stripCountryPrefix?: boolean,
     addChannelNumber?: boolean,
-    numberSeparator?: NumberSeparator
+    numberSeparator?: NumberSeparator,
+    keepCountryPrefix?: boolean,
+    countrySeparator?: NumberSeparator,
+    prefixOrder?: PrefixOrder,
+    stripNetworkPrefix?: boolean
   ) => Promise<void>;
+  // Appearance settings
+  showStreamUrls?: boolean;
+  // Refresh streams (bypasses cache)
+  onRefreshStreams?: () => void;
 }
 
 export function StreamsPane({
@@ -69,7 +83,11 @@ export function StreamsPane({
   isEditMode = false,
   channelGroups = [],
   channelDefaults,
+  externalTriggerGroupName = null,
+  onExternalTriggerHandled,
   onBulkCreateFromGroup,
+  showStreamUrls = true,
+  onRefreshStreams,
 }: StreamsPaneProps) {
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
 
@@ -87,16 +105,16 @@ export function StreamsPane({
       groups.get(groupName)!.push(stream);
     });
 
-    // Sort streams within each group alphabetically
+    // Sort streams within each group alphabetically with natural sort
     groups.forEach((groupStreams) => {
-      groupStreams.sort((a, b) => a.name.localeCompare(b.name));
+      groupStreams.sort((a, b) => naturalCompare(a.name, b.name));
     });
 
-    // Sort groups alphabetically (Ungrouped at end) and flatten
+    // Sort groups alphabetically with natural sort (Ungrouped at end) and flatten
     const sortedGroupNames = Array.from(groups.keys()).sort((a, b) => {
       if (a === 'Ungrouped') return 1;
       if (b === 'Ungrouped') return -1;
-      return a.localeCompare(b);
+      return naturalCompare(a, b);
     });
 
     // Flatten to single array in display order
@@ -113,15 +131,22 @@ export function StreamsPane({
     selectedCount,
     handleSelect,
     toggleSelect,
+    selectMultiple,
+    deselectMultiple,
     selectAll,
     clearSelection,
     isSelected,
   } = useSelection(displayOrderStreams);
 
+  // Track selected stream groups (for multi-group bulk creation)
+  const [selectedGroupNames, setSelectedGroupNames] = useState<Set<string>>(new Set());
+
   // Bulk create modal state
   const [bulkCreateModalOpen, setBulkCreateModalOpen] = useState(false);
   const [bulkCreateGroup, setBulkCreateGroup] = useState<StreamGroup | null>(null);
+  const [bulkCreateGroups, setBulkCreateGroups] = useState<StreamGroup[]>([]); // For multi-group creation
   const [bulkCreateStreams, setBulkCreateStreams] = useState<Stream[]>([]); // For selected streams
+  const [bulkCreateMultiGroupOption, setBulkCreateMultiGroupOption] = useState<'separate' | 'single'>('separate');
   const [bulkCreateStartingNumber, setBulkCreateStartingNumber] = useState<string>('');
   const [bulkCreateGroupOption, setBulkCreateGroupOption] = useState<'same' | 'existing' | 'new'>('same');
   const [bulkCreateSelectedGroupId, setBulkCreateSelectedGroupId] = useState<number | null>(null);
@@ -129,8 +154,12 @@ export function StreamsPane({
   const [bulkCreateLoading, setBulkCreateLoading] = useState(false);
   const [bulkCreateTimezone, setBulkCreateTimezone] = useState<TimezonePreference>('both');
   const [bulkCreateStripCountry, setBulkCreateStripCountry] = useState(false);
+  const [bulkCreateKeepCountry, setBulkCreateKeepCountry] = useState(false);
+  const [bulkCreateCountrySeparator, setBulkCreateCountrySeparator] = useState<NumberSeparator>('|');
   const [bulkCreateAddNumber, setBulkCreateAddNumber] = useState(false);
   const [bulkCreateSeparator, setBulkCreateSeparator] = useState<NumberSeparator>('|');
+  const [bulkCreatePrefixOrder, setBulkCreatePrefixOrder] = useState<PrefixOrder>('number-first');
+  const [bulkCreateStripNetwork, setBulkCreateStripNetwork] = useState(false);
   const [namingOptionsExpanded, setNamingOptionsExpanded] = useState(false);
   const [channelGroupExpanded, setChannelGroupExpanded] = useState(false);
   const [timezoneExpanded, setTimezoneExpanded] = useState(false);
@@ -172,17 +201,17 @@ export function StreamsPane({
       groups.get(groupName)!.push(stream);
     });
 
-    // Sort streams within each group alphabetically
+    // Sort streams within each group alphabetically with natural sort
     groups.forEach((groupStreams) => {
-      groupStreams.sort((a, b) => a.name.localeCompare(b.name));
+      groupStreams.sort((a, b) => naturalCompare(a.name, b.name));
     });
 
-    // Convert to array and sort groups alphabetically (Ungrouped at end)
+    // Convert to array and sort groups alphabetically with natural sort (Ungrouped at end)
     const sortedGroups = Array.from(groups.entries())
       .sort(([a], [b]) => {
         if (a === 'Ungrouped') return 1;
         if (b === 'Ungrouped') return -1;
-        return a.localeCompare(b);
+        return naturalCompare(a, b);
       })
       .map(([name, groupStreams]) => ({
         name,
@@ -274,6 +303,35 @@ export function StreamsPane({
     [handleSelect]
   );
 
+  // Handle dragging a stream group header (for drop onto channels pane)
+  const handleGroupDragStart = useCallback(
+    (e: React.DragEvent, group: StreamGroup) => {
+      // Set data to identify this as a stream group drag
+      e.dataTransfer.setData('streamGroupDrag', 'true');
+      e.dataTransfer.setData('streamGroupName', group.name);
+      e.dataTransfer.setData('streamGroupStreamIds', JSON.stringify(group.streams.map(s => s.id)));
+      e.dataTransfer.effectAllowed = 'copy';
+
+      // Custom drag image showing group info
+      const dragEl = document.createElement('div');
+      dragEl.className = 'drag-preview';
+      dragEl.textContent = `${group.name} (${group.streams.length} streams)`;
+      dragEl.style.cssText = `
+        position: absolute;
+        top: -1000px;
+        background: #22d3ee;
+        color: #1e1e1e;
+        padding: 8px 16px;
+        border-radius: 4px;
+        font-weight: 500;
+      `;
+      document.body.appendChild(dragEl);
+      e.dataTransfer.setDragImage(dragEl, 50, 20);
+      setTimeout(() => document.body.removeChild(dragEl), 0);
+    },
+    []
+  );
+
   // Bulk create handlers - apply settings defaults
   const openBulkCreateModal = useCallback((group: StreamGroup) => {
     setBulkCreateGroup(group);
@@ -285,8 +343,12 @@ export function StreamsPane({
     // Apply settings defaults
     setBulkCreateTimezone((channelDefaults?.timezonePreference as TimezonePreference) || 'both');
     setBulkCreateStripCountry(channelDefaults?.removeCountryPrefix ?? false);
+    setBulkCreateKeepCountry(channelDefaults?.includeCountryInName ?? false);
+    setBulkCreateCountrySeparator((channelDefaults?.countrySeparator as NumberSeparator) || '|');
     setBulkCreateAddNumber(channelDefaults?.includeChannelNumberInName ?? false);
     setBulkCreateSeparator((channelDefaults?.channelNumberSeparator as NumberSeparator) || '|');
+    setBulkCreatePrefixOrder('number-first'); // Default to number first
+    setBulkCreateStripNetwork(false); // Default to not stripping network prefixes
     setNamingOptionsExpanded(false); // Collapse naming options
     setChannelGroupExpanded(false); // Collapse channel group options
     setTimezoneExpanded(false); // Collapse timezone options
@@ -305,8 +367,12 @@ export function StreamsPane({
     // Apply settings defaults
     setBulkCreateTimezone((channelDefaults?.timezonePreference as TimezonePreference) || 'both');
     setBulkCreateStripCountry(channelDefaults?.removeCountryPrefix ?? false);
+    setBulkCreateKeepCountry(channelDefaults?.includeCountryInName ?? false);
+    setBulkCreateCountrySeparator((channelDefaults?.countrySeparator as NumberSeparator) || '|');
     setBulkCreateAddNumber(channelDefaults?.includeChannelNumberInName ?? false);
     setBulkCreateSeparator((channelDefaults?.channelNumberSeparator as NumberSeparator) || '|');
+    setBulkCreatePrefixOrder('number-first'); // Default to number first
+    setBulkCreateStripNetwork(false); // Default to not stripping network prefixes
     setNamingOptionsExpanded(false); // Collapse naming options
     setChannelGroupExpanded(false); // Collapse channel group options
     setTimezoneExpanded(false); // Collapse timezone options
@@ -316,12 +382,104 @@ export function StreamsPane({
   const closeBulkCreateModal = useCallback(() => {
     setBulkCreateModalOpen(false);
     setBulkCreateGroup(null);
+    setBulkCreateGroups([]);
     setBulkCreateStreams([]);
   }, []);
 
-  // Get the streams to create channels from (either from group or selection)
-  const streamsToCreate = bulkCreateGroup ? bulkCreateGroup.streams : bulkCreateStreams;
+  // Handle external trigger to open bulk create modal (from dropping stream group on channels pane)
+  useEffect(() => {
+    if (externalTriggerGroupName && onBulkCreateFromGroup) {
+      // Find the matching stream group
+      const matchingGroup = groupedStreams.find(g => g.name === externalTriggerGroupName);
+      if (matchingGroup) {
+        openBulkCreateModal(matchingGroup);
+      }
+      // Signal that we've handled the trigger
+      onExternalTriggerHandled?.();
+    }
+  }, [externalTriggerGroupName, groupedStreams, openBulkCreateModal, onBulkCreateFromGroup, onExternalTriggerHandled]);
+
+  // Toggle group selection (select/deselect all streams in group)
+  const toggleGroupSelection = useCallback((group: StreamGroup) => {
+    const groupStreamIds = group.streams.map(s => s.id);
+    const allSelected = groupStreamIds.every(id => selectedIds.has(id));
+
+    if (allSelected) {
+      // Deselect all streams in this group
+      deselectMultiple(groupStreamIds);
+      setSelectedGroupNames(prev => {
+        const next = new Set(prev);
+        next.delete(group.name);
+        return next;
+      });
+    } else {
+      // Select all streams in this group
+      selectMultiple(groupStreamIds);
+      setSelectedGroupNames(prev => {
+        const next = new Set(prev);
+        next.add(group.name);
+        return next;
+      });
+    }
+  }, [selectedIds, selectMultiple, deselectMultiple]);
+
+  // Check if all streams in a group are selected
+  const isGroupFullySelected = useCallback((group: StreamGroup): boolean => {
+    if (group.streams.length === 0) return false;
+    return group.streams.every(s => selectedIds.has(s.id));
+  }, [selectedIds]);
+
+  // Check if some but not all streams in a group are selected
+  const isGroupPartiallySelected = useCallback((group: StreamGroup): boolean => {
+    if (group.streams.length === 0) return false;
+    const selectedCount = group.streams.filter(s => selectedIds.has(s.id)).length;
+    return selectedCount > 0 && selectedCount < group.streams.length;
+  }, [selectedIds]);
+
+  // Open bulk create modal for multiple selected groups
+  const openBulkCreateModalForGroups = useCallback(() => {
+    // Get all groups that have at least one stream selected
+    const selectedGroups = groupedStreams.filter(group =>
+      group.streams.some(s => selectedIds.has(s.id))
+    );
+
+    setBulkCreateGroup(null);
+    setBulkCreateGroups(selectedGroups);
+    setBulkCreateStreams([]);
+    setBulkCreateMultiGroupOption('separate'); // Default to separate groups
+    setBulkCreateStartingNumber('');
+    setBulkCreateGroupOption('same'); // Default to same name for multi-group
+    setBulkCreateSelectedGroupId(null);
+    setBulkCreateNewGroupName('');
+    // Apply settings defaults
+    setBulkCreateTimezone((channelDefaults?.timezonePreference as TimezonePreference) || 'both');
+    setBulkCreateStripCountry(channelDefaults?.removeCountryPrefix ?? false);
+    setBulkCreateKeepCountry(channelDefaults?.includeCountryInName ?? false);
+    setBulkCreateCountrySeparator((channelDefaults?.countrySeparator as NumberSeparator) || '|');
+    setBulkCreateAddNumber(channelDefaults?.includeChannelNumberInName ?? false);
+    setBulkCreateSeparator((channelDefaults?.channelNumberSeparator as NumberSeparator) || '|');
+    setBulkCreatePrefixOrder('number-first');
+    setBulkCreateStripNetwork(false);
+    setNamingOptionsExpanded(false);
+    setChannelGroupExpanded(false);
+    setTimezoneExpanded(false);
+    setBulkCreateModalOpen(true);
+  }, [groupedStreams, selectedIds, channelDefaults]);
+
+  // Get the streams to create channels from (either from single group, multiple groups, or selection)
+  const streamsToCreate = useMemo(() => {
+    if (bulkCreateGroup) {
+      return bulkCreateGroup.streams;
+    }
+    if (bulkCreateGroups.length > 0) {
+      // Flatten all streams from all selected groups
+      return bulkCreateGroups.flatMap(g => g.streams);
+    }
+    return bulkCreateStreams;
+  }, [bulkCreateGroup, bulkCreateGroups, bulkCreateStreams]);
+
   const isFromGroup = !!bulkCreateGroup;
+  const isFromMultipleGroups = bulkCreateGroups.length > 0;
 
   // Detect if streams have regional variants (East/West)
   const hasRegionalVariants = useMemo(() => {
@@ -331,6 +489,11 @@ export function StreamsPane({
   // Detect if streams have country prefixes (US, UK, CA, etc.)
   const hasCountryPrefixes = useMemo(() => {
     return detectCountryPrefixes(streamsToCreate);
+  }, [streamsToCreate]);
+
+  // Detect if streams have network prefixes (CHAMP, PPV, etc.)
+  const hasNetworkPrefixes = useMemo(() => {
+    return detectNetworkPrefixes(streamsToCreate);
   }, [streamsToCreate]);
 
   // Get unique country prefixes for display
@@ -349,6 +512,9 @@ export function StreamsPane({
     const normalizeOptions: NormalizeOptions = {
       timezonePreference: bulkCreateTimezone,
       stripCountryPrefix: bulkCreateStripCountry,
+      keepCountryPrefix: bulkCreateKeepCountry,
+      countrySeparator: bulkCreateCountrySeparator,
+      stripNetworkPrefix: bulkCreateStripNetwork,
     };
 
     const streamsByNormalizedName = new Map<string, Stream[]>();
@@ -366,7 +532,7 @@ export function StreamsPane({
     const hasDuplicates = duplicateCount > 0;
     const excludedCount = streamsToCreate.length - filteredStreams.length;
     return { uniqueCount, duplicateCount, hasDuplicates, streamsByNormalizedName, excludedCount };
-  }, [streamsToCreate, bulkCreateTimezone, bulkCreateStripCountry]);
+  }, [streamsToCreate, bulkCreateTimezone, bulkCreateStripCountry, bulkCreateKeepCountry, bulkCreateCountrySeparator, bulkCreateStripNetwork]);
 
   const handleBulkCreate = useCallback(async () => {
     if (streamsToCreate.length === 0 || !onBulkCreateFromGroup) return;
@@ -380,42 +546,78 @@ export function StreamsPane({
     setBulkCreateLoading(true);
 
     try {
-      let groupId: number | null = null;
-      let newGroupName: string | undefined;
+      // Handle multi-group mode with separate groups
+      if (isFromMultipleGroups && bulkCreateMultiGroupOption === 'separate') {
+        // Create channels for each group separately
+        let currentNumber = startingNum;
+        for (const group of bulkCreateGroups) {
+          // Find existing group with same name, or create new
+          const existingGroup = channelGroups.find(g => g.name === group.name);
+          const groupId = existingGroup?.id ?? null;
+          const newGroupName = existingGroup ? undefined : group.name;
 
-      if (bulkCreateGroupOption === 'same' && bulkCreateGroup) {
-        // Find existing group with same name, or create new
-        const existingGroup = channelGroups.find(g => g.name === bulkCreateGroup.name);
-        if (existingGroup) {
-          groupId = existingGroup.id;
-        } else {
-          newGroupName = bulkCreateGroup.name;
+          await onBulkCreateFromGroup(
+            group.streams,
+            currentNumber,
+            groupId,
+            newGroupName,
+            bulkCreateTimezone,
+            bulkCreateStripCountry,
+            bulkCreateAddNumber,
+            bulkCreateSeparator,
+            bulkCreateKeepCountry,
+            bulkCreateCountrySeparator,
+            bulkCreatePrefixOrder,
+            bulkCreateStripNetwork
+          );
+
+          // Increment starting number for next group
+          currentNumber += group.streams.length;
         }
-      } else if (bulkCreateGroupOption === 'existing') {
-        groupId = bulkCreateSelectedGroupId;
-      } else if (bulkCreateGroupOption === 'new') {
-        if (!bulkCreateNewGroupName.trim()) {
-          alert('Please enter a name for the new group');
-          setBulkCreateLoading(false);
-          return;
+      } else {
+        // Single group or combined mode
+        let groupId: number | null = null;
+        let newGroupName: string | undefined;
+
+        if (bulkCreateGroupOption === 'same' && bulkCreateGroup) {
+          // Find existing group with same name, or create new
+          const existingGroup = channelGroups.find(g => g.name === bulkCreateGroup.name);
+          if (existingGroup) {
+            groupId = existingGroup.id;
+          } else {
+            newGroupName = bulkCreateGroup.name;
+          }
+        } else if (bulkCreateGroupOption === 'existing') {
+          groupId = bulkCreateSelectedGroupId;
+        } else if (bulkCreateGroupOption === 'new') {
+          if (!bulkCreateNewGroupName.trim()) {
+            alert('Please enter a name for the new group');
+            setBulkCreateLoading(false);
+            return;
+          }
+          newGroupName = bulkCreateNewGroupName.trim();
         }
-        newGroupName = bulkCreateNewGroupName.trim();
+
+        await onBulkCreateFromGroup(
+          streamsToCreate,
+          startingNum,
+          groupId,
+          newGroupName,
+          bulkCreateTimezone,
+          bulkCreateStripCountry,
+          bulkCreateAddNumber,
+          bulkCreateSeparator,
+          bulkCreateKeepCountry,
+          bulkCreateCountrySeparator,
+          bulkCreatePrefixOrder,
+          bulkCreateStripNetwork
+        );
       }
-
-      await onBulkCreateFromGroup(
-        streamsToCreate,
-        startingNum,
-        groupId,
-        newGroupName,
-        bulkCreateTimezone,
-        bulkCreateStripCountry,
-        bulkCreateAddNumber,
-        bulkCreateSeparator
-      );
 
       // Clear selection after successful creation
       if (!isFromGroup) {
         clearSelection();
+        setSelectedGroupNames(new Set());
       }
 
       closeBulkCreateModal();
@@ -428,15 +630,22 @@ export function StreamsPane({
   }, [
     streamsToCreate,
     isFromGroup,
+    isFromMultipleGroups,
     bulkCreateGroup,
+    bulkCreateGroups,
+    bulkCreateMultiGroupOption,
     bulkCreateStartingNumber,
     bulkCreateGroupOption,
     bulkCreateSelectedGroupId,
     bulkCreateNewGroupName,
     bulkCreateTimezone,
     bulkCreateStripCountry,
+    bulkCreateKeepCountry,
+    bulkCreateCountrySeparator,
     bulkCreateAddNumber,
     bulkCreateSeparator,
+    bulkCreatePrefixOrder,
+    bulkCreateStripNetwork,
     channelGroups,
     onBulkCreateFromGroup,
     clearSelection,
@@ -446,21 +655,39 @@ export function StreamsPane({
   return (
     <div className="streams-pane">
       <div className="pane-header">
-        <h2>Streams</h2>
+        <h2>
+          Streams
+          {onRefreshStreams && (
+            <button
+              className="refresh-streams-btn"
+              onClick={onRefreshStreams}
+              title="Refresh streams from Dispatcharr"
+              disabled={loading}
+            >
+              <span className={`material-icons${loading ? ' spinning' : ''}`}>sync</span>
+            </button>
+          )}
+        </h2>
         {selectedCount > 0 && (
           <div className="selection-info">
-            <span className="selection-count">{selectedCount} selected</span>
+            <span className="selection-count">
+              {selectedCount} stream{selectedCount !== 1 ? 's' : ''}
+              {selectedGroupNames.size > 0 && ` (${selectedGroupNames.size} group${selectedGroupNames.size !== 1 ? 's' : ''})`}
+            </span>
             {isEditMode && onBulkCreateFromGroup && (
               <button
                 className="create-channels-btn"
-                onClick={openBulkCreateModalForSelection}
-                title="Create channels from selected streams"
+                onClick={selectedGroupNames.size > 1 ? openBulkCreateModalForGroups : openBulkCreateModalForSelection}
+                title={selectedGroupNames.size > 1 ? 'Create channels from selected groups' : 'Create channels from selected streams'}
               >
                 <span className="material-icons">playlist_add</span>
                 Create
               </button>
             )}
-            <button className="clear-selection-btn" onClick={clearSelection}>
+            <button className="clear-selection-btn" onClick={() => {
+              clearSelection();
+              setSelectedGroupNames(new Set());
+            }}>
               Clear
             </button>
           </div>
@@ -619,11 +846,45 @@ export function StreamsPane({
           <>
             <div className="streams-list">
               {groupedStreams.map((group) => (
-                <div key={group.name} className="stream-group">
+                <div key={group.name} className={`stream-group ${isGroupFullySelected(group) && isEditMode ? 'group-selected' : ''}`}>
                   <div
                     className="stream-group-header"
                     onClick={() => toggleGroup(group.name)}
+                    draggable={isEditMode && !!onBulkCreateFromGroup}
+                    onDragStart={(e) => {
+                      if (isEditMode && onBulkCreateFromGroup) {
+                        handleGroupDragStart(e, group);
+                      }
+                    }}
                   >
+                    {isEditMode && onBulkCreateFromGroup && (
+                      <span className="group-drag-handle" title="Drag to Channels pane to bulk create">
+                        <span className="material-icons">drag_indicator</span>
+                      </span>
+                    )}
+                    {isEditMode && onBulkCreateFromGroup && (
+                      <span
+                        className="group-selection-checkbox"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          e.preventDefault();
+                          toggleGroupSelection(group);
+                        }}
+                        onPointerDown={(e) => e.stopPropagation()}
+                        onMouseDown={(e) => e.stopPropagation()}
+                        onTouchStart={(e) => e.stopPropagation()}
+                        draggable={false}
+                        title={isGroupFullySelected(group) ? 'Deselect all streams in group' : 'Select all streams in group'}
+                      >
+                        <span className="material-icons">
+                          {isGroupFullySelected(group)
+                            ? 'check_box'
+                            : isGroupPartiallySelected(group)
+                              ? 'indeterminate_check_box'
+                              : 'check_box_outline_blank'}
+                        </span>
+                      </span>
+                    )}
                     <span className="expand-icon">{group.expanded ? '▼' : '▶'}</span>
                     <span className="group-name">{group.name}</span>
                     <span className="group-count">{group.streams.length}</span>
@@ -645,22 +906,29 @@ export function StreamsPane({
                       {group.streams.map((stream) => (
                         <div
                           key={stream.id}
-                          className={`stream-item ${isSelected(stream.id) ? 'selected' : ''}`}
+                          className={`stream-item ${isSelected(stream.id) && isEditMode ? 'selected' : ''}`}
                           draggable
                           onClick={(e) => handleItemClick(e, stream)}
                           onDragStart={(e) => handleDragStart(e, stream)}
                         >
-                          <span
-                            className="selection-checkbox"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              toggleSelect(stream.id);
-                            }}
-                          >
-                            <span className="material-icons">
-                              {isSelected(stream.id) ? 'check_box' : 'check_box_outline_blank'}
+                          {isEditMode && (
+                            <span
+                              className="selection-checkbox"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                e.preventDefault();
+                                toggleSelect(stream.id);
+                              }}
+                              onPointerDown={(e) => e.stopPropagation()}
+                              onMouseDown={(e) => e.stopPropagation()}
+                              onTouchStart={(e) => e.stopPropagation()}
+                              draggable={false}
+                            >
+                              <span className="material-icons">
+                                {isSelected(stream.id) ? 'check_box' : 'check_box_outline_blank'}
+                              </span>
                             </span>
-                          </span>
+                          )}
                           {stream.logo_url && (
                             <img
                               src={stream.logo_url}
@@ -673,12 +941,29 @@ export function StreamsPane({
                           )}
                           <div className="stream-info">
                             <span className="stream-name">{stream.name}</span>
+                            {showStreamUrls && stream.url && (
+                              <span className="stream-url" title={stream.url}>
+                                {stream.url}
+                              </span>
+                            )}
                             {stream.m3u_account && (
                               <span className="stream-provider">
                                 {providers.find((p) => p.id === stream.m3u_account)?.name || 'Unknown'}
                               </span>
                             )}
                           </div>
+                          {stream.url && (
+                            <button
+                              className="copy-url-btn"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                navigator.clipboard.writeText(stream.url!);
+                              }}
+                              title="Copy stream URL"
+                            >
+                              <span className="material-icons">content_copy</span>
+                            </button>
+                          )}
                           <span className="drag-handle">⋮⋮</span>
                         </div>
                       ))}
@@ -699,7 +984,9 @@ export function StreamsPane({
               <h3>
                 {isFromGroup
                   ? `Create Channels from "${bulkCreateGroup!.name}"`
-                  : `Create Channels from ${streamsToCreate.length} Selected Streams`
+                  : isFromMultipleGroups
+                    ? `Create Channels from ${bulkCreateGroups.length} Groups`
+                    : `Create Channels from ${streamsToCreate.length} Selected Streams`
                 }
               </h3>
               <button className="modal-close-btn" onClick={closeBulkCreateModal}>
@@ -708,6 +995,41 @@ export function StreamsPane({
             </div>
 
             <div className="modal-body">
+              {/* Multi-group option - only show when multiple groups selected */}
+              {isFromMultipleGroups && (
+                <div className="form-group multi-group-option">
+                  <div className="multi-group-info">
+                    <span className="material-icons">folder_copy</span>
+                    <span>
+                      <strong>{bulkCreateGroups.length}</strong> groups selected: {bulkCreateGroups.map(g => g.name).join(', ')}
+                    </span>
+                  </div>
+                  <label className="form-label">Channel Group Creation</label>
+                  <div className="radio-group">
+                    <label className="radio-option">
+                      <input
+                        type="radio"
+                        name="multiGroupOption"
+                        checked={bulkCreateMultiGroupOption === 'separate'}
+                        onChange={() => setBulkCreateMultiGroupOption('separate')}
+                      />
+                      <span>Create separate channel groups</span>
+                      <span className="option-hint">Each M3U group becomes its own channel group</span>
+                    </label>
+                    <label className="radio-option">
+                      <input
+                        type="radio"
+                        name="multiGroupOption"
+                        checked={bulkCreateMultiGroupOption === 'single'}
+                        onChange={() => setBulkCreateMultiGroupOption('single')}
+                      />
+                      <span>Combine into single channel group</span>
+                      <span className="option-hint">All streams go into one channel group</span>
+                    </label>
+                  </div>
+                </div>
+              )}
+
               <div className="bulk-create-info">
                 <span className="material-icons">info</span>
                 {bulkCreateStats.hasDuplicates ? (
@@ -742,6 +1064,8 @@ export function StreamsPane({
               </div>
 
               {/* Channel Group - Collapsible Section */}
+              {/* Hide when multi-group with separate option is selected */}
+              {!(isFromMultipleGroups && bulkCreateMultiGroupOption === 'separate') && (
               <div className="form-group collapsible-section">
                 <div
                   className="collapsible-header"
@@ -771,7 +1095,7 @@ export function StreamsPane({
                 {channelGroupExpanded && (
                   <div className="collapsible-content">
                     <div className="radio-group">
-                      {/* Only show "same name" option when creating from a group */}
+                      {/* Only show "same name" option when creating from a single group */}
                       {isFromGroup && bulkCreateGroup && (
                         <label className="radio-option">
                           <input
@@ -833,6 +1157,7 @@ export function StreamsPane({
                   </div>
                 )}
               </div>
+              )}
 
               {/* Timezone preference - Collapsible, only show if regional variants detected */}
               {hasRegionalVariants && (
@@ -909,7 +1234,9 @@ export function StreamsPane({
                   <span className="naming-options-summary">
                     {(() => {
                       const options: string[] = [];
-                      if (bulkCreateStripCountry) options.push('Strip country');
+                      if (bulkCreateStripNetwork) options.push('Strip network');
+                      if (bulkCreateStripCountry) options.push('Remove country');
+                      if (bulkCreateKeepCountry) options.push(`Keep country (${bulkCreateCountrySeparator})`);
                       if (bulkCreateAddNumber) options.push(`Add numbers (${bulkCreateSeparator})`);
                       const hasDefaults = channelDefaults && (
                         channelDefaults.removeCountryPrefix ||
@@ -925,6 +1252,21 @@ export function StreamsPane({
 
                 {namingOptionsExpanded && (
                   <div className="naming-options-content">
+                    {/* Network prefix option - only show if network prefixes detected */}
+                    {hasNetworkPrefixes && (
+                      <div className="naming-option-group">
+                        <label className="checkbox-option">
+                          <input
+                            type="checkbox"
+                            checked={bulkCreateStripNetwork}
+                            onChange={(e) => setBulkCreateStripNetwork(e.target.checked)}
+                          />
+                          <span>Strip network prefixes</span>
+                        </label>
+                        <span className="option-hint">e.g., "CHAMP | Queens Park Rangers" → "Queens Park Rangers"</span>
+                      </div>
+                    )}
+
                     {/* Country prefix option - only show if country prefixes detected */}
                     {hasCountryPrefixes && (
                       <div className="naming-option-group">
@@ -932,15 +1274,63 @@ export function StreamsPane({
                           <span className="material-icons">public</span>
                           <span>Country prefixes detected: {uniqueCountryPrefixes.slice(0, 5).join(', ')}{uniqueCountryPrefixes.length > 5 ? ', ...' : ''}</span>
                         </div>
-                        <label className="checkbox-option">
-                          <input
-                            type="checkbox"
-                            checked={bulkCreateStripCountry}
-                            onChange={(e) => setBulkCreateStripCountry(e.target.checked)}
-                          />
-                          <span>Remove country prefix from channel names</span>
-                        </label>
-                        <span className="option-hint">e.g., "US: Sports Channel" becomes "Sports Channel"</span>
+                        <div className="radio-group country-prefix-options">
+                          <label className="radio-option">
+                            <input
+                              type="radio"
+                              name="countryPrefixOption"
+                              checked={bulkCreateStripCountry && !bulkCreateKeepCountry}
+                              onChange={() => {
+                                setBulkCreateStripCountry(true);
+                                setBulkCreateKeepCountry(false);
+                              }}
+                            />
+                            <span>Remove country prefix</span>
+                          </label>
+                          <span className="option-hint radio-hint">e.g., "US: Sports Channel" → "Sports Channel"</span>
+
+                          <label className="radio-option">
+                            <input
+                              type="radio"
+                              name="countryPrefixOption"
+                              checked={bulkCreateKeepCountry}
+                              onChange={() => {
+                                setBulkCreateStripCountry(false);
+                                setBulkCreateKeepCountry(true);
+                              }}
+                            />
+                            <span>Keep country prefix (normalized)</span>
+                          </label>
+                          {bulkCreateKeepCountry && (
+                            <>
+                              <div className="separator-options country-separator">
+                                <span className="separator-label">Separator:</span>
+                                <button
+                                  type="button"
+                                  className={`separator-btn ${bulkCreateCountrySeparator === '-' ? 'active' : ''}`}
+                                  onClick={() => setBulkCreateCountrySeparator('-')}
+                                >
+                                  -
+                                </button>
+                                <button
+                                  type="button"
+                                  className={`separator-btn ${bulkCreateCountrySeparator === ':' ? 'active' : ''}`}
+                                  onClick={() => setBulkCreateCountrySeparator(':')}
+                                >
+                                  :
+                                </button>
+                                <button
+                                  type="button"
+                                  className={`separator-btn ${bulkCreateCountrySeparator === '|' ? 'active' : ''}`}
+                                  onClick={() => setBulkCreateCountrySeparator('|')}
+                                >
+                                  |
+                                </button>
+                              </div>
+                              <span className="option-hint radio-hint">e.g., "US: Sports Channel" → "US {bulkCreateCountrySeparator} Sports Channel"</span>
+                            </>
+                          )}
+                        </div>
                       </div>
                     )}
 
@@ -984,6 +1374,35 @@ export function StreamsPane({
                         </>
                       )}
                     </div>
+
+                    {/* Prefix order option - only show when both country and number are enabled */}
+                    {bulkCreateKeepCountry && bulkCreateAddNumber && (
+                      <div className="naming-option-group prefix-order-group">
+                        <div className="prefix-order-label">Prefix Order:</div>
+                        <div className="prefix-order-options">
+                          <label className="radio-option">
+                            <input
+                              type="radio"
+                              name="prefixOrder"
+                              checked={bulkCreatePrefixOrder === 'number-first'}
+                              onChange={() => setBulkCreatePrefixOrder('number-first')}
+                            />
+                            <span>Number first</span>
+                          </label>
+                          <span className="option-hint radio-hint">e.g., "100 {bulkCreateSeparator} US {bulkCreateCountrySeparator} Sports Channel"</span>
+                          <label className="radio-option">
+                            <input
+                              type="radio"
+                              name="prefixOrder"
+                              checked={bulkCreatePrefixOrder === 'country-first'}
+                              onChange={() => setBulkCreatePrefixOrder('country-first')}
+                            />
+                            <span>Country first</span>
+                          </label>
+                          <span className="option-hint radio-hint">e.g., "US {bulkCreateCountrySeparator} 100 {bulkCreateSeparator} Sports Channel"</span>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
@@ -993,9 +1412,24 @@ export function StreamsPane({
                 <div className="preview-list">
                   {Array.from(bulkCreateStats.streamsByNormalizedName.entries()).slice(0, 10).map(([normalizedName, groupedStreams], idx) => {
                     const num = bulkCreateStartingNumber ? parseInt(bulkCreateStartingNumber, 10) + idx : '?';
-                    const displayName = bulkCreateAddNumber
-                      ? `${num} ${bulkCreateSeparator} ${normalizedName}`
-                      : normalizedName;
+                    // Build display name based on options and prefix order
+                    let displayName = normalizedName;
+                    if (bulkCreateAddNumber && bulkCreateKeepCountry) {
+                      // Both enabled - extract country from normalized name and apply order
+                      const countryMatch = normalizedName.match(new RegExp(`^([A-Z]{2,6})\\s*[${bulkCreateCountrySeparator}]\\s*(.+)$`));
+                      if (countryMatch) {
+                        const [, countryCode, baseName] = countryMatch;
+                        if (bulkCreatePrefixOrder === 'country-first') {
+                          displayName = `${countryCode} ${bulkCreateCountrySeparator} ${num} ${bulkCreateSeparator} ${baseName}`;
+                        } else {
+                          displayName = `${num} ${bulkCreateSeparator} ${countryCode} ${bulkCreateCountrySeparator} ${baseName}`;
+                        }
+                      } else {
+                        displayName = `${num} ${bulkCreateSeparator} ${normalizedName}`;
+                      }
+                    } else if (bulkCreateAddNumber) {
+                      displayName = `${num} ${bulkCreateSeparator} ${normalizedName}`;
+                    }
                     return (
                       <div key={normalizedName} className="preview-item">
                         <span className="preview-number">{num}</span>

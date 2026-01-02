@@ -22,6 +22,7 @@ A professional-grade web interface for managing IPTV configurations with Dispatc
 - **Bulk Delete** - Select multiple channels and delete them at once
 - **Search & Filter** - Search channels by name, filter by one or more groups
 - **Inline Stream Display** - View assigned streams directly in the channel list
+- **Copy Channel URL** - Click copy button on any channel to copy its Dispatcharr proxy stream URL
 
 ### Stream Management
 
@@ -31,6 +32,7 @@ A professional-grade web interface for managing IPTV configurations with Dispatc
 - **Multi-Select** - Select multiple streams and bulk-add to channels
 - **Filter by Provider** - Filter streams by M3U account
 - **Filter by Group** - Filter streams by their source group
+- **Copy Stream URL** - Click copy button on any stream to copy its direct URL
 
 ### EPG Management
 
@@ -48,9 +50,12 @@ A professional-grade web interface for managing IPTV configurations with Dispatc
 - **Auto-Assign Streams** - Each created channel automatically gets its source stream assigned
 - **Merge Duplicate Names** - Streams with identical names from different M3U providers are merged into a single channel with all streams assigned (provides multi-provider redundancy)
 - **Quality Variant Normalization** - Streams with quality suffixes (FHD, UHD, HD, SD, 4K, 1080P, etc.) are automatically merged into one channel
+- **Smart Stream Ordering** - Streams are automatically ordered by quality (UHD/4K → FHD/1080p → HD/720p → SD) and interleaved by provider for failover redundancy (e.g., Provider1-FHD, Provider2-FHD, Provider1-HD, Provider2-HD)
+- **Network Prefix Stripping** - Option to strip network prefixes (e.g., "CHAMP | Queens Park Rangers" → "Queens Park Rangers") to merge streams from different networks into the same channel
 - **East/West Timezone Preference** - When streams have regional variants (e.g., "Movies Channel" and "Movies Channel West"), choose to create East feeds only, West feeds only, or keep both as separate channels
-- **Country Prefix Removal** - Option to remove country prefixes (US, UK, CA, etc.) from channel names (e.g., "US: Sports Channel" becomes "Sports Channel")
+- **Country Prefix Options** - Choose to remove country prefixes (e.g., "US: Sports Channel" → "Sports Channel") or keep them with normalized formatting (e.g., "US: Sports Channel" → "US | Sports Channel") with configurable separator
 - **Channel Number Prefix** - Option to prepend channel numbers to names with configurable separator (-, :, or |), e.g., "100 | Sports Channel"
+- **Prefix Order Choice** - When both country and channel number are enabled, choose the order: "Number first" (100 | US | Sports Channel) or "Country first" (US | 100 | Sports Channel)
 - **Custom Starting Number** - Choose the starting channel number for sequential assignment
 - **Flexible Group Options** - Create in same-named group, select existing group, or create new group
 - **Preview Before Creating** - See a preview of channels that will be created with merged stream counts
@@ -110,8 +115,13 @@ A unique workflow that lets you stage changes locally before committing to the s
 - **Assign EPG** - Map EPG data to channels
 - **Bulk EPG Assignment** - Assign EPG to multiple selected channels at once with intelligent matching:
   - **Country-Aware Matching** - Detects country from stream names (e.g., "US: Sports Channel") and matches to appropriate EPG entries (e.g., `SportsChannel.us` not `SportsChannel.mx`)
+  - **Smart Call Sign Matching** - Prefers EPG entries where the call sign matches the channel name (e.g., `NOSEY` over `VIZNOSE` for "Nosey" channel)
+  - **HD Variant Preference** - Automatically prefers HD EPG entries over SD when available
+  - **Regional Variant Handling** - Intelligent matching for regional variants (East, West, Pacific, etc.) with East as default when no region specified
+  - **Special Character Support** - Properly handles channels with special characters like "E!" or "MGM+"
   - **Auto-Match** - Channels with a single matching EPG entry are automatically assigned
-  - **Conflict Resolution** - When multiple EPG entries match, review and select the correct one
+  - **Conflict Resolution** - When multiple EPG entries match, review and select the correct one with card-based navigation
+  - **Search Filter** - Filter EPG options within conflict resolution
   - **Unmatched List** - See which channels couldn't be matched for manual assignment later
   - **Batch Undo** - All assignments from a bulk operation undo as a single action
 - **TVG ID Support** - Set TVG IDs for Kodi/XMLTV compatibility
@@ -145,10 +155,18 @@ Default options applied when using bulk channel creation:
 - **Auto-Rename on Number Change** - Update channel names when numbers change
 - **Include Channel Number in Name** - Add number prefix to channel names (e.g., "101 - Sports Channel")
 - **Number Separator** - Choose hyphen (-), colon (:), or pipe (|) for number prefix
-- **Remove Country Prefix** - Strip country codes (US, UK, CA, etc.) from names
+- **Remove Country Prefix** - Strip country codes (US, UK, CA, etc.) from names (the bulk create modal also offers a "Keep" option with normalized formatting)
 - **Timezone Preference** - Default handling for East/West regional variants
 
 These defaults are pre-loaded when opening the bulk create modal, with a "(from settings)" indicator shown.
+
+#### Appearance
+- **Theme** - Choose from three themes:
+  - **Dark** (default) - Dark theme for low-light environments
+  - **Light** - Bright theme for well-lit environments
+  - **High Contrast** - Maximum contrast for accessibility
+- **Show Stream URLs** - Toggle visibility of stream URLs in the UI (useful for screenshots or hiding sensitive information)
+- **Hide Auto-Sync Groups** - Automatically hide channel groups managed by M3U auto-sync on app load
 
 ### Channel List Filters
 

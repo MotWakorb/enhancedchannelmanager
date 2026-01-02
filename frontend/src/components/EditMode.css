@@ -4,9 +4,9 @@
   align-items: center;
   gap: 0.375rem;
   padding: 0.375rem 0.75rem;
-  background-color: #333;
-  border: 1px solid #444;
-  color: #ccc;
+  background-color: var(--border-primary);
+  border: 1px solid var(--border-secondary);
+  color: var(--button-text);
   border-radius: 4px;
   cursor: pointer;
   font-size: 0.85rem;
@@ -14,8 +14,8 @@
 }
 
 .edit-mode-toggle:hover:not(:disabled) {
-  background-color: #444;
-  color: #fff;
+  background-color: var(--border-secondary);
+  color: var(--text-primary);
 }
 
 .edit-mode-toggle:disabled {
@@ -25,8 +25,8 @@
 
 .edit-mode-toggle.active {
   background-color: rgba(74, 222, 128, 0.2);
-  border-color: #4ade80;
-  color: #4ade80;
+  border-color: var(--success);
+  color: var(--success);
 }
 
 .edit-mode-toggle.active:hover:not(:disabled) {
@@ -42,7 +42,7 @@
 }
 
 .edit-mode-count {
-  background-color: #4ade80;
+  background-color: var(--success);
   color: #1a1a1a;
   padding: 0.125rem 0.375rem;
   border-radius: 8px;
@@ -60,7 +60,7 @@
   padding: 0.5rem 1rem;
   background-color: rgba(100, 108, 255, 0.15);
   border-bottom: 1px solid rgba(100, 108, 255, 0.3);
-  color: #a5b4fc;
+  color: var(--accent-secondary);
 }
 
 .edit-mode-banner.warning {
@@ -93,7 +93,7 @@
 }
 
 .edit-mode-banner-warning {
-  color: #fbbf24;
+  color: var(--warning);
   font-size: 0.85rem;
   font-style: italic;
 }
@@ -122,7 +122,7 @@
   display: flex;
   align-items: center;
   background-color: rgba(248, 113, 113, 0.2);
-  color: #f87171;
+  color: var(--error);
 }
 
 .edit-mode-banner-btn.discard:hover:not(:disabled) {
@@ -131,7 +131,7 @@
 
 .edit-mode-banner-btn.apply {
   background-color: rgba(74, 222, 128, 0.2);
-  color: #4ade80;
+  color: var(--success);
 }
 
 .edit-mode-banner-btn.apply:hover:not(:disabled) {
@@ -153,8 +153,8 @@
 }
 
 .edit-mode-dialog {
-  background-color: #2d2d2d;
-  border: 1px solid #404040;
+  background-color: var(--input-bg);
+  border: 1px solid var(--border-secondary);
   border-radius: 8px;
   width: 90%;
   max-width: 450px;
@@ -170,7 +170,7 @@
   margin: 0;
   font-size: 1.1rem;
   font-weight: 600;
-  color: #fff;
+  color: var(--text-primary);
 }
 
 .edit-mode-dialog-content {
@@ -179,7 +179,7 @@
 
 .edit-mode-dialog-summary-intro {
   margin: 0 0 0.75rem;
-  color: #ccc;
+  color: var(--button-text);
 }
 
 .edit-mode-dialog-summary {
@@ -194,13 +194,13 @@
 
 .edit-mode-dialog-question {
   margin: 0;
-  color: #fff;
+  color: var(--text-primary);
   font-weight: 500;
 }
 
 .edit-mode-dialog-no-changes {
   margin: 0;
-  color: #888;
+  color: var(--text-secondary);
   text-align: center;
   font-style: italic;
 }
@@ -220,7 +220,7 @@
 }
 
 .edit-mode-dialog-toggle:hover {
-  color: #a5b4fc;
+  color: var(--accent-secondary);
 }
 
 .edit-mode-dialog-toggle .toggle-icon {
@@ -231,8 +231,8 @@
 .edit-mode-dialog-details {
   max-height: 200px;
   overflow-y: auto;
-  background-color: #252525;
-  border: 1px solid #3d3d3d;
+  background-color: var(--bg-tertiary);
+  border: 1px solid var(--border-primary);
   border-radius: 4px;
   padding: 0.5rem;
   margin-bottom: 1rem;
@@ -243,7 +243,7 @@
   gap: 0.5rem;
   padding: 0.375rem 0.5rem;
   font-size: 0.85rem;
-  border-bottom: 1px solid #333;
+  border-bottom: 1px solid var(--border-primary);
 }
 
 .operation-detail:last-child {
@@ -251,13 +251,13 @@
 }
 
 .operation-number {
-  color: #666;
+  color: var(--text-muted);
   min-width: 1.5rem;
   text-align: right;
 }
 
 .operation-description {
-  color: #ccc;
+  color: var(--button-text);
   flex: 1;
 }
 
@@ -266,7 +266,7 @@
   justify-content: flex-end;
   gap: 0.5rem;
   padding: 1rem 1.25rem;
-  border-top: 1px solid #3d3d3d;
+  border-top: 1px solid var(--border-primary);
   background-color: #262626;
   border-radius: 0 0 8px 8px;
 }
@@ -288,7 +288,7 @@
 
 .edit-mode-dialog-btn.secondary {
   background-color: #404040;
-  color: #ccc;
+  color: var(--button-text);
 }
 
 .edit-mode-dialog-btn.secondary:hover:not(:disabled) {
@@ -297,7 +297,7 @@
 
 .edit-mode-dialog-btn.danger {
   background-color: rgba(248, 113, 113, 0.2);
-  color: #f87171;
+  color: var(--error);
 }
 
 .edit-mode-dialog-btn.danger:hover:not(:disabled) {
@@ -305,12 +305,12 @@
 }
 
 .edit-mode-dialog-btn.primary {
-  background-color: #646cff;
-  color: #fff;
+  background-color: var(--accent-primary);
+  color: var(--text-primary);
 }
 
 .edit-mode-dialog-btn.primary:hover:not(:disabled) {
-  background-color: #535bf2;
+  background-color: var(--accent-primary);
 }
 
 /* Modified channel indicator */
@@ -325,5 +325,5 @@
   top: 0;
   bottom: 0;
   width: 3px;
-  background-color: #646cff;
+  background-color: var(--accent-primary);
 }

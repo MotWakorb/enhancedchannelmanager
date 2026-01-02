@@ -139,6 +139,7 @@ export async function getStreams(params?: {
   search?: string;
   channelGroup?: string;
   m3uAccount?: number;
+  bypassCache?: boolean;
 }): Promise<PaginatedResponse<Stream>> {
   const searchParams = new URLSearchParams();
   if (params?.page) searchParams.set('page', String(params.page));
@@ -146,13 +147,24 @@ export async function getStreams(params?: {
   if (params?.search) searchParams.set('search', params.search);
   if (params?.channelGroup) searchParams.set('channel_group_name', params.channelGroup);
   if (params?.m3uAccount) searchParams.set('m3u_account', String(params.m3uAccount));
+  if (params?.bypassCache) searchParams.set('bypass_cache', 'true');
 
   const query = searchParams.toString();
   return fetchJson(`${API_BASE}/streams${query ? `?${query}` : ''}`);
 }
 
-export async function getStreamGroups(): Promise<string[]> {
-  return fetchJson(`${API_BASE}/stream-groups`);
+export async function getStreamGroups(bypassCache?: boolean): Promise<string[]> {
+  const params = bypassCache ? '?bypass_cache=true' : '';
+  return fetchJson(`${API_BASE}/stream-groups${params}`);
+}
+
+export async function invalidateCache(prefix?: string): Promise<{ message: string }> {
+  const params = prefix ? `?prefix=${encodeURIComponent(prefix)}` : '';
+  return fetchJson(`${API_BASE}/cache/invalidate${params}`, { method: 'POST' });
+}
+
+export async function getCacheStats(): Promise<{ entry_count: number; entries: Array<{ key: string; age_seconds: number }> }> {
+  return fetchJson(`${API_BASE}/cache/stats`);
 }
 
 // M3U Accounts (Providers)
@@ -170,6 +182,8 @@ export async function getHealth(): Promise<{ status: string; service: string }> 
 }
 
 // Settings
+export type Theme = 'dark' | 'light' | 'high-contrast';
+
 export interface SettingsResponse {
   url: string;
   username: string;
@@ -178,7 +192,12 @@ export interface SettingsResponse {
   include_channel_number_in_name: boolean;
   channel_number_separator: string;
   remove_country_prefix: boolean;
+  include_country_in_name: boolean;
+  country_separator: string;
   timezone_preference: string;
+  show_stream_urls: boolean;
+  hide_auto_sync_groups: boolean;
+  theme: Theme;
 }
 
 export interface TestConnectionResult {
@@ -198,7 +217,12 @@ export async function saveSettings(settings: {
   include_channel_number_in_name: boolean;
   channel_number_separator: string;
   remove_country_prefix: boolean;
+  include_country_in_name: boolean;
+  country_separator: string;
   timezone_preference: string;
+  show_stream_urls?: boolean;  // Optional - defaults to true
+  hide_auto_sync_groups?: boolean;  // Optional - defaults to false
+  theme?: Theme;  // Optional - defaults to 'dark'
 }): Promise<{ status: string; configured: boolean }> {
   return fetchJson(`${API_BASE}/settings`, {
     method: 'POST',
@@ -376,7 +400,193 @@ const QUALITY_SUFFIXES = [
   'HEVC', 'H264', 'H265',
 ];
 
+// Network/channel prefixes that should be stripped when followed by content names
+// These are networks that often prefix their content with their branding
+// Format: "NETWORK | Content Name" or "NETWORK: Content Name"
+const NETWORK_PREFIXES = [
+  // Sports networks
+  'CHAMP', 'CHAMPIONSHIP', 'PPV', 'PAY PER VIEW',
+  'PREMIER', 'PREMIER LEAGUE', 'PL',
+  'NFL', 'NBA', 'MLB', 'NHL', 'MLS', 'NCAA',
+  'UFC', 'WWE', 'AEW', 'BOXING',
+  'GOLF', 'TENNIS', 'CRICKET', 'RUGBY',
+  'RACING', 'MOTORSPORT', 'F1', 'NASCAR',
+  // General networks that prefix content
+  'LIVE', 'SPORTS', 'MATCH', 'GAME',
+  '24/7', 'LINEAR',
+  // Regional sports networks pattern
+  'RSN',
+];
+
+// Quality priority for stream ordering (lower number = higher priority/quality)
+// Streams without quality indicators default to 720p position (priority 30)
+const QUALITY_PRIORITY: Record<string, number> = {
+  // Ultra HD / 4K (highest quality)
+  'UHD': 10,
+  '4K': 10,
+  '2160P': 10,
+  // Full HD
+  'FHD': 20,
+  '1080P': 20,
+  '1080I': 21, // Slightly lower than progressive
+  // HD (default level for unknown quality)
+  'HD': 30,
+  '720P': 30,
+  // Standard Definition (lowest)
+  'SD': 40,
+  '480P': 40,
+};
+
+// Default priority for streams without quality indicators (treated as HD/720p)
+const DEFAULT_QUALITY_PRIORITY = 30;
+
+/**
+ * Get the quality priority score for a stream name.
+ * Lower score = higher quality (should appear first in the list).
+ * Streams without quality indicators get DEFAULT_QUALITY_PRIORITY (HD level).
+ */
+export function getStreamQualityPriority(streamName: string): number {
+  const upperName = streamName.toUpperCase();
+
+  // Check for each quality indicator in the name
+  for (const [quality, priority] of Object.entries(QUALITY_PRIORITY)) {
+    // Match quality at word boundary or with common separators
+    const pattern = new RegExp(`(?:^|[\\s\\-_|:])${quality}(?:$|[\\s\\-_|:])`, 'i');
+    if (pattern.test(upperName)) {
+      return priority;
+    }
+  }
+
+  return DEFAULT_QUALITY_PRIORITY;
+}
+
+/**
+ * Sort streams by quality priority (highest quality first).
+ * Within each quality tier, alternates between providers for failover redundancy.
+ *
+ * Example with 4 streams:
+ * - "US: ESPN FHD" on Provider 1
+ * - "US: ESPN" on Provider 1
+ * - "US: ESPN FHD" on Provider 2
+ * - "US: ESPN" on Provider 2
+ *
+ * Result order:
+ * 1. Provider 1 "US: ESPN FHD" (FHD tier, provider 1)
+ * 2. Provider 2 "US: ESPN FHD" (FHD tier, provider 2)
+ * 3. Provider 1 "US: ESPN" (HD tier, provider 1)
+ * 4. Provider 2 "US: ESPN" (HD tier, provider 2)
+ */
+export function sortStreamsByQuality<T extends { name: string; m3u_account?: number | null }>(streams: T[]): T[] {
+  // Group streams by quality tier
+  const qualityGroups = new Map<number, T[]>();
+
+  for (const stream of streams) {
+    const priority = getStreamQualityPriority(stream.name);
+    if (!qualityGroups.has(priority)) {
+      qualityGroups.set(priority, []);
+    }
+    qualityGroups.get(priority)!.push(stream);
+  }
+
+  // Sort quality tiers (lowest priority number = highest quality = first)
+  const sortedPriorities = [...qualityGroups.keys()].sort((a, b) => a - b);
+
+  const result: T[] = [];
+
+  for (const priority of sortedPriorities) {
+    const tierStreams = qualityGroups.get(priority)!;
+
+    // Group by provider within this quality tier
+    const providerGroups = new Map<number | null, T[]>();
+    for (const stream of tierStreams) {
+      const providerId = stream.m3u_account ?? null;
+      if (!providerGroups.has(providerId)) {
+        providerGroups.set(providerId, []);
+      }
+      providerGroups.get(providerId)!.push(stream);
+    }
+
+    // Sort provider IDs to ensure consistent ordering
+    const sortedProviderIds = [...providerGroups.keys()].sort((a, b) => {
+      if (a === null) return 1;
+      if (b === null) return -1;
+      return a - b;
+    });
+
+    // Interleave streams from different providers (round-robin)
+    // This ensures failover: Provider1-FHD, Provider2-FHD, Provider3-FHD, etc.
+    const providerIterators = sortedProviderIds.map(id => ({
+      id,
+      streams: providerGroups.get(id)!,
+      index: 0
+    }));
+
+    let hasMore = true;
+    while (hasMore) {
+      hasMore = false;
+      for (const iter of providerIterators) {
+        if (iter.index < iter.streams.length) {
+          result.push(iter.streams[iter.index]);
+          iter.index++;
+          hasMore = true;
+        }
+      }
+    }
+  }
+
+  return result;
+}
+
 export type TimezonePreference = 'east' | 'west' | 'both';
+
+/**
+ * Strip network prefix from a stream name if present.
+ * Network prefixes are things like "CHAMP |", "PPV |", "NFL |" that precede content names.
+ * Only strips if the prefix is followed by a separator AND substantial content.
+ *
+ * Examples:
+ * - "CHAMP | Queens Park Rangers" → "Queens Park Rangers"
+ * - "PPV | UFC 300" → "UFC 300"
+ * - "ESPN" → "ESPN" (no change - it's the channel name itself)
+ * - "ESPN2" → "ESPN2" (no change - suffix is part of channel identity)
+ */
+export function stripNetworkPrefix(name: string): string {
+  const trimmedName = name.trim();
+
+  // Sort prefixes by length (longest first) to match more specific ones first
+  const sortedPrefixes = [...NETWORK_PREFIXES].sort((a, b) => b.length - a.length);
+
+  for (const prefix of sortedPrefixes) {
+    // Pattern: prefix at start, followed by separator (|, :, -, /)
+    // The content after must be at least 3 characters (to avoid stripping too much)
+    const pattern = new RegExp(`^${prefix}\\s*[|:\\-/]\\s*(.{3,})$`, 'i');
+    const match = trimmedName.match(pattern);
+    if (match) {
+      return match[1].trim();
+    }
+  }
+
+  return trimmedName;
+}
+
+/**
+ * Detect if a stream name has a network prefix that can be stripped.
+ */
+export function hasNetworkPrefix(name: string): boolean {
+  return stripNetworkPrefix(name) !== name.trim();
+}
+
+/**
+ * Detect if a list of streams has network prefixes.
+ */
+export function detectNetworkPrefixes(streams: { name: string }[]): boolean {
+  for (const stream of streams) {
+    if (hasNetworkPrefix(stream.name)) {
+      return true;
+    }
+  }
+  return false;
+}
 
 // Common country prefixes found in stream names
 // These typically appear at the start of the name followed by a separator
@@ -493,6 +703,9 @@ export function detectRegionalVariants(streams: { name: string }[]): boolean {
 export interface NormalizeOptions {
   timezonePreference?: TimezonePreference;
   stripCountryPrefix?: boolean;
+  keepCountryPrefix?: boolean;       // Keep and normalize country prefix format
+  countrySeparator?: NumberSeparator; // Separator to use when keeping country prefix
+  stripNetworkPrefix?: boolean;      // Strip network prefixes like "CHAMP |", "PPV |" etc.
 }
 
 // Normalize a stream name for matching purposes
@@ -502,22 +715,45 @@ export interface NormalizeOptions {
 // - 'east': prefer East timezone - merge West into base name, treat non-suffixed as East
 // - 'west': prefer West timezone - merge East/non-suffixed into base, keep West
 // stripCountryPrefix: if true, removes country prefix (e.g., "US: Sports Channel" -> "Sports Channel")
+// keepCountryPrefix: if true, keeps country prefix but normalizes format (e.g., "US: Sports Channel" -> "US | Sports Channel")
 export function normalizeStreamName(name: string, timezonePreferenceOrOptions: TimezonePreference | NormalizeOptions = 'both'): string {
   // Handle both old signature (just TimezonePreference) and new signature (NormalizeOptions)
   let timezonePreference: TimezonePreference = 'both';
   let stripCountry = false;
+  let keepCountry = false;
+  let countrySeparator: NumberSeparator = '|';
+  let stripNetwork = false;
 
   if (typeof timezonePreferenceOrOptions === 'object') {
     timezonePreference = timezonePreferenceOrOptions.timezonePreference ?? 'both';
     stripCountry = timezonePreferenceOrOptions.stripCountryPrefix ?? false;
+    keepCountry = timezonePreferenceOrOptions.keepCountryPrefix ?? false;
+    countrySeparator = timezonePreferenceOrOptions.countrySeparator ?? '|';
+    stripNetwork = timezonePreferenceOrOptions.stripNetworkPrefix ?? false;
   } else {
     timezonePreference = timezonePreferenceOrOptions;
   }
 
   let normalized = name.trim();
 
-  // Strip country prefix if requested (do this first, before other normalization)
-  if (stripCountry) {
+  // Strip network prefix first (before country prefix, as network prefix may come before country)
+  // e.g., "CHAMP | US: Queens Park Rangers" → "US: Queens Park Rangers" → then handle country
+  if (stripNetwork) {
+    normalized = stripNetworkPrefix(normalized);
+  }
+
+  // Handle country prefix based on options
+  // keepCountryPrefix takes precedence over stripCountryPrefix if both are set
+  if (keepCountry) {
+    // Keep the country prefix but normalize its format
+    const countryCode = getCountryPrefix(normalized);
+    if (countryCode) {
+      // Strip the existing prefix (with whatever separator it had)
+      const nameWithoutPrefix = stripCountryPrefix(normalized);
+      // Re-add it with the chosen separator
+      normalized = `${countryCode} ${countrySeparator} ${nameWithoutPrefix}`;
+    }
+  } else if (stripCountry) {
     normalized = stripCountryPrefix(normalized);
   }
 
@@ -580,15 +816,22 @@ export function filterStreamsByTimezone<T extends { name: string }>(
   });
 }
 
-// Separator types for channel number prefix
+// Separator types for channel number prefix and country prefix
 export type NumberSeparator = '-' | ':' | '|';
+
+// Prefix order when both country and number are enabled
+export type PrefixOrder = 'number-first' | 'country-first';
 
 // Options for bulk channel creation
 export interface BulkCreateOptions {
   timezonePreference?: TimezonePreference;
   stripCountryPrefix?: boolean;
+  keepCountryPrefix?: boolean;       // Keep and normalize country prefix (e.g., "US: ESPN" -> "US | ESPN")
+  countrySeparator?: NumberSeparator; // Separator for country prefix when keeping
+  stripNetworkPrefix?: boolean;      // Strip network prefixes like "CHAMP |", "PPV |" etc.
   addChannelNumber?: boolean;
   numberSeparator?: NumberSeparator;
+  prefixOrder?: PrefixOrder;         // Order of prefixes: 'number-first' (100 | US | Name) or 'country-first' (US | 100 | Name)
 }
 
 // Bulk Channel Creation
@@ -602,14 +845,22 @@ export async function bulkCreateChannelsFromStreams(
   // Handle both old signature (just TimezonePreference) and new signature (BulkCreateOptions)
   let timezonePreference: TimezonePreference = 'both';
   let stripCountry = false;
+  let keepCountry = false;
+  let countrySeparator: NumberSeparator = '|';
+  let stripNetwork = false;
   let addChannelNumber = false;
   let numberSeparator: NumberSeparator = '|';
+  let prefixOrder: PrefixOrder = 'number-first';
 
   if (typeof timezonePreferenceOrOptions === 'object') {
     timezonePreference = timezonePreferenceOrOptions.timezonePreference ?? 'both';
     stripCountry = timezonePreferenceOrOptions.stripCountryPrefix ?? false;
+    keepCountry = timezonePreferenceOrOptions.keepCountryPrefix ?? false;
+    countrySeparator = timezonePreferenceOrOptions.countrySeparator ?? '|';
+    stripNetwork = timezonePreferenceOrOptions.stripNetworkPrefix ?? false;
     addChannelNumber = timezonePreferenceOrOptions.addChannelNumber ?? false;
     numberSeparator = timezonePreferenceOrOptions.numberSeparator ?? '|';
+    prefixOrder = timezonePreferenceOrOptions.prefixOrder ?? 'number-first';
   } else {
     timezonePreference = timezonePreferenceOrOptions;
   }
@@ -629,6 +880,9 @@ export async function bulkCreateChannelsFromStreams(
     const normalizedName = normalizeStreamName(stream.name, {
       timezonePreference,
       stripCountryPrefix: stripCountry,
+      keepCountryPrefix: keepCountry,
+      countrySeparator,
+      stripNetworkPrefix: stripNetwork,
     });
     const existing = streamsByNormalizedName.get(normalizedName);
     if (existing) {
@@ -648,10 +902,34 @@ export async function bulkCreateChannelsFromStreams(
     channelIndex++;
 
     // Use the normalized name as the channel name (cleaner, without quality suffix)
-    // Optionally prepend channel number with separator
-    const channelName = addChannelNumber
-      ? `${channelNumber} ${numberSeparator} ${normalizedName}`
-      : normalizedName;
+    // Optionally prepend channel number and/or country prefix based on prefixOrder
+    // normalizedName already has country prefix if keepCountry is true (e.g., "US | Sports Channel")
+    // We need to extract it to reorder if needed
+    let channelName = normalizedName;
+
+    if (addChannelNumber && keepCountry) {
+      // Both number and country enabled - need to consider order
+      // normalizedName is currently: "US | Sports Channel" (country already normalized)
+      // Extract country from the normalized name to reorder
+      const countryMatch = normalizedName.match(new RegExp(`^([A-Z]{2,6})\\s*[${countrySeparator}]\\s*(.+)$`));
+      if (countryMatch) {
+        const [, countryCode, baseName] = countryMatch;
+        if (prefixOrder === 'country-first') {
+          // Country first: "US | 100 | Sports Channel"
+          channelName = `${countryCode} ${countrySeparator} ${channelNumber} ${numberSeparator} ${baseName}`;
+        } else {
+          // Number first (default): "100 | US | Sports Channel"
+          channelName = `${channelNumber} ${numberSeparator} ${countryCode} ${countrySeparator} ${baseName}`;
+        }
+      } else {
+        // No country found in name, just add number
+        channelName = `${channelNumber} ${numberSeparator} ${normalizedName}`;
+      }
+    } else if (addChannelNumber) {
+      // Only number, no country
+      channelName = `${channelNumber} ${numberSeparator} ${normalizedName}`;
+    }
+    // else: normalizedName is already correct (with or without country prefix)
 
     try {
       // Create the channel
@@ -662,8 +940,10 @@ export async function bulkCreateChannelsFromStreams(
       });
 
       // Add all streams with this normalized name to the channel (provides multi-provider/quality redundancy)
+      // Sort streams by quality so highest quality (UHD/4K) appears first
+      const sortedStreams = sortStreamsByQuality(groupedStreams);
       const addedStreamIds: number[] = [];
-      for (const stream of groupedStreams) {
+      for (const stream of sortedStreams) {
         try {
           await addStreamToChannel(channel.id, stream.id);
           addedStreamIds.push(stream.id);
@@ -672,8 +952,8 @@ export async function bulkCreateChannelsFromStreams(
         }
       }
 
-      // Use the first stream's logo if available
-      const logoUrl = groupedStreams.find((s: { logo_url?: string | null }) => s.logo_url)?.logo_url;
+      // Use the first stream's logo if available (sorted streams, so highest quality first)
+      const logoUrl = sortedStreams.find((s: { logo_url?: string | null }) => s.logo_url)?.logo_url;
       if (logoUrl) {
         try {
           const logo = await getOrCreateLogo(channelName, logoUrl, logoCache);
