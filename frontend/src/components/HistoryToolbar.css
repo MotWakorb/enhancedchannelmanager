@@ -9,9 +9,9 @@
   align-items: center;
   gap: 0.25rem;
   padding: 0.375rem 0.625rem;
-  background-color: #333;
-  border: 1px solid #444;
-  color: #ccc;
+  background-color: var(--border-primary);
+  border: 1px solid var(--border-secondary);
+  color: var(--button-text);
   border-radius: 4px;
   cursor: pointer;
   font-size: 0.85rem;
@@ -19,8 +19,8 @@
 }
 
 .history-btn:hover:not(:disabled) {
-  background-color: #444;
-  color: #fff;
+  background-color: var(--border-secondary);
+  color: var(--text-primary);
 }
 
 .history-btn:disabled {
@@ -35,7 +35,7 @@
 
 .history-count {
   font-size: 0.7rem;
-  background-color: #555;
+  background-color: var(--text-muted);
   padding: 0.125rem 0.375rem;
   border-radius: 8px;
   min-width: 1.25rem;
@@ -45,13 +45,13 @@
 .history-divider {
   width: 1px;
   height: 1.5rem;
-  background-color: #444;
+  background-color: var(--border-secondary);
   margin: 0 0.25rem;
 }
 
 .save-point-btn {
   background-color: rgba(100, 108, 255, 0.2);
-  border-color: #646cff;
+  border-color: var(--accent-primary);
 }
 
 .save-point-btn:hover:not(:disabled) {
@@ -80,8 +80,8 @@
   top: 100%;
   right: 0;
   margin-top: 4px;
-  background-color: #2d2d2d;
-  border: 1px solid #404040;
+  background-color: var(--input-bg);
+  border: 1px solid var(--border-secondary);
   border-radius: 4px;
   min-width: 250px;
   max-height: 300px;
@@ -114,12 +114,12 @@
 
 .save-point-name {
   font-size: 0.85rem;
-  color: #ddd;
+  color: var(--text-primary);
 }
 
 .save-point-time {
   font-size: 0.7rem;
-  color: #888;
+  color: var(--text-secondary);
 }
 
 .save-point-actions {
@@ -138,7 +138,7 @@
 
 .save-point-action.revert {
   background-color: rgba(74, 222, 128, 0.2);
-  color: #4ade80;
+  color: var(--success);
 }
 
 .save-point-action.revert:hover {
@@ -147,7 +147,7 @@
 
 .save-point-action.delete {
   background-color: transparent;
-  color: #666;
+  color: var(--text-muted);
   padding: 0.125rem 0.25rem;
   display: flex;
   align-items: center;
@@ -159,11 +159,11 @@
 
 .save-point-action.delete:hover {
   background-color: rgba(248, 113, 113, 0.2);
-  color: #f87171;
+  color: var(--error);
 }
 
 .unsaved-indicator {
-  color: #f59e0b;
+  color: var(--warning);
   font-size: 12px;
   line-height: 1;
   animation: pulse 2s infinite;
@@ -180,7 +180,7 @@
 }
 
 .pending-indicator {
-  color: #888;
+  color: var(--text-secondary);
   font-size: 0.85rem;
   animation: blink 1s infinite;
 }

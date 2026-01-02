@@ -2,7 +2,7 @@
   display: flex;
   flex-direction: column;
   height: 100%;
-  background-color: #252525;
+  background-color: var(--bg-tertiary);
   border-left: 1px solid #333;
   min-width: 300px;
   max-width: 400px;
@@ -12,14 +12,14 @@
   display: flex;
   align-items: flex-start;
   padding: 1rem;
-  border-bottom: 1px solid #333;
+  border-bottom: 1px solid var(--border-primary);
   gap: 0.75rem;
 }
 
 .close-btn {
   background: none;
   border: none;
-  color: #888;
+  color: var(--text-secondary);
   font-size: 1.25rem;
   cursor: pointer;
   padding: 0.25rem 0.5rem;
@@ -27,8 +27,8 @@
 }
 
 .close-btn:hover {
-  background-color: #333;
-  color: #fff;
+  background-color: var(--border-primary);
+  color: var(--text-primary);
 }
 
 .channel-info {
@@ -42,7 +42,7 @@
 
 .channel-number {
   font-size: 0.9rem;
-  color: #888;
+  color: var(--text-secondary);
   font-family: monospace;
 }
 
@@ -53,17 +53,17 @@
 }
 
 .channel-number.editable:hover {
-  background-color: #333;
-  color: #fff;
+  background-color: var(--border-primary);
+  color: var(--text-primary);
 }
 
 .number-input {
   width: 80px;
   padding: 0.25rem 0.5rem;
-  background-color: #2d2d2d;
-  border: 1px solid #646cff;
+  background-color: var(--input-bg);
+  border: 1px solid var(--accent-primary);
   border-radius: 4px;
-  color: #fff;
+  color: var(--text-primary);
   font-size: 0.9rem;
   font-family: monospace;
 }
@@ -89,7 +89,7 @@
 
 .detail-content h4 {
   font-size: 0.85rem;
-  color: #888;
+  color: var(--text-secondary);
   text-transform: uppercase;
   letter-spacing: 0.05em;
   margin: 0 0 1rem 0;
@@ -100,7 +100,7 @@
 
 .hint {
   font-size: 0.7rem;
-  color: #555;
+  color: var(--text-muted);
   font-weight: normal;
   text-transform: none;
   letter-spacing: normal;
@@ -109,7 +109,7 @@
 .loading,
 .empty-state {
   text-align: center;
-  color: #666;
+  color: var(--text-muted);
   padding: 2rem 1rem;
   font-size: 0.9rem;
 }
@@ -130,7 +130,7 @@
   width: 1.5rem;
   text-align: center;
   font-size: 0.8rem;
-  color: #666;
+  color: var(--text-muted);
   font-family: monospace;
 }
 
@@ -139,13 +139,13 @@
   display: flex;
   align-items: center;
   padding: 0.5rem;
-  background-color: #2a2a2a;
+  background-color: var(--input-bg);
   border-radius: 4px;
   gap: 0.5rem;
 }
 
 .stream-detail-item .drag-handle {
-  color: #555;
+  color: var(--text-muted);
   cursor: grab;
   padding: 0 0.25rem;
   user-select: none;
@@ -160,7 +160,7 @@
   height: 24px;
   object-fit: contain;
   border-radius: 3px;
-  background-color: #1a1a1a;
+  background-color: var(--bg-tertiary);
 }
 
 .stream-detail-item .stream-name {
@@ -174,7 +174,7 @@
 .remove-btn {
   background: none;
   border: none;
-  color: #666;
+  color: var(--text-muted);
   font-size: 0.9rem;
   cursor: pointer;
   padding: 0.25rem 0.5rem;
@@ -188,6 +188,6 @@
 }
 
 .remove-btn:hover {
-  background-color: #f8717133;
-  color: #f87171;
+  background-color: var(--error)33;
+  color: var(--error);
 }

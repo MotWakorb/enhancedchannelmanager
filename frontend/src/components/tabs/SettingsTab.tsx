@@ -1,14 +1,16 @@
 import { useState, useEffect } from 'react';
 import * as api from '../../services/api';
+import type { Theme } from '../../services/api';
 import './SettingsTab.css';
 
 interface SettingsTabProps {
   onSaved: () => void;
+  onThemeChange?: (theme: Theme) => void;
 }
 
 type SettingsPage = 'general' | 'channel-defaults' | 'appearance' | 'about';
 
-export function SettingsTab({ onSaved }: SettingsTabProps) {
+export function SettingsTab({ onSaved, onThemeChange }: SettingsTabProps) {
   const [activePage, setActivePage] = useState<SettingsPage>('general');
 
   // Connection settings
@@ -21,7 +23,14 @@ export function SettingsTab({ onSaved }: SettingsTabProps) {
   const [includeChannelNumberInName, setIncludeChannelNumberInName] = useState(false);
   const [channelNumberSeparator, setChannelNumberSeparator] = useState('-');
   const [removeCountryPrefix, setRemoveCountryPrefix] = useState(false);
+  const [includeCountryInName, setIncludeCountryInName] = useState(false);
+  const [countrySeparator, setCountrySeparator] = useState('|');
   const [timezonePreference, setTimezonePreference] = useState('both');
+
+  // Appearance settings
+  const [showStreamUrls, setShowStreamUrls] = useState(true);
+  const [hideAutoSyncGroups, setHideAutoSyncGroups] = useState(false);
+  const [theme, setTheme] = useState<Theme>('dark');
 
   // UI state
   const [loading, setLoading] = useState(false);
@@ -50,12 +59,25 @@ export function SettingsTab({ onSaved }: SettingsTabProps) {
       setIncludeChannelNumberInName(settings.include_channel_number_in_name);
       setChannelNumberSeparator(settings.channel_number_separator);
       setRemoveCountryPrefix(settings.remove_country_prefix);
+      setIncludeCountryInName(settings.include_country_in_name);
+      setCountrySeparator(settings.country_separator);
       setTimezonePreference(settings.timezone_preference);
+      setShowStreamUrls(settings.show_stream_urls);
+      setHideAutoSyncGroups(settings.hide_auto_sync_groups);
+      setTheme(settings.theme || 'dark');
       setTestResult(null);
       setError(null);
     } catch (err) {
       console.error('Failed to load settings:', err);
     }
+  };
+
+  // Handle theme change with immediate preview
+  const handleThemeChange = (newTheme: Theme) => {
+    setTheme(newTheme);
+    // Apply theme immediately for preview
+    document.documentElement.setAttribute('data-theme', newTheme === 'dark' ? '' : newTheme);
+    onThemeChange?.(newTheme);
   };
 
   const handleTest = async () => {
@@ -109,7 +131,12 @@ export function SettingsTab({ onSaved }: SettingsTabProps) {
         include_channel_number_in_name: includeChannelNumberInName,
         channel_number_separator: channelNumberSeparator,
         remove_country_prefix: removeCountryPrefix,
+        include_country_in_name: includeCountryInName,
+        country_separator: countrySeparator,
         timezone_preference: timezonePreference,
+        show_stream_urls: showStreamUrls,
+        hide_auto_sync_groups: hideAutoSyncGroups,
+        theme: theme,
       });
       setOriginalUrl(url);
       setOriginalUsername(username);
@@ -213,6 +240,123 @@ export function SettingsTab({ onSaved }: SettingsTabProps) {
     </div>
   );
 
+  const renderAppearancePage = () => (
+    <div className="settings-page">
+      <div className="settings-page-header">
+        <h2>Appearance</h2>
+        <p>Customize how the app displays information.</p>
+      </div>
+
+      {saveSuccess && (
+        <div className="save-success">
+          <span className="material-icons">check_circle</span>
+          Settings saved successfully
+        </div>
+      )}
+
+      <div className="settings-section">
+        <div className="settings-section-header">
+          <span className="material-icons">palette</span>
+          <h3>Theme</h3>
+        </div>
+
+        <div className="theme-selector">
+          <label className={`theme-option ${theme === 'dark' ? 'active' : ''}`}>
+            <input
+              type="radio"
+              name="theme"
+              value="dark"
+              checked={theme === 'dark'}
+              onChange={() => handleThemeChange('dark')}
+            />
+            <span className="theme-preview dark-preview">
+              <span className="material-icons">dark_mode</span>
+            </span>
+            <span className="theme-label">Dark</span>
+            <span className="theme-description">Default dark theme for low-light environments</span>
+          </label>
+
+          <label className={`theme-option ${theme === 'light' ? 'active' : ''}`}>
+            <input
+              type="radio"
+              name="theme"
+              value="light"
+              checked={theme === 'light'}
+              onChange={() => handleThemeChange('light')}
+            />
+            <span className="theme-preview light-preview">
+              <span className="material-icons">light_mode</span>
+            </span>
+            <span className="theme-label">Light</span>
+            <span className="theme-description">Bright theme for well-lit environments</span>
+          </label>
+
+          <label className={`theme-option ${theme === 'high-contrast' ? 'active' : ''}`}>
+            <input
+              type="radio"
+              name="theme"
+              value="high-contrast"
+              checked={theme === 'high-contrast'}
+              onChange={() => handleThemeChange('high-contrast')}
+            />
+            <span className="theme-preview high-contrast-preview">
+              <span className="material-icons">contrast</span>
+            </span>
+            <span className="theme-label">High Contrast</span>
+            <span className="theme-description">Maximum contrast for accessibility</span>
+          </label>
+        </div>
+      </div>
+
+      <div className="settings-section">
+        <div className="settings-section-header">
+          <span className="material-icons">visibility</span>
+          <h3>Display Options</h3>
+        </div>
+
+        <div className="checkbox-group">
+          <input
+            id="showStreamUrls"
+            type="checkbox"
+            checked={showStreamUrls}
+            onChange={(e) => setShowStreamUrls(e.target.checked)}
+          />
+          <div className="checkbox-content">
+            <label htmlFor="showStreamUrls">Show stream URLs in the UI</label>
+            <p>
+              Display the full stream URL below each stream and channel. Disable this for cleaner
+              screenshots or to hide sensitive URL information.
+            </p>
+          </div>
+        </div>
+
+        <div className="checkbox-group">
+          <input
+            id="hideAutoSyncGroups"
+            type="checkbox"
+            checked={hideAutoSyncGroups}
+            onChange={(e) => setHideAutoSyncGroups(e.target.checked)}
+          />
+          <div className="checkbox-content">
+            <label htmlFor="hideAutoSyncGroups">Hide auto-sync groups by default</label>
+            <p>
+              Automatically hide channel groups that are managed by Dispatcharr's M3U auto-sync feature.
+              You can still show them using the filter in the Channel Manager tab.
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <div className="settings-actions">
+        <div className="settings-actions-left" />
+        <button className="btn-primary" onClick={handleSave} disabled={loading}>
+          <span className="material-icons">save</span>
+          {loading ? 'Saving...' : 'Save Settings'}
+        </button>
+      </div>
+    </div>
+  );
+
   const renderChannelDefaultsPage = () => (
     <div className="settings-page">
       <div className="settings-page-header">
@@ -291,7 +435,13 @@ export function SettingsTab({ onSaved }: SettingsTabProps) {
             id="removeCountry"
             type="checkbox"
             checked={removeCountryPrefix}
-            onChange={(e) => setRemoveCountryPrefix(e.target.checked)}
+            onChange={(e) => {
+              setRemoveCountryPrefix(e.target.checked);
+              // If enabling remove, disable include
+              if (e.target.checked) {
+                setIncludeCountryInName(false);
+              }
+            }}
           />
           <div className="checkbox-content">
             <label htmlFor="removeCountry">Remove country prefix from names</label>
@@ -300,6 +450,42 @@ export function SettingsTab({ onSaved }: SettingsTabProps) {
             </p>
           </div>
         </div>
+
+        <div className="checkbox-group">
+          <input
+            id="includeCountry"
+            type="checkbox"
+            checked={includeCountryInName}
+            onChange={(e) => {
+              setIncludeCountryInName(e.target.checked);
+              // If enabling include, disable remove
+              if (e.target.checked) {
+                setRemoveCountryPrefix(false);
+              }
+            }}
+          />
+          <div className="checkbox-content">
+            <label htmlFor="includeCountry">Include country prefix in name (normalized)</label>
+            <p>
+              Keep country codes in channel names with a consistent separator (e.g., "US | Sports Channel").
+            </p>
+          </div>
+        </div>
+
+        {includeCountryInName && (
+          <div className="form-group indent">
+            <label htmlFor="countrySeparator">Country separator</label>
+            <select
+              id="countrySeparator"
+              value={countrySeparator}
+              onChange={(e) => setCountrySeparator(e.target.value)}
+            >
+              <option value="-">Hyphen (US - Channel)</option>
+              <option value=":">Colon (US: Channel)</option>
+              <option value="|">Pipe (US | Channel)</option>
+            </select>
+          </div>
+        )}
       </div>
 
       <div className="settings-section">
@@ -353,7 +539,10 @@ export function SettingsTab({ onSaved }: SettingsTabProps) {
             <span className="material-icons">tv</span>
             Channel Defaults
           </li>
-          <li className="settings-nav-item disabled">
+          <li
+            className={`settings-nav-item ${activePage === 'appearance' ? 'active' : ''}`}
+            onClick={() => setActivePage('appearance')}
+          >
             <span className="material-icons">palette</span>
             Appearance
           </li>
@@ -367,6 +556,7 @@ export function SettingsTab({ onSaved }: SettingsTabProps) {
       <div className="settings-content">
         {activePage === 'general' && renderGeneralPage()}
         {activePage === 'channel-defaults' && renderChannelDefaultsPage()}
+        {activePage === 'appearance' && renderAppearancePage()}
       </div>
     </div>
   );

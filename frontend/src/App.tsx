@@ -9,6 +9,7 @@ import { ChannelManagerTab } from './components/tabs/ChannelManagerTab';
 import { useChangeHistory, useEditMode } from './hooks';
 import * as api from './services/api';
 import type { Channel, ChannelGroup, Stream, M3UAccount, M3UGroupSetting, Logo, ChangeInfo, EPGData, StreamProfile, EPGSource, ChannelListFilterSettings } from './types';
+import packageJson from '../package.json';
 import './App.css';
 
 // Lazy load non-primary tabs
@@ -56,10 +57,14 @@ function App() {
   // Settings state
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [autoRenameChannelNumber, setAutoRenameChannelNumber] = useState(false);
+  const [dispatcharrUrl, setDispatcharrUrl] = useState('');
+  const [showStreamUrls, setShowStreamUrls] = useState(true);
   const [channelDefaults, setChannelDefaults] = useState({
     includeChannelNumberInName: false,
     channelNumberSeparator: '-',
     removeCountryPrefix: false,
+    includeCountryInName: false,
+    countrySeparator: '|',
     timezonePreference: 'both',
   });
 
@@ -94,6 +99,9 @@ function App() {
   // Tab navigation state
   const [activeTab, setActiveTab] = useState<TabId>('channel-manager');
   const [pendingTabChange, setPendingTabChange] = useState<TabId | null>(null);
+
+  // Stream group drop trigger (for opening bulk create modal from channels pane)
+  const [droppedStreamGroupName, setDroppedStreamGroupName] = useState<string | null>(null);
 
   // Edit mode for staging changes
   const {
@@ -213,12 +221,27 @@ function App() {
       try {
         const settings = await api.getSettings();
         setAutoRenameChannelNumber(settings.auto_rename_channel_number);
+        setDispatcharrUrl(settings.url);
+        setShowStreamUrls(settings.show_stream_urls);
         setChannelDefaults({
           includeChannelNumberInName: settings.include_channel_number_in_name,
           channelNumberSeparator: settings.channel_number_separator,
           removeCountryPrefix: settings.remove_country_prefix,
+          includeCountryInName: settings.include_country_in_name,
+          countrySeparator: settings.country_separator,
           timezonePreference: settings.timezone_preference,
         });
+
+        // Apply hide_auto_sync_groups setting to channelListFilters
+        setChannelListFilters(prev => ({
+          ...prev,
+          showAutoChannelGroups: !settings.hide_auto_sync_groups,
+        }));
+
+        // Apply theme setting
+        if (settings.theme && settings.theme !== 'dark') {
+          document.documentElement.setAttribute('data-theme', settings.theme);
+        }
 
         if (!settings.configured) {
           setSettingsOpen(true);
@@ -252,6 +275,20 @@ function App() {
     if (channelGroupFilterInitialized.current) return;
     if (channels.length === 0 || channelGroups.length === 0) return;
 
+    // Build set of auto-sync related groups (same logic as ChannelsPane)
+    const autoSyncRelatedGroups = new Set<number>();
+    const settingsMap = providerGroupSettings as unknown as Record<string, M3UGroupSetting> | undefined;
+    if (settingsMap) {
+      for (const setting of Object.values(settingsMap)) {
+        if (setting.auto_channel_sync) {
+          autoSyncRelatedGroups.add(setting.channel_group);
+          if (setting.custom_properties?.group_override) {
+            autoSyncRelatedGroups.add(setting.custom_properties.group_override);
+          }
+        }
+      }
+    }
+
     // Get unique group IDs from channels
     const groupsWithChannels = new Set<number>();
     channels.forEach((ch) => {
@@ -260,11 +297,59 @@ function App() {
       }
     });
 
-    // Auto-select groups that have channels
-    const groupIds = Array.from(groupsWithChannels);
+    // Auto-select groups that have channels, respecting showAutoChannelGroups filter
+    let groupIds = Array.from(groupsWithChannels);
+    if (channelListFilters.showAutoChannelGroups === false) {
+      groupIds = groupIds.filter(id => !autoSyncRelatedGroups.has(id));
+    }
     setChannelGroupFilter(groupIds);
     channelGroupFilterInitialized.current = true;
-  }, [channels, channelGroups]);
+  }, [channels, channelGroups, providerGroupSettings, channelListFilters.showAutoChannelGroups]);
+
+  // Track previous showAutoChannelGroups value to detect changes
+  const prevShowAutoChannelGroups = useRef(channelListFilters.showAutoChannelGroups);
+
+  // When showAutoChannelGroups filter is toggled, update the group selection
+  useEffect(() => {
+    // Skip if this is the initial render or value hasn't changed
+    if (prevShowAutoChannelGroups.current === channelListFilters.showAutoChannelGroups) return;
+    prevShowAutoChannelGroups.current = channelListFilters.showAutoChannelGroups;
+
+    // Build set of auto-sync related groups
+    const autoSyncRelatedGroups = new Set<number>();
+    const settingsMap = providerGroupSettings as unknown as Record<string, M3UGroupSetting> | undefined;
+    if (settingsMap) {
+      for (const setting of Object.values(settingsMap)) {
+        if (setting.auto_channel_sync) {
+          autoSyncRelatedGroups.add(setting.channel_group);
+          if (setting.custom_properties?.group_override) {
+            autoSyncRelatedGroups.add(setting.custom_properties.group_override);
+          }
+        }
+      }
+    }
+    if (autoSyncRelatedGroups.size === 0) return;
+
+    // Get auto-sync groups that have channels
+    const autoSyncGroupsWithChannels = new Set<number>();
+    channels.forEach((ch) => {
+      if (ch.channel_group_id !== null && autoSyncRelatedGroups.has(ch.channel_group_id)) {
+        autoSyncGroupsWithChannels.add(ch.channel_group_id);
+      }
+    });
+
+    if (channelListFilters.showAutoChannelGroups) {
+      // Add auto-sync groups to selection
+      setChannelGroupFilter(prev => {
+        const newSet = new Set(prev);
+        autoSyncGroupsWithChannels.forEach(id => newSet.add(id));
+        return Array.from(newSet);
+      });
+    } else {
+      // Remove auto-sync groups from selection
+      setChannelGroupFilter(prev => prev.filter(id => !autoSyncRelatedGroups.has(id)));
+    }
+  }, [channelListFilters.showAutoChannelGroups, providerGroupSettings, channels]);
 
   const handleSettingsSaved = async () => {
     setError(null);
@@ -272,12 +357,23 @@ function App() {
     try {
       const settings = await api.getSettings();
       setAutoRenameChannelNumber(settings.auto_rename_channel_number);
+      setDispatcharrUrl(settings.url);
+      setShowStreamUrls(settings.show_stream_urls);
       setChannelDefaults({
         includeChannelNumberInName: settings.include_channel_number_in_name,
         channelNumberSeparator: settings.channel_number_separator,
         removeCountryPrefix: settings.remove_country_prefix,
+        includeCountryInName: settings.include_country_in_name,
+        countrySeparator: settings.country_separator,
         timezonePreference: settings.timezone_preference,
       });
+
+      // Apply hide_auto_sync_groups setting to channelListFilters
+      // The useEffect watching showAutoChannelGroups will handle updating group selection
+      setChannelListFilters(prev => ({
+        ...prev,
+        showAutoChannelGroups: !settings.hide_auto_sync_groups,
+      }));
     } catch (err) {
       console.error('Failed to reload settings:', err);
     }
@@ -430,7 +526,7 @@ function App() {
     }
   };
 
-  const loadStreams = async () => {
+  const loadStreams = async (bypassCache: boolean = false) => {
     setStreamsLoading(true);
     try {
       // Fetch all pages of streams (like channels)
@@ -445,6 +541,7 @@ function App() {
           search: streamSearch || undefined,
           m3uAccount: streamProviderFilter ?? undefined,
           channelGroup: streamGroupFilter ?? undefined,
+          bypassCache,
         });
         allStreams.push(...response.results);
         hasMore = response.next !== null;
@@ -458,6 +555,11 @@ function App() {
       setStreamsLoading(false);
     }
   };
+
+  // Force refresh streams from Dispatcharr (bypassing cache)
+  const refreshStreams = useCallback(() => {
+    loadStreams(true);
+  }, [streamSearch, streamProviderFilter, streamGroupFilter]);
 
   // Reload channels when search changes
   useEffect(() => {
@@ -581,6 +683,24 @@ function App() {
     setLastSelectedChannelId(toId);
   }, []);
 
+  const handleSelectGroupChannels = useCallback((channelIds: number[], select: boolean) => {
+    setSelectedChannelIds((prev) => {
+      const newSet = new Set(prev);
+      if (select) {
+        // Add all channels in the group
+        channelIds.forEach((id) => newSet.add(id));
+      } else {
+        // Remove all channels in the group
+        channelIds.forEach((id) => newSet.delete(id));
+      }
+      return newSet;
+    });
+    // Set last selected to the first channel in the group if selecting
+    if (select && channelIds.length > 0) {
+      setLastSelectedChannelId(channelIds[0]);
+    }
+  }, []);
+
   const handleChannelUpdate = useCallback(
     (updatedChannel: Channel, changeInfo?: ChangeInfo) => {
       const originalChannel = channels.find((ch) => ch.id === updatedChannel.id);
@@ -684,7 +804,11 @@ function App() {
       timezonePreference?: api.TimezonePreference,
       stripCountryPrefix?: boolean,
       addChannelNumber?: boolean,
-      numberSeparator?: api.NumberSeparator
+      numberSeparator?: api.NumberSeparator,
+      keepCountryPrefix?: boolean,
+      countrySeparator?: api.NumberSeparator,
+      prefixOrder?: api.PrefixOrder,
+      stripNetworkPrefix?: boolean
     ) => {
       try {
         // If we need to create a new group first
@@ -707,8 +831,12 @@ function App() {
           {
             timezonePreference: timezonePreference ?? 'both',
             stripCountryPrefix: stripCountryPrefix ?? false,
+            keepCountryPrefix: keepCountryPrefix ?? false,
+            countrySeparator: countrySeparator ?? '|',
+            stripNetworkPrefix: stripNetworkPrefix ?? false,
             addChannelNumber: addChannelNumber ?? false,
             numberSeparator: numberSeparator ?? '|',
+            prefixOrder: prefixOrder ?? 'number-first',
           }
         );
 
@@ -759,6 +887,17 @@ function App() {
     },
     [isEditMode, addChannelToWorkingCopy, trackNewlyCreatedGroup]
   );
+
+  // Handle stream group drop on channels pane (triggers bulk create modal in streams pane)
+  const handleStreamGroupDrop = useCallback((groupName: string, _streamIds: number[]) => {
+    // Set the dropped group name - StreamsPane will react to this and open the modal
+    setDroppedStreamGroupName(groupName);
+  }, []);
+
+  // Clear the dropped stream group trigger after it's been handled
+  const handleStreamGroupTriggerHandled = useCallback(() => {
+    setDroppedStreamGroupName(null);
+  }, []);
 
   // Filter streams based on multi-select filters (client-side)
   const filteredStreams = useMemo(() => {
@@ -990,6 +1129,7 @@ function App() {
               onToggleChannelSelection={handleToggleChannelSelection}
               onClearChannelSelection={handleClearChannelSelection}
               onSelectChannelRange={handleSelectChannelRange}
+              onSelectGroupChannels={handleSelectGroupChannels}
 
               // Auto-rename
               autoRenameChannelNumber={autoRenameChannelNumber}
@@ -1060,7 +1200,19 @@ function App() {
 
               // Bulk Create
               channelDefaults={channelDefaults}
+              externalTriggerGroupName={droppedStreamGroupName}
+              onExternalTriggerHandled={handleStreamGroupTriggerHandled}
+              onStreamGroupDrop={handleStreamGroupDrop}
               onBulkCreateFromGroup={handleBulkCreateFromGroup}
+
+              // Dispatcharr URL for channel stream URLs
+              dispatcharrUrl={dispatcharrUrl}
+
+              // Appearance settings
+              showStreamUrls={showStreamUrls}
+
+              // Refresh streams (bypasses cache)
+              onRefreshStreams={refreshStreams}
             />
           )}
           {activeTab === 'm3u-manager' && <M3UManagerTab />}
@@ -1071,12 +1223,17 @@ function App() {
       </main>
 
       <footer className="footer">
-        {error && <span className="error">API Error: {error}</span>}
-        {health && (
-          <span className="status">
-            API: {health.status} | Service: {health.service}
-          </span>
-        )}
+        <div className="footer-left">
+          {error && <span className="error">API Error: {error}</span>}
+          {health && (
+            <span className="status">
+              API: {health.status} | Service: {health.service}
+            </span>
+          )}
+        </div>
+        <div className="footer-right">
+          <span className="version">v{packageJson.version}</span>
+        </div>
       </footer>
     </div>
   );

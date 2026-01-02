@@ -8,11 +8,13 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import type { Channel, Stream, EPGData, EPGSource } from '../types';
 import {
-  batchFindEPGMatches,
+  batchFindEPGMatchesAsync,
   getEPGSourceName,
   type EPGMatchResult,
   type EPGAssignment,
+  type BatchMatchProgress,
 } from '../utils/epgMatching';
+import { naturalCompare } from '../utils/naturalSort';
 import './BulkEPGAssignModal.css';
 
 export type { EPGAssignment };
@@ -44,9 +46,13 @@ export function BulkEPGAssignModal({
   const [autoMatchedExpanded, setAutoMatchedExpanded] = useState(true);
   const [unmatchedExpanded, setUnmatchedExpanded] = useState(true);
   const [currentConflictIndex, setCurrentConflictIndex] = useState(0);
+  const [showConflictReview, setShowConflictReview] = useState(false);
+  const [progress, setProgress] = useState<BatchMatchProgress | null>(null);
+  const [epgSearchFilter, setEpgSearchFilter] = useState('');
 
   // Track if we've already analyzed for this modal session
   const hasAnalyzedRef = useRef(false);
+
 
   // Run matching when modal opens
   useEffect(() => {
@@ -58,6 +64,9 @@ export function BulkEPGAssignModal({
       setAutoMatchedExpanded(true);
       setUnmatchedExpanded(true);
       setCurrentConflictIndex(0);
+      setShowConflictReview(false);
+      setProgress(null);
+      setEpgSearchFilter('');
       hasAnalyzedRef.current = false;
       return;
     }
@@ -71,26 +80,47 @@ export function BulkEPGAssignModal({
     setPhase('analyzing');
     hasAnalyzedRef.current = true;
 
-    // Use setTimeout to allow UI to render "analyzing" state
-    const timer = setTimeout(() => {
-      console.log('[BulkEPGAssign] Running analysis...');
-      console.log('[BulkEPGAssign] Selected channels:', selectedChannels.length);
-      console.log('[BulkEPGAssign] Available streams:', streams.length);
-      console.log('[BulkEPGAssign] EPG data entries:', epgData.length);
-      const results = batchFindEPGMatches(selectedChannels, streams, epgData);
-      console.log('[BulkEPGAssign] Match results:', results);
-      const autoCount = results.filter(r => r.status === 'exact').length;
-      const conflictCount = results.filter(r => r.status === 'multiple').length;
-      const unmatchedCount = results.filter(r => r.status === 'none').length;
-      console.log(`[BulkEPGAssign] Summary: ${autoCount} auto, ${conflictCount} conflicts, ${unmatchedCount} unmatched`);
-      setMatchResults(results);
-      setPhase('review');
-    }, 100);
+    // Run async analysis
+    const runAnalysis = async () => {
+      try {
+        console.log('[BulkEPGAssign] Running analysis...');
+        console.log('[BulkEPGAssign] Selected channels:', selectedChannels.length);
+        console.log('[BulkEPGAssign] Available streams:', streams.length);
+        console.log('[BulkEPGAssign] EPG data entries:', epgData.length);
 
-    return () => clearTimeout(timer);
+        // Early exit if no channels selected
+        if (selectedChannels.length === 0) {
+          console.log('[BulkEPGAssign] No channels selected, skipping analysis');
+          setMatchResults([]);
+          setPhase('review');
+          return;
+        }
+
+        const results = await batchFindEPGMatchesAsync(
+          selectedChannels,
+          streams,
+          epgData,
+          (prog) => setProgress(prog)
+        );
+        console.log('[BulkEPGAssign] Match results:', results);
+        const autoCount = results.filter(r => r.status === 'exact').length;
+        const conflictCount = results.filter(r => r.status === 'multiple').length;
+        const unmatchedCount = results.filter(r => r.status === 'none').length;
+        console.log(`[BulkEPGAssign] Summary: ${autoCount} auto, ${conflictCount} conflicts, ${unmatchedCount} unmatched`);
+        setMatchResults(results);
+        setPhase('review');
+      } catch (error) {
+        console.error('[BulkEPGAssign] Analysis failed:', error);
+        // Still transition to review phase so UI doesn't hang
+        setMatchResults([]);
+        setPhase('review');
+      }
+    };
+
+    runAnalysis();
   }, [isOpen, selectedChannels, streams, epgData]);
 
-  // Categorize results
+  // Categorize results and sort A-Z by channel name
   const { autoMatched, conflicts, unmatched } = useMemo(() => {
     const auto: EPGMatchResult[] = [];
     const conf: EPGMatchResult[] = [];
@@ -106,8 +136,36 @@ export function BulkEPGAssignModal({
       }
     }
 
-    return { autoMatched: auto, conflicts: conf, unmatched: none };
+    // Sort each category alphabetically by channel name (A-Z) with natural sort
+    const sortByChannelName = (a: EPGMatchResult, b: EPGMatchResult) =>
+      naturalCompare(a.channel.name, b.channel.name);
+
+    return {
+      autoMatched: auto.sort(sortByChannelName),
+      conflicts: conf.sort(sortByChannelName),
+      unmatched: none.sort(sortByChannelName),
+    };
   }, [matchResults]);
+
+
+  // Pre-select recommended matches for all conflicts when entering review phase
+  useEffect(() => {
+    if (phase !== 'review' || conflicts.length === 0) return;
+
+    // Only pre-select if we haven't set any resolutions yet (fresh review)
+    if (conflictResolutions.size > 0) return;
+
+    const preselected = new Map<number, EPGData | null>();
+    for (const result of conflicts) {
+      if (result.matches.length > 0) {
+        // First match is the recommended one (already sorted by country priority)
+        preselected.set(result.channel.id, result.matches[0]);
+      }
+    }
+    if (preselected.size > 0) {
+      setConflictResolutions(preselected);
+    }
+  }, [phase, conflicts, conflictResolutions.size]);
 
   // Handle conflict resolution selection
   const handleConflictSelect = useCallback((channelId: number, epgData: EPGData | null) => {
@@ -133,6 +191,28 @@ export function BulkEPGAssignModal({
     // matches are already sorted with matching country first
     return result.matches[0];
   }, []);
+
+  // Accept all recommended matches for unresolved conflicts
+  const handleAcceptAllRecommended = useCallback(() => {
+    setConflictResolutions(prev => {
+      const next = new Map(prev);
+      for (const result of conflicts) {
+        // Only set if not already resolved
+        if (!next.has(result.channel.id)) {
+          const recommended = result.matches[0]; // First match is recommended
+          if (recommended) {
+            next.set(result.channel.id, recommended);
+          }
+        }
+      }
+      return next;
+    });
+  }, [conflicts]);
+
+  // Count unresolved conflicts
+  const unresolvedCount = useMemo(() => {
+    return conflicts.filter(c => !conflictResolutions.has(c.channel.id)).length;
+  }, [conflicts, conflictResolutions]);
 
   // Count how many assignments will be made
   const assignmentCount = useMemo(() => {
@@ -194,7 +274,22 @@ export function BulkEPGAssignModal({
           {phase === 'analyzing' ? (
             <div className="bulk-epg-analyzing">
               <span className="material-icons spinning">sync</span>
-              <p>Analyzing {selectedChannels.length} channels...</p>
+              <div className="analyzing-text">
+                <p>Analyzing {selectedChannels.length} channels...</p>
+                {progress && (
+                  <div className="analyzing-progress">
+                    <div className="progress-bar">
+                      <div
+                        className="progress-fill"
+                        style={{ width: `${(progress.current / progress.total) * 100}%` }}
+                      />
+                    </div>
+                    <p className="progress-detail">
+                      {progress.current} / {progress.total}: {progress.channelName}
+                    </p>
+                  </div>
+                )}
+              </div>
             </div>
           ) : (
             <>
@@ -222,49 +317,90 @@ export function BulkEPGAssignModal({
                 </div>
               )}
 
-              {/* Conflicts Section */}
-              {conflicts.length > 0 && (
+              {/* Choice prompt when there are conflicts and user hasn't chosen yet */}
+              {conflicts.length > 0 && !showConflictReview && (
+                <div className="bulk-epg-choice">
+                  <p>There are {conflicts.length} channels with multiple EPG matches. How would you like to proceed?</p>
+                  <div className="choice-buttons">
+                    <button
+                      className="choice-btn choice-review"
+                      onClick={() => setShowConflictReview(true)}
+                    >
+                      <span className="material-icons">rate_review</span>
+                      <div className="choice-content">
+                        <span className="choice-title">Review Changes</span>
+                        <span className="choice-desc">Manually select the best match for each channel</span>
+                      </div>
+                    </button>
+                    <button
+                      className="choice-btn choice-accept"
+                      onClick={handleAcceptAllRecommended}
+                    >
+                      <span className="material-icons">done_all</span>
+                      <div className="choice-content">
+                        <span className="choice-title">Accept Best Guesses</span>
+                        <span className="choice-desc">Use the recommended match for all conflicts</span>
+                      </div>
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Conflicts Section - only show when reviewing */}
+              {conflicts.length > 0 && showConflictReview && (
                 <div className="bulk-epg-section conflicts-section">
                   <div className="section-header conflicts-header">
                     <div className="conflicts-title">
                       <span className="material-icons">help</span>
                       Needs Review ({conflicts.length})
                     </div>
-                    <div className="conflicts-nav">
-                      <button
-                        className="nav-btn"
-                        onClick={handlePrevConflict}
-                        disabled={currentConflictIndex === 0}
-                        title="Previous"
-                      >
-                        <span className="material-icons">chevron_left</span>
-                      </button>
-                      <span className="nav-counter">{currentConflictIndex + 1} / {conflicts.length}</span>
-                      <button
-                        className="nav-btn"
-                        onClick={handleNextConflict}
-                        disabled={currentConflictIndex === conflicts.length - 1}
-                        title="Next"
-                      >
-                        <span className="material-icons">chevron_right</span>
-                      </button>
+                    <div className="conflicts-actions">
+                      {unresolvedCount > 0 && (
+                        <button
+                          className="accept-all-btn"
+                          onClick={handleAcceptAllRecommended}
+                          title="Accept recommended match for all unresolved conflicts"
+                        >
+                          <span className="material-icons">done_all</span>
+                          Accept All
+                        </button>
+                      )}
                     </div>
                   </div>
-                  <div className="conflicts-list">
-                    {conflicts.map((result, index) => (
-                      <ConflictItem
-                        key={result.channel.id}
-                        result={result}
-                        epgSources={epgSources}
-                        selectedEpg={conflictResolutions.get(result.channel.id)}
-                        onSelect={epg => handleConflictSelect(result.channel.id, epg)}
-                        isExpanded={index === currentConflictIndex}
-                        onToggle={() => setCurrentConflictIndex(index)}
-                        recommendedEpg={getRecommendedEpg(result)}
-                        isResolved={conflictResolutions.has(result.channel.id)}
-                      />
-                    ))}
+                  {/* Navigation above the card */}
+                  <div className="conflict-card-nav">
+                    <button
+                      className="nav-btn"
+                      onClick={handlePrevConflict}
+                      disabled={currentConflictIndex === 0}
+                      title="Previous"
+                    >
+                      <span className="material-icons">chevron_left</span>
+                      <span className="nav-label">Previous</span>
+                    </button>
+                    <span className="nav-counter">{currentConflictIndex + 1} / {conflicts.length}</span>
+                    <button
+                      className="nav-btn"
+                      onClick={handleNextConflict}
+                      disabled={currentConflictIndex === conflicts.length - 1}
+                      title="Next"
+                    >
+                      <span className="nav-label">Next</span>
+                      <span className="material-icons">chevron_right</span>
+                    </button>
                   </div>
+                  {/* Single conflict card - show only current conflict */}
+                  {conflicts[currentConflictIndex] && (
+                    <ConflictCard
+                      result={conflicts[currentConflictIndex]}
+                      epgSources={epgSources}
+                      selectedEpg={conflictResolutions.get(conflicts[currentConflictIndex].channel.id)}
+                      onSelect={epg => handleConflictSelect(conflicts[currentConflictIndex].channel.id, epg)}
+                      recommendedEpg={getRecommendedEpg(conflicts[currentConflictIndex])}
+                      searchFilter={epgSearchFilter}
+                      onSearchChange={setEpgSearchFilter}
+                    />
+                  )}
                 </div>
               )}
 
@@ -352,82 +488,99 @@ export function BulkEPGAssignModal({
   );
 }
 
-// Conflict resolution item component
-interface ConflictItemProps {
+// Conflict card component - shows a single conflict as a card
+interface ConflictCardProps {
   result: EPGMatchResult;
   epgSources: EPGSource[];
   selectedEpg: EPGData | null | undefined;
   onSelect: (epg: EPGData | null) => void;
-  isExpanded: boolean;
-  onToggle: () => void;
   recommendedEpg: EPGData | null;
-  isResolved: boolean;
+  searchFilter: string;
+  onSearchChange: (filter: string) => void;
 }
 
-function ConflictItem({ result, epgSources, selectedEpg, onSelect, isExpanded, onToggle, recommendedEpg, isResolved }: ConflictItemProps) {
+function ConflictCard({ result, epgSources, selectedEpg, onSelect, recommendedEpg, searchFilter, onSearchChange }: ConflictCardProps) {
+  // Filter matches based on search
+  const filteredMatches = useMemo(() => {
+    if (!searchFilter.trim()) return result.matches;
+    const lowerFilter = searchFilter.toLowerCase();
+    return result.matches.filter(epg =>
+      epg.name.toLowerCase().includes(lowerFilter) ||
+      epg.tvg_id.toLowerCase().includes(lowerFilter) ||
+      getEPGSourceName(epg, epgSources).toLowerCase().includes(lowerFilter)
+    );
+  }, [result.matches, searchFilter, epgSources]);
+
   return (
-    <div className={`conflict-item ${isExpanded ? 'expanded' : 'collapsed'} ${isResolved ? 'resolved' : ''}`}>
-      <button className="conflict-header" onClick={onToggle}>
+    <div className="conflict-card">
+      <div className="conflict-card-header">
         <div className="conflict-channel">
           <span className="channel-name">{result.channel.name}</span>
           {result.detectedCountry && (
             <span className="country-badge">{result.detectedCountry.toUpperCase()}</span>
           )}
-          {isResolved && (
-            <span className="resolved-badge">
-              <span className="material-icons">check</span>
-            </span>
-          )}
         </div>
-        <span className="material-icons expand-icon">
-          {isExpanded ? 'expand_less' : 'expand_more'}
-        </span>
-      </button>
-      {isExpanded && (
-        <div className="conflict-body">
-          <div className="normalized-label">Normalized: "{result.normalizedName}"</div>
-          <div className="conflict-options">
-            {result.matches.map(epg => {
-              const isRecommended = recommendedEpg?.id === epg.id;
-              return (
-                <label
-                  key={epg.id}
-                  className={`conflict-option ${isRecommended ? 'recommended' : ''}`}
-                >
-                  <input
-                    type="radio"
-                    name={`conflict-${result.channel.id}`}
-                    checked={selectedEpg?.id === epg.id}
-                    onChange={() => onSelect(epg)}
-                  />
-                  <div className="option-content">
-                    {epg.icon_url && (
-                      <img src={epg.icon_url} alt="" className="epg-icon" />
-                    )}
-                    <div className="option-info">
-                      <span className="epg-name">
-                        {epg.name}
-                        {isRecommended && <span className="recommended-tag">Recommended</span>}
-                      </span>
-                      <span className="epg-tvgid">{epg.tvg_id}</span>
-                      <span className="epg-source">{getEPGSourceName(epg, epgSources)}</span>
-                    </div>
+        <div className="normalized-label">Searching for: "{result.normalizedName}"</div>
+      </div>
+      <div className="conflict-card-search">
+        <span className="material-icons">search</span>
+        <input
+          type="text"
+          placeholder="Filter EPG matches..."
+          value={searchFilter}
+          onChange={e => onSearchChange(e.target.value)}
+        />
+        {searchFilter && (
+          <button className="clear-search" onClick={() => onSearchChange('')}>
+            <span className="material-icons">close</span>
+          </button>
+        )}
+      </div>
+      <div className="conflict-card-body">
+        <div className="conflict-options">
+          {filteredMatches.map(epg => {
+            const isRecommended = recommendedEpg?.id === epg.id;
+            return (
+              <label
+                key={epg.id}
+                className={`conflict-option ${isRecommended ? 'recommended' : ''} ${selectedEpg?.id === epg.id ? 'selected' : ''}`}
+              >
+                <input
+                  type="radio"
+                  name={`conflict-${result.channel.id}`}
+                  checked={selectedEpg?.id === epg.id}
+                  onChange={() => onSelect(epg)}
+                />
+                <div className="option-content">
+                  {epg.icon_url && (
+                    <img src={epg.icon_url} alt="" className="epg-icon" />
+                  )}
+                  <div className="option-info">
+                    <span className="epg-name">
+                      {epg.name}
+                      {isRecommended && <span className="recommended-tag">Recommended</span>}
+                    </span>
+                    <span className="epg-tvgid">{epg.tvg_id}</span>
+                    <span className="epg-source">{getEPGSourceName(epg, epgSources)}</span>
                   </div>
-                </label>
-              );
-            })}
-            <label className="conflict-option skip-option">
-              <input
-                type="radio"
-                name={`conflict-${result.channel.id}`}
-                checked={selectedEpg === null}
-                onChange={() => onSelect(null)}
-              />
-              <span className="skip-label">Skip this channel</span>
-            </label>
-          </div>
+                </div>
+              </label>
+            );
+          })}
+          {filteredMatches.length === 0 && searchFilter && (
+            <div className="no-matches">No matches found for "{searchFilter}"</div>
+          )}
+          <label className={`conflict-option skip-option ${selectedEpg === null ? 'selected' : ''}`}>
+            <input
+              type="radio"
+              name={`conflict-${result.channel.id}`}
+              checked={selectedEpg === null}
+              onChange={() => onSelect(null)}
+            />
+            <span className="skip-label">Skip this channel</span>
+          </label>
         </div>
-      )}
+      </div>
     </div>
   );
 }

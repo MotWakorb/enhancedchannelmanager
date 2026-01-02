@@ -11,7 +11,6 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
 
 jobs:
   # Security scanning jobs run first
@@ -156,14 +155,16 @@ jobs:
         if: always()
         run: docker stop ecm-dast || true
 
-  # Build job depends on security scans passing
-  build:
-    name: Build Docker Image
+  # Build AMD64 image natively
+  build-amd64:
+    name: Build Docker Image (AMD64)
     runs-on: ubuntu-latest
     needs: [security-scan-frontend, security-scan-backend, codeql-analysis, iac-security-scan, dast-scan]
     permissions:
       contents: read
       packages: write
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
 
     steps:
       - name: Checkout repository
@@ -180,30 +181,25 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Extract metadata (tags, labels)
+      - name: Set lowercase image name
+        id: image
+        run: echo "name=${GITHUB_REPOSITORY,,}" >> $GITHUB_OUTPUT
+
+      - name: Extract metadata
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          tags: |
-            # Branch name tag
-            type=ref,event=branch
-            # SHA tag for traceability
-            type=sha,prefix={{branch}}-
-            # Latest tag only on main branch
-            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
-            # Dev tag on dev branch
-            type=raw,value=dev,enable=${{ github.ref == 'refs/heads/dev' }}
+          images: ${{ env.REGISTRY }}/${{ steps.image.outputs.name }}
 
-      - name: Build Docker image
+      - name: Build Docker image for Trivy scan
         uses: docker/build-push-action@v5
-        id: build
         with:
           context: .
           load: true
           tags: ecm-scan:latest
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          platforms: linux/amd64
+          cache-from: type=gha,scope=amd64
+          cache-to: type=gha,mode=max,scope=amd64
 
       - name: Run Trivy vulnerability scanner
         uses: aquasecurity/trivy-action@master
@@ -215,14 +211,110 @@ jobs:
           vuln-type: 'os,library'
           severity: 'CRITICAL,HIGH'
 
-      - name: Build and push Docker image
-        if: success()
+      - name: Build and push (AMD64)
+        id: build
         uses: docker/build-push-action@v5
         with:
           context: .
+          platforms: linux/amd64
           push: ${{ github.event_name != 'pull_request' }}
-          tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-          platforms: linux/amd64,linux/arm64
+          outputs: type=image,name=${{ env.REGISTRY }}/${{ steps.image.outputs.name }},push-by-digest=true,name-canonical=true,push=${{ github.event_name != 'pull_request' }}
+          cache-from: type=gha,scope=amd64
+          cache-to: type=gha,mode=max,scope=amd64
+
+  # Build ARM64 image natively on ARM runner (avoids QEMU emulation issues)
+  build-arm64:
+    name: Build Docker Image (ARM64)
+    runs-on: ubuntu-24.04-arm
+    needs: [security-scan-frontend, security-scan-backend, codeql-analysis, iac-security-scan, dast-scan]
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Container Registry
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set lowercase image name
+        id: image
+        run: echo "name=${GITHUB_REPOSITORY,,}" >> $GITHUB_OUTPUT
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ steps.image.outputs.name }}
+
+      - name: Build and push (ARM64)
+        id: build
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          platforms: linux/arm64
+          push: ${{ github.event_name != 'pull_request' }}
+          labels: ${{ steps.meta.outputs.labels }}
+          outputs: type=image,name=${{ env.REGISTRY }}/${{ steps.image.outputs.name }},push-by-digest=true,name-canonical=true,push=${{ github.event_name != 'pull_request' }}
+          cache-from: type=gha,scope=arm64
+          cache-to: type=gha,mode=max,scope=arm64
+
+  # Create multi-arch manifest by merging AMD64 and ARM64 images
+  merge-manifests:
+    name: Create Multi-Arch Manifest
+    runs-on: ubuntu-latest
+    needs: [build-amd64, build-arm64]
+    if: github.event_name != 'pull_request'
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set lowercase image name
+        id: image
+        run: echo "name=${GITHUB_REPOSITORY,,}" >> $GITHUB_OUTPUT
+
+      - name: Extract metadata (tags, labels)
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ steps.image.outputs.name }}
+          tags: |
+            # Branch name tag
+            type=ref,event=branch
+            # SHA tag for traceability
+            type=sha,prefix={{branch}}-
+            # Latest tag only on main branch
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+            # Dev tag on dev branch
+            type=raw,value=dev,enable=${{ github.ref == 'refs/heads/dev' }}
+
+      - name: Create manifest list and push
+        working-directory: /tmp
+        run: |
+          docker buildx imagetools create \
+            $(echo "${{ steps.meta.outputs.tags }}" | xargs -I {} echo --tag {}) \
+            ${{ env.REGISTRY }}/${{ steps.image.outputs.name }}@${{ needs.build-amd64.outputs.digest }} \
+            ${{ env.REGISTRY }}/${{ steps.image.outputs.name }}@${{ needs.build-arm64.outputs.digest }}

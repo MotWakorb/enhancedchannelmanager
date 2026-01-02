@@ -4,7 +4,7 @@
   justify-content: center;
   height: 100%;
   width: 100%;
-  background-color: #1e1e1e;
+  background-color: var(--bg-secondary);
 }
 
 .placeholder-content {
@@ -14,20 +14,20 @@
 
 .placeholder-icon {
   font-size: 64px;
-  color: #444;
+  color: var(--border-secondary);
   margin-bottom: 1rem;
   display: block;
 }
 
 .placeholder-content h2 {
-  color: #ccc;
+  color: var(--button-text);
   margin-bottom: 0.5rem;
   font-size: 1.5rem;
   font-weight: 500;
 }
 
 .placeholder-content p {
-  color: #888;
+  color: var(--text-secondary);
   font-size: 0.9rem;
   max-width: 300px;
   line-height: 1.5;
