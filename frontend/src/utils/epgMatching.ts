@@ -358,8 +358,9 @@ function findEPGMatchesWithLookup(
   // 2. Matching special punctuation (e.g., "!" in channel name matches "!" in EPG)
   // 3. Matching country over non-matching country
   // 4. Name similarity (prefer EPG names closer in length to channel name)
-  // 5. HD variants over non-HD (prefer higher quality)
-  // 6. Alphabetically by name
+  // 5. Regional preference: match channel's region hint, or default to East
+  // 6. HD variants over non-HD (prefer higher quality)
+  // 7. Alphabetically by name
   const matches = matchArray.sort((a, b) => {
     const aQuality = matchQuality.get(a.id) || 'prefix';
     const bQuality = matchQuality.get(b.id) || 'prefix';
@@ -403,6 +404,49 @@ function findEPGMatchesWithLookup(
     const bLengthDiff = Math.abs(bNormalized.length - normalizedName.length);
     if (aLengthDiff !== bLengthDiff) {
       return aLengthDiff - bLengthDiff; // Smaller difference = better match
+    }
+
+    // Handle regional variants (Pacific, East, West, etc.) in TVG-ID
+    // If channel name contains a region hint, prefer matching region
+    // Otherwise, deprioritize regional variants
+    const regionalPattern = /\((Pacific|East|West|Central|Mountain)\)/i;
+    const aRegionalMatch = a.tvg_id.match(regionalPattern);
+    const bRegionalMatch = b.tvg_id.match(regionalPattern);
+    const aIsRegional = !!aRegionalMatch;
+    const bIsRegional = !!bRegionalMatch;
+
+    // Check if channel name hints at a region (e.g., "FYI West" or "FYI East")
+    const channelWantsWest = /\bwest\b/i.test(channel.name) || /\bpacific\b/i.test(channel.name);
+    const channelWantsEast = /\beast\b/i.test(channel.name);
+    const channelWantsCentral = /\bcentral\b/i.test(channel.name);
+    const channelWantsMountain = /\bmountain\b/i.test(channel.name);
+
+    // Determine which region to prefer
+    // If channel name specifies a region, use that; otherwise default to East
+    const wantsWest = channelWantsWest;
+    const wantsEast = channelWantsEast || (!channelWantsWest && !channelWantsCentral && !channelWantsMountain);
+    const wantsCentral = channelWantsCentral;
+    const wantsMountain = channelWantsMountain;
+
+    // Check if each EPG entry matches the wanted region
+    const aMatchesWanted =
+      (wantsWest && aRegionalMatch && /pacific|west/i.test(aRegionalMatch[1])) ||
+      (wantsEast && aRegionalMatch && /east/i.test(aRegionalMatch[1])) ||
+      (wantsCentral && aRegionalMatch && /central/i.test(aRegionalMatch[1])) ||
+      (wantsMountain && aRegionalMatch && /mountain/i.test(aRegionalMatch[1]));
+    const bMatchesWanted =
+      (wantsWest && bRegionalMatch && /pacific|west/i.test(bRegionalMatch[1])) ||
+      (wantsEast && bRegionalMatch && /east/i.test(bRegionalMatch[1])) ||
+      (wantsCentral && bRegionalMatch && /central/i.test(bRegionalMatch[1])) ||
+      (wantsMountain && bRegionalMatch && /mountain/i.test(bRegionalMatch[1]));
+
+    // Prefer matching regional variant, then non-regional, then other regional
+    if (aMatchesWanted && !bMatchesWanted) return -1;
+    if (bMatchesWanted && !aMatchesWanted) return 1;
+    // If neither matches wanted region, prefer non-regional over wrong regional
+    if (!aMatchesWanted && !bMatchesWanted) {
+      if (!aIsRegional && bIsRegional) return -1;
+      if (aIsRegional && !bIsRegional) return 1;
     }
 
     // Prefer HD variants over non-HD (check TVG-ID for HD suffix in call sign)
