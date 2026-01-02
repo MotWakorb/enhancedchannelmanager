@@ -838,18 +838,11 @@ function App() {
           return;
         }
 
-        // If we need to create a new group, create it immediately
-        // (We need the group ID to assign channels to it during staging)
-        let targetGroupId = channelGroupId;
-        let newGroupCreated = false;
-        if (newGroupName) {
-          const newGroup = await api.createChannelGroup(newGroupName);
-          targetGroupId = newGroup.id;
-          newGroupCreated = true;
-          // Refresh channel groups
-          const updatedGroups = await api.getChannelGroups();
-          setChannelGroups(updatedGroups);
-        }
+        // Determine target group: either an existing group ID or a new group name
+        // If newGroupName is provided, we'll stage the group creation and use newGroupName
+        // when staging channels. The commit logic will create the group first and map the ID.
+        const targetGroupId = channelGroupId;
+        const targetNewGroupName = newGroupName;
 
         // Create channels locally without calling Dispatcharr API (edit mode only)
         // Build options for filtering/grouping
@@ -906,7 +899,13 @@ function App() {
           }
 
           // Create the channel (returns temp ID)
-          const tempChannelId = stageCreateChannel(channelName, channelNumber, targetGroupId ?? undefined);
+          // If targetNewGroupName is set, pass it so the commit logic can create the group first
+          const tempChannelId = stageCreateChannel(
+            channelName,
+            channelNumber,
+            targetGroupId ?? undefined,
+            targetNewGroupName
+          );
 
           // Assign all streams in this group to the new channel
           for (const stream of groupedStreams) {
@@ -921,9 +920,13 @@ function App() {
         const mergeInfo = mergedCount > 0
           ? `\n(${mergedCount} streams will be merged from duplicate names)`
           : '';
-        alert(`Staged ${streamsByNormalizedName.size} channels for creation!${mergeInfo}\n\nThey will be created in Dispatcharr when you click "Done".`);
+        const groupInfo = targetNewGroupName
+          ? `\n\nA new group "${targetNewGroupName}" will be created.`
+          : '';
+        alert(`Staged ${streamsByNormalizedName.size} channels for creation!${mergeInfo}${groupInfo}\n\nThey will be created in Dispatcharr when you click "Done".`);
 
-        // If a new group was created or we used an existing group, add it to the visible filter
+        // If we used an existing group, add it to the visible filter now
+        // (New groups will be added to filter after commit when they actually exist)
         if (targetGroupId !== null) {
           setChannelGroupFilter((prev) => {
             if (!prev.includes(targetGroupId!)) {
@@ -933,18 +936,13 @@ function App() {
           });
         }
 
-        // Track as newly created if it was a new group
-        if (newGroupCreated && targetGroupId !== null) {
-          trackNewlyCreatedGroup(targetGroupId);
-        }
-
       } catch (err) {
         console.error('Bulk create failed:', err);
         setError('Failed to bulk create channels');
         throw err;
       }
     },
-    [isEditMode, stageCreateChannel, stageAddStream, startBatch, endBatch, trackNewlyCreatedGroup]
+    [isEditMode, stageCreateChannel, stageAddStream, startBatch, endBatch]
   );
 
   // Handle stream group drop on channels pane (triggers bulk create modal in streams pane)
