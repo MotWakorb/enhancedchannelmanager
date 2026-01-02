@@ -287,8 +287,8 @@
   padding: 0.625rem 1.25rem;
   border: none;
   border-radius: 6px;
-  background-color: var(--accent-primary);
-  color: white;
+  background-color: var(--button-primary-bg);
+  color: var(--button-primary-text);
   font-size: 0.875rem;
   font-weight: 500;
   cursor: pointer;

@@ -237,9 +237,9 @@
   display: flex;
   align-items: center;
   gap: 0.375rem;
-  background-color: var(--accent-primary);
-  border: 1px solid var(--accent-primary);
-  color: var(--text-primary);
+  background-color: var(--button-primary-bg);
+  border: 1px solid var(--button-primary-bg);
+  color: var(--button-primary-text);
   padding: 0.375rem 0.75rem;
   border-radius: 4px;
   font-size: 0.85rem;
@@ -249,7 +249,7 @@
 }
 
 .create-channel-btn:hover {
-  background-color: var(--accent-primary);
+  background-color: var(--button-primary-bg);
 }
 
 .create-group-btn {
@@ -1212,13 +1212,13 @@
 }
 
 .modal-btn.primary {
-  background-color: var(--accent-primary);
+  background-color: var(--button-primary-bg);
   border: none;
-  color: var(--text-primary);
+  color: var(--button-primary-text);
 }
 
 .modal-btn.primary:hover:not(:disabled) {
-  background-color: var(--accent-primary);
+  background-color: var(--button-primary-bg);
 }
 
 .modal-btn:disabled {
@@ -1782,10 +1782,10 @@
   justify-content: center;
   padding: 0 1rem;
   height: 34px;
-  background-color: var(--accent-primary);
-  border: 1px solid var(--accent-primary);
+  background-color: var(--button-primary-bg);
+  border: 1px solid var(--button-primary-bg);
   border-radius: 4px;
-  color: var(--text-primary);
+  color: var(--button-primary-text);
   cursor: pointer;
   transition: background-color 0.15s, border-color 0.15s;
   white-space: nowrap;
@@ -1793,7 +1793,7 @@
 }
 
 .logo-add-btn:hover {
-  background-color: var(--accent-primary);
+  background-color: var(--button-primary-bg);
   border-color: var(--accent-primary);
 }
 
@@ -1845,16 +1845,16 @@
 
 .edit-channel-save-btn {
   padding: 0.5rem 1.5rem;
-  background-color: var(--accent-primary);
+  background-color: var(--button-primary-bg);
   border: none;
   border-radius: 4px;
-  color: var(--text-primary);
+  color: var(--button-primary-text);
   cursor: pointer;
   transition: background-color 0.15s;
 }
 
 .edit-channel-save-btn:hover {
-  background-color: var(--accent-primary);
+  background-color: var(--button-primary-bg);
 }
 
 .edit-channel-save-btn:disabled {

@@ -40,6 +40,8 @@
   --button-bg: #333;
   --button-hover-bg: #444;
   --button-text: #ccc;
+  --button-primary-bg: var(--accent-primary);
+  --button-primary-text: white;
 
   --scrollbar-track: #1a1a1a;
   --scrollbar-thumb: #444;
@@ -83,6 +85,8 @@
   --button-bg: #e8e8e8;
   --button-hover-bg: #d4d4d4;
   --button-text: #333;
+  --button-primary-bg: var(--accent-primary);
+  --button-primary-text: white;
 
   --scrollbar-track: #f0f0f0;
   --scrollbar-thumb: #bbb;
@@ -126,6 +130,8 @@
   --button-bg: #222;
   --button-hover-bg: #333;
   --button-text: #fff;
+  --button-primary-bg: #ffff00;
+  --button-primary-text: #000;
 
   --scrollbar-track: #111;
   --scrollbar-thumb: #555;
