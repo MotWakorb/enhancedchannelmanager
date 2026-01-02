@@ -87,7 +87,7 @@ function createInitialState(): EditModeState {
 export interface UseEditModeOptions {
   channels: Channel[];
   onChannelsChange: (channels: Channel[]) => void;
-  onCommitComplete?: () => void;
+  onCommitComplete?: (createdGroupIds: number[]) => void;
   onError?: (message: string) => void;
 }
 
@@ -964,7 +964,9 @@ export function useEditMode({
         onChannelsChange(allChannels);
         // Exit edit mode on success
         setState(createInitialState());
-        onCommitComplete?.();
+        // Pass the IDs of newly created groups to the callback
+        const createdGroupIds = Array.from(newGroupIdMap.values());
+        onCommitComplete?.(createdGroupIds);
       } else {
         onError?.(
           `Failed to apply ${result.operationsFailed} operation(s): ${result.errors[0]?.error}`

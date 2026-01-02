@@ -134,9 +134,19 @@ function App() {
   } = useEditMode({
     channels,
     onChannelsChange: setChannels,
-    onCommitComplete: () => {
+    onCommitComplete: (createdGroupIds) => {
       loadChannels(); // Refresh from server
       loadChannelGroups(); // Refresh groups (for deleted groups)
+      // Add newly created groups to the filter so they're visible
+      if (createdGroupIds.length > 0) {
+        setChannelGroupFilter((prev) => {
+          const newIds = createdGroupIds.filter(id => !prev.includes(id));
+          if (newIds.length > 0) {
+            return [...prev, ...newIds];
+          }
+          return prev;
+        });
+      }
     },
     onError: setError,
   });
