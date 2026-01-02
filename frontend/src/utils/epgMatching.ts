@@ -359,8 +359,8 @@ function findEPGMatchesWithLookup(
   // 3. Matching country over non-matching country
   // 4. Name similarity (prefer EPG names closer in length to channel name)
   // 5. Regional preference: match channel's region hint, or default to East
-  // 6. HD variants over non-HD (prefer higher quality)
-  // 7. Matching call sign (FOXSOUL call sign for "FOX Soul" channel)
+  // 6. Call sign match quality (NOSEY > VIZNOSE for "Nosey", REELZHD > VIZREEL for "Reelz")
+  // 7. HD variants over non-HD (prefer higher quality)
   // 8. Alphabetically by name
   const matches = matchArray.sort((a, b) => {
     const aQuality = matchQuality.get(a.id) || 'prefix';
@@ -453,36 +453,60 @@ function findEPGMatchesWithLookup(
       if (aIsRegional && !bIsRegional) return 1;
     }
 
+    // Prefer EPG entries where call sign better matches the channel name
+    // This is important because call signs like NOSEY, REELZHD, PETCOLL contain
+    // the channel name, while VIZNOSE, VIZREEL, XALPTCL don't
+    const aCallSignMatch = a.tvg_id.match(/\(([^)]+)\)/);
+    const bCallSignMatch = b.tvg_id.match(/\(([^)]+)\)/);
+
+    // Score call sign match quality:
+    // 3 = exact match (call sign equals normalized name)
+    // 2 = base match (call sign minus HD/SD suffix equals normalized name)
+    // 1 = partial match (call sign starts with normalized name, or normalized name starts with call sign base)
+    // 0 = no meaningful match
+    const scoreCallSign = (callSignRaw: string | null): number => {
+      if (!callSignRaw) return 0;
+      const callSign = callSignRaw.toLowerCase().replace(/[^a-z0-9]/g, '');
+      const callSignBase = callSign.replace(/(hd|sd|fhd|uhd)$/, '');
+
+      // Exact match
+      if (callSign === normalizedName || callSignBase === normalizedName) return 3;
+      // Call sign starts with channel name (e.g., REELZHD starts with REELZ for "Reelz")
+      if (callSign.startsWith(normalizedName) || callSignBase.startsWith(normalizedName)) return 2;
+      // Channel name starts with call sign base (e.g., "tastemadetravel" starts with "tmtravel" - no wait, that's not right)
+      // Actually check if they share a common prefix of significant length
+      // This catches cases like PURSTHD for "pursuit" (both start with "purs")
+      if (normalizedName.length >= 4 && callSignBase.length >= 4) {
+        // Find longest common prefix
+        let commonLen = 0;
+        const minLen = Math.min(normalizedName.length, callSignBase.length);
+        for (let i = 0; i < minLen; i++) {
+          if (normalizedName[i] === callSignBase[i]) {
+            commonLen++;
+          } else {
+            break;
+          }
+        }
+        // If common prefix is at least 60% of the shorter string, it's a partial match
+        if (commonLen >= Math.ceil(Math.min(normalizedName.length, callSignBase.length) * 0.6)) {
+          return 1;
+        }
+      }
+      return 0;
+    };
+
+    const aCallSignScore = scoreCallSign(aCallSignMatch?.[1] ?? null);
+    const bCallSignScore = scoreCallSign(bCallSignMatch?.[1] ?? null);
+
+    if (aCallSignScore !== bCallSignScore) {
+      return bCallSignScore - aCallSignScore; // Higher score = better match
+    }
+
     // Prefer HD variants over non-HD (check TVG-ID for HD suffix in call sign)
     const aHasHD = /hd\)?\./i.test(a.tvg_id) || /HD$/i.test(a.name);
     const bHasHD = /hd\)?\./i.test(b.tvg_id) || /HD$/i.test(b.name);
     if (aHasHD && !bHasHD) return -1;
     if (bHasHD && !aHasHD) return 1;
-
-    // Prefer EPG entries where call sign matches channel name
-    // Priority: exact match > base match (after stripping HD/SD suffix) > no match
-    // "FYI(FYI).us" should be preferred over "FYI(FYISD).us" for channel "FYI"
-    const aCallSignMatch = a.tvg_id.match(/\(([^)]+)\)/);
-    const bCallSignMatch = b.tvg_id.match(/\(([^)]+)\)/);
-    if (aCallSignMatch && bCallSignMatch) {
-      const aCallSign = aCallSignMatch[1].toLowerCase().replace(/[^a-z0-9]/g, '');
-      const bCallSign = bCallSignMatch[1].toLowerCase().replace(/[^a-z0-9]/g, '');
-      // Check for exact call sign match
-      const aExactMatch = aCallSign === normalizedName;
-      const bExactMatch = bCallSign === normalizedName;
-      // Prefer exact match over non-exact
-      if (aExactMatch && !bExactMatch) return -1;
-      if (bExactMatch && !aExactMatch) return 1;
-      // If neither is exact, check base match (after stripping suffix)
-      if (!aExactMatch && !bExactMatch) {
-        const aCallSignBase = aCallSign.replace(/(hd|sd|fhd|uhd)$/, '');
-        const bCallSignBase = bCallSign.replace(/(hd|sd|fhd|uhd)$/, '');
-        const aBaseMatch = aCallSignBase === normalizedName;
-        const bBaseMatch = bCallSignBase === normalizedName;
-        if (aBaseMatch && !bBaseMatch) return -1;
-        if (bBaseMatch && !aBaseMatch) return 1;
-      }
-    }
 
     // Then alphabetically by name
     return a.name.localeCompare(b.name);
