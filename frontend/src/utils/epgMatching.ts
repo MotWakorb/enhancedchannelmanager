@@ -360,7 +360,8 @@ function findEPGMatchesWithLookup(
   // 4. Name similarity (prefer EPG names closer in length to channel name)
   // 5. Regional preference: match channel's region hint, or default to East
   // 6. HD variants over non-HD (prefer higher quality)
-  // 7. Alphabetically by name
+  // 7. Matching call sign (FOXSOUL call sign for "FOX Soul" channel)
+  // 8. Alphabetically by name
   const matches = matchArray.sort((a, b) => {
     const aQuality = matchQuality.get(a.id) || 'prefix';
     const bQuality = matchQuality.get(b.id) || 'prefix';
@@ -454,6 +455,22 @@ function findEPGMatchesWithLookup(
     const bHasHD = /hd\)?\./i.test(b.tvg_id) || /HD$/i.test(b.name);
     if (aHasHD && !bHasHD) return -1;
     if (bHasHD && !aHasHD) return 1;
+
+    // Prefer EPG entries where call sign matches channel name
+    // "FOXSOUL(FOXSOUL).us" should be preferred over "FOXSoul(VIZFXSL).us" for channel "FOX Soul"
+    const aCallSignMatch = a.tvg_id.match(/\(([^)]+)\)/);
+    const bCallSignMatch = b.tvg_id.match(/\(([^)]+)\)/);
+    if (aCallSignMatch && bCallSignMatch) {
+      const aCallSign = aCallSignMatch[1].toLowerCase().replace(/[^a-z0-9]/g, '');
+      const bCallSign = bCallSignMatch[1].toLowerCase().replace(/[^a-z0-9]/g, '');
+      // Strip HD suffix from call signs for comparison
+      const aCallSignBase = aCallSign.replace(/(hd|sd|fhd|uhd)$/, '');
+      const bCallSignBase = bCallSign.replace(/(hd|sd|fhd|uhd)$/, '');
+      const aCallSignMatches = aCallSignBase === normalizedName || aCallSign === normalizedName;
+      const bCallSignMatches = bCallSignBase === normalizedName || bCallSign === normalizedName;
+      if (aCallSignMatches && !bCallSignMatches) return -1;
+      if (bCallSignMatches && !aCallSignMatches) return 1;
+    }
 
     // Then alphabetically by name
     return a.name.localeCompare(b.name);
