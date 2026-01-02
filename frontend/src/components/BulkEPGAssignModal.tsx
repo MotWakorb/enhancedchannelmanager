@@ -52,8 +52,6 @@ export function BulkEPGAssignModal({
   // Track if we've already analyzed for this modal session
   const hasAnalyzedRef = useRef(false);
 
-  // Refs for scrolling to current conflict item when navigating
-  const conflictItemRefs = useRef<Map<number, HTMLDivElement>>(new Map());
 
   // Run matching when modal opens
   useEffect(() => {
@@ -147,17 +145,6 @@ export function BulkEPGAssignModal({
     };
   }, [matchResults]);
 
-  // Scroll current conflict item into view when navigating
-  useEffect(() => {
-    if (conflicts.length === 0) return;
-    const currentConflict = conflicts[currentConflictIndex];
-    if (!currentConflict) return;
-
-    const element = conflictItemRefs.current.get(currentConflict.channel.id);
-    if (element) {
-      element.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    }
-  }, [currentConflictIndex, conflicts]);
 
   // Pre-select recommended matches for all conflicts when entering review phase
   useEffect(() => {
@@ -376,48 +363,39 @@ export function BulkEPGAssignModal({
                           Accept All
                         </button>
                       )}
-                      <div className="conflicts-nav">
-                        <button
-                          className="nav-btn"
-                          onClick={handlePrevConflict}
-                          disabled={currentConflictIndex === 0}
-                          title="Previous"
-                        >
-                          <span className="material-icons">chevron_left</span>
-                        </button>
-                        <span className="nav-counter">{currentConflictIndex + 1} / {conflicts.length}</span>
-                        <button
-                          className="nav-btn"
-                          onClick={handleNextConflict}
-                          disabled={currentConflictIndex === conflicts.length - 1}
-                          title="Next"
-                        >
-                          <span className="material-icons">chevron_right</span>
-                        </button>
-                      </div>
                     </div>
                   </div>
-                  <div className="conflicts-list">
-                    {conflicts.map((result, index) => (
-                      <ConflictItem
-                        key={result.channel.id}
-                        result={result}
-                        epgSources={epgSources}
-                        selectedEpg={conflictResolutions.get(result.channel.id)}
-                        onSelect={epg => handleConflictSelect(result.channel.id, epg)}
-                        isExpanded={index === currentConflictIndex}
-                        onToggle={() => setCurrentConflictIndex(index)}
-                        recommendedEpg={getRecommendedEpg(result)}
-                        isResolved={conflictResolutions.has(result.channel.id)}
-                        itemRef={el => {
-                          if (el) {
-                            conflictItemRefs.current.set(result.channel.id, el);
-                          } else {
-                            conflictItemRefs.current.delete(result.channel.id);
-                          }
-                        }}
-                      />
-                    ))}
+                  {/* Single conflict card - show only current conflict */}
+                  {conflicts[currentConflictIndex] && (
+                    <ConflictCard
+                      result={conflicts[currentConflictIndex]}
+                      epgSources={epgSources}
+                      selectedEpg={conflictResolutions.get(conflicts[currentConflictIndex].channel.id)}
+                      onSelect={epg => handleConflictSelect(conflicts[currentConflictIndex].channel.id, epg)}
+                      recommendedEpg={getRecommendedEpg(conflicts[currentConflictIndex])}
+                    />
+                  )}
+                  {/* Navigation at bottom of card */}
+                  <div className="conflict-card-nav">
+                    <button
+                      className="nav-btn"
+                      onClick={handlePrevConflict}
+                      disabled={currentConflictIndex === 0}
+                      title="Previous"
+                    >
+                      <span className="material-icons">chevron_left</span>
+                      <span className="nav-label">Previous</span>
+                    </button>
+                    <span className="nav-counter">{currentConflictIndex + 1} / {conflicts.length}</span>
+                    <button
+                      className="nav-btn"
+                      onClick={handleNextConflict}
+                      disabled={currentConflictIndex === conflicts.length - 1}
+                      title="Next"
+                    >
+                      <span className="nav-label">Next</span>
+                      <span className="material-icons">chevron_right</span>
+                    </button>
                   </div>
                 </div>
               )}
@@ -506,83 +484,69 @@ export function BulkEPGAssignModal({
   );
 }
 
-// Conflict resolution item component
-interface ConflictItemProps {
+// Conflict card component - shows a single conflict as a card
+interface ConflictCardProps {
   result: EPGMatchResult;
   epgSources: EPGSource[];
   selectedEpg: EPGData | null | undefined;
   onSelect: (epg: EPGData | null) => void;
-  isExpanded: boolean;
-  onToggle: () => void;
   recommendedEpg: EPGData | null;
-  isResolved: boolean;
-  itemRef: (el: HTMLDivElement | null) => void;
 }
 
-function ConflictItem({ result, epgSources, selectedEpg, onSelect, isExpanded, onToggle, recommendedEpg, isResolved, itemRef }: ConflictItemProps) {
+function ConflictCard({ result, epgSources, selectedEpg, onSelect, recommendedEpg }: ConflictCardProps) {
   return (
-    <div ref={itemRef} className={`conflict-item ${isExpanded ? 'expanded' : 'collapsed'} ${isResolved ? 'resolved' : ''}`}>
-      <button className="conflict-header" onClick={onToggle}>
+    <div className="conflict-card">
+      <div className="conflict-card-header">
         <div className="conflict-channel">
           <span className="channel-name">{result.channel.name}</span>
           {result.detectedCountry && (
             <span className="country-badge">{result.detectedCountry.toUpperCase()}</span>
           )}
-          {isResolved && (
-            <span className="resolved-badge">
-              <span className="material-icons">check</span>
-            </span>
-          )}
         </div>
-        <span className="material-icons expand-icon">
-          {isExpanded ? 'expand_less' : 'expand_more'}
-        </span>
-      </button>
-      {isExpanded && (
-        <div className="conflict-body">
-          <div className="normalized-label">Normalized: "{result.normalizedName}"</div>
-          <div className="conflict-options">
-            {result.matches.map(epg => {
-              const isRecommended = recommendedEpg?.id === epg.id;
-              return (
-                <label
-                  key={epg.id}
-                  className={`conflict-option ${isRecommended ? 'recommended' : ''}`}
-                >
-                  <input
-                    type="radio"
-                    name={`conflict-${result.channel.id}`}
-                    checked={selectedEpg?.id === epg.id}
-                    onChange={() => onSelect(epg)}
-                  />
-                  <div className="option-content">
-                    {epg.icon_url && (
-                      <img src={epg.icon_url} alt="" className="epg-icon" />
-                    )}
-                    <div className="option-info">
-                      <span className="epg-name">
-                        {epg.name}
-                        {isRecommended && <span className="recommended-tag">Recommended</span>}
-                      </span>
-                      <span className="epg-tvgid">{epg.tvg_id}</span>
-                      <span className="epg-source">{getEPGSourceName(epg, epgSources)}</span>
-                    </div>
+        <div className="normalized-label">Searching for: "{result.normalizedName}"</div>
+      </div>
+      <div className="conflict-card-body">
+        <div className="conflict-options">
+          {result.matches.map(epg => {
+            const isRecommended = recommendedEpg?.id === epg.id;
+            return (
+              <label
+                key={epg.id}
+                className={`conflict-option ${isRecommended ? 'recommended' : ''} ${selectedEpg?.id === epg.id ? 'selected' : ''}`}
+              >
+                <input
+                  type="radio"
+                  name={`conflict-${result.channel.id}`}
+                  checked={selectedEpg?.id === epg.id}
+                  onChange={() => onSelect(epg)}
+                />
+                <div className="option-content">
+                  {epg.icon_url && (
+                    <img src={epg.icon_url} alt="" className="epg-icon" />
+                  )}
+                  <div className="option-info">
+                    <span className="epg-name">
+                      {epg.name}
+                      {isRecommended && <span className="recommended-tag">Recommended</span>}
+                    </span>
+                    <span className="epg-tvgid">{epg.tvg_id}</span>
+                    <span className="epg-source">{getEPGSourceName(epg, epgSources)}</span>
                   </div>
-                </label>
-              );
-            })}
-            <label className="conflict-option skip-option">
-              <input
-                type="radio"
-                name={`conflict-${result.channel.id}`}
-                checked={selectedEpg === null}
-                onChange={() => onSelect(null)}
-              />
-              <span className="skip-label">Skip this channel</span>
-            </label>
-          </div>
+                </div>
+              </label>
+            );
+          })}
+          <label className={`conflict-option skip-option ${selectedEpg === null ? 'selected' : ''}`}>
+            <input
+              type="radio"
+              name={`conflict-${result.channel.id}`}
+              checked={selectedEpg === null}
+              onChange={() => onSelect(null)}
+            />
+            <span className="skip-label">Skip this channel</span>
+          </label>
         </div>
-      )}
+      </div>
     </div>
   );
 }

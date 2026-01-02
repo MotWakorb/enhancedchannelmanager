@@ -313,53 +313,107 @@
   text-align: center;
 }
 
-/* Conflicts list */
-.conflicts-list {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 12px;
-  max-height: 400px;
-  overflow-y: auto;
-}
-
-.conflict-item {
-  background: #3a3a3a;
-  border-radius: 6px;
-  border: 1px solid var(--border-secondary);
-  transition: border-color 0.15s, background 0.15s;
-}
-
-.conflict-item.expanded {
+/* Conflict card - single card view for current conflict */
+.conflict-card {
   background: var(--bg-secondary);
-  border-color: var(--accent-primary);
+  border: 1px solid var(--accent-primary);
+  border-radius: 8px;
+  margin: 12px 0;
 }
 
-.conflict-item.resolved .conflict-header {
-  background: rgba(74, 222, 128, 0.15);
+.conflict-card-header {
+  padding: 16px;
+  border-bottom: 1px solid var(--border-secondary);
 }
 
-.conflict-header {
+.conflict-card-header .conflict-channel {
   display: flex;
-  justify-content: space-between;
   align-items: center;
-  width: 100%;
-  padding: 10px 12px;
-  background: transparent;
-  border: none;
-  cursor: pointer;
-  text-align: left;
-  transition: background 0.15s;
+  gap: 10px;
+  margin-bottom: 6px;
+}
+
+.conflict-card-header .channel-name {
+  font-size: 1.1rem;
+  font-weight: 600;
   color: var(--text-primary);
 }
 
-.conflict-header:hover {
-  background: #4a4a4a;
+.conflict-card-header .normalized-label {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  font-style: italic;
 }
 
-.conflict-header .expand-icon {
-  color: var(--text-secondary);
+.conflict-card-body {
+  padding: 12px 16px 16px;
+}
+
+.conflict-card-body .conflict-options {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+}
+
+/* Navigation at bottom of card */
+.conflict-card-nav {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 16px;
+  background: var(--bg-secondary);
+  border-top: 1px solid var(--border-secondary);
+  border-radius: 0 0 6px 6px;
+}
+
+.conflict-card-nav .nav-btn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 16px;
+  background: #3d3d3d;
+  border: none;
+  border-radius: 4px;
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: background 0.15s;
+  width: auto;
+  height: auto;
+}
+
+.conflict-card-nav .nav-btn:hover:not(:disabled) {
+  background: #4d4d4d;
+}
+
+.conflict-card-nav .nav-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.conflict-card-nav .nav-btn .material-icons {
   font-size: 20px;
+}
+
+.conflict-card-nav .nav-label {
+  font-size: 0.9rem;
+}
+
+.conflict-card-nav .nav-counter {
+  font-size: 0.95rem;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+/* Selected option highlight */
+.conflict-option.selected {
+  background: rgba(100, 108, 255, 0.2);
+  border: 1px solid var(--accent-primary);
+}
+
+.conflict-option.skip-option.selected {
+  background: rgba(100, 108, 255, 0.15);
+  border: 1px solid var(--accent-primary);
 }
 
 .conflict-channel {
