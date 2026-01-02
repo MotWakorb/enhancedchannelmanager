@@ -1937,11 +1937,12 @@ export function ChannelsPane({
     setNewChannelName(stream.name);
 
     // Set the group (handle 'ungrouped' case)
-    if (groupId === 'ungrouped') {
-      setNewChannelGroup('');
-    } else {
-      setNewChannelGroup(groupId);
-    }
+    const numericGroupId = groupId === 'ungrouped' ? '' : groupId;
+    setNewChannelGroup(numericGroupId);
+
+    // Set the next available channel number for this group
+    const nextNumber = getNextChannelNumberForGroup(numericGroupId);
+    setNewChannelNumber(nextNumber.toString());
 
     // Open the create modal
     setShowCreateModal(true);
