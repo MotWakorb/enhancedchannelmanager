@@ -1304,6 +1304,7 @@ export function ChannelsPane({
   const [newChannelNamingExpanded, setNewChannelNamingExpanded] = useState(false);
   const [newChannelAddNumber, setNewChannelAddNumber] = useState(false);
   const [newChannelNumberSeparator, setNewChannelNumberSeparator] = useState<NumberSeparator>('-');
+  const [newChannelStripCountry, setNewChannelStripCountry] = useState(false);
   const [groupSearchText, setGroupSearchText] = useState('');
   const [showGroupDropdown, setShowGroupDropdown] = useState(false);
   const [creating, setCreating] = useState(false);
@@ -2031,6 +2032,7 @@ export function ChannelsPane({
     // Set naming options from settings defaults
     setNewChannelAddNumber(channelDefaults?.includeChannelNumberInName ?? false);
     setNewChannelNumberSeparator((channelDefaults?.channelNumberSeparator as NumberSeparator) || '-');
+    setNewChannelStripCountry(channelDefaults?.removeCountryPrefix ?? false);
     setNewChannelNamingExpanded(false);
 
     // Open the create modal
@@ -2062,6 +2064,12 @@ export function ChannelsPane({
       // Build the final channel name with naming options applied
       let finalName = newChannelName.trim();
 
+      // Strip country prefix if requested (e.g., "US : BET Gospel" -> "BET Gospel")
+      if (newChannelStripCountry) {
+        finalName = api.stripCountryPrefix(finalName);
+      }
+
+      // Add channel number prefix if requested
       if (newChannelAddNumber) {
         finalName = `${channelNum} ${newChannelNumberSeparator} ${finalName}`;
       }
@@ -3637,6 +3645,7 @@ export function ChannelsPane({
                   // Set naming options from settings defaults
                   setNewChannelAddNumber(channelDefaults?.includeChannelNumberInName ?? false);
                   setNewChannelNumberSeparator((channelDefaults?.channelNumberSeparator as NumberSeparator) || '-');
+                  setNewChannelStripCountry(channelDefaults?.removeCountryPrefix ?? false);
                   setNewChannelNamingExpanded(false);
                   setShowCreateModal(true);
                 }}
@@ -3760,11 +3769,28 @@ export function ChannelsPane({
                   </span>
                   <span>Naming Options</span>
                   <span className="collapsible-summary">
-                    {newChannelAddNumber ? `Add number (${newChannelNumberSeparator})` : 'Default'}
+                    {(() => {
+                      const options: string[] = [];
+                      if (newChannelStripCountry) options.push('Strip country');
+                      if (newChannelAddNumber) options.push(`Add # (${newChannelNumberSeparator})`);
+                      return options.length > 0 ? options.join(', ') : 'Default';
+                    })()}
                   </span>
                 </button>
                 {newChannelNamingExpanded && (
                   <div className="collapsible-content naming-options">
+                    {/* Strip country prefix - only show if detected */}
+                    {api.getCountryPrefix(newChannelName) && (
+                      <label className="naming-option">
+                        <input
+                          type="checkbox"
+                          checked={newChannelStripCountry}
+                          onChange={(e) => setNewChannelStripCountry(e.target.checked)}
+                        />
+                        <span>Strip country prefix ({api.getCountryPrefix(newChannelName)})</span>
+                      </label>
+                    )}
+
                     {/* Add channel number to name */}
                     <label className="naming-option">
                       <input
@@ -3801,12 +3827,21 @@ export function ChannelsPane({
                       </div>
                     )}
 
-                    {/* Preview */}
-                    {newChannelAddNumber && newChannelName && newChannelNumber && (
+                    {/* Preview - show when any naming option is active */}
+                    {(newChannelStripCountry || newChannelAddNumber) && newChannelName && newChannelNumber && (
                       <div className="naming-preview">
                         <span className="preview-label">Preview:</span>
                         <span className="preview-name">
-                          {`${newChannelNumber} ${newChannelNumberSeparator} ${newChannelName}`}
+                          {(() => {
+                            let preview = newChannelName;
+                            if (newChannelStripCountry) {
+                              preview = api.stripCountryPrefix(preview);
+                            }
+                            if (newChannelAddNumber) {
+                              preview = `${newChannelNumber} ${newChannelNumberSeparator} ${preview}`;
+                            }
+                            return preview;
+                          })()}
                         </span>
                       </div>
                     )}
