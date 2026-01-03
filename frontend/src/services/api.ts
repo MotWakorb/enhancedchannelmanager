@@ -318,6 +318,7 @@ export interface SettingsResponse {
   show_stream_urls: boolean;
   hide_auto_sync_groups: boolean;
   theme: Theme;
+  default_channel_profile_id: number | null;
 }
 
 export interface TestConnectionResult {
@@ -343,6 +344,7 @@ export async function saveSettings(settings: {
   show_stream_urls?: boolean;  // Optional - defaults to true
   hide_auto_sync_groups?: boolean;  // Optional - defaults to false
   theme?: Theme;  // Optional - defaults to 'dark'
+  default_channel_profile_id?: number | null;  // Optional - null means no default
 }): Promise<{ status: string; configured: boolean }> {
   return fetchJson(`${API_BASE}/settings`, {
     method: 'POST',
