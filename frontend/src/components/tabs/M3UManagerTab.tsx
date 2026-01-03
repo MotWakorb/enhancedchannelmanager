@@ -322,10 +322,10 @@ export function M3UManagerTab() {
     loadData();
   };
 
-  // Filter accounts by server group if selected
-  const filteredAccounts = filterServerGroup !== null
-    ? accounts.filter(a => a.server_group === filterServerGroup)
-    : accounts;
+  // Filter accounts: hide "custom" account and optionally filter by server group
+  const filteredAccounts = accounts
+    .filter(a => a.name.toLowerCase() !== 'custom')
+    .filter(a => filterServerGroup === null || a.server_group === filterServerGroup);
 
   if (loading) {
     return (
