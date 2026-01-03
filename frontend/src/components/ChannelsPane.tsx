@@ -1215,7 +1215,7 @@ export function ChannelsPane({
   isEditMode = false,
   modifiedChannelIds,
   onStageUpdateChannel,
-  onStageAddStream: _onStageAddStream, // Handled in App.tsx for stream drops
+  onStageAddStream, // Used for stream assignment after channel creation
   onStageRemoveStream,
   onStageReorderStreams,
   onStageBulkAssignNumbers: _onStageBulkAssignNumbers, // Handled in App.tsx for channel reorder
@@ -1275,7 +1275,6 @@ export function ChannelsPane({
   showStreamUrls = true,
 }: ChannelsPaneProps) {
   // Suppress unused variable warnings - these are passed through but handled in parent
-  void _onStageAddStream;
   void _onStageBulkAssignNumbers;
   void onLogosChange;
   const [expandedGroups, setExpandedGroups] = useState<GroupState>({});
@@ -1298,6 +1297,7 @@ export function ChannelsPane({
   const [newChannelGroup, setNewChannelGroup] = useState<number | ''>('');
   const [newChannelLogoId, setNewChannelLogoId] = useState<number | null>(null); // Logo from dropped stream
   const [newChannelTvgId, setNewChannelTvgId] = useState<string | null>(null); // tvg_id from dropped stream
+  const [newChannelStreamId, setNewChannelStreamId] = useState<number | null>(null); // Stream to assign after channel creation
   const [newChannelSelectedProfiles, setNewChannelSelectedProfiles] = useState<Set<number>>(new Set());
   const [newChannelProfilesExpanded, setNewChannelProfilesExpanded] = useState(false);
   // Naming options state for single channel create
@@ -1958,6 +1958,7 @@ export function ChannelsPane({
     setNewChannelGroup('');
     setNewChannelLogoId(null);
     setNewChannelTvgId(null);
+    setNewChannelStreamId(null);
     setGroupSearchText('');
     setShowGroupDropdown(false);
   };
@@ -2007,6 +2008,9 @@ export function ChannelsPane({
 
     // Capture the stream's tvg_id for the new channel
     setNewChannelTvgId(stream.tvg_id ?? null);
+
+    // Store the stream ID to assign after channel creation
+    setNewChannelStreamId(streamId);
 
     // Set the group (handle 'ungrouped' case)
     if (groupId === 'ungrouped') {
@@ -2081,6 +2085,22 @@ export function ChannelsPane({
         newChannelLogoId ?? undefined,
         newChannelTvgId ?? undefined
       );
+
+      // Assign the stream to the channel if one was dropped
+      if (newChannelStreamId && newChannel?.id) {
+        if (isEditMode && onStageAddStream) {
+          // In edit mode, stage the stream assignment
+          const stream = allStreams.find((s: Stream) => s.id === newChannelStreamId);
+          onStageAddStream(newChannel.id, newChannelStreamId, `Added stream "${stream?.name || newChannelStreamId}" to channel`);
+        } else {
+          // In normal mode, call the API directly
+          try {
+            await onChannelDrop(newChannel.id, newChannelStreamId);
+          } catch (err) {
+            console.error(`Failed to assign stream ${newChannelStreamId} to channel ${newChannel.id}:`, err);
+          }
+        }
+      }
 
       // Assign channel to selected profiles
       if (newChannelSelectedProfiles.size > 0 && newChannel?.id) {
@@ -3637,6 +3657,7 @@ export function ChannelsPane({
                   setGroupSearchText('');
                   setNewChannelLogoId(null);
                   setNewChannelTvgId(null);
+                  setNewChannelStreamId(null);
                   // Set default channel profile from settings
                   setNewChannelSelectedProfiles(
                     channelDefaults?.defaultChannelProfileId ? new Set([channelDefaults.defaultChannelProfileId]) : new Set()
