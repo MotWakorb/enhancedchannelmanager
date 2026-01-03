@@ -1186,7 +1186,7 @@ export function StreamsPane({
 
       {/* Bulk Create Modal */}
       {bulkCreateModalOpen && streamsToCreate.length > 0 && (
-        <div className="modal-overlay" onClick={closeBulkCreateModal}>
+        <div className="modal-overlay">
           <div className="bulk-create-modal" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
               <h3>

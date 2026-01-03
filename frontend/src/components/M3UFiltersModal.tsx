@@ -148,7 +148,7 @@ export function M3UFiltersModal({
   if (!isOpen) return null;
 
   return (
-    <div className="modal-overlay" onClick={onClose}>
+    <div className="modal-overlay">
       <div className="modal-content m3u-filters-modal" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
           <div className="header-info">

@@ -831,7 +831,7 @@ function EditChannelModal({
   };
 
   return (
-    <div className="edit-channel-modal-overlay" onClick={handleClose}>
+    <div className="edit-channel-modal-overlay">
       <div className="edit-channel-modal" onClick={(e) => e.stopPropagation()}>
         <div className="edit-channel-titlebar">
           <span className="edit-channel-titlebar-text">Edit Channel</span>
@@ -3698,7 +3698,7 @@ export function ChannelsPane({
 
       {/* Create Channel Modal */}
       {showCreateModal && (
-        <div className="modal-overlay" onClick={handleCloseCreateModal}>
+        <div className="modal-overlay">
           <div className="modal-content" onClick={(e) => e.stopPropagation()}>
             <h3>Create New Channel</h3>
             <div className="modal-form">
@@ -3935,7 +3935,7 @@ export function ChannelsPane({
 
       {/* Create Channel Group Modal */}
       {showCreateGroupModal && (
-        <div className="modal-overlay" onClick={handleCloseCreateGroupModal}>
+        <div className="modal-overlay">
           <div className="modal-content" onClick={(e) => e.stopPropagation()}>
             <h3>Create New Channel Group</h3>
             <div className="modal-form">
@@ -3977,7 +3977,7 @@ export function ChannelsPane({
 
       {/* Channel Number Conflict Dialog */}
       {showConflictDialog && conflictingChannelNumber !== null && (
-        <div className="modal-overlay" onClick={() => setShowConflictDialog(false)}>
+        <div className="modal-overlay">
           <div className="modal-content conflict-dialog" onClick={(e) => e.stopPropagation()}>
             <h3>Channel Number Conflict</h3>
             <div className="conflict-message">
@@ -4025,7 +4025,7 @@ export function ChannelsPane({
 
       {/* Delete Channel Confirmation Dialog */}
       {showDeleteConfirm && channelToDelete && (
-        <div className="modal-overlay" onClick={handleCancelDelete}>
+        <div className="modal-overlay">
           <div className="modal-content delete-dialog" onClick={(e) => e.stopPropagation()}>
             <h3>Delete Channel</h3>
             <div className="delete-message">
@@ -4102,7 +4102,7 @@ export function ChannelsPane({
 
       {/* Delete Group Confirmation Dialog */}
       {showDeleteGroupConfirm && groupToDelete && (
-        <div className="modal-overlay" onClick={handleCancelDeleteGroup}>
+        <div className="modal-overlay">
           <div className="modal-content delete-dialog" onClick={(e) => e.stopPropagation()}>
             <h3>Delete Group</h3>
             <div className="delete-message">
@@ -4173,7 +4173,7 @@ export function ChannelsPane({
         }
 
         return (
-          <div className="modal-overlay" onClick={handleCancelBulkDelete}>
+          <div className="modal-overlay">
             <div className="modal-content delete-dialog" onClick={(e) => e.stopPropagation()}>
               <h3>Delete {selectedChannelIds.size} Channel{selectedChannelIds.size !== 1 ? 's' : ''}</h3>
               <div className="delete-message">
@@ -4329,7 +4329,7 @@ export function ChannelsPane({
 
       {/* Cross-Group Move Modal */}
       {showCrossGroupMoveModal && crossGroupMoveData && (
-        <div className="modal-overlay" onClick={handleCrossGroupMoveCancel}>
+        <div className="modal-overlay">
           <div className="modal-content cross-group-move-dialog" onClick={(e) => e.stopPropagation()}>
             <h3>Move {crossGroupMoveData.channels.length > 1 ? `${crossGroupMoveData.channels.length} Channels` : 'Channel'} to Group</h3>
 
@@ -4503,7 +4503,7 @@ export function ChannelsPane({
 
       {/* Sort & Renumber Modal */}
       {showSortRenumberModal && sortRenumberData && (
-        <div className="modal-overlay" onClick={handleSortRenumberCancel}>
+        <div className="modal-overlay">
           <div className="modal-content sort-renumber-dialog" onClick={(e) => e.stopPropagation()}>
             <h3>Sort & Renumber Channels</h3>
 

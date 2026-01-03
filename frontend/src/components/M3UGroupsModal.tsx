@@ -146,7 +146,7 @@ export function M3UGroupsModal({
   if (!isOpen) return null;
 
   return (
-    <div className="modal-overlay" onClick={onClose}>
+    <div className="modal-overlay">
       <div className="modal-content m3u-groups-modal" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
           <div className="header-info">
