@@ -24,7 +24,7 @@ import type { Channel, ChannelGroup, ChannelProfile, Stream, M3UAccount, M3UGrou
 import { ChannelProfilesListModal } from './ChannelProfilesListModal';
 import type { ChannelDefaults } from './StreamsPane';
 import * as api from '../services/api';
-import type { NumberSeparator, PrefixOrder } from '../services/api';
+import type { NumberSeparator } from '../services/api';
 import { HistoryToolbar } from './HistoryToolbar';
 import { BulkEPGAssignModal, type EPGAssignment } from './BulkEPGAssignModal';
 import { naturalCompare } from '../utils/naturalSort';
@@ -1304,10 +1304,6 @@ export function ChannelsPane({
   const [newChannelNamingExpanded, setNewChannelNamingExpanded] = useState(false);
   const [newChannelAddNumber, setNewChannelAddNumber] = useState(false);
   const [newChannelNumberSeparator, setNewChannelNumberSeparator] = useState<NumberSeparator>('-');
-  const [newChannelKeepCountry, setNewChannelKeepCountry] = useState(false);
-  const [newChannelCountrySeparator, setNewChannelCountrySeparator] = useState<NumberSeparator>('|');
-  const [newChannelPrefixOrder, setNewChannelPrefixOrder] = useState<PrefixOrder>('number-first');
-  const [newChannelCountryCode, setNewChannelCountryCode] = useState('');
   const [groupSearchText, setGroupSearchText] = useState('');
   const [showGroupDropdown, setShowGroupDropdown] = useState(false);
   const [creating, setCreating] = useState(false);
@@ -2035,10 +2031,6 @@ export function ChannelsPane({
     // Set naming options from settings defaults
     setNewChannelAddNumber(channelDefaults?.includeChannelNumberInName ?? false);
     setNewChannelNumberSeparator((channelDefaults?.channelNumberSeparator as NumberSeparator) || '-');
-    setNewChannelKeepCountry(channelDefaults?.includeCountryInName ?? false);
-    setNewChannelCountrySeparator((channelDefaults?.countrySeparator as NumberSeparator) || '|');
-    setNewChannelPrefixOrder('number-first');
-    setNewChannelCountryCode('');
     setNewChannelNamingExpanded(false);
 
     // Open the create modal
@@ -2069,21 +2061,9 @@ export function ChannelsPane({
     try {
       // Build the final channel name with naming options applied
       let finalName = newChannelName.trim();
-      const countryCode = newChannelCountryCode || '';
 
-      if (newChannelAddNumber && newChannelKeepCountry && countryCode) {
-        // Both number and country
-        if (newChannelPrefixOrder === 'country-first') {
-          finalName = `${countryCode} ${newChannelCountrySeparator} ${channelNum} ${newChannelNumberSeparator} ${finalName}`;
-        } else {
-          finalName = `${channelNum} ${newChannelNumberSeparator} ${countryCode} ${newChannelCountrySeparator} ${finalName}`;
-        }
-      } else if (newChannelAddNumber) {
-        // Just number
+      if (newChannelAddNumber) {
         finalName = `${channelNum} ${newChannelNumberSeparator} ${finalName}`;
-      } else if (newChannelKeepCountry && countryCode) {
-        // Just country
-        finalName = `${countryCode} ${newChannelCountrySeparator} ${finalName}`;
       }
 
       const newChannel = await onCreateChannel(
@@ -3657,10 +3637,6 @@ export function ChannelsPane({
                   // Set naming options from settings defaults
                   setNewChannelAddNumber(channelDefaults?.includeChannelNumberInName ?? false);
                   setNewChannelNumberSeparator((channelDefaults?.channelNumberSeparator as NumberSeparator) || '-');
-                  setNewChannelKeepCountry(channelDefaults?.includeCountryInName ?? false);
-                  setNewChannelCountrySeparator((channelDefaults?.countrySeparator as NumberSeparator) || '|');
-                  setNewChannelPrefixOrder('number-first');
-                  setNewChannelCountryCode('');
                   setNewChannelNamingExpanded(false);
                   setShowCreateModal(true);
                 }}
@@ -3784,12 +3760,7 @@ export function ChannelsPane({
                   </span>
                   <span>Naming Options</span>
                   <span className="collapsible-summary">
-                    {(() => {
-                      const opts: string[] = [];
-                      if (newChannelAddNumber) opts.push(`Number (${newChannelNumberSeparator})`);
-                      if (newChannelKeepCountry) opts.push(`Country (${newChannelCountrySeparator})`);
-                      return opts.length > 0 ? opts.join(', ') : 'Default';
-                    })()}
+                    {newChannelAddNumber ? `Add number (${newChannelNumberSeparator})` : 'Default'}
                   </span>
                 </button>
                 {newChannelNamingExpanded && (
@@ -3830,100 +3801,12 @@ export function ChannelsPane({
                       </div>
                     )}
 
-                    {/* Keep country prefix */}
-                    <label className="naming-option">
-                      <input
-                        type="checkbox"
-                        checked={newChannelKeepCountry}
-                        onChange={(e) => setNewChannelKeepCountry(e.target.checked)}
-                      />
-                      <span>Add country prefix</span>
-                    </label>
-                    {newChannelKeepCountry && (
-                      <>
-                        <div className="separator-options">
-                          <span className="separator-label">Separator:</span>
-                          <button
-                            type="button"
-                            className={`separator-btn ${newChannelCountrySeparator === '-' ? 'active' : ''}`}
-                            onClick={() => setNewChannelCountrySeparator('-')}
-                          >
-                            -
-                          </button>
-                          <button
-                            type="button"
-                            className={`separator-btn ${newChannelCountrySeparator === ':' ? 'active' : ''}`}
-                            onClick={() => setNewChannelCountrySeparator(':')}
-                          >
-                            :
-                          </button>
-                          <button
-                            type="button"
-                            className={`separator-btn ${newChannelCountrySeparator === '|' ? 'active' : ''}`}
-                            onClick={() => setNewChannelCountrySeparator('|')}
-                          >
-                            |
-                          </button>
-                        </div>
-                        <input
-                          type="text"
-                          className="country-input"
-                          placeholder="Country code (e.g., US)"
-                          maxLength={6}
-                          value={newChannelCountryCode}
-                          onChange={(e) => setNewChannelCountryCode(e.target.value.toUpperCase())}
-                        />
-                      </>
-                    )}
-
-                    {/* Prefix order - only show when both are enabled */}
-                    {newChannelAddNumber && newChannelKeepCountry && (
-                      <div className="prefix-order-options">
-                        <span className="prefix-order-label">Prefix Order:</span>
-                        <label className="radio-option">
-                          <input
-                            type="radio"
-                            name="newChannelPrefixOrder"
-                            checked={newChannelPrefixOrder === 'number-first'}
-                            onChange={() => setNewChannelPrefixOrder('number-first')}
-                          />
-                          <span>Number first</span>
-                        </label>
-                        <label className="radio-option">
-                          <input
-                            type="radio"
-                            name="newChannelPrefixOrder"
-                            checked={newChannelPrefixOrder === 'country-first'}
-                            onChange={() => setNewChannelPrefixOrder('country-first')}
-                          />
-                          <span>Country first</span>
-                        </label>
-                      </div>
-                    )}
-
                     {/* Preview */}
-                    {(newChannelAddNumber || newChannelKeepCountry) && newChannelName && newChannelNumber && (
+                    {newChannelAddNumber && newChannelName && newChannelNumber && (
                       <div className="naming-preview">
                         <span className="preview-label">Preview:</span>
                         <span className="preview-name">
-                          {(() => {
-                            const num = newChannelNumber;
-                            const name = newChannelName;
-                            const countryCode = newChannelCountryCode || 'US';
-
-                            if (newChannelAddNumber && newChannelKeepCountry) {
-                              if (newChannelPrefixOrder === 'country-first') {
-                                return `${countryCode} ${newChannelCountrySeparator} ${num} ${newChannelNumberSeparator} ${name}`;
-                              } else {
-                                return `${num} ${newChannelNumberSeparator} ${countryCode} ${newChannelCountrySeparator} ${name}`;
-                              }
-                            } else if (newChannelAddNumber) {
-                              return `${num} ${newChannelNumberSeparator} ${name}`;
-                            } else if (newChannelKeepCountry) {
-                              return `${countryCode} ${newChannelCountrySeparator} ${name}`;
-                            }
-                            return name;
-                          })()}
+                          {`${newChannelNumber} ${newChannelNumberSeparator} ${newChannelName}`}
                         </span>
                       </div>
                     )}
