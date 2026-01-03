@@ -592,6 +592,69 @@ class DispatcharrClient:
         return response.json()
 
     # -------------------------------------------------------------------------
+    # Channel Profiles
+    # -------------------------------------------------------------------------
+
+    async def get_channel_profiles(self) -> list:
+        """Get all channel profiles."""
+        response = await self._request("GET", "/api/channels/profiles/")
+        response.raise_for_status()
+        return response.json()
+
+    async def get_channel_profile(self, profile_id: int) -> dict:
+        """Get a single channel profile by ID."""
+        response = await self._request("GET", f"/api/channels/profiles/{profile_id}/")
+        response.raise_for_status()
+        return response.json()
+
+    async def create_channel_profile(self, data: dict) -> dict:
+        """Create a new channel profile."""
+        response = await self._request("POST", "/api/channels/profiles/", json=data)
+        response.raise_for_status()
+        return response.json()
+
+    async def update_channel_profile(self, profile_id: int, data: dict) -> dict:
+        """Update a channel profile (PATCH)."""
+        response = await self._request(
+            "PATCH", f"/api/channels/profiles/{profile_id}/", json=data
+        )
+        response.raise_for_status()
+        return response.json()
+
+    async def delete_channel_profile(self, profile_id: int) -> None:
+        """Delete a channel profile."""
+        response = await self._request("DELETE", f"/api/channels/profiles/{profile_id}/")
+        response.raise_for_status()
+
+    async def bulk_update_profile_channels(self, profile_id: int, data: dict) -> dict:
+        """Bulk enable/disable channels for a profile.
+
+        Data format: {"channel_ids": [1, 2, 3], "enabled": true}
+        """
+        response = await self._request(
+            "PATCH",
+            f"/api/channels/profiles/{profile_id}/channels/bulk-update/",
+            json=data
+        )
+        response.raise_for_status()
+        return response.json() if response.content else {"success": True}
+
+    async def update_profile_channel(
+        self, profile_id: int, channel_id: int, data: dict
+    ) -> dict:
+        """Enable/disable a single channel for a profile.
+
+        Data format: {"enabled": true}
+        """
+        response = await self._request(
+            "PATCH",
+            f"/api/channels/profiles/{profile_id}/channels/{channel_id}/",
+            json=data
+        )
+        response.raise_for_status()
+        return response.json() if response.content else {"success": True}
+
+    # -------------------------------------------------------------------------
     # Cleanup
     # -------------------------------------------------------------------------
 

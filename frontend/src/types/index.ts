@@ -55,6 +55,13 @@ export interface StreamProfile {
   locked: boolean;
 }
 
+// Channel Profile - for creating separate M3U playlists per user
+export interface ChannelProfile {
+  id: number;
+  name: string;
+  channels: number[]; // channel IDs enabled for this profile (read-only from API)
+}
+
 export interface ChannelGroup {
   id: number;
   name: string;

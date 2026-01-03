@@ -277,6 +277,31 @@
   font-size: 18px;
 }
 
+.profiles-btn {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  background-color: var(--bg-hover);
+  border: 1px solid var(--border-secondary);
+  color: var(--button-text);
+  padding: 0.375rem 0.75rem;
+  border-radius: 4px;
+  font-size: 0.85rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color 0.15s, border-color 0.15s;
+}
+
+.profiles-btn:hover {
+  background-color: var(--button-hover-bg);
+  border-color: var(--border-secondary);
+  color: var(--text-primary);
+}
+
+.profiles-btn .material-icons {
+  font-size: 18px;
+}
+
 .pane-filters {
   padding: 0.75rem;
   display: flex;
