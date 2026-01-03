@@ -116,7 +116,7 @@ function M3UAccountRow({
           Streams: {account.max_streams === 0 ? 'Unlimited' : account.max_streams}
         </span>
         <span className="setting-item">
-          Refresh: {account.refresh_interval}h
+          Refresh: {account.refresh_interval === 0 ? 'Disabled' : `${account.refresh_interval}h`}
         </span>
       </div>
 

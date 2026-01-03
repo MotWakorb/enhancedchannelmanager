@@ -8,7 +8,7 @@ import {
 import { ChannelManagerTab } from './components/tabs/ChannelManagerTab';
 import { useChangeHistory, useEditMode } from './hooks';
 import * as api from './services/api';
-import type { Channel, ChannelGroup, Stream, M3UAccount, M3UGroupSetting, Logo, ChangeInfo, EPGData, StreamProfile, EPGSource, ChannelListFilterSettings } from './types';
+import type { Channel, ChannelGroup, ChannelProfile, Stream, M3UAccount, M3UGroupSetting, Logo, ChangeInfo, EPGData, StreamProfile, EPGSource, ChannelListFilterSettings } from './types';
 import packageJson from '../package.json';
 import './App.css';
 
@@ -41,17 +41,24 @@ function App() {
   const [streamSearch, setStreamSearch] = useState('');
   const [streamProviderFilter, setStreamProviderFilter] = useState<number | null>(null);
   const [streamGroupFilter, setStreamGroupFilter] = useState<string | null>(null);
-  // Multi-select filter state for streams pane (UI filtering)
-  const [selectedProviderFilters, setSelectedProviderFilters] = useState<number[]>([]);
-  const [selectedStreamGroupFilters, setSelectedStreamGroupFilters] = useState<string[]>([]);
+  // Multi-select filter state for streams pane (UI filtering) - persisted to localStorage
+  const [selectedProviderFilters, setSelectedProviderFilters] = useState<number[]>(() => {
+    const saved = localStorage.getItem('streamProviderFilters');
+    return saved ? JSON.parse(saved) : [];
+  });
+  const [selectedStreamGroupFilters, setSelectedStreamGroupFilters] = useState<string[]>(() => {
+    const saved = localStorage.getItem('streamGroupFilters');
+    return saved ? JSON.parse(saved) : [];
+  });
 
   // Logos state
   const [logos, setLogos] = useState<Logo[]>([]);
 
-  // EPG Data, EPG Sources, and Stream Profiles state
+  // EPG Data, EPG Sources, Stream Profiles, and Channel Profiles state
   const [epgData, setEpgData] = useState<EPGData[]>([]);
   const [epgSources, setEpgSources] = useState<EPGSource[]>([]);
   const [streamProfiles, setStreamProfiles] = useState<StreamProfile[]>([]);
+  const [channelProfiles, setChannelProfiles] = useState<ChannelProfile[]>([]);
   const [epgDataLoading, setEpgDataLoading] = useState(false);
 
   // Settings state
@@ -292,6 +299,7 @@ function App() {
         loadStreams();
         loadLogos();
         loadStreamProfiles();
+        loadChannelProfiles();
         loadEpgSources();
         loadEpgData();
       } catch (err) {
@@ -421,6 +429,7 @@ function App() {
     loadStreams();
     loadLogos();
     loadStreamProfiles();
+    loadChannelProfiles();
     loadEpgSources();
     loadEpgData();
   };
@@ -457,6 +466,24 @@ function App() {
       localStorage.setItem('channelListFilters', JSON.stringify(newFilters));
       return newFilters;
     });
+  }, []);
+
+  // Wrapper functions to persist stream filters to localStorage
+  const updateSelectedProviderFilters = useCallback((providerIds: number[]) => {
+    setSelectedProviderFilters(providerIds);
+    localStorage.setItem('streamProviderFilters', JSON.stringify(providerIds));
+  }, []);
+
+  const updateSelectedStreamGroupFilters = useCallback((groups: string[]) => {
+    setSelectedStreamGroupFilters(groups);
+    localStorage.setItem('streamGroupFilters', JSON.stringify(groups));
+  }, []);
+
+  const clearStreamFilters = useCallback(() => {
+    setSelectedProviderFilters([]);
+    setSelectedStreamGroupFilters([]);
+    localStorage.removeItem('streamProviderFilters');
+    localStorage.removeItem('streamGroupFilters');
   }, []);
 
   const trackNewlyCreatedGroup = useCallback((groupId: number) => {
@@ -534,6 +561,15 @@ function App() {
       setStreamProfiles(profiles);
     } catch (err) {
       console.error('Failed to load stream profiles:', err);
+    }
+  };
+
+  const loadChannelProfiles = async () => {
+    try {
+      const profiles = await api.getChannelProfiles();
+      setChannelProfiles(profiles);
+    } catch (err) {
+      console.error('Failed to load channel profiles:', err);
     }
   };
 
@@ -1281,6 +1317,10 @@ function App() {
               streamProfiles={streamProfiles}
               epgDataLoading={epgDataLoading}
 
+              // Channel Profiles
+              channelProfiles={channelProfiles}
+              onChannelProfilesChange={loadChannelProfiles}
+
               // Provider & Filter Settings
               providerGroupSettings={providerGroupSettings}
               channelListFilters={channelListFilters}
@@ -1302,9 +1342,10 @@ function App() {
               streamGroupFilter={streamGroupFilter}
               onStreamGroupFilterChange={setStreamGroupFilter}
               selectedProviders={selectedProviderFilters}
-              onSelectedProvidersChange={setSelectedProviderFilters}
+              onSelectedProvidersChange={updateSelectedProviderFilters}
               selectedStreamGroups={selectedStreamGroupFilters}
-              onSelectedStreamGroupsChange={setSelectedStreamGroupFilters}
+              onSelectedStreamGroupsChange={updateSelectedStreamGroupFilters}
+              onClearStreamFilters={clearStreamFilters}
 
               // Bulk Create
               channelDefaults={channelDefaults}

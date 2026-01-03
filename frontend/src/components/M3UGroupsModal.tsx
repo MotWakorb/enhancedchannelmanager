@@ -29,23 +29,27 @@ export function M3UGroupsModal({
   const [error, setError] = useState<string | null>(null);
   const [hasChanges, setHasChanges] = useState(false);
 
-  // Fetch channel groups to get names when modal opens
+  // Fetch fresh account data and channel groups when modal opens
   useEffect(() => {
-    if (isOpen) {
+    if (isOpen && account) {
       setSearch('');
       setError(null);
       setHasChanges(false);
       setLoading(true);
 
-      // Fetch channel groups to get the names
-      api.getChannelGroups()
-        .then((channelGroups: ChannelGroup[]) => {
+      // Fetch both fresh account data AND channel groups to get names
+      // This ensures we always have the latest state from the server
+      Promise.all([
+        api.getM3UAccount(account.id),
+        api.getChannelGroups(),
+      ])
+        .then(([freshAccount, channelGroups]: [typeof account, ChannelGroup[]]) => {
           // Create a map of channel_group ID -> name
           const nameMap = new Map<number, string>();
           channelGroups.forEach(g => nameMap.set(g.id, g.name));
 
-          // Merge names into account's channel_groups
-          const groupsWithNames: GroupWithName[] = account.channel_groups.map(g => ({
+          // Merge names into fresh account's channel_groups
+          const groupsWithNames: GroupWithName[] = freshAccount.channel_groups.map(g => ({
             ...g,
             name: nameMap.get(g.channel_group) || `Group ${g.channel_group}`,
           }));
@@ -53,8 +57,8 @@ export function M3UGroupsModal({
           setGroups(groupsWithNames);
         })
         .catch(err => {
-          setError(err instanceof Error ? err.message : 'Failed to load group names');
-          // Fall back to showing groups without names
+          setError(err instanceof Error ? err.message : 'Failed to load group data');
+          // Fall back to showing groups from prop without names
           setGroups(account.channel_groups.map(g => ({
             ...g,
             name: `Group ${g.channel_group}`,
@@ -62,7 +66,7 @@ export function M3UGroupsModal({
         })
         .finally(() => setLoading(false));
     }
-  }, [isOpen, account]);
+  }, [isOpen, account?.id]);
 
   // Filter groups by search and hideDisabled
   const filteredGroups = useMemo(() => {
@@ -127,7 +131,7 @@ export function M3UGroupsModal({
         auto_sync_channel_start: g.auto_sync_channel_start,
       }));
 
-      await api.updateM3UGroupSettings(account.id, { channel_groups: groupSettings });
+      await api.updateM3UGroupSettings(account.id, { group_settings: groupSettings });
       onSaved();
       onClose();
     } catch (err) {

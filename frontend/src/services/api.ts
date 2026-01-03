@@ -1,6 +1,7 @@
 import type {
   Channel,
   ChannelGroup,
+  ChannelProfile,
   Stream,
   M3UAccount,
   M3UAccountCreateRequest,
@@ -261,8 +262,8 @@ export async function deleteM3UFilter(accountId: number, filterId: number): Prom
 // M3U Group Settings
 export async function updateM3UGroupSettings(
   accountId: number,
-  data: { channel_groups: Partial<ChannelGroupM3UAccount>[] }
-): Promise<M3UAccount> {
+  data: { group_settings: Partial<ChannelGroupM3UAccount>[] }
+): Promise<{ message: string }> {
   return fetchJson(`${API_BASE}/m3u/accounts/${accountId}/group-settings`, {
     method: 'PATCH',
     body: JSON.stringify(data),
@@ -480,6 +481,59 @@ export async function getEPGDataById(id: number): Promise<EPGData> {
 // Stream Profiles
 export async function getStreamProfiles(): Promise<StreamProfile[]> {
   return fetchJson(`${API_BASE}/stream-profiles`);
+}
+
+// Channel Profiles
+export async function getChannelProfiles(): Promise<ChannelProfile[]> {
+  return fetchJson(`${API_BASE}/channel-profiles`);
+}
+
+export async function getChannelProfile(id: number): Promise<ChannelProfile> {
+  return fetchJson(`${API_BASE}/channel-profiles/${id}`);
+}
+
+export async function createChannelProfile(data: { name: string }): Promise<ChannelProfile> {
+  return fetchJson(`${API_BASE}/channel-profiles`, {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
+export async function updateChannelProfile(
+  id: number,
+  data: Partial<ChannelProfile>
+): Promise<ChannelProfile> {
+  return fetchJson(`${API_BASE}/channel-profiles/${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify(data),
+  });
+}
+
+export async function deleteChannelProfile(id: number): Promise<{ status: string }> {
+  return fetchJson(`${API_BASE}/channel-profiles/${id}`, {
+    method: 'DELETE',
+  });
+}
+
+export async function bulkUpdateProfileChannels(
+  profileId: number,
+  data: { channel_ids: number[]; enabled: boolean }
+): Promise<{ success: boolean }> {
+  return fetchJson(`${API_BASE}/channel-profiles/${profileId}/channels/bulk-update`, {
+    method: 'PATCH',
+    body: JSON.stringify(data),
+  });
+}
+
+export async function updateProfileChannel(
+  profileId: number,
+  channelId: number,
+  data: { enabled: boolean }
+): Promise<{ success: boolean }> {
+  return fetchJson(`${API_BASE}/channel-profiles/${profileId}/channels/${channelId}`, {
+    method: 'PATCH',
+    body: JSON.stringify(data),
+  });
 }
 
 // Helper function to get or create a logo by URL
@@ -898,6 +952,13 @@ export function normalizeStreamName(name: string, timezonePreferenceOrOptions: T
 
   // Normalize multiple spaces to single space and trim
   normalized = normalized.replace(/\s+/g, ' ').trim();
+
+  // If normalization resulted in empty string, fall back to original name
+  // This can happen when a channel name matches both a country code (e.g., "ID" for Indonesia)
+  // and a quality suffix (e.g., "ID FHD" -> strip "ID " as country -> "FHD" -> strip as quality -> "")
+  if (!normalized) {
+    return name.trim();
+  }
 
   return normalized;
 }

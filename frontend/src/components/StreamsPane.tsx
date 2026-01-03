@@ -38,6 +38,7 @@ interface StreamsPaneProps {
   onSelectedProvidersChange?: (providerIds: number[]) => void;
   selectedStreamGroups?: string[];
   onSelectedStreamGroupsChange?: (groups: string[]) => void;
+  onClearStreamFilters?: () => void;
   // Bulk channel creation
   isEditMode?: boolean;
   channelGroups?: ChannelGroup[];
@@ -81,6 +82,7 @@ export function StreamsPane({
   onSelectedProvidersChange,
   selectedStreamGroups = [],
   onSelectedStreamGroupsChange,
+  onClearStreamFilters,
   isEditMode = false,
   channelGroups = [],
   channelDefaults,
@@ -947,6 +949,17 @@ export function StreamsPane({
                 </option>
               ))}
             </select>
+          )}
+
+          {/* Clear Filters Button - show when any filter is active */}
+          {onClearStreamFilters && (selectedProviders.length > 0 || selectedStreamGroups.length > 0) && (
+            <button
+              className="clear-filters-btn"
+              onClick={onClearStreamFilters}
+              title="Clear all filters"
+            >
+              <span className="material-icons">filter_alt_off</span>
+            </button>
           )}
         </div>
       </div>

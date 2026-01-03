@@ -1,5 +1,5 @@
 import { SplitPane, ChannelsPane, StreamsPane } from '../';
-import type { Channel, ChannelGroup, Stream, M3UAccount, Logo, EPGData, EPGSource, StreamProfile, M3UGroupSetting, ChannelListFilterSettings, ChangeInfo, SavePoint, ChangeRecord } from '../../types';
+import type { Channel, ChannelGroup, ChannelProfile, Stream, M3UAccount, Logo, EPGData, EPGSource, StreamProfile, M3UGroupSetting, ChannelListFilterSettings, ChangeInfo, SavePoint, ChangeRecord } from '../../types';
 import type { TimezonePreference, NumberSeparator, PrefixOrder } from '../../services/api';
 import type { ChannelDefaults } from '../StreamsPane';
 
@@ -77,6 +77,10 @@ export interface ChannelManagerTabProps {
   streamProfiles: StreamProfile[];
   epgDataLoading: boolean;
 
+  // Channel Profiles
+  channelProfiles: ChannelProfile[];
+  onChannelProfilesChange: () => Promise<void>;
+
   // Provider & Filter Settings
   providerGroupSettings: Record<number, M3UGroupSetting>;
   channelListFilters: ChannelListFilterSettings;
@@ -101,6 +105,7 @@ export interface ChannelManagerTabProps {
   onSelectedProvidersChange: (providers: number[]) => void;
   selectedStreamGroups: string[];
   onSelectedStreamGroupsChange: (groups: string[]) => void;
+  onClearStreamFilters?: () => void;
 
   // Dispatcharr URL (for constructing channel stream URLs)
   dispatcharrUrl: string;
@@ -207,6 +212,10 @@ export function ChannelManagerTab({
   streamProfiles,
   epgDataLoading,
 
+  // Channel Profiles
+  channelProfiles,
+  onChannelProfilesChange,
+
   // Provider & Filter Settings
   providerGroupSettings,
   channelListFilters,
@@ -231,6 +240,7 @@ export function ChannelManagerTab({
   onSelectedProvidersChange,
   selectedStreamGroups,
   onSelectedStreamGroupsChange,
+  onClearStreamFilters,
 
   // Dispatcharr URL
   dispatcharrUrl,
@@ -303,6 +313,8 @@ export function ChannelManagerTab({
           epgSources={epgSources}
           streamProfiles={streamProfiles}
           epgDataLoading={epgDataLoading}
+          channelProfiles={channelProfiles}
+          onChannelProfilesChange={onChannelProfilesChange}
           providerGroupSettings={providerGroupSettings}
           channelListFilters={channelListFilters}
           onChannelListFiltersChange={onChannelListFiltersChange}
@@ -335,6 +347,7 @@ export function ChannelManagerTab({
           onSelectedProvidersChange={onSelectedProvidersChange}
           selectedStreamGroups={selectedStreamGroups}
           onSelectedStreamGroupsChange={onSelectedStreamGroupsChange}
+          onClearStreamFilters={onClearStreamFilters}
           isEditMode={isEditMode}
           channelGroups={channelGroups}
           channelDefaults={channelDefaults}

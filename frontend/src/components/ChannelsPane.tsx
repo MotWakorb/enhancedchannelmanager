@@ -20,7 +20,8 @@ import {
   verticalListSortingStrategy,
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import type { Channel, ChannelGroup, Stream, M3UAccount, M3UGroupSetting, Logo, ChangeInfo, ChangeRecord, SavePoint, EPGData, EPGSource, StreamProfile, ChannelListFilterSettings } from '../types';
+import type { Channel, ChannelGroup, ChannelProfile, Stream, M3UAccount, M3UGroupSetting, Logo, ChangeInfo, ChangeRecord, SavePoint, EPGData, EPGSource, StreamProfile, ChannelListFilterSettings } from '../types';
+import { ChannelProfilesListModal } from './ChannelProfilesListModal';
 import * as api from '../services/api';
 import { HistoryToolbar } from './HistoryToolbar';
 import { BulkEPGAssignModal, type EPGAssignment } from './BulkEPGAssignModal';
@@ -84,6 +85,9 @@ interface ChannelsPaneProps {
   epgSources?: EPGSource[];
   streamProfiles?: StreamProfile[];
   epgDataLoading?: boolean;
+  // Channel Profiles props
+  channelProfiles?: ChannelProfile[];
+  onChannelProfilesChange?: () => Promise<void>;
   // Channel list filter props
   providerGroupSettings?: Record<number, M3UGroupSetting>;
   channelListFilters?: ChannelListFilterSettings;
@@ -1241,6 +1245,9 @@ export function ChannelsPane({
   epgSources = [],
   streamProfiles = [],
   epgDataLoading = false,
+  // Channel Profiles props
+  channelProfiles: _channelProfiles = [],
+  onChannelProfilesChange,
   // Channel list filter props
   providerGroupSettings = {},
   channelListFilters,
@@ -1265,6 +1272,7 @@ export function ChannelsPane({
   void _onStageAddStream;
   void _onStageBulkAssignNumbers;
   void onLogosChange;
+  void _channelProfiles;
   const [expandedGroups, setExpandedGroups] = useState<GroupState>({});
   const [dragOverChannelId, setDragOverChannelId] = useState<number | null>(null);
   const [localChannels, setLocalChannels] = useState<Channel[]>(channels);
@@ -1277,6 +1285,9 @@ export function ChannelsPane({
 
   // Create channel modal state
   const [showCreateModal, setShowCreateModal] = useState(false);
+
+  // Channel profiles modal state
+  const [showProfilesModal, setShowProfilesModal] = useState(false);
   const [newChannelName, setNewChannelName] = useState('');
   const [newChannelNumber, setNewChannelNumber] = useState('');
   const [newChannelGroup, setNewChannelGroup] = useState<number | ''>('');
@@ -3581,6 +3592,14 @@ export function ChannelsPane({
               </button>
             </>
           )}
+          <button
+            className="profiles-btn"
+            onClick={() => setShowProfilesModal(true)}
+            title="Manage channel profiles"
+          >
+            <span className="material-icons">group</span>
+            <span>Profiles</span>
+          </button>
         </div>
       </div>
 
@@ -4342,6 +4361,19 @@ export function ChannelsPane({
           </div>
         </div>
       )}
+
+      {/* Channel Profiles Modal */}
+      <ChannelProfilesListModal
+        isOpen={showProfilesModal}
+        onClose={() => setShowProfilesModal(false)}
+        onSaved={() => {
+          if (onChannelProfilesChange) {
+            onChannelProfilesChange();
+          }
+        }}
+        channels={channels}
+        channelGroups={channelGroups}
+      />
 
       <div className="pane-filters">
         <input
