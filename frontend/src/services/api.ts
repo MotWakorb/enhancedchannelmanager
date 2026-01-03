@@ -956,6 +956,14 @@ export function normalizeStreamName(name: string, timezonePreferenceOrOptions: T
   // Normalize multiple spaces to single space and trim
   normalized = normalized.replace(/\s+/g, ' ').trim();
 
+  // Normalize separator spacing: ensure consistent spacing around common separators
+  // This ensures "PL| ID" and "PL | ID" are treated as the same channel
+  normalized = normalized.replace(/\s*\|\s*/g, ' | ');
+  normalized = normalized.replace(/\s*:\s*/g, ': ');
+  normalized = normalized.replace(/\s*-\s*/g, ' - ');
+  // Re-trim in case we added leading/trailing spaces
+  normalized = normalized.trim();
+
   // If normalization resulted in empty string, fall back to original name
   // This can happen when a channel name matches both a country code (e.g., "ID" for Indonesia)
   // and a quality suffix (e.g., "ID FHD" -> strip "ID " as country -> "FHD" -> strip as quality -> "")
