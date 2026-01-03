@@ -2867,6 +2867,65 @@
   }
 }
 
+/* Stream insert zone - drop zone between channels for creating new channels */
+.stream-insert-zone {
+  height: 8px;
+  margin: -4px 0;
+  position: relative;
+  z-index: 10;
+  cursor: pointer;
+}
+
+.stream-insert-zone:hover,
+.stream-insert-zone.active {
+  height: 24px;
+  margin: 0;
+  background-color: rgba(34, 197, 94, 0.1);
+  border-radius: 4px;
+}
+
+.stream-insert-indicator {
+  position: relative;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 0.5rem;
+}
+
+.stream-insert-line {
+  position: absolute;
+  left: 0.5rem;
+  right: 0.5rem;
+  height: 3px;
+  background: linear-gradient(90deg, #22c55e 0%, #4ade80 50%, #22c55e 100%);
+  border-radius: 2px;
+  box-shadow: 0 0 8px rgba(34, 197, 94, 0.6), 0 0 16px rgba(34, 197, 94, 0.3);
+  animation: stream-insert-pulse 1.2s ease-in-out infinite;
+}
+
+.stream-insert-label {
+  position: relative;
+  z-index: 1;
+  font-size: 0.7rem;
+  color: #22c55e;
+  background-color: var(--bg-primary);
+  padding: 0 0.5rem;
+  border-radius: 4px;
+  white-space: nowrap;
+}
+
+@keyframes stream-insert-pulse {
+  0%, 100% {
+    opacity: 1;
+    box-shadow: 0 0 8px rgba(34, 197, 94, 0.6), 0 0 16px rgba(34, 197, 94, 0.3);
+  }
+  50% {
+    opacity: 0.8;
+    box-shadow: 0 0 12px rgba(34, 197, 94, 0.8), 0 0 24px rgba(34, 197, 94, 0.5);
+  }
+}
+
 /* Drop zone at the end of a group - invisible until hovered */
 .group-end-dropzone {
   min-height: 32px;

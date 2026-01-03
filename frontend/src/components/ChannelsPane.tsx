@@ -41,7 +41,7 @@ interface ChannelsPaneProps {
   onChannelDrop: (channelId: number, streamId: number) => void;
   onBulkStreamDrop: (channelId: number, streamIds: number[]) => void;
   onChannelReorder: (channelIds: number[], startingNumber: number) => void;
-  onCreateChannel: (name: string, channelNumber?: number, groupId?: number, logoId?: number, tvgId?: string) => Promise<Channel>;
+  onCreateChannel: (name: string, channelNumber?: number, groupId?: number, logoId?: number, tvgId?: string, logoUrl?: string) => Promise<Channel>;
   onDeleteChannel: (channelId: number) => Promise<void>;
   searchTerm: string;
   onSearchChange: (term: string) => void;
@@ -467,7 +467,7 @@ interface DroppableGroupHeaderProps {
   onSortAndRenumber?: () => void;
   onDeleteGroup?: () => void;
   onSelectAll?: () => void;
-  onStreamDropOnGroup?: (groupId: number | 'ungrouped', streamId: number) => void;
+  onStreamDropOnGroup?: (groupId: number | 'ungrouped', streamIds: number[]) => void;
 }
 
 function DroppableGroupHeader({
@@ -529,9 +529,28 @@ function DroppableGroupHeader({
     setStreamDragOver(false);
 
     e.preventDefault();
+
+    // Check for multiple streams first (streamIds), fall back to single (streamId)
+    const streamIdsJson = e.dataTransfer.getData('streamIds');
     const streamId = e.dataTransfer.getData('streamId');
-    if (streamId && onStreamDropOnGroup) {
-      onStreamDropOnGroup(groupId, parseInt(streamId, 10));
+
+    if (onStreamDropOnGroup) {
+      if (streamIdsJson) {
+        try {
+          const streamIds = JSON.parse(streamIdsJson) as number[];
+          if (streamIds.length > 0) {
+            onStreamDropOnGroup(groupId, streamIds);
+            return;
+          }
+        } catch {
+          // Fall through to single stream handling
+        }
+      }
+
+      // Fallback to single stream
+      if (streamId) {
+        onStreamDropOnGroup(groupId, [parseInt(streamId, 10)]);
+      }
     }
   };
 
@@ -1296,8 +1315,9 @@ export function ChannelsPane({
   const [newChannelNumber, setNewChannelNumber] = useState('');
   const [newChannelGroup, setNewChannelGroup] = useState<number | ''>('');
   const [newChannelLogoId, setNewChannelLogoId] = useState<number | null>(null); // Logo from dropped stream
+  const [newChannelLogoUrl, setNewChannelLogoUrl] = useState<string | null>(null); // Logo URL from dropped stream (used if no logo_id match)
   const [newChannelTvgId, setNewChannelTvgId] = useState<string | null>(null); // tvg_id from dropped stream
-  const [newChannelStreamId, setNewChannelStreamId] = useState<number | null>(null); // Stream to assign after channel creation
+  const [newChannelStreamIds, setNewChannelStreamIds] = useState<number[]>([]); // Streams to assign after channel creation
   const [newChannelSelectedProfiles, setNewChannelSelectedProfiles] = useState<Set<number>>(new Set());
   const [newChannelProfilesExpanded, setNewChannelProfilesExpanded] = useState(false);
   // Naming options state for single channel create
@@ -1398,6 +1418,14 @@ export function ChannelsPane({
     position: 'before' | 'after';
     groupId: number | 'ungrouped';
     atGroupEnd?: boolean;  // When true, indicates dropping at end of group
+  } | null>(null);
+
+  // Stream insert indicator - tracks where a stream is being dragged to create a new channel
+  const [streamInsertIndicator, setStreamInsertIndicator] = useState<{
+    channelId: number;  // The channel before/after which to insert
+    position: 'before' | 'after';
+    groupId: number | 'ungrouped';
+    channelNumber: number;  // The channel number to insert at
   } | null>(null);
 
   // Stream reorder sensors (separate from channel reorder)
@@ -1957,8 +1985,9 @@ export function ChannelsPane({
     setNewChannelNumber('');
     setNewChannelGroup('');
     setNewChannelLogoId(null);
+    setNewChannelLogoUrl(null);
     setNewChannelTvgId(null);
-    setNewChannelStreamId(null);
+    setNewChannelStreamIds([]);
     setGroupSearchText('');
     setShowGroupDropdown(false);
   };
@@ -1989,17 +2018,23 @@ export function ChannelsPane({
   };
 
   // Handle stream dropped on group header - creates new channel with stream name
-  const handleStreamDropOnGroup = (groupId: number | 'ungrouped', streamId: number) => {
-    const stream = allStreams.find((s: Stream) => s.id === streamId);
-    if (!stream) return;
+  // Supports multiple streams being dropped at once (e.g., same stream from different providers)
+  const handleStreamDropOnGroup = (groupId: number | 'ungrouped', streamIds: number[]) => {
+    if (streamIds.length === 0) return;
+
+    // Use the first stream's info for the channel details
+    const firstStream = allStreams.find((s: Stream) => s.id === streamIds[0]);
+    if (!firstStream) return;
 
     // Use stream name as the channel name
-    setNewChannelName(stream.name);
+    setNewChannelName(firstStream.name);
 
     // Find matching logo by URL if stream has a logo_url
-    if (stream.logo_url) {
+    // Always capture the logo_url for fallback during commit
+    setNewChannelLogoUrl(firstStream.logo_url ?? null);
+    if (firstStream.logo_url) {
       const matchingLogo = logos.find(
-        (logo) => logo.url === stream.logo_url || logo.cache_url === stream.logo_url
+        (logo) => logo.url === firstStream.logo_url || logo.cache_url === firstStream.logo_url
       );
       setNewChannelLogoId(matchingLogo?.id ?? null);
     } else {
@@ -2007,10 +2042,10 @@ export function ChannelsPane({
     }
 
     // Capture the stream's tvg_id for the new channel
-    setNewChannelTvgId(stream.tvg_id ?? null);
+    setNewChannelTvgId(firstStream.tvg_id ?? null);
 
-    // Store the stream ID to assign after channel creation
-    setNewChannelStreamId(streamId);
+    // Store all stream IDs to assign after channel creation
+    setNewChannelStreamIds(streamIds);
 
     // Set the group (handle 'ungrouped' case)
     if (groupId === 'ungrouped') {
@@ -2026,6 +2061,68 @@ export function ChannelsPane({
     const numericGroupId = groupId === 'ungrouped' ? '' : groupId;
     const nextNumber = getNextChannelNumberForGroup(numericGroupId);
     setNewChannelNumber(nextNumber.toString());
+
+    // Set default channel profile from settings
+    setNewChannelSelectedProfiles(
+      channelDefaults?.defaultChannelProfileId ? new Set([channelDefaults.defaultChannelProfileId]) : new Set()
+    );
+    setNewChannelProfilesExpanded(false);
+
+    // Set naming options from settings defaults
+    setNewChannelAddNumber(channelDefaults?.includeChannelNumberInName ?? false);
+    setNewChannelNumberSeparator((channelDefaults?.channelNumberSeparator as NumberSeparator) || '-');
+    setNewChannelStripCountry(channelDefaults?.removeCountryPrefix ?? false);
+    setNewChannelNamingExpanded(false);
+
+    // Open the create modal
+    setShowCreateModal(true);
+  };
+
+  // Handle stream dropped between channels - creates new channel at specific position
+  // Automatically shifts existing channels down to make room
+  const handleStreamDropAtPosition = (
+    groupId: number | 'ungrouped',
+    streamIds: number[],
+    insertAtChannelNumber: number
+  ) => {
+    if (streamIds.length === 0) return;
+
+    // Use the first stream's info for the channel details
+    const firstStream = allStreams.find((s: Stream) => s.id === streamIds[0]);
+    if (!firstStream) return;
+
+    // Use stream name as the channel name
+    setNewChannelName(firstStream.name);
+
+    // Find matching logo by URL if stream has a logo_url
+    setNewChannelLogoUrl(firstStream.logo_url ?? null);
+    if (firstStream.logo_url) {
+      const matchingLogo = logos.find(
+        (logo) => logo.url === firstStream.logo_url || logo.cache_url === firstStream.logo_url
+      );
+      setNewChannelLogoId(matchingLogo?.id ?? null);
+    } else {
+      setNewChannelLogoId(null);
+    }
+
+    // Capture the stream's tvg_id for the new channel
+    setNewChannelTvgId(firstStream.tvg_id ?? null);
+
+    // Store all stream IDs to assign after channel creation
+    setNewChannelStreamIds(streamIds);
+
+    // Set the group
+    if (groupId === 'ungrouped') {
+      setNewChannelGroup('');
+      setGroupSearchText('');
+    } else {
+      const group = channelGroups.find((g) => g.id === groupId);
+      setNewChannelGroup(groupId);
+      setGroupSearchText(group?.name || '');
+    }
+
+    // Use the specific insert position
+    setNewChannelNumber(insertAtChannelNumber.toString());
 
     // Set default channel profile from settings
     setNewChannelSelectedProfiles(
@@ -2083,21 +2180,26 @@ export function ChannelsPane({
         channelNum,
         newChannelGroup !== '' ? newChannelGroup : undefined,
         newChannelLogoId ?? undefined,
-        newChannelTvgId ?? undefined
+        newChannelTvgId ?? undefined,
+        newChannelLogoUrl ?? undefined
       );
 
-      // Assign the stream to the channel if one was dropped
-      if (newChannelStreamId && newChannel?.id) {
+      // Assign the streams to the channel if any were dropped
+      if (newChannelStreamIds.length > 0 && newChannel?.id) {
         if (isEditMode && onStageAddStream) {
-          // In edit mode, stage the stream assignment
-          const stream = allStreams.find((s: Stream) => s.id === newChannelStreamId);
-          onStageAddStream(newChannel.id, newChannelStreamId, `Added stream "${stream?.name || newChannelStreamId}" to channel`);
+          // In edit mode, stage all stream assignments
+          for (const streamId of newChannelStreamIds) {
+            const stream = allStreams.find((s: Stream) => s.id === streamId);
+            onStageAddStream(newChannel.id, streamId, `Added stream "${stream?.name || streamId}" to channel`);
+          }
         } else {
-          // In normal mode, call the API directly
-          try {
-            await onChannelDrop(newChannel.id, newChannelStreamId);
-          } catch (err) {
-            console.error(`Failed to assign stream ${newChannelStreamId} to channel ${newChannel.id}:`, err);
+          // In normal mode, call the API directly for each stream
+          for (const streamId of newChannelStreamIds) {
+            try {
+              await onChannelDrop(newChannel.id, streamId);
+            } catch (err) {
+              console.error(`Failed to assign stream ${streamId} to channel ${newChannel.id}:`, err);
+            }
           }
         }
       }
@@ -3487,9 +3589,76 @@ export function ChannelsPane({
                     dropIndicator.channelId === channel.id &&
                     dropIndicator.position === 'after' &&
                     dropIndicator.groupId === groupId;
+                  // Check if stream insert indicator should show before this channel
+                  const showStreamInsertBefore = streamInsertIndicator &&
+                    streamInsertIndicator.channelId === channel.id &&
+                    streamInsertIndicator.position === 'before' &&
+                    streamInsertIndicator.groupId === groupId;
 
                   return (
                   <div key={channel.id} className="channel-wrapper">
+                    {/* Stream insert drop zone - visible when dragging streams in edit mode */}
+                    {isEditMode && (
+                      <div
+                        className={`stream-insert-zone ${showStreamInsertBefore ? 'active' : ''}`}
+                        onDragOver={(e) => {
+                          const types = e.dataTransfer.types.map(t => t.toLowerCase());
+                          if (types.includes('streamid') || types.includes('streamids')) {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            // Set indicator for this position
+                            if (channel.channel_number !== null) {
+                              setStreamInsertIndicator({
+                                channelId: channel.id,
+                                position: 'before',
+                                groupId,
+                                channelNumber: channel.channel_number,
+                              });
+                            }
+                          }
+                        }}
+                        onDragLeave={(e) => {
+                          e.stopPropagation();
+                          // Only clear if not entering another insert zone
+                          const relatedTarget = e.relatedTarget as HTMLElement;
+                          if (!relatedTarget?.classList?.contains('stream-insert-zone')) {
+                            setStreamInsertIndicator(null);
+                          }
+                        }}
+                        onDrop={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          setStreamInsertIndicator(null);
+
+                          // Get stream IDs
+                          const streamIdsJson = e.dataTransfer.getData('streamIds');
+                          const streamId = e.dataTransfer.getData('streamId');
+                          let streamIds: number[] = [];
+
+                          if (streamIdsJson) {
+                            try {
+                              streamIds = JSON.parse(streamIdsJson) as number[];
+                            } catch {
+                              // Fall through to single stream
+                            }
+                          }
+                          if (streamIds.length === 0 && streamId) {
+                            streamIds = [parseInt(streamId, 10)];
+                          }
+
+                          if (streamIds.length > 0 && channel.channel_number !== null) {
+                            handleStreamDropAtPosition(groupId, streamIds, channel.channel_number);
+                          }
+                        }}
+                      >
+                        {showStreamInsertBefore && (
+                          <div className="stream-insert-indicator">
+                            <div className="stream-insert-line" />
+                            <span className="stream-insert-label">Insert at {channel.channel_number}</span>
+                          </div>
+                        )}
+                      </div>
+                    )}
                     {showIndicatorBefore && (
                       <div className="channel-drop-indicator">
                         <div className="drop-indicator-line" />
@@ -3656,8 +3825,9 @@ export function ChannelsPane({
                   setNewChannelGroup('');
                   setGroupSearchText('');
                   setNewChannelLogoId(null);
+                  setNewChannelLogoUrl(null);
                   setNewChannelTvgId(null);
-                  setNewChannelStreamId(null);
+                  setNewChannelStreamIds([]);
                   // Set default channel profile from settings
                   setNewChannelSelectedProfiles(
                     channelDefaults?.defaultChannelProfileId ? new Set([channelDefaults.defaultChannelProfileId]) : new Set()
