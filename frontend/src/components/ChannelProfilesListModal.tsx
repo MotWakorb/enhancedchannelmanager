@@ -309,7 +309,7 @@ export function ChannelProfilesListModal({
   if (!isOpen) return null;
 
   return (
-    <div className="modal-overlay" onClick={onClose}>
+    <div className="modal-overlay">
       <div className="modal-content channel-profiles-modal" onClick={(e) => e.stopPropagation()}>
         {viewMode === 'list' ? (
           <>

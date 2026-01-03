@@ -147,7 +147,7 @@ export function M3UAccountModal({
   if (!isOpen) return null;
 
   return (
-    <div className="modal-overlay" onClick={onClose}>
+    <div className="modal-overlay">
       <div className="modal-content m3u-account-modal" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
           <h2>{isEdit ? 'Edit M3U Account' : 'Add M3U Account'}</h2>

@@ -261,7 +261,7 @@ export function BulkEPGAssignModal({
   if (!isOpen) return null;
 
   return (
-    <div className="modal-overlay" onClick={onClose}>
+    <div className="modal-overlay">
       <div className="bulk-epg-modal" onClick={e => e.stopPropagation()}>
         <div className="bulk-epg-header">
           <h2>Bulk EPG Assignment</h2>
