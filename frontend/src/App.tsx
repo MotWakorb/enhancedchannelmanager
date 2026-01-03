@@ -74,6 +74,7 @@ function App() {
     countrySeparator: '|',
     timezonePreference: 'both',
   });
+  const [defaultChannelProfileId, setDefaultChannelProfileId] = useState<number | null>(null);
 
   // Provider group settings (for identifying auto channel sync groups)
   const [providerGroupSettings, setProviderGroupSettings] = useState<Record<number, M3UGroupSetting>>({});
@@ -325,6 +326,7 @@ function App() {
           countrySeparator: settings.country_separator,
           timezonePreference: settings.timezone_preference,
         });
+        setDefaultChannelProfileId(settings.default_channel_profile_id);
 
         // Apply hide_auto_sync_groups setting to channelListFilters
         setChannelListFilters(prev => ({
@@ -462,6 +464,7 @@ function App() {
         countrySeparator: settings.country_separator,
         timezonePreference: settings.timezone_preference,
       });
+      setDefaultChannelProfileId(settings.default_channel_profile_id);
 
       // Apply hide_auto_sync_groups setting to channelListFilters
       // The useEffect watching showAutoChannelGroups will handle updating group selection
@@ -903,6 +906,15 @@ function App() {
           // Pass logoId and tvgId so the staged channel has the metadata
           const tempId = stageCreateChannel(name, channelNumber, groupId, undefined, logoId, undefined, tvgId);
 
+          // Track for default profile assignment after commit
+          if (defaultChannelProfileId && channelNumber !== undefined) {
+            pendingProfileAssignmentsRef.current.push({
+              startNumber: channelNumber,
+              count: 1,
+              profileIds: [defaultChannelProfileId],
+            });
+          }
+
           // Create a temporary channel object to return (for compatibility)
           const tempChannel: Channel = {
             id: tempId,
@@ -931,6 +943,16 @@ function App() {
             tvg_id: tvgId,
           });
           setChannels((prev) => [...prev, newChannel]);
+
+          // Apply default profile if set
+          if (defaultChannelProfileId) {
+            try {
+              await api.updateProfileChannel(defaultChannelProfileId, newChannel.id, { enabled: true });
+            } catch (err) {
+              console.warn(`Failed to add channel ${newChannel.id} to default profile:`, err);
+            }
+          }
+
           return newChannel;
         }
       } catch (err) {
@@ -939,7 +961,7 @@ function App() {
         throw err;
       }
     },
-    [isEditMode, stageCreateChannel]
+    [isEditMode, stageCreateChannel, defaultChannelProfileId]
   );
 
   const handleBulkCreateFromGroup = useCallback(
@@ -1076,11 +1098,16 @@ function App() {
         }
 
         // Store pending profile assignments to be applied after commit
-        if (profileIds && profileIds.length > 0) {
+        // Use explicit profileIds if provided, otherwise fall back to default profile
+        const profileIdsToApply = (profileIds && profileIds.length > 0)
+          ? profileIds
+          : (defaultChannelProfileId ? [defaultChannelProfileId] : []);
+
+        if (profileIdsToApply.length > 0) {
           pendingProfileAssignmentsRef.current.push({
             startNumber: startingNumber,
             count: streamsByNormalizedName.size,
-            profileIds,
+            profileIds: profileIdsToApply,
           });
         }
 
@@ -1090,7 +1117,7 @@ function App() {
         throw err;
       }
     },
-    [isEditMode, stageCreateChannel, stageAddStream, startBatch, endBatch]
+    [isEditMode, stageCreateChannel, stageAddStream, startBatch, endBatch, defaultChannelProfileId]
   );
 
   // Handle stream group drop on channels pane (triggers bulk create modal in streams pane)
@@ -1434,7 +1461,7 @@ function App() {
           {activeTab === 'm3u-manager' && <M3UManagerTab />}
           {activeTab === 'epg-manager' && <EPGManagerTab />}
           {activeTab === 'logo-manager' && <LogoManagerTab />}
-          {activeTab === 'settings' && <SettingsTab onSaved={handleSettingsSaved} />}
+          {activeTab === 'settings' && <SettingsTab onSaved={handleSettingsSaved} channelProfiles={channelProfiles} />}
         </Suspense>
       </main>
 

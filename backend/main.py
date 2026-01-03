@@ -113,6 +113,7 @@ class SettingsRequest(BaseModel):
     show_stream_urls: bool = True
     hide_auto_sync_groups: bool = False
     theme: str = "dark"
+    default_channel_profile_id: Optional[int] = None
 
 
 class SettingsResponse(BaseModel):
@@ -129,6 +130,7 @@ class SettingsResponse(BaseModel):
     show_stream_urls: bool
     hide_auto_sync_groups: bool
     theme: str
+    default_channel_profile_id: Optional[int]
 
 
 class TestConnectionRequest(BaseModel):
@@ -155,6 +157,7 @@ async def get_current_settings():
         show_stream_urls=settings.show_stream_urls,
         hide_auto_sync_groups=settings.hide_auto_sync_groups,
         theme=settings.theme,
+        default_channel_profile_id=settings.default_channel_profile_id,
     )
 
 
@@ -192,6 +195,7 @@ async def update_settings(request: SettingsRequest):
         show_stream_urls=request.show_stream_urls,
         hide_auto_sync_groups=request.hide_auto_sync_groups,
         theme=request.theme,
+        default_channel_profile_id=request.default_channel_profile_id,
     )
     save_settings(new_settings)
     clear_settings_cache()
