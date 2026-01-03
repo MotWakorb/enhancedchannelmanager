@@ -146,13 +146,13 @@
 }
 
 .btn-primary {
-  background-color: var(--accent-primary);
-  border: 1px solid var(--accent-primary);
-  color: var(--text-primary);
+  background-color: var(--button-primary-bg);
+  border: 1px solid var(--button-primary-bg);
+  color: var(--button-primary-text);
 }
 
 .btn-primary:hover:not(:disabled) {
-  background-color: var(--accent-primary);
+  background-color: var(--button-primary-bg);
 }
 
 button:disabled {

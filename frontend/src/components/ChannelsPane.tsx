@@ -38,7 +38,7 @@ interface ChannelsPaneProps {
   onChannelDrop: (channelId: number, streamId: number) => void;
   onBulkStreamDrop: (channelId: number, streamIds: number[]) => void;
   onChannelReorder: (channelIds: number[], startingNumber: number) => void;
-  onCreateChannel: (name: string, channelNumber?: number, groupId?: number) => Promise<Channel>;
+  onCreateChannel: (name: string, channelNumber?: number, groupId?: number, logoId?: number) => Promise<Channel>;
   onDeleteChannel: (channelId: number) => Promise<void>;
   searchTerm: string;
   onSearchChange: (term: string) => void;
@@ -99,8 +99,8 @@ interface ChannelsPaneProps {
   onSelectGroupChannels?: (channelIds: number[], select: boolean) => void;
   // Dispatcharr URL for constructing channel stream URLs
   dispatcharrUrl?: string;
-  // Stream group drop callback (for bulk channel creation)
-  onStreamGroupDrop?: (groupName: string, streamIds: number[]) => void;
+  // Stream group drop callback (for bulk channel creation) - supports multiple groups
+  onStreamGroupDrop?: (groupNames: string[], streamIds: number[]) => void;
   // Appearance settings
   showStreamUrls?: boolean;
 }
@@ -459,6 +459,7 @@ interface DroppableGroupHeaderProps {
   onSortAndRenumber?: () => void;
   onDeleteGroup?: () => void;
   onSelectAll?: () => void;
+  onStreamDropOnGroup?: (groupId: number | 'ungrouped', streamId: number) => void;
 }
 
 function DroppableGroupHeader({
@@ -475,12 +476,15 @@ function DroppableGroupHeader({
   onSortAndRenumber,
   onDeleteGroup,
   onSelectAll,
+  onStreamDropOnGroup,
 }: DroppableGroupHeaderProps) {
   const droppableId = `group-${groupId}`;
   const { isOver, setNodeRef } = useDroppable({
     id: droppableId,
     disabled: !isEditMode,
   });
+
+  const [streamDragOver, setStreamDragOver] = useState(false);
 
   const handleSortClick = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -497,6 +501,32 @@ function DroppableGroupHeader({
     onSelectAll?.();
   };
 
+
+  const handleStreamDragOver = (e: React.DragEvent) => {
+    const types = e.dataTransfer.types.map(t => t.toLowerCase());
+    if (types.includes('streamid')) {
+      e.preventDefault();
+      e.stopPropagation();
+      setStreamDragOver(true);
+    }
+  };
+
+  const handleStreamDragLeave = (e: React.DragEvent) => {
+    e.stopPropagation();
+    setStreamDragOver(false);
+  };
+
+  const handleStreamDrop = (e: React.DragEvent) => {
+    e.stopPropagation();
+    setStreamDragOver(false);
+
+    e.preventDefault();
+    const streamId = e.dataTransfer.getData('streamId');
+    if (streamId && onStreamDropOnGroup) {
+      onStreamDropOnGroup(groupId, parseInt(streamId, 10));
+    }
+  };
+
   // Determine checkbox state: all selected, some selected, or none selected
   const allSelected = channelCount > 0 && selectedCount === channelCount;
   const someSelected = selectedCount > 0 && selectedCount < channelCount;
@@ -504,8 +534,11 @@ function DroppableGroupHeader({
   return (
     <div
       ref={setNodeRef}
-      className={`group-header ${isOver && isEditMode ? 'drop-target' : ''}`}
+      className={`group-header ${isOver && isEditMode ? 'drop-target' : ''} ${streamDragOver ? 'stream-drag-over' : ''}`}
       onClick={onToggle}
+      onDragOver={handleStreamDragOver}
+      onDragLeave={handleStreamDragLeave}
+      onDrop={handleStreamDrop}
     >
       {isEditMode && !isEmpty && (
         <span
@@ -1247,6 +1280,7 @@ export function ChannelsPane({
   const [newChannelName, setNewChannelName] = useState('');
   const [newChannelNumber, setNewChannelNumber] = useState('');
   const [newChannelGroup, setNewChannelGroup] = useState<number | ''>('');
+  const [newChannelLogoId, setNewChannelLogoId] = useState<number | null>(null); // Logo from dropped stream
   const [groupSearchText, setGroupSearchText] = useState('');
   const [showGroupDropdown, setShowGroupDropdown] = useState(false);
   const [creating, setCreating] = useState(false);
@@ -1295,6 +1329,7 @@ export function ChannelsPane({
   // Bulk delete channels state
   const [showBulkDeleteConfirm, setShowBulkDeleteConfirm] = useState(false);
   const [bulkDeleting, setBulkDeleting] = useState(false);
+  const [deleteEmptyGroups, setDeleteEmptyGroups] = useState(true); // Default to true since user is deleting all channels in group
 
   // Bulk EPG assignment modal state
   const [showBulkEPGModal, setShowBulkEPGModal] = useState(false);
@@ -1570,6 +1605,10 @@ export function ChannelsPane({
 
   // Helper to get logo URL for a channel
   const getChannelLogoUrl = (channel: Channel): string | null => {
+    // For staged channels (during edit mode), use the temporary logo URL
+    if (channel._stagedLogoUrl) {
+      return channel._stagedLogoUrl;
+    }
     if (!channel.logo_id) return null;
     const logo = logos.find((l) => l.id === channel.logo_id);
     return logo?.cache_url || logo?.url || null;
@@ -1728,13 +1767,40 @@ export function ChannelsPane({
 
       // In edit mode, stage the delete operations for undo support
       if (isEditMode && onStageDeleteChannel && onStartBatch && onEndBatch) {
+        // Find groups that would be emptied by this delete (if checkbox is checked)
+        const groupsToDelete: ChannelGroup[] = [];
+        if (deleteEmptyGroups && onStageDeleteChannelGroup) {
+          for (const group of channelGroups) {
+            const channelsInGroup = channels.filter(ch => ch.channel_group_id === group.id);
+            if (channelsInGroup.length > 0) {
+              const allSelected = channelsInGroup.every(ch => selectedChannelIds.has(ch.id));
+              if (allSelected) {
+                groupsToDelete.push(group);
+              }
+            }
+          }
+        }
+
         // Use batch to group all deletes as a single undo operation
-        onStartBatch(`Delete ${channelIdsToDelete.length} channels`);
+        const batchDescription = groupsToDelete.length > 0
+          ? `Delete ${channelIdsToDelete.length} channels and ${groupsToDelete.length} group${groupsToDelete.length !== 1 ? 's' : ''}`
+          : `Delete ${channelIdsToDelete.length} channels`;
+        onStartBatch(batchDescription);
+
+        // Stage channel deletions
         for (const channelId of channelIdsToDelete) {
           const channel = channels.find((ch) => ch.id === channelId);
           const description = `Delete channel "${channel?.name || channelId}"`;
           onStageDeleteChannel(channelId, description);
         }
+
+        // Stage group deletions if checkbox is checked
+        if (deleteEmptyGroups && onStageDeleteChannelGroup) {
+          for (const group of groupsToDelete) {
+            onStageDeleteChannelGroup(group.id, `Delete group "${group.name}"`);
+          }
+        }
+
         onEndBatch();
         // Local state is updated via displayChannels from working copy
       } else {
@@ -1866,6 +1932,7 @@ export function ChannelsPane({
     setNewChannelName('');
     setNewChannelNumber('');
     setNewChannelGroup('');
+    setNewChannelLogoId(null);
     setGroupSearchText('');
     setShowGroupDropdown(false);
   };
@@ -1895,6 +1962,43 @@ export function ChannelsPane({
     return sourceChannels.some((ch) => ch.channel_number === num);
   };
 
+  // Handle stream dropped on group header - creates new channel with stream name
+  const handleStreamDropOnGroup = (groupId: number | 'ungrouped', streamId: number) => {
+    const stream = allStreams.find((s: Stream) => s.id === streamId);
+    if (!stream) return;
+
+    // Use stream name as the channel name
+    setNewChannelName(stream.name);
+
+    // Find matching logo by URL if stream has a logo_url
+    if (stream.logo_url) {
+      const matchingLogo = logos.find(
+        (logo) => logo.url === stream.logo_url || logo.cache_url === stream.logo_url
+      );
+      setNewChannelLogoId(matchingLogo?.id ?? null);
+    } else {
+      setNewChannelLogoId(null);
+    }
+
+    // Set the group (handle 'ungrouped' case)
+    if (groupId === 'ungrouped') {
+      setNewChannelGroup('');
+      setGroupSearchText('');
+    } else {
+      const group = channelGroups.find((g) => g.id === groupId);
+      setNewChannelGroup(groupId);
+      setGroupSearchText(group?.name || '');
+    }
+
+    // Set the next available channel number for this group
+    const numericGroupId = groupId === 'ungrouped' ? '' : groupId;
+    const nextNumber = getNextChannelNumberForGroup(numericGroupId);
+    setNewChannelNumber(nextNumber.toString());
+
+    // Open the create modal
+    setShowCreateModal(true);
+  };
+
   // Handle creating a new channel - checks for conflicts first
   const handleCreateChannel = async () => {
     if (!newChannelName.trim() || !newChannelNumber.trim()) return;
@@ -1920,7 +2024,8 @@ export function ChannelsPane({
       const newChannel = await onCreateChannel(
         newChannelName.trim(),
         channelNum,
-        newChannelGroup !== '' ? newChannelGroup : undefined
+        newChannelGroup !== '' ? newChannelGroup : undefined,
+        newChannelLogoId ?? undefined
       );
       // In edit mode, we need to manually add the new channel to localChannels
       // since we disabled the automatic sync from parent state
@@ -2260,18 +2365,31 @@ export function ChannelsPane({
   const handlePaneDrop = (e: React.DragEvent) => {
     setStreamGroupDragOver(false);
 
-    // Check for stream group drop
+    // Check for stream group drop (supports multiple groups)
     const isStreamGroupDrag = e.dataTransfer.getData('streamGroupDrag');
     if (isStreamGroupDrag === 'true' && isEditMode && onStreamGroupDrop) {
       e.preventDefault();
-      const groupName = e.dataTransfer.getData('streamGroupName');
       const streamIdsJson = e.dataTransfer.getData('streamGroupStreamIds');
-      if (groupName && streamIdsJson) {
+      // Check for multiple groups first (new format)
+      const groupNamesJson = e.dataTransfer.getData('streamGroupNames');
+      if (groupNamesJson && streamIdsJson) {
         try {
+          const groupNames = JSON.parse(groupNamesJson) as string[];
           const streamIds = JSON.parse(streamIdsJson) as number[];
-          onStreamGroupDrop(groupName, streamIds);
+          onStreamGroupDrop(groupNames, streamIds);
         } catch {
-          console.error('Failed to parse stream IDs from stream group drop');
+          console.error('Failed to parse stream group drop data');
+        }
+      } else {
+        // Fallback to single group (backward compatibility)
+        const groupName = e.dataTransfer.getData('streamGroupName');
+        if (groupName && streamIdsJson) {
+          try {
+            const streamIds = JSON.parse(streamIdsJson) as number[];
+            onStreamGroupDrop([groupName], streamIds);
+          } catch {
+            console.error('Failed to parse stream IDs from stream group drop');
+          }
         }
       }
     }
@@ -3258,6 +3376,7 @@ export function ChannelsPane({
           onSortAndRenumber={() => handleOpenSortRenumber(groupId, groupName, groupChannels)}
           onDeleteGroup={group ? () => handleDeleteGroupClick(group) : undefined}
           onSelectAll={handleSelectAllInGroup}
+          onStreamDropOnGroup={handleStreamDropOnGroup}
         />
         {isExpanded && isEmpty && (
           <div className="group-channels empty-group-placeholder">
@@ -3790,40 +3909,72 @@ export function ChannelsPane({
       )}
 
       {/* Bulk Delete Channels Confirmation Dialog */}
-      {showBulkDeleteConfirm && selectedChannelIds.size > 0 && (
-        <div className="modal-overlay" onClick={handleCancelBulkDelete}>
-          <div className="modal-content delete-dialog" onClick={(e) => e.stopPropagation()}>
-            <h3>Delete {selectedChannelIds.size} Channel{selectedChannelIds.size !== 1 ? 's' : ''}</h3>
-            <div className="delete-message">
-              <p>
-                Are you sure you want to delete{' '}
-                <strong>{selectedChannelIds.size} selected channel{selectedChannelIds.size !== 1 ? 's' : ''}</strong>?
-              </p>
-              <p className={isEditMode ? "delete-info" : "delete-warning"}>
-                {isEditMode
-                  ? 'Changes can be undone while in edit mode.'
-                  : 'This action cannot be undone. All selected channels and their stream assignments will be permanently removed.'}
-              </p>
-            </div>
-            <div className="modal-actions">
-              <button
-                className="modal-btn cancel"
-                onClick={handleCancelBulkDelete}
-                disabled={bulkDeleting}
-              >
-                Cancel
-              </button>
-              <button
-                className="modal-btn danger"
-                onClick={handleConfirmBulkDelete}
-                disabled={bulkDeleting}
-              >
-                {bulkDeleting ? 'Deleting...' : `Delete ${selectedChannelIds.size} Channel${selectedChannelIds.size !== 1 ? 's' : ''}`}
-              </button>
+      {showBulkDeleteConfirm && selectedChannelIds.size > 0 && (() => {
+        // Compute which groups would be emptied by this bulk delete
+        const groupsToEmpty: ChannelGroup[] = [];
+        if (isEditMode && onStageDeleteChannelGroup) {
+          // For each group, check if ALL its channels are selected for deletion
+          for (const group of channelGroups) {
+            const channelsInGroup = channels.filter(ch => ch.channel_group_id === group.id);
+            if (channelsInGroup.length > 0) {
+              const allSelected = channelsInGroup.every(ch => selectedChannelIds.has(ch.id));
+              if (allSelected) {
+                groupsToEmpty.push(group);
+              }
+            }
+          }
+        }
+
+        return (
+          <div className="modal-overlay" onClick={handleCancelBulkDelete}>
+            <div className="modal-content delete-dialog" onClick={(e) => e.stopPropagation()}>
+              <h3>Delete {selectedChannelIds.size} Channel{selectedChannelIds.size !== 1 ? 's' : ''}</h3>
+              <div className="delete-message">
+                <p>
+                  Are you sure you want to delete{' '}
+                  <strong>{selectedChannelIds.size} selected channel{selectedChannelIds.size !== 1 ? 's' : ''}</strong>?
+                </p>
+                <p className={isEditMode ? "delete-info" : "delete-warning"}>
+                  {isEditMode
+                    ? 'Changes can be undone while in edit mode.'
+                    : 'This action cannot be undone. All selected channels and their stream assignments will be permanently removed.'}
+                </p>
+                {/* Show checkbox to also delete groups that would be emptied */}
+                {groupsToEmpty.length > 0 && (
+                  <label className="delete-checkbox-label">
+                    <input
+                      type="checkbox"
+                      checked={deleteEmptyGroups}
+                      onChange={(e) => setDeleteEmptyGroups(e.target.checked)}
+                      disabled={bulkDeleting}
+                    />
+                    <span>
+                      Also delete {groupsToEmpty.length} empty group{groupsToEmpty.length !== 1 ? 's' : ''}:{' '}
+                      <strong>{groupsToEmpty.map(g => g.name).join(', ')}</strong>
+                    </span>
+                  </label>
+                )}
+              </div>
+              <div className="modal-actions">
+                <button
+                  className="modal-btn cancel"
+                  onClick={handleCancelBulkDelete}
+                  disabled={bulkDeleting}
+                >
+                  Cancel
+                </button>
+                <button
+                  className="modal-btn danger"
+                  onClick={handleConfirmBulkDelete}
+                  disabled={bulkDeleting}
+                >
+                  {bulkDeleting ? 'Deleting...' : `Delete ${selectedChannelIds.size} Channel${selectedChannelIds.size !== 1 ? 's' : ''}`}
+                </button>
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* Bulk EPG Assignment Modal */}
       <BulkEPGAssignModal
