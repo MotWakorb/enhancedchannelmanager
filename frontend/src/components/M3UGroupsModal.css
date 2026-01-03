@@ -282,6 +282,15 @@
   font-size: 36px;
 }
 
+.m3u-groups-modal .spinning {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
 /* Error Message */
 .m3u-groups-modal .error-message {
   padding: 0.75rem 1.5rem;

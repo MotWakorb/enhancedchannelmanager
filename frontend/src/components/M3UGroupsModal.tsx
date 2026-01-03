@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from 'react';
-import type { M3UAccount, ChannelGroupM3UAccount } from '../types';
+import type { M3UAccount, ChannelGroupM3UAccount, ChannelGroup } from '../types';
 import * as api from '../services/api';
 import './M3UGroupsModal.css';
 
@@ -10,25 +10,56 @@ interface M3UGroupsModalProps {
   account: M3UAccount;
 }
 
+// Extended type with name from channel groups lookup
+interface GroupWithName extends ChannelGroupM3UAccount {
+  name: string;
+}
+
 export function M3UGroupsModal({
   isOpen,
   onClose,
   onSaved,
   account,
 }: M3UGroupsModalProps) {
-  const [groups, setGroups] = useState<ChannelGroupM3UAccount[]>([]);
+  const [groups, setGroups] = useState<GroupWithName[]>([]);
   const [search, setSearch] = useState('');
   const [saving, setSaving] = useState(false);
+  const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [hasChanges, setHasChanges] = useState(false);
 
-  // Reset state when modal opens
+  // Fetch channel groups to get names when modal opens
   useEffect(() => {
     if (isOpen) {
-      setGroups([...account.channel_groups]);
       setSearch('');
       setError(null);
       setHasChanges(false);
+      setLoading(true);
+
+      // Fetch channel groups to get the names
+      api.getChannelGroups()
+        .then((channelGroups: ChannelGroup[]) => {
+          // Create a map of channel_group ID -> name
+          const nameMap = new Map<number, string>();
+          channelGroups.forEach(g => nameMap.set(g.id, g.name));
+
+          // Merge names into account's channel_groups
+          const groupsWithNames: GroupWithName[] = account.channel_groups.map(g => ({
+            ...g,
+            name: nameMap.get(g.channel_group) || `Group ${g.channel_group}`,
+          }));
+
+          setGroups(groupsWithNames);
+        })
+        .catch(err => {
+          setError(err instanceof Error ? err.message : 'Failed to load group names');
+          // Fall back to showing groups without names
+          setGroups(account.channel_groups.map(g => ({
+            ...g,
+            name: `Group ${g.channel_group}`,
+          })));
+        })
+        .finally(() => setLoading(false));
     }
   }, [isOpen, account]);
 
@@ -37,7 +68,7 @@ export function M3UGroupsModal({
     if (!search.trim()) return groups;
     const searchLower = search.toLowerCase();
     return groups.filter(g =>
-      g.channel_group_name.toLowerCase().includes(searchLower)
+      g.name.toLowerCase().includes(searchLower)
     );
   }, [groups, search]);
 
@@ -136,7 +167,12 @@ export function M3UGroupsModal({
         </div>
 
         <div className="modal-body">
-          {filteredGroups.length === 0 ? (
+          {loading ? (
+            <div className="loading-state">
+              <span className="material-icons spinning">sync</span>
+              <p>Loading groups...</p>
+            </div>
+          ) : filteredGroups.length === 0 ? (
             <div className="empty-state">
               {search ? (
                 <p>No groups match "{search}"</p>
@@ -154,8 +190,8 @@ export function M3UGroupsModal({
               </div>
               {filteredGroups.map(group => (
                 <div key={group.channel_group} className="group-row">
-                  <div className="group-name" title={group.channel_group_name}>
-                    {group.channel_group_name}
+                  <div className="group-name" title={group.name}>
+                    {group.name}
                   </div>
                   <div className="group-enabled">
                     <label className="toggle">
