@@ -23,6 +23,7 @@ export function M3UGroupsModal({
 }: M3UGroupsModalProps) {
   const [groups, setGroups] = useState<GroupWithName[]>([]);
   const [search, setSearch] = useState('');
+  const [hideDisabled, setHideDisabled] = useState(false);
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -63,14 +64,23 @@ export function M3UGroupsModal({
     }
   }, [isOpen, account]);
 
-  // Filter groups by search
+  // Filter groups by search and hideDisabled
   const filteredGroups = useMemo(() => {
-    if (!search.trim()) return groups;
-    const searchLower = search.toLowerCase();
-    return groups.filter(g =>
-      g.name.toLowerCase().includes(searchLower)
-    );
-  }, [groups, search]);
+    let filtered = groups;
+
+    // Filter by hideDisabled
+    if (hideDisabled) {
+      filtered = filtered.filter(g => g.enabled);
+    }
+
+    // Filter by search
+    if (search.trim()) {
+      const searchLower = search.toLowerCase();
+      filtered = filtered.filter(g => g.name.toLowerCase().includes(searchLower));
+    }
+
+    return filtered;
+  }, [groups, search, hideDisabled]);
 
   const handleToggleEnabled = (groupId: number) => {
     setGroups(prev => prev.map(g =>
@@ -159,6 +169,14 @@ export function M3UGroupsModal({
               </button>
             )}
           </div>
+          <label className="hide-disabled-checkbox">
+            <input
+              type="checkbox"
+              checked={hideDisabled}
+              onChange={(e) => setHideDisabled(e.target.checked)}
+            />
+            <span>Hide disabled</span>
+          </label>
           <div className="toolbar-actions">
             <span className="group-count">{enabledCount} / {groups.length} enabled</span>
             <button className="btn-small" onClick={handleEnableAll}>Enable All</button>
@@ -176,6 +194,8 @@ export function M3UGroupsModal({
             <div className="empty-state">
               {search ? (
                 <p>No groups match "{search}"</p>
+              ) : hideDisabled ? (
+                <p>No enabled groups. Uncheck "Hide disabled" to see all groups.</p>
               ) : (
                 <p>No groups available for this account.</p>
               )}

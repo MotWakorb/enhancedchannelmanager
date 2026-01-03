@@ -104,6 +104,23 @@
   font-size: 16px;
 }
 
+.hide-disabled-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+  cursor: pointer;
+  user-select: none;
+}
+
+.hide-disabled-checkbox input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+  accent-color: var(--accent-primary);
+}
+
 .toolbar-actions {
   display: flex;
   align-items: center;
