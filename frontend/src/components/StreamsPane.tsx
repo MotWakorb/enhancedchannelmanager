@@ -1474,6 +1474,20 @@ export function StreamsPane({
                             <input
                               type="radio"
                               name="countryPrefixOption"
+                              checked={!bulkCreateStripCountry && !bulkCreateKeepCountry}
+                              onChange={() => {
+                                setBulkCreateStripCountry(false);
+                                setBulkCreateKeepCountry(false);
+                              }}
+                            />
+                            <span>Keep as-is</span>
+                          </label>
+                          <span className="option-hint radio-hint">e.g., "US: Sports Channel" stays "US: Sports Channel"</span>
+
+                          <label className="radio-option">
+                            <input
+                              type="radio"
+                              name="countryPrefixOption"
                               checked={bulkCreateStripCountry && !bulkCreateKeepCountry}
                               onChange={() => {
                                 setBulkCreateStripCountry(true);
