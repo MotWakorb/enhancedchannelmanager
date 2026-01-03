@@ -131,10 +131,35 @@
 .filter-row {
   display: flex;
   gap: 0.5rem;
+  align-items: center;
 }
 
 .filter-row .filter-select {
   flex: 1;
+}
+
+.clear-filters-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: 1px solid var(--border-secondary);
+  color: var(--text-secondary);
+  cursor: pointer;
+  padding: 0.4rem;
+  border-radius: 4px;
+  transition: color 0.15s, background-color 0.15s, border-color 0.15s;
+  flex-shrink: 0;
+}
+
+.clear-filters-btn:hover {
+  color: var(--accent-primary);
+  border-color: var(--accent-primary);
+  background-color: rgba(100, 108, 255, 0.15);
+}
+
+.clear-filters-btn .material-icons {
+  font-size: 1.1rem;
 }
 
 .search-input,

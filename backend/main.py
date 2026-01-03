@@ -715,6 +715,85 @@ async def get_stream_profiles():
 
 
 # -------------------------------------------------------------------------
+# Channel Profiles
+# -------------------------------------------------------------------------
+
+@app.get("/api/channel-profiles")
+async def get_channel_profiles():
+    """Get all channel profiles."""
+    client = get_client()
+    try:
+        return await client.get_channel_profiles()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/channel-profiles")
+async def create_channel_profile(request: Request):
+    """Create a new channel profile."""
+    client = get_client()
+    try:
+        data = await request.json()
+        return await client.create_channel_profile(data)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/channel-profiles/{profile_id}")
+async def get_channel_profile(profile_id: int):
+    """Get a single channel profile."""
+    client = get_client()
+    try:
+        return await client.get_channel_profile(profile_id)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.patch("/api/channel-profiles/{profile_id}")
+async def update_channel_profile(profile_id: int, request: Request):
+    """Update a channel profile."""
+    client = get_client()
+    try:
+        data = await request.json()
+        return await client.update_channel_profile(profile_id, data)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/api/channel-profiles/{profile_id}")
+async def delete_channel_profile(profile_id: int):
+    """Delete a channel profile."""
+    client = get_client()
+    try:
+        await client.delete_channel_profile(profile_id)
+        return {"status": "deleted"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.patch("/api/channel-profiles/{profile_id}/channels/bulk-update")
+async def bulk_update_profile_channels(profile_id: int, request: Request):
+    """Bulk enable/disable channels for a profile."""
+    client = get_client()
+    try:
+        data = await request.json()
+        return await client.bulk_update_profile_channels(profile_id, data)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.patch("/api/channel-profiles/{profile_id}/channels/{channel_id}")
+async def update_profile_channel(profile_id: int, channel_id: int, request: Request):
+    """Enable/disable a single channel for a profile."""
+    client = get_client()
+    try:
+        data = await request.json()
+        return await client.update_profile_channel(profile_id, channel_id, data)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# -------------------------------------------------------------------------
 # M3U Account Management
 # -------------------------------------------------------------------------
 
