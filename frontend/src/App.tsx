@@ -73,7 +73,9 @@ function App() {
     includeCountryInName: false,
     countrySeparator: '|',
     timezonePreference: 'both',
+    defaultChannelProfileId: null as number | null,
   });
+  // Also keep separate state for use in callbacks (to avoid stale closure issues)
   const [defaultChannelProfileId, setDefaultChannelProfileId] = useState<number | null>(null);
 
   // Provider group settings (for identifying auto channel sync groups)
@@ -325,6 +327,7 @@ function App() {
           includeCountryInName: settings.include_country_in_name,
           countrySeparator: settings.country_separator,
           timezonePreference: settings.timezone_preference,
+          defaultChannelProfileId: settings.default_channel_profile_id,
         });
         setDefaultChannelProfileId(settings.default_channel_profile_id);
 
@@ -463,6 +466,7 @@ function App() {
         includeCountryInName: settings.include_country_in_name,
         countrySeparator: settings.country_separator,
         timezonePreference: settings.timezone_preference,
+        defaultChannelProfileId: settings.default_channel_profile_id,
       });
       setDefaultChannelProfileId(settings.default_channel_profile_id);
 
