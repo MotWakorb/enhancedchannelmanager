@@ -321,10 +321,15 @@
 /* Modal Footer */
 .m3u-groups-modal .modal-footer {
   display: flex;
-  justify-content: flex-end;
-  gap: 0.75rem;
+  justify-content: space-between;
+  align-items: center;
   padding: 1rem 1.5rem;
   border-top: 1px solid var(--border-primary);
+}
+
+.m3u-groups-modal .modal-footer .footer-buttons {
+  display: flex;
+  gap: 0.75rem;
 }
 
 .m3u-groups-modal .modal-footer button {

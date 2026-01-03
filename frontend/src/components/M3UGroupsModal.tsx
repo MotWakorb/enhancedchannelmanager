@@ -169,14 +169,6 @@ export function M3UGroupsModal({
               </button>
             )}
           </div>
-          <label className="hide-disabled-checkbox">
-            <input
-              type="checkbox"
-              checked={hideDisabled}
-              onChange={(e) => setHideDisabled(e.target.checked)}
-            />
-            <span>Hide disabled</span>
-          </label>
           <div className="toolbar-actions">
             <span className="group-count">{enabledCount} / {groups.length} enabled</span>
             <button className="btn-small" onClick={handleEnableAll}>Enable All</button>
@@ -253,12 +245,22 @@ export function M3UGroupsModal({
         </div>
 
         <div className="modal-footer">
-          <button className="btn-secondary" onClick={onClose} disabled={saving}>
-            Cancel
-          </button>
-          <button className="btn-primary" onClick={handleSave} disabled={saving || !hasChanges}>
-            {saving ? 'Saving...' : 'Save Changes'}
-          </button>
+          <label className="hide-disabled-checkbox">
+            <input
+              type="checkbox"
+              checked={hideDisabled}
+              onChange={(e) => setHideDisabled(e.target.checked)}
+            />
+            <span>Hide disabled</span>
+          </label>
+          <div className="footer-buttons">
+            <button className="btn-secondary" onClick={onClose} disabled={saving}>
+              Cancel
+            </button>
+            <button className="btn-primary" onClick={handleSave} disabled={saving || !hasChanges}>
+              {saving ? 'Saving...' : 'Save Changes'}
+            </button>
+          </div>
         </div>
       </div>
     </div>
