@@ -203,7 +203,7 @@
 
 .list-header {
   display: grid;
-  grid-template-columns: 100px 1fr 100px 140px 160px 180px;
+  grid-template-columns: 100px 1fr 130px 140px 160px 180px;
   gap: 1rem;
   padding: 0.75rem 1rem;
   background-color: var(--input-bg);
@@ -217,7 +217,7 @@
 
 .m3u-account-row {
   display: grid;
-  grid-template-columns: 100px 1fr 100px 140px 160px 180px;
+  grid-template-columns: 100px 1fr 130px 140px 160px 180px;
   gap: 1rem;
   padding: 1rem;
   border-bottom: 1px solid var(--border-primary);
@@ -349,16 +349,8 @@
 }
 
 .setting-item {
-  display: flex;
-  align-items: center;
-  gap: 0.25rem;
-  font-size: 0.75rem;
+  font-size: 0.8rem;
   color: var(--text-secondary);
-}
-
-.setting-item .material-icons {
-  font-size: 14px;
-  color: var(--text-muted);
 }
 
 /* Account Updated */

@@ -113,12 +113,10 @@ function M3UAccountRow({
 
       <div className="account-settings">
         <span className="setting-item">
-          <span className="material-icons" title="Max Streams">stream</span>
-          {account.max_streams === 0 ? 'Unlimited' : account.max_streams}
+          Streams: {account.max_streams === 0 ? 'Unlimited' : account.max_streams}
         </span>
         <span className="setting-item">
-          <span className="material-icons" title="Refresh Interval">schedule</span>
-          {account.refresh_interval}h
+          Refresh: {account.refresh_interval}h
         </span>
       </div>
 
