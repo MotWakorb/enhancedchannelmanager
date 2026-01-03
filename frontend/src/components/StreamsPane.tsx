@@ -19,6 +19,7 @@ export interface ChannelDefaults {
   includeCountryInName: boolean;
   countrySeparator: string;
   timezonePreference: string;
+  defaultChannelProfileId?: number | null;
 }
 
 interface StreamsPaneProps {
@@ -396,6 +397,10 @@ export function StreamsPane({
     setBulkCreateSeparator((channelDefaults?.channelNumberSeparator as NumberSeparator) || '|');
     setBulkCreatePrefixOrder('number-first'); // Default to number first
     setBulkCreateStripNetwork(false); // Default to not stripping network prefixes
+    // Apply default channel profile from settings
+    setBulkCreateSelectedProfiles(
+      channelDefaults?.defaultChannelProfileId ? new Set([channelDefaults.defaultChannelProfileId]) : new Set()
+    );
     setNamingOptionsExpanded(false); // Collapse naming options
     setChannelGroupExpanded(false); // Collapse channel group options
     setTimezoneExpanded(false); // Collapse timezone options
@@ -420,6 +425,10 @@ export function StreamsPane({
     setBulkCreateSeparator((channelDefaults?.channelNumberSeparator as NumberSeparator) || '|');
     setBulkCreatePrefixOrder('number-first'); // Default to number first
     setBulkCreateStripNetwork(false); // Default to not stripping network prefixes
+    // Apply default channel profile from settings
+    setBulkCreateSelectedProfiles(
+      channelDefaults?.defaultChannelProfileId ? new Set([channelDefaults.defaultChannelProfileId]) : new Set()
+    );
     setNamingOptionsExpanded(false); // Collapse naming options
     setChannelGroupExpanded(false); // Collapse channel group options
     setTimezoneExpanded(false); // Collapse timezone options
@@ -503,6 +512,10 @@ export function StreamsPane({
     setBulkCreateSeparator((channelDefaults?.channelNumberSeparator as NumberSeparator) || '|');
     setBulkCreatePrefixOrder('number-first');
     setBulkCreateStripNetwork(false);
+    // Apply default channel profile from settings
+    setBulkCreateSelectedProfiles(
+      channelDefaults?.defaultChannelProfileId ? new Set([channelDefaults.defaultChannelProfileId]) : new Set()
+    );
     setNamingOptionsExpanded(false);
     setChannelGroupExpanded(false);
     setTimezoneExpanded(false);
@@ -534,6 +547,10 @@ export function StreamsPane({
     setBulkCreateSeparator((channelDefaults?.channelNumberSeparator as NumberSeparator) || '|');
     setBulkCreatePrefixOrder('number-first');
     setBulkCreateStripNetwork(false);
+    // Apply default channel profile from settings
+    setBulkCreateSelectedProfiles(
+      channelDefaults?.defaultChannelProfileId ? new Set([channelDefaults.defaultChannelProfileId]) : new Set()
+    );
     setNamingOptionsExpanded(false);
     setChannelGroupExpanded(false);
     setTimezoneExpanded(false);
