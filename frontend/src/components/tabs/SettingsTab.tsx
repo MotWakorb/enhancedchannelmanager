@@ -1,16 +1,18 @@
 import { useState, useEffect } from 'react';
 import * as api from '../../services/api';
 import type { Theme } from '../../services/api';
+import type { ChannelProfile } from '../../types';
 import './SettingsTab.css';
 
 interface SettingsTabProps {
   onSaved: () => void;
   onThemeChange?: (theme: Theme) => void;
+  channelProfiles?: ChannelProfile[];
 }
 
 type SettingsPage = 'general' | 'channel-defaults' | 'appearance' | 'about';
 
-export function SettingsTab({ onSaved, onThemeChange }: SettingsTabProps) {
+export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: SettingsTabProps) {
   const [activePage, setActivePage] = useState<SettingsPage>('general');
 
   // Connection settings
@@ -26,6 +28,7 @@ export function SettingsTab({ onSaved, onThemeChange }: SettingsTabProps) {
   const [includeCountryInName, setIncludeCountryInName] = useState(false);
   const [countrySeparator, setCountrySeparator] = useState('|');
   const [timezonePreference, setTimezonePreference] = useState('both');
+  const [defaultChannelProfileId, setDefaultChannelProfileId] = useState<number | null>(null);
 
   // Appearance settings
   const [showStreamUrls, setShowStreamUrls] = useState(true);
@@ -65,6 +68,7 @@ export function SettingsTab({ onSaved, onThemeChange }: SettingsTabProps) {
       setShowStreamUrls(settings.show_stream_urls);
       setHideAutoSyncGroups(settings.hide_auto_sync_groups);
       setTheme(settings.theme || 'dark');
+      setDefaultChannelProfileId(settings.default_channel_profile_id);
       setTestResult(null);
       setError(null);
     } catch (err) {
@@ -137,6 +141,7 @@ export function SettingsTab({ onSaved, onThemeChange }: SettingsTabProps) {
         show_stream_urls: showStreamUrls,
         hide_auto_sync_groups: hideAutoSyncGroups,
         theme: theme,
+        default_channel_profile_id: defaultChannelProfileId,
       });
       setOriginalUrl(url);
       setOriginalUsername(username);
@@ -507,6 +512,35 @@ export function SettingsTab({ onSaved, onThemeChange }: SettingsTabProps) {
           </select>
           <p className="form-hint">
             When streams have East/West variants, this determines which to use by default.
+          </p>
+        </div>
+      </div>
+
+      <div className="settings-section">
+        <div className="settings-section-header">
+          <span className="material-icons">people</span>
+          <h3>Channel Profiles</h3>
+        </div>
+
+        <div className="form-group">
+          <label htmlFor="defaultProfile">Default channel profile for new channels</label>
+          <select
+            id="defaultProfile"
+            value={defaultChannelProfileId ?? ''}
+            onChange={(e) => setDefaultChannelProfileId(e.target.value ? Number(e.target.value) : null)}
+          >
+            <option value="">None (don't auto-add to profiles)</option>
+            {channelProfiles.map((profile) => (
+              <option key={profile.id} value={profile.id}>
+                {profile.name}
+              </option>
+            ))}
+          </select>
+          <p className="form-hint">
+            Newly created channels will automatically be added to this profile.
+            {channelProfiles.length === 0 && (
+              <span className="form-hint-warning"> No profiles available. Create profiles in the Channel Manager.</span>
+            )}
           </p>
         </div>
       </div>
