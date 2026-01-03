@@ -306,7 +306,7 @@ export function useEditMode({
             streams: [],
             stream_profile_id: null,
             uuid: `temp-${tempId}`,
-            logo_id: null,
+            logo_id: apiCall.logoId ?? null,
             auto_created: false,
             auto_created_by: null,
             auto_created_by_name: null,
@@ -421,12 +421,12 @@ export function useEditMode({
   );
 
   const stageCreateChannel = useCallback(
-    (name: string, channelNumber?: number, groupId?: number, newGroupName?: string): number => {
+    (name: string, channelNumber?: number, groupId?: number, newGroupName?: string, logoId?: number): number => {
       // Use ref to get unique temp ID even when called in a loop (React batching issue)
       const tempId = nextTempIdRef.current;
       nextTempIdRef.current -= 1; // Decrement immediately for next call
       stageOperation(
-        { type: 'createChannel', name, channelNumber, groupId, newGroupName },
+        { type: 'createChannel', name, channelNumber, groupId, newGroupName, logoId },
         `Create channel "${name}"`,
         []
       );
@@ -836,13 +836,11 @@ export function useEditMode({
       const newGroupNames = new Set<string>();
       for (const operation of state.stagedOperations) {
         if (operation.apiCall.type === 'createChannel') {
-          console.log('createChannel operation:', operation.apiCall);
           if (operation.apiCall.newGroupName) {
             newGroupNames.add(operation.apiCall.newGroupName);
           }
         }
       }
-      console.log('New group names to create:', Array.from(newGroupNames));
 
       // Create all new groups first
       for (const groupName of newGroupNames) {
@@ -911,6 +909,7 @@ export function useEditMode({
                 name: apiCall.name,
                 channel_number: apiCall.channelNumber,
                 channel_group_id: groupId,
+                logo_id: apiCall.logoId,
               });
               // Track the mapping from temp ID to real ID
               const tempId = operation.afterSnapshot[0]?.id;

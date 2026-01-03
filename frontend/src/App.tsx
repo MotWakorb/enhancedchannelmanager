@@ -929,13 +929,28 @@ function App() {
             channelName = `${channelNumber} ${numberSeparator} ${normalizedName}`;
           }
 
+          // Find logo from the first stream that has one
+          let logoId: number | undefined;
+          for (const stream of groupedStreams) {
+            if (stream.logo_url) {
+              const matchingLogo = logos.find(
+                (logo) => logo.url === stream.logo_url || logo.cache_url === stream.logo_url
+              );
+              if (matchingLogo) {
+                logoId = matchingLogo.id;
+                break;
+              }
+            }
+          }
+
           // Create the channel (returns temp ID)
           // If targetNewGroupName is set, pass it so the commit logic can create the group first
           const tempChannelId = stageCreateChannel(
             channelName,
             channelNumber,
             targetGroupId ?? undefined,
-            targetNewGroupName
+            targetNewGroupName,
+            logoId
           );
 
           // Assign all streams in this group to the new channel
@@ -973,7 +988,7 @@ function App() {
         throw err;
       }
     },
-    [isEditMode, stageCreateChannel, stageAddStream, startBatch, endBatch]
+    [isEditMode, stageCreateChannel, stageAddStream, startBatch, endBatch, logos]
   );
 
   // Handle stream group drop on channels pane (triggers bulk create modal in streams pane)

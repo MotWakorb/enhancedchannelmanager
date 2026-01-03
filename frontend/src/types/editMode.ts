@@ -17,7 +17,7 @@ export type ApiCallSpec =
   | { type: 'removeStreamFromChannel'; channelId: number; streamId: number }
   | { type: 'reorderChannelStreams'; channelId: number; streamIds: number[] }
   | { type: 'bulkAssignChannelNumbers'; channelIds: number[]; startingNumber?: number }
-  | { type: 'createChannel'; name: string; channelNumber?: number; groupId?: number; newGroupName?: string }
+  | { type: 'createChannel'; name: string; channelNumber?: number; groupId?: number; newGroupName?: string; logoId?: number }
   | { type: 'deleteChannel'; channelId: number }
   | { type: 'createGroup'; name: string }
   | { type: 'deleteChannelGroup'; groupId: number };
@@ -166,7 +166,7 @@ export interface UseEditModeReturn {
   stageRemoveStream: (channelId: number, streamId: number, description: string) => void;
   stageReorderStreams: (channelId: number, streamIds: number[], description: string) => void;
   stageBulkAssignNumbers: (channelIds: number[], startingNumber: number, description: string) => void;
-  stageCreateChannel: (name: string, channelNumber?: number, groupId?: number, newGroupName?: string) => number; // returns temp ID
+  stageCreateChannel: (name: string, channelNumber?: number, groupId?: number, newGroupName?: string, logoId?: number) => number; // returns temp ID
   stageDeleteChannel: (channelId: number, description: string) => void;
   stageCreateGroup: (name: string) => void;
   stageDeleteChannelGroup: (groupId: number, description: string) => void;
