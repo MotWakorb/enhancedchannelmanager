@@ -9,6 +9,7 @@ import type {
   CommitResult,
   UseEditModeReturn,
   ApiCallSpec,
+  Logo,
 } from '../types';
 import * as api from '../services/api';
 
@@ -78,13 +79,16 @@ function createInitialState(): EditModeState {
     nextTempId: -1,
     tempIdMap: new Map(),
     currentBatch: null,
+    stagedGroups: new Map(),
+    newGroupNameToTempId: new Map(),
+    nextTempGroupId: -1000, // Start at -1000 to distinguish from channel temp IDs
   };
 }
 
 export interface UseEditModeOptions {
   channels: Channel[];
   onChannelsChange: (channels: Channel[]) => void;
-  onCommitComplete?: () => void;
+  onCommitComplete?: (createdGroupIds: number[]) => void;
   onError?: (message: string) => void;
 }
 
@@ -99,12 +103,22 @@ export function useEditMode({
 
   // Track real channels for conflict detection
   const realChannelsRef = useRef<Channel[]>(channels);
+
+  // Use a ref for next temp ID to avoid React batching issues when creating multiple channels in a loop
+  const nextTempIdRef = useRef(-1);
   realChannelsRef.current = channels;
+
+  // Use a ref for next temp group ID to avoid React batching issues
+  const nextTempGroupIdRef = useRef(-1000);
 
   // Enter edit mode - snapshot current state
   const enterEditMode = useCallback(() => {
     const snapshot = channels.map(createSnapshot);
     const workingCopy = channels.map((ch) => ({ ...ch, streams: [...ch.streams] }));
+
+    // Reset temp ID refs
+    nextTempIdRef.current = -1;
+    nextTempGroupIdRef.current = -1000;
 
     setState({
       isActive: true,
@@ -118,16 +132,21 @@ export function useEditMode({
       nextTempId: -1,
       tempIdMap: new Map(),
       currentBatch: null,
+      stagedGroups: new Map(),
+      newGroupNameToTempId: new Map(),
+      nextTempGroupId: -1000,
     });
   }, [channels]);
 
   // Exit edit mode (discards changes)
   const exitEditMode = useCallback(() => {
+    nextTempIdRef.current = -1; // Reset temp ID ref
     setState(createInitialState());
   }, []);
 
   // Discard all staged changes
   const discard = useCallback(() => {
+    nextTempIdRef.current = -1; // Reset temp ID ref
     setState(createInitialState());
   }, []);
 
@@ -193,6 +212,12 @@ export function useEditMode({
           return workingCopy.filter((ch) => ch.id !== apiCall.channelId);
         }
 
+        case 'createGroup': {
+          // Group creation doesn't affect the working copy of channels
+          // It's a separate entity handled at commit time
+          return workingCopy;
+        }
+
         case 'deleteChannelGroup': {
           // Group deletion doesn't affect the working copy of channels
           // It's a separate entity handled at commit time
@@ -210,7 +235,9 @@ export function useEditMode({
   const stageOperation = useCallback(
     (apiCall: ApiCallSpec, description: string, affectedChannelIds: number[]) => {
       setState((prev) => {
-        if (!prev.isActive) return prev;
+        if (!prev.isActive) {
+          return prev;
+        }
 
         // Get before snapshot from current working copy
         const beforeSnapshot = prev.workingCopy
@@ -230,24 +257,61 @@ export function useEditMode({
         // Apply to working copy
         let newWorkingCopy = applyOperationToWorkingCopy(prev.workingCopy, operation);
 
+        // Track new staged groups and their temp IDs
+        let newStagedGroups = prev.stagedGroups;
+        let newGroupNameToTempId = prev.newGroupNameToTempId;
+        let newNextTempGroupId = prev.nextTempGroupId;
+
         // Handle create channel specially
         if (apiCall.type === 'createChannel') {
           const tempId = prev.nextTempId;
+
+          // Determine channel_group_id: use existing groupId, or create/reuse a temp group for newGroupName
+          let channelGroupId: number | null = apiCall.groupId ?? null;
+
+          if (apiCall.newGroupName) {
+            // Check if we already have a temp ID for this group name
+            if (prev.newGroupNameToTempId.has(apiCall.newGroupName)) {
+              channelGroupId = prev.newGroupNameToTempId.get(apiCall.newGroupName)!;
+            } else {
+              // Create a new staged group
+              const tempGroupId = nextTempGroupIdRef.current;
+              nextTempGroupIdRef.current -= 1;
+
+              const newGroup = {
+                id: tempGroupId,
+                name: apiCall.newGroupName,
+                channel_count: 0, // Will be updated as channels are added
+              };
+
+              // Update maps (need to create new Map instances for immutability)
+              newStagedGroups = new Map(prev.stagedGroups);
+              newStagedGroups.set(tempGroupId, newGroup);
+
+              newGroupNameToTempId = new Map(prev.newGroupNameToTempId);
+              newGroupNameToTempId.set(apiCall.newGroupName, tempGroupId);
+
+              newNextTempGroupId = tempGroupId - 1;
+              channelGroupId = tempGroupId;
+            }
+          }
+
           const newChannel: Channel = {
             id: tempId,
             channel_number: apiCall.channelNumber ?? null,
             name: apiCall.name,
-            channel_group_id: apiCall.groupId ?? null,
+            channel_group_id: channelGroupId,
             tvg_id: null,
             tvc_guide_stationid: null,
             epg_data_id: null,
             streams: [],
             stream_profile_id: null,
             uuid: `temp-${tempId}`,
-            logo_id: null,
+            logo_id: apiCall.logoId ?? null,
             auto_created: false,
             auto_created_by: null,
             auto_created_by_name: null,
+            _stagedLogoUrl: apiCall.logoUrl,
           };
           newWorkingCopy = [...newWorkingCopy, newChannel];
         }
@@ -287,7 +351,7 @@ export function useEditMode({
           newUndoStack = [...prev.localUndoStack, undoEntry];
         }
 
-        return {
+        const newState = {
           ...prev,
           workingCopy: newWorkingCopy,
           stagedOperations: [...prev.stagedOperations, operation],
@@ -296,7 +360,11 @@ export function useEditMode({
           modifiedChannelIds: newModifiedIds,
           nextTempId: apiCall.type === 'createChannel' ? prev.nextTempId - 1 : prev.nextTempId,
           currentBatch: newCurrentBatch,
+          stagedGroups: newStagedGroups,
+          newGroupNameToTempId: newGroupNameToTempId,
+          nextTempGroupId: newNextTempGroupId,
         };
+        return newState;
       });
     },
     [applyOperationToWorkingCopy]
@@ -355,16 +423,18 @@ export function useEditMode({
   );
 
   const stageCreateChannel = useCallback(
-    (name: string, channelNumber?: number, groupId?: number): number => {
-      const tempId = state.nextTempId;
+    (name: string, channelNumber?: number, groupId?: number, newGroupName?: string, logoId?: number, logoUrl?: string): number => {
+      // Use ref to get unique temp ID even when called in a loop (React batching issue)
+      const tempId = nextTempIdRef.current;
+      nextTempIdRef.current -= 1; // Decrement immediately for next call
       stageOperation(
-        { type: 'createChannel', name, channelNumber, groupId },
+        { type: 'createChannel', name, channelNumber, groupId, newGroupName, logoId, logoUrl },
         `Create channel "${name}"`,
         []
       );
       return tempId;
     },
-    [stageOperation, state.nextTempId]
+    [stageOperation]
   );
 
   const stageDeleteChannel = useCallback(
@@ -373,6 +443,17 @@ export function useEditMode({
         { type: 'deleteChannel', channelId },
         description,
         [channelId]
+      );
+    },
+    [stageOperation]
+  );
+
+  const stageCreateGroup = useCallback(
+    (name: string) => {
+      stageOperation(
+        { type: 'createGroup', name },
+        `Create group "${name}"`,
+        [] // No channels directly affected
       );
     },
     [stageOperation]
@@ -605,9 +686,13 @@ export function useEditMode({
       channelNameChanges: 0,
       newChannels: 0,
       deletedChannels: 0,
+      newGroups: 0,
       deletedGroups: 0,
       operationDetails: [],
     };
+
+    // Track new group names from createChannel operations (deduplicated)
+    const newGroupNamesFromChannels = new Set<string>();
 
     for (const op of state.stagedOperations) {
       // Add to operation details
@@ -640,14 +725,33 @@ export function useEditMode({
           break;
         case 'createChannel':
           summary.newChannels++;
+          // Track new groups from createChannel operations
+          if (op.apiCall.newGroupName) {
+            newGroupNamesFromChannels.add(op.apiCall.newGroupName);
+          }
           break;
         case 'deleteChannel':
           summary.deletedChannels++;
+          break;
+        case 'createGroup':
+          summary.newGroups++;
           break;
         case 'deleteChannelGroup':
           summary.deletedGroups++;
           break;
       }
+    }
+
+    // Add unique new groups from createChannel operations to the count
+    summary.newGroups += newGroupNamesFromChannels.size;
+
+    // Add operation details for each new group from channels
+    for (const groupName of newGroupNamesFromChannels) {
+      summary.operationDetails.unshift({
+        id: `new-group-${groupName}`,
+        type: 'createGroup',
+        description: `Create group "${groupName}"`,
+      });
     }
 
     return summary;
@@ -725,8 +829,48 @@ export function useEditMode({
 
     // Copy the temp ID map for tracking new channel IDs
     const tempIdMap = new Map<number, number>();
+    // Map for new group names to their created IDs
+    const newGroupIdMap = new Map<string, number>();
+    // Cache for logos to avoid creating duplicates
+    const logoCache = new Map<string, Logo>();
 
     try {
+      // First pass: collect all new group names that need to be created
+      // (from createChannel operations with newGroupName)
+      const newGroupNames = new Set<string>();
+      for (const operation of state.stagedOperations) {
+        if (operation.apiCall.type === 'createChannel') {
+          if (operation.apiCall.newGroupName) {
+            newGroupNames.add(operation.apiCall.newGroupName);
+          }
+        }
+      }
+
+      // Create all new groups first
+      for (const groupName of newGroupNames) {
+        try {
+          const newGroup = await api.createChannelGroup(groupName);
+          newGroupIdMap.set(groupName, newGroup.id);
+          result.operationsApplied++;
+        } catch (err) {
+          console.error('Failed to create group:', groupName, err);
+          result.success = false;
+          result.operationsFailed++;
+          result.errors.push({
+            operationId: `create-group-${groupName}`,
+            error: err instanceof Error ? err.message : 'Unknown error',
+          });
+          // Stop on first failure
+          break;
+        }
+      }
+
+      // If group creation failed, don't proceed with other operations
+      if (!result.success) {
+        setIsCommitting(false);
+        return result;
+      }
+
       // Execute operations sequentially
       for (const operation of state.stagedOperations) {
         try {
@@ -760,10 +904,29 @@ export function useEditMode({
               break;
 
             case 'createChannel': {
+              // Resolve group ID: use newGroupName mapping if present, otherwise use groupId
+              let groupId = apiCall.groupId;
+              if (apiCall.newGroupName && newGroupIdMap.has(apiCall.newGroupName)) {
+                groupId = newGroupIdMap.get(apiCall.newGroupName);
+              }
+
+              // Resolve logo ID: if logoUrl is provided, create or find the logo
+              let logoId = apiCall.logoId;
+              if (!logoId && apiCall.logoUrl) {
+                try {
+                  const logo = await api.getOrCreateLogo(apiCall.name, apiCall.logoUrl, logoCache);
+                  logoId = logo.id;
+                } catch (logoErr) {
+                  console.warn('Failed to create/find logo for channel:', apiCall.name, logoErr);
+                  // Continue without logo - don't fail the whole operation
+                }
+              }
+
               const newChannel = await api.createChannel({
                 name: apiCall.name,
                 channel_number: apiCall.channelNumber,
-                channel_group_id: apiCall.groupId,
+                channel_group_id: groupId,
+                logo_id: logoId,
               });
               // Track the mapping from temp ID to real ID
               const tempId = operation.afterSnapshot[0]?.id;
@@ -775,6 +938,10 @@ export function useEditMode({
 
             case 'deleteChannel':
               await api.deleteChannel(resolveId(apiCall.channelId));
+              break;
+
+            case 'createGroup':
+              await api.createChannelGroup(apiCall.name);
               break;
 
             case 'deleteChannelGroup':
@@ -816,7 +983,9 @@ export function useEditMode({
         onChannelsChange(allChannels);
         // Exit edit mode on success
         setState(createInitialState());
-        onCommitComplete?.();
+        // Pass the IDs of newly created groups to the callback
+        const createdGroupIds = Array.from(newGroupIdMap.values());
+        onCommitComplete?.(createdGroupIds);
       } else {
         onError?.(
           `Failed to apply ${result.operationsFailed} operation(s): ${result.errors[0]?.error}`
@@ -863,6 +1032,9 @@ export function useEditMode({
   // Determine which channels to display
   const displayChannels = state.isActive ? state.workingCopy : channels;
 
+  // Convert stagedGroups Map to array for consumers
+  const stagedGroupsArray = state.isActive ? Array.from(state.stagedGroups.values()) : [];
+
   return {
     // State
     isEditMode: state.isActive,
@@ -870,6 +1042,7 @@ export function useEditMode({
     stagedOperationCount: state.localUndoStack.length,
     modifiedChannelIds: state.modifiedChannelIds,
     displayChannels,
+    stagedGroups: stagedGroupsArray,
     canLocalUndo: state.localUndoStack.length > 0,
     canLocalRedo: state.localRedoStack.length > 0,
     editModeDuration,
@@ -886,6 +1059,7 @@ export function useEditMode({
     stageBulkAssignNumbers,
     stageCreateChannel,
     stageDeleteChannel,
+    stageCreateGroup,
     stageDeleteChannelGroup,
     addChannelToWorkingCopy,
 

@@ -305,12 +305,12 @@
 }
 
 .edit-mode-dialog-btn.primary {
-  background-color: var(--accent-primary);
-  color: var(--text-primary);
+  background-color: var(--button-primary-bg);
+  color: var(--button-primary-text);
 }
 
 .edit-mode-dialog-btn.primary:hover:not(:disabled) {
-  background-color: var(--accent-primary);
+  background-color: var(--button-primary-bg);
 }
 
 /* Modified channel indicator */

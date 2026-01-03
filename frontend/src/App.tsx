@@ -101,7 +101,8 @@ function App() {
   const [pendingTabChange, setPendingTabChange] = useState<TabId | null>(null);
 
   // Stream group drop trigger (for opening bulk create modal from channels pane)
-  const [droppedStreamGroupName, setDroppedStreamGroupName] = useState<string | null>(null);
+  // Supports multiple groups being dropped at once
+  const [droppedStreamGroupNames, setDroppedStreamGroupNames] = useState<string[] | null>(null);
 
   // Edit mode for staging changes
   const {
@@ -110,6 +111,7 @@ function App() {
     stagedOperationCount,
     modifiedChannelIds,
     displayChannels,
+    stagedGroups,
     canLocalUndo,
     canLocalRedo,
     editModeDuration,
@@ -120,9 +122,9 @@ function App() {
     stageRemoveStream,
     stageReorderStreams,
     stageBulkAssignNumbers,
+    stageCreateChannel,
     stageDeleteChannel,
     stageDeleteChannelGroup,
-    addChannelToWorkingCopy,
     getSummary,
     commit,
     discard,
@@ -133,12 +135,42 @@ function App() {
   } = useEditMode({
     channels,
     onChannelsChange: setChannels,
-    onCommitComplete: () => {
+    onCommitComplete: (createdGroupIds) => {
       loadChannels(); // Refresh from server
       loadChannelGroups(); // Refresh groups (for deleted groups)
+      loadLogos(); // Refresh logos (for newly created logos)
+      // Add newly created groups to the filter so they're visible
+      if (createdGroupIds.length > 0) {
+        setChannelGroupFilter((prev) => {
+          const newIds = createdGroupIds.filter(id => !prev.includes(id));
+          if (newIds.length > 0) {
+            return [...prev, ...newIds];
+          }
+          return prev;
+        });
+      }
     },
     onError: setError,
   });
+
+  // Auto-add staged groups to the channel group filter so they're visible
+  // Also clean up temp group IDs (negative) when edit mode ends
+  useEffect(() => {
+    if (stagedGroups.length > 0) {
+      // Add new staged groups to filter
+      const stagedGroupIds = stagedGroups.map(g => g.id);
+      setChannelGroupFilter((prev) => {
+        const newIds = stagedGroupIds.filter(id => !prev.includes(id));
+        if (newIds.length > 0) {
+          return [...prev, ...newIds];
+        }
+        return prev;
+      });
+    } else if (!isEditMode) {
+      // Edit mode ended - clean up any temp group IDs (negative numbers)
+      setChannelGroupFilter((prev) => prev.filter(id => id >= 0));
+    }
+  }, [stagedGroups, isEditMode]);
 
   // Wrap exit to show dialog if there are staged changes
   const handleExitEditMode = useCallback(() => {
@@ -773,26 +805,48 @@ function App() {
   );
 
   const handleCreateChannel = useCallback(
-    async (name: string, channelNumber?: number, groupId?: number) => {
+    async (name: string, channelNumber?: number, groupId?: number, logoId?: number) => {
       try {
-        const newChannel = await api.createChannel({
-          name,
-          channel_number: channelNumber,
-          channel_group_id: groupId,
-        });
-        setChannels((prev) => [...prev, newChannel]);
-        // In edit mode, also add to the working copy so it can be used immediately
         if (isEditMode) {
-          addChannelToWorkingCopy(newChannel);
+          // In edit mode, stage the creation without calling Dispatcharr API
+          const tempId = stageCreateChannel(name, channelNumber, groupId);
+
+          // Create a temporary channel object to return (for compatibility)
+          const tempChannel: Channel = {
+            id: tempId,
+            channel_number: channelNumber ?? null,
+            name,
+            channel_group_id: groupId ?? null,
+            tvg_id: null,
+            tvc_guide_stationid: null,
+            epg_data_id: null,
+            streams: [],
+            stream_profile_id: null,
+            uuid: `temp-${tempId}`,
+            logo_id: logoId ?? null,
+            auto_created: false,
+            auto_created_by: null,
+            auto_created_by_name: null,
+          };
+          return tempChannel;
+        } else {
+          // Normal mode - create immediately via API
+          const newChannel = await api.createChannel({
+            name,
+            channel_number: channelNumber,
+            channel_group_id: groupId,
+            logo_id: logoId,
+          });
+          setChannels((prev) => [...prev, newChannel]);
+          return newChannel;
         }
-        return newChannel;
       } catch (err) {
         console.error('Failed to create channel:', err);
         setError('Failed to create channel');
         throw err;
       }
     },
-    [isEditMode, addChannelToWorkingCopy]
+    [isEditMode, stageCreateChannel]
   );
 
   const handleBulkCreateFromGroup = useCallback(
@@ -811,60 +865,113 @@ function App() {
       stripNetworkPrefix?: boolean
     ) => {
       try {
-        // If we need to create a new group first
-        let targetGroupId = channelGroupId;
-        let newGroupCreated = false;
-        if (newGroupName) {
-          const newGroup = await api.createChannelGroup(newGroupName);
-          targetGroupId = newGroup.id;
-          newGroupCreated = true;
-          // Refresh channel groups
-          const updatedGroups = await api.getChannelGroups();
-          setChannelGroups(updatedGroups);
+        // Bulk creation requires edit mode
+        if (!isEditMode) {
+          setError('Bulk channel creation requires edit mode');
+          return;
         }
 
-        // Create channels with streams (include logo_url for auto-assignment)
-        const result = await api.bulkCreateChannelsFromStreams(
-          streamsToCreate.map(s => ({ id: s.id, name: s.name, logo_url: s.logo_url })),
-          startingNumber,
-          targetGroupId,
-          {
-            timezonePreference: timezonePreference ?? 'both',
-            stripCountryPrefix: stripCountryPrefix ?? false,
-            keepCountryPrefix: keepCountryPrefix ?? false,
-            countrySeparator: countrySeparator ?? '|',
-            stripNetworkPrefix: stripNetworkPrefix ?? false,
-            addChannelNumber: addChannelNumber ?? false,
-            numberSeparator: numberSeparator ?? '|',
-            prefixOrder: prefixOrder ?? 'number-first',
-          }
-        );
+        // Determine target group: either an existing group ID or a new group name
+        // If newGroupName is provided, we'll stage the group creation and use newGroupName
+        // when staging channels. The commit logic will create the group first and map the ID.
+        const targetGroupId = channelGroupId;
+        const targetNewGroupName = newGroupName;
 
-        // Update channels state with new channels
-        if (result.created.length > 0) {
-          setChannels((prev) => [...prev, ...result.created]);
+        // Create channels locally without calling Dispatcharr API (edit mode only)
+        // Build options for filtering/grouping
+        const options: api.NormalizeOptions = {
+          timezonePreference: timezonePreference ?? 'both',
+          stripCountryPrefix: stripCountryPrefix ?? false,
+          keepCountryPrefix: keepCountryPrefix ?? false,
+          countrySeparator: countrySeparator ?? '|',
+          stripNetworkPrefix: stripNetworkPrefix ?? false,
+        };
 
-          // In edit mode, also add to working copy
-          if (isEditMode) {
-            result.created.forEach(ch => addChannelToWorkingCopy(ch));
+        // Filter streams by timezone preference
+        const filteredStreams = api.filterStreamsByTimezone(streamsToCreate, timezonePreference ?? 'both');
+
+        // Group streams by normalized name
+        const streamsByNormalizedName = new Map<string, Stream[]>();
+        for (const stream of filteredStreams) {
+          const normalizedName = api.normalizeStreamName(stream.name, options);
+          const existing = streamsByNormalizedName.get(normalizedName);
+          if (existing) {
+            existing.push(stream);
+          } else {
+            streamsByNormalizedName.set(normalizedName, [stream]);
           }
         }
+
+        const mergedCount = filteredStreams.length - streamsByNormalizedName.size;
+
+        // Start a batch for all channel creations
+        startBatch(`Create ${streamsByNormalizedName.size} channels from streams`);
+
+        // Create channels and assign streams
+        let channelIndex = 0;
+        for (const [normalizedName, groupedStreams] of streamsByNormalizedName) {
+          const channelNumber = startingNumber + channelIndex;
+          channelIndex++;
+
+          // Build channel name with proper prefixes
+          let channelName = normalizedName;
+          if (addChannelNumber && keepCountryPrefix) {
+            const countryMatch = normalizedName.match(new RegExp(`^([A-Z]{2,6})\\s*[${countrySeparator ?? '|'}]\\s*(.+)$`));
+            if (countryMatch) {
+              const [, countryCode, baseName] = countryMatch;
+              if (prefixOrder === 'country-first') {
+                channelName = `${countryCode} ${countrySeparator} ${channelNumber} ${numberSeparator} ${baseName}`;
+              } else {
+                channelName = `${channelNumber} ${numberSeparator} ${countryCode} ${countrySeparator} ${baseName}`;
+              }
+            } else {
+              channelName = `${channelNumber} ${numberSeparator} ${normalizedName}`;
+            }
+          } else if (addChannelNumber) {
+            channelName = `${channelNumber} ${numberSeparator} ${normalizedName}`;
+          }
+
+          // Find logo URL from the first stream that has one
+          let logoUrl: string | undefined;
+          for (const stream of groupedStreams) {
+            if (stream.logo_url) {
+              logoUrl = stream.logo_url;
+              break;
+            }
+          }
+
+          // Create the channel (returns temp ID)
+          // If targetNewGroupName is set, pass it so the commit logic can create the group first
+          // Pass logoUrl - the commit logic will create the logo if needed
+          const tempChannelId = stageCreateChannel(
+            channelName,
+            channelNumber,
+            targetGroupId ?? undefined,
+            targetNewGroupName,
+            undefined, // logoId - will be resolved during commit
+            logoUrl
+          );
+
+          // Assign all streams in this group to the new channel
+          for (const stream of groupedStreams) {
+            stageAddStream(tempChannelId, stream.id, `Assign stream to "${channelName}"`);
+          }
+        }
+
+        // End the batch
+        endBatch();
 
         // Show results
-        const mergeInfo = result.mergedCount > 0
-          ? `\n(${result.mergedCount} streams merged from duplicate names)`
+        const mergeInfo = mergedCount > 0
+          ? `\n(${mergedCount} streams will be merged from duplicate names)`
           : '';
-        if (result.errors.length > 0) {
-          alert(`Created ${result.created.length} channels.${mergeInfo}\n\nErrors:\n${result.errors.join('\n')}`);
-        } else {
-          alert(`Successfully created ${result.created.length} channels!${mergeInfo}`);
-        }
+        const groupInfo = targetNewGroupName
+          ? `\n\nA new group "${targetNewGroupName}" will be created.`
+          : '';
+        alert(`Staged ${streamsByNormalizedName.size} channels for creation!${mergeInfo}${groupInfo}\n\nThey will be created in Dispatcharr when you click "Done".`);
 
-        // Refresh channel groups to update counts
-        const updatedGroups = await api.getChannelGroups();
-        setChannelGroups(updatedGroups);
-
-        // If a new group was created or we used an existing group, add it to the visible filter
+        // If we used an existing group, add it to the visible filter now
+        // (New groups will be added to filter after commit when they actually exist)
         if (targetGroupId !== null) {
           setChannelGroupFilter((prev) => {
             if (!prev.includes(targetGroupId!)) {
@@ -874,29 +981,25 @@ function App() {
           });
         }
 
-        // Track as newly created if it was a new group
-        if (newGroupCreated && targetGroupId !== null) {
-          trackNewlyCreatedGroup(targetGroupId);
-        }
-
       } catch (err) {
         console.error('Bulk create failed:', err);
         setError('Failed to bulk create channels');
         throw err;
       }
     },
-    [isEditMode, addChannelToWorkingCopy, trackNewlyCreatedGroup]
+    [isEditMode, stageCreateChannel, stageAddStream, startBatch, endBatch]
   );
 
   // Handle stream group drop on channels pane (triggers bulk create modal in streams pane)
-  const handleStreamGroupDrop = useCallback((groupName: string, _streamIds: number[]) => {
-    // Set the dropped group name - StreamsPane will react to this and open the modal
-    setDroppedStreamGroupName(groupName);
+  // Supports multiple groups being dropped at once
+  const handleStreamGroupDrop = useCallback((groupNames: string[], _streamIds: number[]) => {
+    // Set the dropped group names - StreamsPane will react to this and open the modal
+    setDroppedStreamGroupNames(groupNames);
   }, []);
 
   // Clear the dropped stream group trigger after it's been handled
   const handleStreamGroupTriggerHandled = useCallback(() => {
-    setDroppedStreamGroupName(null);
+    setDroppedStreamGroupNames(null);
   }, []);
 
   // Filter streams based on multi-select filters (client-side)
@@ -1002,6 +1105,11 @@ function App() {
     return secs > 0 ? `${mins}m ${secs}s` : `${mins}m`;
   };
 
+  // Merge real channel groups with staged groups when in edit mode
+  const displayChannelGroups = isEditMode && stagedGroups.length > 0
+    ? [...channelGroups, ...stagedGroups]
+    : channelGroups;
+
   return (
     <div className="app">
       <header className={`header ${isEditMode ? 'edit-mode-active' : ''}`}>
@@ -1101,7 +1209,7 @@ function App() {
           {activeTab === 'channel-manager' && (
             <ChannelManagerTab
               // Channel Groups
-              channelGroups={channelGroups}
+              channelGroups={displayChannelGroups}
               onChannelGroupsChange={loadChannelGroups}
               onDeleteChannelGroup={handleDeleteChannelGroup}
 
@@ -1200,7 +1308,7 @@ function App() {
 
               // Bulk Create
               channelDefaults={channelDefaults}
-              externalTriggerGroupName={droppedStreamGroupName}
+              externalTriggerGroupNames={droppedStreamGroupNames}
               onExternalTriggerHandled={handleStreamGroupTriggerHandled}
               onStreamGroupDrop={handleStreamGroupDrop}
               onBulkCreateFromGroup={handleBulkCreateFromGroup}
