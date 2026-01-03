@@ -268,6 +268,147 @@ class DispatcharrClient:
                         all_settings[channel_group_id] = new_setting
         return all_settings
 
+    async def get_m3u_account(self, account_id: int) -> dict:
+        """Get a single M3U account by ID."""
+        response = await self._request("GET", f"/api/m3u/accounts/{account_id}/")
+        response.raise_for_status()
+        return response.json()
+
+    async def create_m3u_account(self, data: dict) -> dict:
+        """Create a new M3U account."""
+        response = await self._request("POST", "/api/m3u/accounts/", json=data)
+        response.raise_for_status()
+        return response.json()
+
+    async def update_m3u_account(self, account_id: int, data: dict) -> dict:
+        """Update an M3U account (full update)."""
+        response = await self._request(
+            "PUT", f"/api/m3u/accounts/{account_id}/", json=data
+        )
+        response.raise_for_status()
+        return response.json()
+
+    async def patch_m3u_account(self, account_id: int, data: dict) -> dict:
+        """Partially update an M3U account (e.g., toggle is_active)."""
+        response = await self._request(
+            "PATCH", f"/api/m3u/accounts/{account_id}/", json=data
+        )
+        response.raise_for_status()
+        return response.json()
+
+    async def delete_m3u_account(self, account_id: int) -> None:
+        """Delete an M3U account."""
+        response = await self._request("DELETE", f"/api/m3u/accounts/{account_id}/")
+        response.raise_for_status()
+
+    async def refresh_m3u_account(self, account_id: int) -> dict:
+        """Trigger refresh for a single M3U account."""
+        response = await self._request(
+            "POST", f"/api/m3u/refresh/{account_id}/"
+        )
+        response.raise_for_status()
+        return response.json() if response.content else {"success": True, "message": "Refresh initiated"}
+
+    async def refresh_all_m3u_accounts(self) -> dict:
+        """Trigger refresh for all active M3U accounts."""
+        response = await self._request("POST", "/api/m3u/refresh/")
+        response.raise_for_status()
+        return response.json() if response.content else {"success": True, "message": "Refresh initiated"}
+
+    async def refresh_m3u_vod(self, account_id: int) -> dict:
+        """Refresh VOD content for an XtreamCodes account."""
+        response = await self._request(
+            "POST", f"/api/m3u/accounts/{account_id}/refresh-vod/"
+        )
+        response.raise_for_status()
+        return response.json() if response.content else {"success": True, "message": "VOD refresh initiated"}
+
+    # -------------------------------------------------------------------------
+    # M3U Filters
+    # -------------------------------------------------------------------------
+
+    async def get_m3u_filters(self, account_id: int) -> list:
+        """Get all filters for an M3U account."""
+        response = await self._request(
+            "GET", f"/api/m3u/accounts/{account_id}/filters/"
+        )
+        response.raise_for_status()
+        return response.json()
+
+    async def create_m3u_filter(self, account_id: int, data: dict) -> dict:
+        """Create a new filter for an M3U account."""
+        response = await self._request(
+            "POST", f"/api/m3u/accounts/{account_id}/filters/", json=data
+        )
+        response.raise_for_status()
+        return response.json()
+
+    async def update_m3u_filter(
+        self, account_id: int, filter_id: int, data: dict
+    ) -> dict:
+        """Update a filter for an M3U account."""
+        response = await self._request(
+            "PUT", f"/api/m3u/accounts/{account_id}/filters/{filter_id}/", json=data
+        )
+        response.raise_for_status()
+        return response.json()
+
+    async def delete_m3u_filter(self, account_id: int, filter_id: int) -> None:
+        """Delete a filter from an M3U account."""
+        response = await self._request(
+            "DELETE", f"/api/m3u/accounts/{account_id}/filters/{filter_id}/"
+        )
+        response.raise_for_status()
+
+    # -------------------------------------------------------------------------
+    # M3U Group Settings
+    # -------------------------------------------------------------------------
+
+    async def update_m3u_group_settings(self, account_id: int, data: dict) -> dict:
+        """Update group settings for an M3U account.
+
+        Data should contain channel group settings like:
+        {
+            "channel_groups": [
+                {"channel_group": 123, "enabled": true, "auto_channel_sync": false, ...}
+            ]
+        }
+        """
+        response = await self._request(
+            "PATCH", f"/api/m3u/accounts/{account_id}/group-settings/", json=data
+        )
+        response.raise_for_status()
+        return response.json()
+
+    # -------------------------------------------------------------------------
+    # Server Groups
+    # -------------------------------------------------------------------------
+
+    async def get_server_groups(self) -> list:
+        """Get all server groups."""
+        response = await self._request("GET", "/api/m3u/server-groups/")
+        response.raise_for_status()
+        return response.json()
+
+    async def create_server_group(self, data: dict) -> dict:
+        """Create a new server group."""
+        response = await self._request("POST", "/api/m3u/server-groups/", json=data)
+        response.raise_for_status()
+        return response.json()
+
+    async def update_server_group(self, group_id: int, data: dict) -> dict:
+        """Update a server group."""
+        response = await self._request(
+            "PATCH", f"/api/m3u/server-groups/{group_id}/", json=data
+        )
+        response.raise_for_status()
+        return response.json()
+
+    async def delete_server_group(self, group_id: int) -> None:
+        """Delete a server group."""
+        response = await self._request("DELETE", f"/api/m3u/server-groups/{group_id}/")
+        response.raise_for_status()
+
     # -------------------------------------------------------------------------
     # Logos
     # -------------------------------------------------------------------------

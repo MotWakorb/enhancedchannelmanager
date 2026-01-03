@@ -1,0 +1,91 @@
+/* M3U Account Modal specific styles */
+/* Extends/overrides SettingsModal.css base styles */
+
+.m3u-account-modal {
+  max-width: 550px;
+}
+
+.m3u-account-modal .modal-body {
+  max-height: 70vh;
+  overflow-y: auto;
+}
+
+/* Radio button group */
+.radio-group {
+  display: flex;
+  gap: 1.5rem;
+}
+
+.radio-label {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  cursor: pointer;
+  color: var(--text-secondary);
+}
+
+.radio-label input[type="radio"] {
+  width: auto;
+  margin: 0;
+  cursor: pointer;
+  accent-color: var(--accent-primary);
+}
+
+.radio-label span {
+  font-size: 0.95rem;
+}
+
+/* "or" divider */
+.form-or {
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  margin: 0.5rem 0;
+}
+
+/* Form row for multiple inline fields */
+.form-row {
+  display: flex;
+  gap: 1rem;
+}
+
+.form-row .form-group {
+  flex: 1;
+}
+
+/* Form hint under input */
+.form-hint {
+  display: block;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  margin-top: 0.25rem;
+}
+
+/* Select styling */
+.m3u-account-modal select {
+  width: 100%;
+  padding: 0.75rem;
+  background-color: var(--input-bg);
+  border: 1px solid var(--border-secondary);
+  border-radius: 4px;
+  color: var(--text-primary);
+  font-size: 0.95rem;
+  box-sizing: border-box;
+  cursor: pointer;
+}
+
+.m3u-account-modal select:focus {
+  outline: none;
+  border-color: var(--accent-primary);
+}
+
+/* Number input styling */
+.m3u-account-modal input[type="number"] {
+  -moz-appearance: textfield;
+}
+
+.m3u-account-modal input[type="number"]::-webkit-outer-spin-button,
+.m3u-account-modal input[type="number"]::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
