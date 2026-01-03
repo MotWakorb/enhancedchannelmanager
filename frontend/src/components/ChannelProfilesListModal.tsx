@@ -314,32 +314,46 @@ export function ChannelProfilesListModal({
         {viewMode === 'list' ? (
           <>
             <div className="modal-header">
-              <div className="header-info">
-                <h2>Channel Profiles</h2>
-                <span className="subtitle">Manage profiles for generating separate M3U playlists</span>
-              </div>
+              <h2>Channel Profiles</h2>
               <button className="close-btn" onClick={onClose}>
                 &times;
               </button>
             </div>
 
             <div className="modal-toolbar">
-              <div className="search-box">
-                <span className="material-icons">search</span>
+              <div className="toolbar-row">
+                <div className="search-box">
+                  <span className="material-icons">search</span>
+                  <input
+                    type="text"
+                    placeholder="Search profiles..."
+                    value={search}
+                    onChange={(e) => setSearch(e.target.value)}
+                  />
+                  {search && (
+                    <button className="clear-search" onClick={() => setSearch('')}>
+                      <span className="material-icons">close</span>
+                    </button>
+                  )}
+                </div>
+                <span className="profile-count">{profiles.length} profile{profiles.length !== 1 ? 's' : ''}</span>
+              </div>
+              <div className="toolbar-row create-row">
                 <input
                   type="text"
-                  placeholder="Search profiles..."
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
+                  className="create-input"
+                  placeholder="New profile name..."
+                  value={newProfileName}
+                  onChange={(e) => setNewProfileName(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && handleCreateProfile()}
                 />
-                {search && (
-                  <button className="clear-search" onClick={() => setSearch('')}>
-                    <span className="material-icons">close</span>
-                  </button>
-                )}
-              </div>
-              <div className="toolbar-actions">
-                <span className="profile-count">{profiles.length} profile{profiles.length !== 1 ? 's' : ''}</span>
+                <button
+                  className="btn-small create-btn"
+                  onClick={handleCreateProfile}
+                  disabled={!newProfileName.trim() || isCreating}
+                >
+                  {isCreating ? 'Creating...' : 'Create'}
+                </button>
               </div>
             </div>
 
@@ -351,40 +365,17 @@ export function ChannelProfilesListModal({
                 </div>
               ) : (
                 <>
-                  {/* Create new profile */}
-                  <div className="create-profile-row">
-                    <input
-                      type="text"
-                      placeholder="New profile name..."
-                      value={newProfileName}
-                      onChange={(e) => setNewProfileName(e.target.value)}
-                      onKeyDown={(e) => e.key === 'Enter' && handleCreateProfile()}
-                    />
-                    <button
-                      className="btn-primary"
-                      onClick={handleCreateProfile}
-                      disabled={!newProfileName.trim() || isCreating}
-                    >
-                      {isCreating ? 'Creating...' : 'Create'}
-                    </button>
-                  </div>
-
                   {/* Profile list */}
                   {filteredProfiles.length === 0 ? (
                     <div className="empty-state">
                       {search ? (
                         <p>No profiles match "{search}"</p>
                       ) : (
-                        <p>No profiles yet. Create one above.</p>
+                        <p>No profiles yet. Create one using the field above.</p>
                       )}
                     </div>
                   ) : (
                     <div className="profiles-list">
-                      <div className="profiles-header">
-                        <span className="col-name">Profile Name</span>
-                        <span className="col-channels">Channels</span>
-                        <span className="col-actions">Actions</span>
-                      </div>
                       {filteredProfiles.map(profile => (
                         <div key={profile.id} className="profile-row">
                           <div className="profile-name">
