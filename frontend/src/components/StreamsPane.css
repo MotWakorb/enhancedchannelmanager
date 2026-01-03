@@ -1175,6 +1175,7 @@
   border-top: none;
   border-radius: 0 0 6px 6px;
   background-color: var(--bg-tertiary);
+  overflow: hidden;
 }
 
 .collapsible-content .timezone-info {
