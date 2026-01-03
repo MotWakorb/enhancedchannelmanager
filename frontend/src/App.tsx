@@ -903,12 +903,13 @@ function App() {
   );
 
   const handleCreateChannel = useCallback(
-    async (name: string, channelNumber?: number, groupId?: number, logoId?: number, tvgId?: string) => {
+    async (name: string, channelNumber?: number, groupId?: number, logoId?: number, tvgId?: string, logoUrl?: string) => {
       try {
         if (isEditMode) {
           // In edit mode, stage the creation without calling Dispatcharr API
-          // Pass logoId and tvgId so the staged channel has the metadata
-          const tempId = stageCreateChannel(name, channelNumber, groupId, undefined, logoId, undefined, tvgId);
+          // Pass logoId, logoUrl, and tvgId so the staged channel has the metadata
+          // logoUrl is used as fallback if logoId is not found - the commit will create/find the logo
+          const tempId = stageCreateChannel(name, channelNumber, groupId, undefined, logoId, logoUrl, tvgId);
 
           // Track for default profile assignment after commit
           if (defaultChannelProfileId && channelNumber !== undefined) {
