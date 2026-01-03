@@ -498,24 +498,40 @@ export function ChannelProfilesListModal({
             </div>
 
             <div className="modal-toolbar">
-              <div className="search-box">
-                <span className="material-icons">search</span>
-                <input
-                  type="text"
-                  placeholder="Search channels..."
-                  value={channelSearch}
-                  onChange={(e) => setChannelSearch(e.target.value)}
-                />
-                {channelSearch && (
-                  <button className="clear-search" onClick={() => setChannelSearch('')}>
-                    <span className="material-icons">close</span>
-                  </button>
-                )}
-              </div>
-              <div className="toolbar-actions">
+              <div className="toolbar-row">
+                <div className="search-box">
+                  <span className="material-icons">search</span>
+                  <input
+                    type="text"
+                    placeholder="Search channels..."
+                    value={channelSearch}
+                    onChange={(e) => setChannelSearch(e.target.value)}
+                  />
+                  {channelSearch && (
+                    <button className="clear-search" onClick={() => setChannelSearch('')}>
+                      <span className="material-icons">close</span>
+                    </button>
+                  )}
+                </div>
                 <span className="channel-count-label">{enabledCount} / {channels.length} enabled</span>
-                <button className="btn-small" onClick={handleEnableAllVisible}>Enable Visible</button>
-                <button className="btn-small" onClick={handleDisableAllVisible}>Disable Visible</button>
+              </div>
+              <div className="toolbar-row">
+                <div className="toolbar-actions">
+                  <button className="btn-small enable-btn" onClick={handleEnableAllVisible}>
+                    Enable Visible
+                  </button>
+                  <button className="btn-small disable-btn" onClick={handleDisableAllVisible}>
+                    Disable Visible
+                  </button>
+                </div>
+                <label className="hide-disabled-checkbox">
+                  <input
+                    type="checkbox"
+                    checked={hideDisabledChannels}
+                    onChange={(e) => setHideDisabledChannels(e.target.checked)}
+                  />
+                  <span>Hide disabled</span>
+                </label>
               </div>
             </div>
 
@@ -565,26 +581,16 @@ export function ChannelProfilesListModal({
             {error && <div className="error-message">{error}</div>}
 
             <div className="modal-footer">
-              <label className="hide-disabled-checkbox">
-                <input
-                  type="checkbox"
-                  checked={hideDisabledChannels}
-                  onChange={(e) => setHideDisabledChannels(e.target.checked)}
-                />
-                <span>Hide disabled</span>
-              </label>
-              <div className="footer-buttons">
-                <button className="btn-secondary" onClick={handleBackToList} disabled={savingChannels}>
-                  Back
-                </button>
-                <button
-                  className="btn-primary"
-                  onClick={handleSaveChannelChanges}
-                  disabled={savingChannels || channelChanges.size === 0}
-                >
-                  {savingChannels ? 'Saving...' : `Save Changes${channelChanges.size > 0 ? ` (${channelChanges.size})` : ''}`}
-                </button>
-              </div>
+              <button className="btn-secondary" onClick={handleBackToList} disabled={savingChannels}>
+                Back
+              </button>
+              <button
+                className="btn-primary"
+                onClick={handleSaveChannelChanges}
+                disabled={savingChannels || channelChanges.size === 0}
+              >
+                {savingChannels ? 'Saving...' : `Save Changes${channelChanges.size > 0 ? ` (${channelChanges.size})` : ''}`}
+              </button>
             </div>
           </>
         )}
