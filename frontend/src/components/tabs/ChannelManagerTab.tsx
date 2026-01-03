@@ -134,7 +134,8 @@ export interface ChannelManagerTabProps {
     keepCountryPrefix?: boolean,
     countrySeparator?: NumberSeparator,
     prefixOrder?: PrefixOrder,
-    stripNetworkPrefix?: boolean
+    stripNetworkPrefix?: boolean,
+    profileIds?: number[]
   ) => Promise<void>;
 }
 
@@ -350,6 +351,7 @@ export function ChannelManagerTab({
           onClearStreamFilters={onClearStreamFilters}
           isEditMode={isEditMode}
           channelGroups={channelGroups}
+          channelProfiles={channelProfiles}
           channelDefaults={channelDefaults}
           externalTriggerGroupNames={externalTriggerGroupNames}
           onExternalTriggerHandled={onExternalTriggerHandled}

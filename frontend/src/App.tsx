@@ -94,6 +94,10 @@ function App() {
   // Track newly created group IDs in this session
   const [newlyCreatedGroupIds, setNewlyCreatedGroupIds] = useState<Set<number>>(new Set());
 
+  // Pending profile assignments (to be applied after commit)
+  // Stores { startNumber, count, profileIds } for each bulk create
+  const pendingProfileAssignmentsRef = useRef<Array<{ startNumber: number; count: number; profileIds: number[] }>>([]);
+
   // Track if baseline has been initialized
   const baselineInitialized = useRef(false);
 
@@ -142,10 +146,14 @@ function App() {
   } = useEditMode({
     channels,
     onChannelsChange: setChannels,
-    onCommitComplete: (createdGroupIds) => {
-      loadChannels(); // Refresh from server
-      loadChannelGroups(); // Refresh groups (for deleted groups)
-      loadLogos(); // Refresh logos (for newly created logos)
+    onCommitComplete: async (createdGroupIds) => {
+      // Refresh data from server
+      await Promise.all([
+        loadChannels(),
+        loadChannelGroups(),
+        loadLogos(),
+      ]);
+
       // Add newly created groups to the filter so they're visible
       if (createdGroupIds.length > 0) {
         setChannelGroupFilter((prev) => {
@@ -155,6 +163,53 @@ function App() {
           }
           return prev;
         });
+      }
+
+      // Apply pending profile assignments
+      if (pendingProfileAssignmentsRef.current.length > 0) {
+        try {
+          // Get fresh channel list to find channels by number
+          const freshChannels = await api.getChannels({ page: 1, pageSize: 5000 });
+          const channelsByNumber = new Map<number, Channel>();
+          for (const ch of freshChannels.results) {
+            if (ch.channel_number !== null) {
+              channelsByNumber.set(ch.channel_number, ch);
+            }
+          }
+
+          // Process each pending assignment
+          for (const assignment of pendingProfileAssignmentsRef.current) {
+            const { startNumber, count, profileIds } = assignment;
+            const channelIds: number[] = [];
+
+            // Find channels by number range
+            for (let i = 0; i < count; i++) {
+              const channel = channelsByNumber.get(startNumber + i);
+              if (channel) {
+                channelIds.push(channel.id);
+              }
+            }
+
+            // Add each channel to each profile
+            for (const profileId of profileIds) {
+              for (const channelId of channelIds) {
+                try {
+                  await api.updateProfileChannel(profileId, channelId, { enabled: true });
+                } catch (err) {
+                  console.warn(`Failed to add channel ${channelId} to profile ${profileId}:`, err);
+                }
+              }
+            }
+          }
+
+          // Clear pending assignments
+          pendingProfileAssignmentsRef.current = [];
+
+          // Refresh channel profiles to reflect changes
+          loadChannelProfiles();
+        } catch (err) {
+          console.error('Failed to apply profile assignments:', err);
+        }
       }
     },
     onError: setError,
@@ -898,7 +953,8 @@ function App() {
       keepCountryPrefix?: boolean,
       countrySeparator?: api.NumberSeparator,
       prefixOrder?: api.PrefixOrder,
-      stripNetworkPrefix?: boolean
+      stripNetworkPrefix?: boolean,
+      profileIds?: number[]
     ) => {
       try {
         // Bulk creation requires edit mode
@@ -1014,6 +1070,15 @@ function App() {
               return [...prev, targetGroupId!];
             }
             return prev;
+          });
+        }
+
+        // Store pending profile assignments to be applied after commit
+        if (profileIds && profileIds.length > 0) {
+          pendingProfileAssignmentsRef.current.push({
+            startNumber: startingNumber,
+            count: streamsByNormalizedName.size,
+            profileIds,
           });
         }
 

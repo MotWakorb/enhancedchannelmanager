@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import type { Stream, M3UAccount, ChannelGroup } from '../types';
+import type { Stream, M3UAccount, ChannelGroup, ChannelProfile } from '../types';
 import { useSelection } from '../hooks';
 import { normalizeStreamName, detectRegionalVariants, filterStreamsByTimezone, detectCountryPrefixes, getUniqueCountryPrefixes, detectNetworkPrefixes, type TimezonePreference, type NormalizeOptions, type NumberSeparator, type PrefixOrder } from '../services/api';
 import { naturalCompare } from '../utils/naturalSort';
@@ -42,6 +42,7 @@ interface StreamsPaneProps {
   // Bulk channel creation
   isEditMode?: boolean;
   channelGroups?: ChannelGroup[];
+  channelProfiles?: ChannelProfile[];
   channelDefaults?: ChannelDefaults;
   // External trigger to open bulk create modal for stream groups (set by dropping on channels pane)
   // Supports multiple groups being dropped at once
@@ -59,7 +60,8 @@ interface StreamsPaneProps {
     keepCountryPrefix?: boolean,
     countrySeparator?: NumberSeparator,
     prefixOrder?: PrefixOrder,
-    stripNetworkPrefix?: boolean
+    stripNetworkPrefix?: boolean,
+    profileIds?: number[]
   ) => Promise<void>;
   // Appearance settings
   showStreamUrls?: boolean;
@@ -85,6 +87,7 @@ export function StreamsPane({
   onClearStreamFilters,
   isEditMode = false,
   channelGroups = [],
+  channelProfiles = [],
   channelDefaults,
   externalTriggerGroupNames = null,
   onExternalTriggerHandled,
@@ -167,6 +170,8 @@ export function StreamsPane({
   const [bulkCreateSeparator, setBulkCreateSeparator] = useState<NumberSeparator>('|');
   const [bulkCreatePrefixOrder, setBulkCreatePrefixOrder] = useState<PrefixOrder>('number-first');
   const [bulkCreateStripNetwork, setBulkCreateStripNetwork] = useState(false);
+  const [bulkCreateSelectedProfiles, setBulkCreateSelectedProfiles] = useState<Set<number>>(new Set());
+  const [profilesExpanded, setProfilesExpanded] = useState(false);
   const [namingOptionsExpanded, setNamingOptionsExpanded] = useState(false);
   const [channelGroupExpanded, setChannelGroupExpanded] = useState(false);
   const [timezoneExpanded, setTimezoneExpanded] = useState(false);
@@ -428,6 +433,7 @@ export function StreamsPane({
     setBulkCreateStreams([]);
     setBulkCreateCustomGroupNames(new Map());
     setBulkCreateGroupStartNumbers(new Map());
+    setBulkCreateSelectedProfiles(new Set());
   }, []);
 
   // Toggle group selection (select/deselect all streams in group)
@@ -679,7 +685,8 @@ export function StreamsPane({
             bulkCreateKeepCountry,
             bulkCreateCountrySeparator,
             bulkCreatePrefixOrder,
-            bulkCreateStripNetwork
+            bulkCreateStripNetwork,
+            bulkCreateSelectedProfiles.size > 0 ? Array.from(bulkCreateSelectedProfiles) : undefined
           );
 
           // Increment starting number for next group (if no explicit start)
@@ -722,7 +729,8 @@ export function StreamsPane({
           bulkCreateKeepCountry,
           bulkCreateCountrySeparator,
           bulkCreatePrefixOrder,
-          bulkCreateStripNetwork
+          bulkCreateStripNetwork,
+          bulkCreateSelectedProfiles.size > 0 ? Array.from(bulkCreateSelectedProfiles) : undefined
         );
       }
 
@@ -760,6 +768,7 @@ export function StreamsPane({
     bulkCreateSeparator,
     bulkCreatePrefixOrder,
     bulkCreateStripNetwork,
+    bulkCreateSelectedProfiles,
     channelGroups,
     onBulkCreateFromGroup,
     clearSelection,
@@ -1592,6 +1601,64 @@ export function StreamsPane({
                   </div>
                 )}
               </div>
+
+              {/* Channel Profiles - Collapsible Section */}
+              {channelProfiles.length > 0 && (
+                <div className="form-group collapsible-section">
+                  <div
+                    className="collapsible-header"
+                    onClick={() => setProfilesExpanded(!profilesExpanded)}
+                  >
+                    <span className="expand-icon">{profilesExpanded ? '▼' : '▶'}</span>
+                    <span className="collapsible-title">Channel Profiles</span>
+                    <span className="collapsible-summary">
+                      {bulkCreateSelectedProfiles.size === 0
+                        ? 'None selected'
+                        : `${bulkCreateSelectedProfiles.size} profile${bulkCreateSelectedProfiles.size !== 1 ? 's' : ''} selected`}
+                    </span>
+                  </div>
+
+                  {profilesExpanded && (
+                    <div className="collapsible-content">
+                      <div className="profiles-info">
+                        <span className="material-icons">people</span>
+                        <span>Assign new channels to these profiles (optional)</span>
+                      </div>
+                      <div className="checkbox-group profiles-list">
+                        {channelProfiles.map(profile => (
+                          <label key={profile.id} className="checkbox-option">
+                            <input
+                              type="checkbox"
+                              checked={bulkCreateSelectedProfiles.has(profile.id)}
+                              onChange={(e) => {
+                                const newSet = new Set(bulkCreateSelectedProfiles);
+                                if (e.target.checked) {
+                                  newSet.add(profile.id);
+                                } else {
+                                  newSet.delete(profile.id);
+                                }
+                                setBulkCreateSelectedProfiles(newSet);
+                              }}
+                            />
+                            <span>{profile.name}</span>
+                            <span className="profile-channel-count">
+                              ({profile.channels.length > 0 ? profile.channels.length : 'all'} channels)
+                            </span>
+                          </label>
+                        ))}
+                      </div>
+                      {bulkCreateSelectedProfiles.size > 0 && (
+                        <button
+                          className="btn-clear-profiles"
+                          onClick={() => setBulkCreateSelectedProfiles(new Set())}
+                        >
+                          Clear selection
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
 
               {/* Preview - show per-group preview in separate mode, otherwise show combined preview */}
               {isFromMultipleGroups && bulkCreateMultiGroupOption === 'separate' ? (

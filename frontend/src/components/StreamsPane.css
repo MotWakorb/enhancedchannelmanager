@@ -1008,6 +1008,72 @@
   font-style: italic;
 }
 
+/* Profiles section styling */
+.profiles-info {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  background-color: #6366f122;
+  border: 1px solid #6366f144;
+  border-radius: 6px;
+  margin-bottom: 0.75rem;
+}
+
+.profiles-info .material-icons {
+  font-size: 1.1rem;
+  color: #818cf8;
+}
+
+.profiles-info span {
+  font-size: 0.85rem;
+  color: var(--button-text);
+}
+
+.bulk-create-modal .profiles-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.bulk-create-modal .profiles-list .checkbox-option {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background-color 0.15s;
+}
+
+.bulk-create-modal .profiles-list .checkbox-option:hover {
+  background-color: var(--border-primary);
+}
+
+.profile-channel-count {
+  margin-left: auto;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.btn-clear-profiles {
+  margin-top: 0.5rem;
+  padding: 0.375rem 0.75rem;
+  background: none;
+  border: 1px solid var(--border-secondary);
+  border-radius: 4px;
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.btn-clear-profiles:hover {
+  background-color: var(--border-primary);
+  border-color: var(--border-primary);
+  color: var(--text-primary);
+}
+
 /* Country prefix styling */
 .country-prefix-info {
   display: flex;
