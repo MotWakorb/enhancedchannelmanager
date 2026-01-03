@@ -88,6 +88,7 @@ interface ChannelsPaneProps {
   // Channel Profiles props
   channelProfiles?: ChannelProfile[];
   onChannelProfilesChange?: () => Promise<void>;
+  defaultChannelProfileId?: number | null;
   // Channel list filter props
   providerGroupSettings?: Record<number, M3UGroupSetting>;
   channelListFilters?: ChannelListFilterSettings;
@@ -1246,8 +1247,9 @@ export function ChannelsPane({
   streamProfiles = [],
   epgDataLoading = false,
   // Channel Profiles props
-  channelProfiles: _channelProfiles = [],
+  channelProfiles = [],
   onChannelProfilesChange,
+  defaultChannelProfileId,
   // Channel list filter props
   providerGroupSettings = {},
   channelListFilters,
@@ -1272,7 +1274,6 @@ export function ChannelsPane({
   void _onStageAddStream;
   void _onStageBulkAssignNumbers;
   void onLogosChange;
-  void _channelProfiles;
   const [expandedGroups, setExpandedGroups] = useState<GroupState>({});
   const [dragOverChannelId, setDragOverChannelId] = useState<number | null>(null);
   const [localChannels, setLocalChannels] = useState<Channel[]>(channels);
@@ -1293,6 +1294,8 @@ export function ChannelsPane({
   const [newChannelGroup, setNewChannelGroup] = useState<number | ''>('');
   const [newChannelLogoId, setNewChannelLogoId] = useState<number | null>(null); // Logo from dropped stream
   const [newChannelTvgId, setNewChannelTvgId] = useState<string | null>(null); // tvg_id from dropped stream
+  const [newChannelSelectedProfiles, setNewChannelSelectedProfiles] = useState<Set<number>>(new Set());
+  const [newChannelProfilesExpanded, setNewChannelProfilesExpanded] = useState(false);
   const [groupSearchText, setGroupSearchText] = useState('');
   const [showGroupDropdown, setShowGroupDropdown] = useState(false);
   const [creating, setCreating] = useState(false);
@@ -2011,6 +2014,12 @@ export function ChannelsPane({
     const nextNumber = getNextChannelNumberForGroup(numericGroupId);
     setNewChannelNumber(nextNumber.toString());
 
+    // Set default channel profile from settings
+    setNewChannelSelectedProfiles(
+      defaultChannelProfileId ? new Set([defaultChannelProfileId]) : new Set()
+    );
+    setNewChannelProfilesExpanded(false);
+
     // Open the create modal
     setShowCreateModal(true);
   };
@@ -2037,13 +2046,25 @@ export function ChannelsPane({
   const createChannelWithNumber = async (channelNum: number) => {
     setCreating(true);
     try {
-      await onCreateChannel(
+      const newChannel = await onCreateChannel(
         newChannelName.trim(),
         channelNum,
         newChannelGroup !== '' ? newChannelGroup : undefined,
         newChannelLogoId ?? undefined,
         newChannelTvgId ?? undefined
       );
+
+      // Assign channel to selected profiles
+      if (newChannelSelectedProfiles.size > 0 && newChannel?.id) {
+        for (const profileId of newChannelSelectedProfiles) {
+          try {
+            await api.updateProfileChannel(profileId, newChannel.id, { enabled: true });
+          } catch (err) {
+            console.error(`Failed to add channel ${newChannel.id} to profile ${profileId}:`, err);
+          }
+        }
+      }
+
       // In edit mode, the channel is added to workingCopy by stageCreateChannel,
       // which flows through the channels prop and syncs to localChannels via useEffect.
       // We don't manually add here to avoid duplicates.
@@ -3580,7 +3601,21 @@ export function ChannelsPane({
             <>
               <button
                 className="create-channel-btn"
-                onClick={() => setShowCreateModal(true)}
+                onClick={() => {
+                  // Reset form state
+                  setNewChannelName('');
+                  setNewChannelNumber('');
+                  setNewChannelGroup('');
+                  setGroupSearchText('');
+                  setNewChannelLogoId(null);
+                  setNewChannelTvgId(null);
+                  // Set default channel profile from settings
+                  setNewChannelSelectedProfiles(
+                    defaultChannelProfileId ? new Set([defaultChannelProfileId]) : new Set()
+                  );
+                  setNewChannelProfilesExpanded(false);
+                  setShowCreateModal(true);
+                }}
                 title="Create new channel"
               >
                 <span className="material-icons create-channel-icon">add</span>
@@ -3688,6 +3723,49 @@ export function ChannelsPane({
                   )}
                 </div>
               </label>
+
+              {/* Channel Profiles Section */}
+              {channelProfiles.length > 0 && (
+                <div className="collapsible-section">
+                  <button
+                    type="button"
+                    className={`collapsible-header ${newChannelProfilesExpanded ? 'expanded' : ''}`}
+                    onClick={() => setNewChannelProfilesExpanded(!newChannelProfilesExpanded)}
+                  >
+                    <span className="material-icons">
+                      {newChannelProfilesExpanded ? 'expand_more' : 'chevron_right'}
+                    </span>
+                    <span>Channel Profiles</span>
+                    <span className="collapsible-summary">
+                      {newChannelSelectedProfiles.size === 0
+                        ? 'None selected'
+                        : `${newChannelSelectedProfiles.size} selected`}
+                    </span>
+                  </button>
+                  {newChannelProfilesExpanded && (
+                    <div className="collapsible-content profile-list">
+                      {channelProfiles.map((profile) => (
+                        <label key={profile.id} className="profile-checkbox">
+                          <input
+                            type="checkbox"
+                            checked={newChannelSelectedProfiles.has(profile.id)}
+                            onChange={() => {
+                              const newSet = new Set(newChannelSelectedProfiles);
+                              if (newSet.has(profile.id)) {
+                                newSet.delete(profile.id);
+                              } else {
+                                newSet.add(profile.id);
+                              }
+                              setNewChannelSelectedProfiles(newSet);
+                            }}
+                          />
+                          <span>{profile.name}</span>
+                        </label>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
             <div className="modal-actions">
               <button
