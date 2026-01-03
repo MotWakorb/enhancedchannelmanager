@@ -316,7 +316,7 @@ export function ChannelManagerTab({
           epgDataLoading={epgDataLoading}
           channelProfiles={channelProfiles}
           onChannelProfilesChange={onChannelProfilesChange}
-          defaultChannelProfileId={channelDefaults?.defaultChannelProfileId}
+          channelDefaults={channelDefaults}
           providerGroupSettings={providerGroupSettings}
           channelListFilters={channelListFilters}
           onChannelListFiltersChange={onChannelListFiltersChange}
