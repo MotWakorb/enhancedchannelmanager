@@ -60,6 +60,21 @@ export function EditModeExitDialog({
                     {summary.newChannels} new channel{summary.newChannels !== 1 ? 's' : ''} created
                   </li>
                 )}
+                {summary.newGroups > 0 && (
+                  <li>
+                    {summary.newGroups} new group{summary.newGroups !== 1 ? 's' : ''} created
+                  </li>
+                )}
+                {summary.deletedChannels > 0 && (
+                  <li>
+                    {summary.deletedChannels} channel{summary.deletedChannels !== 1 ? 's' : ''} deleted
+                  </li>
+                )}
+                {summary.deletedGroups > 0 && (
+                  <li>
+                    {summary.deletedGroups} group{summary.deletedGroups !== 1 ? 's' : ''} deleted
+                  </li>
+                )}
               </ul>
 
               {/* Toggle for detailed change list */}

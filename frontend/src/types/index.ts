@@ -13,6 +13,8 @@ export interface Channel {
   auto_created: boolean;
   auto_created_by: number | null;
   auto_created_by_name: string | null;
+  // Client-side only: temporary logo URL for staged channels before commit
+  _stagedLogoUrl?: string;
 }
 
 export type EPGSourceType = 'xmltv' | 'schedules_direct' | 'dummy';

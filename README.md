@@ -47,7 +47,14 @@ A professional-grade web interface for managing IPTV configurations with Dispatc
 ### Bulk Channel Creation
 
 - **Create from Stream Group** - Create multiple channels from an entire M3U stream group at once
+- **Multi-Group Creation** - Select and drag multiple stream groups at once to create channels from all of them
+  - **Separate Groups Mode** - Create a separate channel group for each stream group with independent naming and numbering
+  - **Combined Mode** - Merge all streams from selected groups into a single channel group
+  - **Per-Group Settings** - Customize channel group name and starting channel number for each group
+  - **Group Preview** - See channel previews organized by group with calculated channel numbers
+  - **Drag Multiple Groups** - Select multiple groups in the streams pane and drag them together onto the channels pane
 - **Auto-Assign Streams** - Each created channel automatically gets its source stream assigned
+- **Auto-Assign Logos** - Channels inherit logos from their source streams automatically
 - **Merge Duplicate Names** - Streams with identical names from different M3U providers are merged into a single channel with all streams assigned (provides multi-provider redundancy)
 - **Quality Variant Normalization** - Streams with quality suffixes (FHD, UHD, HD, SD, 4K, 1080P, etc.) are automatically merged into one channel
 - **Smart Stream Ordering** - Streams are automatically ordered by quality (UHD/4K → FHD/1080p → HD/720p → SD) and interleaved by provider for failover redundancy (e.g., Provider1-FHD, Provider2-FHD, Provider1-HD, Provider2-HD)
@@ -58,6 +65,7 @@ A professional-grade web interface for managing IPTV configurations with Dispatc
 - **Prefix Order Choice** - When both country and channel number are enabled, choose the order: "Number first" (100 | US | Sports Channel) or "Country first" (US | 100 | Sports Channel)
 - **Custom Starting Number** - Choose the starting channel number for sequential assignment
 - **Flexible Group Options** - Create in same-named group, select existing group, or create new group
+- **Staged Group Creation** - New channel groups are staged with channels and only created on commit (prevents orphaned groups)
 - **Preview Before Creating** - See a preview of channels that will be created with merged stream counts
 - **Edit Mode Integration** - Requires edit mode, button visible on stream group headers on hover
 
@@ -70,15 +78,17 @@ A unique workflow that lets you stage changes locally before committing to the s
 - **Preview Changes** - See pending operations count
 - **Local Undo/Redo** - Undo/redo within your edit session (Ctrl+Z / Ctrl+Shift+Z)
 - **Undoable Deletes** - Channel and group deletions can be undone before committing
+- **Bulk Delete with Groups** - When deleting all channels in a group, option to delete the empty group too
 - **Batch Operations** - Group related changes together
 - **Commit or Discard** - Apply all changes at once or discard everything
-- **Exit Dialog** - Review a summary of all changes before committing
+- **Exit Dialog** - Review a detailed summary of all changes before committing (channel number changes, name changes, streams added/removed, new channels, deleted channels, new groups, deleted groups)
 - **Modified Indicators** - Visual highlighting of channels with pending changes
 
 ### Drag and Drop
 
 - **Add Streams** - Drag streams onto channels to add them
 - **Bulk Add** - Drag multiple selected streams at once
+- **Create from Stream** - Drag a stream onto a group header (not a channel) to create a new channel with the stream name pre-populated
 - **Reorder Channels** - Drag channels to reorder within a group (edit mode)
 - **Move Between Groups** - Drag channels to different groups with confirmation modal
 - **Reorder Streams** - Drag to reorder streams within a channel
@@ -116,8 +126,9 @@ A unique workflow that lets you stage changes locally before committing to the s
 - **Bulk EPG Assignment** - Assign EPG to multiple selected channels at once with intelligent matching:
   - **Country-Aware Matching** - Detects country from stream names (e.g., "US: Sports Channel") and matches to appropriate EPG entries (e.g., `SportsChannel.us` not `SportsChannel.mx`)
   - **Smart Call Sign Matching** - Prefers EPG entries where the call sign matches the channel name (e.g., `NOSEY` over `VIZNOSE` for "Nosey" channel)
-  - **HD Variant Preference** - Automatically prefers HD EPG entries over SD when available
-  - **Regional Variant Handling** - Intelligent matching for regional variants (East, West, Pacific, etc.) with East as default when no region specified
+  - **Call Sign Scoring** - Rates call sign matches: exact match > starts with channel name > common prefix > no match
+  - **Balanced HD Preference** - Prefers HD EPG entries but not when a non-HD variant has a significantly better call sign match
+  - **Regional Variant Handling** - Intelligent matching for regional variants including East, West, Pacific, Central, Mountain, and compound variants like WestCoastFeed
   - **Special Character Support** - Properly handles channels with special characters like "E!" or "MGM+"
   - **Auto-Match** - Channels with a single matching EPG entry are automatically assigned
   - **Conflict Resolution** - When multiple EPG entries match, review and select the correct one with card-based navigation
