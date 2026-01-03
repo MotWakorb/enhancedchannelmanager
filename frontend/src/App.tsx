@@ -101,7 +101,8 @@ function App() {
   const [pendingTabChange, setPendingTabChange] = useState<TabId | null>(null);
 
   // Stream group drop trigger (for opening bulk create modal from channels pane)
-  const [droppedStreamGroupName, setDroppedStreamGroupName] = useState<string | null>(null);
+  // Supports multiple groups being dropped at once
+  const [droppedStreamGroupNames, setDroppedStreamGroupNames] = useState<string[] | null>(null);
 
   // Edit mode for staging changes
   const {
@@ -137,6 +138,7 @@ function App() {
     onCommitComplete: (createdGroupIds) => {
       loadChannels(); // Refresh from server
       loadChannelGroups(); // Refresh groups (for deleted groups)
+      loadLogos(); // Refresh logos (for newly created logos)
       // Add newly created groups to the filter so they're visible
       if (createdGroupIds.length > 0) {
         setChannelGroupFilter((prev) => {
@@ -929,28 +931,25 @@ function App() {
             channelName = `${channelNumber} ${numberSeparator} ${normalizedName}`;
           }
 
-          // Find logo from the first stream that has one
-          let logoId: number | undefined;
+          // Find logo URL from the first stream that has one
+          let logoUrl: string | undefined;
           for (const stream of groupedStreams) {
             if (stream.logo_url) {
-              const matchingLogo = logos.find(
-                (logo) => logo.url === stream.logo_url || logo.cache_url === stream.logo_url
-              );
-              if (matchingLogo) {
-                logoId = matchingLogo.id;
-                break;
-              }
+              logoUrl = stream.logo_url;
+              break;
             }
           }
 
           // Create the channel (returns temp ID)
           // If targetNewGroupName is set, pass it so the commit logic can create the group first
+          // Pass logoUrl - the commit logic will create the logo if needed
           const tempChannelId = stageCreateChannel(
             channelName,
             channelNumber,
             targetGroupId ?? undefined,
             targetNewGroupName,
-            logoId
+            undefined, // logoId - will be resolved during commit
+            logoUrl
           );
 
           // Assign all streams in this group to the new channel
@@ -988,18 +987,19 @@ function App() {
         throw err;
       }
     },
-    [isEditMode, stageCreateChannel, stageAddStream, startBatch, endBatch, logos]
+    [isEditMode, stageCreateChannel, stageAddStream, startBatch, endBatch]
   );
 
   // Handle stream group drop on channels pane (triggers bulk create modal in streams pane)
-  const handleStreamGroupDrop = useCallback((groupName: string, _streamIds: number[]) => {
-    // Set the dropped group name - StreamsPane will react to this and open the modal
-    setDroppedStreamGroupName(groupName);
+  // Supports multiple groups being dropped at once
+  const handleStreamGroupDrop = useCallback((groupNames: string[], _streamIds: number[]) => {
+    // Set the dropped group names - StreamsPane will react to this and open the modal
+    setDroppedStreamGroupNames(groupNames);
   }, []);
 
   // Clear the dropped stream group trigger after it's been handled
   const handleStreamGroupTriggerHandled = useCallback(() => {
-    setDroppedStreamGroupName(null);
+    setDroppedStreamGroupNames(null);
   }, []);
 
   // Filter streams based on multi-select filters (client-side)
@@ -1308,7 +1308,7 @@ function App() {
 
               // Bulk Create
               channelDefaults={channelDefaults}
-              externalTriggerGroupName={droppedStreamGroupName}
+              externalTriggerGroupNames={droppedStreamGroupNames}
               onExternalTriggerHandled={handleStreamGroupTriggerHandled}
               onStreamGroupDrop={handleStreamGroupDrop}
               onBulkCreateFromGroup={handleBulkCreateFromGroup}

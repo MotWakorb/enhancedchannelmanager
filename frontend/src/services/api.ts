@@ -367,7 +367,7 @@ export async function getStreamProfiles(): Promise<StreamProfile[]> {
 
 // Helper function to get or create a logo by URL
 // Dispatcharr enforces unique URLs, so we try to create first, then search if it already exists
-async function getOrCreateLogo(name: string, url: string, logoCache: Map<string, Logo>): Promise<Logo> {
+export async function getOrCreateLogo(name: string, url: string, logoCache: Map<string, Logo>): Promise<Logo> {
   // Check cache first
   const cached = logoCache.get(url);
   if (cached) {

@@ -99,8 +99,8 @@ interface ChannelsPaneProps {
   onSelectGroupChannels?: (channelIds: number[], select: boolean) => void;
   // Dispatcharr URL for constructing channel stream URLs
   dispatcharrUrl?: string;
-  // Stream group drop callback (for bulk channel creation)
-  onStreamGroupDrop?: (groupName: string, streamIds: number[]) => void;
+  // Stream group drop callback (for bulk channel creation) - supports multiple groups
+  onStreamGroupDrop?: (groupNames: string[], streamIds: number[]) => void;
   // Appearance settings
   showStreamUrls?: boolean;
 }
@@ -1605,6 +1605,10 @@ export function ChannelsPane({
 
   // Helper to get logo URL for a channel
   const getChannelLogoUrl = (channel: Channel): string | null => {
+    // For staged channels (during edit mode), use the temporary logo URL
+    if (channel._stagedLogoUrl) {
+      return channel._stagedLogoUrl;
+    }
     if (!channel.logo_id) return null;
     const logo = logos.find((l) => l.id === channel.logo_id);
     return logo?.cache_url || logo?.url || null;
@@ -2361,18 +2365,31 @@ export function ChannelsPane({
   const handlePaneDrop = (e: React.DragEvent) => {
     setStreamGroupDragOver(false);
 
-    // Check for stream group drop
+    // Check for stream group drop (supports multiple groups)
     const isStreamGroupDrag = e.dataTransfer.getData('streamGroupDrag');
     if (isStreamGroupDrag === 'true' && isEditMode && onStreamGroupDrop) {
       e.preventDefault();
-      const groupName = e.dataTransfer.getData('streamGroupName');
       const streamIdsJson = e.dataTransfer.getData('streamGroupStreamIds');
-      if (groupName && streamIdsJson) {
+      // Check for multiple groups first (new format)
+      const groupNamesJson = e.dataTransfer.getData('streamGroupNames');
+      if (groupNamesJson && streamIdsJson) {
         try {
+          const groupNames = JSON.parse(groupNamesJson) as string[];
           const streamIds = JSON.parse(streamIdsJson) as number[];
-          onStreamGroupDrop(groupName, streamIds);
+          onStreamGroupDrop(groupNames, streamIds);
         } catch {
-          console.error('Failed to parse stream IDs from stream group drop');
+          console.error('Failed to parse stream group drop data');
+        }
+      } else {
+        // Fallback to single group (backward compatibility)
+        const groupName = e.dataTransfer.getData('streamGroupName');
+        if (groupName && streamIdsJson) {
+          try {
+            const streamIds = JSON.parse(streamIdsJson) as number[];
+            onStreamGroupDrop([groupName], streamIds);
+          } catch {
+            console.error('Failed to parse stream IDs from stream group drop');
+          }
         }
       }
     }

@@ -9,6 +9,7 @@ import type {
   CommitResult,
   UseEditModeReturn,
   ApiCallSpec,
+  Logo,
 } from '../types';
 import * as api from '../services/api';
 
@@ -310,6 +311,7 @@ export function useEditMode({
             auto_created: false,
             auto_created_by: null,
             auto_created_by_name: null,
+            _stagedLogoUrl: apiCall.logoUrl,
           };
           newWorkingCopy = [...newWorkingCopy, newChannel];
         }
@@ -421,12 +423,12 @@ export function useEditMode({
   );
 
   const stageCreateChannel = useCallback(
-    (name: string, channelNumber?: number, groupId?: number, newGroupName?: string, logoId?: number): number => {
+    (name: string, channelNumber?: number, groupId?: number, newGroupName?: string, logoId?: number, logoUrl?: string): number => {
       // Use ref to get unique temp ID even when called in a loop (React batching issue)
       const tempId = nextTempIdRef.current;
       nextTempIdRef.current -= 1; // Decrement immediately for next call
       stageOperation(
-        { type: 'createChannel', name, channelNumber, groupId, newGroupName, logoId },
+        { type: 'createChannel', name, channelNumber, groupId, newGroupName, logoId, logoUrl },
         `Create channel "${name}"`,
         []
       );
@@ -829,6 +831,8 @@ export function useEditMode({
     const tempIdMap = new Map<number, number>();
     // Map for new group names to their created IDs
     const newGroupIdMap = new Map<string, number>();
+    // Cache for logos to avoid creating duplicates
+    const logoCache = new Map<string, Logo>();
 
     try {
       // First pass: collect all new group names that need to be created
@@ -905,11 +909,24 @@ export function useEditMode({
               if (apiCall.newGroupName && newGroupIdMap.has(apiCall.newGroupName)) {
                 groupId = newGroupIdMap.get(apiCall.newGroupName);
               }
+
+              // Resolve logo ID: if logoUrl is provided, create or find the logo
+              let logoId = apiCall.logoId;
+              if (!logoId && apiCall.logoUrl) {
+                try {
+                  const logo = await api.getOrCreateLogo(apiCall.name, apiCall.logoUrl, logoCache);
+                  logoId = logo.id;
+                } catch (logoErr) {
+                  console.warn('Failed to create/find logo for channel:', apiCall.name, logoErr);
+                  // Continue without logo - don't fail the whole operation
+                }
+              }
+
               const newChannel = await api.createChannel({
                 name: apiCall.name,
                 channel_number: apiCall.channelNumber,
                 channel_group_id: groupId,
-                logo_id: apiCall.logoId,
+                logo_id: logoId,
               });
               // Track the mapping from temp ID to real ID
               const tempId = operation.afterSnapshot[0]?.id;
