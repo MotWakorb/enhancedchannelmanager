@@ -11,25 +11,15 @@
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 1rem 1.5rem;
+  padding: 0.875rem 1.5rem;
+  background-color: var(--input-bg);
   border-bottom: 1px solid var(--border-primary);
 }
 
-.channel-profiles-modal .header-info {
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
-}
-
-.channel-profiles-modal .header-info > div {
-  display: flex;
-  flex-direction: column;
-  gap: 0.25rem;
-}
-
-.channel-profiles-modal .header-info h2 {
+.channel-profiles-modal .modal-header h2 {
   margin: 0;
-  font-size: 1.25rem;
+  font-size: 1rem;
+  font-weight: 600;
   color: var(--text-primary);
 }
 
@@ -76,18 +66,64 @@
   padding: 0;
 }
 
-/* Create Profile Row */
-.create-profile-row {
+/* Search Box */
+.channel-profiles-modal .search-box {
   display: flex;
-  gap: 0.75rem;
-  padding: 1rem 1.5rem;
-  border-bottom: 1px solid var(--border-primary);
-  background-color: var(--input-bg);
+  align-items: center;
+  gap: 0.5rem;
+  flex: 1;
+  background-color: var(--bg-primary);
+  border: 1px solid var(--border-secondary);
+  border-radius: 6px;
+  padding: 0.375rem 0.75rem;
 }
 
-.create-profile-row input {
+.channel-profiles-modal .search-box .material-icons {
+  font-size: 18px;
+  color: var(--text-muted);
+}
+
+.channel-profiles-modal .search-box input {
   flex: 1;
-  padding: 0.5rem 0.75rem;
+  background: none;
+  border: none;
+  outline: none;
+  color: var(--text-primary);
+  font-size: 0.875rem;
+}
+
+.channel-profiles-modal .search-box input::placeholder {
+  color: var(--text-muted);
+}
+
+.channel-profiles-modal .search-box .clear-search {
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+}
+
+.channel-profiles-modal .search-box .clear-search:hover {
+  color: var(--text-primary);
+}
+
+.channel-profiles-modal .search-box .clear-search .material-icons {
+  font-size: 16px;
+}
+
+/* Create Row */
+.channel-profiles-modal .toolbar-row.create-row {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.channel-profiles-modal .create-input {
+  flex: 1;
+  padding: 0.375rem 0.75rem;
   background-color: var(--bg-primary);
   border: 1px solid var(--border-secondary);
   border-radius: 6px;
@@ -95,27 +131,27 @@
   font-size: 0.875rem;
 }
 
-.create-profile-row input:focus {
+.channel-profiles-modal .create-input:focus {
   outline: none;
   border-color: var(--accent-primary);
 }
 
-.create-profile-row input::placeholder {
+.channel-profiles-modal .create-input::placeholder {
   color: var(--text-muted);
 }
 
-.create-profile-row .btn-primary {
-  padding: 0.5rem 1rem;
+.channel-profiles-modal .create-btn {
   background-color: var(--button-primary-bg);
   color: var(--button-primary-text);
-  border: none;
-  border-radius: 6px;
-  font-size: 0.875rem;
-  cursor: pointer;
-  white-space: nowrap;
+  border: none !important;
 }
 
-.create-profile-row .btn-primary:disabled {
+.channel-profiles-modal .create-btn:hover:not(:disabled) {
+  opacity: 0.9;
+  background-color: var(--button-primary-bg) !important;
+}
+
+.channel-profiles-modal .create-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }
@@ -126,27 +162,12 @@
   flex-direction: column;
 }
 
-.profiles-header {
-  display: grid;
-  grid-template-columns: 1fr 100px 120px;
-  gap: 1rem;
-  padding: 0.75rem 1.5rem;
-  background-color: var(--input-bg);
-  border-bottom: 1px solid var(--border-primary);
-  font-size: 0.75rem;
-  font-weight: 600;
-  color: var(--text-secondary);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-}
-
 .profile-row {
-  display: grid;
-  grid-template-columns: 1fr 100px 120px;
+  display: flex;
+  align-items: center;
   gap: 1rem;
   padding: 0.75rem 1.5rem;
   border-bottom: 1px solid var(--border-primary);
-  align-items: center;
 }
 
 .profile-row:last-child {
@@ -160,6 +181,8 @@
 .profile-name {
   display: flex;
   align-items: center;
+  flex: 1;
+  min-width: 0;
 }
 
 .profile-name .name-text {
@@ -185,6 +208,7 @@
 .profile-channels {
   display: flex;
   justify-content: center;
+  flex-shrink: 0;
 }
 
 .profile-channels .channel-count {
@@ -203,8 +227,9 @@
 
 .profile-actions {
   display: flex;
-  justify-content: center;
+  justify-content: flex-end;
   gap: 0.25rem;
+  flex-shrink: 0;
 }
 
 .icon-btn {
