@@ -896,11 +896,12 @@ function App() {
   );
 
   const handleCreateChannel = useCallback(
-    async (name: string, channelNumber?: number, groupId?: number, logoId?: number) => {
+    async (name: string, channelNumber?: number, groupId?: number, logoId?: number, tvgId?: string) => {
       try {
         if (isEditMode) {
           // In edit mode, stage the creation without calling Dispatcharr API
-          const tempId = stageCreateChannel(name, channelNumber, groupId);
+          // Pass logoId and tvgId so the staged channel has the metadata
+          const tempId = stageCreateChannel(name, channelNumber, groupId, undefined, logoId, undefined, tvgId);
 
           // Create a temporary channel object to return (for compatibility)
           const tempChannel: Channel = {
@@ -908,7 +909,7 @@ function App() {
             channel_number: channelNumber ?? null,
             name,
             channel_group_id: groupId ?? null,
-            tvg_id: null,
+            tvg_id: tvgId ?? null,
             tvc_guide_stationid: null,
             epg_data_id: null,
             streams: [],
@@ -927,6 +928,7 @@ function App() {
             channel_number: channelNumber,
             channel_group_id: groupId,
             logo_id: logoId,
+            tvg_id: tvgId,
           });
           setChannels((prev) => [...prev, newChannel]);
           return newChannel;

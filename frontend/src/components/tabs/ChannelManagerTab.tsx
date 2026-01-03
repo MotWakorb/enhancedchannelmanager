@@ -17,7 +17,7 @@ export interface ChannelManagerTabProps {
   onChannelDrop: (channelId: number, streamId: number) => Promise<void>;
   onBulkStreamDrop: (channelId: number, streamIds: number[]) => Promise<void>;
   onChannelReorder: (channelIds: number[], startingNumber: number) => Promise<void>;
-  onCreateChannel: (name: string, channelNumber?: number, groupId?: number) => Promise<Channel>;
+  onCreateChannel: (name: string, channelNumber?: number, groupId?: number, logoId?: number, tvgId?: string) => Promise<Channel>;
   onDeleteChannel: (channelId: number) => Promise<void>;
   channelsLoading: boolean;
 

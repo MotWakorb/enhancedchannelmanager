@@ -39,7 +39,7 @@ interface ChannelsPaneProps {
   onChannelDrop: (channelId: number, streamId: number) => void;
   onBulkStreamDrop: (channelId: number, streamIds: number[]) => void;
   onChannelReorder: (channelIds: number[], startingNumber: number) => void;
-  onCreateChannel: (name: string, channelNumber?: number, groupId?: number, logoId?: number) => Promise<Channel>;
+  onCreateChannel: (name: string, channelNumber?: number, groupId?: number, logoId?: number, tvgId?: string) => Promise<Channel>;
   onDeleteChannel: (channelId: number) => Promise<void>;
   searchTerm: string;
   onSearchChange: (term: string) => void;
@@ -1292,6 +1292,7 @@ export function ChannelsPane({
   const [newChannelNumber, setNewChannelNumber] = useState('');
   const [newChannelGroup, setNewChannelGroup] = useState<number | ''>('');
   const [newChannelLogoId, setNewChannelLogoId] = useState<number | null>(null); // Logo from dropped stream
+  const [newChannelTvgId, setNewChannelTvgId] = useState<string | null>(null); // tvg_id from dropped stream
   const [groupSearchText, setGroupSearchText] = useState('');
   const [showGroupDropdown, setShowGroupDropdown] = useState(false);
   const [creating, setCreating] = useState(false);
@@ -1944,6 +1945,7 @@ export function ChannelsPane({
     setNewChannelNumber('');
     setNewChannelGroup('');
     setNewChannelLogoId(null);
+    setNewChannelTvgId(null);
     setGroupSearchText('');
     setShowGroupDropdown(false);
   };
@@ -1991,6 +1993,9 @@ export function ChannelsPane({
       setNewChannelLogoId(null);
     }
 
+    // Capture the stream's tvg_id for the new channel
+    setNewChannelTvgId(stream.tvg_id ?? null);
+
     // Set the group (handle 'ungrouped' case)
     if (groupId === 'ungrouped') {
       setNewChannelGroup('');
@@ -2032,17 +2037,16 @@ export function ChannelsPane({
   const createChannelWithNumber = async (channelNum: number) => {
     setCreating(true);
     try {
-      const newChannel = await onCreateChannel(
+      await onCreateChannel(
         newChannelName.trim(),
         channelNum,
         newChannelGroup !== '' ? newChannelGroup : undefined,
-        newChannelLogoId ?? undefined
+        newChannelLogoId ?? undefined,
+        newChannelTvgId ?? undefined
       );
-      // In edit mode, we need to manually add the new channel to localChannels
-      // since we disabled the automatic sync from parent state
-      if (isEditMode && newChannel) {
-        setLocalChannels((prev) => [...prev, newChannel]);
-      }
+      // In edit mode, the channel is added to workingCopy by stageCreateChannel,
+      // which flows through the channels prop and syncs to localChannels via useEffect.
+      // We don't manually add here to avoid duplicates.
       handleCloseCreateModal();
     } catch {
       // Error handled in parent

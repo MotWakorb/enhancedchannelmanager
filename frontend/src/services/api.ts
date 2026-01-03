@@ -109,6 +109,7 @@ export async function createChannel(data: {
   channel_number?: number;
   channel_group_id?: number;
   logo_id?: number;
+  tvg_id?: string;
 }): Promise<Channel> {
   return fetchJson(`${API_BASE}/channels`, {
     method: 'POST',

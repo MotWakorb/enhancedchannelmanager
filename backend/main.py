@@ -235,6 +235,7 @@ class CreateChannelRequest(BaseModel):
     channel_number: Optional[float] = None
     channel_group_id: Optional[int] = None
     logo_id: Optional[int] = None
+    tvg_id: Optional[str] = None
 
 
 @app.get("/api/channels")
@@ -267,6 +268,8 @@ async def create_channel(request: CreateChannelRequest):
             data["channel_group_id"] = request.channel_group_id
         if request.logo_id is not None:
             data["logo_id"] = request.logo_id
+        if request.tvg_id is not None:
+            data["tvg_id"] = request.tvg_id
         return await client.create_channel(data)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
