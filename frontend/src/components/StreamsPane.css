@@ -1237,6 +1237,24 @@
   font-style: italic;
 }
 
+.preview-group {
+  margin-bottom: 0.75rem;
+}
+
+.preview-group:last-child {
+  margin-bottom: 0;
+}
+
+.preview-group-header {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--accent-primary);
+  padding: 0.375rem 0.75rem;
+  background-color: var(--bg-hover);
+  border-radius: 4px;
+  margin-bottom: 0.25rem;
+}
+
 .modal-footer {
   display: flex;
   justify-content: flex-end;
