@@ -42,8 +42,9 @@ interface StreamsPaneProps {
   isEditMode?: boolean;
   channelGroups?: ChannelGroup[];
   channelDefaults?: ChannelDefaults;
-  // External trigger to open bulk create modal for a stream group (set by dropping on channels pane)
-  externalTriggerGroupName?: string | null;
+  // External trigger to open bulk create modal for stream groups (set by dropping on channels pane)
+  // Supports multiple groups being dropped at once
+  externalTriggerGroupNames?: string[] | null;
   onExternalTriggerHandled?: () => void;
   onBulkCreateFromGroup?: (
     streams: Stream[],
@@ -83,7 +84,7 @@ export function StreamsPane({
   isEditMode = false,
   channelGroups = [],
   channelDefaults,
-  externalTriggerGroupName = null,
+  externalTriggerGroupNames = null,
   onExternalTriggerHandled,
   onBulkCreateFromGroup,
   showStreamUrls = true,
@@ -147,6 +148,10 @@ export function StreamsPane({
   const [bulkCreateGroups, setBulkCreateGroups] = useState<StreamGroup[]>([]); // For multi-group creation
   const [bulkCreateStreams, setBulkCreateStreams] = useState<Stream[]>([]); // For selected streams
   const [bulkCreateMultiGroupOption, setBulkCreateMultiGroupOption] = useState<'separate' | 'single'>('separate');
+  // Custom names for each group when using 'separate' mode (maps original group name to custom name)
+  const [bulkCreateCustomGroupNames, setBulkCreateCustomGroupNames] = useState<Map<string, string>>(new Map());
+  // Starting channel number for each group when using 'separate' mode (maps original group name to starting number)
+  const [bulkCreateGroupStartNumbers, setBulkCreateGroupStartNumbers] = useState<Map<string, string>>(new Map());
   const [bulkCreateStartingNumber, setBulkCreateStartingNumber] = useState<string>('');
   const [bulkCreateGroupOption, setBulkCreateGroupOption] = useState<'same' | 'existing' | 'new'>('same');
   const [bulkCreateSelectedGroupId, setBulkCreateSelectedGroupId] = useState<number | null>(null);
@@ -304,32 +309,67 @@ export function StreamsPane({
   );
 
   // Handle dragging a stream group header (for drop onto channels pane)
+  // If multiple groups are selected and we drag one of them, drag all selected groups
   const handleGroupDragStart = useCallback(
     (e: React.DragEvent, group: StreamGroup) => {
       // Set data to identify this as a stream group drag
       e.dataTransfer.setData('streamGroupDrag', 'true');
-      e.dataTransfer.setData('streamGroupName', group.name);
-      e.dataTransfer.setData('streamGroupStreamIds', JSON.stringify(group.streams.map(s => s.id)));
       e.dataTransfer.effectAllowed = 'copy';
 
-      // Custom drag image showing group info
-      const dragEl = document.createElement('div');
-      dragEl.className = 'drag-preview';
-      dragEl.textContent = `${group.name} (${group.streams.length} streams)`;
-      dragEl.style.cssText = `
-        position: absolute;
-        top: -1000px;
-        background: #22d3ee;
-        color: #1e1e1e;
-        padding: 8px 16px;
-        border-radius: 4px;
-        font-weight: 500;
-      `;
-      document.body.appendChild(dragEl);
-      e.dataTransfer.setDragImage(dragEl, 50, 20);
-      setTimeout(() => document.body.removeChild(dragEl), 0);
+      // Check if the dragged group is part of a multi-group selection
+      const isGroupSelected = selectedGroupNames.has(group.name);
+      const hasMultipleGroupsSelected = selectedGroupNames.size > 1;
+
+      if (isGroupSelected && hasMultipleGroupsSelected) {
+        // Drag all selected groups
+        const selectedGroupsList = groupedStreams.filter(g => selectedGroupNames.has(g.name));
+        const allGroupNames = selectedGroupsList.map(g => g.name);
+        const allStreamIds = selectedGroupsList.flatMap(g => g.streams.map(s => s.id));
+
+        e.dataTransfer.setData('streamGroupNames', JSON.stringify(allGroupNames));
+        e.dataTransfer.setData('streamGroupStreamIds', JSON.stringify(allStreamIds));
+
+        // Custom drag image showing multi-group info
+        const dragEl = document.createElement('div');
+        dragEl.className = 'drag-preview';
+        const totalStreams = selectedGroupsList.reduce((sum, g) => sum + g.streams.length, 0);
+        dragEl.textContent = `${selectedGroupsList.length} groups (${totalStreams} streams)`;
+        dragEl.style.cssText = `
+          position: absolute;
+          top: -1000px;
+          background: #a855f7;
+          color: white;
+          padding: 8px 16px;
+          border-radius: 4px;
+          font-weight: 500;
+        `;
+        document.body.appendChild(dragEl);
+        e.dataTransfer.setDragImage(dragEl, 50, 20);
+        setTimeout(() => document.body.removeChild(dragEl), 0);
+      } else {
+        // Single group drag
+        e.dataTransfer.setData('streamGroupName', group.name);
+        e.dataTransfer.setData('streamGroupStreamIds', JSON.stringify(group.streams.map(s => s.id)));
+
+        // Custom drag image showing group info
+        const dragEl = document.createElement('div');
+        dragEl.className = 'drag-preview';
+        dragEl.textContent = `${group.name} (${group.streams.length} streams)`;
+        dragEl.style.cssText = `
+          position: absolute;
+          top: -1000px;
+          background: #22d3ee;
+          color: #1e1e1e;
+          padding: 8px 16px;
+          border-radius: 4px;
+          font-weight: 500;
+        `;
+        document.body.appendChild(dragEl);
+        e.dataTransfer.setDragImage(dragEl, 50, 20);
+        setTimeout(() => document.body.removeChild(dragEl), 0);
+      }
     },
-    []
+    [selectedGroupNames, groupedStreams]
   );
 
   // Bulk create handlers - apply settings defaults
@@ -384,20 +424,9 @@ export function StreamsPane({
     setBulkCreateGroup(null);
     setBulkCreateGroups([]);
     setBulkCreateStreams([]);
+    setBulkCreateCustomGroupNames(new Map());
+    setBulkCreateGroupStartNumbers(new Map());
   }, []);
-
-  // Handle external trigger to open bulk create modal (from dropping stream group on channels pane)
-  useEffect(() => {
-    if (externalTriggerGroupName && onBulkCreateFromGroup) {
-      // Find the matching stream group
-      const matchingGroup = groupedStreams.find(g => g.name === externalTriggerGroupName);
-      if (matchingGroup) {
-        openBulkCreateModal(matchingGroup);
-      }
-      // Signal that we've handled the trigger
-      onExternalTriggerHandled?.();
-    }
-  }, [externalTriggerGroupName, groupedStreams, openBulkCreateModal, onBulkCreateFromGroup, onExternalTriggerHandled]);
 
   // Toggle group selection (select/deselect all streams in group)
   const toggleGroupSelection = useCallback((group: StreamGroup) => {
@@ -447,6 +476,12 @@ export function StreamsPane({
     setBulkCreateGroups(selectedGroups);
     setBulkCreateStreams([]);
     setBulkCreateMultiGroupOption('separate'); // Default to separate groups
+    // Initialize custom group names with the original names
+    const initialNames = new Map<string, string>();
+    selectedGroups.forEach(g => initialNames.set(g.name, g.name));
+    setBulkCreateCustomGroupNames(initialNames);
+    // Initialize per-group start numbers (empty by default)
+    setBulkCreateGroupStartNumbers(new Map());
     setBulkCreateStartingNumber('');
     setBulkCreateGroupOption('same'); // Default to same name for multi-group
     setBulkCreateSelectedGroupId(null);
@@ -465,6 +500,59 @@ export function StreamsPane({
     setTimezoneExpanded(false);
     setBulkCreateModalOpen(true);
   }, [groupedStreams, selectedIds, channelDefaults]);
+
+  // Open bulk create modal for explicitly provided groups (used by external trigger)
+  const openBulkCreateModalForMultipleGroups = useCallback((groups: StreamGroup[]) => {
+    setBulkCreateGroup(null);
+    setBulkCreateGroups(groups);
+    setBulkCreateStreams([]);
+    setBulkCreateMultiGroupOption('separate'); // Default to separate groups
+    // Initialize custom group names with the original names
+    const initialNames = new Map<string, string>();
+    groups.forEach(g => initialNames.set(g.name, g.name));
+    setBulkCreateCustomGroupNames(initialNames);
+    // Initialize per-group start numbers (empty by default)
+    setBulkCreateGroupStartNumbers(new Map());
+    setBulkCreateStartingNumber('');
+    setBulkCreateGroupOption('same'); // Default to same name for multi-group
+    setBulkCreateSelectedGroupId(null);
+    setBulkCreateNewGroupName('');
+    // Apply settings defaults
+    setBulkCreateTimezone((channelDefaults?.timezonePreference as TimezonePreference) || 'both');
+    setBulkCreateStripCountry(channelDefaults?.removeCountryPrefix ?? false);
+    setBulkCreateKeepCountry(channelDefaults?.includeCountryInName ?? false);
+    setBulkCreateCountrySeparator((channelDefaults?.countrySeparator as NumberSeparator) || '|');
+    setBulkCreateAddNumber(channelDefaults?.includeChannelNumberInName ?? false);
+    setBulkCreateSeparator((channelDefaults?.channelNumberSeparator as NumberSeparator) || '|');
+    setBulkCreatePrefixOrder('number-first');
+    setBulkCreateStripNetwork(false);
+    setNamingOptionsExpanded(false);
+    setChannelGroupExpanded(false);
+    setTimezoneExpanded(false);
+    setBulkCreateModalOpen(true);
+  }, [channelDefaults]);
+
+  // Handle external trigger to open bulk create modal (from dropping stream groups on channels pane)
+  // Supports single or multiple groups
+  useEffect(() => {
+    if (externalTriggerGroupNames && externalTriggerGroupNames.length > 0 && onBulkCreateFromGroup) {
+      if (externalTriggerGroupNames.length === 1) {
+        // Single group - use single group modal
+        const matchingGroup = groupedStreams.find(g => g.name === externalTriggerGroupNames[0]);
+        if (matchingGroup) {
+          openBulkCreateModal(matchingGroup);
+        }
+      } else {
+        // Multiple groups - use multi-group modal
+        const matchingGroups = groupedStreams.filter(g => externalTriggerGroupNames.includes(g.name));
+        if (matchingGroups.length > 0) {
+          openBulkCreateModalForMultipleGroups(matchingGroups);
+        }
+      }
+      // Signal that we've handled the trigger
+      onExternalTriggerHandled?.();
+    }
+  }, [externalTriggerGroupNames, groupedStreams, openBulkCreateModal, openBulkCreateModalForMultipleGroups, onBulkCreateFromGroup, onExternalTriggerHandled]);
 
   // Get the streams to create channels from (either from single group, multiple groups, or selection)
   const streamsToCreate = useMemo(() => {
@@ -537,24 +625,45 @@ export function StreamsPane({
   const handleBulkCreate = useCallback(async () => {
     if (streamsToCreate.length === 0 || !onBulkCreateFromGroup) return;
 
-    const startingNum = parseInt(bulkCreateStartingNumber, 10);
-    if (isNaN(startingNum) || startingNum < 0) {
-      alert('Please enter a valid starting channel number');
-      return;
+    // For separate groups mode, we use per-group starting numbers
+    // For other modes, we need a valid global starting number
+    const useSeparateMode = isFromMultipleGroups && bulkCreateMultiGroupOption === 'separate';
+
+    if (useSeparateMode) {
+      // Check that at least the first group has a starting number
+      const firstGroupStart = bulkCreateGroupStartNumbers.get(bulkCreateGroups[0]?.name);
+      if (!firstGroupStart || isNaN(parseInt(firstGroupStart, 10)) || parseInt(firstGroupStart, 10) < 0) {
+        alert('Please enter a valid starting channel number for the first group');
+        return;
+      }
+    } else {
+      const startingNum = parseInt(bulkCreateStartingNumber, 10);
+      if (isNaN(startingNum) || startingNum < 0) {
+        alert('Please enter a valid starting channel number');
+        return;
+      }
     }
 
     setBulkCreateLoading(true);
 
     try {
       // Handle multi-group mode with separate groups
-      if (isFromMultipleGroups && bulkCreateMultiGroupOption === 'separate') {
-        // Create channels for each group separately
-        let currentNumber = startingNum;
-        for (const group of bulkCreateGroups) {
-          // Find existing group with same name, or create new
-          const existingGroup = channelGroups.find(g => g.name === group.name);
+      if (useSeparateMode) {
+        // Create channels for each group separately, using per-group starting numbers
+        let currentNumber = 0; // Will be set by first group's start number
+        for (let i = 0; i < bulkCreateGroups.length; i++) {
+          const group = bulkCreateGroups[i];
+          // Get per-group start number (or continue from previous)
+          const groupStartStr = bulkCreateGroupStartNumbers.get(group.name);
+          if (groupStartStr && !isNaN(parseInt(groupStartStr, 10))) {
+            currentNumber = parseInt(groupStartStr, 10);
+          }
+          // Get custom group name (user may have renamed it)
+          const customGroupName = bulkCreateCustomGroupNames.get(group.name) || group.name;
+          // Find existing group with the custom name, or create new
+          const existingGroup = channelGroups.find(g => g.name === customGroupName);
           const groupId = existingGroup?.id ?? null;
-          const newGroupName = existingGroup ? undefined : group.name;
+          const newGroupName = existingGroup ? undefined : customGroupName;
 
           await onBulkCreateFromGroup(
             group.streams,
@@ -571,11 +680,12 @@ export function StreamsPane({
             bulkCreateStripNetwork
           );
 
-          // Increment starting number for next group
+          // Increment starting number for next group (if no explicit start)
           currentNumber += group.streams.length;
         }
       } else {
         // Single group or combined mode
+        const startingNum = parseInt(bulkCreateStartingNumber, 10);
         let groupId: number | null = null;
         let newGroupName: string | undefined;
 
@@ -634,6 +744,8 @@ export function StreamsPane({
     bulkCreateGroup,
     bulkCreateGroups,
     bulkCreateMultiGroupOption,
+    bulkCreateCustomGroupNames,
+    bulkCreateGroupStartNumbers,
     bulkCreateStartingNumber,
     bulkCreateGroupOption,
     bulkCreateSelectedGroupId,
@@ -1027,6 +1139,64 @@ export function StreamsPane({
                       <span className="option-hint">All streams go into one channel group</span>
                     </label>
                   </div>
+
+                  {/* Per-group settings when separate mode is selected */}
+                  {bulkCreateMultiGroupOption === 'separate' && (
+                    <div className="multi-group-names">
+                      <label className="form-label">Channel Groups</label>
+                      <div className="group-name-list-header">
+                        <span className="header-streams">Streams</span>
+                        <span className="header-name">Group Name</span>
+                        <span className="header-start">Start #</span>
+                        <span className="header-status">Status</span>
+                      </div>
+                      <div className="group-name-list">
+                        {bulkCreateGroups.map((group) => {
+                          const customName = bulkCreateCustomGroupNames.get(group.name) || group.name;
+                          const startNumber = bulkCreateGroupStartNumbers.get(group.name) || '';
+                          const existingGroup = channelGroups.find(g => g.name === customName);
+                          return (
+                            <div key={group.name} className="group-name-row">
+                              <span className="group-stream-count">{group.streams.length}</span>
+                              <input
+                                type="text"
+                                value={customName}
+                                onChange={(e) => {
+                                  const newMap = new Map(bulkCreateCustomGroupNames);
+                                  newMap.set(group.name, e.target.value);
+                                  setBulkCreateCustomGroupNames(newMap);
+                                }}
+                                placeholder={group.name}
+                                className="form-input group-name-input"
+                              />
+                              <input
+                                type="number"
+                                min="0"
+                                value={startNumber}
+                                onChange={(e) => {
+                                  const newMap = new Map(bulkCreateGroupStartNumbers);
+                                  newMap.set(group.name, e.target.value);
+                                  setBulkCreateGroupStartNumbers(newMap);
+                                }}
+                                placeholder="Auto"
+                                className="form-input group-start-input"
+                                title="Starting channel number for this group"
+                              />
+                              {existingGroup ? (
+                                <span className="group-exists-badge" title="Group already exists - channels will be added to it">exists</span>
+                              ) : (
+                                <span className="group-new-badge" title="New group will be created">new</span>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                      <div className="group-start-hint">
+                        <span className="material-icons">info_outline</span>
+                        Leave start # empty to continue from previous group's last channel
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -1045,23 +1215,26 @@ export function StreamsPane({
                 )}
               </div>
 
-              <div className="form-group">
-                <label>Starting Channel Number</label>
-                <input
-                  type="number"
-                  min="0"
-                  value={bulkCreateStartingNumber}
-                  onChange={(e) => setBulkCreateStartingNumber(e.target.value)}
-                  placeholder="e.g., 100"
-                  className="form-input"
-                  autoFocus
-                />
-                {bulkCreateStartingNumber && !isNaN(parseInt(bulkCreateStartingNumber, 10)) && (
-                  <div className="number-range-preview">
-                    Channels {bulkCreateStartingNumber} - {parseInt(bulkCreateStartingNumber, 10) + bulkCreateStats.uniqueCount - 1}
-                  </div>
-                )}
-              </div>
+              {/* Starting Channel Number - hide when multi-group with separate mode (per-group numbers used instead) */}
+              {!(isFromMultipleGroups && bulkCreateMultiGroupOption === 'separate') && (
+                <div className="form-group">
+                  <label>Starting Channel Number</label>
+                  <input
+                    type="number"
+                    min="0"
+                    value={bulkCreateStartingNumber}
+                    onChange={(e) => setBulkCreateStartingNumber(e.target.value)}
+                    placeholder="e.g., 100"
+                    className="form-input"
+                    autoFocus
+                  />
+                  {bulkCreateStartingNumber && !isNaN(parseInt(bulkCreateStartingNumber, 10)) && (
+                    <div className="number-range-preview">
+                      Channels {bulkCreateStartingNumber} - {parseInt(bulkCreateStartingNumber, 10) + bulkCreateStats.uniqueCount - 1}
+                    </div>
+                  )}
+                </div>
+              )}
 
               {/* Channel Group - Collapsible Section */}
               {/* Hide when multi-group with separate option is selected */}
@@ -1407,48 +1580,51 @@ export function StreamsPane({
                 )}
               </div>
 
-              <div className="bulk-create-preview">
-                <label>Preview (first 10 channels)</label>
-                <div className="preview-list">
-                  {Array.from(bulkCreateStats.streamsByNormalizedName.entries()).slice(0, 10).map(([normalizedName, groupedStreams], idx) => {
-                    const num = bulkCreateStartingNumber ? parseInt(bulkCreateStartingNumber, 10) + idx : '?';
-                    // Build display name based on options and prefix order
-                    let displayName = normalizedName;
-                    if (bulkCreateAddNumber && bulkCreateKeepCountry) {
-                      // Both enabled - extract country from normalized name and apply order
-                      const countryMatch = normalizedName.match(new RegExp(`^([A-Z]{2,6})\\s*[${bulkCreateCountrySeparator}]\\s*(.+)$`));
-                      if (countryMatch) {
-                        const [, countryCode, baseName] = countryMatch;
-                        if (bulkCreatePrefixOrder === 'country-first') {
-                          displayName = `${countryCode} ${bulkCreateCountrySeparator} ${num} ${bulkCreateSeparator} ${baseName}`;
+              {/* Preview - hide in separate groups mode since each group has its own numbering */}
+              {!(isFromMultipleGroups && bulkCreateMultiGroupOption === 'separate') && (
+                <div className="bulk-create-preview">
+                  <label>Preview (first 10 channels)</label>
+                  <div className="preview-list">
+                    {Array.from(bulkCreateStats.streamsByNormalizedName.entries()).slice(0, 10).map(([normalizedName, groupedStreams], idx) => {
+                      const num = bulkCreateStartingNumber ? parseInt(bulkCreateStartingNumber, 10) + idx : '?';
+                      // Build display name based on options and prefix order
+                      let displayName = normalizedName;
+                      if (bulkCreateAddNumber && bulkCreateKeepCountry) {
+                        // Both enabled - extract country from normalized name and apply order
+                        const countryMatch = normalizedName.match(new RegExp(`^([A-Z]{2,6})\\s*[${bulkCreateCountrySeparator}]\\s*(.+)$`));
+                        if (countryMatch) {
+                          const [, countryCode, baseName] = countryMatch;
+                          if (bulkCreatePrefixOrder === 'country-first') {
+                            displayName = `${countryCode} ${bulkCreateCountrySeparator} ${num} ${bulkCreateSeparator} ${baseName}`;
+                          } else {
+                            displayName = `${num} ${bulkCreateSeparator} ${countryCode} ${bulkCreateCountrySeparator} ${baseName}`;
+                          }
                         } else {
-                          displayName = `${num} ${bulkCreateSeparator} ${countryCode} ${bulkCreateCountrySeparator} ${baseName}`;
+                          displayName = `${num} ${bulkCreateSeparator} ${normalizedName}`;
                         }
-                      } else {
+                      } else if (bulkCreateAddNumber) {
                         displayName = `${num} ${bulkCreateSeparator} ${normalizedName}`;
                       }
-                    } else if (bulkCreateAddNumber) {
-                      displayName = `${num} ${bulkCreateSeparator} ${normalizedName}`;
-                    }
-                    return (
-                      <div key={normalizedName} className="preview-item">
-                        <span className="preview-number">{num}</span>
-                        <span className="preview-name">{displayName}</span>
-                        {groupedStreams.length > 1 && (
-                          <span className="preview-stream-count" title={groupedStreams.map(s => s.name).join('\n')}>
-                            {groupedStreams.length} streams
-                          </span>
-                        )}
+                      return (
+                        <div key={normalizedName} className="preview-item">
+                          <span className="preview-number">{num}</span>
+                          <span className="preview-name">{displayName}</span>
+                          {groupedStreams.length > 1 && (
+                            <span className="preview-stream-count" title={groupedStreams.map(s => s.name).join('\n')}>
+                              {groupedStreams.length} streams
+                            </span>
+                          )}
+                        </div>
+                      );
+                    })}
+                    {bulkCreateStats.streamsByNormalizedName.size > 10 && (
+                      <div className="preview-more">
+                        ... and {bulkCreateStats.streamsByNormalizedName.size - 10} more channels
                       </div>
-                    );
-                  })}
-                  {bulkCreateStats.streamsByNormalizedName.size > 10 && (
-                    <div className="preview-more">
-                      ... and {bulkCreateStats.streamsByNormalizedName.size - 10} more channels
-                    </div>
-                  )}
+                    )}
+                  </div>
                 </div>
-              </div>
+              )}
             </div>
 
             <div className="modal-footer">
@@ -1458,7 +1634,12 @@ export function StreamsPane({
               <button
                 className="btn-create"
                 onClick={handleBulkCreate}
-                disabled={bulkCreateLoading || !bulkCreateStartingNumber}
+                disabled={bulkCreateLoading || (
+                  // In separate groups mode, check first group has a start number
+                  isFromMultipleGroups && bulkCreateMultiGroupOption === 'separate'
+                    ? !bulkCreateGroupStartNumbers.get(bulkCreateGroups[0]?.name)
+                    : !bulkCreateStartingNumber
+                )}
               >
                 {bulkCreateLoading ? (
                   <>
