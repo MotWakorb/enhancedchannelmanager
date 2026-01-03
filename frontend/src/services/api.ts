@@ -3,7 +3,12 @@ import type {
   ChannelGroup,
   Stream,
   M3UAccount,
+  M3UAccountCreateRequest,
   M3UGroupSetting,
+  M3UFilter,
+  M3UFilterCreateRequest,
+  ServerGroup,
+  ChannelGroupM3UAccount,
   Logo,
   PaginatedResponse,
   EPGSource,
@@ -175,6 +180,118 @@ export async function getM3UAccounts(): Promise<M3UAccount[]> {
 
 export async function getProviderGroupSettings(): Promise<Record<number, M3UGroupSetting>> {
   return fetchJson(`${API_BASE}/providers/group-settings`);
+}
+
+// M3U Account CRUD
+export async function getM3UAccount(id: number): Promise<M3UAccount> {
+  return fetchJson(`${API_BASE}/m3u/accounts/${id}`);
+}
+
+export async function createM3UAccount(data: M3UAccountCreateRequest): Promise<M3UAccount> {
+  return fetchJson(`${API_BASE}/m3u/accounts`, {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
+export async function updateM3UAccount(id: number, data: Partial<M3UAccount>): Promise<M3UAccount> {
+  return fetchJson(`${API_BASE}/m3u/accounts/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify(data),
+  });
+}
+
+export async function patchM3UAccount(id: number, data: Partial<M3UAccount>): Promise<M3UAccount> {
+  return fetchJson(`${API_BASE}/m3u/accounts/${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify(data),
+  });
+}
+
+export async function deleteM3UAccount(id: number): Promise<{ status: string }> {
+  return fetchJson(`${API_BASE}/m3u/accounts/${id}`, {
+    method: 'DELETE',
+  });
+}
+
+// M3U Refresh
+export async function refreshM3UAccount(id: number): Promise<{ success: boolean; message: string }> {
+  return fetchJson(`${API_BASE}/m3u/refresh/${id}`, {
+    method: 'POST',
+  });
+}
+
+export async function refreshAllM3UAccounts(): Promise<{ success: boolean; message: string }> {
+  return fetchJson(`${API_BASE}/m3u/refresh`, {
+    method: 'POST',
+  });
+}
+
+export async function refreshM3UVod(id: number): Promise<{ success: boolean; message: string }> {
+  return fetchJson(`${API_BASE}/m3u/accounts/${id}/refresh-vod`, {
+    method: 'POST',
+  });
+}
+
+// M3U Filters
+export async function getM3UFilters(accountId: number): Promise<M3UFilter[]> {
+  return fetchJson(`${API_BASE}/m3u/accounts/${accountId}/filters`);
+}
+
+export async function createM3UFilter(accountId: number, data: M3UFilterCreateRequest): Promise<M3UFilter> {
+  return fetchJson(`${API_BASE}/m3u/accounts/${accountId}/filters`, {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
+export async function updateM3UFilter(accountId: number, filterId: number, data: Partial<M3UFilter>): Promise<M3UFilter> {
+  return fetchJson(`${API_BASE}/m3u/accounts/${accountId}/filters/${filterId}`, {
+    method: 'PUT',
+    body: JSON.stringify(data),
+  });
+}
+
+export async function deleteM3UFilter(accountId: number, filterId: number): Promise<{ status: string }> {
+  return fetchJson(`${API_BASE}/m3u/accounts/${accountId}/filters/${filterId}`, {
+    method: 'DELETE',
+  });
+}
+
+// M3U Group Settings
+export async function updateM3UGroupSettings(
+  accountId: number,
+  data: { channel_groups: Partial<ChannelGroupM3UAccount>[] }
+): Promise<M3UAccount> {
+  return fetchJson(`${API_BASE}/m3u/accounts/${accountId}/group-settings`, {
+    method: 'PATCH',
+    body: JSON.stringify(data),
+  });
+}
+
+// Server Groups
+export async function getServerGroups(): Promise<ServerGroup[]> {
+  return fetchJson(`${API_BASE}/m3u/server-groups`);
+}
+
+export async function createServerGroup(data: { name: string }): Promise<ServerGroup> {
+  return fetchJson(`${API_BASE}/m3u/server-groups`, {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
+export async function updateServerGroup(id: number, data: Partial<ServerGroup>): Promise<ServerGroup> {
+  return fetchJson(`${API_BASE}/m3u/server-groups/${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify(data),
+  });
+}
+
+export async function deleteServerGroup(id: number): Promise<{ status: string }> {
+  return fetchJson(`${API_BASE}/m3u/server-groups/${id}`, {
+    method: 'DELETE',
+  });
 }
 
 // Health check
