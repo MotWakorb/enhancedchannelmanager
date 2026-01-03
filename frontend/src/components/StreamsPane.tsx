@@ -180,8 +180,10 @@ export function StreamsPane({
   // Dropdown state
   const [providerDropdownOpen, setProviderDropdownOpen] = useState(false);
   const [groupDropdownOpen, setGroupDropdownOpen] = useState(false);
+  const [groupSearchFilter, setGroupSearchFilter] = useState('');
   const providerDropdownRef = useRef<HTMLDivElement>(null);
   const groupDropdownRef = useRef<HTMLDivElement>(null);
+  const groupSearchInputRef = useRef<HTMLInputElement>(null);
 
   // Close dropdowns when clicking outside
   useEffect(() => {
@@ -191,11 +193,19 @@ export function StreamsPane({
       }
       if (groupDropdownRef.current && !groupDropdownRef.current.contains(event.target as Node)) {
         setGroupDropdownOpen(false);
+        setGroupSearchFilter('');
       }
     };
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
+
+  // Focus search input when group dropdown opens
+  useEffect(() => {
+    if (groupDropdownOpen && groupSearchInputRef.current) {
+      groupSearchInputRef.current.focus();
+    }
+  }, [groupDropdownOpen]);
 
   // Determine if we're using multi-select mode
   const useMultiSelectProviders = !!onSelectedProvidersChange;
@@ -927,37 +937,84 @@ export function StreamsPane({
               </button>
               {groupDropdownOpen && (
                 <div className="filter-dropdown-menu">
+                  <div className="filter-dropdown-search">
+                    <span className="material-icons search-icon">search</span>
+                    <input
+                      ref={groupSearchInputRef}
+                      type="text"
+                      placeholder="Search groups..."
+                      value={groupSearchFilter}
+                      onChange={(e) => setGroupSearchFilter(e.target.value)}
+                      onClick={(e) => e.stopPropagation()}
+                    />
+                    {groupSearchFilter && (
+                      <button
+                        className="clear-search"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setGroupSearchFilter('');
+                          groupSearchInputRef.current?.focus();
+                        }}
+                      >
+                        <span className="material-icons">close</span>
+                      </button>
+                    )}
+                  </div>
                   <div className="filter-dropdown-actions">
                     <button
                       className="filter-dropdown-action"
-                      onClick={() => onSelectedStreamGroupsChange!(streamGroups)}
+                      onClick={() => {
+                        // Select all visible (filtered) groups
+                        const filteredGroups = streamGroups.filter(g =>
+                          g.toLowerCase().includes(groupSearchFilter.toLowerCase())
+                        );
+                        const newSelection = [...new Set([...selectedStreamGroups, ...filteredGroups])];
+                        onSelectedStreamGroupsChange!(newSelection);
+                      }}
                     >
-                      Select All
+                      Select All{groupSearchFilter ? ' Visible' : ''}
                     </button>
                     <button
                       className="filter-dropdown-action"
-                      onClick={() => onSelectedStreamGroupsChange!([])}
+                      onClick={() => {
+                        if (groupSearchFilter) {
+                          // Clear only visible (filtered) groups
+                          const filteredGroups = streamGroups.filter(g =>
+                            g.toLowerCase().includes(groupSearchFilter.toLowerCase())
+                          );
+                          onSelectedStreamGroupsChange!(
+                            selectedStreamGroups.filter(g => !filteredGroups.includes(g))
+                          );
+                        } else {
+                          onSelectedStreamGroupsChange!([]);
+                        }
+                      }}
                     >
-                      Clear All
+                      Clear{groupSearchFilter ? ' Visible' : ' All'}
                     </button>
                   </div>
                   <div className="filter-dropdown-options">
-                    {streamGroups.map((group) => (
-                      <label key={group} className="filter-dropdown-option">
-                        <input
-                          type="checkbox"
-                          checked={selectedStreamGroups.includes(group)}
-                          onChange={(e) => {
-                            if (e.target.checked) {
-                              onSelectedStreamGroupsChange!([...selectedStreamGroups, group]);
-                            } else {
-                              onSelectedStreamGroupsChange!(selectedStreamGroups.filter((g) => g !== group));
-                            }
-                          }}
-                        />
-                        <span className="filter-option-name">{group}</span>
-                      </label>
-                    ))}
+                    {streamGroups
+                      .filter(group => group.toLowerCase().includes(groupSearchFilter.toLowerCase()))
+                      .map((group) => (
+                        <label key={group} className="filter-dropdown-option">
+                          <input
+                            type="checkbox"
+                            checked={selectedStreamGroups.includes(group)}
+                            onChange={(e) => {
+                              if (e.target.checked) {
+                                onSelectedStreamGroupsChange!([...selectedStreamGroups, group]);
+                              } else {
+                                onSelectedStreamGroupsChange!(selectedStreamGroups.filter((g) => g !== group));
+                              }
+                            }}
+                          />
+                          <span className="filter-option-name">{group}</span>
+                        </label>
+                      ))}
+                    {streamGroups.filter(group => group.toLowerCase().includes(groupSearchFilter.toLowerCase())).length === 0 && (
+                      <div className="filter-dropdown-empty">No groups match "{groupSearchFilter}"</div>
+                    )}
                   </div>
                 </div>
               )}
