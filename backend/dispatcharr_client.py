@@ -629,12 +629,22 @@ class DispatcharrClient:
     async def bulk_update_profile_channels(self, profile_id: int, data: dict) -> dict:
         """Bulk enable/disable channels for a profile.
 
-        Data format: {"channel_ids": [1, 2, 3], "enabled": true}
+        Input format: {"channel_ids": [1, 2, 3], "enabled": true}
+        API format: {"channels": [{"channel_id": 1, "enabled": true}, ...]}
         """
+        # Transform from our format to API format
+        channel_ids = data.get("channel_ids", [])
+        enabled = data.get("enabled", True)
+        api_data = {
+            "channels": [
+                {"channel_id": cid, "enabled": enabled}
+                for cid in channel_ids
+            ]
+        }
         response = await self._request(
             "PATCH",
             f"/api/channels/profiles/{profile_id}/channels/bulk-update/",
-            json=data
+            json=api_data
         )
         response.raise_for_status()
         return response.json() if response.content else {"success": True}

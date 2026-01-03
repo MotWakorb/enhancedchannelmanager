@@ -153,12 +153,22 @@ export function ChannelProfilesListModal({
   };
 
   // Build channel list with enabled state from profile
+  // NOTE: Dispatcharr uses ChannelProfileMembership records to track channel-profile relationships
+  // - Empty channels array = no membership records exist (channels lack explicit profile assignment)
+  // - Non-empty array = only those channels have membership records with enabled=true
+  // We treat missing memberships as "enabled" for better UX (matches default behavior when profile is created)
   const channelsWithState = useMemo(() => {
     if (!selectedProfile) return [];
+
+    // Empty array = no membership records (treat as all enabled)
+    // Non-empty array = only those channels have enabled=true memberships
+    const hasExplicitList = selectedProfile.channels.length > 0;
     const enabledSet = new Set(selectedProfile.channels);
+
     return channels.map(ch => ({
       ...ch,
-      enabled: enabledSet.has(ch.id),
+      // If no explicit list, show as enabled; otherwise check the set
+      enabled: hasExplicitList ? enabledSet.has(ch.id) : true,
     }));
   }, [channels, selectedProfile]);
 
@@ -266,31 +276,15 @@ export function ChannelProfilesListModal({
     setError(null);
 
     try {
-      // Group changes into enable and disable lists
-      const toEnable: number[] = [];
-      const toDisable: number[] = [];
+      // Use individual channel updates to ensure membership records are created
+      // (Dispatcharr's bulk API only updates existing records, doesn't create new ones)
+      const updatePromises = Array.from(channelChanges.entries()).map(
+        ([channelId, enabled]) =>
+          api.updateProfileChannel(selectedProfile.id, channelId, { enabled })
+      );
 
-      for (const [channelId, enabled] of channelChanges) {
-        if (enabled) {
-          toEnable.push(channelId);
-        } else {
-          toDisable.push(channelId);
-        }
-      }
-
-      // Make API calls
-      if (toEnable.length > 0) {
-        await api.bulkUpdateProfileChannels(selectedProfile.id, {
-          channel_ids: toEnable,
-          enabled: true,
-        });
-      }
-      if (toDisable.length > 0) {
-        await api.bulkUpdateProfileChannels(selectedProfile.id, {
-          channel_ids: toDisable,
-          enabled: false,
-        });
-      }
+      // Run updates in parallel for performance
+      await Promise.all(updatePromises);
 
       // Refresh the profile to get updated channel list
       const updated = await api.getChannelProfile(selectedProfile.id);
@@ -421,7 +415,7 @@ export function ChannelProfilesListModal({
                               onClick={() => handleOpenChannels(profile)}
                               title="Click to manage channels"
                             >
-                              {profile.channels.length}
+                              {profile.channels.length > 0 ? profile.channels.length : channels.length}
                             </span>
                           </div>
                           <div className="profile-actions">
