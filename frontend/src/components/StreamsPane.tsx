@@ -1580,8 +1580,54 @@ export function StreamsPane({
                 )}
               </div>
 
-              {/* Preview - hide in separate groups mode since each group has its own numbering */}
-              {!(isFromMultipleGroups && bulkCreateMultiGroupOption === 'separate') && (
+              {/* Preview - show per-group preview in separate mode, otherwise show combined preview */}
+              {isFromMultipleGroups && bulkCreateMultiGroupOption === 'separate' ? (
+                <div className="bulk-create-preview">
+                  <label>Preview (first 3 channels per group)</label>
+                  <div className="preview-list">
+                    {bulkCreateGroups.map((group, groupIdx) => {
+                      const groupStartStr = bulkCreateGroupStartNumbers.get(group.name);
+                      // Calculate starting number: use explicit value, or continue from previous group
+                      let startNum: number | null = null;
+                      if (groupStartStr && !isNaN(parseInt(groupStartStr, 10))) {
+                        startNum = parseInt(groupStartStr, 10);
+                      } else if (groupIdx > 0) {
+                        // Find the previous group's start and add its stream count
+                        let prevEnd = 0;
+                        for (let i = 0; i < groupIdx; i++) {
+                          const prevStartStr = bulkCreateGroupStartNumbers.get(bulkCreateGroups[i].name);
+                          if (prevStartStr && !isNaN(parseInt(prevStartStr, 10))) {
+                            prevEnd = parseInt(prevStartStr, 10) + bulkCreateGroups[i].streams.length;
+                          } else if (i === 0) {
+                            prevEnd = bulkCreateGroups[i].streams.length;
+                          } else {
+                            prevEnd += bulkCreateGroups[i].streams.length;
+                          }
+                        }
+                        startNum = prevEnd;
+                      }
+                      const customName = bulkCreateCustomGroupNames.get(group.name) || group.name;
+                      return (
+                        <div key={group.name} className="preview-group">
+                          <div className="preview-group-header">{customName}</div>
+                          {group.streams.slice(0, 3).map((stream, idx) => {
+                            const num = startNum !== null ? startNum + idx : '?';
+                            return (
+                              <div key={stream.id} className="preview-item">
+                                <span className="preview-number">{num}</span>
+                                <span className="preview-name">{stream.name}</span>
+                              </div>
+                            );
+                          })}
+                          {group.streams.length > 3 && (
+                            <div className="preview-more">... and {group.streams.length - 3} more</div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              ) : (
                 <div className="bulk-create-preview">
                   <label>Preview (first 10 channels)</label>
                   <div className="preview-list">
