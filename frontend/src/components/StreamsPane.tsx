@@ -958,7 +958,7 @@ export function StreamsPane({
         )}
       </div>
 
-      <div className="pane-filters">
+      <div className="streams-pane-filters">
         <input
           type="text"
           placeholder="Search streams..."
@@ -966,7 +966,7 @@ export function StreamsPane({
           onChange={(e) => onSearchChange(e.target.value)}
           className="search-input"
         />
-        <div className="filter-row">
+        <div className="streams-filter-row">
           {/* Provider Filter Dropdown */}
           {useMultiSelectProviders ? (
             <div className="filter-dropdown" ref={providerDropdownRef}>
