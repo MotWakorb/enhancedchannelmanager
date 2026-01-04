@@ -120,8 +120,12 @@ export interface ChannelManagerTabProps {
   channelDefaults?: ChannelDefaults;
   // Stream group drop (for opening bulk create modal) - supports multiple groups
   externalTriggerGroupNames?: string[] | null;
+  // Stream IDs drop (for opening bulk create modal when dropping individual streams)
+  externalTriggerStreamIds?: number[] | null;
   onExternalTriggerHandled?: () => void;
   onStreamGroupDrop?: (groupNames: string[], streamIds: number[]) => void;
+  // Bulk streams drop (for opening bulk create modal when dropping multiple streams)
+  onBulkStreamsDrop?: (streamIds: number[]) => void;
   onBulkCreateFromGroup: (
     streams: Stream[],
     startingNumber: number,
@@ -255,8 +259,10 @@ export function ChannelManagerTab({
   // Bulk Create
   channelDefaults,
   externalTriggerGroupNames,
+  externalTriggerStreamIds,
   onExternalTriggerHandled,
   onStreamGroupDrop,
+  onBulkStreamsDrop,
   onBulkCreateFromGroup,
 }: ChannelManagerTabProps) {
   return (
@@ -330,6 +336,7 @@ export function ChannelManagerTab({
           onSelectGroupChannels={onSelectGroupChannels}
           dispatcharrUrl={dispatcharrUrl}
           onStreamGroupDrop={onStreamGroupDrop}
+          onBulkStreamsDrop={onBulkStreamsDrop}
           showStreamUrls={showStreamUrls}
         />
       }
@@ -355,6 +362,7 @@ export function ChannelManagerTab({
           channelProfiles={channelProfiles}
           channelDefaults={channelDefaults}
           externalTriggerGroupNames={externalTriggerGroupNames}
+          externalTriggerStreamIds={externalTriggerStreamIds}
           onExternalTriggerHandled={onExternalTriggerHandled}
           onBulkCreateFromGroup={onBulkCreateFromGroup}
           showStreamUrls={showStreamUrls}

@@ -117,6 +117,8 @@ function App() {
   // Stream group drop trigger (for opening bulk create modal from channels pane)
   // Supports multiple groups being dropped at once
   const [droppedStreamGroupNames, setDroppedStreamGroupNames] = useState<string[] | null>(null);
+  // Stream IDs drop trigger (for opening bulk create modal when dropping individual streams)
+  const [droppedStreamIds, setDroppedStreamIds] = useState<number[] | null>(null);
 
   // Edit mode for staging changes
   const {
@@ -1132,9 +1134,16 @@ function App() {
     setDroppedStreamGroupNames(groupNames);
   }, []);
 
-  // Clear the dropped stream group trigger after it's been handled
+  // Handle bulk streams drop on channels pane (triggers bulk create modal for specific streams)
+  const handleBulkStreamsDrop = useCallback((streamIds: number[]) => {
+    // Set the dropped stream IDs - StreamsPane will react to this and open the modal
+    setDroppedStreamIds(streamIds);
+  }, []);
+
+  // Clear the dropped stream group/streams trigger after it's been handled
   const handleStreamGroupTriggerHandled = useCallback(() => {
     setDroppedStreamGroupNames(null);
+    setDroppedStreamIds(null);
   }, []);
 
   // Filter streams based on multi-select filters (client-side)
@@ -1449,8 +1458,10 @@ function App() {
               // Bulk Create
               channelDefaults={channelDefaults}
               externalTriggerGroupNames={droppedStreamGroupNames}
+              externalTriggerStreamIds={droppedStreamIds}
               onExternalTriggerHandled={handleStreamGroupTriggerHandled}
               onStreamGroupDrop={handleStreamGroupDrop}
+              onBulkStreamsDrop={handleBulkStreamsDrop}
               onBulkCreateFromGroup={handleBulkCreateFromGroup}
 
               // Dispatcharr URL for channel stream URLs
