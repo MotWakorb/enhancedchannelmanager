@@ -718,16 +718,43 @@ export function StreamsPane({
       stripNetworkPrefix: bulkCreateStripNetwork,
     };
 
-    const streamsByNormalizedName = new Map<string, Stream[]>();
+    const unsortedStreamsByNormalizedName = new Map<string, Stream[]>();
     for (const stream of filteredStreams) {
       const normalizedName = normalizeStreamName(stream.name, normalizeOptions);
-      const existing = streamsByNormalizedName.get(normalizedName);
+      const existing = unsortedStreamsByNormalizedName.get(normalizedName);
       if (existing) {
         existing.push(stream);
       } else {
-        streamsByNormalizedName.set(normalizedName, [stream]);
+        unsortedStreamsByNormalizedName.set(normalizedName, [stream]);
       }
     }
+
+    // Sort entries using natural sort (same logic as App.tsx handleBulkCreateFromGroup)
+    // This ensures preview matches actual creation order
+    const sortedEntries = Array.from(unsortedStreamsByNormalizedName.entries()).sort((a, b) => {
+      const nameA = a[0];
+      const nameB = b[0];
+
+      // Extract base name and trailing number (if any)
+      const matchA = nameA.match(/^(.+?)(\s*\d+)?$/);
+      const matchB = nameB.match(/^(.+?)(\s*\d+)?$/);
+
+      const baseA = matchA?.[1]?.trim() || nameA;
+      const baseB = matchB?.[1]?.trim() || nameB;
+      const numA = matchA?.[2] ? parseInt(matchA[2].trim(), 10) : 0;
+      const numB = matchB?.[2] ? parseInt(matchB[2].trim(), 10) : 0;
+
+      // First compare base names
+      const baseCompare = baseA.localeCompare(baseB, undefined, { sensitivity: 'base' });
+      if (baseCompare !== 0) return baseCompare;
+
+      // If base names are equal, sort by number (0 = no number, comes first)
+      return numA - numB;
+    });
+
+    // Rebuild Map in sorted order
+    const streamsByNormalizedName = new Map<string, Stream[]>(sortedEntries);
+
     const uniqueCount = streamsByNormalizedName.size;
     const duplicateCount = filteredStreams.length - uniqueCount;
     const hasDuplicates = duplicateCount > 0;
@@ -746,21 +773,21 @@ export function StreamsPane({
     if (useSeparateMode) {
       // Check that at least the first group has a starting number
       const firstGroupStart = bulkCreateGroupStartNumbers.get(bulkCreateGroups[0]?.name);
-      if (!firstGroupStart || isNaN(parseInt(firstGroupStart, 10)) || parseInt(firstGroupStart, 10) < 0) {
+      if (!firstGroupStart || isNaN(parseFloat(firstGroupStart)) || parseFloat(firstGroupStart) < 0) {
         alert('Please enter a valid starting channel number for the first group');
         return;
       }
     } else {
-      const startingNum = parseInt(bulkCreateStartingNumber, 10);
+      const startingNum = parseFloat(bulkCreateStartingNumber);
       if (isNaN(startingNum) || startingNum < 0) {
         alert('Please enter a valid starting channel number');
         return;
       }
     }
 
-    // Check for conflicts before proceeding
+    // Check for conflicts before proceeding (use floor for conflict check since it checks integer ranges)
     if (onCheckConflicts && !useSeparateMode) {
-      const startingNum = parseInt(bulkCreateStartingNumber, 10);
+      const startingNum = Math.floor(parseFloat(bulkCreateStartingNumber));
       const conflictCount = onCheckConflicts(startingNum, bulkCreateStats.uniqueCount);
       if (conflictCount > 0) {
         // Show conflict dialog
@@ -834,7 +861,8 @@ export function StreamsPane({
         }
       } else {
         // Single group or combined mode
-        const startingNum = parseInt(bulkCreateStartingNumber, 10);
+        // Use parseFloat to support decimal channel numbers (e.g., 38.1, 38.2)
+        const startingNum = parseFloat(bulkCreateStartingNumber);
         let groupId: number | null = null;
         let newGroupName: string | undefined;
 
@@ -1432,15 +1460,24 @@ export function StreamsPane({
                   <input
                     type="number"
                     min="0"
+                    step="any"
                     value={bulkCreateStartingNumber}
                     onChange={(e) => setBulkCreateStartingNumber(e.target.value)}
-                    placeholder="e.g., 100"
+                    placeholder="e.g., 100 or 38.1"
                     className="form-input"
                     autoFocus
                   />
-                  {bulkCreateStartingNumber && !isNaN(parseInt(bulkCreateStartingNumber, 10)) && (
+                  {bulkCreateStartingNumber && !isNaN(parseFloat(bulkCreateStartingNumber)) && (
                     <div className="number-range-preview">
-                      Channels {bulkCreateStartingNumber} - {parseInt(bulkCreateStartingNumber, 10) + bulkCreateStats.uniqueCount - 1}
+                      {(() => {
+                        const startNum = parseFloat(bulkCreateStartingNumber);
+                        const hasDecimal = bulkCreateStartingNumber.includes('.');
+                        const increment = hasDecimal ? 0.1 : 1;
+                        const endNum = startNum + (bulkCreateStats.uniqueCount - 1) * increment;
+                        // Format end number to match decimal places of start
+                        const endNumStr = hasDecimal ? endNum.toFixed(1) : Math.floor(endNum).toString();
+                        return `Channels ${bulkCreateStartingNumber} - ${endNumStr}`;
+                      })()}
                     </div>
                   )}
                 </div>
@@ -1914,7 +1951,17 @@ export function StreamsPane({
                   <label>Preview (first 10 channels)</label>
                   <div className="preview-list">
                     {Array.from(bulkCreateStats.streamsByNormalizedName.entries()).slice(0, 10).map(([normalizedName, groupedStreams], idx) => {
-                      const num = bulkCreateStartingNumber ? parseInt(bulkCreateStartingNumber, 10) + idx : '?';
+                      // Support decimal channel numbers (e.g., 38.1, 38.2, 38.3)
+                      let num: string | number = '?';
+                      if (bulkCreateStartingNumber) {
+                        const startNum = parseFloat(bulkCreateStartingNumber);
+                        if (!isNaN(startNum)) {
+                          const hasDecimal = bulkCreateStartingNumber.includes('.');
+                          const increment = hasDecimal ? 0.1 : 1;
+                          const channelNum = startNum + idx * increment;
+                          num = hasDecimal ? channelNum.toFixed(1) : Math.floor(channelNum);
+                        }
+                      }
                       // Build display name based on options and prefix order
                       let displayName = normalizedName;
                       if (bulkCreateAddNumber && bulkCreateKeepCountry) {
