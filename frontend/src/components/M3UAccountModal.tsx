@@ -3,6 +3,31 @@ import type { M3UAccount, M3UAccountType, ServerGroup } from '../types';
 import * as api from '../services/api';
 import './M3UAccountModal.css';
 
+// UI-only account type that includes HDHR (which gets converted to STD for API)
+type UIAccountType = M3UAccountType | 'HDHR';
+
+// Helper to detect if a URL is an HD Homerun lineup URL
+function isHDHomerunUrl(url: string): boolean {
+  if (!url) return false;
+  try {
+    const parsed = new URL(url);
+    return parsed.pathname === '/lineup.m3u' || parsed.pathname === '/lineup.m3u8';
+  } catch {
+    return false;
+  }
+}
+
+// Helper to extract IP/host from HD Homerun URL
+function extractHDHomerunIP(url: string): string {
+  if (!url) return '';
+  try {
+    const parsed = new URL(url);
+    return parsed.host; // Returns host:port or just host
+  } catch {
+    return '';
+  }
+}
+
 interface M3UAccountModalProps {
   isOpen: boolean;
   onClose: () => void;
@@ -22,8 +47,9 @@ export function M3UAccountModal({
 
   // Form state
   const [name, setName] = useState('');
-  const [accountType, setAccountType] = useState<M3UAccountType>('STD');
+  const [accountType, setAccountType] = useState<UIAccountType>('STD');
   const [serverUrl, setServerUrl] = useState('');
+  const [hdhrIP, setHdhrIP] = useState(''); // HD Homerun IP address
   const [filePath, setFilePath] = useState('');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
@@ -47,8 +73,6 @@ export function M3UAccountModal({
       if (account) {
         // Editing existing account
         setName(account.name);
-        setAccountType(account.account_type);
-        setServerUrl(account.server_url || '');
         setFilePath(account.file_path || '');
         setUsername(account.username || '');
         setPassword(''); // Never pre-fill password
@@ -61,11 +85,23 @@ export function M3UAccountModal({
         setAutoEnableVod(account.auto_enable_new_groups_vod);
         setAutoEnableSeries(account.auto_enable_new_groups_series);
         setIsActive(account.is_active);
+
+        // Detect if this is an HD Homerun account (STD with lineup.m3u URL)
+        if (account.account_type === 'STD' && isHDHomerunUrl(account.server_url || '')) {
+          setAccountType('HDHR');
+          setHdhrIP(extractHDHomerunIP(account.server_url || ''));
+          setServerUrl('');
+        } else {
+          setAccountType(account.account_type);
+          setServerUrl(account.server_url || '');
+          setHdhrIP('');
+        }
       } else {
         // Creating new account - reset to defaults
         setName('');
         setAccountType('STD');
         setServerUrl('');
+        setHdhrIP('');
         setFilePath('');
         setUsername('');
         setPassword('');
@@ -95,6 +131,11 @@ export function M3UAccountModal({
         setError('Either M3U URL or file path is required');
         return;
       }
+    } else if (accountType === 'HDHR') {
+      if (!hdhrIP.trim()) {
+        setError('HD Homerun IP address is required');
+        return;
+      }
     } else {
       // XtreamCodes
       if (!serverUrl.trim()) {
@@ -111,10 +152,16 @@ export function M3UAccountModal({
     setError(null);
 
     try {
+      // Convert HDHR to STD with constructed URL
+      const apiAccountType: M3UAccountType = accountType === 'HDHR' ? 'STD' : accountType;
+      const apiServerUrl = accountType === 'HDHR'
+        ? `http://${hdhrIP.trim()}/lineup.m3u`
+        : (serverUrl.trim() || null);
+
       const data = {
         name: name.trim(),
-        account_type: accountType,
-        server_url: serverUrl.trim() || null,
+        account_type: apiAccountType,
+        server_url: apiServerUrl,
         file_path: accountType === 'STD' ? (filePath.trim() || null) : null,
         username: accountType === 'XC' ? (username.trim() || null) : null,
         password: accountType === 'XC' ? (password.trim() || null) : null,
@@ -191,6 +238,15 @@ export function M3UAccountModal({
                 />
                 <span>XtreamCodes</span>
               </label>
+              <label className="radio-label">
+                <input
+                  type="radio"
+                  name="accountType"
+                  checked={accountType === 'HDHR'}
+                  onChange={() => setAccountType('HDHR')}
+                />
+                <span>HD Homerun</span>
+              </label>
             </div>
           </div>
 
@@ -255,6 +311,21 @@ export function M3UAccountModal({
                 />
               </div>
             </>
+          )}
+
+          {/* HD Homerun Fields */}
+          {accountType === 'HDHR' && (
+            <div className="form-group">
+              <label htmlFor="hdhrIP">HD Homerun IP Address</label>
+              <input
+                id="hdhrIP"
+                type="text"
+                placeholder="192.168.1.100"
+                value={hdhrIP}
+                onChange={(e) => setHdhrIP(e.target.value)}
+              />
+              <span className="form-hint">URL will be: http://{hdhrIP || '<ip>'}/lineup.m3u</span>
+            </div>
           )}
 
           <div className="form-group-divider" />
