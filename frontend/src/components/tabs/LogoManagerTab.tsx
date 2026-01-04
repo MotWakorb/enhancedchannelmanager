@@ -12,12 +12,6 @@ export function LogoManagerTab() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Pagination state
-  const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(50);
-  const [totalCount, setTotalCount] = useState(0);
-  const [totalPages, setTotalPages] = useState(1);
-
   // Search state
   const [search, setSearch] = useState('');
   const [searchInput, setSearchInput] = useState('');
@@ -33,22 +27,20 @@ export function LogoManagerTab() {
   const [deletingLogo, setDeletingLogo] = useState<Logo | null>(null);
   const [deleteLoading, setDeleteLoading] = useState(false);
 
-  // Load logos
+  // Load all logos (no pagination)
   const loadLogos = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const result = await api.getLogos({ page, pageSize, search });
+      // Request a large page size to get all logos
+      const result = await api.getLogos({ page: 1, pageSize: 10000, search });
       setLogos(result.results);
-      setTotalCount(result.count);
-      // Calculate total pages from count and pageSize
-      setTotalPages(Math.ceil(result.count / pageSize));
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load logos');
     } finally {
       setLoading(false);
     }
-  }, [page, pageSize, search]);
+  }, [search]);
 
   useEffect(() => {
     loadLogos();
@@ -58,7 +50,6 @@ export function LogoManagerTab() {
   useEffect(() => {
     const timer = setTimeout(() => {
       setSearch(searchInput);
-      setPage(1); // Reset to first page on search
     }, 300);
     return () => clearTimeout(timer);
   }, [searchInput]);
@@ -109,17 +100,6 @@ export function LogoManagerTab() {
     setEditingLogo(null);
   };
 
-  const handlePageChange = (newPage: number) => {
-    if (newPage >= 1 && newPage <= totalPages) {
-      setPage(newPage);
-    }
-  };
-
-  const handlePageSizeChange = (newSize: number) => {
-    setPageSize(newSize);
-    setPage(1);
-  };
-
   // Render loading state
   if (loading && logos.length === 0) {
     return (
@@ -132,9 +112,6 @@ export function LogoManagerTab() {
     );
   }
 
-  const startIndex = (page - 1) * pageSize + 1;
-  const endIndex = Math.min(page * pageSize, totalCount);
-
   return (
     <div className="logo-manager-tab">
       {/* Header */}
@@ -142,7 +119,7 @@ export function LogoManagerTab() {
         <div className="header-title">
           <h2>Logos</h2>
           <p className="header-description">
-            Manage logos for your channels
+            Manage logos for your channels ({logos.length} total)
           </p>
         </div>
         <div className="header-actions">
@@ -334,41 +311,6 @@ export function LogoManagerTab() {
                 </div>
               </div>
             ))}
-          </div>
-        )}
-
-        {/* Pagination */}
-        {logos.length > 0 && totalPages > 0 && (
-          <div className="pagination">
-            <div className="pagination-info">
-              Showing {startIndex}-{endIndex} of {totalCount} logos
-            </div>
-            <div className="pagination-controls">
-              <button
-                onClick={() => handlePageChange(page - 1)}
-                disabled={page <= 1}
-              >
-                <span className="material-icons">chevron_left</span>
-              </button>
-              <span>
-                Page {page} of {totalPages}
-              </span>
-              <button
-                onClick={() => handlePageChange(page + 1)}
-                disabled={page >= totalPages}
-              >
-                <span className="material-icons">chevron_right</span>
-              </button>
-              <select
-                className="page-size-select"
-                value={pageSize}
-                onChange={(e) => handlePageSizeChange(Number(e.target.value))}
-              >
-                <option value={25}>25</option>
-                <option value={50}>50</option>
-                <option value={100}>100</option>
-              </select>
-            </div>
           </div>
         )}
       </div>
