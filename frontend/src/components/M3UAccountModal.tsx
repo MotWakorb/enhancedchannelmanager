@@ -179,7 +179,16 @@ export function M3UAccountModal({
       if (isEdit) {
         await api.updateM3UAccount(account!.id, data);
       } else {
-        await api.createM3UAccount(data);
+        // Create account and immediately trigger refresh to avoid "Pending Setup" state
+        const newAccount = await api.createM3UAccount(data);
+        try {
+          await api.refreshM3UAccount(newAccount.id);
+          // Wait for Dispatcharr to update state before reloading data in ECM
+          await new Promise(resolve => setTimeout(resolve, 2500));
+        } catch (refreshErr) {
+          // Don't fail the whole operation if refresh fails - account was created successfully
+          console.warn('Auto-refresh failed after account creation:', refreshErr);
+        }
       }
 
       onSaved();
