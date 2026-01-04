@@ -159,8 +159,9 @@ export function M3UGroupsModal({
       // Cascade to linked accounts if any
       if (linkedAccountInfo.isLinked && linkedAccountInfo.linkedAccountIds.length > 0) {
         // Build a map of group name -> enabled state from this account's settings
+        // Use channel_group_name (the stored name) for matching, not the display name
         const groupEnabledByName = new Map<string, boolean>();
-        groups.forEach(g => groupEnabledByName.set(g.name, g.enabled));
+        groups.forEach(g => groupEnabledByName.set(g.channel_group_name, g.enabled));
 
         // Update each linked account
         for (const linkedAccountId of linkedAccountInfo.linkedAccountIds) {
