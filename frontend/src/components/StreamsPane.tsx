@@ -1123,7 +1123,7 @@ export function StreamsPane({
                         <div
                           key={stream.id}
                           className={`stream-item ${isSelected(stream.id) && isEditMode ? 'selected' : ''}`}
-                          draggable
+                          draggable={isEditMode}
                           onClick={(e) => handleItemClick(e, stream)}
                           onDragStart={(e) => handleDragStart(e, stream)}
                         >
