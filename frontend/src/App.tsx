@@ -1029,9 +1029,36 @@ function App() {
         }
 
         const mergedCount = filteredStreams.length - streamsByNormalizedName.size;
+        const channelCount = streamsByNormalizedName.size;
 
-        // Start a batch for all channel creations
-        startBatch(`Create ${streamsByNormalizedName.size} channels from streams`);
+        // Check for conflicts with existing channels
+        // Find all channels that would conflict with the new channel numbers
+        const endNumber = startingNumber + channelCount - 1;
+        const conflictingChannels = displayChannels.filter(
+          (ch) => ch.channel_number !== null &&
+                  ch.channel_number >= startingNumber &&
+                  ch.channel_number <= endNumber
+        );
+
+        // Start a batch for all channel operations
+        startBatch(`Create ${channelCount} channels from streams`);
+
+        // If there are conflicts, push down all channels >= startingNumber by the number of new channels
+        if (conflictingChannels.length > 0) {
+          // Get ALL channels >= startingNumber (not just the ones in the conflict range)
+          // This ensures we don't create gaps
+          const channelsToShift = displayChannels
+            .filter((ch) => ch.channel_number !== null && ch.channel_number >= startingNumber)
+            .sort((a, b) => (b.channel_number ?? 0) - (a.channel_number ?? 0)); // Sort descending to avoid conflicts
+
+          // Shift each channel by the count of new channels (starting from highest to avoid conflicts)
+          for (const ch of channelsToShift) {
+            const newNum = ch.channel_number! + channelCount;
+            // Note: We don't auto-rename here because we're shifting by multiple positions
+            // and the original channel name relationship would be lost
+            stageUpdateChannel(ch.id, { channel_number: newNum }, `Shifted channel ${ch.channel_number} to ${newNum} to make room`);
+          }
+        }
 
         // Create channels and assign streams
         let channelIndex = 0;
@@ -1127,7 +1154,7 @@ function App() {
         throw err;
       }
     },
-    [isEditMode, stageCreateChannel, stageAddStream, startBatch, endBatch, defaultChannelProfileId]
+    [isEditMode, stageCreateChannel, stageAddStream, stageUpdateChannel, startBatch, endBatch, displayChannels, defaultChannelProfileId]
   );
 
   // Handle stream group drop on channels pane (triggers bulk create modal in streams pane)
