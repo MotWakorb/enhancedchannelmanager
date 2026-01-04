@@ -154,7 +154,7 @@ export function M3UGroupsModal({
       }));
 
       // Save this account first
-      await api.updateM3UGroupSettings(account.id, { group_settings: groupSettings });
+      await api.updateM3UGroupSettings(account.id, { channel_groups: groupSettings });
 
       // Cascade to linked accounts if any
       if (linkedAccountInfo.isLinked && linkedAccountInfo.linkedAccountIds.length > 0) {
@@ -181,7 +181,7 @@ export function M3UGroupsModal({
               };
             });
 
-            await api.updateM3UGroupSettings(linkedAccountId, { group_settings: linkedSettings });
+            await api.updateM3UGroupSettings(linkedAccountId, { channel_groups: linkedSettings });
           } catch (linkedErr) {
             // Log error but continue with other linked accounts
             console.error(`Failed to update linked account ${linkedAccountId}:`, linkedErr);
