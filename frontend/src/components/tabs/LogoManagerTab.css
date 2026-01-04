@@ -250,6 +250,7 @@
 .logos-container {
   flex: 1;
   min-height: 0;
+  width: 100%;
 }
 
 /* ===================== */
@@ -431,8 +432,9 @@
 
 .logos-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
   gap: 1rem;
+  width: 100%;
 }
 
 .logo-card {
