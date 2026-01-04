@@ -263,6 +263,14 @@ export function StreamsPane({
     clearSelection();
   }, [searchTerm, providerFilter, groupFilter, clearSelection]);
 
+  // Clear selection when exiting edit mode
+  useEffect(() => {
+    if (!isEditMode) {
+      clearSelection();
+      setSelectedGroupNames(new Set());
+    }
+  }, [isEditMode, clearSelection]);
+
   // Keyboard shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
