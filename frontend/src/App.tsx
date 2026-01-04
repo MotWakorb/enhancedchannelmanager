@@ -1065,8 +1065,13 @@ function App() {
         }
 
         // Create channels and assign streams
+        // Sort entries alphabetically by normalized name for consistent ordering
+        const sortedEntries = Array.from(streamsByNormalizedName.entries()).sort((a, b) =>
+          a[0].localeCompare(b[0], undefined, { numeric: true, sensitivity: 'base' })
+        );
+
         let channelIndex = 0;
-        for (const [normalizedName, groupedStreams] of streamsByNormalizedName) {
+        for (const [normalizedName, groupedStreams] of sortedEntries) {
           const channelNumber = startingNumber + channelIndex;
           channelIndex++;
 
