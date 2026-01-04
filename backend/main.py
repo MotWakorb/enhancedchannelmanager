@@ -114,6 +114,7 @@ class SettingsRequest(BaseModel):
     hide_auto_sync_groups: bool = False
     theme: str = "dark"
     default_channel_profile_id: Optional[int] = None
+    linked_m3u_accounts: list[list[int]] = []
 
 
 class SettingsResponse(BaseModel):
@@ -131,6 +132,7 @@ class SettingsResponse(BaseModel):
     hide_auto_sync_groups: bool
     theme: str
     default_channel_profile_id: Optional[int]
+    linked_m3u_accounts: list[list[int]]
 
 
 class TestConnectionRequest(BaseModel):
@@ -158,6 +160,7 @@ async def get_current_settings():
         hide_auto_sync_groups=settings.hide_auto_sync_groups,
         theme=settings.theme,
         default_channel_profile_id=settings.default_channel_profile_id,
+        linked_m3u_accounts=settings.linked_m3u_accounts,
     )
 
 
@@ -196,6 +199,7 @@ async def update_settings(request: SettingsRequest):
         hide_auto_sync_groups=request.hide_auto_sync_groups,
         theme=request.theme,
         default_channel_profile_id=request.default_channel_profile_id,
+        linked_m3u_accounts=request.linked_m3u_accounts,
     )
     save_settings(new_settings)
     clear_settings_cache()
