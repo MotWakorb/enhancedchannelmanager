@@ -146,7 +146,9 @@ export function M3UGroupsModal({
 
     try {
       // Build settings for this account
+      // Include id field - Dispatcharr needs this to identify the relationship record
       const groupSettings = groups.map(g => ({
+        id: g.id,
         channel_group: g.channel_group,
         enabled: g.enabled,
         auto_channel_sync: g.auto_channel_sync,
@@ -154,14 +156,14 @@ export function M3UGroupsModal({
       }));
 
       // Save this account first
-      await api.updateM3UGroupSettings(account.id, { channel_groups: groupSettings });
+      await api.updateM3UGroupSettings(account.id, { group_settings: groupSettings });
 
       // Cascade to linked accounts if any
       if (linkedAccountInfo.isLinked && linkedAccountInfo.linkedAccountIds.length > 0) {
-        // Build a map of group name -> enabled state from this account's settings
-        // Use channel_group_name (the stored name) for matching, not the display name
-        const groupEnabledByName = new Map<string, boolean>();
-        groups.forEach(g => groupEnabledByName.set(g.channel_group_name, g.enabled));
+        // Build a map of channel_group ID -> enabled state from this account's settings
+        // Use channel_group (the ID) for matching since linked accounts share the same group IDs
+        const groupEnabledById = new Map<number, boolean>();
+        groups.forEach(g => groupEnabledById.set(g.channel_group, g.enabled));
 
         // Update each linked account
         for (const linkedAccountId of linkedAccountInfo.linkedAccountIds) {
@@ -169,10 +171,10 @@ export function M3UGroupsModal({
             // Fetch the linked account's current groups
             const linkedAccount = await api.getM3UAccount(linkedAccountId);
 
-            // Build settings for linked account - match by exact group name
+            // Build settings for linked account - match by channel_group ID
             const linkedSettings = linkedAccount.channel_groups.map(lg => {
-              // Look up by channel_group_name (the name stored in the account's group settings)
-              const matchEnabled = groupEnabledByName.get(lg.channel_group_name);
+              // Look up by channel_group ID (the group ID is shared across M3U accounts)
+              const matchEnabled = groupEnabledById.get(lg.channel_group);
               return {
                 channel_group: lg.channel_group,
                 enabled: matchEnabled !== undefined ? matchEnabled : lg.enabled,  // Use this account's setting if matched
@@ -181,7 +183,7 @@ export function M3UGroupsModal({
               };
             });
 
-            await api.updateM3UGroupSettings(linkedAccountId, { channel_groups: linkedSettings });
+            await api.updateM3UGroupSettings(linkedAccountId, { group_settings: linkedSettings });
           } catch (linkedErr) {
             // Log error but continue with other linked accounts
             console.error(`Failed to update linked account ${linkedAccountId}:`, linkedErr);

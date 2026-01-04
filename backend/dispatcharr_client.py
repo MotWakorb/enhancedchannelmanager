@@ -367,9 +367,9 @@ class DispatcharrClient:
     async def update_m3u_group_settings(self, account_id: int, data: dict) -> dict:
         """Update group settings for an M3U account.
 
-        Data should contain channel group settings like:
+        Data should contain group settings like:
         {
-            "channel_groups": [
+            "group_settings": [
                 {"channel_group": 123, "enabled": true, "auto_channel_sync": false, ...}
             ]
         }

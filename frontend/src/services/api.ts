@@ -263,8 +263,9 @@ export async function deleteM3UFilter(accountId: number, filterId: number): Prom
 // M3U Group Settings
 export async function updateM3UGroupSettings(
   accountId: number,
-  data: { channel_groups: Partial<ChannelGroupM3UAccount>[] }
+  data: { group_settings: Partial<ChannelGroupM3UAccount>[] }
 ): Promise<{ message: string }> {
+  // Dispatcharr expects 'group_settings' key, not 'channel_groups'
   return fetchJson(`${API_BASE}/m3u/accounts/${accountId}/group-settings`, {
     method: 'PATCH',
     body: JSON.stringify(data),
