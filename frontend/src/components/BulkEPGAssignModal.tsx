@@ -50,6 +50,11 @@ export function BulkEPGAssignModal({
   const [progress, setProgress] = useState<BatchMatchProgress | null>(null);
   const [epgSearchFilter, setEpgSearchFilter] = useState('');
 
+  // Unmatched channel search state
+  const [unmatchedSelections, setUnmatchedSelections] = useState<Map<number, EPGData>>(new Map());
+  const [searchingUnmatchedId, setSearchingUnmatchedId] = useState<number | null>(null);
+  const [unmatchedSearchTerm, setUnmatchedSearchTerm] = useState('');
+
   // EPG Source selection state - simple Set of selected source IDs
   const [selectedSourceIds, setSelectedSourceIds] = useState<Set<number> | null>(null);
   const [sourceDropdownOpen, setSourceDropdownOpen] = useState(false);
@@ -139,6 +144,9 @@ export function BulkEPGAssignModal({
       setShowConflictReview(false);
       setProgress(null);
       setEpgSearchFilter('');
+      setUnmatchedSelections(new Map());
+      setSearchingUnmatchedId(null);
+      setUnmatchedSearchTerm('');
       setSelectedSourceIds(null); // Reset to default (all selected)
       setSourceDropdownOpen(false);
       hasAnalyzedRef.current = false;
@@ -294,6 +302,33 @@ export function BulkEPGAssignModal({
     return conflicts.filter(c => !conflictResolutions.has(c.channel.id)).length;
   }, [conflicts, conflictResolutions]);
 
+  // Handle unmatched channel EPG selection
+  const handleUnmatchedSelect = useCallback((channelId: number, epgData: EPGData | null) => {
+    setUnmatchedSelections(prev => {
+      const next = new Map(prev);
+      if (epgData) {
+        next.set(channelId, epgData);
+      } else {
+        next.delete(channelId);
+      }
+      return next;
+    });
+    setSearchingUnmatchedId(null);
+    setUnmatchedSearchTerm('');
+  }, []);
+
+  // Open search for an unmatched channel
+  const handleOpenUnmatchedSearch = useCallback((result: EPGMatchResult) => {
+    setSearchingUnmatchedId(result.channel.id);
+    setUnmatchedSearchTerm(result.normalizedName || result.channel.name);
+  }, []);
+
+  // Close unmatched search without selecting
+  const handleCloseUnmatchedSearch = useCallback(() => {
+    setSearchingUnmatchedId(null);
+    setUnmatchedSearchTerm('');
+  }, []);
+
   // Count how many assignments will be made
   const assignmentCount = useMemo(() => {
     let count = autoMatched.length;
@@ -302,8 +337,10 @@ export function BulkEPGAssignModal({
         count++;
       }
     }
+    // Add unmatched selections
+    count += unmatchedSelections.size;
     return count;
-  }, [autoMatched, conflictResolutions]);
+  }, [autoMatched, conflictResolutions, unmatchedSelections]);
 
   // Handle assign button click
   const handleAssign = useCallback(() => {
@@ -335,8 +372,21 @@ export function BulkEPGAssignModal({
       }
     }
 
+    // Add unmatched selections
+    for (const [channelId, selected] of unmatchedSelections) {
+      const channel = selectedChannels.find(c => c.id === channelId);
+      if (channel) {
+        assignments.push({
+          channelId,
+          channelName: channel.name,
+          tvg_id: selected.tvg_id,
+          epg_data_id: selected.id,
+        });
+      }
+    }
+
     onAssign(assignments);
-  }, [autoMatched, conflictResolutions, selectedChannels, onAssign]);
+  }, [autoMatched, conflictResolutions, unmatchedSelections, selectedChannels, onAssign]);
 
   if (!isOpen) return null;
 
@@ -552,6 +602,7 @@ export function BulkEPGAssignModal({
                     <ConflictCard
                       result={conflicts[currentConflictIndex]}
                       epgSources={epgSources}
+                      allEpgData={filteredEpgData}
                       selectedEpg={conflictResolutions.get(conflicts[currentConflictIndex].channel.id)}
                       onSelect={epg => handleConflictSelect(conflicts[currentConflictIndex].channel.id, epg)}
                       recommendedEpg={getRecommendedEpg(conflicts[currentConflictIndex])}
@@ -606,21 +657,59 @@ export function BulkEPGAssignModal({
                   >
                     <span className="material-icons">remove_circle_outline</span>
                     Unmatched ({unmatched.length})
+                    {unmatchedSelections.size > 0 && (
+                      <span className="assigned-count">({unmatchedSelections.size} assigned)</span>
+                    )}
                     <span className="material-icons expand-icon">
                       {unmatchedExpanded ? 'expand_less' : 'expand_more'}
                     </span>
                   </button>
                   {unmatchedExpanded && (
                     <div className="unmatched-list">
-                      {unmatched.map(result => (
-                        <div key={result.channel.id} className="unmatched-item">
-                          <span className="channel-name">{result.channel.name}</span>
-                          {result.detectedCountry && (
-                            <span className="country-badge">{result.detectedCountry.toUpperCase()}</span>
-                          )}
-                          <span className="normalized-name">({result.normalizedName || 'empty'})</span>
-                        </div>
-                      ))}
+                      {unmatched.map(result => {
+                        const assignedEpg = unmatchedSelections.get(result.channel.id);
+                        const isSearching = searchingUnmatchedId === result.channel.id;
+                        return (
+                          <div key={result.channel.id}>
+                            <div
+                              className={`unmatched-item clickable ${assignedEpg ? 'assigned' : ''}`}
+                              onClick={() => handleOpenUnmatchedSearch(result)}
+                            >
+                              <div className="unmatched-item-main">
+                                <span className="channel-name">{result.channel.name}</span>
+                                {result.detectedCountry && (
+                                  <span className="country-badge">{result.detectedCountry.toUpperCase()}</span>
+                                )}
+                                {!assignedEpg && (
+                                  <span className="normalized-name">({result.normalizedName || 'empty'})</span>
+                                )}
+                              </div>
+                              {assignedEpg ? (
+                                <div className="assigned-epg-info">
+                                  <span className="material-icons assigned-icon">check_circle</span>
+                                  <span className="assigned-epg-name">{assignedEpg.name}</span>
+                                </div>
+                              ) : (
+                                <span className="material-icons search-icon">search</span>
+                              )}
+                            </div>
+                            {isSearching && (
+                              <EPGSearchCard
+                                channelName={result.channel.name}
+                                normalizedName={result.normalizedName || result.channel.name}
+                                detectedCountry={result.detectedCountry}
+                                epgData={filteredEpgData}
+                                epgSources={epgSources}
+                                selectedEpg={assignedEpg}
+                                onSelect={(epg) => handleUnmatchedSelect(result.channel.id, epg)}
+                                onClose={handleCloseUnmatchedSearch}
+                                searchTerm={unmatchedSearchTerm}
+                                onSearchChange={setUnmatchedSearchTerm}
+                              />
+                            )}
+                          </div>
+                        );
+                      })}
                     </div>
                   )}
                 </div>
@@ -650,6 +739,7 @@ export function BulkEPGAssignModal({
 interface ConflictCardProps {
   result: EPGMatchResult;
   epgSources: EPGSource[];
+  allEpgData: EPGData[];  // All EPG data for "Search All" mode
   selectedEpg: EPGData | null | undefined;
   onSelect: (epg: EPGData | null) => void;
   recommendedEpg: EPGData | null;
@@ -657,17 +747,45 @@ interface ConflictCardProps {
   onSearchChange: (filter: string) => void;
 }
 
-function ConflictCard({ result, epgSources, selectedEpg, onSelect, recommendedEpg, searchFilter, onSearchChange }: ConflictCardProps) {
-  // Filter matches based on search
+const MAX_ALL_EPG_RESULTS = 50;
+
+function ConflictCard({ result, epgSources, allEpgData, selectedEpg, onSelect, recommendedEpg, searchFilter, onSearchChange }: ConflictCardProps) {
+  // State for "Search All EPG" mode
+  const [searchAllMode, setSearchAllMode] = useState(false);
+
+  // Filter matches based on search - either from suggestions or all EPG data
   const filteredMatches = useMemo(() => {
-    if (!searchFilter.trim()) return result.matches;
+    if (searchAllMode) {
+      // Search all EPG data
+      if (!searchFilter.trim()) return [];
+      const lowerFilter = searchFilter.toLowerCase();
+      const results = allEpgData.filter(epg =>
+        epg.name.toLowerCase().includes(lowerFilter) ||
+        epg.tvg_id.toLowerCase().includes(lowerFilter)
+      );
+      return results.slice(0, MAX_ALL_EPG_RESULTS);
+    } else {
+      // Filter within suggestions
+      if (!searchFilter.trim()) return result.matches;
+      const lowerFilter = searchFilter.toLowerCase();
+      return result.matches.filter(epg =>
+        epg.name.toLowerCase().includes(lowerFilter) ||
+        epg.tvg_id.toLowerCase().includes(lowerFilter) ||
+        getEPGSourceName(epg, epgSources).toLowerCase().includes(lowerFilter)
+      );
+    }
+  }, [searchAllMode, result.matches, allEpgData, searchFilter, epgSources]);
+
+  // Check if there are more results when in search all mode
+  const hasMoreResults = useMemo(() => {
+    if (!searchAllMode || !searchFilter.trim()) return false;
     const lowerFilter = searchFilter.toLowerCase();
-    return result.matches.filter(epg =>
+    const totalCount = allEpgData.filter(epg =>
       epg.name.toLowerCase().includes(lowerFilter) ||
-      epg.tvg_id.toLowerCase().includes(lowerFilter) ||
-      getEPGSourceName(epg, epgSources).toLowerCase().includes(lowerFilter)
-    );
-  }, [result.matches, searchFilter, epgSources]);
+      epg.tvg_id.toLowerCase().includes(lowerFilter)
+    ).length;
+    return totalCount > MAX_ALL_EPG_RESULTS;
+  }, [searchAllMode, allEpgData, searchFilter]);
 
   return (
     <div className="conflict-card">
@@ -684,7 +802,7 @@ function ConflictCard({ result, epgSources, selectedEpg, onSelect, recommendedEp
         <span className="material-icons">search</span>
         <input
           type="text"
-          placeholder="Filter EPG matches..."
+          placeholder={searchAllMode ? "Search all EPG data..." : "Filter suggestions..."}
           value={searchFilter}
           onChange={e => onSearchChange(e.target.value)}
         />
@@ -694,10 +812,27 @@ function ConflictCard({ result, epgSources, selectedEpg, onSelect, recommendedEp
           </button>
         )}
       </div>
+      <div className="conflict-card-mode-toggle">
+        <button
+          className={`mode-btn ${!searchAllMode ? 'active' : ''}`}
+          onClick={() => { setSearchAllMode(false); onSearchChange(''); }}
+        >
+          Suggestions ({result.matches.length})
+        </button>
+        <button
+          className={`mode-btn ${searchAllMode ? 'active' : ''}`}
+          onClick={() => { setSearchAllMode(true); onSearchChange(result.normalizedName || ''); }}
+        >
+          Search All EPG
+        </button>
+      </div>
       <div className="conflict-card-body">
         <div className="conflict-options">
+          {searchAllMode && !searchFilter.trim() && (
+            <div className="search-prompt">Type to search across all EPG entries</div>
+          )}
           {filteredMatches.map(epg => {
-            const isRecommended = recommendedEpg?.id === epg.id;
+            const isRecommended = !searchAllMode && recommendedEpg?.id === epg.id;
             return (
               <label
                 key={epg.id}
@@ -725,8 +860,16 @@ function ConflictCard({ result, epgSources, selectedEpg, onSelect, recommendedEp
               </label>
             );
           })}
-          {filteredMatches.length === 0 && searchFilter && (
+          {filteredMatches.length === 0 && searchFilter && !searchAllMode && (
             <div className="no-matches">No matches found for "{searchFilter}"</div>
+          )}
+          {filteredMatches.length === 0 && searchFilter && searchAllMode && (
+            <div className="no-matches">No EPG entries found for "{searchFilter}"</div>
+          )}
+          {hasMoreResults && (
+            <div className="more-results">
+              Showing first {MAX_ALL_EPG_RESULTS} results. Refine your search for more specific matches.
+            </div>
           )}
           <label className={`conflict-option skip-option ${selectedEpg === null ? 'selected' : ''}`}>
             <input
@@ -738,6 +881,141 @@ function ConflictCard({ result, epgSources, selectedEpg, onSelect, recommendedEp
             <span className="skip-label">Skip this channel</span>
           </label>
         </div>
+      </div>
+    </div>
+  );
+}
+
+// EPG Search Card - for searching ALL EPG data (used for unmatched channels)
+interface EPGSearchCardProps {
+  channelName: string;
+  normalizedName: string;
+  detectedCountry: string | null;
+  epgData: EPGData[];
+  epgSources: EPGSource[];
+  selectedEpg: EPGData | undefined;
+  onSelect: (epg: EPGData | null) => void;
+  onClose: () => void;
+  searchTerm: string;
+  onSearchChange: (term: string) => void;
+}
+
+const MAX_SEARCH_RESULTS = 50;
+
+function EPGSearchCard({
+  channelName,
+  normalizedName,
+  detectedCountry,
+  epgData,
+  epgSources,
+  selectedEpg,
+  onSelect,
+  onClose,
+  searchTerm,
+  onSearchChange,
+}: EPGSearchCardProps) {
+  // Search across all EPG data
+  const searchResults = useMemo(() => {
+    if (!searchTerm.trim()) return [];
+    const lowerTerm = searchTerm.toLowerCase();
+    const results = epgData.filter(epg =>
+      epg.name.toLowerCase().includes(lowerTerm) ||
+      epg.tvg_id.toLowerCase().includes(lowerTerm)
+    );
+    // Limit results for performance
+    return results.slice(0, MAX_SEARCH_RESULTS);
+  }, [epgData, searchTerm]);
+
+  const hasMoreResults = useMemo(() => {
+    if (!searchTerm.trim()) return false;
+    const lowerTerm = searchTerm.toLowerCase();
+    const totalCount = epgData.filter(epg =>
+      epg.name.toLowerCase().includes(lowerTerm) ||
+      epg.tvg_id.toLowerCase().includes(lowerTerm)
+    ).length;
+    return totalCount > MAX_SEARCH_RESULTS;
+  }, [epgData, searchTerm]);
+
+  return (
+    <div className="epg-search-card">
+      <div className="epg-search-card-header">
+        <div className="epg-search-channel">
+          <span className="channel-name">{channelName}</span>
+          {detectedCountry && (
+            <span className="country-badge">{detectedCountry.toUpperCase()}</span>
+          )}
+        </div>
+        <button className="close-btn" onClick={onClose} title="Close">
+          <span className="material-icons">close</span>
+        </button>
+      </div>
+      <div className="epg-search-card-search">
+        <span className="material-icons">search</span>
+        <input
+          type="text"
+          placeholder="Search all EPG data..."
+          value={searchTerm}
+          onChange={e => onSearchChange(e.target.value)}
+          autoFocus
+        />
+        {searchTerm && (
+          <button className="clear-search" onClick={() => onSearchChange('')}>
+            <span className="material-icons">close</span>
+          </button>
+        )}
+      </div>
+      <div className="epg-search-hint">
+        Searching for: "{normalizedName}"
+      </div>
+      <div className="epg-search-card-body">
+        {searchTerm.trim() === '' ? (
+          <div className="search-prompt">Type to search across all EPG entries</div>
+        ) : searchResults.length === 0 ? (
+          <div className="no-matches">No EPG entries found for "{searchTerm}"</div>
+        ) : (
+          <div className="epg-search-options">
+            {searchResults.map(epg => (
+              <label
+                key={epg.id}
+                className={`conflict-option ${selectedEpg?.id === epg.id ? 'selected' : ''}`}
+              >
+                <input
+                  type="radio"
+                  name="epg-search-select"
+                  checked={selectedEpg?.id === epg.id}
+                  onChange={() => onSelect(epg)}
+                />
+                <div className="option-content">
+                  {epg.icon_url && (
+                    <img src={epg.icon_url} alt="" className="epg-icon" />
+                  )}
+                  <div className="option-info">
+                    <span className="epg-name">{epg.name}</span>
+                    <span className="epg-tvgid">{epg.tvg_id}</span>
+                    <span className="epg-source">{getEPGSourceName(epg, epgSources)}</span>
+                  </div>
+                </div>
+              </label>
+            ))}
+            {hasMoreResults && (
+              <div className="more-results">
+                Showing first {MAX_SEARCH_RESULTS} results. Refine your search for more specific matches.
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+      <div className="epg-search-card-footer">
+        <button className="btn-cancel" onClick={onClose}>
+          Cancel
+        </button>
+        <button
+          className="btn-primary"
+          onClick={() => onSelect(selectedEpg || null)}
+          disabled={!selectedEpg}
+        >
+          {selectedEpg ? 'Assign EPG' : 'Select an EPG'}
+        </button>
       </div>
     </div>
   );
