@@ -2235,15 +2235,11 @@ export function ChannelsPane({
     try {
       // Get channels that need to be shifted (>= the conflicting number)
       // Use localChannels in edit mode since it may have been modified
-      const groupId = newChannelGroup !== '' ? newChannelGroup : null;
+      // IMPORTANT: Push down ALL channels with >= the number, across ALL groups
+      // Channel numbers must be unique globally, not just within a group
       const sourceChannels = isEditMode ? localChannels : channels;
       const channelsToShift = sourceChannels
-        .filter((ch) => {
-          const sameGroup = groupId === null
-            ? ch.channel_group_id === null
-            : ch.channel_group_id === groupId;
-          return sameGroup && ch.channel_number !== null && ch.channel_number >= conflictingChannelNumber;
-        })
+        .filter((ch) => ch.channel_number !== null && ch.channel_number >= conflictingChannelNumber)
         .sort((a, b) => (b.channel_number ?? 0) - (a.channel_number ?? 0)); // Sort descending to avoid conflicts
 
       // If in edit mode, stage the shifts; otherwise, this would need API calls
