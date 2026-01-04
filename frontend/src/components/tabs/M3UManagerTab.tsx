@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import type { M3UAccount, ServerGroup } from '../../types';
 import * as api from '../../services/api';
+import { naturalCompare } from '../../utils/naturalSort';
 import { M3UAccountModal } from '../M3UAccountModal';
 import { M3UGroupsModal } from '../M3UGroupsModal';
 import { M3UFiltersModal } from '../M3UFiltersModal';
@@ -427,10 +428,21 @@ export function M3UManagerTab() {
     return map;
   }, [accounts, linkedM3UAccounts]);
 
-  // Filter accounts: hide "custom" account and optionally filter by server group
-  const filteredAccounts = accounts
-    .filter(a => a.name.toLowerCase() !== 'custom')
-    .filter(a => filterServerGroup === null || a.server_group === filterServerGroup);
+  // Filter and sort accounts: hide "custom" account, optionally filter by server group,
+  // then sort with Standard M3U first, XtreamCodes second, natural sort within each type
+  const filteredAccounts = useMemo(() => {
+    return accounts
+      .filter(a => a.name.toLowerCase() !== 'custom')
+      .filter(a => filterServerGroup === null || a.server_group === filterServerGroup)
+      .sort((a, b) => {
+        // First sort by type: STD (Standard M3U) before XC (XtreamCodes)
+        if (a.account_type !== b.account_type) {
+          return a.account_type === 'STD' ? -1 : 1;
+        }
+        // Then natural sort by name within each type
+        return naturalCompare(a.name, b.name);
+      });
+  }, [accounts, filterServerGroup]);
 
   if (loading) {
     return (
