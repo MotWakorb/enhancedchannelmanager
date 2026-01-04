@@ -250,6 +250,39 @@
   border-top: 1px solid var(--border-primary);
 }
 
+.edit-actions button {
+  padding: 0.625rem 1.25rem;
+  border: none;
+  border-radius: 6px;
+  font-size: 0.875rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color 0.15s, opacity 0.15s;
+}
+
+.edit-actions .btn-secondary {
+  background-color: var(--border-primary);
+  color: var(--text-primary);
+}
+
+.edit-actions .btn-secondary:hover:not(:disabled) {
+  background-color: var(--border-secondary);
+}
+
+.edit-actions .btn-primary {
+  background-color: var(--button-primary-bg);
+  color: var(--button-primary-text);
+}
+
+.edit-actions .btn-primary:hover:not(:disabled) {
+  opacity: 0.9;
+}
+
+.edit-actions .btn-primary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 /* Modal Footer */
 .m3u-linked-accounts-modal .modal-footer {
   display: flex;
