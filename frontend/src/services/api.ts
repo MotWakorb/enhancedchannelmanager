@@ -1,9 +1,15 @@
 import type {
   Channel,
   ChannelGroup,
+  ChannelProfile,
   Stream,
   M3UAccount,
+  M3UAccountCreateRequest,
   M3UGroupSetting,
+  M3UFilter,
+  M3UFilterCreateRequest,
+  ServerGroup,
+  ChannelGroupM3UAccount,
   Logo,
   PaginatedResponse,
   EPGSource,
@@ -103,6 +109,7 @@ export async function createChannel(data: {
   channel_number?: number;
   channel_group_id?: number;
   logo_id?: number;
+  tvg_id?: string;
 }): Promise<Channel> {
   return fetchJson(`${API_BASE}/channels`, {
     method: 'POST',
@@ -177,6 +184,119 @@ export async function getProviderGroupSettings(): Promise<Record<number, M3UGrou
   return fetchJson(`${API_BASE}/providers/group-settings`);
 }
 
+// M3U Account CRUD
+export async function getM3UAccount(id: number): Promise<M3UAccount> {
+  return fetchJson(`${API_BASE}/m3u/accounts/${id}`);
+}
+
+export async function createM3UAccount(data: M3UAccountCreateRequest): Promise<M3UAccount> {
+  return fetchJson(`${API_BASE}/m3u/accounts`, {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
+export async function updateM3UAccount(id: number, data: Partial<M3UAccount>): Promise<M3UAccount> {
+  return fetchJson(`${API_BASE}/m3u/accounts/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify(data),
+  });
+}
+
+export async function patchM3UAccount(id: number, data: Partial<M3UAccount>): Promise<M3UAccount> {
+  return fetchJson(`${API_BASE}/m3u/accounts/${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify(data),
+  });
+}
+
+export async function deleteM3UAccount(id: number): Promise<{ status: string }> {
+  return fetchJson(`${API_BASE}/m3u/accounts/${id}`, {
+    method: 'DELETE',
+  });
+}
+
+// M3U Refresh
+export async function refreshM3UAccount(id: number): Promise<{ success: boolean; message: string }> {
+  return fetchJson(`${API_BASE}/m3u/refresh/${id}`, {
+    method: 'POST',
+  });
+}
+
+export async function refreshAllM3UAccounts(): Promise<{ success: boolean; message: string }> {
+  return fetchJson(`${API_BASE}/m3u/refresh`, {
+    method: 'POST',
+  });
+}
+
+export async function refreshM3UVod(id: number): Promise<{ success: boolean; message: string }> {
+  return fetchJson(`${API_BASE}/m3u/accounts/${id}/refresh-vod`, {
+    method: 'POST',
+  });
+}
+
+// M3U Filters
+export async function getM3UFilters(accountId: number): Promise<M3UFilter[]> {
+  return fetchJson(`${API_BASE}/m3u/accounts/${accountId}/filters`);
+}
+
+export async function createM3UFilter(accountId: number, data: M3UFilterCreateRequest): Promise<M3UFilter> {
+  return fetchJson(`${API_BASE}/m3u/accounts/${accountId}/filters`, {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
+export async function updateM3UFilter(accountId: number, filterId: number, data: Partial<M3UFilter>): Promise<M3UFilter> {
+  return fetchJson(`${API_BASE}/m3u/accounts/${accountId}/filters/${filterId}`, {
+    method: 'PUT',
+    body: JSON.stringify(data),
+  });
+}
+
+export async function deleteM3UFilter(accountId: number, filterId: number): Promise<{ status: string }> {
+  return fetchJson(`${API_BASE}/m3u/accounts/${accountId}/filters/${filterId}`, {
+    method: 'DELETE',
+  });
+}
+
+// M3U Group Settings
+export async function updateM3UGroupSettings(
+  accountId: number,
+  data: { group_settings: Partial<ChannelGroupM3UAccount>[] }
+): Promise<{ message: string }> {
+  // Dispatcharr expects 'group_settings' key, not 'channel_groups'
+  return fetchJson(`${API_BASE}/m3u/accounts/${accountId}/group-settings`, {
+    method: 'PATCH',
+    body: JSON.stringify(data),
+  });
+}
+
+// Server Groups
+export async function getServerGroups(): Promise<ServerGroup[]> {
+  return fetchJson(`${API_BASE}/m3u/server-groups`);
+}
+
+export async function createServerGroup(data: { name: string }): Promise<ServerGroup> {
+  return fetchJson(`${API_BASE}/m3u/server-groups`, {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
+export async function updateServerGroup(id: number, data: Partial<ServerGroup>): Promise<ServerGroup> {
+  return fetchJson(`${API_BASE}/m3u/server-groups/${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify(data),
+  });
+}
+
+export async function deleteServerGroup(id: number): Promise<{ status: string }> {
+  return fetchJson(`${API_BASE}/m3u/server-groups/${id}`, {
+    method: 'DELETE',
+  });
+}
+
 // Health check
 export async function getHealth(): Promise<{ status: string; service: string }> {
   return fetchJson(`${API_BASE}/health`);
@@ -199,6 +319,8 @@ export interface SettingsResponse {
   show_stream_urls: boolean;
   hide_auto_sync_groups: boolean;
   theme: Theme;
+  default_channel_profile_id: number | null;
+  linked_m3u_accounts: number[][];  // List of link groups, each is a list of account IDs
 }
 
 export interface TestConnectionResult {
@@ -224,6 +346,8 @@ export async function saveSettings(settings: {
   show_stream_urls?: boolean;  // Optional - defaults to true
   hide_auto_sync_groups?: boolean;  // Optional - defaults to false
   theme?: Theme;  // Optional - defaults to 'dark'
+  default_channel_profile_id?: number | null;  // Optional - null means no default
+  linked_m3u_accounts?: number[][];  // Optional - list of link groups
 }): Promise<{ status: string; configured: boolean }> {
   return fetchJson(`${API_BASE}/settings`, {
     method: 'POST',
@@ -363,6 +487,59 @@ export async function getEPGDataById(id: number): Promise<EPGData> {
 // Stream Profiles
 export async function getStreamProfiles(): Promise<StreamProfile[]> {
   return fetchJson(`${API_BASE}/stream-profiles`);
+}
+
+// Channel Profiles
+export async function getChannelProfiles(): Promise<ChannelProfile[]> {
+  return fetchJson(`${API_BASE}/channel-profiles`);
+}
+
+export async function getChannelProfile(id: number): Promise<ChannelProfile> {
+  return fetchJson(`${API_BASE}/channel-profiles/${id}`);
+}
+
+export async function createChannelProfile(data: { name: string }): Promise<ChannelProfile> {
+  return fetchJson(`${API_BASE}/channel-profiles`, {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
+export async function updateChannelProfile(
+  id: number,
+  data: Partial<ChannelProfile>
+): Promise<ChannelProfile> {
+  return fetchJson(`${API_BASE}/channel-profiles/${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify(data),
+  });
+}
+
+export async function deleteChannelProfile(id: number): Promise<{ status: string }> {
+  return fetchJson(`${API_BASE}/channel-profiles/${id}`, {
+    method: 'DELETE',
+  });
+}
+
+export async function bulkUpdateProfileChannels(
+  profileId: number,
+  data: { channel_ids: number[]; enabled: boolean }
+): Promise<{ success: boolean }> {
+  return fetchJson(`${API_BASE}/channel-profiles/${profileId}/channels/bulk-update`, {
+    method: 'PATCH',
+    body: JSON.stringify(data),
+  });
+}
+
+export async function updateProfileChannel(
+  profileId: number,
+  channelId: number,
+  data: { enabled: boolean }
+): Promise<{ success: boolean }> {
+  return fetchJson(`${API_BASE}/channel-profiles/${profileId}/channels/${channelId}`, {
+    method: 'PATCH',
+    body: JSON.stringify(data),
+  });
 }
 
 // Helper function to get or create a logo by URL
@@ -781,6 +958,21 @@ export function normalizeStreamName(name: string, timezonePreferenceOrOptions: T
 
   // Normalize multiple spaces to single space and trim
   normalized = normalized.replace(/\s+/g, ' ').trim();
+
+  // Normalize separator spacing: ensure consistent spacing around common separators
+  // This ensures "PL| ID" and "PL | ID" are treated as the same channel
+  normalized = normalized.replace(/\s*\|\s*/g, ' | ');
+  normalized = normalized.replace(/\s*:\s*/g, ': ');
+  normalized = normalized.replace(/\s*-\s*/g, ' - ');
+  // Re-trim in case we added leading/trailing spaces
+  normalized = normalized.trim();
+
+  // If normalization resulted in empty string, fall back to original name
+  // This can happen when a channel name matches both a country code (e.g., "ID" for Indonesia)
+  // and a quality suffix (e.g., "ID FHD" -> strip "ID " as country -> "FHD" -> strip as quality -> "")
+  if (!normalized) {
+    return name.trim();
+  }
 
   return normalized;
 }

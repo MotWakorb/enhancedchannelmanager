@@ -301,7 +301,7 @@ export function useEditMode({
             channel_number: apiCall.channelNumber ?? null,
             name: apiCall.name,
             channel_group_id: channelGroupId,
-            tvg_id: null,
+            tvg_id: apiCall.tvgId ?? null,
             tvc_guide_stationid: null,
             epg_data_id: null,
             streams: [],
@@ -423,12 +423,12 @@ export function useEditMode({
   );
 
   const stageCreateChannel = useCallback(
-    (name: string, channelNumber?: number, groupId?: number, newGroupName?: string, logoId?: number, logoUrl?: string): number => {
+    (name: string, channelNumber?: number, groupId?: number, newGroupName?: string, logoId?: number, logoUrl?: string, tvgId?: string): number => {
       // Use ref to get unique temp ID even when called in a loop (React batching issue)
       const tempId = nextTempIdRef.current;
       nextTempIdRef.current -= 1; // Decrement immediately for next call
       stageOperation(
-        { type: 'createChannel', name, channelNumber, groupId, newGroupName, logoId, logoUrl },
+        { type: 'createChannel', name, channelNumber, groupId, newGroupName, logoId, logoUrl, tvgId },
         `Create channel "${name}"`,
         []
       );
@@ -927,6 +927,7 @@ export function useEditMode({
                 channel_number: apiCall.channelNumber,
                 channel_group_id: groupId,
                 logo_id: logoId,
+                tvg_id: apiCall.tvgId,
               });
               // Track the mapping from temp ID to real ID
               const tempId = operation.afterSnapshot[0]?.id;

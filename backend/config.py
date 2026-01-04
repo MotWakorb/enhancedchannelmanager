@@ -31,6 +31,11 @@ class DispatcharrSettings(BaseModel):
     show_stream_urls: bool = True  # Show stream URLs in the UI (can hide for screenshots)
     hide_auto_sync_groups: bool = False  # Hide auto-sync channel groups by default
     theme: str = "dark"  # Theme: "dark", "light", or "high-contrast"
+    # Default channel profile for new channels (None means no default)
+    default_channel_profile_id: int | None = None
+    # Linked M3U accounts - groups of account IDs that should sync group settings
+    # Each inner list is a group of linked account IDs, e.g. [[1, 2], [3, 4, 5]]
+    linked_m3u_accounts: list[list[int]] = []
 
     def is_configured(self) -> bool:
         return bool(self.url and self.username and self.password)

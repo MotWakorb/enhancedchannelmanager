@@ -113,6 +113,8 @@ class SettingsRequest(BaseModel):
     show_stream_urls: bool = True
     hide_auto_sync_groups: bool = False
     theme: str = "dark"
+    default_channel_profile_id: Optional[int] = None
+    linked_m3u_accounts: list[list[int]] = []
 
 
 class SettingsResponse(BaseModel):
@@ -129,6 +131,8 @@ class SettingsResponse(BaseModel):
     show_stream_urls: bool
     hide_auto_sync_groups: bool
     theme: str
+    default_channel_profile_id: Optional[int]
+    linked_m3u_accounts: list[list[int]]
 
 
 class TestConnectionRequest(BaseModel):
@@ -155,6 +159,8 @@ async def get_current_settings():
         show_stream_urls=settings.show_stream_urls,
         hide_auto_sync_groups=settings.hide_auto_sync_groups,
         theme=settings.theme,
+        default_channel_profile_id=settings.default_channel_profile_id,
+        linked_m3u_accounts=settings.linked_m3u_accounts,
     )
 
 
@@ -192,6 +198,8 @@ async def update_settings(request: SettingsRequest):
         show_stream_urls=request.show_stream_urls,
         hide_auto_sync_groups=request.hide_auto_sync_groups,
         theme=request.theme,
+        default_channel_profile_id=request.default_channel_profile_id,
+        linked_m3u_accounts=request.linked_m3u_accounts,
     )
     save_settings(new_settings)
     clear_settings_cache()
@@ -235,6 +243,7 @@ class CreateChannelRequest(BaseModel):
     channel_number: Optional[float] = None
     channel_group_id: Optional[int] = None
     logo_id: Optional[int] = None
+    tvg_id: Optional[str] = None
 
 
 @app.get("/api/channels")
@@ -267,6 +276,8 @@ async def create_channel(request: CreateChannelRequest):
             data["channel_group_id"] = request.channel_group_id
         if request.logo_id is not None:
             data["logo_id"] = request.logo_id
+        if request.tvg_id is not None:
+            data["tvg_id"] = request.tvg_id
         return await client.create_channel(data)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -710,6 +721,286 @@ async def get_stream_profiles():
     client = get_client()
     try:
         return await client.get_stream_profiles()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# -------------------------------------------------------------------------
+# Channel Profiles
+# -------------------------------------------------------------------------
+
+@app.get("/api/channel-profiles")
+async def get_channel_profiles():
+    """Get all channel profiles."""
+    client = get_client()
+    try:
+        return await client.get_channel_profiles()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/channel-profiles")
+async def create_channel_profile(request: Request):
+    """Create a new channel profile."""
+    client = get_client()
+    try:
+        data = await request.json()
+        return await client.create_channel_profile(data)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/channel-profiles/{profile_id}")
+async def get_channel_profile(profile_id: int):
+    """Get a single channel profile."""
+    client = get_client()
+    try:
+        return await client.get_channel_profile(profile_id)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.patch("/api/channel-profiles/{profile_id}")
+async def update_channel_profile(profile_id: int, request: Request):
+    """Update a channel profile."""
+    client = get_client()
+    try:
+        data = await request.json()
+        return await client.update_channel_profile(profile_id, data)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/api/channel-profiles/{profile_id}")
+async def delete_channel_profile(profile_id: int):
+    """Delete a channel profile."""
+    client = get_client()
+    try:
+        await client.delete_channel_profile(profile_id)
+        return {"status": "deleted"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.patch("/api/channel-profiles/{profile_id}/channels/bulk-update")
+async def bulk_update_profile_channels(profile_id: int, request: Request):
+    """Bulk enable/disable channels for a profile."""
+    client = get_client()
+    try:
+        data = await request.json()
+        return await client.bulk_update_profile_channels(profile_id, data)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.patch("/api/channel-profiles/{profile_id}/channels/{channel_id}")
+async def update_profile_channel(profile_id: int, channel_id: int, request: Request):
+    """Enable/disable a single channel for a profile."""
+    client = get_client()
+    try:
+        data = await request.json()
+        return await client.update_profile_channel(profile_id, channel_id, data)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# -------------------------------------------------------------------------
+# M3U Account Management
+# -------------------------------------------------------------------------
+
+@app.get("/api/m3u/accounts/{account_id}")
+async def get_m3u_account(account_id: int):
+    """Get a single M3U account by ID."""
+    client = get_client()
+    try:
+        return await client.get_m3u_account(account_id)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/m3u/accounts")
+async def create_m3u_account(request: Request):
+    """Create a new M3U account."""
+    client = get_client()
+    try:
+        data = await request.json()
+        return await client.create_m3u_account(data)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.put("/api/m3u/accounts/{account_id}")
+async def update_m3u_account(account_id: int, request: Request):
+    """Update an M3U account (full update)."""
+    client = get_client()
+    try:
+        data = await request.json()
+        return await client.update_m3u_account(account_id, data)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.patch("/api/m3u/accounts/{account_id}")
+async def patch_m3u_account(account_id: int, request: Request):
+    """Partially update an M3U account (e.g., toggle is_active)."""
+    client = get_client()
+    try:
+        data = await request.json()
+        return await client.patch_m3u_account(account_id, data)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/api/m3u/accounts/{account_id}")
+async def delete_m3u_account(account_id: int):
+    """Delete an M3U account."""
+    client = get_client()
+    try:
+        await client.delete_m3u_account(account_id)
+        return {"status": "deleted"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# -------------------------------------------------------------------------
+# M3U Refresh
+# -------------------------------------------------------------------------
+
+@app.post("/api/m3u/refresh")
+async def refresh_all_m3u_accounts():
+    """Trigger refresh for all active M3U accounts."""
+    client = get_client()
+    try:
+        return await client.refresh_all_m3u_accounts()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/m3u/refresh/{account_id}")
+async def refresh_m3u_account(account_id: int):
+    """Trigger refresh for a single M3U account."""
+    client = get_client()
+    try:
+        return await client.refresh_m3u_account(account_id)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/m3u/accounts/{account_id}/refresh-vod")
+async def refresh_m3u_vod(account_id: int):
+    """Refresh VOD content for an XtreamCodes account."""
+    client = get_client()
+    try:
+        return await client.refresh_m3u_vod(account_id)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# -------------------------------------------------------------------------
+# M3U Filters
+# -------------------------------------------------------------------------
+
+@app.get("/api/m3u/accounts/{account_id}/filters")
+async def get_m3u_filters(account_id: int):
+    """Get all filters for an M3U account."""
+    client = get_client()
+    try:
+        return await client.get_m3u_filters(account_id)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/m3u/accounts/{account_id}/filters")
+async def create_m3u_filter(account_id: int, request: Request):
+    """Create a new filter for an M3U account."""
+    client = get_client()
+    try:
+        data = await request.json()
+        return await client.create_m3u_filter(account_id, data)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.put("/api/m3u/accounts/{account_id}/filters/{filter_id}")
+async def update_m3u_filter(account_id: int, filter_id: int, request: Request):
+    """Update a filter for an M3U account."""
+    client = get_client()
+    try:
+        data = await request.json()
+        return await client.update_m3u_filter(account_id, filter_id, data)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/api/m3u/accounts/{account_id}/filters/{filter_id}")
+async def delete_m3u_filter(account_id: int, filter_id: int):
+    """Delete a filter from an M3U account."""
+    client = get_client()
+    try:
+        await client.delete_m3u_filter(account_id, filter_id)
+        return {"status": "deleted"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# -------------------------------------------------------------------------
+# M3U Group Settings
+# -------------------------------------------------------------------------
+
+@app.patch("/api/m3u/accounts/{account_id}/group-settings")
+async def update_m3u_group_settings(account_id: int, request: Request):
+    """Update group settings for an M3U account."""
+    client = get_client()
+    try:
+        data = await request.json()
+        return await client.update_m3u_group_settings(account_id, data)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# -------------------------------------------------------------------------
+# Server Groups
+# -------------------------------------------------------------------------
+
+@app.get("/api/m3u/server-groups")
+async def get_server_groups():
+    """Get all server groups."""
+    client = get_client()
+    try:
+        return await client.get_server_groups()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/m3u/server-groups")
+async def create_server_group(request: Request):
+    """Create a new server group."""
+    client = get_client()
+    try:
+        data = await request.json()
+        return await client.create_server_group(data)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.patch("/api/m3u/server-groups/{group_id}")
+async def update_server_group(group_id: int, request: Request):
+    """Update a server group."""
+    client = get_client()
+    try:
+        data = await request.json()
+        return await client.update_server_group(group_id, data)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/api/m3u/server-groups/{group_id}")
+async def delete_server_group(group_id: int):
+    """Delete a server group."""
+    client = get_client()
+    try:
+        await client.delete_server_group(group_id)
+        return {"status": "deleted"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

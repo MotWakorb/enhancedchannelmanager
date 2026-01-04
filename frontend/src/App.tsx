@@ -8,7 +8,7 @@ import {
 import { ChannelManagerTab } from './components/tabs/ChannelManagerTab';
 import { useChangeHistory, useEditMode } from './hooks';
 import * as api from './services/api';
-import type { Channel, ChannelGroup, Stream, M3UAccount, M3UGroupSetting, Logo, ChangeInfo, EPGData, StreamProfile, EPGSource, ChannelListFilterSettings } from './types';
+import type { Channel, ChannelGroup, ChannelProfile, Stream, M3UAccount, M3UGroupSetting, Logo, ChangeInfo, EPGData, StreamProfile, EPGSource, ChannelListFilterSettings } from './types';
 import packageJson from '../package.json';
 import './App.css';
 
@@ -41,17 +41,24 @@ function App() {
   const [streamSearch, setStreamSearch] = useState('');
   const [streamProviderFilter, setStreamProviderFilter] = useState<number | null>(null);
   const [streamGroupFilter, setStreamGroupFilter] = useState<string | null>(null);
-  // Multi-select filter state for streams pane (UI filtering)
-  const [selectedProviderFilters, setSelectedProviderFilters] = useState<number[]>([]);
-  const [selectedStreamGroupFilters, setSelectedStreamGroupFilters] = useState<string[]>([]);
+  // Multi-select filter state for streams pane (UI filtering) - persisted to localStorage
+  const [selectedProviderFilters, setSelectedProviderFilters] = useState<number[]>(() => {
+    const saved = localStorage.getItem('streamProviderFilters');
+    return saved ? JSON.parse(saved) : [];
+  });
+  const [selectedStreamGroupFilters, setSelectedStreamGroupFilters] = useState<string[]>(() => {
+    const saved = localStorage.getItem('streamGroupFilters');
+    return saved ? JSON.parse(saved) : [];
+  });
 
   // Logos state
   const [logos, setLogos] = useState<Logo[]>([]);
 
-  // EPG Data, EPG Sources, and Stream Profiles state
+  // EPG Data, EPG Sources, Stream Profiles, and Channel Profiles state
   const [epgData, setEpgData] = useState<EPGData[]>([]);
   const [epgSources, setEpgSources] = useState<EPGSource[]>([]);
   const [streamProfiles, setStreamProfiles] = useState<StreamProfile[]>([]);
+  const [channelProfiles, setChannelProfiles] = useState<ChannelProfile[]>([]);
   const [epgDataLoading, setEpgDataLoading] = useState(false);
 
   // Settings state
@@ -66,7 +73,10 @@ function App() {
     includeCountryInName: false,
     countrySeparator: '|',
     timezonePreference: 'both',
+    defaultChannelProfileId: null as number | null,
   });
+  // Also keep separate state for use in callbacks (to avoid stale closure issues)
+  const [defaultChannelProfileId, setDefaultChannelProfileId] = useState<number | null>(null);
 
   // Provider group settings (for identifying auto channel sync groups)
   const [providerGroupSettings, setProviderGroupSettings] = useState<Record<number, M3UGroupSetting>>({});
@@ -87,6 +97,10 @@ function App() {
   // Track newly created group IDs in this session
   const [newlyCreatedGroupIds, setNewlyCreatedGroupIds] = useState<Set<number>>(new Set());
 
+  // Pending profile assignments (to be applied after commit)
+  // Stores { startNumber, count, profileIds } for each bulk create
+  const pendingProfileAssignmentsRef = useRef<Array<{ startNumber: number; count: number; profileIds: number[] }>>([]);
+
   // Track if baseline has been initialized
   const baselineInitialized = useRef(false);
 
@@ -103,6 +117,11 @@ function App() {
   // Stream group drop trigger (for opening bulk create modal from channels pane)
   // Supports multiple groups being dropped at once
   const [droppedStreamGroupNames, setDroppedStreamGroupNames] = useState<string[] | null>(null);
+  // Stream IDs drop trigger (for opening bulk create modal when dropping individual streams)
+  // Includes target group ID and starting channel number for pre-filling the modal
+  const [droppedStreamIds, setDroppedStreamIds] = useState<number[] | null>(null);
+  const [droppedStreamTargetGroupId, setDroppedStreamTargetGroupId] = useState<number | null>(null);
+  const [droppedStreamStartingNumber, setDroppedStreamStartingNumber] = useState<number | null>(null);
 
   // Edit mode for staging changes
   const {
@@ -135,10 +154,14 @@ function App() {
   } = useEditMode({
     channels,
     onChannelsChange: setChannels,
-    onCommitComplete: (createdGroupIds) => {
-      loadChannels(); // Refresh from server
-      loadChannelGroups(); // Refresh groups (for deleted groups)
-      loadLogos(); // Refresh logos (for newly created logos)
+    onCommitComplete: async (createdGroupIds) => {
+      // Refresh data from server
+      await Promise.all([
+        loadChannels(),
+        loadChannelGroups(),
+        loadLogos(),
+      ]);
+
       // Add newly created groups to the filter so they're visible
       if (createdGroupIds.length > 0) {
         setChannelGroupFilter((prev) => {
@@ -148,6 +171,53 @@ function App() {
           }
           return prev;
         });
+      }
+
+      // Apply pending profile assignments
+      if (pendingProfileAssignmentsRef.current.length > 0) {
+        try {
+          // Get fresh channel list to find channels by number
+          const freshChannels = await api.getChannels({ page: 1, pageSize: 5000 });
+          const channelsByNumber = new Map<number, Channel>();
+          for (const ch of freshChannels.results) {
+            if (ch.channel_number !== null) {
+              channelsByNumber.set(ch.channel_number, ch);
+            }
+          }
+
+          // Process each pending assignment
+          for (const assignment of pendingProfileAssignmentsRef.current) {
+            const { startNumber, count, profileIds } = assignment;
+            const channelIds: number[] = [];
+
+            // Find channels by number range
+            for (let i = 0; i < count; i++) {
+              const channel = channelsByNumber.get(startNumber + i);
+              if (channel) {
+                channelIds.push(channel.id);
+              }
+            }
+
+            // Add each channel to each profile
+            for (const profileId of profileIds) {
+              for (const channelId of channelIds) {
+                try {
+                  await api.updateProfileChannel(profileId, channelId, { enabled: true });
+                } catch (err) {
+                  console.warn(`Failed to add channel ${channelId} to profile ${profileId}:`, err);
+                }
+              }
+            }
+          }
+
+          // Clear pending assignments
+          pendingProfileAssignmentsRef.current = [];
+
+          // Refresh channel profiles to reflect changes
+          loadChannelProfiles();
+        } catch (err) {
+          console.error('Failed to apply profile assignments:', err);
+        }
       }
     },
     onError: setError,
@@ -262,7 +332,9 @@ function App() {
           includeCountryInName: settings.include_country_in_name,
           countrySeparator: settings.country_separator,
           timezonePreference: settings.timezone_preference,
+          defaultChannelProfileId: settings.default_channel_profile_id,
         });
+        setDefaultChannelProfileId(settings.default_channel_profile_id);
 
         // Apply hide_auto_sync_groups setting to channelListFilters
         setChannelListFilters(prev => ({
@@ -292,6 +364,7 @@ function App() {
         loadStreams();
         loadLogos();
         loadStreamProfiles();
+        loadChannelProfiles();
         loadEpgSources();
         loadEpgData();
       } catch (err) {
@@ -398,7 +471,9 @@ function App() {
         includeCountryInName: settings.include_country_in_name,
         countrySeparator: settings.country_separator,
         timezonePreference: settings.timezone_preference,
+        defaultChannelProfileId: settings.default_channel_profile_id,
       });
+      setDefaultChannelProfileId(settings.default_channel_profile_id);
 
       // Apply hide_auto_sync_groups setting to channelListFilters
       // The useEffect watching showAutoChannelGroups will handle updating group selection
@@ -421,6 +496,7 @@ function App() {
     loadStreams();
     loadLogos();
     loadStreamProfiles();
+    loadChannelProfiles();
     loadEpgSources();
     loadEpgData();
   };
@@ -457,6 +533,24 @@ function App() {
       localStorage.setItem('channelListFilters', JSON.stringify(newFilters));
       return newFilters;
     });
+  }, []);
+
+  // Wrapper functions to persist stream filters to localStorage
+  const updateSelectedProviderFilters = useCallback((providerIds: number[]) => {
+    setSelectedProviderFilters(providerIds);
+    localStorage.setItem('streamProviderFilters', JSON.stringify(providerIds));
+  }, []);
+
+  const updateSelectedStreamGroupFilters = useCallback((groups: string[]) => {
+    setSelectedStreamGroupFilters(groups);
+    localStorage.setItem('streamGroupFilters', JSON.stringify(groups));
+  }, []);
+
+  const clearStreamFilters = useCallback(() => {
+    setSelectedProviderFilters([]);
+    setSelectedStreamGroupFilters([]);
+    localStorage.removeItem('streamProviderFilters');
+    localStorage.removeItem('streamGroupFilters');
   }, []);
 
   const trackNewlyCreatedGroup = useCallback((groupId: number) => {
@@ -534,6 +628,15 @@ function App() {
       setStreamProfiles(profiles);
     } catch (err) {
       console.error('Failed to load stream profiles:', err);
+    }
+  };
+
+  const loadChannelProfiles = async () => {
+    try {
+      const profiles = await api.getChannelProfiles();
+      setChannelProfiles(profiles);
+    } catch (err) {
+      console.error('Failed to load channel profiles:', err);
     }
   };
 
@@ -805,11 +908,22 @@ function App() {
   );
 
   const handleCreateChannel = useCallback(
-    async (name: string, channelNumber?: number, groupId?: number, logoId?: number) => {
+    async (name: string, channelNumber?: number, groupId?: number, logoId?: number, tvgId?: string, logoUrl?: string) => {
       try {
         if (isEditMode) {
           // In edit mode, stage the creation without calling Dispatcharr API
-          const tempId = stageCreateChannel(name, channelNumber, groupId);
+          // Pass logoId, logoUrl, and tvgId so the staged channel has the metadata
+          // logoUrl is used as fallback if logoId is not found - the commit will create/find the logo
+          const tempId = stageCreateChannel(name, channelNumber, groupId, undefined, logoId, logoUrl, tvgId);
+
+          // Track for default profile assignment after commit
+          if (defaultChannelProfileId && channelNumber !== undefined) {
+            pendingProfileAssignmentsRef.current.push({
+              startNumber: channelNumber,
+              count: 1,
+              profileIds: [defaultChannelProfileId],
+            });
+          }
 
           // Create a temporary channel object to return (for compatibility)
           const tempChannel: Channel = {
@@ -817,7 +931,7 @@ function App() {
             channel_number: channelNumber ?? null,
             name,
             channel_group_id: groupId ?? null,
-            tvg_id: null,
+            tvg_id: tvgId ?? null,
             tvc_guide_stationid: null,
             epg_data_id: null,
             streams: [],
@@ -836,8 +950,19 @@ function App() {
             channel_number: channelNumber,
             channel_group_id: groupId,
             logo_id: logoId,
+            tvg_id: tvgId,
           });
           setChannels((prev) => [...prev, newChannel]);
+
+          // Apply default profile if set
+          if (defaultChannelProfileId) {
+            try {
+              await api.updateProfileChannel(defaultChannelProfileId, newChannel.id, { enabled: true });
+            } catch (err) {
+              console.warn(`Failed to add channel ${newChannel.id} to default profile:`, err);
+            }
+          }
+
           return newChannel;
         }
       } catch (err) {
@@ -846,8 +971,20 @@ function App() {
         throw err;
       }
     },
-    [isEditMode, stageCreateChannel]
+    [isEditMode, stageCreateChannel, defaultChannelProfileId]
   );
+
+  // Check for conflicts with existing channel numbers
+  // Returns the count of conflicting channels
+  const handleCheckConflicts = useCallback((startingNumber: number, count: number): number => {
+    const endNumber = startingNumber + count - 1;
+    const conflictingChannels = displayChannels.filter(
+      (ch) => ch.channel_number !== null &&
+              ch.channel_number >= startingNumber &&
+              ch.channel_number <= endNumber
+    );
+    return conflictingChannels.length;
+  }, [displayChannels]);
 
   const handleBulkCreateFromGroup = useCallback(
     async (
@@ -862,7 +999,9 @@ function App() {
       keepCountryPrefix?: boolean,
       countrySeparator?: api.NumberSeparator,
       prefixOrder?: api.PrefixOrder,
-      stripNetworkPrefix?: boolean
+      stripNetworkPrefix?: boolean,
+      profileIds?: number[],
+      pushDownOnConflict?: boolean
     ) => {
       try {
         // Bulk creation requires edit mode
@@ -903,13 +1042,55 @@ function App() {
         }
 
         const mergedCount = filteredStreams.length - streamsByNormalizedName.size;
+        const channelCount = streamsByNormalizedName.size;
 
-        // Start a batch for all channel creations
-        startBatch(`Create ${streamsByNormalizedName.size} channels from streams`);
+        // Start a batch for all channel operations
+        startBatch(`Create ${channelCount} channels from streams`);
+
+        // Only push down channels if explicitly requested via pushDownOnConflict
+        if (pushDownOnConflict) {
+          // Get ALL channels >= startingNumber
+          // This ensures we don't create gaps
+          const channelsToShift = displayChannels
+            .filter((ch) => ch.channel_number !== null && ch.channel_number >= startingNumber)
+            .sort((a, b) => (b.channel_number ?? 0) - (a.channel_number ?? 0)); // Sort descending to avoid conflicts
+
+          // Shift each channel by the count of new channels (starting from highest to avoid conflicts)
+          for (const ch of channelsToShift) {
+            const newNum = ch.channel_number! + channelCount;
+            // Note: We don't auto-rename here because we're shifting by multiple positions
+            // and the original channel name relationship would be lost
+            stageUpdateChannel(ch.id, { channel_number: newNum }, `Shifted channel ${ch.channel_number} to ${newNum} to make room`);
+          }
+        }
 
         // Create channels and assign streams
+        // Sort entries alphabetically by normalized name for consistent ordering
+        // Use natural sort so "C-SPAN" comes before "C-SPAN 2" which comes before "C-SPAN 3"
+        const sortedEntries = Array.from(streamsByNormalizedName.entries()).sort((a, b) => {
+          // Natural sort comparison that handles trailing numbers properly
+          const nameA = a[0];
+          const nameB = b[0];
+
+          // Extract base name and trailing number (if any)
+          const matchA = nameA.match(/^(.+?)(\s*\d+)?$/);
+          const matchB = nameB.match(/^(.+?)(\s*\d+)?$/);
+
+          const baseA = matchA?.[1]?.trim() || nameA;
+          const baseB = matchB?.[1]?.trim() || nameB;
+          const numA = matchA?.[2] ? parseInt(matchA[2].trim(), 10) : 0;
+          const numB = matchB?.[2] ? parseInt(matchB[2].trim(), 10) : 0;
+
+          // First compare base names
+          const baseCompare = baseA.localeCompare(baseB, undefined, { sensitivity: 'base' });
+          if (baseCompare !== 0) return baseCompare;
+
+          // If base names are equal, sort by number (0 = no number, comes first)
+          return numA - numB;
+        });
+
         let channelIndex = 0;
-        for (const [normalizedName, groupedStreams] of streamsByNormalizedName) {
+        for (const [normalizedName, groupedStreams] of sortedEntries) {
           const channelNumber = startingNumber + channelIndex;
           channelIndex++;
 
@@ -981,13 +1162,27 @@ function App() {
           });
         }
 
+        // Store pending profile assignments to be applied after commit
+        // Use explicit profileIds if provided, otherwise fall back to default profile
+        const profileIdsToApply = (profileIds && profileIds.length > 0)
+          ? profileIds
+          : (defaultChannelProfileId ? [defaultChannelProfileId] : []);
+
+        if (profileIdsToApply.length > 0) {
+          pendingProfileAssignmentsRef.current.push({
+            startNumber: startingNumber,
+            count: streamsByNormalizedName.size,
+            profileIds: profileIdsToApply,
+          });
+        }
+
       } catch (err) {
         console.error('Bulk create failed:', err);
         setError('Failed to bulk create channels');
         throw err;
       }
     },
-    [isEditMode, stageCreateChannel, stageAddStream, startBatch, endBatch]
+    [isEditMode, stageCreateChannel, stageAddStream, stageUpdateChannel, startBatch, endBatch, displayChannels, defaultChannelProfileId]
   );
 
   // Handle stream group drop on channels pane (triggers bulk create modal in streams pane)
@@ -997,9 +1192,20 @@ function App() {
     setDroppedStreamGroupNames(groupNames);
   }, []);
 
-  // Clear the dropped stream group trigger after it's been handled
+  // Handle bulk streams drop on channels pane (triggers bulk create modal for specific streams)
+  const handleBulkStreamsDrop = useCallback((streamIds: number[], groupId: number | null, startingNumber: number) => {
+    // Set the dropped stream IDs and target info - StreamsPane will react to this and open the modal
+    setDroppedStreamIds(streamIds);
+    setDroppedStreamTargetGroupId(groupId);
+    setDroppedStreamStartingNumber(startingNumber);
+  }, []);
+
+  // Clear the dropped stream group/streams trigger after it's been handled
   const handleStreamGroupTriggerHandled = useCallback(() => {
     setDroppedStreamGroupNames(null);
+    setDroppedStreamIds(null);
+    setDroppedStreamTargetGroupId(null);
+    setDroppedStreamStartingNumber(null);
   }, []);
 
   // Filter streams based on multi-select filters (client-side)
@@ -1281,6 +1487,10 @@ function App() {
               streamProfiles={streamProfiles}
               epgDataLoading={epgDataLoading}
 
+              // Channel Profiles
+              channelProfiles={channelProfiles}
+              onChannelProfilesChange={loadChannelProfiles}
+
               // Provider & Filter Settings
               providerGroupSettings={providerGroupSettings}
               channelListFilters={channelListFilters}
@@ -1302,16 +1512,22 @@ function App() {
               streamGroupFilter={streamGroupFilter}
               onStreamGroupFilterChange={setStreamGroupFilter}
               selectedProviders={selectedProviderFilters}
-              onSelectedProvidersChange={setSelectedProviderFilters}
+              onSelectedProvidersChange={updateSelectedProviderFilters}
               selectedStreamGroups={selectedStreamGroupFilters}
-              onSelectedStreamGroupsChange={setSelectedStreamGroupFilters}
+              onSelectedStreamGroupsChange={updateSelectedStreamGroupFilters}
+              onClearStreamFilters={clearStreamFilters}
 
               // Bulk Create
               channelDefaults={channelDefaults}
               externalTriggerGroupNames={droppedStreamGroupNames}
+              externalTriggerStreamIds={droppedStreamIds}
+              externalTriggerTargetGroupId={droppedStreamTargetGroupId}
+              externalTriggerStartingNumber={droppedStreamStartingNumber}
               onExternalTriggerHandled={handleStreamGroupTriggerHandled}
               onStreamGroupDrop={handleStreamGroupDrop}
+              onBulkStreamsDrop={handleBulkStreamsDrop}
               onBulkCreateFromGroup={handleBulkCreateFromGroup}
+              onCheckConflicts={handleCheckConflicts}
 
               // Dispatcharr URL for channel stream URLs
               dispatcharrUrl={dispatcharrUrl}
@@ -1326,7 +1542,7 @@ function App() {
           {activeTab === 'm3u-manager' && <M3UManagerTab />}
           {activeTab === 'epg-manager' && <EPGManagerTab />}
           {activeTab === 'logo-manager' && <LogoManagerTab />}
-          {activeTab === 'settings' && <SettingsTab onSaved={handleSettingsSaved} />}
+          {activeTab === 'settings' && <SettingsTab onSaved={handleSettingsSaved} channelProfiles={channelProfiles} />}
         </Suspense>
       </main>
 

@@ -55,6 +55,13 @@ export interface StreamProfile {
   locked: boolean;
 }
 
+// Channel Profile - for creating separate M3U playlists per user
+export interface ChannelProfile {
+  id: number;
+  name: string;
+  channels: number[]; // channel IDs enabled for this profile (read-only from API)
+}
+
 export interface ChannelGroup {
   id: number;
   name: string;
@@ -73,10 +80,97 @@ export interface Stream {
   is_custom: boolean;
 }
 
+// M3U Account types
+export type M3UAccountType = 'STD' | 'XC';
+export type M3UAccountStatus = 'idle' | 'fetching' | 'parsing' | 'error' | 'success' | 'pending_setup' | 'disabled';
+
+export interface M3UAccountProfile {
+  id: number;
+  name: string;
+  max_streams: number;
+  is_active: boolean;
+  expire_date: string | null;
+  status: string;
+}
+
+export interface ChannelGroupM3UAccount {
+  id: number;
+  channel_group: number;
+  channel_group_name: string;
+  enabled: boolean;
+  enabled_vod: boolean;
+  enabled_series: boolean;
+  auto_channel_sync: boolean;
+  auto_sync_channel_start: number | null;
+  custom_properties: Record<string, unknown> | null;
+}
+
 export interface M3UAccount {
   id: number;
   name: string;
+  server_url: string | null;
+  file_path: string | null;
+  server_group: number | null;
+  max_streams: number;
   is_active: boolean;
+  created_at: string;
+  updated_at: string | null;
+  user_agent: number | null;
+  profiles: M3UAccountProfile[];
+  locked: boolean;
+  channel_groups: ChannelGroupM3UAccount[];
+  refresh_interval: number;
+  custom_properties: Record<string, unknown> | null;
+  account_type: M3UAccountType;
+  username: string | null;
+  password: string | null;
+  stale_stream_days: number;
+  priority: number;
+  status: M3UAccountStatus;
+  last_message: string | null;
+  enable_vod: boolean;
+  auto_enable_new_groups_live: boolean;
+  auto_enable_new_groups_vod: boolean;
+  auto_enable_new_groups_series: boolean;
+}
+
+export interface M3UAccountCreateRequest {
+  name: string;
+  server_url?: string | null;
+  file_path?: string | null;
+  server_group?: number | null;
+  max_streams?: number;
+  is_active?: boolean;
+  refresh_interval?: number;
+  account_type: M3UAccountType;
+  username?: string | null;
+  password?: string | null;
+  stale_stream_days?: number;
+  enable_vod?: boolean;
+  auto_enable_new_groups_live?: boolean;
+  auto_enable_new_groups_vod?: boolean;
+  auto_enable_new_groups_series?: boolean;
+}
+
+export interface M3UFilter {
+  id: number;
+  m3u_account: number;
+  filter_type: 'group' | 'name' | 'url';
+  regex_pattern: string;
+  exclude: boolean;
+  order: number;
+}
+
+export interface M3UFilterCreateRequest {
+  filter_type: 'group' | 'name' | 'url';
+  regex_pattern: string;
+  exclude: boolean;
+  order?: number;
+}
+
+export interface ServerGroup {
+  id: number;
+  name: string;
 }
 
 export interface M3UGroupSetting {

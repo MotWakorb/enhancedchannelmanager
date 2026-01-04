@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import type { Stream, M3UAccount, ChannelGroup } from '../types';
+import type { Stream, M3UAccount, ChannelGroup, ChannelProfile } from '../types';
 import { useSelection } from '../hooks';
 import { normalizeStreamName, detectRegionalVariants, filterStreamsByTimezone, detectCountryPrefixes, getUniqueCountryPrefixes, detectNetworkPrefixes, type TimezonePreference, type NormalizeOptions, type NumberSeparator, type PrefixOrder } from '../services/api';
 import { naturalCompare } from '../utils/naturalSort';
@@ -19,6 +19,7 @@ export interface ChannelDefaults {
   includeCountryInName: boolean;
   countrySeparator: string;
   timezonePreference: string;
+  defaultChannelProfileId?: number | null;
 }
 
 interface StreamsPaneProps {
@@ -38,13 +39,20 @@ interface StreamsPaneProps {
   onSelectedProvidersChange?: (providerIds: number[]) => void;
   selectedStreamGroups?: string[];
   onSelectedStreamGroupsChange?: (groups: string[]) => void;
+  onClearStreamFilters?: () => void;
   // Bulk channel creation
   isEditMode?: boolean;
   channelGroups?: ChannelGroup[];
+  channelProfiles?: ChannelProfile[];
   channelDefaults?: ChannelDefaults;
   // External trigger to open bulk create modal for stream groups (set by dropping on channels pane)
   // Supports multiple groups being dropped at once
   externalTriggerGroupNames?: string[] | null;
+  // External trigger to open bulk create modal for specific streams (set by dropping streams on channels pane)
+  externalTriggerStreamIds?: number[] | null;
+  // Target group ID and starting number for pre-filling the bulk create modal
+  externalTriggerTargetGroupId?: number | null;
+  externalTriggerStartingNumber?: number | null;
   onExternalTriggerHandled?: () => void;
   onBulkCreateFromGroup?: (
     streams: Stream[],
@@ -58,8 +66,13 @@ interface StreamsPaneProps {
     keepCountryPrefix?: boolean,
     countrySeparator?: NumberSeparator,
     prefixOrder?: PrefixOrder,
-    stripNetworkPrefix?: boolean
+    stripNetworkPrefix?: boolean,
+    profileIds?: number[],
+    pushDownOnConflict?: boolean
   ) => Promise<void>;
+  // Callback to check for conflicts with existing channel numbers
+  // Returns the number of conflicting channels
+  onCheckConflicts?: (startingNumber: number, count: number) => number;
   // Appearance settings
   showStreamUrls?: boolean;
   // Refresh streams (bypasses cache)
@@ -81,12 +94,18 @@ export function StreamsPane({
   onSelectedProvidersChange,
   selectedStreamGroups = [],
   onSelectedStreamGroupsChange,
+  onClearStreamFilters,
   isEditMode = false,
   channelGroups = [],
+  channelProfiles = [],
   channelDefaults,
   externalTriggerGroupNames = null,
+  externalTriggerStreamIds = null,
+  externalTriggerTargetGroupId = null,
+  externalTriggerStartingNumber = null,
   onExternalTriggerHandled,
   onBulkCreateFromGroup,
+  onCheckConflicts,
   showStreamUrls = true,
   onRefreshStreams,
 }: StreamsPaneProps) {
@@ -157,6 +176,8 @@ export function StreamsPane({
   const [bulkCreateSelectedGroupId, setBulkCreateSelectedGroupId] = useState<number | null>(null);
   const [bulkCreateNewGroupName, setBulkCreateNewGroupName] = useState('');
   const [bulkCreateLoading, setBulkCreateLoading] = useState(false);
+  const [bulkCreateShowConflict, setBulkCreateShowConflict] = useState(false);
+  const [bulkCreateConflictCount, setBulkCreateConflictCount] = useState(0);
   const [bulkCreateTimezone, setBulkCreateTimezone] = useState<TimezonePreference>('both');
   const [bulkCreateStripCountry, setBulkCreateStripCountry] = useState(false);
   const [bulkCreateKeepCountry, setBulkCreateKeepCountry] = useState(false);
@@ -165,6 +186,8 @@ export function StreamsPane({
   const [bulkCreateSeparator, setBulkCreateSeparator] = useState<NumberSeparator>('|');
   const [bulkCreatePrefixOrder, setBulkCreatePrefixOrder] = useState<PrefixOrder>('number-first');
   const [bulkCreateStripNetwork, setBulkCreateStripNetwork] = useState(false);
+  const [bulkCreateSelectedProfiles, setBulkCreateSelectedProfiles] = useState<Set<number>>(new Set());
+  const [profilesExpanded, setProfilesExpanded] = useState(false);
   const [namingOptionsExpanded, setNamingOptionsExpanded] = useState(false);
   const [channelGroupExpanded, setChannelGroupExpanded] = useState(false);
   const [timezoneExpanded, setTimezoneExpanded] = useState(false);
@@ -172,8 +195,10 @@ export function StreamsPane({
   // Dropdown state
   const [providerDropdownOpen, setProviderDropdownOpen] = useState(false);
   const [groupDropdownOpen, setGroupDropdownOpen] = useState(false);
+  const [groupSearchFilter, setGroupSearchFilter] = useState('');
   const providerDropdownRef = useRef<HTMLDivElement>(null);
   const groupDropdownRef = useRef<HTMLDivElement>(null);
+  const groupSearchInputRef = useRef<HTMLInputElement>(null);
 
   // Close dropdowns when clicking outside
   useEffect(() => {
@@ -183,11 +208,19 @@ export function StreamsPane({
       }
       if (groupDropdownRef.current && !groupDropdownRef.current.contains(event.target as Node)) {
         setGroupDropdownOpen(false);
+        setGroupSearchFilter('');
       }
     };
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
+
+  // Focus search input when group dropdown opens
+  useEffect(() => {
+    if (groupDropdownOpen && groupSearchInputRef.current) {
+      groupSearchInputRef.current.focus();
+    }
+  }, [groupDropdownOpen]);
 
   // Determine if we're using multi-select mode
   const useMultiSelectProviders = !!onSelectedProvidersChange;
@@ -244,6 +277,14 @@ export function StreamsPane({
   useEffect(() => {
     clearSelection();
   }, [searchTerm, providerFilter, groupFilter, clearSelection]);
+
+  // Clear selection when exiting edit mode
+  useEffect(() => {
+    if (!isEditMode) {
+      clearSelection();
+      setSelectedGroupNames(new Set());
+    }
+  }, [isEditMode, clearSelection]);
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -389,6 +430,10 @@ export function StreamsPane({
     setBulkCreateSeparator((channelDefaults?.channelNumberSeparator as NumberSeparator) || '|');
     setBulkCreatePrefixOrder('number-first'); // Default to number first
     setBulkCreateStripNetwork(false); // Default to not stripping network prefixes
+    // Apply default channel profile from settings
+    setBulkCreateSelectedProfiles(
+      channelDefaults?.defaultChannelProfileId ? new Set([channelDefaults.defaultChannelProfileId]) : new Set()
+    );
     setNamingOptionsExpanded(false); // Collapse naming options
     setChannelGroupExpanded(false); // Collapse channel group options
     setTimezoneExpanded(false); // Collapse timezone options
@@ -413,11 +458,57 @@ export function StreamsPane({
     setBulkCreateSeparator((channelDefaults?.channelNumberSeparator as NumberSeparator) || '|');
     setBulkCreatePrefixOrder('number-first'); // Default to number first
     setBulkCreateStripNetwork(false); // Default to not stripping network prefixes
+    // Apply default channel profile from settings
+    setBulkCreateSelectedProfiles(
+      channelDefaults?.defaultChannelProfileId ? new Set([channelDefaults.defaultChannelProfileId]) : new Set()
+    );
     setNamingOptionsExpanded(false); // Collapse naming options
     setChannelGroupExpanded(false); // Collapse channel group options
     setTimezoneExpanded(false); // Collapse timezone options
     setBulkCreateModalOpen(true);
   }, [streams, selectedIds, channelDefaults]);
+
+  // Open bulk create modal for specific stream IDs (from external trigger)
+  // Optionally accepts target group ID and starting number to pre-fill the modal
+  const openBulkCreateModalForStreamIds = useCallback((
+    streamIds: number[],
+    targetGroupId?: number | null,
+    startingNumber?: number | null
+  ) => {
+    const streamsList = streams.filter(s => streamIds.includes(s.id));
+    if (streamsList.length === 0) return;
+
+    setBulkCreateGroup(null);
+    setBulkCreateStreams(streamsList);
+    // Pre-fill starting number if provided
+    setBulkCreateStartingNumber(startingNumber != null ? startingNumber.toString() : '');
+    // Pre-select group if provided
+    if (targetGroupId != null) {
+      setBulkCreateGroupOption('existing');
+      setBulkCreateSelectedGroupId(targetGroupId);
+    } else {
+      setBulkCreateGroupOption('existing');
+      setBulkCreateSelectedGroupId(null);
+    }
+    setBulkCreateNewGroupName('');
+    // Apply settings defaults
+    setBulkCreateTimezone((channelDefaults?.timezonePreference as TimezonePreference) || 'both');
+    setBulkCreateStripCountry(channelDefaults?.removeCountryPrefix ?? false);
+    setBulkCreateKeepCountry(channelDefaults?.includeCountryInName ?? false);
+    setBulkCreateCountrySeparator((channelDefaults?.countrySeparator as NumberSeparator) || '|');
+    setBulkCreateAddNumber(channelDefaults?.includeChannelNumberInName ?? false);
+    setBulkCreateSeparator((channelDefaults?.channelNumberSeparator as NumberSeparator) || '|');
+    setBulkCreatePrefixOrder('number-first');
+    setBulkCreateStripNetwork(false);
+    // Apply default channel profile from settings
+    setBulkCreateSelectedProfiles(
+      channelDefaults?.defaultChannelProfileId ? new Set([channelDefaults.defaultChannelProfileId]) : new Set()
+    );
+    setNamingOptionsExpanded(false);
+    setChannelGroupExpanded(false);
+    setTimezoneExpanded(false);
+    setBulkCreateModalOpen(true);
+  }, [streams, channelDefaults]);
 
   const closeBulkCreateModal = useCallback(() => {
     setBulkCreateModalOpen(false);
@@ -426,6 +517,7 @@ export function StreamsPane({
     setBulkCreateStreams([]);
     setBulkCreateCustomGroupNames(new Map());
     setBulkCreateGroupStartNumbers(new Map());
+    setBulkCreateSelectedProfiles(new Set());
   }, []);
 
   // Toggle group selection (select/deselect all streams in group)
@@ -495,6 +587,10 @@ export function StreamsPane({
     setBulkCreateSeparator((channelDefaults?.channelNumberSeparator as NumberSeparator) || '|');
     setBulkCreatePrefixOrder('number-first');
     setBulkCreateStripNetwork(false);
+    // Apply default channel profile from settings
+    setBulkCreateSelectedProfiles(
+      channelDefaults?.defaultChannelProfileId ? new Set([channelDefaults.defaultChannelProfileId]) : new Set()
+    );
     setNamingOptionsExpanded(false);
     setChannelGroupExpanded(false);
     setTimezoneExpanded(false);
@@ -526,6 +622,10 @@ export function StreamsPane({
     setBulkCreateSeparator((channelDefaults?.channelNumberSeparator as NumberSeparator) || '|');
     setBulkCreatePrefixOrder('number-first');
     setBulkCreateStripNetwork(false);
+    // Apply default channel profile from settings
+    setBulkCreateSelectedProfiles(
+      channelDefaults?.defaultChannelProfileId ? new Set([channelDefaults.defaultChannelProfileId]) : new Set()
+    );
     setNamingOptionsExpanded(false);
     setChannelGroupExpanded(false);
     setTimezoneExpanded(false);
@@ -553,6 +653,19 @@ export function StreamsPane({
       onExternalTriggerHandled?.();
     }
   }, [externalTriggerGroupNames, groupedStreams, openBulkCreateModal, openBulkCreateModalForMultipleGroups, onBulkCreateFromGroup, onExternalTriggerHandled]);
+
+  // Handle external trigger to open bulk create modal for specific stream IDs
+  useEffect(() => {
+    if (externalTriggerStreamIds && externalTriggerStreamIds.length > 0 && onBulkCreateFromGroup) {
+      openBulkCreateModalForStreamIds(
+        externalTriggerStreamIds,
+        externalTriggerTargetGroupId,
+        externalTriggerStartingNumber
+      );
+      // Signal that we've handled the trigger
+      onExternalTriggerHandled?.();
+    }
+  }, [externalTriggerStreamIds, externalTriggerTargetGroupId, externalTriggerStartingNumber, openBulkCreateModalForStreamIds, onBulkCreateFromGroup, onExternalTriggerHandled]);
 
   // Get the streams to create channels from (either from single group, multiple groups, or selection)
   const streamsToCreate = useMemo(() => {
@@ -622,6 +735,7 @@ export function StreamsPane({
     return { uniqueCount, duplicateCount, hasDuplicates, streamsByNormalizedName, excludedCount };
   }, [streamsToCreate, bulkCreateTimezone, bulkCreateStripCountry, bulkCreateKeepCountry, bulkCreateCountrySeparator, bulkCreateStripNetwork]);
 
+  // Check for conflicts and show dialog, or proceed directly if no conflicts
   const handleBulkCreate = useCallback(async () => {
     if (streamsToCreate.length === 0 || !onBulkCreateFromGroup) return;
 
@@ -644,7 +758,40 @@ export function StreamsPane({
       }
     }
 
+    // Check for conflicts before proceeding
+    if (onCheckConflicts && !useSeparateMode) {
+      const startingNum = parseInt(bulkCreateStartingNumber, 10);
+      const conflictCount = onCheckConflicts(startingNum, bulkCreateStats.uniqueCount);
+      if (conflictCount > 0) {
+        // Show conflict dialog
+        setBulkCreateConflictCount(conflictCount);
+        setBulkCreateShowConflict(true);
+        return;
+      }
+    }
+
+    // No conflicts or separate mode - proceed with creation
+    await doBulkCreate(false);
+  }, [
+    streamsToCreate,
+    isFromMultipleGroups,
+    bulkCreateMultiGroupOption,
+    bulkCreateGroupStartNumbers,
+    bulkCreateGroups,
+    bulkCreateStartingNumber,
+    bulkCreateStats.uniqueCount,
+    onBulkCreateFromGroup,
+    onCheckConflicts,
+  ]);
+
+  // Actually perform the bulk create with the specified pushDown option
+  const doBulkCreate = useCallback(async (pushDown: boolean) => {
+    if (streamsToCreate.length === 0 || !onBulkCreateFromGroup) return;
+
+    const useSeparateMode = isFromMultipleGroups && bulkCreateMultiGroupOption === 'separate';
+
     setBulkCreateLoading(true);
+    setBulkCreateShowConflict(false);
 
     try {
       // Handle multi-group mode with separate groups
@@ -677,7 +824,9 @@ export function StreamsPane({
             bulkCreateKeepCountry,
             bulkCreateCountrySeparator,
             bulkCreatePrefixOrder,
-            bulkCreateStripNetwork
+            bulkCreateStripNetwork,
+            bulkCreateSelectedProfiles.size > 0 ? Array.from(bulkCreateSelectedProfiles) : undefined,
+            pushDown
           );
 
           // Increment starting number for next group (if no explicit start)
@@ -720,7 +869,9 @@ export function StreamsPane({
           bulkCreateKeepCountry,
           bulkCreateCountrySeparator,
           bulkCreatePrefixOrder,
-          bulkCreateStripNetwork
+          bulkCreateStripNetwork,
+          bulkCreateSelectedProfiles.size > 0 ? Array.from(bulkCreateSelectedProfiles) : undefined,
+          pushDown
         );
       }
 
@@ -758,6 +909,7 @@ export function StreamsPane({
     bulkCreateSeparator,
     bulkCreatePrefixOrder,
     bulkCreateStripNetwork,
+    bulkCreateSelectedProfiles,
     channelGroups,
     onBulkCreateFromGroup,
     clearSelection,
@@ -899,37 +1051,84 @@ export function StreamsPane({
               </button>
               {groupDropdownOpen && (
                 <div className="filter-dropdown-menu">
+                  <div className="filter-dropdown-search">
+                    <span className="material-icons search-icon">search</span>
+                    <input
+                      ref={groupSearchInputRef}
+                      type="text"
+                      placeholder="Search groups..."
+                      value={groupSearchFilter}
+                      onChange={(e) => setGroupSearchFilter(e.target.value)}
+                      onClick={(e) => e.stopPropagation()}
+                    />
+                    {groupSearchFilter && (
+                      <button
+                        className="clear-search"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setGroupSearchFilter('');
+                          groupSearchInputRef.current?.focus();
+                        }}
+                      >
+                        <span className="material-icons">close</span>
+                      </button>
+                    )}
+                  </div>
                   <div className="filter-dropdown-actions">
                     <button
                       className="filter-dropdown-action"
-                      onClick={() => onSelectedStreamGroupsChange!(streamGroups)}
+                      onClick={() => {
+                        // Select all visible (filtered) groups
+                        const filteredGroups = streamGroups.filter(g =>
+                          g.toLowerCase().includes(groupSearchFilter.toLowerCase())
+                        );
+                        const newSelection = [...new Set([...selectedStreamGroups, ...filteredGroups])];
+                        onSelectedStreamGroupsChange!(newSelection);
+                      }}
                     >
-                      Select All
+                      Select All{groupSearchFilter ? ' Visible' : ''}
                     </button>
                     <button
                       className="filter-dropdown-action"
-                      onClick={() => onSelectedStreamGroupsChange!([])}
+                      onClick={() => {
+                        if (groupSearchFilter) {
+                          // Clear only visible (filtered) groups
+                          const filteredGroups = streamGroups.filter(g =>
+                            g.toLowerCase().includes(groupSearchFilter.toLowerCase())
+                          );
+                          onSelectedStreamGroupsChange!(
+                            selectedStreamGroups.filter(g => !filteredGroups.includes(g))
+                          );
+                        } else {
+                          onSelectedStreamGroupsChange!([]);
+                        }
+                      }}
                     >
-                      Clear All
+                      Clear{groupSearchFilter ? ' Visible' : ' All'}
                     </button>
                   </div>
                   <div className="filter-dropdown-options">
-                    {streamGroups.map((group) => (
-                      <label key={group} className="filter-dropdown-option">
-                        <input
-                          type="checkbox"
-                          checked={selectedStreamGroups.includes(group)}
-                          onChange={(e) => {
-                            if (e.target.checked) {
-                              onSelectedStreamGroupsChange!([...selectedStreamGroups, group]);
-                            } else {
-                              onSelectedStreamGroupsChange!(selectedStreamGroups.filter((g) => g !== group));
-                            }
-                          }}
-                        />
-                        <span className="filter-option-name">{group}</span>
-                      </label>
-                    ))}
+                    {streamGroups
+                      .filter(group => group.toLowerCase().includes(groupSearchFilter.toLowerCase()))
+                      .map((group) => (
+                        <label key={group} className="filter-dropdown-option">
+                          <input
+                            type="checkbox"
+                            checked={selectedStreamGroups.includes(group)}
+                            onChange={(e) => {
+                              if (e.target.checked) {
+                                onSelectedStreamGroupsChange!([...selectedStreamGroups, group]);
+                              } else {
+                                onSelectedStreamGroupsChange!(selectedStreamGroups.filter((g) => g !== group));
+                              }
+                            }}
+                          />
+                          <span className="filter-option-name">{group}</span>
+                        </label>
+                      ))}
+                    {streamGroups.filter(group => group.toLowerCase().includes(groupSearchFilter.toLowerCase())).length === 0 && (
+                      <div className="filter-dropdown-empty">No groups match "{groupSearchFilter}"</div>
+                    )}
                   </div>
                 </div>
               )}
@@ -947,6 +1146,17 @@ export function StreamsPane({
                 </option>
               ))}
             </select>
+          )}
+
+          {/* Clear Filters Button - show when any filter is active */}
+          {onClearStreamFilters && (selectedProviders.length > 0 || selectedStreamGroups.length > 0) && (
+            <button
+              className="clear-filters-btn"
+              onClick={onClearStreamFilters}
+              title="Clear all filters"
+            >
+              <span className="material-icons">filter_alt_off</span>
+            </button>
           )}
         </div>
       </div>
@@ -1019,7 +1229,7 @@ export function StreamsPane({
                         <div
                           key={stream.id}
                           className={`stream-item ${isSelected(stream.id) && isEditMode ? 'selected' : ''}`}
-                          draggable
+                          draggable={isEditMode}
                           onClick={(e) => handleItemClick(e, stream)}
                           onDragStart={(e) => handleDragStart(e, stream)}
                         >
@@ -1090,7 +1300,7 @@ export function StreamsPane({
 
       {/* Bulk Create Modal */}
       {bulkCreateModalOpen && streamsToCreate.length > 0 && (
-        <div className="modal-overlay" onClick={closeBulkCreateModal}>
+        <div className="modal-overlay">
           <div className="bulk-create-modal" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
               <h3>
@@ -1452,6 +1662,20 @@ export function StreamsPane({
                             <input
                               type="radio"
                               name="countryPrefixOption"
+                              checked={!bulkCreateStripCountry && !bulkCreateKeepCountry}
+                              onChange={() => {
+                                setBulkCreateStripCountry(false);
+                                setBulkCreateKeepCountry(false);
+                              }}
+                            />
+                            <span>Keep as-is</span>
+                          </label>
+                          <span className="option-hint radio-hint">e.g., "US: Sports Channel" stays "US: Sports Channel"</span>
+
+                          <label className="radio-option">
+                            <input
+                              type="radio"
+                              name="countryPrefixOption"
                               checked={bulkCreateStripCountry && !bulkCreateKeepCountry}
                               onChange={() => {
                                 setBulkCreateStripCountry(true);
@@ -1580,6 +1804,64 @@ export function StreamsPane({
                 )}
               </div>
 
+              {/* Channel Profiles - Collapsible Section */}
+              {channelProfiles.length > 0 && (
+                <div className="form-group collapsible-section">
+                  <div
+                    className="collapsible-header"
+                    onClick={() => setProfilesExpanded(!profilesExpanded)}
+                  >
+                    <span className="expand-icon">{profilesExpanded ? '▼' : '▶'}</span>
+                    <span className="collapsible-title">Channel Profiles</span>
+                    <span className="collapsible-summary">
+                      {bulkCreateSelectedProfiles.size === 0
+                        ? 'None selected'
+                        : `${bulkCreateSelectedProfiles.size} profile${bulkCreateSelectedProfiles.size !== 1 ? 's' : ''} selected`}
+                    </span>
+                  </div>
+
+                  {profilesExpanded && (
+                    <div className="collapsible-content">
+                      <div className="profiles-info">
+                        <span className="material-icons">people</span>
+                        <span>Assign new channels to these profiles (optional)</span>
+                      </div>
+                      <div className="checkbox-group profiles-list">
+                        {channelProfiles.map(profile => (
+                          <label key={profile.id} className="checkbox-option">
+                            <input
+                              type="checkbox"
+                              checked={bulkCreateSelectedProfiles.has(profile.id)}
+                              onChange={(e) => {
+                                const newSet = new Set(bulkCreateSelectedProfiles);
+                                if (e.target.checked) {
+                                  newSet.add(profile.id);
+                                } else {
+                                  newSet.delete(profile.id);
+                                }
+                                setBulkCreateSelectedProfiles(newSet);
+                              }}
+                            />
+                            <span>{profile.name}</span>
+                            <span className="profile-channel-count">
+                              ({profile.channels.length > 0 ? profile.channels.length : 'all'} channels)
+                            </span>
+                          </label>
+                        ))}
+                      </div>
+                      {bulkCreateSelectedProfiles.size > 0 && (
+                        <button
+                          className="btn-clear-profiles"
+                          onClick={() => setBulkCreateSelectedProfiles(new Set())}
+                        >
+                          Clear selection
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+
               {/* Preview - show per-group preview in separate mode, otherwise show combined preview */}
               {isFromMultipleGroups && bulkCreateMultiGroupOption === 'separate' ? (
                 <div className="bulk-create-preview">
@@ -1698,6 +1980,55 @@ export function StreamsPane({
                     Create {bulkCreateStats.uniqueCount} Channels
                   </>
                 )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Bulk Create Conflict Dialog */}
+      {bulkCreateShowConflict && (
+        <div className="modal-overlay">
+          <div className="modal-content conflict-dialog" onClick={(e) => e.stopPropagation()}>
+            <h3>Channel Number Conflict</h3>
+            <div className="conflict-message">
+              <p>
+                <strong>{bulkCreateConflictCount}</strong> existing channel{bulkCreateConflictCount !== 1 ? 's' : ''} would
+                conflict with the new channels (starting at <strong>{bulkCreateStartingNumber}</strong>).
+              </p>
+              <p>How would you like to proceed?</p>
+            </div>
+            <div className="conflict-options">
+              <button
+                className="conflict-option-btn push-down"
+                onClick={() => doBulkCreate(true)}
+                disabled={bulkCreateLoading}
+              >
+                <span className="material-icons">vertical_align_bottom</span>
+                <div className="conflict-option-text">
+                  <strong>Push channels down</strong>
+                  <span>Insert at {bulkCreateStartingNumber} and shift existing channels by {bulkCreateStats.uniqueCount}</span>
+                </div>
+              </button>
+              <button
+                className="conflict-option-btn add-to-end"
+                onClick={() => doBulkCreate(false)}
+                disabled={bulkCreateLoading}
+              >
+                <span className="material-icons">warning</span>
+                <div className="conflict-option-text">
+                  <strong>Create anyway</strong>
+                  <span>Create with duplicate channel numbers (not recommended)</span>
+                </div>
+              </button>
+            </div>
+            <div className="modal-actions">
+              <button
+                className="modal-btn cancel"
+                onClick={() => setBulkCreateShowConflict(false)}
+                disabled={bulkCreateLoading}
+              >
+                Cancel
               </button>
             </div>
           </div>

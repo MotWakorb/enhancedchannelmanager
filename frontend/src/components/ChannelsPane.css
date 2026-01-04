@@ -277,6 +277,31 @@
   font-size: 18px;
 }
 
+.profiles-btn {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  background-color: var(--bg-hover);
+  border: 1px solid var(--border-secondary);
+  color: var(--button-text);
+  padding: 0.375rem 0.75rem;
+  border-radius: 4px;
+  font-size: 0.85rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color 0.15s, border-color 0.15s;
+}
+
+.profiles-btn:hover {
+  background-color: var(--button-hover-bg);
+  border-color: var(--border-secondary);
+  color: var(--text-primary);
+}
+
+.profiles-btn .material-icons {
+  font-size: 18px;
+}
+
 .pane-filters {
   padding: 0.75rem;
   display: flex;
@@ -1230,6 +1255,203 @@
 .modal-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+/* Collapsible Sections in Create Channel Modal */
+.modal-form .collapsible-section {
+  border: 1px solid var(--border-secondary);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.modal-form .collapsible-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 0.625rem 0.75rem;
+  background-color: var(--bg-secondary);
+  border: none;
+  cursor: pointer;
+  color: var(--text-primary);
+  font-size: 0.875rem;
+  text-align: left;
+}
+
+.modal-form .collapsible-header:hover {
+  background-color: var(--bg-hover);
+}
+
+.modal-form .collapsible-header .material-icons {
+  font-size: 18px;
+  color: var(--text-muted);
+}
+
+.modal-form .collapsible-summary {
+  margin-left: auto;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.modal-form .collapsible-content {
+  padding: 0.75rem;
+  background-color: var(--bg-primary);
+  border-top: 1px solid var(--border-secondary);
+}
+
+/* Naming Options */
+.modal-form .naming-options {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.modal-form .naming-option {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 0.5rem;
+  cursor: pointer;
+  font-size: 0.875rem;
+  color: var(--text-primary);
+}
+
+.modal-form .naming-option input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  padding: 0;
+  cursor: pointer;
+  accent-color: var(--accent-primary);
+}
+
+.modal-form .separator-options {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-left: 1.5rem;
+}
+
+.modal-form .separator-label {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.modal-form .separator-btn {
+  padding: 0.25rem 0.5rem;
+  background-color: var(--bg-secondary);
+  border: 1px solid var(--border-secondary);
+  border-radius: 4px;
+  cursor: pointer;
+  color: var(--text-secondary);
+  font-size: 0.875rem;
+  min-width: 28px;
+}
+
+.modal-form .separator-btn:hover {
+  background-color: var(--bg-hover);
+}
+
+.modal-form .separator-btn.active {
+  background-color: var(--accent-primary);
+  border-color: var(--accent-primary);
+  color: white;
+}
+
+.modal-form .country-input {
+  width: 80px;
+  margin-left: 1.5rem;
+  padding: 0.375rem 0.5rem;
+  background-color: var(--bg-secondary);
+  border: 1px solid var(--border-secondary);
+  border-radius: 4px;
+  color: var(--text-primary);
+  font-size: 0.875rem;
+}
+
+.modal-form .country-input:focus {
+  outline: none;
+  border-color: var(--accent-primary);
+}
+
+.modal-form .prefix-order-options {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
+  margin-left: 1.5rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--border-secondary);
+}
+
+.modal-form .prefix-order-label {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.modal-form .prefix-order-options .radio-option {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 0.375rem;
+  cursor: pointer;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+
+.modal-form .prefix-order-options .radio-option input[type="radio"] {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  cursor: pointer;
+  accent-color: var(--accent-primary);
+}
+
+.modal-form .naming-preview {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  background-color: var(--bg-secondary);
+  border-radius: 4px;
+  margin-top: 0.25rem;
+}
+
+.modal-form .preview-label {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.modal-form .preview-name {
+  font-size: 0.875rem;
+  color: var(--accent-primary);
+  font-weight: 500;
+}
+
+/* Profile List in Modal */
+.modal-form .profile-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.modal-form .profile-checkbox {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 0.5rem;
+  cursor: pointer;
+  font-size: 0.875rem;
+  color: var(--text-primary);
+}
+
+.modal-form .profile-checkbox input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  padding: 0;
+  cursor: pointer;
+  accent-color: var(--accent-primary);
 }
 
 /* Conflict Dialog Styles */
@@ -2642,6 +2864,65 @@
   50% {
     opacity: 0.8;
     box-shadow: 0 0 12px rgba(100, 108, 255, 0.8), 0 0 24px rgba(100, 108, 255, 0.5);
+  }
+}
+
+/* Stream insert zone - drop zone between channels for creating new channels */
+.stream-insert-zone {
+  height: 8px;
+  margin: -4px 0;
+  position: relative;
+  z-index: 10;
+  cursor: pointer;
+}
+
+.stream-insert-zone:hover,
+.stream-insert-zone.active {
+  height: 24px;
+  margin: 0;
+  background-color: rgba(34, 197, 94, 0.1);
+  border-radius: 4px;
+}
+
+.stream-insert-indicator {
+  position: relative;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 0.5rem;
+}
+
+.stream-insert-line {
+  position: absolute;
+  left: 0.5rem;
+  right: 0.5rem;
+  height: 3px;
+  background: linear-gradient(90deg, #22c55e 0%, #4ade80 50%, #22c55e 100%);
+  border-radius: 2px;
+  box-shadow: 0 0 8px rgba(34, 197, 94, 0.6), 0 0 16px rgba(34, 197, 94, 0.3);
+  animation: stream-insert-pulse 1.2s ease-in-out infinite;
+}
+
+.stream-insert-label {
+  position: relative;
+  z-index: 1;
+  font-size: 0.7rem;
+  color: #22c55e;
+  background-color: var(--bg-primary);
+  padding: 0 0.5rem;
+  border-radius: 4px;
+  white-space: nowrap;
+}
+
+@keyframes stream-insert-pulse {
+  0%, 100% {
+    opacity: 1;
+    box-shadow: 0 0 8px rgba(34, 197, 94, 0.6), 0 0 16px rgba(34, 197, 94, 0.3);
+  }
+  50% {
+    opacity: 0.8;
+    box-shadow: 0 0 12px rgba(34, 197, 94, 0.8), 0 0 24px rgba(34, 197, 94, 0.5);
   }
 }
 

@@ -1,5 +1,5 @@
 import { SplitPane, ChannelsPane, StreamsPane } from '../';
-import type { Channel, ChannelGroup, Stream, M3UAccount, Logo, EPGData, EPGSource, StreamProfile, M3UGroupSetting, ChannelListFilterSettings, ChangeInfo, SavePoint, ChangeRecord } from '../../types';
+import type { Channel, ChannelGroup, ChannelProfile, Stream, M3UAccount, Logo, EPGData, EPGSource, StreamProfile, M3UGroupSetting, ChannelListFilterSettings, ChangeInfo, SavePoint, ChangeRecord } from '../../types';
 import type { TimezonePreference, NumberSeparator, PrefixOrder } from '../../services/api';
 import type { ChannelDefaults } from '../StreamsPane';
 
@@ -17,7 +17,7 @@ export interface ChannelManagerTabProps {
   onChannelDrop: (channelId: number, streamId: number) => Promise<void>;
   onBulkStreamDrop: (channelId: number, streamIds: number[]) => Promise<void>;
   onChannelReorder: (channelIds: number[], startingNumber: number) => Promise<void>;
-  onCreateChannel: (name: string, channelNumber?: number, groupId?: number) => Promise<Channel>;
+  onCreateChannel: (name: string, channelNumber?: number, groupId?: number, logoId?: number, tvgId?: string, logoUrl?: string) => Promise<Channel>;
   onDeleteChannel: (channelId: number) => Promise<void>;
   channelsLoading: boolean;
 
@@ -77,6 +77,10 @@ export interface ChannelManagerTabProps {
   streamProfiles: StreamProfile[];
   epgDataLoading: boolean;
 
+  // Channel Profiles
+  channelProfiles: ChannelProfile[];
+  onChannelProfilesChange: () => Promise<void>;
+
   // Provider & Filter Settings
   providerGroupSettings: Record<number, M3UGroupSetting>;
   channelListFilters: ChannelListFilterSettings;
@@ -101,6 +105,7 @@ export interface ChannelManagerTabProps {
   onSelectedProvidersChange: (providers: number[]) => void;
   selectedStreamGroups: string[];
   onSelectedStreamGroupsChange: (groups: string[]) => void;
+  onClearStreamFilters?: () => void;
 
   // Dispatcharr URL (for constructing channel stream URLs)
   dispatcharrUrl: string;
@@ -115,8 +120,16 @@ export interface ChannelManagerTabProps {
   channelDefaults?: ChannelDefaults;
   // Stream group drop (for opening bulk create modal) - supports multiple groups
   externalTriggerGroupNames?: string[] | null;
+  // Stream IDs drop (for opening bulk create modal when dropping individual streams)
+  externalTriggerStreamIds?: number[] | null;
+  // Target group ID and starting number for pre-filling the bulk create modal
+  externalTriggerTargetGroupId?: number | null;
+  externalTriggerStartingNumber?: number | null;
   onExternalTriggerHandled?: () => void;
   onStreamGroupDrop?: (groupNames: string[], streamIds: number[]) => void;
+  // Bulk streams drop (for opening bulk create modal when dropping multiple streams)
+  // Includes target group ID and starting channel number for pre-filling the modal
+  onBulkStreamsDrop?: (streamIds: number[], groupId: number | null, startingNumber: number) => void;
   onBulkCreateFromGroup: (
     streams: Stream[],
     startingNumber: number,
@@ -129,8 +142,12 @@ export interface ChannelManagerTabProps {
     keepCountryPrefix?: boolean,
     countrySeparator?: NumberSeparator,
     prefixOrder?: PrefixOrder,
-    stripNetworkPrefix?: boolean
+    stripNetworkPrefix?: boolean,
+    profileIds?: number[],
+    pushDownOnConflict?: boolean
   ) => Promise<void>;
+  // Callback to check for conflicts with existing channel numbers
+  onCheckConflicts?: (startingNumber: number, count: number) => number;
 }
 
 export function ChannelManagerTab({
@@ -207,6 +224,10 @@ export function ChannelManagerTab({
   streamProfiles,
   epgDataLoading,
 
+  // Channel Profiles
+  channelProfiles,
+  onChannelProfilesChange,
+
   // Provider & Filter Settings
   providerGroupSettings,
   channelListFilters,
@@ -231,6 +252,7 @@ export function ChannelManagerTab({
   onSelectedProvidersChange,
   selectedStreamGroups,
   onSelectedStreamGroupsChange,
+  onClearStreamFilters,
 
   // Dispatcharr URL
   dispatcharrUrl,
@@ -244,9 +266,14 @@ export function ChannelManagerTab({
   // Bulk Create
   channelDefaults,
   externalTriggerGroupNames,
+  externalTriggerStreamIds,
+  externalTriggerTargetGroupId,
+  externalTriggerStartingNumber,
   onExternalTriggerHandled,
   onStreamGroupDrop,
+  onBulkStreamsDrop,
   onBulkCreateFromGroup,
+  onCheckConflicts,
 }: ChannelManagerTabProps) {
   return (
     <SplitPane
@@ -303,6 +330,9 @@ export function ChannelManagerTab({
           epgSources={epgSources}
           streamProfiles={streamProfiles}
           epgDataLoading={epgDataLoading}
+          channelProfiles={channelProfiles}
+          onChannelProfilesChange={onChannelProfilesChange}
+          channelDefaults={channelDefaults}
           providerGroupSettings={providerGroupSettings}
           channelListFilters={channelListFilters}
           onChannelListFiltersChange={onChannelListFiltersChange}
@@ -316,6 +346,7 @@ export function ChannelManagerTab({
           onSelectGroupChannels={onSelectGroupChannels}
           dispatcharrUrl={dispatcharrUrl}
           onStreamGroupDrop={onStreamGroupDrop}
+          onBulkStreamsDrop={onBulkStreamsDrop}
           showStreamUrls={showStreamUrls}
         />
       }
@@ -335,12 +366,18 @@ export function ChannelManagerTab({
           onSelectedProvidersChange={onSelectedProvidersChange}
           selectedStreamGroups={selectedStreamGroups}
           onSelectedStreamGroupsChange={onSelectedStreamGroupsChange}
+          onClearStreamFilters={onClearStreamFilters}
           isEditMode={isEditMode}
           channelGroups={channelGroups}
+          channelProfiles={channelProfiles}
           channelDefaults={channelDefaults}
           externalTriggerGroupNames={externalTriggerGroupNames}
+          externalTriggerStreamIds={externalTriggerStreamIds}
+          externalTriggerTargetGroupId={externalTriggerTargetGroupId}
+          externalTriggerStartingNumber={externalTriggerStartingNumber}
           onExternalTriggerHandled={onExternalTriggerHandled}
           onBulkCreateFromGroup={onBulkCreateFromGroup}
+          onCheckConflicts={onCheckConflicts}
           showStreamUrls={showStreamUrls}
           onRefreshStreams={onRefreshStreams}
         />
