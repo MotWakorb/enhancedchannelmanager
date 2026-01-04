@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import type { M3UAccount, ChannelGroupM3UAccount, ChannelGroup } from '../types';
 import * as api from '../services/api';
+import { naturalCompare } from '../utils/naturalSort';
 import './M3UGroupsModal.css';
 
 interface M3UGroupsModalProps {
@@ -88,7 +89,7 @@ export function M3UGroupsModal({
     }
   }, [isOpen, account?.id]);
 
-  // Filter groups by search and hideDisabled
+  // Filter and sort groups by search and hideDisabled
   const filteredGroups = useMemo(() => {
     let filtered = groups;
 
@@ -103,7 +104,8 @@ export function M3UGroupsModal({
       filtered = filtered.filter(g => g.name.toLowerCase().includes(searchLower));
     }
 
-    return filtered;
+    // Sort alphabetically with natural sort
+    return [...filtered].sort((a, b) => naturalCompare(a.name, b.name));
   }, [groups, search, hideDisabled]);
 
   const handleToggleEnabled = (groupId: number) => {
