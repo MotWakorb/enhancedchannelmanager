@@ -41,7 +41,7 @@ interface ChannelsPaneProps {
   onChannelDrop: (channelId: number, streamId: number) => void;
   onBulkStreamDrop: (channelId: number, streamIds: number[]) => void;
   onChannelReorder: (channelIds: number[], startingNumber: number) => void;
-  onCreateChannel: (name: string, channelNumber?: number, groupId?: number, logoId?: number, tvgId?: string, logoUrl?: string) => Promise<Channel>;
+  onCreateChannel: (name: string, channelNumber?: number, groupId?: number, logoId?: number, tvgId?: string, logoUrl?: string, profileIds?: number[]) => Promise<Channel>;
   onDeleteChannel: (channelId: number) => Promise<void>;
   searchTerm: string;
   onSearchChange: (term: string) => void;
@@ -2214,13 +2214,17 @@ export function ChannelsPane({
         finalName = `${channelNum} ${newChannelNumberSeparator} ${finalName}`;
       }
 
+      // Pass profile IDs to onCreateChannel - it handles both edit mode (pending assignments) and normal mode (immediate API calls)
+      const profileIdsArray = newChannelSelectedProfiles.size > 0 ? Array.from(newChannelSelectedProfiles) : undefined;
+
       const newChannel = await onCreateChannel(
         finalName,
         channelNum,
         newChannelGroup !== '' ? newChannelGroup : undefined,
         newChannelLogoId ?? undefined,
         newChannelTvgId ?? undefined,
-        newChannelLogoUrl ?? undefined
+        newChannelLogoUrl ?? undefined,
+        profileIdsArray
       );
 
       // Assign the streams to the channel if any were dropped
@@ -2243,16 +2247,8 @@ export function ChannelsPane({
         }
       }
 
-      // Assign channel to selected profiles
-      if (newChannelSelectedProfiles.size > 0 && newChannel?.id) {
-        for (const profileId of newChannelSelectedProfiles) {
-          try {
-            await api.updateProfileChannel(profileId, newChannel.id, { enabled: true });
-          } catch (err) {
-            console.error(`Failed to add channel ${newChannel.id} to profile ${profileId}:`, err);
-          }
-        }
-      }
+      // Profile assignment is now handled by onCreateChannel (in normal mode it makes API calls immediately,
+      // in edit mode it stores them in pendingProfileAssignmentsRef to apply after commit)
 
       // In edit mode, the channel is added to workingCopy by stageCreateChannel,
       // which flows through the channels prop and syncs to localChannels via useEffect.
