@@ -48,6 +48,8 @@ interface StreamsPaneProps {
   // External trigger to open bulk create modal for stream groups (set by dropping on channels pane)
   // Supports multiple groups being dropped at once
   externalTriggerGroupNames?: string[] | null;
+  // External trigger to open bulk create modal for specific streams (set by dropping streams on channels pane)
+  externalTriggerStreamIds?: number[] | null;
   onExternalTriggerHandled?: () => void;
   onBulkCreateFromGroup?: (
     streams: Stream[],
@@ -91,6 +93,7 @@ export function StreamsPane({
   channelProfiles = [],
   channelDefaults,
   externalTriggerGroupNames = null,
+  externalTriggerStreamIds = null,
   onExternalTriggerHandled,
   onBulkCreateFromGroup,
   showStreamUrls = true,
@@ -453,6 +456,36 @@ export function StreamsPane({
     setBulkCreateModalOpen(true);
   }, [streams, selectedIds, channelDefaults]);
 
+  // Open bulk create modal for specific stream IDs (from external trigger)
+  const openBulkCreateModalForStreamIds = useCallback((streamIds: number[]) => {
+    const streamsList = streams.filter(s => streamIds.includes(s.id));
+    if (streamsList.length === 0) return;
+
+    setBulkCreateGroup(null);
+    setBulkCreateStreams(streamsList);
+    setBulkCreateStartingNumber('');
+    setBulkCreateGroupOption('existing'); // Default to existing group for dropped streams
+    setBulkCreateSelectedGroupId(null);
+    setBulkCreateNewGroupName('');
+    // Apply settings defaults
+    setBulkCreateTimezone((channelDefaults?.timezonePreference as TimezonePreference) || 'both');
+    setBulkCreateStripCountry(channelDefaults?.removeCountryPrefix ?? false);
+    setBulkCreateKeepCountry(channelDefaults?.includeCountryInName ?? false);
+    setBulkCreateCountrySeparator((channelDefaults?.countrySeparator as NumberSeparator) || '|');
+    setBulkCreateAddNumber(channelDefaults?.includeChannelNumberInName ?? false);
+    setBulkCreateSeparator((channelDefaults?.channelNumberSeparator as NumberSeparator) || '|');
+    setBulkCreatePrefixOrder('number-first');
+    setBulkCreateStripNetwork(false);
+    // Apply default channel profile from settings
+    setBulkCreateSelectedProfiles(
+      channelDefaults?.defaultChannelProfileId ? new Set([channelDefaults.defaultChannelProfileId]) : new Set()
+    );
+    setNamingOptionsExpanded(false);
+    setChannelGroupExpanded(false);
+    setTimezoneExpanded(false);
+    setBulkCreateModalOpen(true);
+  }, [streams, channelDefaults]);
+
   const closeBulkCreateModal = useCallback(() => {
     setBulkCreateModalOpen(false);
     setBulkCreateGroup(null);
@@ -596,6 +629,15 @@ export function StreamsPane({
       onExternalTriggerHandled?.();
     }
   }, [externalTriggerGroupNames, groupedStreams, openBulkCreateModal, openBulkCreateModalForMultipleGroups, onBulkCreateFromGroup, onExternalTriggerHandled]);
+
+  // Handle external trigger to open bulk create modal for specific stream IDs
+  useEffect(() => {
+    if (externalTriggerStreamIds && externalTriggerStreamIds.length > 0 && onBulkCreateFromGroup) {
+      openBulkCreateModalForStreamIds(externalTriggerStreamIds);
+      // Signal that we've handled the trigger
+      onExternalTriggerHandled?.();
+    }
+  }, [externalTriggerStreamIds, openBulkCreateModalForStreamIds, onBulkCreateFromGroup, onExternalTriggerHandled]);
 
   // Get the streams to create channels from (either from single group, multiple groups, or selection)
   const streamsToCreate = useMemo(() => {
