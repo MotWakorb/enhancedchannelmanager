@@ -693,6 +693,7 @@ function EditChannelModal({
   const [newLogoUrl, setNewLogoUrl] = useState('');
   const [addingLogo, setAddingLogo] = useState(false);
   const [uploadingLogo, setUploadingLogo] = useState(false);
+  const [addingEpgLogo, setAddingEpgLogo] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Metadata state
@@ -803,8 +804,8 @@ function EditChannelModal({
 
     setUploadingLogo(true);
     try {
-      const newLogo = await onLogoUpload(file);
-      setSelectedLogoId(newLogo.id);
+      // Upload the logo but don't auto-select it - user must manually select after upload
+      await onLogoUpload(file);
     } catch (err) {
       console.error('Failed to upload logo:', err);
     } finally {
@@ -813,6 +814,21 @@ function EditChannelModal({
       if (fileInputRef.current) {
         fileInputRef.current.value = '';
       }
+    }
+  };
+
+  // Handle using EPG logo
+  const handleUseEpgLogo = async () => {
+    if (!currentEpgData?.icon_url) return;
+
+    setAddingEpgLogo(true);
+    try {
+      const newLogo = await onLogoCreate(currentEpgData.icon_url);
+      setSelectedLogoId(newLogo.id);
+    } catch (err) {
+      console.error('Failed to create logo from EPG:', err);
+    } finally {
+      setAddingEpgLogo(false);
     }
   };
 
@@ -1171,6 +1187,17 @@ function EditChannelModal({
               <span className="material-icons">upload_file</span>
               {uploadingLogo ? 'Uploading...' : 'Upload'}
             </button>
+            {currentEpgData?.icon_url && (
+              <button
+                onClick={handleUseEpgLogo}
+                disabled={addingEpgLogo}
+                className="logo-epg-btn"
+                title="Use the logo from the assigned EPG data"
+              >
+                <span className="material-icons">live_tv</span>
+                {addingEpgLogo ? 'Adding...' : 'Use EPG Logo'}
+              </button>
+            )}
           </div>
         </div>
 

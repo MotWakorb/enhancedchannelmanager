@@ -2091,6 +2091,38 @@
   font-size: 1rem;
 }
 
+.logo-epg-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.375rem;
+  padding: 0 0.75rem;
+  height: 34px;
+  background-color: var(--bg-hover);
+  border: 1px solid var(--border-secondary);
+  border-radius: 4px;
+  color: var(--button-text);
+  cursor: pointer;
+  transition: all 0.15s;
+  font-size: 0.9rem;
+  white-space: nowrap;
+}
+
+.logo-epg-btn:hover {
+  background-color: var(--button-hover-bg);
+  border-color: var(--accent-primary);
+  color: var(--text-primary);
+}
+
+.logo-epg-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.logo-epg-btn .material-icons {
+  font-size: 1rem;
+}
+
 .edit-channel-actions {
   display: flex;
   justify-content: flex-end;
