@@ -154,21 +154,18 @@ export function ChannelProfilesListModal({
 
   // Build channel list with enabled state from profile
   // NOTE: Dispatcharr uses ChannelProfileMembership records to track channel-profile relationships
-  // - Empty channels array = no membership records exist (channels lack explicit profile assignment)
+  // - Empty channels array = no membership records exist (no channels assigned to profile)
   // - Non-empty array = only those channels have membership records with enabled=true
-  // We treat missing memberships as "enabled" for better UX (matches default behavior when profile is created)
   const channelsWithState = useMemo(() => {
     if (!selectedProfile) return [];
 
-    // Empty array = no membership records (treat as all enabled)
-    // Non-empty array = only those channels have enabled=true memberships
-    const hasExplicitList = selectedProfile.channels.length > 0;
+    // Create set of enabled channel IDs
     const enabledSet = new Set(selectedProfile.channels);
 
     return channels.map(ch => ({
       ...ch,
-      // If no explicit list, show as enabled; otherwise check the set
-      enabled: hasExplicitList ? enabledSet.has(ch.id) : true,
+      // Channel is enabled only if explicitly in the profile's channels list
+      enabled: enabledSet.has(ch.id),
     }));
   }, [channels, selectedProfile]);
 
@@ -406,7 +403,7 @@ export function ChannelProfilesListModal({
                               onClick={() => handleOpenChannels(profile)}
                               title="Click to manage channels"
                             >
-                              {profile.channels.length > 0 ? profile.channels.length : channels.length}
+                              {profile.channels.length}
                             </span>
                           </div>
                           <div className="profile-actions">
@@ -547,11 +544,11 @@ export function ChannelProfilesListModal({
                             className={`channel-item ${isEnabled ? 'enabled' : ''} ${hasChange ? 'changed' : ''}`}
                             onClick={() => handleToggleChannel(channel.id)}
                           >
-                            <label className="toggle">
+                            <label className="toggle" onClick={(e) => e.stopPropagation()}>
                               <input
                                 type="checkbox"
                                 checked={isEnabled}
-                                onChange={() => {}}
+                                onChange={() => handleToggleChannel(channel.id)}
                               />
                               <span className="toggle-slider"></span>
                             </label>

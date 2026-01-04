@@ -908,7 +908,7 @@ function App() {
   );
 
   const handleCreateChannel = useCallback(
-    async (name: string, channelNumber?: number, groupId?: number, logoId?: number, tvgId?: string, logoUrl?: string) => {
+    async (name: string, channelNumber?: number, groupId?: number, logoId?: number, tvgId?: string, logoUrl?: string, profileIds?: number[]) => {
       try {
         if (isEditMode) {
           // In edit mode, stage the creation without calling Dispatcharr API
@@ -916,12 +916,17 @@ function App() {
           // logoUrl is used as fallback if logoId is not found - the commit will create/find the logo
           const tempId = stageCreateChannel(name, channelNumber, groupId, undefined, logoId, logoUrl, tvgId);
 
-          // Track for default profile assignment after commit
-          if (defaultChannelProfileId && channelNumber !== undefined) {
+          // Track profile assignments for after commit
+          // Use passed profileIds if provided, otherwise fall back to default profile
+          const profilesToAssign = profileIds && profileIds.length > 0
+            ? profileIds
+            : (defaultChannelProfileId ? [defaultChannelProfileId] : []);
+
+          if (profilesToAssign.length > 0 && channelNumber !== undefined) {
             pendingProfileAssignmentsRef.current.push({
               startNumber: channelNumber,
               count: 1,
-              profileIds: [defaultChannelProfileId],
+              profileIds: profilesToAssign,
             });
           }
 
@@ -954,12 +959,16 @@ function App() {
           });
           setChannels((prev) => [...prev, newChannel]);
 
-          // Apply default profile if set
-          if (defaultChannelProfileId) {
+          // Apply profile assignments - use passed profileIds if provided, otherwise fall back to default
+          const profilesToAssign = profileIds && profileIds.length > 0
+            ? profileIds
+            : (defaultChannelProfileId ? [defaultChannelProfileId] : []);
+
+          for (const profileId of profilesToAssign) {
             try {
-              await api.updateProfileChannel(defaultChannelProfileId, newChannel.id, { enabled: true });
+              await api.updateProfileChannel(profileId, newChannel.id, { enabled: true });
             } catch (err) {
-              console.warn(`Failed to add channel ${newChannel.id} to default profile:`, err);
+              console.warn(`Failed to add channel ${newChannel.id} to profile ${profileId}:`, err);
             }
           }
 
