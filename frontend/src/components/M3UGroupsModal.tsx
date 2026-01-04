@@ -8,6 +8,8 @@ interface M3UGroupsModalProps {
   onClose: () => void;
   onSaved: () => void;
   account: M3UAccount;
+  allAccounts?: M3UAccount[];         // All M3U accounts for cascading to linked accounts
+  linkedAccountGroups?: number[][];   // Link groups from settings
 }
 
 // Extended type with name from channel groups lookup
@@ -20,6 +22,8 @@ export function M3UGroupsModal({
   onClose,
   onSaved,
   account,
+  allAccounts = [],
+  linkedAccountGroups = [],
 }: M3UGroupsModalProps) {
   const [groups, setGroups] = useState<GroupWithName[]>([]);
   const [search, setSearch] = useState('');
@@ -28,6 +32,22 @@ export function M3UGroupsModal({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [hasChanges, setHasChanges] = useState(false);
+
+  // Find linked accounts for this account
+  const linkedAccountInfo = useMemo(() => {
+    // Find the link group containing this account
+    const linkGroup = linkedAccountGroups.find(group => group.includes(account.id));
+    if (!linkGroup) return { isLinked: false, linkedAccountIds: [], linkedAccountNames: [] };
+
+    // Get the other account IDs in this group
+    const linkedAccountIds = linkGroup.filter(id => id !== account.id);
+    const linkedAccountNames = linkedAccountIds.map(id => {
+      const acc = allAccounts.find(a => a.id === id);
+      return acc?.name ?? `Account ${id}`;
+    });
+
+    return { isLinked: true, linkedAccountIds, linkedAccountNames };
+  }, [account.id, linkedAccountGroups, allAccounts]);
 
   // Fetch fresh account data and channel groups when modal opens
   useEffect(() => {
@@ -123,7 +143,7 @@ export function M3UGroupsModal({
     setError(null);
 
     try {
-      // Only send the fields that are editable
+      // Build settings for this account
       const groupSettings = groups.map(g => ({
         channel_group: g.channel_group,
         enabled: g.enabled,
@@ -131,7 +151,41 @@ export function M3UGroupsModal({
         auto_sync_channel_start: g.auto_sync_channel_start,
       }));
 
+      // Save this account first
       await api.updateM3UGroupSettings(account.id, { group_settings: groupSettings });
+
+      // Cascade to linked accounts if any
+      if (linkedAccountInfo.isLinked && linkedAccountInfo.linkedAccountIds.length > 0) {
+        // Build a map of group name -> enabled state from this account's settings
+        const groupEnabledByName = new Map<string, boolean>();
+        groups.forEach(g => groupEnabledByName.set(g.name, g.enabled));
+
+        // Update each linked account
+        for (const linkedAccountId of linkedAccountInfo.linkedAccountIds) {
+          try {
+            // Fetch the linked account's current groups
+            const linkedAccount = await api.getM3UAccount(linkedAccountId);
+
+            // Build settings for linked account - match by exact group name
+            const linkedSettings = linkedAccount.channel_groups.map(lg => {
+              // Look up by channel_group_name (the name stored in the account's group settings)
+              const matchEnabled = groupEnabledByName.get(lg.channel_group_name);
+              return {
+                channel_group: lg.channel_group,
+                enabled: matchEnabled !== undefined ? matchEnabled : lg.enabled,  // Use this account's setting if matched
+                auto_channel_sync: lg.auto_channel_sync,  // Keep linked account's own value
+                auto_sync_channel_start: lg.auto_sync_channel_start,  // Keep linked account's own value
+              };
+            });
+
+            await api.updateM3UGroupSettings(linkedAccountId, { group_settings: linkedSettings });
+          } catch (linkedErr) {
+            // Log error but continue with other linked accounts
+            console.error(`Failed to update linked account ${linkedAccountId}:`, linkedErr);
+          }
+        }
+      }
+
       onSaved();
       onClose();
     } catch (err) {
@@ -152,6 +206,12 @@ export function M3UGroupsModal({
           <div className="header-info">
             <h2>Manage Groups</h2>
             <span className="account-name">{account.name}</span>
+            {linkedAccountInfo.isLinked && (
+              <span className="linked-info">
+                <span className="material-icons">link</span>
+                Linked with: {linkedAccountInfo.linkedAccountNames.join(', ')}
+              </span>
+            )}
           </div>
           <button className="close-btn" onClick={onClose}>
             &times;

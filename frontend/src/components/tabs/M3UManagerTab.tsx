@@ -1,9 +1,10 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import type { M3UAccount, ServerGroup } from '../../types';
 import * as api from '../../services/api';
 import { M3UAccountModal } from '../M3UAccountModal';
 import { M3UGroupsModal } from '../M3UGroupsModal';
 import { M3UFiltersModal } from '../M3UFiltersModal';
+import { M3ULinkedAccountsModal } from '../M3ULinkedAccountsModal';
 import './M3UManagerTab.css';
 
 interface M3UAccountRowProps {
@@ -14,6 +15,7 @@ interface M3UAccountRowProps {
   onToggleActive: (account: M3UAccount) => void;
   onManageGroups: (account: M3UAccount) => void;
   onManageFilters: (account: M3UAccount) => void;
+  linkedAccountNames?: string[];  // Names of accounts linked to this one
 }
 
 function M3UAccountRow({
@@ -24,6 +26,7 @@ function M3UAccountRow({
   onToggleActive,
   onManageGroups,
   onManageFilters,
+  linkedAccountNames,
 }: M3UAccountRowProps) {
   const getStatusIcon = (status: M3UAccount['status']) => {
     switch (status) {
@@ -87,7 +90,17 @@ function M3UAccountRow({
       </div>
 
       <div className="account-info">
-        <div className="account-name">{account.name}</div>
+        <div className="account-name">
+          {linkedAccountNames && linkedAccountNames.length > 0 && (
+            <span
+              className="link-indicator"
+              title={`Linked with: ${linkedAccountNames.join(', ')}`}
+            >
+              <span className="material-icons">link</span>
+            </span>
+          )}
+          {account.name}
+        </div>
         <div className="account-details">
           <span className={`account-type ${account.account_type.toLowerCase()}`}>
             {getAccountTypeLabel(account.account_type)}
@@ -191,15 +204,19 @@ export function M3UManagerTab() {
   const [groupsAccount, setGroupsAccount] = useState<M3UAccount | null>(null);
   const [filtersModalOpen, setFiltersModalOpen] = useState(false);
   const [filtersAccount, setFiltersAccount] = useState<M3UAccount | null>(null);
+  const [linkedAccountsModalOpen, setLinkedAccountsModalOpen] = useState(false);
+  const [linkedM3UAccounts, setLinkedM3UAccounts] = useState<number[][]>([]);
 
   const loadData = useCallback(async () => {
     try {
-      const [accountsData, serverGroupsData] = await Promise.all([
+      const [accountsData, serverGroupsData, settings] = await Promise.all([
         api.getM3UAccounts(),
         api.getServerGroups(),
+        api.getSettings(),
       ]);
       setAccounts(accountsData);
       setServerGroups(serverGroupsData);
+      setLinkedM3UAccounts(settings.linked_m3u_accounts ?? []);
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load M3U accounts');
@@ -320,6 +337,40 @@ export function M3UManagerTab() {
     loadData();
   };
 
+  const handleSaveLinkedAccounts = async (linkGroups: number[][]) => {
+    try {
+      // Load current settings and update linked_m3u_accounts
+      const settings = await api.getSettings();
+      await api.saveSettings({
+        ...settings,
+        linked_m3u_accounts: linkGroups,
+      });
+      setLinkedM3UAccounts(linkGroups);
+    } catch (err) {
+      setError('Failed to save linked accounts');
+    }
+  };
+
+  // Create a map from account ID to linked account names
+  const linkedAccountNamesMap = useMemo(() => {
+    const map = new Map<number, string[]>();
+    const accountNameMap = new Map<number, string>();
+    accounts.forEach(a => accountNameMap.set(a.id, a.name));
+
+    for (const group of linkedM3UAccounts) {
+      for (const accountId of group) {
+        // Get names of OTHER accounts in this group
+        const otherNames = group
+          .filter(id => id !== accountId)
+          .map(id => accountNameMap.get(id) ?? `Account ${id}`);
+        if (otherNames.length > 0) {
+          map.set(accountId, otherNames);
+        }
+      }
+    }
+    return map;
+  }, [accounts, linkedM3UAccounts]);
+
   // Filter accounts: hide "custom" account and optionally filter by server group
   const filteredAccounts = accounts
     .filter(a => a.name.toLowerCase() !== 'custom')
@@ -358,6 +409,10 @@ export function M3UManagerTab() {
               ))}
             </select>
           )}
+          <button className="btn-secondary" onClick={() => setLinkedAccountsModalOpen(true)}>
+            <span className="material-icons">link</span>
+            Manage Links
+          </button>
           <button className="btn-secondary" onClick={handleRefreshAll} disabled={refreshingAll}>
             <span className={`material-icons ${refreshingAll ? 'spinning' : ''}`}>sync</span>
             {refreshingAll ? 'Refreshing...' : 'Refresh All'}
@@ -408,6 +463,7 @@ export function M3UManagerTab() {
               onToggleActive={handleToggleActive}
               onManageGroups={handleManageGroups}
               onManageFilters={handleManageFilters}
+              linkedAccountNames={linkedAccountNamesMap.get(account.id)}
             />
           ))}
         </div>
@@ -427,6 +483,8 @@ export function M3UManagerTab() {
           onClose={() => setGroupsModalOpen(false)}
           onSaved={handleGroupsSaved}
           account={groupsAccount}
+          allAccounts={accounts}
+          linkedAccountGroups={linkedM3UAccounts}
         />
       )}
 
@@ -438,6 +496,14 @@ export function M3UManagerTab() {
           account={filtersAccount}
         />
       )}
+
+      <M3ULinkedAccountsModal
+        isOpen={linkedAccountsModalOpen}
+        onClose={() => setLinkedAccountsModalOpen(false)}
+        onSave={handleSaveLinkedAccounts}
+        accounts={accounts}
+        linkGroups={linkedM3UAccounts}
+      />
     </div>
   );
 }

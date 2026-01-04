@@ -319,6 +319,7 @@ export interface SettingsResponse {
   hide_auto_sync_groups: boolean;
   theme: Theme;
   default_channel_profile_id: number | null;
+  linked_m3u_accounts: number[][];  // List of link groups, each is a list of account IDs
 }
 
 export interface TestConnectionResult {
@@ -345,6 +346,7 @@ export async function saveSettings(settings: {
   hide_auto_sync_groups?: boolean;  // Optional - defaults to false
   theme?: Theme;  // Optional - defaults to 'dark'
   default_channel_profile_id?: number | null;  // Optional - null means no default
+  linked_m3u_accounts?: number[][];  // Optional - list of link groups
 }): Promise<{ status: string; configured: boolean }> {
   return fetchJson(`${API_BASE}/settings`, {
     method: 'POST',
