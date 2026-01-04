@@ -110,7 +110,8 @@ interface ChannelsPaneProps {
   // Stream group drop callback (for bulk channel creation) - supports multiple groups
   onStreamGroupDrop?: (groupNames: string[], streamIds: number[]) => void;
   // Bulk streams drop callback (for opening bulk create modal when dropping multiple streams)
-  onBulkStreamsDrop?: (streamIds: number[]) => void;
+  // Includes target group ID and starting channel number for pre-filling the modal
+  onBulkStreamsDrop?: (streamIds: number[], groupId: number | null, startingNumber: number) => void;
   // Appearance settings
   showStreamUrls?: boolean;
 }
@@ -2037,9 +2038,14 @@ export function ChannelsPane({
       droppedStreams.map(s => api.normalizeStreamName(s.name, 'both'))
     );
 
+    // Calculate the starting channel number for this group
+    const numericGroupId = groupId === 'ungrouped' ? '' : groupId;
+    const nextNumber = getNextChannelNumberForGroup(numericGroupId);
+    const targetGroupId = groupId === 'ungrouped' ? null : groupId;
+
     // If multiple unique names, use bulk create modal instead
     if (uniqueNormalizedNames.size > 1 && onBulkStreamsDrop) {
-      onBulkStreamsDrop(streamIds);
+      onBulkStreamsDrop(streamIds, targetGroupId, nextNumber);
       return;
     }
 
@@ -2076,10 +2082,6 @@ export function ChannelsPane({
       setNewChannelGroup(groupId);
       setGroupSearchText(group?.name || '');
     }
-
-    // Set the next available channel number for this group
-    const numericGroupId = groupId === 'ungrouped' ? '' : groupId;
-    const nextNumber = getNextChannelNumberForGroup(numericGroupId);
     setNewChannelNumber(nextNumber.toString());
 
     // Set default channel profile from settings
@@ -2117,9 +2119,11 @@ export function ChannelsPane({
       droppedStreams.map(s => api.normalizeStreamName(s.name, 'both'))
     );
 
+    const targetGroupId = groupId === 'ungrouped' ? null : groupId;
+
     // If multiple unique names, use bulk create modal instead
     if (uniqueNormalizedNames.size > 1 && onBulkStreamsDrop) {
-      onBulkStreamsDrop(streamIds);
+      onBulkStreamsDrop(streamIds, targetGroupId, insertAtChannelNumber);
       return;
     }
 

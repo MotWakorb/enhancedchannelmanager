@@ -118,7 +118,10 @@ function App() {
   // Supports multiple groups being dropped at once
   const [droppedStreamGroupNames, setDroppedStreamGroupNames] = useState<string[] | null>(null);
   // Stream IDs drop trigger (for opening bulk create modal when dropping individual streams)
+  // Includes target group ID and starting channel number for pre-filling the modal
   const [droppedStreamIds, setDroppedStreamIds] = useState<number[] | null>(null);
+  const [droppedStreamTargetGroupId, setDroppedStreamTargetGroupId] = useState<number | null>(null);
+  const [droppedStreamStartingNumber, setDroppedStreamStartingNumber] = useState<number | null>(null);
 
   // Edit mode for staging changes
   const {
@@ -1135,15 +1138,19 @@ function App() {
   }, []);
 
   // Handle bulk streams drop on channels pane (triggers bulk create modal for specific streams)
-  const handleBulkStreamsDrop = useCallback((streamIds: number[]) => {
-    // Set the dropped stream IDs - StreamsPane will react to this and open the modal
+  const handleBulkStreamsDrop = useCallback((streamIds: number[], groupId: number | null, startingNumber: number) => {
+    // Set the dropped stream IDs and target info - StreamsPane will react to this and open the modal
     setDroppedStreamIds(streamIds);
+    setDroppedStreamTargetGroupId(groupId);
+    setDroppedStreamStartingNumber(startingNumber);
   }, []);
 
   // Clear the dropped stream group/streams trigger after it's been handled
   const handleStreamGroupTriggerHandled = useCallback(() => {
     setDroppedStreamGroupNames(null);
     setDroppedStreamIds(null);
+    setDroppedStreamTargetGroupId(null);
+    setDroppedStreamStartingNumber(null);
   }, []);
 
   // Filter streams based on multi-select filters (client-side)
@@ -1459,6 +1466,8 @@ function App() {
               channelDefaults={channelDefaults}
               externalTriggerGroupNames={droppedStreamGroupNames}
               externalTriggerStreamIds={droppedStreamIds}
+              externalTriggerTargetGroupId={droppedStreamTargetGroupId}
+              externalTriggerStartingNumber={droppedStreamStartingNumber}
               onExternalTriggerHandled={handleStreamGroupTriggerHandled}
               onStreamGroupDrop={handleStreamGroupDrop}
               onBulkStreamsDrop={handleBulkStreamsDrop}
