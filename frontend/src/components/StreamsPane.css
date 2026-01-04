@@ -124,14 +124,16 @@
   flex-direction: column;
   gap: 0.5rem;
   border-bottom: 1px solid var(--border-primary);
-  height: 96px;
   box-sizing: border-box;
+  flex-shrink: 0;
 }
 
 .filter-row {
   display: flex;
   gap: 0.5rem;
   align-items: center;
+  flex-wrap: nowrap;
+  min-width: 0;
 }
 
 .filter-row .filter-select {
@@ -459,6 +461,7 @@
 .filter-dropdown {
   position: relative;
   flex: 1;
+  min-width: 0;
 }
 
 .filter-dropdown-button {
