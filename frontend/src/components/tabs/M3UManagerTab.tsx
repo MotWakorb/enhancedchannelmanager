@@ -206,6 +206,7 @@ export function M3UManagerTab() {
   const [filtersAccount, setFiltersAccount] = useState<M3UAccount | null>(null);
   const [linkedAccountsModalOpen, setLinkedAccountsModalOpen] = useState(false);
   const [linkedM3UAccounts, setLinkedM3UAccounts] = useState<number[][]>([]);
+  const [syncingGroups, setSyncingGroups] = useState(false);
 
   const loadData = useCallback(async () => {
     try {
@@ -351,6 +352,61 @@ export function M3UManagerTab() {
     }
   };
 
+  // Sync groups across all linked M3U accounts using Union (OR) logic
+  // If a group is enabled in ANY linked account, enable it in ALL linked accounts
+  const handleSyncGroups = async () => {
+    if (linkedM3UAccounts.length === 0) {
+      setError('No linked accounts configured. Use "Manage Links" to set up linked accounts first.');
+      return;
+    }
+
+    setSyncingGroups(true);
+    setError(null);
+
+    try {
+      // Process each link group
+      for (const linkGroup of linkedM3UAccounts) {
+        if (linkGroup.length < 2) continue;
+
+        // Fetch fresh data for all accounts in this link group
+        const accountsData = await Promise.all(
+          linkGroup.map(id => api.getM3UAccount(id))
+        );
+
+        // Build a map of channel_group ID -> enabled (union of all accounts)
+        // If enabled in ANY account, it should be enabled in ALL
+        const groupEnabledUnion = new Map<number, boolean>();
+
+        for (const account of accountsData) {
+          for (const group of account.channel_groups) {
+            const currentEnabled = groupEnabledUnion.get(group.channel_group) ?? false;
+            // Union (OR): if enabled in this account OR already marked enabled, keep enabled
+            groupEnabledUnion.set(group.channel_group, currentEnabled || group.enabled);
+          }
+        }
+
+        // Update each account with the union result
+        for (const account of accountsData) {
+          const groupSettings = account.channel_groups.map(g => ({
+            channel_group: g.channel_group,
+            enabled: groupEnabledUnion.get(g.channel_group) ?? g.enabled,
+            auto_channel_sync: g.auto_channel_sync,
+            auto_sync_channel_start: g.auto_sync_channel_start,
+          }));
+
+          await api.updateM3UGroupSettings(account.id, { group_settings: groupSettings });
+        }
+      }
+
+      // Reload data to show updated state
+      await loadData();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to sync groups');
+    } finally {
+      setSyncingGroups(false);
+    }
+  };
+
   // Create a map from account ID to linked account names
   const linkedAccountNamesMap = useMemo(() => {
     const map = new Map<number, string[]>();
@@ -412,6 +468,15 @@ export function M3UManagerTab() {
           <button className="btn-secondary" onClick={() => setLinkedAccountsModalOpen(true)}>
             <span className="material-icons">link</span>
             Manage Links
+          </button>
+          <button
+            className="btn-secondary"
+            onClick={handleSyncGroups}
+            disabled={syncingGroups || linkedM3UAccounts.length === 0}
+            title={linkedM3UAccounts.length === 0 ? 'No linked accounts configured' : 'Sync enabled groups across all linked accounts'}
+          >
+            <span className={`material-icons ${syncingGroups ? 'spinning' : ''}`}>sync_alt</span>
+            {syncingGroups ? 'Syncing...' : 'Sync Groups'}
           </button>
           <button className="btn-secondary" onClick={handleRefreshAll} disabled={refreshingAll}>
             <span className={`material-icons ${refreshingAll ? 'spinning' : ''}`}>sync</span>
