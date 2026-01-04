@@ -67,8 +67,12 @@ interface StreamsPaneProps {
     countrySeparator?: NumberSeparator,
     prefixOrder?: PrefixOrder,
     stripNetworkPrefix?: boolean,
-    profileIds?: number[]
+    profileIds?: number[],
+    pushDownOnConflict?: boolean
   ) => Promise<void>;
+  // Callback to check for conflicts with existing channel numbers
+  // Returns the number of conflicting channels
+  onCheckConflicts?: (startingNumber: number, count: number) => number;
   // Appearance settings
   showStreamUrls?: boolean;
   // Refresh streams (bypasses cache)
@@ -101,6 +105,7 @@ export function StreamsPane({
   externalTriggerStartingNumber = null,
   onExternalTriggerHandled,
   onBulkCreateFromGroup,
+  onCheckConflicts,
   showStreamUrls = true,
   onRefreshStreams,
 }: StreamsPaneProps) {
@@ -171,6 +176,8 @@ export function StreamsPane({
   const [bulkCreateSelectedGroupId, setBulkCreateSelectedGroupId] = useState<number | null>(null);
   const [bulkCreateNewGroupName, setBulkCreateNewGroupName] = useState('');
   const [bulkCreateLoading, setBulkCreateLoading] = useState(false);
+  const [bulkCreateShowConflict, setBulkCreateShowConflict] = useState(false);
+  const [bulkCreateConflictCount, setBulkCreateConflictCount] = useState(0);
   const [bulkCreateTimezone, setBulkCreateTimezone] = useState<TimezonePreference>('both');
   const [bulkCreateStripCountry, setBulkCreateStripCountry] = useState(false);
   const [bulkCreateKeepCountry, setBulkCreateKeepCountry] = useState(false);
@@ -728,6 +735,7 @@ export function StreamsPane({
     return { uniqueCount, duplicateCount, hasDuplicates, streamsByNormalizedName, excludedCount };
   }, [streamsToCreate, bulkCreateTimezone, bulkCreateStripCountry, bulkCreateKeepCountry, bulkCreateCountrySeparator, bulkCreateStripNetwork]);
 
+  // Check for conflicts and show dialog, or proceed directly if no conflicts
   const handleBulkCreate = useCallback(async () => {
     if (streamsToCreate.length === 0 || !onBulkCreateFromGroup) return;
 
@@ -750,7 +758,40 @@ export function StreamsPane({
       }
     }
 
+    // Check for conflicts before proceeding
+    if (onCheckConflicts && !useSeparateMode) {
+      const startingNum = parseInt(bulkCreateStartingNumber, 10);
+      const conflictCount = onCheckConflicts(startingNum, bulkCreateStats.uniqueCount);
+      if (conflictCount > 0) {
+        // Show conflict dialog
+        setBulkCreateConflictCount(conflictCount);
+        setBulkCreateShowConflict(true);
+        return;
+      }
+    }
+
+    // No conflicts or separate mode - proceed with creation
+    await doBulkCreate(false);
+  }, [
+    streamsToCreate,
+    isFromMultipleGroups,
+    bulkCreateMultiGroupOption,
+    bulkCreateGroupStartNumbers,
+    bulkCreateGroups,
+    bulkCreateStartingNumber,
+    bulkCreateStats.uniqueCount,
+    onBulkCreateFromGroup,
+    onCheckConflicts,
+  ]);
+
+  // Actually perform the bulk create with the specified pushDown option
+  const doBulkCreate = useCallback(async (pushDown: boolean) => {
+    if (streamsToCreate.length === 0 || !onBulkCreateFromGroup) return;
+
+    const useSeparateMode = isFromMultipleGroups && bulkCreateMultiGroupOption === 'separate';
+
     setBulkCreateLoading(true);
+    setBulkCreateShowConflict(false);
 
     try {
       // Handle multi-group mode with separate groups
@@ -784,7 +825,8 @@ export function StreamsPane({
             bulkCreateCountrySeparator,
             bulkCreatePrefixOrder,
             bulkCreateStripNetwork,
-            bulkCreateSelectedProfiles.size > 0 ? Array.from(bulkCreateSelectedProfiles) : undefined
+            bulkCreateSelectedProfiles.size > 0 ? Array.from(bulkCreateSelectedProfiles) : undefined,
+            pushDown
           );
 
           // Increment starting number for next group (if no explicit start)
@@ -828,7 +870,8 @@ export function StreamsPane({
           bulkCreateCountrySeparator,
           bulkCreatePrefixOrder,
           bulkCreateStripNetwork,
-          bulkCreateSelectedProfiles.size > 0 ? Array.from(bulkCreateSelectedProfiles) : undefined
+          bulkCreateSelectedProfiles.size > 0 ? Array.from(bulkCreateSelectedProfiles) : undefined,
+          pushDown
         );
       }
 
@@ -1937,6 +1980,55 @@ export function StreamsPane({
                     Create {bulkCreateStats.uniqueCount} Channels
                   </>
                 )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Bulk Create Conflict Dialog */}
+      {bulkCreateShowConflict && (
+        <div className="modal-overlay">
+          <div className="modal-content conflict-dialog" onClick={(e) => e.stopPropagation()}>
+            <h3>Channel Number Conflict</h3>
+            <div className="conflict-message">
+              <p>
+                <strong>{bulkCreateConflictCount}</strong> existing channel{bulkCreateConflictCount !== 1 ? 's' : ''} would
+                conflict with the new channels (starting at <strong>{bulkCreateStartingNumber}</strong>).
+              </p>
+              <p>How would you like to proceed?</p>
+            </div>
+            <div className="conflict-options">
+              <button
+                className="conflict-option-btn push-down"
+                onClick={() => doBulkCreate(true)}
+                disabled={bulkCreateLoading}
+              >
+                <span className="material-icons">vertical_align_bottom</span>
+                <div className="conflict-option-text">
+                  <strong>Push channels down</strong>
+                  <span>Insert at {bulkCreateStartingNumber} and shift existing channels by {bulkCreateStats.uniqueCount}</span>
+                </div>
+              </button>
+              <button
+                className="conflict-option-btn add-to-end"
+                onClick={() => doBulkCreate(false)}
+                disabled={bulkCreateLoading}
+              >
+                <span className="material-icons">warning</span>
+                <div className="conflict-option-text">
+                  <strong>Create anyway</strong>
+                  <span>Create with duplicate channel numbers (not recommended)</span>
+                </div>
+              </button>
+            </div>
+            <div className="modal-actions">
+              <button
+                className="modal-btn cancel"
+                onClick={() => setBulkCreateShowConflict(false)}
+                disabled={bulkCreateLoading}
+              >
+                Cancel
               </button>
             </div>
           </div>

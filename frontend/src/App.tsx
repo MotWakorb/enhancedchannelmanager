@@ -974,6 +974,18 @@ function App() {
     [isEditMode, stageCreateChannel, defaultChannelProfileId]
   );
 
+  // Check for conflicts with existing channel numbers
+  // Returns the count of conflicting channels
+  const handleCheckConflicts = useCallback((startingNumber: number, count: number): number => {
+    const endNumber = startingNumber + count - 1;
+    const conflictingChannels = displayChannels.filter(
+      (ch) => ch.channel_number !== null &&
+              ch.channel_number >= startingNumber &&
+              ch.channel_number <= endNumber
+    );
+    return conflictingChannels.length;
+  }, [displayChannels]);
+
   const handleBulkCreateFromGroup = useCallback(
     async (
       streamsToCreate: Stream[],
@@ -988,7 +1000,8 @@ function App() {
       countrySeparator?: api.NumberSeparator,
       prefixOrder?: api.PrefixOrder,
       stripNetworkPrefix?: boolean,
-      profileIds?: number[]
+      profileIds?: number[],
+      pushDownOnConflict?: boolean
     ) => {
       try {
         // Bulk creation requires edit mode
@@ -1031,21 +1044,12 @@ function App() {
         const mergedCount = filteredStreams.length - streamsByNormalizedName.size;
         const channelCount = streamsByNormalizedName.size;
 
-        // Check for conflicts with existing channels
-        // Find all channels that would conflict with the new channel numbers
-        const endNumber = startingNumber + channelCount - 1;
-        const conflictingChannels = displayChannels.filter(
-          (ch) => ch.channel_number !== null &&
-                  ch.channel_number >= startingNumber &&
-                  ch.channel_number <= endNumber
-        );
-
         // Start a batch for all channel operations
         startBatch(`Create ${channelCount} channels from streams`);
 
-        // If there are conflicts, push down all channels >= startingNumber by the number of new channels
-        if (conflictingChannels.length > 0) {
-          // Get ALL channels >= startingNumber (not just the ones in the conflict range)
+        // Only push down channels if explicitly requested via pushDownOnConflict
+        if (pushDownOnConflict) {
+          // Get ALL channels >= startingNumber
           // This ensures we don't create gaps
           const channelsToShift = displayChannels
             .filter((ch) => ch.channel_number !== null && ch.channel_number >= startingNumber)
@@ -1499,6 +1503,7 @@ function App() {
               onStreamGroupDrop={handleStreamGroupDrop}
               onBulkStreamsDrop={handleBulkStreamsDrop}
               onBulkCreateFromGroup={handleBulkCreateFromGroup}
+              onCheckConflicts={handleCheckConflicts}
 
               // Dispatcharr URL for channel stream URLs
               dispatcharrUrl={dispatcharrUrl}

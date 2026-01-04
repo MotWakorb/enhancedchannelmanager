@@ -143,8 +143,11 @@ export interface ChannelManagerTabProps {
     countrySeparator?: NumberSeparator,
     prefixOrder?: PrefixOrder,
     stripNetworkPrefix?: boolean,
-    profileIds?: number[]
+    profileIds?: number[],
+    pushDownOnConflict?: boolean
   ) => Promise<void>;
+  // Callback to check for conflicts with existing channel numbers
+  onCheckConflicts?: (startingNumber: number, count: number) => number;
 }
 
 export function ChannelManagerTab({
@@ -270,6 +273,7 @@ export function ChannelManagerTab({
   onStreamGroupDrop,
   onBulkStreamsDrop,
   onBulkCreateFromGroup,
+  onCheckConflicts,
 }: ChannelManagerTabProps) {
   return (
     <SplitPane
@@ -373,6 +377,7 @@ export function ChannelManagerTab({
           externalTriggerStartingNumber={externalTriggerStartingNumber}
           onExternalTriggerHandled={onExternalTriggerHandled}
           onBulkCreateFromGroup={onBulkCreateFromGroup}
+          onCheckConflicts={onCheckConflicts}
           showStreamUrls={showStreamUrls}
           onRefreshStreams={onRefreshStreams}
         />
