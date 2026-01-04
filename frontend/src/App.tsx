@@ -1066,9 +1066,28 @@ function App() {
 
         // Create channels and assign streams
         // Sort entries alphabetically by normalized name for consistent ordering
-        const sortedEntries = Array.from(streamsByNormalizedName.entries()).sort((a, b) =>
-          a[0].localeCompare(b[0], undefined, { numeric: true, sensitivity: 'base' })
-        );
+        // Use natural sort so "C-SPAN" comes before "C-SPAN 2" which comes before "C-SPAN 3"
+        const sortedEntries = Array.from(streamsByNormalizedName.entries()).sort((a, b) => {
+          // Natural sort comparison that handles trailing numbers properly
+          const nameA = a[0];
+          const nameB = b[0];
+
+          // Extract base name and trailing number (if any)
+          const matchA = nameA.match(/^(.+?)(\s*\d+)?$/);
+          const matchB = nameB.match(/^(.+?)(\s*\d+)?$/);
+
+          const baseA = matchA?.[1]?.trim() || nameA;
+          const baseB = matchB?.[1]?.trim() || nameB;
+          const numA = matchA?.[2] ? parseInt(matchA[2].trim(), 10) : 0;
+          const numB = matchB?.[2] ? parseInt(matchB[2].trim(), 10) : 0;
+
+          // First compare base names
+          const baseCompare = baseA.localeCompare(baseB, undefined, { sensitivity: 'base' });
+          if (baseCompare !== 0) return baseCompare;
+
+          // If base names are equal, sort by number (0 = no number, comes first)
+          return numA - numB;
+        });
 
         let channelIndex = 0;
         for (const [normalizedName, groupedStreams] of sortedEntries) {
