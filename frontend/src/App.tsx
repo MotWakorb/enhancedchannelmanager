@@ -1098,9 +1098,17 @@ function App() {
           return numA - numB;
         });
 
+        // Detect if we should use decimal increments (e.g., 38.1 -> 38.2 -> 38.3)
+        // A number like 38.1 has a decimal part, so we increment by 0.1
+        const hasDecimal = startingNumber % 1 !== 0;
+        const increment = hasDecimal ? 0.1 : 1;
+
         let channelIndex = 0;
         for (const [normalizedName, groupedStreams] of sortedEntries) {
-          const channelNumber = startingNumber + channelIndex;
+          // Calculate channel number with proper decimal handling
+          const rawChannelNumber = startingNumber + channelIndex * increment;
+          // Round to 1 decimal place to avoid floating point precision issues
+          const channelNumber = hasDecimal ? Math.round(rawChannelNumber * 10) / 10 : rawChannelNumber;
           channelIndex++;
 
           // Build channel name with proper prefixes
