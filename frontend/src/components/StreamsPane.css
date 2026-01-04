@@ -118,7 +118,7 @@
   font-size: 18px;
 }
 
-.pane-filters {
+.streams-pane-filters {
   padding: 0.75rem;
   display: flex;
   flex-direction: column;
@@ -126,17 +126,20 @@
   border-bottom: 1px solid var(--border-primary);
   box-sizing: border-box;
   flex-shrink: 0;
+  position: relative;
+  z-index: 10;
 }
 
-.filter-row {
+.streams-filter-row {
   display: flex;
   gap: 0.5rem;
   align-items: center;
   flex-wrap: nowrap;
   min-width: 0;
+  width: 100%;
 }
 
-.filter-row .filter-select {
+.streams-filter-row .filter-select {
   flex: 1;
 }
 
