@@ -2022,32 +2022,9 @@ export function ChannelsPane({
   const handleStreamDropOnGroup = (groupId: number | 'ungrouped', streamIds: number[]) => {
     if (streamIds.length === 0) return;
 
-    // Get all the streams being dropped
-    const droppedStreams = streamIds
-      .map(id => allStreams.find((s: Stream) => s.id === id))
-      .filter((s): s is Stream => s !== undefined);
-
-    if (droppedStreams.length === 0) return;
-
-    // Count unique normalized names to determine if this should be bulk or single channel creation
-    const uniqueNames = new Set<string>();
-    for (const stream of droppedStreams) {
-      // Use simple normalization - just the base name without quality suffixes
-      const normalizedName = api.normalizeStreamName(stream.name, 'both');
-      uniqueNames.add(normalizedName);
-    }
-
-    // If multiple unique channels would be created, redirect to bulk modal
-    if (uniqueNames.size > 1 && onStreamGroupDrop) {
-      // Create a synthetic "group" name based on the drop context
-      const groupName = groupId === 'ungrouped' ? 'Dropped Streams' :
-        (channelGroups.find(g => g.id === groupId)?.name ?? 'Dropped Streams');
-      onStreamGroupDrop([groupName], streamIds);
-      return;
-    }
-
-    // Single channel creation - use the first stream's info for the channel details
-    const firstStream = droppedStreams[0];
+    // Use the first stream's info for the channel details
+    const firstStream = allStreams.find((s: Stream) => s.id === streamIds[0]);
+    if (!firstStream) return;
 
     // Use stream name as the channel name
     setNewChannelName(firstStream.name);
@@ -2109,32 +2086,9 @@ export function ChannelsPane({
   ) => {
     if (streamIds.length === 0) return;
 
-    // Get all the streams being dropped
-    const droppedStreams = streamIds
-      .map(id => allStreams.find((s: Stream) => s.id === id))
-      .filter((s): s is Stream => s !== undefined);
-
-    if (droppedStreams.length === 0) return;
-
-    // Count unique normalized names to determine if this should be bulk or single channel creation
-    const uniqueNames = new Set<string>();
-    for (const stream of droppedStreams) {
-      // Use simple normalization - just the base name without quality suffixes
-      const normalizedName = api.normalizeStreamName(stream.name, 'both');
-      uniqueNames.add(normalizedName);
-    }
-
-    // If multiple unique channels would be created, redirect to bulk modal
-    if (uniqueNames.size > 1 && onStreamGroupDrop) {
-      // Create a synthetic "group" name based on the drop context
-      const groupName = groupId === 'ungrouped' ? 'Dropped Streams' :
-        (channelGroups.find(g => g.id === groupId)?.name ?? 'Dropped Streams');
-      onStreamGroupDrop([groupName], streamIds);
-      return;
-    }
-
-    // Single channel creation - use the first stream's info for the channel details
-    const firstStream = droppedStreams[0];
+    // Use the first stream's info for the channel details
+    const firstStream = allStreams.find((s: Stream) => s.id === streamIds[0]);
+    if (!firstStream) return;
 
     // Use stream name as the channel name
     setNewChannelName(firstStream.name);
