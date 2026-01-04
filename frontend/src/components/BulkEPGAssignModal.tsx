@@ -6,6 +6,23 @@
  */
 
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import {
+  DndContext,
+  closestCenter,
+  KeyboardSensor,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from '@dnd-kit/core';
+import {
+  arrayMove,
+  SortableContext,
+  sortableKeyboardCoordinates,
+  useSortable,
+  verticalListSortingStrategy,
+} from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
 import type { Channel, Stream, EPGData, EPGSource } from '../types';
 import {
   batchFindEPGMatchesAsync,
@@ -50,11 +67,61 @@ export function BulkEPGAssignModal({
   const [progress, setProgress] = useState<BatchMatchProgress | null>(null);
   const [epgSearchFilter, setEpgSearchFilter] = useState('');
 
+  // EPG Source selection state
+  const [orderedSourceIds, setOrderedSourceIds] = useState<number[]>([]);
+  const [selectedSourceIds, setSelectedSourceIds] = useState<Set<number>>(new Set());
+  const [sourceDropdownOpen, setSourceDropdownOpen] = useState(false);
+  const sourceDropdownRef = useRef<HTMLDivElement>(null);
+
   // Track if we've already analyzed for this modal session
   const hasAnalyzedRef = useRef(false);
 
+  // DnD sensors for source reordering
+  const sensors = useSensors(
+    useSensor(PointerSensor, {
+      activationConstraint: {
+        distance: 5,
+      },
+    }),
+    useSensor(KeyboardSensor, {
+      coordinateGetter: sortableKeyboardCoordinates,
+    })
+  );
 
-  // Run matching when modal opens
+  // Filter to only standard EPG sources (exclude dummy)
+  const availableSources = useMemo(() =>
+    epgSources.filter(s => s.source_type !== 'dummy'),
+    [epgSources]
+  );
+
+  // Filter EPG data based on selected sources and maintain priority order
+  const filteredEpgData = useMemo(() => {
+    if (selectedSourceIds.size === 0) return [];
+
+    // Get selected sources in priority order
+    const priorityOrder = orderedSourceIds.filter(id => selectedSourceIds.has(id));
+
+    // Group EPG data by source, maintaining priority order
+    const bySource = new Map<number, EPGData[]>();
+    for (const epg of epgData) {
+      if (selectedSourceIds.has(epg.epg_source)) {
+        const list = bySource.get(epg.epg_source) || [];
+        list.push(epg);
+        bySource.set(epg.epg_source, list);
+      }
+    }
+
+    // Flatten in priority order
+    const result: EPGData[] = [];
+    for (const sourceId of priorityOrder) {
+      const sourceEpg = bySource.get(sourceId) || [];
+      result.push(...sourceEpg);
+    }
+    return result;
+  }, [epgData, selectedSourceIds, orderedSourceIds]);
+
+
+  // Initialize source selection when modal opens
   useEffect(() => {
     if (!isOpen) {
       // Reset state when modal closes
@@ -67,12 +134,35 @@ export function BulkEPGAssignModal({
       setShowConflictReview(false);
       setProgress(null);
       setEpgSearchFilter('');
+      setOrderedSourceIds([]);
+      setSelectedSourceIds(new Set());
+      setSourceDropdownOpen(false);
       hasAnalyzedRef.current = false;
       return;
     }
 
+    // Initialize source selection on first open
+    if (orderedSourceIds.length === 0 && availableSources.length > 0) {
+      // Sort by existing priority (higher = first) and filter to active only
+      const activeSources = availableSources
+        .filter(s => s.is_active)
+        .sort((a, b) => b.priority - a.priority);
+      setOrderedSourceIds(activeSources.map(s => s.id));
+      setSelectedSourceIds(new Set(activeSources.map(s => s.id)));
+    }
+  }, [isOpen, availableSources, orderedSourceIds.length]);
+
+  // Run matching when source selection is ready
+  useEffect(() => {
+    if (!isOpen) return;
+
     // Only run analysis once per modal open
     if (hasAnalyzedRef.current) {
+      return;
+    }
+
+    // Wait for source selection to be initialized
+    if (orderedSourceIds.length === 0 && availableSources.length > 0) {
       return;
     }
 
@@ -86,7 +176,8 @@ export function BulkEPGAssignModal({
         console.log('[BulkEPGAssign] Running analysis...');
         console.log('[BulkEPGAssign] Selected channels:', selectedChannels.length);
         console.log('[BulkEPGAssign] Available streams:', streams.length);
-        console.log('[BulkEPGAssign] EPG data entries:', epgData.length);
+        console.log('[BulkEPGAssign] EPG data entries (filtered):', filteredEpgData.length);
+        console.log('[BulkEPGAssign] Source priority order:', orderedSourceIds);
 
         // Early exit if no channels selected
         if (selectedChannels.length === 0) {
@@ -99,8 +190,9 @@ export function BulkEPGAssignModal({
         const results = await batchFindEPGMatchesAsync(
           selectedChannels,
           streams,
-          epgData,
-          (prog) => setProgress(prog)
+          filteredEpgData,
+          (prog) => setProgress(prog),
+          orderedSourceIds.filter(id => selectedSourceIds.has(id)) // Pass source priority order
         );
         console.log('[BulkEPGAssign] Match results:', results);
         const autoCount = results.filter(r => r.status === 'exact').length;
@@ -118,7 +210,67 @@ export function BulkEPGAssignModal({
     };
 
     runAnalysis();
-  }, [isOpen, selectedChannels, streams, epgData]);
+  }, [isOpen, selectedChannels, streams, filteredEpgData, orderedSourceIds, selectedSourceIds, availableSources.length]);
+
+  // Close dropdown when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (sourceDropdownRef.current && !sourceDropdownRef.current.contains(event.target as Node)) {
+        setSourceDropdownOpen(false);
+      }
+    };
+
+    if (sourceDropdownOpen) {
+      document.addEventListener('mousedown', handleClickOutside);
+    }
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [sourceDropdownOpen]);
+
+  // Handle drag end for source reordering
+  const handleDragEnd = useCallback((event: DragEndEvent) => {
+    const { active, over } = event;
+    if (over && active.id !== over.id) {
+      setOrderedSourceIds(prev => {
+        const oldIndex = prev.indexOf(Number(active.id));
+        const newIndex = prev.indexOf(Number(over.id));
+        return arrayMove(prev, oldIndex, newIndex);
+      });
+    }
+  }, []);
+
+  // Toggle source selection
+  const handleToggleSource = useCallback((sourceId: number) => {
+    setSelectedSourceIds(prev => {
+      const next = new Set(prev);
+      if (next.has(sourceId)) {
+        next.delete(sourceId);
+      } else {
+        next.add(sourceId);
+      }
+      return next;
+    });
+  }, []);
+
+  // Select/deselect all sources
+  const handleSelectAllSources = useCallback(() => {
+    setSelectedSourceIds(new Set(orderedSourceIds));
+  }, [orderedSourceIds]);
+
+  const handleClearAllSources = useCallback(() => {
+    setSelectedSourceIds(new Set());
+  }, []);
+
+  // Re-run analysis when source selection changes (after initial load)
+  const handleRerunAnalysis = useCallback(() => {
+    hasAnalyzedRef.current = false;
+    setPhase('analyzing');
+    setMatchResults([]);
+    setConflictResolutions(new Map());
+    setShowConflictReview(false);
+    setCurrentConflictIndex(0);
+  }, []);
 
   // Categorize results and sort A-Z by channel name
   const { autoMatched, conflicts, unmatched } = useMemo(() => {
@@ -260,6 +412,13 @@ export function BulkEPGAssignModal({
 
   if (!isOpen) return null;
 
+  // Get source label for dropdown button
+  const sourceButtonLabel = useMemo(() => {
+    if (selectedSourceIds.size === 0) return 'No Sources';
+    if (selectedSourceIds.size === orderedSourceIds.length) return `All Sources (${selectedSourceIds.size})`;
+    return `${selectedSourceIds.size} Source${selectedSourceIds.size !== 1 ? 's' : ''}`;
+  }, [selectedSourceIds.size, orderedSourceIds.length]);
+
   return (
     <div className="modal-overlay">
       <div className="bulk-epg-modal" onClick={e => e.stopPropagation()}>
@@ -269,6 +428,83 @@ export function BulkEPGAssignModal({
             <span className="material-icons">close</span>
           </button>
         </div>
+
+        {/* EPG Source Selection */}
+        {availableSources.length > 0 && (
+          <div className="bulk-epg-source-filter">
+            <span className="source-filter-label">EPG Sources:</span>
+            <div className="source-filter-dropdown" ref={sourceDropdownRef}>
+              <button
+                className="source-filter-button"
+                onClick={() => setSourceDropdownOpen(!sourceDropdownOpen)}
+              >
+                <span>{sourceButtonLabel}</span>
+                <span className="dropdown-arrow">{sourceDropdownOpen ? '▲' : '▼'}</span>
+              </button>
+              {sourceDropdownOpen && (
+                <div className="source-filter-menu">
+                  <div className="source-filter-actions">
+                    <button
+                      className="source-filter-action"
+                      onClick={handleSelectAllSources}
+                    >
+                      Select All
+                    </button>
+                    <button
+                      className="source-filter-action"
+                      onClick={handleClearAllSources}
+                    >
+                      Clear All
+                    </button>
+                  </div>
+                  <DndContext
+                    sensors={sensors}
+                    collisionDetection={closestCenter}
+                    onDragEnd={handleDragEnd}
+                  >
+                    <SortableContext
+                      items={orderedSourceIds}
+                      strategy={verticalListSortingStrategy}
+                    >
+                      <div className="source-filter-options">
+                        {orderedSourceIds.map(sourceId => {
+                          const source = availableSources.find(s => s.id === sourceId);
+                          if (!source) return null;
+                          const channelCount = epgData.filter(e => e.epg_source === sourceId).length;
+                          return (
+                            <SortableSourceItem
+                              key={sourceId}
+                              id={sourceId}
+                              source={source}
+                              channelCount={channelCount}
+                              isSelected={selectedSourceIds.has(sourceId)}
+                              onToggle={() => handleToggleSource(sourceId)}
+                            />
+                          );
+                        })}
+                      </div>
+                    </SortableContext>
+                  </DndContext>
+                  <div className="source-filter-hint">
+                    Drag to set priority (top = first)
+                  </div>
+                  <div className="source-filter-apply">
+                    <button
+                      className="source-apply-btn"
+                      onClick={() => {
+                        setSourceDropdownOpen(false);
+                        handleRerunAnalysis();
+                      }}
+                    >
+                      <span className="material-icons">refresh</span>
+                      Re-analyze
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
 
         <div className="bulk-epg-body">
           {phase === 'analyzing' ? (
@@ -581,6 +817,57 @@ function ConflictCard({ result, epgSources, selectedEpg, onSelect, recommendedEp
           </label>
         </div>
       </div>
+    </div>
+  );
+}
+
+// Sortable source item for drag-and-drop reordering
+interface SortableSourceItemProps {
+  id: number;
+  source: EPGSource;
+  channelCount: number;
+  isSelected: boolean;
+  onToggle: () => void;
+}
+
+function SortableSourceItem({ id, source, channelCount, isSelected, onToggle }: SortableSourceItemProps) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id });
+
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.5 : 1,
+  };
+
+  return (
+    <div
+      ref={setNodeRef}
+      style={style}
+      className={`source-filter-option ${isSelected ? 'selected' : ''}`}
+    >
+      <span
+        className="source-drag-handle"
+        {...attributes}
+        {...listeners}
+      >
+        <span className="material-icons">drag_indicator</span>
+      </span>
+      <label className="source-option-label">
+        <input
+          type="checkbox"
+          checked={isSelected}
+          onChange={onToggle}
+        />
+        <span className="source-option-name">{source.name}</span>
+        <span className="source-option-count">({channelCount})</span>
+      </label>
     </div>
   );
 }

@@ -620,18 +620,35 @@ export function batchFindEPGMatches(
 /**
  * Process multiple channels for EPG matching with async progress updates.
  * Yields control periodically to allow UI updates.
+ *
+ * @param channels - Channels to match
+ * @param allStreams - All available streams
+ * @param epgData - All available EPG data (should already be filtered by selected sources)
+ * @param onProgress - Optional callback for progress updates
+ * @param sourceOrder - Optional array of source IDs in priority order (first = highest priority)
+ *                      When provided, matches from higher-priority sources are preferred
+ * @returns Array of match results
  */
 export async function batchFindEPGMatchesAsync(
   channels: Channel[],
   allStreams: Stream[],
   epgData: EPGData[],
-  onProgress?: (progress: BatchMatchProgress) => void
+  onProgress?: (progress: BatchMatchProgress) => void,
+  sourceOrder?: number[]
 ): Promise<EPGMatchResult[]> {
   // Build lookup maps ONCE for all EPG data
   const epgLookup = buildEPGLookup(epgData);
 
   // Create a lookup map for streams by ID
   const streamMap = new Map(allStreams.map(s => [s.id, s]));
+
+  // Create source priority map for sorting (lower index = higher priority)
+  const sourcePriorityMap = new Map<number, number>();
+  if (sourceOrder) {
+    sourceOrder.forEach((sourceId, index) => {
+      sourcePriorityMap.set(sourceId, index);
+    });
+  }
 
   const results: EPGMatchResult[] = [];
   const total = channels.length;
@@ -650,7 +667,32 @@ export async function batchFindEPGMatchesAsync(
       .map(id => streamMap.get(id))
       .filter((s): s is Stream => s !== undefined);
 
-    results.push(findEPGMatchesWithLookup(channel, channelStreams, epgLookup));
+    const result = findEPGMatchesWithLookup(channel, channelStreams, epgLookup);
+
+    // If we have source priority order, re-sort matches by source priority
+    if (sourceOrder && sourceOrder.length > 0 && result.matches.length > 1) {
+      result.matches.sort((a, b) => {
+        const aPriority = sourcePriorityMap.get(a.epg_source) ?? 999;
+        const bPriority = sourcePriorityMap.get(b.epg_source) ?? 999;
+        // Lower priority number = higher priority (comes first)
+        return aPriority - bPriority;
+      });
+
+      // If the top match is from the highest priority source, and there's only one match
+      // from that source, treat it as an exact match
+      const topSourceId = result.matches[0].epg_source;
+      const topPriority = sourcePriorityMap.get(topSourceId) ?? 999;
+      const matchesFromTopSource = result.matches.filter(
+        m => (sourcePriorityMap.get(m.epg_source) ?? 999) === topPriority
+      );
+      if (matchesFromTopSource.length === 1 && result.status === 'multiple') {
+        // Single match from highest priority source - treat as exact
+        result.matches = matchesFromTopSource;
+        result.status = 'exact';
+      }
+    }
+
+    results.push(result);
 
     // Yield control every BATCH_SIZE channels to allow UI updates
     if ((i + 1) % BATCH_SIZE === 0) {
