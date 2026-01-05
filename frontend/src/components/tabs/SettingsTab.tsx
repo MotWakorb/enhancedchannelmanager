@@ -440,74 +440,107 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
         </div>
 
         {includeChannelNumberInName && (
-          <div className="form-group indent">
-            <label htmlFor="separator">Number separator</label>
-            <select
-              id="separator"
-              value={channelNumberSeparator}
-              onChange={(e) => setChannelNumberSeparator(e.target.value)}
-            >
-              <option value="-">Hyphen (101 - Channel)</option>
-              <option value=":">Colon (101: Channel)</option>
-              <option value="|">Pipe (101 | Channel)</option>
-            </select>
+          <div className="separator-row indent">
+            <span className="separator-row-label">Separator:</span>
+            <div className="separator-buttons">
+              <button
+                type="button"
+                className={`separator-btn ${channelNumberSeparator === '-' ? 'active' : ''}`}
+                onClick={() => setChannelNumberSeparator('-')}
+              >
+                -
+              </button>
+              <button
+                type="button"
+                className={`separator-btn ${channelNumberSeparator === ':' ? 'active' : ''}`}
+                onClick={() => setChannelNumberSeparator(':')}
+              >
+                :
+              </button>
+              <button
+                type="button"
+                className={`separator-btn ${channelNumberSeparator === '|' ? 'active' : ''}`}
+                onClick={() => setChannelNumberSeparator('|')}
+              >
+                |
+              </button>
+            </div>
+            <span className="separator-preview">e.g., "101 {channelNumberSeparator} Sports Channel"</span>
           </div>
         )}
 
-        <div className="checkbox-group">
-          <input
-            id="removeCountry"
-            type="checkbox"
-            checked={removeCountryPrefix}
-            onChange={(e) => {
-              setRemoveCountryPrefix(e.target.checked);
-              // If enabling remove, disable include
-              if (e.target.checked) {
-                setIncludeCountryInName(false);
-              }
-            }}
-          />
-          <div className="checkbox-content">
-            <label htmlFor="removeCountry">Remove country prefix from names</label>
-            <p>
-              Strip country codes (US, UK, CA, etc.) from channel names when creating channels.
-            </p>
-          </div>
-        </div>
-
-        <div className="checkbox-group">
-          <input
-            id="includeCountry"
-            type="checkbox"
-            checked={includeCountryInName}
-            onChange={(e) => {
-              setIncludeCountryInName(e.target.checked);
-              // If enabling include, disable remove
-              if (e.target.checked) {
-                setRemoveCountryPrefix(false);
-              }
-            }}
-          />
-          <div className="checkbox-content">
-            <label htmlFor="includeCountry">Include country prefix in name (normalized)</label>
-            <p>
-              Keep country codes in channel names with a consistent separator (e.g., "US | Sports Channel").
-            </p>
+        <div className="form-group">
+          <label>Country prefix handling</label>
+          <div className="radio-group">
+            <label className="radio-option">
+              <input
+                type="radio"
+                name="countryPrefix"
+                checked={removeCountryPrefix}
+                onChange={() => {
+                  setRemoveCountryPrefix(true);
+                  setIncludeCountryInName(false);
+                }}
+              />
+              <span className="radio-label">Remove</span>
+              <span className="radio-description">Strip country codes (US, UK, CA) from names</span>
+            </label>
+            <label className="radio-option">
+              <input
+                type="radio"
+                name="countryPrefix"
+                checked={!removeCountryPrefix && !includeCountryInName}
+                onChange={() => {
+                  setRemoveCountryPrefix(false);
+                  setIncludeCountryInName(false);
+                }}
+              />
+              <span className="radio-label">Keep as-is</span>
+              <span className="radio-description">Leave country prefixes unchanged</span>
+            </label>
+            <label className="radio-option">
+              <input
+                type="radio"
+                name="countryPrefix"
+                checked={includeCountryInName}
+                onChange={() => {
+                  setRemoveCountryPrefix(false);
+                  setIncludeCountryInName(true);
+                }}
+              />
+              <span className="radio-label">Normalize</span>
+              <span className="radio-description">Keep with consistent separator</span>
+            </label>
           </div>
         </div>
 
         {includeCountryInName && (
-          <div className="form-group indent">
-            <label htmlFor="countrySeparator">Country separator</label>
-            <select
-              id="countrySeparator"
-              value={countrySeparator}
-              onChange={(e) => setCountrySeparator(e.target.value)}
-            >
-              <option value="-">Hyphen (US - Channel)</option>
-              <option value=":">Colon (US: Channel)</option>
-              <option value="|">Pipe (US | Channel)</option>
-            </select>
+          <div className="separator-row indent">
+            <span className="separator-row-label">Separator:</span>
+            <div className="separator-buttons">
+              <button
+                type="button"
+                className={`separator-btn ${countrySeparator === '-' ? 'active' : ''}`}
+                onClick={() => setCountrySeparator('-')}
+              >
+                -
+              </button>
+              <button
+                type="button"
+                className={`separator-btn ${countrySeparator === ':' ? 'active' : ''}`}
+                onClick={() => setCountrySeparator(':')}
+              >
+                :
+              </button>
+              <button
+                type="button"
+                className={`separator-btn ${countrySeparator === '|' ? 'active' : ''}`}
+                onClick={() => setCountrySeparator('|')}
+              >
+                |
+              </button>
+            </div>
+            <span className="separator-preview">e.g., "US {countrySeparator} Sports Channel"</span>
           </div>
         )}
       </div>
