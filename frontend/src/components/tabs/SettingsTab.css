@@ -591,6 +591,7 @@
   width: 18px;
   height: 18px;
   margin: 0;
+  margin-top: 2px;
   accent-color: var(--accent-primary);
   cursor: pointer;
   flex-shrink: 0;
