@@ -278,8 +278,11 @@ async def create_channel(request: CreateChannelRequest):
             data["logo_id"] = request.logo_id
         if request.tvg_id is not None:
             data["tvg_id"] = request.tvg_id
-        return await client.create_channel(data)
+        result = await client.create_channel(data)
+        logger.info(f"Created channel: id={result.get('id')}, name={result.get('name')}, number={result.get('channel_number')}")
+        return result
     except Exception as e:
+        logger.error(f"Channel creation failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -495,8 +498,24 @@ async def get_channel_groups():
 async def create_channel_group(request: CreateChannelGroupRequest):
     client = get_client()
     try:
-        return await client.create_channel_group(request.name)
+        result = await client.create_channel_group(request.name)
+        logger.info(f"Created channel group: id={result.get('id')}, name={result.get('name')}")
+        return result
     except Exception as e:
+        error_str = str(e)
+        # Check if this is a "group already exists" error from Dispatcharr
+        if "400" in error_str or "already exists" in error_str.lower():
+            try:
+                # Look up the existing group by name
+                groups = await client.get_channel_groups()
+                for group in groups:
+                    if group.get("name") == request.name:
+                        logger.info(f"Found existing channel group: id={group.get('id')}, name={group.get('name')}")
+                        return group
+                logger.warning(f"Group exists error but could not find group by name: {request.name}")
+            except Exception as search_err:
+                logger.error(f"Error searching for existing group: {search_err}")
+        logger.error(f"Channel group creation failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
