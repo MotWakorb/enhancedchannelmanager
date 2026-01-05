@@ -995,6 +995,17 @@ function App() {
     return conflictingChannels.length;
   }, [displayChannels]);
 
+  // Get the highest existing channel number (for "insert at end" option)
+  const handleGetHighestChannelNumber = useCallback((): number => {
+    let highest = 0;
+    displayChannels.forEach((ch) => {
+      if (ch.channel_number !== null && ch.channel_number > highest) {
+        highest = ch.channel_number;
+      }
+    });
+    return highest;
+  }, [displayChannels]);
+
   const handleBulkCreateFromGroup = useCallback(
     async (
       streamsToCreate: Stream[],
@@ -1545,6 +1556,7 @@ function App() {
               onBulkStreamsDrop={handleBulkStreamsDrop}
               onBulkCreateFromGroup={handleBulkCreateFromGroup}
               onCheckConflicts={handleCheckConflicts}
+              onGetHighestChannelNumber={handleGetHighestChannelNumber}
 
               // Dispatcharr URL for channel stream URLs
               dispatcharrUrl={dispatcharrUrl}

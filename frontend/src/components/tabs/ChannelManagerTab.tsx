@@ -148,6 +148,8 @@ export interface ChannelManagerTabProps {
   ) => Promise<void>;
   // Callback to check for conflicts with existing channel numbers
   onCheckConflicts?: (startingNumber: number, count: number) => number;
+  // Callback to get the highest existing channel number (for "insert at end" option)
+  onGetHighestChannelNumber?: () => number;
 }
 
 export function ChannelManagerTab({
@@ -274,6 +276,7 @@ export function ChannelManagerTab({
   onBulkStreamsDrop,
   onBulkCreateFromGroup,
   onCheckConflicts,
+  onGetHighestChannelNumber,
 }: ChannelManagerTabProps) {
   return (
     <SplitPane
@@ -378,6 +381,7 @@ export function ChannelManagerTab({
           onExternalTriggerHandled={onExternalTriggerHandled}
           onBulkCreateFromGroup={onBulkCreateFromGroup}
           onCheckConflicts={onCheckConflicts}
+          onGetHighestChannelNumber={onGetHighestChannelNumber}
           showStreamUrls={showStreamUrls}
           onRefreshStreams={onRefreshStreams}
         />
