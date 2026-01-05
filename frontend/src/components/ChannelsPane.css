@@ -41,7 +41,7 @@
   color: var(--accent-secondary);
 }
 
-/* Missing streams alert badge */
+/* Missing streams alert badge - clickable button */
 .missing-streams-alert {
   display: inline-flex;
   align-items: center;
@@ -53,7 +53,13 @@
   color: #f59e0b;
   font-size: 0.75rem;
   font-weight: 600;
-  cursor: default;
+  cursor: pointer;
+  transition: background-color 0.15s, border-color 0.15s;
+}
+
+.missing-streams-alert:hover {
+  background-color: rgba(245, 158, 11, 0.25);
+  border-color: rgba(245, 158, 11, 0.6);
 }
 
 .missing-streams-alert .material-icons {

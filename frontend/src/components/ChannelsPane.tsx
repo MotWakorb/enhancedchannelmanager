@@ -3878,12 +3878,39 @@ export function ChannelsPane({
         <div className="pane-header-title">
           <h2>Channels</h2>
           {(() => {
-            const missingStreamsCount = channels.filter(ch => ch.streams.length === 0).length;
-            return missingStreamsCount > 0 && (
-              <span className="missing-streams-alert" title={`${missingStreamsCount} channel${missingStreamsCount !== 1 ? 's' : ''} without streams`}>
+            const channelsMissingStreams = channels.filter(ch => ch.streams.length === 0);
+            const missingStreamsCount = channelsMissingStreams.length;
+            if (missingStreamsCount === 0) return null;
+
+            // Get unique group IDs that have channels missing streams
+            const groupsWithMissingStreams = new Set(
+              channelsMissingStreams.map(ch => ch.channel_group_id).filter((id): id is number => id !== null)
+            );
+            // Include ungrouped (null group) as group ID 0 for expansion
+            const hasUngrouped = channelsMissingStreams.some(ch => ch.channel_group_id === null);
+
+            const handleExpandMissingGroups = () => {
+              setExpandedGroups(prev => {
+                const newState = { ...prev };
+                groupsWithMissingStreams.forEach(groupId => {
+                  newState[groupId] = true;
+                });
+                if (hasUngrouped) {
+                  newState[0] = true; // 0 represents ungrouped
+                }
+                return newState;
+              });
+            };
+
+            return (
+              <button
+                className="missing-streams-alert"
+                title={`${missingStreamsCount} channel${missingStreamsCount !== 1 ? 's' : ''} without streams - click to expand affected groups`}
+                onClick={handleExpandMissingGroups}
+              >
                 <span className="material-icons">warning</span>
                 {missingStreamsCount}
-              </span>
+              </button>
             );
           })()}
           {isEditMode && selectedChannelIds.size > 0 && (
