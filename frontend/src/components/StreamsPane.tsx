@@ -970,8 +970,25 @@ export function StreamsPane({
             {isEditMode && onBulkCreateFromGroup && (
               <button
                 className="create-channels-btn"
-                onClick={selectedGroupNames.size > 1 ? openBulkCreateModalForGroups : openBulkCreateModalForSelection}
-                title={selectedGroupNames.size > 1 ? 'Create channels from selected groups' : 'Create channels from selected streams'}
+                onClick={() => {
+                  if (selectedGroupNames.size > 1) {
+                    // Multiple groups selected - use multi-group modal
+                    openBulkCreateModalForGroups();
+                  } else if (selectedGroupNames.size === 1) {
+                    // Single group selected - use the same modal as drag-and-drop
+                    const groupName = Array.from(selectedGroupNames)[0];
+                    const group = groupedStreams.find(g => g.name === groupName);
+                    if (group) {
+                      openBulkCreateModal(group);
+                    } else {
+                      openBulkCreateModalForSelection();
+                    }
+                  } else {
+                    // Individual streams selected (not grouped) - use selection modal
+                    openBulkCreateModalForSelection();
+                  }
+                }}
+                title={selectedGroupNames.size > 1 ? 'Create channels from selected groups' : selectedGroupNames.size === 1 ? 'Create channels from selected group' : 'Create channels from selected streams'}
               >
                 <span className="material-icons">playlist_add</span>
                 Create
