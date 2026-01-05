@@ -152,7 +152,6 @@ export function StreamsPane({
   const {
     selectedIds,
     selectedCount,
-    handleSelect,
     toggleSelect,
     selectMultiple,
     deselectMultiple,
@@ -350,13 +349,6 @@ export function StreamsPane({
       }
     },
     [isSelected, selectedCount, selectedIds]
-  );
-
-  const handleItemClick = useCallback(
-    (e: React.MouseEvent, stream: Stream) => {
-      handleSelect(stream.id, e);
-    },
-    [handleSelect]
   );
 
   // Handle dragging a stream group header (for drop onto channels pane)
@@ -1290,11 +1282,23 @@ export function StreamsPane({
                       {group.streams.map((stream) => (
                         <div
                           key={stream.id}
-                          className={`stream-item ${isSelected(stream.id) && isEditMode ? 'selected' : ''}`}
-                          draggable={isEditMode}
-                          onClick={(e) => handleItemClick(e, stream)}
-                          onDragStart={(e) => handleDragStart(e, stream)}
+                          className={`stream-item ${isSelected(stream.id) && isEditMode ? 'selected' : ''} ${isEditMode ? 'edit-mode' : ''}`}
+                          onClick={(e) => {
+                            // In edit mode, clicking the row does nothing (use checkbox to select)
+                            // Outside edit mode, clicking the row does nothing either
+                            e.stopPropagation();
+                          }}
                         >
+                          {/* Drag handle - only in edit mode, positioned first like channel groups */}
+                          {isEditMode && (
+                            <span
+                              className="drag-handle"
+                              draggable={true}
+                              onDragStart={(e) => handleDragStart(e, stream)}
+                            >
+                              ⋮⋮
+                            </span>
+                          )}
                           {isEditMode && (
                             <span
                               className="selection-checkbox"
@@ -1348,7 +1352,6 @@ export function StreamsPane({
                               <span className="material-icons">content_copy</span>
                             </button>
                           )}
-                          <span className="drag-handle">⋮⋮</span>
                         </div>
                       ))}
                     </div>
