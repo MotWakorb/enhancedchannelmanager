@@ -753,39 +753,51 @@ function ConflictCard({ result, epgSources, allEpgData, selectedEpg, onSelect, r
   // State for "Search All EPG" mode
   const [searchAllMode, setSearchAllMode] = useState(false);
 
+  // Fuzzy multi-word search matcher
+  // Splits search into words and checks if all words appear in the EPG entry
+  const matchesSearch = useCallback((epg: EPGData, searchWords: string[]): boolean => {
+    const lowerName = epg.name.toLowerCase();
+    const lowerTvgId = epg.tvg_id.toLowerCase();
+    const normalizedName = lowerName.replace(/[^a-z0-9]/g, '');
+    const normalizedTvgId = lowerTvgId.replace(/[^a-z0-9]/g, '');
+    const sourceName = getEPGSourceName(epg, epgSources).toLowerCase();
+
+    return searchWords.every(word => {
+      const normalizedWord = word.replace(/[^a-z0-9]/g, '');
+      return lowerName.includes(word) ||
+             lowerTvgId.includes(word) ||
+             normalizedName.includes(normalizedWord) ||
+             normalizedTvgId.includes(normalizedWord) ||
+             sourceName.includes(word);
+    });
+  }, [epgSources]);
+
   // Filter matches based on search - either from suggestions or all EPG data
   const filteredMatches = useMemo(() => {
     if (searchAllMode) {
-      // Search all EPG data
+      // Search all EPG data with fuzzy multi-word matching
       if (!searchFilter.trim()) return [];
-      const lowerFilter = searchFilter.toLowerCase();
-      const results = allEpgData.filter(epg =>
-        epg.name.toLowerCase().includes(lowerFilter) ||
-        epg.tvg_id.toLowerCase().includes(lowerFilter)
-      );
+      const searchWords = searchFilter.toLowerCase().split(/\s+/).filter(w => w.length > 0);
+      if (searchWords.length === 0) return [];
+      const results = allEpgData.filter(epg => matchesSearch(epg, searchWords));
       return results.slice(0, MAX_ALL_EPG_RESULTS);
     } else {
-      // Filter within suggestions
+      // Filter within suggestions with fuzzy multi-word matching
       if (!searchFilter.trim()) return result.matches;
-      const lowerFilter = searchFilter.toLowerCase();
-      return result.matches.filter(epg =>
-        epg.name.toLowerCase().includes(lowerFilter) ||
-        epg.tvg_id.toLowerCase().includes(lowerFilter) ||
-        getEPGSourceName(epg, epgSources).toLowerCase().includes(lowerFilter)
-      );
+      const searchWords = searchFilter.toLowerCase().split(/\s+/).filter(w => w.length > 0);
+      if (searchWords.length === 0) return result.matches;
+      return result.matches.filter(epg => matchesSearch(epg, searchWords));
     }
-  }, [searchAllMode, result.matches, allEpgData, searchFilter, epgSources]);
+  }, [searchAllMode, result.matches, allEpgData, searchFilter, matchesSearch]);
 
   // Check if there are more results when in search all mode
   const hasMoreResults = useMemo(() => {
     if (!searchAllMode || !searchFilter.trim()) return false;
-    const lowerFilter = searchFilter.toLowerCase();
-    const totalCount = allEpgData.filter(epg =>
-      epg.name.toLowerCase().includes(lowerFilter) ||
-      epg.tvg_id.toLowerCase().includes(lowerFilter)
-    ).length;
+    const searchWords = searchFilter.toLowerCase().split(/\s+/).filter(w => w.length > 0);
+    if (searchWords.length === 0) return false;
+    const totalCount = allEpgData.filter(epg => matchesSearch(epg, searchWords)).length;
     return totalCount > MAX_ALL_EPG_RESULTS;
-  }, [searchAllMode, allEpgData, searchFilter]);
+  }, [searchAllMode, allEpgData, searchFilter, matchesSearch]);
 
   return (
     <div className="conflict-card">
@@ -914,27 +926,44 @@ function EPGSearchCard({
   searchTerm,
   onSearchChange,
 }: EPGSearchCardProps) {
-  // Search across all EPG data
+  // Search across all EPG data with fuzzy multi-word matching
+  // Splits search into words and checks if all words appear in the EPG entry
+  // This allows "BBC News US" to match "BBCNews(BBCNEEU).us"
+  const matchesSearch = useCallback((epg: EPGData, searchWords: string[]): boolean => {
+    const lowerName = epg.name.toLowerCase();
+    const lowerTvgId = epg.tvg_id.toLowerCase();
+    // Also create a version with spaces removed for matching against concatenated names
+    const normalizedName = lowerName.replace(/[^a-z0-9]/g, '');
+    const normalizedTvgId = lowerTvgId.replace(/[^a-z0-9]/g, '');
+
+    // Each search word must appear in either name, tvg_id, or their normalized versions
+    return searchWords.every(word => {
+      const normalizedWord = word.replace(/[^a-z0-9]/g, '');
+      return lowerName.includes(word) ||
+             lowerTvgId.includes(word) ||
+             normalizedName.includes(normalizedWord) ||
+             normalizedTvgId.includes(normalizedWord);
+    });
+  }, []);
+
   const searchResults = useMemo(() => {
     if (!searchTerm.trim()) return [];
-    const lowerTerm = searchTerm.toLowerCase();
-    const results = epgData.filter(epg =>
-      epg.name.toLowerCase().includes(lowerTerm) ||
-      epg.tvg_id.toLowerCase().includes(lowerTerm)
-    );
+    const searchWords = searchTerm.toLowerCase().split(/\s+/).filter(w => w.length > 0);
+    if (searchWords.length === 0) return [];
+
+    const results = epgData.filter(epg => matchesSearch(epg, searchWords));
     // Limit results for performance
     return results.slice(0, MAX_SEARCH_RESULTS);
-  }, [epgData, searchTerm]);
+  }, [epgData, searchTerm, matchesSearch]);
 
   const hasMoreResults = useMemo(() => {
     if (!searchTerm.trim()) return false;
-    const lowerTerm = searchTerm.toLowerCase();
-    const totalCount = epgData.filter(epg =>
-      epg.name.toLowerCase().includes(lowerTerm) ||
-      epg.tvg_id.toLowerCase().includes(lowerTerm)
-    ).length;
+    const searchWords = searchTerm.toLowerCase().split(/\s+/).filter(w => w.length > 0);
+    if (searchWords.length === 0) return false;
+
+    const totalCount = epgData.filter(epg => matchesSearch(epg, searchWords)).length;
     return totalCount > MAX_SEARCH_RESULTS;
-  }, [epgData, searchTerm]);
+  }, [epgData, searchTerm, matchesSearch]);
 
   return (
     <div className="epg-search-card">
