@@ -684,6 +684,7 @@ export function useEditMode({
       streamsReordered: 0,
       channelNumberChanges: 0,
       channelNameChanges: 0,
+      epgChanges: 0,
       newChannels: 0,
       deletedChannels: 0,
       newGroups: 0,
@@ -718,6 +719,9 @@ export function useEditMode({
           }
           if (op.apiCall.data.name !== undefined) {
             summary.channelNameChanges++;
+          }
+          if (op.apiCall.data.tvg_id !== undefined || op.apiCall.data.epg_data_id !== undefined) {
+            summary.epgChanges++;
           }
           break;
         case 'bulkAssignChannelNumbers':
