@@ -4549,7 +4549,7 @@ export function ChannelsPane({
               const name = url.split('/').pop()?.split('?')[0] || 'Logo';
               const newLogo = await api.createLogo({ name, url });
               if (onLogosChange) {
-                onLogosChange();
+                await onLogosChange(); // Wait for logos to refresh so the new logo is available
               }
               return newLogo;
             } catch (err) {
