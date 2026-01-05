@@ -285,11 +285,17 @@ export function BulkEPGAssignModal({
     setCurrentConflictIndex(prev => Math.max(prev - 1, 0));
   }, []);
 
-  // Get recommended EPG for a result (first match with matching country, or first match)
+  // Get recommended EPG for a result (the one with highest confidence score)
   const getRecommendedEpg = useCallback((result: EPGMatchResult): EPGData | null => {
-    if (result.matches.length === 0) return null;
-    // matches are already sorted with matching country first
-    return result.matches[0];
+    if (result.matchesWithScores.length === 0) return null;
+    // Return the match with highest confidence score
+    let best = result.matchesWithScores[0];
+    for (const match of result.matchesWithScores) {
+      if (match.confidence > best.confidence) {
+        best = match;
+      }
+    }
+    return best.epg;
   }, []);
 
   // Accept all recommended matches for unresolved conflicts
@@ -299,7 +305,7 @@ export function BulkEPGAssignModal({
       for (const result of conflicts) {
         // Only set if not already resolved
         if (!next.has(result.channel.id)) {
-          const recommended = result.matches[0]; // First match is recommended
+          const recommended = getRecommendedEpg(result);
           if (recommended) {
             next.set(result.channel.id, recommended);
           }
@@ -307,7 +313,7 @@ export function BulkEPGAssignModal({
       }
       return next;
     });
-  }, [conflicts]);
+  }, [conflicts, getRecommendedEpg]);
 
   // Count unresolved conflicts
   const unresolvedCount = useMemo(() => {

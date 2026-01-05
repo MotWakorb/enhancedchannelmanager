@@ -667,11 +667,15 @@ function findEPGMatchesWithLookup(
   // Get the best score
   const bestScore = matchesWithScores.length > 0 ? matchesWithScores[0].confidence : 0;
 
+  // Re-order matches array to match confidence score order (highest first)
+  // This ensures result.matches[0] is always the best match by confidence
+  const sortedMatches = matchesWithScores.map(m => m.epg);
+
   // Determine status
   let status: 'exact' | 'multiple' | 'none';
-  if (matches.length === 0) {
+  if (sortedMatches.length === 0) {
     status = 'none';
-  } else if (matches.length === 1) {
+  } else if (sortedMatches.length === 1) {
     status = 'exact';
   } else {
     status = 'multiple';
@@ -681,7 +685,7 @@ function findEPGMatchesWithLookup(
     channel,
     detectedCountry,
     normalizedName,
-    matches,
+    matches: sortedMatches,
     matchesWithScores,
     bestScore,
     status,
