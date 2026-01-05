@@ -315,14 +315,19 @@ async def get_logo(logo_id: int):
 async def create_logo(request: CreateLogoRequest):
     client = get_client()
     try:
-        print(f"Creating logo: name={request.name}, url={request.url}", file=sys.stderr, flush=True)
         result = await client.create_logo({"name": request.name, "url": request.url})
-        print(f"Logo created successfully: {result}", file=sys.stderr, flush=True)
         return result
     except Exception as e:
-        print(f"Logo creation failed: {e}", file=sys.stderr, flush=True)
-        traceback.print_exc(file=sys.stderr)
-        sys.stderr.flush()
+        error_str = str(e)
+        # Check if this is a "logo already exists" error from Dispatcharr
+        if "logo with this url already exists" in error_str.lower() or "400" in error_str:
+            try:
+                existing_logo = await client.find_logo_by_url(request.url)
+                if existing_logo:
+                    return existing_logo
+            except Exception:
+                pass  # Fall through to raise the original error
+        logger.error(f"Logo creation failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

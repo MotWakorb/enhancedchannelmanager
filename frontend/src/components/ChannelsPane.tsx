@@ -829,8 +829,10 @@ function EditChannelModal({
     setAddingEpgLogo(true);
     try {
       const newLogo = await onLogoCreate(currentEpgData.icon_url);
-      setPendingLogo(newLogo); // Store for immediate display before logos prop updates
-      setSelectedLogoId(newLogo.id);
+      if (newLogo && newLogo.id) {
+        setPendingLogo(newLogo); // Store for immediate display before logos prop updates
+        setSelectedLogoId(newLogo.id);
+      }
     } catch (err) {
       console.error('Failed to create logo from EPG:', err);
     } finally {

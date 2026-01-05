@@ -437,11 +437,33 @@ class DispatcharrClient:
     async def create_logo(self, data: dict) -> dict:
         """Create a new logo."""
         response = await self._request("POST", "/api/channels/logos/", json=data)
-        if response.status_code >= 400:
-            import sys
-            print(f"Logo creation error - Status: {response.status_code}, Body: {response.text}", file=sys.stderr, flush=True)
         response.raise_for_status()
         return response.json()
+
+    async def find_logo_by_url(self, url: str) -> Optional[dict]:
+        """Find an existing logo by its URL.
+
+        Uses the search parameter to narrow down results, then verifies exact URL match.
+        """
+        # Use search to narrow down - search by a portion of the URL
+        # Extract domain or filename from URL for better search results
+        search_term = url.split("/")[-1] if "/" in url else url
+        if len(search_term) > 50:
+            search_term = search_term[:50]
+
+        result = await self.get_logos(page=1, page_size=100, search=search_term)
+        for logo in result.get("results", []):
+            if logo.get("url") == url:
+                return logo
+
+        # If not found with search, the logo might not exist or search didn't match
+        # Fall back to checking first page without search (common logos)
+        result = await self.get_logos(page=1, page_size=100)
+        for logo in result.get("results", []):
+            if logo.get("url") == url:
+                return logo
+
+        return None
 
     async def update_logo(self, logo_id: int, data: dict) -> dict:
         """Update a logo."""
