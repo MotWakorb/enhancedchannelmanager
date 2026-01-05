@@ -3877,6 +3877,15 @@ export function ChannelsPane({
       <div className={`pane-header ${isEditMode ? 'edit-mode' : ''}`}>
         <div className="pane-header-title">
           <h2>Channels</h2>
+          {(() => {
+            const missingStreamsCount = channels.filter(ch => ch.streams.length === 0).length;
+            return missingStreamsCount > 0 && (
+              <span className="missing-streams-alert" title={`${missingStreamsCount} channel${missingStreamsCount !== 1 ? 's' : ''} without streams`}>
+                <span className="material-icons">warning</span>
+                {missingStreamsCount}
+              </span>
+            );
+          })()}
           {isEditMode && selectedChannelIds.size > 0 && (
             <div className="selection-info">
               <span className="selection-count">{selectedChannelIds.size} selected</span>
