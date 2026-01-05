@@ -30,6 +30,7 @@ class DispatcharrSettings(BaseModel):
     # Appearance settings
     show_stream_urls: bool = True  # Show stream URLs in the UI (can hide for screenshots)
     hide_auto_sync_groups: bool = False  # Hide auto-sync channel groups by default
+    hide_ungrouped_streams: bool = True  # Hide ungrouped streams in the streams pane
     theme: str = "dark"  # Theme: "dark", "light", or "high-contrast"
     # Default channel profile for new channels (None means no default)
     default_channel_profile_id: int | None = None
