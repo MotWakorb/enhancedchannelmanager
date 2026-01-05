@@ -27,6 +27,8 @@ interface BulkEPGAssignModalProps {
   epgSources: EPGSource[];
   onClose: () => void;
   onAssign: (assignments: EPGAssignment[]) => void;
+  /** Confidence threshold (0-100) for auto-matching. Matches >= threshold are considered "exact". Default: 80 */
+  epgAutoMatchThreshold?: number;
 }
 
 type Phase = 'analyzing' | 'review';
@@ -39,6 +41,7 @@ export function BulkEPGAssignModal({
   epgSources,
   onClose,
   onAssign,
+  epgAutoMatchThreshold = 80,
 }: BulkEPGAssignModalProps) {
   const [phase, setPhase] = useState<Phase>('analyzing');
   const [matchResults, setMatchResults] = useState<EPGMatchResult[]>([]);
@@ -209,18 +212,27 @@ export function BulkEPGAssignModal({
   }, [isOpen, selectedChannels, streams]);
 
   // Categorize results and sort A-Z by channel name
+  // Uses confidence threshold to promote high-confidence matches to "auto-matched"
   const { autoMatched, conflicts, unmatched } = useMemo(() => {
     const auto: EPGMatchResult[] = [];
     const conf: EPGMatchResult[] = [];
     const none: EPGMatchResult[] = [];
 
     for (const result of matchResults) {
-      if (result.status === 'exact') {
+      if (result.status === 'none') {
+        // No matches found
+        none.push(result);
+      } else if (result.status === 'exact') {
+        // Single match - always auto-match
         auto.push(result);
       } else if (result.status === 'multiple') {
-        conf.push(result);
-      } else {
-        none.push(result);
+        // Multiple matches - check if best match exceeds threshold
+        // If bestScore >= threshold, treat as auto-matched (high confidence)
+        if (result.bestScore >= epgAutoMatchThreshold) {
+          auto.push(result);
+        } else {
+          conf.push(result);
+        }
       }
     }
 
@@ -233,7 +245,7 @@ export function BulkEPGAssignModal({
       conflicts: conf.sort(sortByChannelName),
       unmatched: none.sort(sortByChannelName),
     };
-  }, [matchResults]);
+  }, [matchResults, epgAutoMatchThreshold]);
 
 
   // Pre-select recommended matches for all conflicts when entering review phase

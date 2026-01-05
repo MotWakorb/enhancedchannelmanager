@@ -608,6 +608,73 @@
   line-height: 18px;
 }
 
+/* Slider group for threshold settings */
+.slider-group {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  margin-top: 0.5rem;
+}
+
+.threshold-slider {
+  flex: 1;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--input-bg);
+  outline: none;
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.threshold-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--accent-primary);
+  cursor: pointer;
+  transition: transform 0.15s;
+}
+
+.threshold-slider::-webkit-slider-thumb:hover {
+  transform: scale(1.1);
+}
+
+.threshold-slider::-moz-range-thumb {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--accent-primary);
+  cursor: pointer;
+  border: none;
+  transition: transform 0.15s;
+}
+
+.threshold-slider::-moz-range-thumb:hover {
+  transform: scale(1.1);
+}
+
+.threshold-slider::-webkit-slider-runnable-track {
+  height: 6px;
+  border-radius: 3px;
+  background: linear-gradient(to right, var(--accent-primary) 0%, var(--input-bg) 0%);
+}
+
+.threshold-slider::-moz-range-track {
+  height: 6px;
+  border-radius: 3px;
+  background: var(--input-bg);
+}
+
+.threshold-value {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--accent-primary);
+  min-width: 3rem;
+  text-align: right;
+}
+
 /* Hide sidebar on small screens */
 @media (max-width: 768px) {
   .settings-sidebar {
