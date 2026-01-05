@@ -18,6 +18,11 @@ const QUALITY_SUFFIXES = [
 // Timezone/regional suffixes to strip
 const TIMEZONE_SUFFIXES = ['EAST', 'WEST', 'ET', 'PT', 'CT', 'MT'];
 
+// Broadcast call sign patterns for US/Canada local TV stations
+// US call signs: K or W followed by 2-4 letters, optionally with -DT, -TV, -HD suffix
+// Examples: KATU, KOIN, KGW, WKOW, WHA-DT, KPTV-DT, WMTV
+const BROADCAST_CALL_SIGN_PATTERN = /\b([KW][A-Z]{2,4})(?:[-]?(?:DT|TV|HD|LP|CD|CA|LD))?\b/i;
+
 /**
  * Result of EPG matching for a single channel
  */
@@ -37,6 +42,29 @@ export interface EPGAssignment {
   channelName: string;
   tvg_id: string | null;
   epg_data_id: number | null;
+}
+
+/**
+ * Extract broadcast call sign from a channel name.
+ * US/Canada broadcast stations use call signs starting with K (west of Mississippi)
+ * or W (east of Mississippi), followed by 2-4 letters, optionally with -DT/-TV/-HD suffix.
+ *
+ * Examples:
+ *   "21.1 | PBS: WHA-DT Madison" -> "wha"
+ *   "2.2 | ABC: KATU Portland" -> "katu"
+ *   "6.1 | CBS: KOIN Portland" -> "koin"
+ *   "ESPN" -> null (not a broadcast call sign)
+ *
+ * @param name - Channel name to extract call sign from
+ * @returns Lowercase call sign (without suffix) or null if none found
+ */
+export function extractBroadcastCallSign(name: string): string | null {
+  const match = name.match(BROADCAST_CALL_SIGN_PATTERN);
+  if (match) {
+    // Return just the base call sign (e.g., "WHA" from "WHA-DT"), normalized to lowercase
+    return match[1].toLowerCase();
+  }
+  return null;
 }
 
 /**
@@ -218,7 +246,7 @@ function buildEPGLookup(epgData: EPGData[]): EPGLookup {
       allNormalizedNames.push({ normalized: epgNormalizedName, epg });
     }
 
-    // Extract and add call sign if present
+    // Extract and add call sign if present in parentheses (e.g., "AdultSwim(ADSM)")
     const callSignMatch = epg.tvg_id.match(/\(([^)]+)\)/);
     if (callSignMatch) {
       const callSign = callSignMatch[1].toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -238,6 +266,18 @@ function buildEPGLookup(epgData: EPGData[]): EPGLookup {
             byCallSign.set(baseCallSign, baseExisting);
           }
         }
+      }
+    }
+
+    // Also extract broadcast call signs from EPG tvg_id and name
+    // This handles local TV stations like "KATU Portland" or TVG-IDs like "KATU.us"
+    const epgBroadcastCallSign = extractBroadcastCallSign(epg.tvg_id) || extractBroadcastCallSign(epg.name);
+    if (epgBroadcastCallSign) {
+      const existing = byCallSign.get(epgBroadcastCallSign) || [];
+      // Only add if not already in the array (avoid duplicates)
+      if (!existing.some(e => e.id === epg.id)) {
+        existing.push(epg);
+        byCallSign.set(epgBroadcastCallSign, existing);
       }
     }
   }
@@ -309,11 +349,22 @@ function findEPGMatchesWithLookup(
     matchQuality.set(epg.id, 'exact');
   }
 
-  // Check call sign matches
+  // Check call sign matches using normalized name
   const callSignMatches = lookup.byCallSign.get(normalizedName) || [];
   for (const epg of callSignMatches) {
     matchSet.set(epg.id, epg);
     matchQuality.set(epg.id, 'exact');
+  }
+
+  // Extract broadcast call sign from channel name (e.g., "KATU" from "2.2 | ABC: KATU Portland")
+  // and look up EPG entries that have matching call signs
+  const broadcastCallSign = extractBroadcastCallSign(channel.name);
+  if (broadcastCallSign) {
+    const broadcastCallSignMatches = lookup.byCallSign.get(broadcastCallSign) || [];
+    for (const epg of broadcastCallSignMatches) {
+      matchSet.set(epg.id, epg);
+      matchQuality.set(epg.id, 'exact');
+    }
   }
 
   // Try prefix matching if:
