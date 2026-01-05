@@ -114,6 +114,9 @@ export interface ChannelManagerTabProps {
   showStreamUrls?: boolean;
   hideUngroupedStreams?: boolean;
 
+  // EPG matching settings
+  epgAutoMatchThreshold?: number;
+
   // Refresh streams (bypasses cache)
   onRefreshStreams?: () => void;
 
@@ -264,6 +267,9 @@ export function ChannelManagerTab({
   showStreamUrls = true,
   hideUngroupedStreams = true,
 
+  // EPG matching settings
+  epgAutoMatchThreshold = 80,
+
   // Refresh streams
   onRefreshStreams,
 
@@ -353,6 +359,7 @@ export function ChannelManagerTab({
           onStreamGroupDrop={onStreamGroupDrop}
           onBulkStreamsDrop={onBulkStreamsDrop}
           showStreamUrls={showStreamUrls}
+          epgAutoMatchThreshold={epgAutoMatchThreshold}
         />
       }
       right={

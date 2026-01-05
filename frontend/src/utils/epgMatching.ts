@@ -24,6 +24,14 @@ const TIMEZONE_SUFFIXES = ['EAST', 'WEST', 'ET', 'PT', 'CT', 'MT'];
 const BROADCAST_CALL_SIGN_PATTERN = /\b([KW][A-Z]{2,4})(?:[-]?(?:DT|TV|HD|LP|CD|CA|LD))?\b/i;
 
 /**
+ * EPG match with confidence score
+ */
+export interface EPGMatchWithScore {
+  epg: EPGData;
+  confidence: number; // 0-100 confidence score
+}
+
+/**
  * Result of EPG matching for a single channel
  */
 export interface EPGMatchResult {
@@ -31,6 +39,8 @@ export interface EPGMatchResult {
   detectedCountry: string | null;
   normalizedName: string;
   matches: EPGData[];
+  matchesWithScores: EPGMatchWithScore[]; // Matches with confidence scores
+  bestScore: number; // Highest confidence score among matches
   status: 'exact' | 'multiple' | 'none';
 }
 
@@ -331,6 +341,8 @@ function findEPGMatchesWithLookup(
       detectedCountry,
       normalizedName,
       matches: [],
+      matchesWithScores: [],
+      bestScore: 0,
       status: 'none',
     };
   }
@@ -580,6 +592,81 @@ function findEPGMatchesWithLookup(
     return a.name.localeCompare(b.name);
   });
 
+  // Calculate confidence scores for each match
+  // Scoring factors (total 100 points):
+  // - Country match: 40 points (most important)
+  // - Exact vs prefix match: 25 points
+  // - Name length similarity: 20 points (closer length = higher score)
+  // - Call sign match: 10 points
+  // - HD variant: 5 points
+  const matchesWithScores: EPGMatchWithScore[] = matches.map(epg => {
+    let confidence = 0;
+    const epgCountry = lookup.countryByEpgId.get(epg.id);
+    const epgNormalized = lookup.normalizedTvgIdByEpgId.get(epg.id) || '';
+    const quality = matchQuality.get(epg.id) || 'prefix';
+
+    // Country match: 40 points
+    if (detectedCountry && epgCountry === detectedCountry) {
+      confidence += 40;
+    } else if (!epgCountry && detectedCountry === 'us') {
+      // No country in EPG, but we're looking for US - give partial credit
+      confidence += 20;
+    }
+
+    // Exact vs prefix match: 25 points
+    if (quality === 'exact') {
+      confidence += 25;
+    } else {
+      // Prefix match - score based on how close the match is
+      const isChannelPrefix = epgNormalized.startsWith(normalizedName);
+      const isEpgPrefix = normalizedName.startsWith(epgNormalized);
+      if (isChannelPrefix && isEpgPrefix) {
+        confidence += 25; // Both are prefixes of each other = exact
+      } else if (isChannelPrefix) {
+        confidence += 20; // Channel name is prefix of EPG name
+      } else if (isEpgPrefix) {
+        confidence += 15; // EPG name is prefix of channel name
+      }
+    }
+
+    // Name length similarity: 20 points
+    const lengthDiff = Math.abs(epgNormalized.length - normalizedName.length);
+    const maxLength = Math.max(epgNormalized.length, normalizedName.length, 1);
+    const lengthSimilarity = 1 - (lengthDiff / maxLength);
+    confidence += Math.round(lengthSimilarity * 20);
+
+    // Call sign match: 10 points
+    const callSignMatch = epg.tvg_id.match(/\(([^)]+)\)/);
+    if (callSignMatch) {
+      const callSign = callSignMatch[1].toLowerCase().replace(/[^a-z0-9]/g, '');
+      const callSignBase = callSign.replace(/(hd|sd|fhd|uhd)$/, '');
+      if (callSign === normalizedName || callSignBase === normalizedName) {
+        confidence += 10; // Exact call sign match
+      } else if (callSign.startsWith(normalizedName) || callSignBase.startsWith(normalizedName)) {
+        confidence += 7; // Call sign starts with channel name
+      } else if (normalizedName.startsWith(callSignBase)) {
+        confidence += 5; // Channel name starts with call sign
+      }
+    }
+
+    // HD variant: 5 points
+    const hasHD = /hd\)?\./i.test(epg.tvg_id) || /HD$/i.test(epg.name);
+    if (hasHD) {
+      confidence += 5;
+    }
+
+    // Cap at 100
+    confidence = Math.min(100, confidence);
+
+    return { epg, confidence };
+  });
+
+  // Sort by confidence score (highest first), keeping the original sort order as tiebreaker
+  matchesWithScores.sort((a, b) => b.confidence - a.confidence);
+
+  // Get the best score
+  const bestScore = matchesWithScores.length > 0 ? matchesWithScores[0].confidence : 0;
+
   // Determine status
   let status: 'exact' | 'multiple' | 'none';
   if (matches.length === 0) {
@@ -595,6 +682,8 @@ function findEPGMatchesWithLookup(
     detectedCountry,
     normalizedName,
     matches,
+    matchesWithScores,
+    bestScore,
     status,
   };
 }

@@ -67,6 +67,7 @@ function App() {
   const [dispatcharrUrl, setDispatcharrUrl] = useState('');
   const [showStreamUrls, setShowStreamUrls] = useState(true);
   const [hideUngroupedStreams, setHideUngroupedStreams] = useState(true);
+  const [epgAutoMatchThreshold, setEpgAutoMatchThreshold] = useState(80);
   const [channelDefaults, setChannelDefaults] = useState({
     includeChannelNumberInName: false,
     channelNumberSeparator: '-',
@@ -327,6 +328,7 @@ function App() {
         setDispatcharrUrl(settings.url);
         setShowStreamUrls(settings.show_stream_urls);
         setHideUngroupedStreams(settings.hide_ungrouped_streams);
+        setEpgAutoMatchThreshold(settings.epg_auto_match_threshold ?? 80);
         setChannelDefaults({
           includeChannelNumberInName: settings.include_channel_number_in_name,
           channelNumberSeparator: settings.channel_number_separator,
@@ -467,6 +469,7 @@ function App() {
       setDispatcharrUrl(settings.url);
       setShowStreamUrls(settings.show_stream_urls);
       setHideUngroupedStreams(settings.hide_ungrouped_streams);
+      setEpgAutoMatchThreshold(settings.epg_auto_match_threshold ?? 80);
       setChannelDefaults({
         includeChannelNumberInName: settings.include_channel_number_in_name,
         channelNumberSeparator: settings.channel_number_separator,
@@ -1567,6 +1570,9 @@ function App() {
               // Appearance settings
               showStreamUrls={showStreamUrls}
               hideUngroupedStreams={hideUngroupedStreams}
+
+              // EPG matching settings
+              epgAutoMatchThreshold={epgAutoMatchThreshold}
 
               // Refresh streams (bypasses cache)
               onRefreshStreams={refreshStreams}

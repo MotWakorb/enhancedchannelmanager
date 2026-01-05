@@ -29,6 +29,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
   const [countrySeparator, setCountrySeparator] = useState('|');
   const [timezonePreference, setTimezonePreference] = useState('both');
   const [defaultChannelProfileIds, setDefaultChannelProfileIds] = useState<number[]>([]);
+  const [epgAutoMatchThreshold, setEpgAutoMatchThreshold] = useState(80);
 
   // Appearance settings
   const [showStreamUrls, setShowStreamUrls] = useState(true);
@@ -71,6 +72,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
       setHideUngroupedStreams(settings.hide_ungrouped_streams);
       setTheme(settings.theme || 'dark');
       setDefaultChannelProfileIds(settings.default_channel_profile_ids);
+      setEpgAutoMatchThreshold(settings.epg_auto_match_threshold ?? 80);
       setTestResult(null);
       setError(null);
     } catch (err) {
@@ -145,6 +147,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
         hide_ungrouped_streams: hideUngroupedStreams,
         theme: theme,
         default_channel_profile_ids: defaultChannelProfileIds,
+        epg_auto_match_threshold: epgAutoMatchThreshold,
       });
       setOriginalUrl(url);
       setOriginalUsername(username);
@@ -602,6 +605,34 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
               ))}
             </div>
           )}
+        </div>
+      </div>
+
+      <div className="settings-section">
+        <div className="settings-section-header">
+          <span className="material-icons">tv_guide</span>
+          <h3>EPG Matching</h3>
+        </div>
+
+        <div className="form-group">
+          <label htmlFor="epgThreshold">Auto-match confidence threshold</label>
+          <div className="slider-group">
+            <input
+              id="epgThreshold"
+              type="range"
+              min="0"
+              max="100"
+              value={epgAutoMatchThreshold}
+              onChange={(e) => setEpgAutoMatchThreshold(Number(e.target.value))}
+              className="threshold-slider"
+            />
+            <span className="threshold-value">{epgAutoMatchThreshold}%</span>
+          </div>
+          <p className="form-hint">
+            EPG matches with a confidence score at or above this threshold will be automatically assigned.
+            Lower values match more channels automatically but may be less accurate.
+            Set to 0 to require manual review for all matches.
+          </p>
         </div>
       </div>
 

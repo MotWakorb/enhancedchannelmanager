@@ -37,6 +37,11 @@ class DispatcharrSettings(BaseModel):
     # Linked M3U accounts - groups of account IDs that should sync group settings
     # Each inner list is a group of linked account IDs, e.g. [[1, 2], [3, 4, 5]]
     linked_m3u_accounts: list[list[int]] = []
+    # EPG auto-match confidence threshold (0-100)
+    # Matches with confidence >= this value are considered "auto-matched"
+    # Set to 0 to disable auto-matching (all matches need review)
+    # Set to 100 to require perfect confidence for auto-match
+    epg_auto_match_threshold: int = 80
 
     def is_configured(self) -> bool:
         return bool(self.url and self.username and self.password)

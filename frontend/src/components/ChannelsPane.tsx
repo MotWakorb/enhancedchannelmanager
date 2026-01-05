@@ -114,6 +114,8 @@ interface ChannelsPaneProps {
   onBulkStreamsDrop?: (streamIds: number[], groupId: number | null, startingNumber: number) => void;
   // Appearance settings
   showStreamUrls?: boolean;
+  // EPG matching settings
+  epgAutoMatchThreshold?: number;
 }
 
 interface GroupState {
@@ -1377,6 +1379,8 @@ export function ChannelsPane({
   onBulkStreamsDrop,
   // Appearance settings
   showStreamUrls = true,
+  // EPG matching settings
+  epgAutoMatchThreshold = 80,
 }: ChannelsPaneProps) {
   // Suppress unused variable warnings - these are passed through but handled in parent
   void _onStageBulkAssignNumbers;
@@ -4549,6 +4553,7 @@ export function ChannelsPane({
         epgSources={epgSources || []}
         onClose={() => setShowBulkEPGModal(false)}
         onAssign={handleBulkEPGAssign}
+        epgAutoMatchThreshold={epgAutoMatchThreshold}
       />
 
       {/* Edit Channel Modal */}

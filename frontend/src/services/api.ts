@@ -322,6 +322,7 @@ export interface SettingsResponse {
   theme: Theme;
   default_channel_profile_ids: number[];
   linked_m3u_accounts: number[][];  // List of link groups, each is a list of account IDs
+  epg_auto_match_threshold: number;  // 0-100, confidence score threshold for auto-matching
 }
 
 export interface TestConnectionResult {
@@ -350,6 +351,7 @@ export async function saveSettings(settings: {
   theme?: Theme;  // Optional - defaults to 'dark'
   default_channel_profile_ids?: number[];  // Optional - empty array means no defaults
   linked_m3u_accounts?: number[][];  // Optional - list of link groups
+  epg_auto_match_threshold?: number;  // Optional - 0-100, defaults to 80
 }): Promise<{ status: string; configured: boolean }> {
   return fetchJson(`${API_BASE}/settings`, {
     method: 'POST',
