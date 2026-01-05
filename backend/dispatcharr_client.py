@@ -435,34 +435,35 @@ class DispatcharrClient:
         return response.json()
 
     async def create_logo(self, data: dict) -> dict:
-        """Create a new logo."""
+        """Create a new logo.
+
+        Returns the created logo, or raises an exception with the response body
+        if creation fails (e.g., logo already exists).
+        """
         response = await self._request("POST", "/api/channels/logos/", json=data)
-        response.raise_for_status()
+        if response.status_code >= 400:
+            # Include response body in exception for better error handling
+            error_body = response.text
+            raise Exception(f"Logo creation failed: {response.status_code} - {error_body}")
         return response.json()
 
     async def find_logo_by_url(self, url: str) -> Optional[dict]:
         """Find an existing logo by its URL.
 
-        Uses the search parameter to narrow down results, then verifies exact URL match.
+        Paginates through logos to find exact URL match.
+        Uses larger page size to minimize API calls.
         """
-        # Use search to narrow down - search by a portion of the URL
-        # Extract domain or filename from URL for better search results
-        search_term = url.split("/")[-1] if "/" in url else url
-        if len(search_term) > 50:
-            search_term = search_term[:50]
-
-        result = await self.get_logos(page=1, page_size=100, search=search_term)
-        for logo in result.get("results", []):
-            if logo.get("url") == url:
-                return logo
-
-        # If not found with search, the logo might not exist or search didn't match
-        # Fall back to checking first page without search (common logos)
-        result = await self.get_logos(page=1, page_size=100)
-        for logo in result.get("results", []):
-            if logo.get("url") == url:
-                return logo
-
+        page = 1
+        page_size = 500  # Use larger page size for efficiency
+        while True:
+            result = await self.get_logos(page=page, page_size=page_size)
+            for logo in result.get("results", []):
+                if logo.get("url") == url:
+                    return logo
+            # Check if there are more pages
+            if not result.get("next"):
+                break
+            page += 1
         return None
 
     async def update_logo(self, logo_id: int, data: dict) -> dict:
