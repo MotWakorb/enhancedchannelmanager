@@ -33,6 +33,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
   // Appearance settings
   const [showStreamUrls, setShowStreamUrls] = useState(true);
   const [hideAutoSyncGroups, setHideAutoSyncGroups] = useState(false);
+  const [hideUngroupedStreams, setHideUngroupedStreams] = useState(true);
   const [theme, setTheme] = useState<Theme>('dark');
 
   // UI state
@@ -67,6 +68,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
       setTimezonePreference(settings.timezone_preference);
       setShowStreamUrls(settings.show_stream_urls);
       setHideAutoSyncGroups(settings.hide_auto_sync_groups);
+      setHideUngroupedStreams(settings.hide_ungrouped_streams);
       setTheme(settings.theme || 'dark');
       setDefaultChannelProfileId(settings.default_channel_profile_id);
       setTestResult(null);
@@ -140,6 +142,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
         timezone_preference: timezonePreference,
         show_stream_urls: showStreamUrls,
         hide_auto_sync_groups: hideAutoSyncGroups,
+        hide_ungrouped_streams: hideUngroupedStreams,
         theme: theme,
         default_channel_profile_id: defaultChannelProfileId,
       });
@@ -347,6 +350,22 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
             <p>
               Automatically hide channel groups that are managed by Dispatcharr's M3U auto-sync feature.
               You can still show them using the filter in the Channel Manager tab.
+            </p>
+          </div>
+        </div>
+
+        <div className="checkbox-group">
+          <input
+            id="hideUngroupedStreams"
+            type="checkbox"
+            checked={hideUngroupedStreams}
+            onChange={(e) => setHideUngroupedStreams(e.target.checked)}
+          />
+          <div className="checkbox-content">
+            <label htmlFor="hideUngroupedStreams">Hide ungrouped streams</label>
+            <p>
+              Hide streams that don't have a group assigned (no group-title in M3U).
+              These streams appear under "Ungrouped" in the Streams pane.
             </p>
           </div>
         </div>
