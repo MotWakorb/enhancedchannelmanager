@@ -305,7 +305,7 @@ function SortableChannel({
     <div
       ref={setNodeRef}
       style={style}
-      className={`channel-item ${isSelected && isEditMode ? 'selected' : ''} ${isMultiSelected ? 'multi-selected' : ''} ${isDragOver ? 'drag-over' : ''} ${isDragging ? 'dragging' : ''} ${isModified ? 'channel-modified' : ''}`}
+      className={`channel-item ${isSelected && isEditMode ? 'selected' : ''} ${isMultiSelected ? 'multi-selected' : ''} ${isDragOver ? 'drag-over' : ''} ${isDragging ? 'dragging' : ''} ${isModified ? 'channel-modified' : ''} ${channel.streams.length === 0 ? 'no-streams' : ''}`}
       onClick={onClick}
       onDragOver={onStreamDragOver}
       onDragLeave={onStreamDragLeave}
@@ -412,7 +412,8 @@ function SortableChannel({
           {channelUrl}
         </span>
       )}
-      <span className="channel-streams-count">
+      <span className={`channel-streams-count ${channel.streams.length === 0 ? 'no-streams' : ''}`}>
+        {channel.streams.length === 0 && <span className="material-icons warning-icon">warning</span>}
         {channel.streams.length} stream{channel.streams.length !== 1 ? 's' : ''}
       </span>
       {onCopyChannelUrl && (
