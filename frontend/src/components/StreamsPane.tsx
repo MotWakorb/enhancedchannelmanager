@@ -282,6 +282,20 @@ export function StreamsPane({
     });
   }, []);
 
+  // Expand all groups
+  const expandAllGroups = useCallback(() => {
+    setExpandedGroups(new Set(groupedStreams.map(g => g.name)));
+  }, [groupedStreams]);
+
+  // Collapse all groups
+  const collapseAllGroups = useCallback(() => {
+    setExpandedGroups(new Set());
+  }, []);
+
+  // Check if all groups are expanded or collapsed
+  const allExpanded = groupedStreams.length > 0 && expandedGroups.size === groupedStreams.length;
+  const allCollapsed = expandedGroups.size === 0;
+
   // Clear selection when streams change (new search/filter)
   useEffect(() => {
     clearSelection();
@@ -1013,13 +1027,33 @@ export function StreamsPane({
       </div>
 
       <div className="streams-pane-filters">
-        <input
-          type="text"
-          placeholder="Search streams..."
-          value={searchTerm}
-          onChange={(e) => onSearchChange(e.target.value)}
-          className="search-input"
-        />
+        <div className="search-row">
+          <input
+            type="text"
+            placeholder="Search streams..."
+            value={searchTerm}
+            onChange={(e) => onSearchChange(e.target.value)}
+            className="search-input"
+          />
+          <div className="expand-collapse-buttons">
+            <button
+              className="expand-collapse-btn"
+              onClick={expandAllGroups}
+              disabled={allExpanded || groupedStreams.length === 0}
+              title="Expand all groups"
+            >
+              <span className="material-icons">unfold_more</span>
+            </button>
+            <button
+              className="expand-collapse-btn"
+              onClick={collapseAllGroups}
+              disabled={allCollapsed || groupedStreams.length === 0}
+              title="Collapse all groups"
+            >
+              <span className="material-icons">unfold_less</span>
+            </button>
+          </div>
+        </div>
         <div className="streams-filter-row">
           {/* Provider Filter Dropdown */}
           {useMultiSelectProviders ? (
