@@ -77,6 +77,7 @@ interface StreamsPaneProps {
   onGetHighestChannelNumber?: () => number;
   // Appearance settings
   showStreamUrls?: boolean;
+  hideUngroupedStreams?: boolean;
   // Refresh streams (bypasses cache)
   onRefreshStreams?: () => void;
 }
@@ -110,6 +111,7 @@ export function StreamsPane({
   onCheckConflicts,
   onGetHighestChannelNumber,
   showStreamUrls = true,
+  hideUngroupedStreams = true,
   onRefreshStreams,
 }: StreamsPaneProps) {
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
@@ -134,11 +136,14 @@ export function StreamsPane({
     });
 
     // Sort groups alphabetically with natural sort (Ungrouped at end) and flatten
-    const sortedGroupNames = Array.from(groups.keys()).sort((a, b) => {
-      if (a === 'Ungrouped') return 1;
-      if (b === 'Ungrouped') return -1;
-      return naturalCompare(a, b);
-    });
+    // Filter out Ungrouped if hideUngroupedStreams is true
+    const sortedGroupNames = Array.from(groups.keys())
+      .filter((name) => !hideUngroupedStreams || name !== 'Ungrouped')
+      .sort((a, b) => {
+        if (a === 'Ungrouped') return 1;
+        if (b === 'Ungrouped') return -1;
+        return naturalCompare(a, b);
+      });
 
     // Flatten to single array in display order
     const result: Stream[] = [];
@@ -146,7 +151,7 @@ export function StreamsPane({
       result.push(...groups.get(groupName)!);
     }
     return result;
-  }, [streams]);
+  }, [streams, hideUngroupedStreams]);
 
   // Use display order for selection so shift-click works correctly
   const {
@@ -255,6 +260,8 @@ export function StreamsPane({
 
     // Convert to array and sort groups alphabetically with natural sort (Ungrouped at end)
     const sortedGroups = Array.from(groups.entries())
+      // Filter out Ungrouped if hideUngroupedStreams is true
+      .filter(([name]) => !hideUngroupedStreams || name !== 'Ungrouped')
       .sort(([a], [b]) => {
         if (a === 'Ungrouped') return 1;
         if (b === 'Ungrouped') return -1;
@@ -267,7 +274,7 @@ export function StreamsPane({
       }));
 
     return sortedGroups;
-  }, [streams, expandedGroups]);
+  }, [streams, expandedGroups, hideUngroupedStreams]);
 
 
   const toggleGroup = useCallback((groupName: string) => {

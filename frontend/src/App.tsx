@@ -66,6 +66,7 @@ function App() {
   const [autoRenameChannelNumber, setAutoRenameChannelNumber] = useState(false);
   const [dispatcharrUrl, setDispatcharrUrl] = useState('');
   const [showStreamUrls, setShowStreamUrls] = useState(true);
+  const [hideUngroupedStreams, setHideUngroupedStreams] = useState(true);
   const [channelDefaults, setChannelDefaults] = useState({
     includeChannelNumberInName: false,
     channelNumberSeparator: '-',
@@ -325,6 +326,7 @@ function App() {
         setAutoRenameChannelNumber(settings.auto_rename_channel_number);
         setDispatcharrUrl(settings.url);
         setShowStreamUrls(settings.show_stream_urls);
+        setHideUngroupedStreams(settings.hide_ungrouped_streams);
         setChannelDefaults({
           includeChannelNumberInName: settings.include_channel_number_in_name,
           channelNumberSeparator: settings.channel_number_separator,
@@ -464,6 +466,7 @@ function App() {
       setAutoRenameChannelNumber(settings.auto_rename_channel_number);
       setDispatcharrUrl(settings.url);
       setShowStreamUrls(settings.show_stream_urls);
+      setHideUngroupedStreams(settings.hide_ungrouped_streams);
       setChannelDefaults({
         includeChannelNumberInName: settings.include_channel_number_in_name,
         channelNumberSeparator: settings.channel_number_separator,
@@ -1563,6 +1566,7 @@ function App() {
 
               // Appearance settings
               showStreamUrls={showStreamUrls}
+              hideUngroupedStreams={hideUngroupedStreams}
 
               // Refresh streams (bypasses cache)
               onRefreshStreams={refreshStreams}

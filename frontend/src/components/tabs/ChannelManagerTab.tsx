@@ -112,6 +112,7 @@ export interface ChannelManagerTabProps {
 
   // Appearance settings
   showStreamUrls?: boolean;
+  hideUngroupedStreams?: boolean;
 
   // Refresh streams (bypasses cache)
   onRefreshStreams?: () => void;
@@ -261,6 +262,7 @@ export function ChannelManagerTab({
 
   // Appearance settings
   showStreamUrls = true,
+  hideUngroupedStreams = true,
 
   // Refresh streams
   onRefreshStreams,
@@ -383,6 +385,7 @@ export function ChannelManagerTab({
           onCheckConflicts={onCheckConflicts}
           onGetHighestChannelNumber={onGetHighestChannelNumber}
           showStreamUrls={showStreamUrls}
+          hideUngroupedStreams={hideUngroupedStreams}
           onRefreshStreams={onRefreshStreams}
         />
       }
