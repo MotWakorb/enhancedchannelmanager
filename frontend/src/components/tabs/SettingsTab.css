@@ -597,7 +597,9 @@
 .profile-checkbox-label {
   font-size: 0.9rem;
   color: var(--text-primary);
-  line-height: 18px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
 }
 
 /* Hide sidebar on small screens */
