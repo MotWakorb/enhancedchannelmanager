@@ -590,6 +590,7 @@
 .profile-checkbox input[type="checkbox"] {
   width: 18px;
   height: 18px;
+  margin: 0;
   accent-color: var(--accent-primary);
   cursor: pointer;
   flex-shrink: 0;
