@@ -694,6 +694,7 @@ function EditChannelModal({
   const [addingLogo, setAddingLogo] = useState(false);
   const [uploadingLogo, setUploadingLogo] = useState(false);
   const [addingEpgLogo, setAddingEpgLogo] = useState(false);
+  const [pendingLogo, setPendingLogo] = useState<Logo | null>(null); // Track newly created logo before props update
   const fileInputRef = useRef<HTMLInputElement>(null);
   const epgDropdownRef = useRef<HTMLDivElement>(null);
 
@@ -719,8 +720,10 @@ function EditChannelModal({
     logo.name.toLowerCase().includes(logoSearch.toLowerCase())
   );
 
-  // Get currently selected logo
-  const currentLogo = selectedLogoId ? logos.find((l) => l.id === selectedLogoId) : null;
+  // Get currently selected logo (use pendingLogo if not yet in logos array)
+  const currentLogo = selectedLogoId
+    ? (logos.find((l) => l.id === selectedLogoId) || (pendingLogo?.id === selectedLogoId ? pendingLogo : null))
+    : null;
 
   // Get currently selected EPG data
   const currentEpgData = selectedEpgDataId ? epgData.find((e) => e.id === selectedEpgDataId) : null;
@@ -784,6 +787,7 @@ function EditChannelModal({
     setAddingLogo(true);
     try {
       const newLogo = await onLogoCreate(newLogoUrl.trim());
+      setPendingLogo(newLogo); // Store for immediate display before logos prop updates
       setSelectedLogoId(newLogo.id);
       setNewLogoUrl('');
     } catch (err) {
@@ -825,6 +829,7 @@ function EditChannelModal({
     setAddingEpgLogo(true);
     try {
       const newLogo = await onLogoCreate(currentEpgData.icon_url);
+      setPendingLogo(newLogo); // Store for immediate display before logos prop updates
       setSelectedLogoId(newLogo.id);
     } catch (err) {
       console.error('Failed to create logo from EPG:', err);
@@ -832,6 +837,13 @@ function EditChannelModal({
       setAddingEpgLogo(false);
     }
   };
+
+  // Clear pending logo once it appears in the logos array
+  useEffect(() => {
+    if (pendingLogo && logos.find((l) => l.id === pendingLogo.id)) {
+      setPendingLogo(null);
+    }
+  }, [logos, pendingLogo]);
 
   const handleEpgSearch = (value: string) => {
     setEpgSearch(value);
