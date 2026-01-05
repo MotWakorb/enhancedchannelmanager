@@ -695,6 +695,7 @@ function EditChannelModal({
   const [uploadingLogo, setUploadingLogo] = useState(false);
   const [addingEpgLogo, setAddingEpgLogo] = useState(false);
   const [pendingLogo, setPendingLogo] = useState<Logo | null>(null); // Track newly created logo before props update
+  const [immediateLogoUrl, setImmediateLogoUrl] = useState<string | null>(null); // For instant display of EPG logo
   const fileInputRef = useRef<HTMLInputElement>(null);
   const epgDropdownRef = useRef<HTMLDivElement>(null);
 
@@ -826,6 +827,8 @@ function EditChannelModal({
   const handleUseEpgLogo = async () => {
     if (!currentEpgData?.icon_url) return;
 
+    // Set immediate URL for instant display while we resolve the logo
+    setImmediateLogoUrl(currentEpgData.icon_url);
     setAddingEpgLogo(true);
     try {
       const newLogo = await onLogoCreate(currentEpgData.icon_url);
@@ -835,17 +838,26 @@ function EditChannelModal({
       }
     } catch (err) {
       console.error('Failed to create logo from EPG:', err);
+      setImmediateLogoUrl(null); // Clear on error
     } finally {
       setAddingEpgLogo(false);
     }
   };
 
   // Clear pending logo once it appears in the logos array
+  // Note: We keep immediateLogoUrl until user changes logo selection to prevent image flicker
   useEffect(() => {
     if (pendingLogo && logos.find((l) => l.id === pendingLogo.id)) {
       setPendingLogo(null);
     }
   }, [logos, pendingLogo]);
+
+  // Clear immediate URL when logo selection changes (to a different logo or no logo)
+  useEffect(() => {
+    if (immediateLogoUrl && (!selectedLogoId || (currentLogo && currentLogo.url !== immediateLogoUrl))) {
+      setImmediateLogoUrl(null);
+    }
+  }, [selectedLogoId, currentLogo, immediateLogoUrl]);
 
   const handleEpgSearch = (value: string) => {
     setEpgSearch(value);
@@ -1142,16 +1154,25 @@ function EditChannelModal({
           {currentLogo && (
             <div className="current-logo-preview">
               <img
-                src={currentLogo.cache_url || currentLogo.url}
+                src={immediateLogoUrl || currentLogo.cache_url || currentLogo.url}
                 alt={currentLogo.name}
                 onError={(e) => {
-                  (e.target as HTMLImageElement).src = currentLogo.url;
+                  // If immediate URL fails, try cache_url, then original url
+                  const target = e.target as HTMLImageElement;
+                  if (immediateLogoUrl && target.src === immediateLogoUrl) {
+                    target.src = currentLogo.cache_url || currentLogo.url;
+                  } else if (currentLogo.cache_url && target.src === currentLogo.cache_url) {
+                    target.src = currentLogo.url;
+                  }
                 }}
               />
               <span>{currentLogo.name}</span>
               <button
                 className="current-logo-remove-btn"
-                onClick={() => setSelectedLogoId(null)}
+                onClick={() => {
+                  setSelectedLogoId(null);
+                  setImmediateLogoUrl(null);
+                }}
               >
                 Remove
               </button>
@@ -4559,6 +4580,12 @@ export function ChannelsPane({
             setChannelToEdit(null);
           }}
           onLogoCreate={async (url: string) => {
+            // First check if logo already exists in our loaded logos array (instant!)
+            const existingLogo = logos.find(l => l.url === url);
+            if (existingLogo) {
+              return existingLogo;
+            }
+            // Otherwise create new logo via API
             try {
               const name = url.split('/').pop()?.split('?')[0] || 'Logo';
               const newLogo = await api.createLogo({ name, url });

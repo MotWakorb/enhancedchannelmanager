@@ -316,6 +316,7 @@ async def create_logo(request: CreateLogoRequest):
     client = get_client()
     try:
         result = await client.create_logo({"name": request.name, "url": request.url})
+        logger.info(f"Created new logo: id={result.get('id')}, name={result.get('name')}")
         return result
     except Exception as e:
         error_str = str(e)
@@ -324,9 +325,12 @@ async def create_logo(request: CreateLogoRequest):
             try:
                 existing_logo = await client.find_logo_by_url(request.url)
                 if existing_logo:
+                    logger.info(f"Found existing logo: id={existing_logo.get('id')}, name={existing_logo.get('name')}, url={existing_logo.get('url')}")
                     return existing_logo
-            except Exception:
-                pass  # Fall through to raise the original error
+                else:
+                    logger.warning(f"Logo exists but could not find it by URL: {request.url}")
+            except Exception as search_err:
+                logger.error(f"Error searching for existing logo: {search_err}")
         logger.error(f"Logo creation failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
