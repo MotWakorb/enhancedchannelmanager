@@ -897,10 +897,26 @@
 }
 
 .channel-streams-count {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
   font-size: 0.75rem;
   color: var(--text-muted);
   margin-left: 0.5rem;
   flex-shrink: 0;
+}
+
+.channel-streams-count.no-streams {
+  color: var(--warning);
+}
+
+.channel-streams-count .warning-icon {
+  font-size: 0.9rem;
+}
+
+/* Highlight channels without streams */
+.channel-item.no-streams {
+  border-left: 3px solid var(--warning);
 }
 
 /* Hover edit button on channel row (edit mode only) */
