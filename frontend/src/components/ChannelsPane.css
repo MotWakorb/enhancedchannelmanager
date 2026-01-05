@@ -2915,15 +2915,15 @@
 }
 
 /* Stream insert zone - drop zone between channels for creating new channels */
+/* Only visible during drag operations */
 .stream-insert-zone {
   height: 8px;
   margin: -4px 0;
   position: relative;
   z-index: 10;
-  cursor: pointer;
 }
 
-.stream-insert-zone:hover,
+/* Only show visual feedback when actively dragging over (.active class set by JS) */
 .stream-insert-zone.active {
   height: 24px;
   margin: 0;
