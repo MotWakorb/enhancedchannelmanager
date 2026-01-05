@@ -74,10 +74,10 @@ function App() {
     includeCountryInName: false,
     countrySeparator: '|',
     timezonePreference: 'both',
-    defaultChannelProfileId: null as number | null,
+    defaultChannelProfileIds: [] as number[],
   });
   // Also keep separate state for use in callbacks (to avoid stale closure issues)
-  const [defaultChannelProfileId, setDefaultChannelProfileId] = useState<number | null>(null);
+  const [defaultChannelProfileIds, setDefaultChannelProfileIds] = useState<number[]>([]);
 
   // Provider group settings (for identifying auto channel sync groups)
   const [providerGroupSettings, setProviderGroupSettings] = useState<Record<number, M3UGroupSetting>>({});
@@ -334,9 +334,9 @@ function App() {
           includeCountryInName: settings.include_country_in_name,
           countrySeparator: settings.country_separator,
           timezonePreference: settings.timezone_preference,
-          defaultChannelProfileId: settings.default_channel_profile_id,
+          defaultChannelProfileIds: settings.default_channel_profile_ids,
         });
-        setDefaultChannelProfileId(settings.default_channel_profile_id);
+        setDefaultChannelProfileIds(settings.default_channel_profile_ids);
 
         // Apply hide_auto_sync_groups setting to channelListFilters
         setChannelListFilters(prev => ({
@@ -474,9 +474,9 @@ function App() {
         includeCountryInName: settings.include_country_in_name,
         countrySeparator: settings.country_separator,
         timezonePreference: settings.timezone_preference,
-        defaultChannelProfileId: settings.default_channel_profile_id,
+        defaultChannelProfileIds: settings.default_channel_profile_ids,
       });
-      setDefaultChannelProfileId(settings.default_channel_profile_id);
+      setDefaultChannelProfileIds(settings.default_channel_profile_ids);
 
       // Apply hide_auto_sync_groups setting to channelListFilters
       // The useEffect watching showAutoChannelGroups will handle updating group selection
@@ -920,10 +920,10 @@ function App() {
           const tempId = stageCreateChannel(name, channelNumber, groupId, undefined, logoId, logoUrl, tvgId);
 
           // Track profile assignments for after commit
-          // Use passed profileIds if provided, otherwise fall back to default profile
+          // Use passed profileIds if provided, otherwise fall back to default profiles
           const profilesToAssign = profileIds && profileIds.length > 0
             ? profileIds
-            : (defaultChannelProfileId ? [defaultChannelProfileId] : []);
+            : defaultChannelProfileIds;
 
           if (profilesToAssign.length > 0 && channelNumber !== undefined) {
             pendingProfileAssignmentsRef.current.push({
@@ -962,10 +962,10 @@ function App() {
           });
           setChannels((prev) => [...prev, newChannel]);
 
-          // Apply profile assignments - use passed profileIds if provided, otherwise fall back to default
+          // Apply profile assignments - use passed profileIds if provided, otherwise fall back to defaults
           const profilesToAssign = profileIds && profileIds.length > 0
             ? profileIds
-            : (defaultChannelProfileId ? [defaultChannelProfileId] : []);
+            : defaultChannelProfileIds;
 
           for (const profileId of profilesToAssign) {
             try {
@@ -983,7 +983,7 @@ function App() {
         throw err;
       }
     },
-    [isEditMode, stageCreateChannel, defaultChannelProfileId]
+    [isEditMode, stageCreateChannel, defaultChannelProfileIds]
   );
 
   // Check for conflicts with existing channel numbers
@@ -1194,10 +1194,10 @@ function App() {
         }
 
         // Store pending profile assignments to be applied after commit
-        // Use explicit profileIds if provided, otherwise fall back to default profile
+        // Use explicit profileIds if provided, otherwise fall back to default profiles
         const profileIdsToApply = (profileIds && profileIds.length > 0)
           ? profileIds
-          : (defaultChannelProfileId ? [defaultChannelProfileId] : []);
+          : defaultChannelProfileIds;
 
         if (profileIdsToApply.length > 0) {
           pendingProfileAssignmentsRef.current.push({
@@ -1213,7 +1213,7 @@ function App() {
         throw err;
       }
     },
-    [isEditMode, stageCreateChannel, stageAddStream, stageUpdateChannel, startBatch, endBatch, displayChannels, defaultChannelProfileId]
+    [isEditMode, stageCreateChannel, stageAddStream, stageUpdateChannel, startBatch, endBatch, displayChannels, defaultChannelProfileIds]
   );
 
   // Handle stream group drop on channels pane (triggers bulk create modal in streams pane)

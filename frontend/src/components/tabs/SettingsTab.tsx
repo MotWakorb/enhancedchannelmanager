@@ -28,7 +28,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
   const [includeCountryInName, setIncludeCountryInName] = useState(false);
   const [countrySeparator, setCountrySeparator] = useState('|');
   const [timezonePreference, setTimezonePreference] = useState('both');
-  const [defaultChannelProfileId, setDefaultChannelProfileId] = useState<number | null>(null);
+  const [defaultChannelProfileIds, setDefaultChannelProfileIds] = useState<number[]>([]);
 
   // Appearance settings
   const [showStreamUrls, setShowStreamUrls] = useState(true);
@@ -70,7 +70,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
       setHideAutoSyncGroups(settings.hide_auto_sync_groups);
       setHideUngroupedStreams(settings.hide_ungrouped_streams);
       setTheme(settings.theme || 'dark');
-      setDefaultChannelProfileId(settings.default_channel_profile_id);
+      setDefaultChannelProfileIds(settings.default_channel_profile_ids);
       setTestResult(null);
       setError(null);
     } catch (err) {
@@ -144,7 +144,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
         hide_auto_sync_groups: hideAutoSyncGroups,
         hide_ungrouped_streams: hideUngroupedStreams,
         theme: theme,
-        default_channel_profile_id: defaultChannelProfileId,
+        default_channel_profile_ids: defaultChannelProfileIds,
       });
       setOriginalUrl(url);
       setOriginalUsername(username);
@@ -575,25 +575,33 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
         </div>
 
         <div className="form-group">
-          <label htmlFor="defaultProfile">Default channel profile for new channels</label>
-          <select
-            id="defaultProfile"
-            value={defaultChannelProfileId ?? ''}
-            onChange={(e) => setDefaultChannelProfileId(e.target.value ? Number(e.target.value) : null)}
-          >
-            <option value="">None (don't auto-add to profiles)</option>
-            {channelProfiles.map((profile) => (
-              <option key={profile.id} value={profile.id}>
-                {profile.name}
-              </option>
-            ))}
-          </select>
-          <p className="form-hint">
-            Newly created channels will automatically be added to this profile.
+          <label>Default profiles for new channels</label>
+          <p className="form-hint" style={{ marginTop: 0, marginBottom: '0.75rem' }}>
+            Newly created channels will automatically be added to the selected profiles.
             {channelProfiles.length === 0 && (
               <span className="form-hint-warning"> No profiles available. Create profiles in the Channel Manager.</span>
             )}
           </p>
+          {channelProfiles.length > 0 && (
+            <div className="profile-checkbox-list">
+              {channelProfiles.map((profile) => (
+                <label key={profile.id} className="profile-checkbox">
+                  <input
+                    type="checkbox"
+                    checked={defaultChannelProfileIds.includes(profile.id)}
+                    onChange={(e) => {
+                      if (e.target.checked) {
+                        setDefaultChannelProfileIds([...defaultChannelProfileIds, profile.id]);
+                      } else {
+                        setDefaultChannelProfileIds(defaultChannelProfileIds.filter(id => id !== profile.id));
+                      }
+                    }}
+                  />
+                  <span className="profile-checkbox-label">{profile.name}</span>
+                </label>
+              ))}
+            </div>
+          )}
         </div>
       </div>
 

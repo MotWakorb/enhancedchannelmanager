@@ -558,6 +558,47 @@
   flex: 1;
 }
 
+/* Profile checkbox list */
+.profile-checkbox-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.profile-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.625rem 1rem;
+  background-color: var(--input-bg);
+  border: 1px solid var(--border-primary);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: border-color 0.15s, background-color 0.15s;
+}
+
+.profile-checkbox:hover {
+  border-color: var(--border-secondary);
+}
+
+.profile-checkbox:has(input:checked) {
+  border-color: var(--accent-primary);
+  background-color: rgba(100, 108, 255, 0.08);
+}
+
+.profile-checkbox input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--accent-primary);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.profile-checkbox-label {
+  font-size: 0.9rem;
+  color: var(--text-primary);
+}
+
 /* Hide sidebar on small screens */
 @media (max-width: 768px) {
   .settings-sidebar {

@@ -114,7 +114,7 @@ class SettingsRequest(BaseModel):
     hide_auto_sync_groups: bool = False
     hide_ungrouped_streams: bool = True
     theme: str = "dark"
-    default_channel_profile_id: Optional[int] = None
+    default_channel_profile_ids: list[int] = []
     linked_m3u_accounts: list[list[int]] = []
 
 
@@ -133,7 +133,7 @@ class SettingsResponse(BaseModel):
     hide_auto_sync_groups: bool
     hide_ungrouped_streams: bool
     theme: str
-    default_channel_profile_id: Optional[int]
+    default_channel_profile_ids: list[int]
     linked_m3u_accounts: list[list[int]]
 
 
@@ -162,7 +162,7 @@ async def get_current_settings():
         hide_auto_sync_groups=settings.hide_auto_sync_groups,
         hide_ungrouped_streams=settings.hide_ungrouped_streams,
         theme=settings.theme,
-        default_channel_profile_id=settings.default_channel_profile_id,
+        default_channel_profile_ids=settings.default_channel_profile_ids,
         linked_m3u_accounts=settings.linked_m3u_accounts,
     )
 
@@ -202,7 +202,7 @@ async def update_settings(request: SettingsRequest):
         hide_auto_sync_groups=request.hide_auto_sync_groups,
         hide_ungrouped_streams=request.hide_ungrouped_streams,
         theme=request.theme,
-        default_channel_profile_id=request.default_channel_profile_id,
+        default_channel_profile_ids=request.default_channel_profile_ids,
         linked_m3u_accounts=request.linked_m3u_accounts,
     )
     save_settings(new_settings)
