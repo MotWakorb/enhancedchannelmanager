@@ -1273,3 +1273,33 @@
   border-color: var(--accent-primary);
   color: white;
 }
+
+/* Confidence score badges and displays */
+.score-range {
+  font-size: 0.8rem;
+  font-weight: normal;
+  opacity: 0.8;
+  margin-left: 4px;
+}
+
+.confidence-badge {
+  flex-shrink: 0;
+  padding: 2px 8px;
+  background: rgba(100, 108, 255, 0.2);
+  color: var(--accent-primary);
+  font-size: 0.75rem;
+  font-weight: 600;
+  border-radius: 10px;
+  margin-left: auto;
+}
+
+.option-confidence {
+  flex-shrink: 0;
+  padding: 2px 8px;
+  background: rgba(100, 108, 255, 0.15);
+  color: var(--accent-primary);
+  font-size: 0.7rem;
+  font-weight: 600;
+  border-radius: 10px;
+  margin-left: auto;
+}
