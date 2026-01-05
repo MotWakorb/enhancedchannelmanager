@@ -695,6 +695,7 @@ function EditChannelModal({
   const [uploadingLogo, setUploadingLogo] = useState(false);
   const [addingEpgLogo, setAddingEpgLogo] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const epgDropdownRef = useRef<HTMLDivElement>(null);
 
   // Metadata state
   const [tvgId, setTvgId] = useState<string>(channel.tvg_id || '');
@@ -868,6 +869,20 @@ function EditChannelModal({
     setTvgIdSearch('');
   };
 
+  // Close EPG dropdown when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (epgDropdownRef.current && !epgDropdownRef.current.contains(event.target as Node)) {
+        setEpgDropdownOpen(false);
+      }
+    };
+
+    if (epgDropdownOpen) {
+      document.addEventListener('mousedown', handleClickOutside);
+      return () => document.removeEventListener('mousedown', handleClickOutside);
+    }
+  }, [epgDropdownOpen]);
+
   return (
     <div className="edit-channel-modal-overlay">
       <div className="edit-channel-modal" onClick={(e) => e.stopPropagation()}>
@@ -1019,7 +1034,7 @@ function EditChannelModal({
               </button>
             </div>
           )}
-          <div className="epg-search-container">
+          <div className="epg-search-container" ref={epgDropdownRef}>
             <input
               type="text"
               className="edit-channel-text-input"
@@ -1094,7 +1109,20 @@ function EditChannelModal({
 
         {/* Logo Section */}
         <div className="edit-channel-section">
-          <label>Channel Logo</label>
+          <div className="logo-section-header">
+            <label>Channel Logo</label>
+            {currentEpgData?.icon_url && (
+              <button
+                onClick={handleUseEpgLogo}
+                disabled={addingEpgLogo}
+                className="logo-epg-btn"
+                title="Use the logo from the assigned EPG data"
+              >
+                <span className="material-icons">live_tv</span>
+                {addingEpgLogo ? 'Adding...' : 'Use EPG Logo'}
+              </button>
+            )}
+          </div>
 
           {/* Current logo preview */}
           {currentLogo && (
@@ -1187,17 +1215,6 @@ function EditChannelModal({
               <span className="material-icons">upload_file</span>
               {uploadingLogo ? 'Uploading...' : 'Upload'}
             </button>
-            {currentEpgData?.icon_url && (
-              <button
-                onClick={handleUseEpgLogo}
-                disabled={addingEpgLogo}
-                className="logo-epg-btn"
-                title="Use the logo from the assigned EPG data"
-              >
-                <span className="material-icons">live_tv</span>
-                {addingEpgLogo ? 'Adding...' : 'Use EPG Logo'}
-              </button>
-            )}
           </div>
         </div>
 

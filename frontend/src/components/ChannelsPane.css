@@ -1949,6 +1949,17 @@
   letter-spacing: 0.05em;
 }
 
+.logo-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.5rem;
+}
+
+.logo-section-header label {
+  margin-bottom: 0;
+}
+
 .logo-selection-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(80px, 1fr));
