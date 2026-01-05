@@ -598,6 +598,7 @@
 .profile-checkbox-label {
   font-size: 0.9rem;
   color: var(--text-primary);
+  margin-left: 0.5rem;
 }
 
 /* Hide sidebar on small screens */
