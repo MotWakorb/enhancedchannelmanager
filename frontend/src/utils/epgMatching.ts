@@ -316,6 +316,12 @@ function findEPGMatchesWithLookup(
     }
   }
 
+  // Default to US if no country detected - this ensures US EPG entries
+  // are preferred over international ones when no explicit country is set
+  if (!detectedCountry) {
+    detectedCountry = 'us';
+  }
+
   // Normalize the channel name
   const normalizedName = normalizeForEPGMatch(channel.name);
 
@@ -405,9 +411,9 @@ function findEPGMatchesWithLookup(
   const channelSpecialChars = channel.name.match(/[!@#$%^*]/g) || [];
 
   // Sort matches with priority:
-  // 1. Exact matches over prefix matches (but not for very short names)
-  // 2. Matching special punctuation (e.g., "!" in channel name matches "!" in EPG)
-  // 3. Matching country over non-matching country
+  // 1. Matching country over non-matching country (highest priority)
+  // 2. Exact matches over prefix matches (but not for very short names)
+  // 3. Matching special punctuation (e.g., "!" in channel name matches "!" in EPG)
   // 4. Name similarity (prefer EPG names closer in length to channel name)
   // 5. Regional preference: match channel's region hint, or default to East
   // 6. HD + call sign combined: prefer HD unless non-HD has much better call sign
@@ -419,10 +425,17 @@ function findEPGMatchesWithLookup(
     const aCountry = lookup.countryByEpgId.get(a.id);
     const bCountry = lookup.countryByEpgId.get(b.id);
 
+    // FIRST: Country matching - this is the highest priority
+    // A US channel should prefer US EPG entries over international ones
+    if (detectedCountry) {
+      if (aCountry === detectedCountry && bCountry !== detectedCountry) return -1;
+      if (bCountry === detectedCountry && aCountry !== detectedCountry) return 1;
+    }
+
     // For short names (1-2 chars), don't prioritize exact matches over prefix
     // because single letters are too generic
     if (normalizedName.length > 2) {
-      // Exact matches first
+      // Exact matches first (within same country)
       if (aQuality === 'exact' && bQuality !== 'exact') return -1;
       if (bQuality === 'exact' && aQuality !== 'exact') return 1;
     }
@@ -434,12 +447,6 @@ function findEPGMatchesWithLookup(
       const bHasSpecialChar = channelSpecialChars.some(char => b.tvg_id.includes(char) || b.name.includes(char));
       if (aHasSpecialChar && !bHasSpecialChar) return -1;
       if (bHasSpecialChar && !aHasSpecialChar) return 1;
-    }
-
-    // Then matching country
-    if (detectedCountry) {
-      if (aCountry === detectedCountry && bCountry !== detectedCountry) return -1;
-      if (bCountry === detectedCountry && aCountry !== detectedCountry) return 1;
     }
 
     // Prefer matches where channel name is a prefix of EPG name (not the reverse)
