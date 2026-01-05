@@ -373,14 +373,11 @@ function findEPGMatchesWithLookup(
     }
   }
 
-  // Try prefix matching if:
-  // 1. No exact matches found and name is long enough, OR
-  // 2. Name is very short (1-2 chars) - single letters are too generic, need more context
-  const shouldTryPrefixMatching =
-    (matchSet.size === 0 && normalizedName.length >= MIN_PREFIX_LENGTH) ||
-    (normalizedName.length <= 2);
-
-  if (shouldTryPrefixMatching) {
+  // Always try prefix matching to find additional matches
+  // This ensures we find entries like "DiscoveryChannel.us" even if there's
+  // an exact match for "Discovery.be" - country sorting will then prefer the right one
+  // Only skip prefix matching for very short names (1-2 chars) that are too generic
+  if (normalizedName.length >= MIN_PREFIX_LENGTH) {
     // Check if channel name is a prefix of any EPG TVG-ID
     for (const { normalized, epg } of lookup.allNormalizedTvgIds) {
       // Channel name starts with EPG name, or EPG name starts with channel name
