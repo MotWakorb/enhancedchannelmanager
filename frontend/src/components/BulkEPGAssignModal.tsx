@@ -517,11 +517,25 @@ export function BulkEPGAssignModal({
               <div className="bulk-epg-summary">
                 <div className="summary-item success">
                   <span className="material-icons">check_circle</span>
-                  <span>{autoMatched.length} matched</span>
+                  <span>
+                    {autoMatched.length} matched
+                    {autoMatched.length > 0 && (
+                      <span className="score-range">
+                        ({Math.min(...autoMatched.map(r => r.bestScore))}-{Math.max(...autoMatched.map(r => r.bestScore))}%)
+                      </span>
+                    )}
+                  </span>
                 </div>
                 <div className="summary-item warning">
                   <span className="material-icons">help</span>
-                  <span>{conflicts.length} need review</span>
+                  <span>
+                    {conflicts.length} need review
+                    {conflicts.length > 0 && (
+                      <span className="score-range">
+                        ({Math.min(...conflicts.map(r => r.bestScore))}-{Math.max(...conflicts.map(r => r.bestScore))}%)
+                      </span>
+                    )}
+                  </span>
                 </div>
                 <div className="summary-item neutral">
                   <span className="material-icons">remove_circle_outline</span>
@@ -653,6 +667,7 @@ export function BulkEPGAssignModal({
                             <span className="epg-name">{result.matches[0].name}</span>
                             <span className="epg-tvgid">{result.matches[0].tvg_id}</span>
                           </div>
+                          <span className="confidence-badge" title="Confidence score">{result.bestScore}%</span>
                         </div>
                       ))}
                     </div>
@@ -784,6 +799,15 @@ function ConflictCard({ result, epgSources, allEpgData, selectedEpg, onSelect, r
     });
   }, [epgSources]);
 
+  // Build a map from EPG id to confidence score for quick lookup
+  const scoreByEpgId = useMemo(() => {
+    const map = new Map<number, number>();
+    for (const match of result.matchesWithScores) {
+      map.set(match.epg.id, match.confidence);
+    }
+    return map;
+  }, [result.matchesWithScores]);
+
   // Filter matches based on search - either from suggestions or all EPG data
   const filteredMatches = useMemo(() => {
     if (searchAllMode) {
@@ -857,6 +881,7 @@ function ConflictCard({ result, epgSources, allEpgData, selectedEpg, onSelect, r
           )}
           {filteredMatches.map(epg => {
             const isRecommended = !searchAllMode && recommendedEpg?.id === epg.id;
+            const confidence = scoreByEpgId.get(epg.id);
             return (
               <label
                 key={epg.id}
@@ -880,6 +905,9 @@ function ConflictCard({ result, epgSources, allEpgData, selectedEpg, onSelect, r
                     <span className="epg-tvgid">{epg.tvg_id}</span>
                     <span className="epg-source">{getEPGSourceName(epg, epgSources)}</span>
                   </div>
+                  {confidence !== undefined && (
+                    <span className="option-confidence" title="Confidence score">{confidence}%</span>
+                  )}
                 </div>
               </label>
             );
