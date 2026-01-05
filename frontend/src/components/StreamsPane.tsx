@@ -73,6 +73,8 @@ interface StreamsPaneProps {
   // Callback to check for conflicts with existing channel numbers
   // Returns the number of conflicting channels
   onCheckConflicts?: (startingNumber: number, count: number) => number;
+  // Callback to get the highest existing channel number (for "insert at end" option)
+  onGetHighestChannelNumber?: () => number;
   // Appearance settings
   showStreamUrls?: boolean;
   // Refresh streams (bypasses cache)
@@ -106,6 +108,7 @@ export function StreamsPane({
   onExternalTriggerHandled,
   onBulkCreateFromGroup,
   onCheckConflicts,
+  onGetHighestChannelNumber,
   showStreamUrls = true,
   onRefreshStreams,
 }: StreamsPaneProps) {
@@ -178,6 +181,7 @@ export function StreamsPane({
   const [bulkCreateLoading, setBulkCreateLoading] = useState(false);
   const [bulkCreateShowConflict, setBulkCreateShowConflict] = useState(false);
   const [bulkCreateConflictCount, setBulkCreateConflictCount] = useState(0);
+  const [bulkCreateEndOfSequenceNumber, setBulkCreateEndOfSequenceNumber] = useState(0);
   const [bulkCreateTimezone, setBulkCreateTimezone] = useState<TimezonePreference>('both');
   const [bulkCreateStripCountry, setBulkCreateStripCountry] = useState(false);
   const [bulkCreateKeepCountry, setBulkCreateKeepCountry] = useState(false);
@@ -769,7 +773,8 @@ export function StreamsPane({
   }, [streamsToCreate, bulkCreateTimezone, bulkCreateStripCountry, bulkCreateKeepCountry, bulkCreateCountrySeparator, bulkCreateStripNetwork]);
 
   // Actually perform the bulk create with the specified pushDown option
-  const doBulkCreate = useCallback(async (pushDown: boolean) => {
+  // startingNumberOverride: optionally override the starting number (used by "insert at end" option)
+  const doBulkCreate = useCallback(async (pushDown: boolean, startingNumberOverride?: number) => {
     if (streamsToCreate.length === 0 || !onBulkCreateFromGroup) return;
 
     const useSeparateMode = isFromMultipleGroups && bulkCreateMultiGroupOption === 'separate';
@@ -819,7 +824,8 @@ export function StreamsPane({
       } else {
         // Single group or combined mode
         // Use parseFloat to support decimal channel numbers (e.g., 38.1, 38.2)
-        const startingNum = parseFloat(bulkCreateStartingNumber);
+        // If startingNumberOverride is provided (from "insert at end" option), use that instead
+        const startingNum = startingNumberOverride !== undefined ? startingNumberOverride : parseFloat(bulkCreateStartingNumber);
         let groupId: number | null = null;
         let newGroupName: string | undefined;
 
@@ -929,6 +935,9 @@ export function StreamsPane({
       const startingNum = Math.floor(parseFloat(bulkCreateStartingNumber));
       const conflictCount = onCheckConflicts(startingNum, bulkCreateStats.uniqueCount);
       if (conflictCount > 0) {
+        // Calculate end-of-sequence number (highest existing + 1)
+        const highestNumber = onGetHighestChannelNumber ? onGetHighestChannelNumber() : 0;
+        setBulkCreateEndOfSequenceNumber(highestNumber + 1);
         // Show conflict dialog
         setBulkCreateConflictCount(conflictCount);
         setBulkCreateShowConflict(true);
@@ -948,6 +957,7 @@ export function StreamsPane({
     bulkCreateStats.uniqueCount,
     onBulkCreateFromGroup,
     onCheckConflicts,
+    onGetHighestChannelNumber,
     doBulkCreate,
   ]);
 
@@ -2130,6 +2140,17 @@ export function StreamsPane({
                 <div className="conflict-option-text">
                   <strong>Push channels down</strong>
                   <span>Insert at {bulkCreateStartingNumber} and shift existing channels by {bulkCreateStats.uniqueCount}</span>
+                </div>
+              </button>
+              <button
+                className="conflict-option-btn insert-at-end"
+                onClick={() => doBulkCreate(false, bulkCreateEndOfSequenceNumber)}
+                disabled={bulkCreateLoading}
+              >
+                <span className="material-icons">last_page</span>
+                <div className="conflict-option-text">
+                  <strong>Insert at end</strong>
+                  <span>Start at channel {bulkCreateEndOfSequenceNumber} (after all existing channels)</span>
                 </div>
               </button>
               <button

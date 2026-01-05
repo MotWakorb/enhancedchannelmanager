@@ -1511,8 +1511,12 @@
   color: var(--accent-primary);
 }
 
-.conflict-option-btn.add-to-end:hover:not(:disabled) .material-icons {
+.conflict-option-btn.insert-at-end:hover:not(:disabled) .material-icons {
   color: var(--success);
+}
+
+.conflict-option-btn.add-to-end:hover:not(:disabled) .material-icons {
+  color: var(--warning);
 }
 
 .conflict-option-text {
