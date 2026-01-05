@@ -542,6 +542,7 @@
   width: 18px;
   height: 18px;
   margin: 0;
+  margin-right: 0.5rem;
   accent-color: var(--accent-primary);
   cursor: pointer;
   flex-shrink: 0;
@@ -552,12 +553,14 @@
   font-weight: 500;
   color: var(--text-primary);
   min-width: 80px;
+  margin-right: 0.5rem;
 }
 
 .radio-description {
   font-size: 0.8rem;
   color: var(--text-secondary);
   flex: 1;
+  margin-left: 0.25rem;
 }
 
 /* Profile checkbox list */
