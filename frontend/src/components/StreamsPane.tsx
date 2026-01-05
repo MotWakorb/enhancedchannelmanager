@@ -762,55 +762,6 @@ export function StreamsPane({
     return { uniqueCount, duplicateCount, hasDuplicates, streamsByNormalizedName, excludedCount };
   }, [streamsToCreate, bulkCreateTimezone, bulkCreateStripCountry, bulkCreateKeepCountry, bulkCreateCountrySeparator, bulkCreateStripNetwork]);
 
-  // Check for conflicts and show dialog, or proceed directly if no conflicts
-  const handleBulkCreate = useCallback(async () => {
-    if (streamsToCreate.length === 0 || !onBulkCreateFromGroup) return;
-
-    // For separate groups mode, we use per-group starting numbers
-    // For other modes, we need a valid global starting number
-    const useSeparateMode = isFromMultipleGroups && bulkCreateMultiGroupOption === 'separate';
-
-    if (useSeparateMode) {
-      // Check that at least the first group has a starting number
-      const firstGroupStart = bulkCreateGroupStartNumbers.get(bulkCreateGroups[0]?.name);
-      if (!firstGroupStart || isNaN(parseFloat(firstGroupStart)) || parseFloat(firstGroupStart) < 0) {
-        alert('Please enter a valid starting channel number for the first group');
-        return;
-      }
-    } else {
-      const startingNum = parseFloat(bulkCreateStartingNumber);
-      if (isNaN(startingNum) || startingNum < 0) {
-        alert('Please enter a valid starting channel number');
-        return;
-      }
-    }
-
-    // Check for conflicts before proceeding (use floor for conflict check since it checks integer ranges)
-    if (onCheckConflicts && !useSeparateMode) {
-      const startingNum = Math.floor(parseFloat(bulkCreateStartingNumber));
-      const conflictCount = onCheckConflicts(startingNum, bulkCreateStats.uniqueCount);
-      if (conflictCount > 0) {
-        // Show conflict dialog
-        setBulkCreateConflictCount(conflictCount);
-        setBulkCreateShowConflict(true);
-        return;
-      }
-    }
-
-    // No conflicts or separate mode - proceed with creation
-    await doBulkCreate(false);
-  }, [
-    streamsToCreate,
-    isFromMultipleGroups,
-    bulkCreateMultiGroupOption,
-    bulkCreateGroupStartNumbers,
-    bulkCreateGroups,
-    bulkCreateStartingNumber,
-    bulkCreateStats.uniqueCount,
-    onBulkCreateFromGroup,
-    onCheckConflicts,
-  ]);
-
   // Actually perform the bulk create with the specified pushDown option
   const doBulkCreate = useCallback(async (pushDown: boolean) => {
     if (streamsToCreate.length === 0 || !onBulkCreateFromGroup) return;
@@ -942,6 +893,56 @@ export function StreamsPane({
     onBulkCreateFromGroup,
     clearSelection,
     closeBulkCreateModal,
+  ]);
+
+  // Check for conflicts and show dialog, or proceed directly if no conflicts
+  const handleBulkCreate = useCallback(async () => {
+    if (streamsToCreate.length === 0 || !onBulkCreateFromGroup) return;
+
+    // For separate groups mode, we use per-group starting numbers
+    // For other modes, we need a valid global starting number
+    const useSeparateMode = isFromMultipleGroups && bulkCreateMultiGroupOption === 'separate';
+
+    if (useSeparateMode) {
+      // Check that at least the first group has a starting number
+      const firstGroupStart = bulkCreateGroupStartNumbers.get(bulkCreateGroups[0]?.name);
+      if (!firstGroupStart || isNaN(parseFloat(firstGroupStart)) || parseFloat(firstGroupStart) < 0) {
+        alert('Please enter a valid starting channel number for the first group');
+        return;
+      }
+    } else {
+      const startingNum = parseFloat(bulkCreateStartingNumber);
+      if (isNaN(startingNum) || startingNum < 0) {
+        alert('Please enter a valid starting channel number');
+        return;
+      }
+    }
+
+    // Check for conflicts before proceeding (use floor for conflict check since it checks integer ranges)
+    if (onCheckConflicts && !useSeparateMode) {
+      const startingNum = Math.floor(parseFloat(bulkCreateStartingNumber));
+      const conflictCount = onCheckConflicts(startingNum, bulkCreateStats.uniqueCount);
+      if (conflictCount > 0) {
+        // Show conflict dialog
+        setBulkCreateConflictCount(conflictCount);
+        setBulkCreateShowConflict(true);
+        return;
+      }
+    }
+
+    // No conflicts or separate mode - proceed with creation
+    await doBulkCreate(false);
+  }, [
+    streamsToCreate,
+    isFromMultipleGroups,
+    bulkCreateMultiGroupOption,
+    bulkCreateGroupStartNumbers,
+    bulkCreateGroups,
+    bulkCreateStartingNumber,
+    bulkCreateStats.uniqueCount,
+    onBulkCreateFromGroup,
+    onCheckConflicts,
+    doBulkCreate,
   ]);
 
   return (
