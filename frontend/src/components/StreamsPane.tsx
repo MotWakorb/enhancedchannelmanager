@@ -187,6 +187,9 @@ export function StreamsPane({
   const [bulkCreatePrefixOrder, setBulkCreatePrefixOrder] = useState<PrefixOrder>('number-first');
   const [bulkCreateStripNetwork, setBulkCreateStripNetwork] = useState(false);
   const [bulkCreateSelectedProfiles, setBulkCreateSelectedProfiles] = useState<Set<number>>(new Set());
+  const [bulkCreateGroupSearch, setBulkCreateGroupSearch] = useState('');
+  const [bulkCreateGroupDropdownOpen, setBulkCreateGroupDropdownOpen] = useState(false);
+  const bulkCreateGroupDropdownRef = useRef<HTMLDivElement>(null);
   const [profilesExpanded, setProfilesExpanded] = useState(false);
   const [namingOptionsExpanded, setNamingOptionsExpanded] = useState(false);
   const [channelGroupExpanded, setChannelGroupExpanded] = useState(false);
@@ -209,6 +212,9 @@ export function StreamsPane({
       if (groupDropdownRef.current && !groupDropdownRef.current.contains(event.target as Node)) {
         setGroupDropdownOpen(false);
         setGroupSearchFilter('');
+      }
+      if (bulkCreateGroupDropdownRef.current && !bulkCreateGroupDropdownRef.current.contains(event.target as Node)) {
+        setBulkCreateGroupDropdownOpen(false);
       }
     };
     document.addEventListener('mousedown', handleClickOutside);
@@ -1561,16 +1567,67 @@ export function StreamsPane({
                         <span>Select existing group</span>
                       </label>
                       {bulkCreateGroupOption === 'existing' && (
-                        <select
-                          value={bulkCreateSelectedGroupId ?? ''}
-                          onChange={(e) => setBulkCreateSelectedGroupId(e.target.value ? parseInt(e.target.value, 10) : null)}
-                          className="form-select"
-                        >
-                          <option value="">-- Select a group --</option>
-                          {channelGroups.map((g) => (
-                            <option key={g.id} value={g.id}>{g.name}</option>
-                          ))}
-                        </select>
+                        <div className="searchable-dropdown" ref={bulkCreateGroupDropdownRef}>
+                          <div
+                            className="dropdown-trigger"
+                            onClick={() => setBulkCreateGroupDropdownOpen(!bulkCreateGroupDropdownOpen)}
+                          >
+                            <span className="dropdown-value">
+                              {bulkCreateSelectedGroupId
+                                ? channelGroups.find(g => g.id === bulkCreateSelectedGroupId)?.name ?? '-- Select a group --'
+                                : '-- Select a group --'}
+                            </span>
+                            <span className="material-icons dropdown-arrow">
+                              {bulkCreateGroupDropdownOpen ? 'expand_less' : 'expand_more'}
+                            </span>
+                          </div>
+                          {bulkCreateGroupDropdownOpen && (
+                            <div className="dropdown-menu">
+                              <div className="dropdown-search">
+                                <span className="material-icons">search</span>
+                                <input
+                                  type="text"
+                                  placeholder="Search groups..."
+                                  value={bulkCreateGroupSearch}
+                                  onChange={(e) => setBulkCreateGroupSearch(e.target.value)}
+                                  onClick={(e) => e.stopPropagation()}
+                                  autoFocus
+                                />
+                                {bulkCreateGroupSearch && (
+                                  <button
+                                    className="clear-search"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setBulkCreateGroupSearch('');
+                                    }}
+                                  >
+                                    <span className="material-icons">close</span>
+                                  </button>
+                                )}
+                              </div>
+                              <div className="dropdown-options">
+                                {channelGroups
+                                  .filter(g => !bulkCreateGroupSearch || g.name.toLowerCase().includes(bulkCreateGroupSearch.toLowerCase()))
+                                  .map((g) => (
+                                    <div
+                                      key={g.id}
+                                      className={`dropdown-option ${bulkCreateSelectedGroupId === g.id ? 'selected' : ''}`}
+                                      onClick={() => {
+                                        setBulkCreateSelectedGroupId(g.id);
+                                        setBulkCreateGroupDropdownOpen(false);
+                                        setBulkCreateGroupSearch('');
+                                      }}
+                                    >
+                                      {g.name}
+                                    </div>
+                                  ))}
+                                {channelGroups.filter(g => !bulkCreateGroupSearch || g.name.toLowerCase().includes(bulkCreateGroupSearch.toLowerCase())).length === 0 && (
+                                  <div className="dropdown-no-results">No groups found</div>
+                                )}
+                              </div>
+                            </div>
+                          )}
+                        </div>
                       )}
 
                       <label className="radio-option">
