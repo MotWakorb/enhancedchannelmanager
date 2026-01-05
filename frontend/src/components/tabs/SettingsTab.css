@@ -517,7 +517,7 @@
 
 .radio-option {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   gap: 0.75rem;
   padding: 0.75rem 1rem;
   background-color: var(--input-bg);
@@ -539,7 +539,7 @@
 .radio-option input[type="radio"] {
   width: 18px;
   height: 18px;
-  margin-top: 2px;
+  margin: 0;
   accent-color: var(--accent-primary);
   cursor: pointer;
   flex-shrink: 0;
@@ -591,16 +591,16 @@
   width: 18px;
   height: 18px;
   margin: 0;
-  margin-top: 2px;
   accent-color: var(--accent-primary);
   cursor: pointer;
   flex-shrink: 0;
+  align-self: center;
 }
 
 .profile-checkbox-label {
   font-size: 0.9rem;
   color: var(--text-primary);
-  margin-left: 0.5rem;
+  line-height: 18px;
 }
 
 /* Hide sidebar on small screens */
