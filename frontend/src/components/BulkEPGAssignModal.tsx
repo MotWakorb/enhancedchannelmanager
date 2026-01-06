@@ -736,15 +736,41 @@ export function BulkEPGAssignModal({
                         const isEditing = editingAutoMatchId === result.channel.id;
 
                         return (
-                          <div key={result.channel.id} className={`matched-item ${hasOverride ? 'has-override' : ''} ${isEditing ? 'editing' : ''}`}>
-                            <div className="matched-channel">
-                              <span className="channel-name" title={result.channel.name}>{result.channel.name}</span>
-                              {result.detectedCountry && (
-                                <span className="country-badge">{result.detectedCountry.toUpperCase()}</span>
+                          <div key={result.channel.id}>
+                            <div className={`matched-item ${hasOverride ? 'has-override' : ''}`}>
+                              <div className="matched-channel">
+                                <span className="channel-name" title={result.channel.name}>{result.channel.name}</span>
+                                {result.detectedCountry && (
+                                  <span className="country-badge">{result.detectedCountry.toUpperCase()}</span>
+                                )}
+                              </div>
+                              <span className="material-icons arrow">arrow_forward</span>
+                              <div className="matched-epg">
+                                <span className="epg-name" title={displayEpg.name}>
+                                  {displayEpg.name}
+                                  {hasOverride && <span className="modified-tag">Modified</span>}
+                                </span>
+                                <span className="epg-tvgid" title={displayEpg.tvg_id}>{displayEpg.tvg_id}</span>
+                              </div>
+                              <span className="confidence-badge" title="Confidence score">{result.bestScore}%</span>
+                              <button
+                                className="edit-match-btn"
+                                onClick={() => handleOpenAutoMatchEdit(result)}
+                                title="Change EPG assignment"
+                              >
+                                <span className="material-icons">edit</span>
+                              </button>
+                              {hasOverride && (
+                                <button
+                                  className="reset-match-btn"
+                                  onClick={() => handleResetAutoMatchOverride(result.channel.id)}
+                                  title="Reset to original match"
+                                >
+                                  <span className="material-icons">undo</span>
+                                </button>
                               )}
                             </div>
-                            <span className="material-icons arrow">arrow_forward</span>
-                            {isEditing ? (
+                            {isEditing && (
                               <EPGSearchCard
                                 channelName={result.channel.name}
                                 normalizedName={result.normalizedName || result.channel.name}
@@ -757,33 +783,6 @@ export function BulkEPGAssignModal({
                                 searchTerm={autoMatchSearchTerm}
                                 onSearchChange={setAutoMatchSearchTerm}
                               />
-                            ) : (
-                              <>
-                                <div className="matched-epg">
-                                  <span className="epg-name" title={displayEpg.name}>
-                                    {displayEpg.name}
-                                    {hasOverride && <span className="modified-tag">Modified</span>}
-                                  </span>
-                                  <span className="epg-tvgid" title={displayEpg.tvg_id}>{displayEpg.tvg_id}</span>
-                                </div>
-                                <span className="confidence-badge" title="Confidence score">{result.bestScore}%</span>
-                                <button
-                                  className="edit-match-btn"
-                                  onClick={() => handleOpenAutoMatchEdit(result)}
-                                  title="Change EPG assignment"
-                                >
-                                  <span className="material-icons">edit</span>
-                                </button>
-                                {hasOverride && (
-                                  <button
-                                    className="reset-match-btn"
-                                    onClick={() => handleResetAutoMatchOverride(result.channel.id)}
-                                    title="Reset to original match"
-                                  >
-                                    <span className="material-icons">undo</span>
-                                  </button>
-                                )}
-                              </>
                             )}
                           </div>
                         );
