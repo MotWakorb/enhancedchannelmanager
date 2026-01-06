@@ -4947,13 +4947,64 @@ export function ChannelsPane({
       />
 
       <div className="pane-filters">
-        <input
-          type="text"
-          placeholder="Search channels..."
-          value={searchTerm}
-          onChange={(e) => onSearchChange(e.target.value)}
-          className="search-input"
-        />
+        <div className="search-row">
+          <input
+            type="text"
+            placeholder="Search channels..."
+            value={searchTerm}
+            onChange={(e) => onSearchChange(e.target.value)}
+            className="search-input"
+          />
+          {/* Expand/Collapse All Buttons */}
+          <div className="expand-collapse-buttons">
+            <button
+              className="expand-collapse-btn"
+              onClick={() => {
+                // Get all visible group IDs
+                const visibleGroupIds: number[] = [];
+                filteredChannelGroups.forEach((g) => visibleGroupIds.push(g.id));
+                selectedGroups.forEach((groupId) => {
+                  const isEmpty = !channelsByGroup[groupId] || channelsByGroup[groupId].length === 0;
+                  if (isEmpty && shouldShowGroup(groupId) && !visibleGroupIds.includes(groupId)) {
+                    visibleGroupIds.push(groupId);
+                  }
+                });
+                newlyCreatedGroupIds.forEach((groupId) => {
+                  const isEmpty = !channelsByGroup[groupId] || channelsByGroup[groupId].length === 0;
+                  const notAlreadyRendered = !filteredChannelGroups.some((g) => g.id === groupId) && !selectedGroups.includes(groupId);
+                  if (isEmpty && notAlreadyRendered && shouldShowGroup(groupId) && !visibleGroupIds.includes(groupId)) {
+                    visibleGroupIds.push(groupId);
+                  }
+                });
+                // Include ungrouped (as 0) if it has channels
+                if (channelsByGroup.ungrouped?.length > 0) {
+                  visibleGroupIds.push(0); // 0 represents 'ungrouped'
+                }
+                // Expand all
+                setExpandedGroups((prev) => {
+                  const newState = { ...prev };
+                  visibleGroupIds.forEach((id) => {
+                    newState[id] = true;
+                  });
+                  return newState;
+                });
+              }}
+              title="Expand all groups"
+            >
+              <span className="material-icons">unfold_more</span>
+            </button>
+            <button
+              className="expand-collapse-btn"
+              onClick={() => {
+                // Collapse all
+                setExpandedGroups({});
+              }}
+              title="Collapse all groups"
+            >
+              <span className="material-icons">unfold_less</span>
+            </button>
+          </div>
+        </div>
         <div className="pane-filters-row">
         <div className="group-filter-dropdown" ref={dropdownRef}>
           <button

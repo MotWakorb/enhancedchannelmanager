@@ -347,6 +347,18 @@
   flex: 1;
 }
 
+/* Search row with expand/collapse buttons */
+.search-row {
+  display: flex;
+  gap: 0.5rem;
+  align-items: stretch;
+}
+
+.search-row .search-input {
+  flex: 1;
+  min-width: 0;
+}
+
 .search-input {
   width: 100%;
   padding: 0.5rem;
@@ -525,6 +537,47 @@
 .group-option-count {
   font-size: 0.75rem;
   color: var(--text-secondary);
+}
+
+/* Expand/Collapse All Buttons */
+.expand-collapse-buttons {
+  display: flex;
+  gap: 2px;
+}
+
+.expand-collapse-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  background-color: var(--input-bg);
+  border: 1px solid var(--border-secondary);
+  border-radius: 4px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: background-color 0.15s, border-color 0.15s, color 0.15s;
+  padding: 0;
+}
+
+.expand-collapse-btn:first-child {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+  border-right: none;
+}
+
+.expand-collapse-btn:last-child {
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+}
+
+.expand-collapse-btn:hover {
+  background-color: var(--bg-hover);
+  border-color: var(--border-secondary);
+  color: var(--text-primary);
+}
+
+.expand-collapse-btn .material-icons {
+  font-size: 18px;
 }
 
 /* Filter Settings Dropdown */
