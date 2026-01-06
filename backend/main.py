@@ -6,8 +6,6 @@ from pydantic import BaseModel
 from typing import Optional
 import os
 import re
-import sys
-import traceback
 import logging
 
 from dispatcharr_client import get_client, reset_client
