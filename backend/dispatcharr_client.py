@@ -622,12 +622,6 @@ class DispatcharrClient:
         response.raise_for_status()
         return response.json()
 
-    async def get_stream_profile(self, profile_id: int) -> dict:
-        """Get a single stream profile by ID."""
-        response = await self._request("GET", f"/api/core/streamprofiles/{profile_id}/")
-        response.raise_for_status()
-        return response.json()
-
     # -------------------------------------------------------------------------
     # Channel Profiles
     # -------------------------------------------------------------------------
