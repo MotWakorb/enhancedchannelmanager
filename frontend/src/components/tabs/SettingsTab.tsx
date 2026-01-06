@@ -615,18 +615,23 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
         </div>
 
         <div className="form-group">
-          <label htmlFor="epgThreshold">Auto-match confidence threshold</label>
-          <div className="slider-group">
-            <input
-              id="epgThreshold"
-              type="range"
-              min="0"
-              max="100"
-              value={epgAutoMatchThreshold}
-              onChange={(e) => setEpgAutoMatchThreshold(Number(e.target.value))}
-              className="threshold-slider"
-            />
-            <span className="threshold-value">{epgAutoMatchThreshold}%</span>
+          <div className="threshold-label-row">
+            <label htmlFor="epgThreshold">Auto-match confidence threshold</label>
+            <div className="threshold-input-group">
+              <input
+                id="epgThreshold"
+                type="number"
+                min="0"
+                max="100"
+                value={epgAutoMatchThreshold}
+                onChange={(e) => {
+                  const value = Math.max(0, Math.min(100, Number(e.target.value) || 0));
+                  setEpgAutoMatchThreshold(value);
+                }}
+                className="threshold-input"
+              />
+              <span className="threshold-percent">%</span>
+            </div>
           </div>
           <p className="form-hint">
             EPG matches with a confidence score at or above this threshold will be automatically assigned.

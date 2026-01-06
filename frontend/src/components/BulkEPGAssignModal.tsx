@@ -58,6 +58,11 @@ export function BulkEPGAssignModal({
   const [searchingUnmatchedId, setSearchingUnmatchedId] = useState<number | null>(null);
   const [unmatchedSearchTerm, setUnmatchedSearchTerm] = useState('');
 
+  // Auto-match override state (for editing auto-matched items)
+  const [autoMatchOverrides, setAutoMatchOverrides] = useState<Map<number, EPGData | null>>(new Map());
+  const [editingAutoMatchId, setEditingAutoMatchId] = useState<number | null>(null);
+  const [autoMatchSearchTerm, setAutoMatchSearchTerm] = useState('');
+
   // EPG Source selection state - simple Set of selected source IDs
   const [selectedSourceIds, setSelectedSourceIds] = useState<Set<number> | null>(null);
   const [sourceDropdownOpen, setSourceDropdownOpen] = useState(false);
@@ -150,6 +155,9 @@ export function BulkEPGAssignModal({
       setUnmatchedSelections(new Map());
       setSearchingUnmatchedId(null);
       setUnmatchedSearchTerm('');
+      setAutoMatchOverrides(new Map());
+      setEditingAutoMatchId(null);
+      setAutoMatchSearchTerm('');
       setSelectedSourceIds(null); // Reset to default (all selected)
       setSourceDropdownOpen(false);
       hasAnalyzedRef.current = false;
@@ -212,7 +220,7 @@ export function BulkEPGAssignModal({
   }, [isOpen, selectedChannels, streams]);
 
   // Categorize results and sort A-Z by channel name
-  // Uses confidence threshold to promote high-confidence matches to "auto-matched"
+  // Uses confidence threshold to determine auto-matching
   const { autoMatched, conflicts, unmatched } = useMemo(() => {
     const auto: EPGMatchResult[] = [];
     const conf: EPGMatchResult[] = [];
@@ -222,17 +230,12 @@ export function BulkEPGAssignModal({
       if (result.status === 'none') {
         // No matches found
         none.push(result);
-      } else if (result.status === 'exact') {
-        // Single match - always auto-match
+      } else if (result.bestScore >= epgAutoMatchThreshold) {
+        // High confidence match (single or multiple) - auto-match
         auto.push(result);
-      } else if (result.status === 'multiple') {
-        // Multiple matches - check if best match exceeds threshold
-        // If bestScore >= threshold, treat as auto-matched (high confidence)
-        if (result.bestScore >= epgAutoMatchThreshold) {
-          auto.push(result);
-        } else {
-          conf.push(result);
-        }
+      } else {
+        // Below threshold - needs review
+        conf.push(result);
       }
     }
 
@@ -347,9 +350,57 @@ export function BulkEPGAssignModal({
     setUnmatchedSearchTerm('');
   }, []);
 
+  // Handle auto-match override selection
+  const handleAutoMatchOverride = useCallback((channelId: number, epgData: EPGData | null) => {
+    setAutoMatchOverrides(prev => {
+      const next = new Map(prev);
+      if (epgData) {
+        next.set(channelId, epgData);
+      } else {
+        next.delete(channelId);
+      }
+      return next;
+    });
+    setEditingAutoMatchId(null);
+    setAutoMatchSearchTerm('');
+  }, []);
+
+  // Open edit for an auto-matched channel
+  const handleOpenAutoMatchEdit = useCallback((result: EPGMatchResult) => {
+    setEditingAutoMatchId(result.channel.id);
+    setAutoMatchSearchTerm('');
+  }, []);
+
+  // Close auto-match edit without changing
+  const handleCloseAutoMatchEdit = useCallback(() => {
+    setEditingAutoMatchId(null);
+    setAutoMatchSearchTerm('');
+  }, []);
+
+  // Reset an auto-match override back to original
+  const handleResetAutoMatchOverride = useCallback((channelId: number) => {
+    setAutoMatchOverrides(prev => {
+      const next = new Map(prev);
+      next.delete(channelId);
+      return next;
+    });
+  }, []);
+
   // Count how many assignments will be made
   const assignmentCount = useMemo(() => {
-    let count = autoMatched.length;
+    // Count auto-matched, accounting for overrides
+    let count = 0;
+    for (const result of autoMatched) {
+      if (autoMatchOverrides.has(result.channel.id)) {
+        // Has an override - count if not null
+        if (autoMatchOverrides.get(result.channel.id) !== null) {
+          count++;
+        }
+      } else {
+        // No override - count the original auto-match
+        count++;
+      }
+    }
     for (const [, selected] of conflictResolutions) {
       if (selected !== null) {
         count++;
@@ -358,21 +409,36 @@ export function BulkEPGAssignModal({
     // Add unmatched selections
     count += unmatchedSelections.size;
     return count;
-  }, [autoMatched, conflictResolutions, unmatchedSelections]);
+  }, [autoMatched, autoMatchOverrides, conflictResolutions, unmatchedSelections]);
 
   // Handle assign button click
   const handleAssign = useCallback(() => {
     const assignments: EPGAssignment[] = [];
 
-    // Add auto-matched channels
+    // Add auto-matched channels (with override support)
     for (const result of autoMatched) {
-      const match = result.matches[0];
-      assignments.push({
-        channelId: result.channel.id,
-        channelName: result.channel.name,
-        tvg_id: match.tvg_id,
-        epg_data_id: match.id,
-      });
+      if (autoMatchOverrides.has(result.channel.id)) {
+        // Use override if set
+        const override = autoMatchOverrides.get(result.channel.id);
+        if (override) {
+          assignments.push({
+            channelId: result.channel.id,
+            channelName: result.channel.name,
+            tvg_id: override.tvg_id,
+            epg_data_id: override.id,
+          });
+        }
+        // If override is null, skip this channel (user chose to not assign)
+      } else {
+        // Use original auto-match
+        const match = result.matches[0];
+        assignments.push({
+          channelId: result.channel.id,
+          channelName: result.channel.name,
+          tvg_id: match.tvg_id,
+          epg_data_id: match.id,
+        });
+      }
     }
 
     // Add resolved conflicts
@@ -404,7 +470,7 @@ export function BulkEPGAssignModal({
     }
 
     onAssign(assignments);
-  }, [autoMatched, conflictResolutions, unmatchedSelections, selectedChannels, onAssign]);
+  }, [autoMatched, autoMatchOverrides, conflictResolutions, unmatchedSelections, selectedChannels, onAssign]);
 
   if (!isOpen) return null;
 
@@ -654,28 +720,74 @@ export function BulkEPGAssignModal({
                   >
                     <span className="material-icons">check_circle</span>
                     Auto-Matched ({autoMatched.length})
+                    {autoMatchOverrides.size > 0 && (
+                      <span className="override-count">({autoMatchOverrides.size} modified)</span>
+                    )}
                     <span className="material-icons expand-icon">
                       {autoMatchedExpanded ? 'expand_less' : 'expand_more'}
                     </span>
                   </button>
                   {autoMatchedExpanded && (
                     <div className="matched-list">
-                      {autoMatched.map(result => (
-                        <div key={result.channel.id} className="matched-item">
-                          <div className="matched-channel">
-                            <span className="channel-name">{result.channel.name}</span>
-                            {result.detectedCountry && (
-                              <span className="country-badge">{result.detectedCountry.toUpperCase()}</span>
+                      {autoMatched.map(result => {
+                        const override = autoMatchOverrides.get(result.channel.id);
+                        const hasOverride = autoMatchOverrides.has(result.channel.id);
+                        const displayEpg = hasOverride && override ? override : result.matches[0];
+                        const isEditing = editingAutoMatchId === result.channel.id;
+
+                        return (
+                          <div key={result.channel.id} className={`matched-item ${hasOverride ? 'has-override' : ''} ${isEditing ? 'editing' : ''}`}>
+                            <div className="matched-channel">
+                              <span className="channel-name" title={result.channel.name}>{result.channel.name}</span>
+                              {result.detectedCountry && (
+                                <span className="country-badge">{result.detectedCountry.toUpperCase()}</span>
+                              )}
+                            </div>
+                            <span className="material-icons arrow">arrow_forward</span>
+                            {isEditing ? (
+                              <EPGSearchCard
+                                channelName={result.channel.name}
+                                normalizedName={result.normalizedName || result.channel.name}
+                                detectedCountry={result.detectedCountry}
+                                epgData={filteredEpgData}
+                                epgSources={epgSources}
+                                selectedEpg={displayEpg}
+                                onSelect={(epg) => handleAutoMatchOverride(result.channel.id, epg)}
+                                onClose={handleCloseAutoMatchEdit}
+                                searchTerm={autoMatchSearchTerm}
+                                onSearchChange={setAutoMatchSearchTerm}
+                              />
+                            ) : (
+                              <>
+                                <div className="matched-epg">
+                                  <span className="epg-name" title={displayEpg.name}>
+                                    {displayEpg.name}
+                                    {hasOverride && <span className="modified-tag">Modified</span>}
+                                  </span>
+                                  <span className="epg-tvgid" title={displayEpg.tvg_id}>{displayEpg.tvg_id}</span>
+                                </div>
+                                <span className="confidence-badge" title="Confidence score">{result.bestScore}%</span>
+                                <button
+                                  className="edit-match-btn"
+                                  onClick={() => handleOpenAutoMatchEdit(result)}
+                                  title="Change EPG assignment"
+                                >
+                                  <span className="material-icons">edit</span>
+                                </button>
+                                {hasOverride && (
+                                  <button
+                                    className="reset-match-btn"
+                                    onClick={() => handleResetAutoMatchOverride(result.channel.id)}
+                                    title="Reset to original match"
+                                  >
+                                    <span className="material-icons">undo</span>
+                                  </button>
+                                )}
+                              </>
                             )}
                           </div>
-                          <span className="material-icons arrow">arrow_forward</span>
-                          <div className="matched-epg">
-                            <span className="epg-name">{result.matches[0].name}</span>
-                            <span className="epg-tvgid">{result.matches[0].tvg_id}</span>
-                          </div>
-                          <span className="confidence-badge" title="Confidence score">{result.bestScore}%</span>
-                        </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   )}
                 </div>
@@ -709,7 +821,7 @@ export function BulkEPGAssignModal({
                               onClick={() => handleOpenUnmatchedSearch(result)}
                             >
                               <div className="unmatched-item-main">
-                                <span className="channel-name">{result.channel.name}</span>
+                                <span className="channel-name" title={result.channel.name}>{result.channel.name}</span>
                                 {result.detectedCountry && (
                                   <span className="country-badge">{result.detectedCountry.toUpperCase()}</span>
                                 )}
@@ -720,7 +832,7 @@ export function BulkEPGAssignModal({
                               {assignedEpg ? (
                                 <div className="assigned-epg-info">
                                   <span className="material-icons assigned-icon">check_circle</span>
-                                  <span className="assigned-epg-name">{assignedEpg.name}</span>
+                                  <span className="assigned-epg-name" title={assignedEpg.name}>{assignedEpg.name}</span>
                                 </div>
                               ) : (
                                 <span className="material-icons search-icon">search</span>
@@ -845,7 +957,7 @@ function ConflictCard({ result, epgSources, allEpgData, selectedEpg, onSelect, r
     <div className="conflict-card">
       <div className="conflict-card-header">
         <div className="conflict-channel">
-          <span className="channel-name">{result.channel.name}</span>
+          <span className="channel-name" title={result.channel.name}>{result.channel.name}</span>
           {result.detectedCountry && (
             <span className="country-badge">{result.detectedCountry.toUpperCase()}</span>
           )}
@@ -904,11 +1016,11 @@ function ConflictCard({ result, epgSources, allEpgData, selectedEpg, onSelect, r
                     <img src={epg.icon_url} alt="" className="epg-icon" />
                   )}
                   <div className="option-info">
-                    <span className="epg-name">
+                    <span className="epg-name" title={epg.name}>
                       {epg.name}
                       {isRecommended && <span className="recommended-tag">Recommended</span>}
                     </span>
-                    <span className="epg-tvgid">{epg.tvg_id}</span>
+                    <span className="epg-tvgid" title={epg.tvg_id}>{epg.tvg_id}</span>
                     <span className="epg-source">{getEPGSourceName(epg, epgSources)}</span>
                   </div>
                   {confidence !== undefined && (
@@ -1015,7 +1127,7 @@ function EPGSearchCard({
     <div className="epg-search-card">
       <div className="epg-search-card-header">
         <div className="epg-search-channel">
-          <span className="channel-name">{channelName}</span>
+          <span className="channel-name" title={channelName}>{channelName}</span>
           {detectedCountry && (
             <span className="country-badge">{detectedCountry.toUpperCase()}</span>
           )}
@@ -1065,8 +1177,8 @@ function EPGSearchCard({
                     <img src={epg.icon_url} alt="" className="epg-icon" />
                   )}
                   <div className="option-info">
-                    <span className="epg-name">{epg.name}</span>
-                    <span className="epg-tvgid">{epg.tvg_id}</span>
+                    <span className="epg-name" title={epg.name}>{epg.name}</span>
+                    <span className="epg-tvgid" title={epg.tvg_id}>{epg.tvg_id}</span>
                     <span className="epg-source">{getEPGSourceName(epg, epgSources)}</span>
                   </div>
                 </div>

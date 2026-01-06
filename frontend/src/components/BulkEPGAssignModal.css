@@ -5,8 +5,8 @@
 .bulk-epg-modal {
   background: var(--input-bg);
   border-radius: 8px;
-  width: 90%;
-  max-width: 700px;
+  width: 95%;
+  max-width: 1000px;
   max-height: 85vh;
   display: flex;
   flex-direction: column;
@@ -868,8 +868,7 @@
   font-size: 0.85rem;
   color: var(--success);
   white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  flex-shrink: 0;
 }
 
 .matched-epg .epg-tvgid {
@@ -877,6 +876,9 @@
   color: var(--text-secondary);
   font-family: monospace;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
 }
 
 /* Unmatched list */
@@ -1302,4 +1304,69 @@
   font-weight: 600;
   border-radius: 10px;
   margin-left: auto;
+}
+
+/* Override count in section header */
+.override-count {
+  font-size: 0.75rem;
+  font-weight: normal;
+  color: var(--warning);
+  margin-left: 4px;
+}
+
+/* Modified tag for overridden matches */
+.modified-tag {
+  font-size: 0.65rem;
+  font-weight: 600;
+  color: var(--warning);
+  background: rgba(245, 158, 11, 0.15);
+  padding: 1px 6px;
+  border-radius: 8px;
+  margin-left: 6px;
+}
+
+/* Edit and reset buttons for auto-matched items */
+.edit-match-btn,
+.reset-match-btn {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all 0.15s;
+  margin-left: 4px;
+}
+
+.edit-match-btn:hover {
+  background: rgba(100, 108, 255, 0.15);
+  color: var(--accent-primary);
+}
+
+.reset-match-btn:hover {
+  background: rgba(245, 158, 11, 0.15);
+  color: var(--warning);
+}
+
+.edit-match-btn .material-icons,
+.reset-match-btn .material-icons {
+  font-size: 16px;
+}
+
+/* Matched item states */
+.matched-item.has-override {
+  background: rgba(245, 158, 11, 0.05);
+  border-left: 2px solid var(--warning);
+  padding-left: 10px;
+}
+
+.matched-item.editing {
+  flex-wrap: wrap;
+  padding: 8px;
 }
