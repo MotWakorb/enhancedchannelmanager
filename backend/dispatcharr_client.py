@@ -126,11 +126,18 @@ class DispatcharrClient:
         return response.json()
 
     async def create_channel(self, data: dict) -> dict:
-        """Create a new channel."""
+        """Create a new channel.
+
+        Returns the created channel, or raises an exception with the response body
+        if creation fails.
+        """
         response = await self._request(
             "POST", "/api/channels/channels/", json=data
         )
-        response.raise_for_status()
+        if response.status_code >= 400:
+            # Include response body in exception for better error handling
+            error_body = response.text
+            raise Exception(f"Channel creation failed: {response.status_code} - {error_body}")
         return response.json()
 
     async def delete_channel(self, channel_id: int) -> None:
@@ -165,11 +172,18 @@ class DispatcharrClient:
         return response.json()
 
     async def create_channel_group(self, name: str) -> dict:
-        """Create a new channel group."""
+        """Create a new channel group.
+
+        Returns the created group, or raises an exception with the response body
+        if creation fails (e.g., group already exists).
+        """
         response = await self._request(
             "POST", "/api/channels/groups/", json={"name": name}
         )
-        response.raise_for_status()
+        if response.status_code >= 400:
+            # Include response body in exception for better error handling
+            error_body = response.text
+            raise Exception(f"Channel group creation failed: {response.status_code} - {error_body}")
         return response.json()
 
     async def update_channel_group(self, group_id: int, data: dict) -> dict:
@@ -435,13 +449,36 @@ class DispatcharrClient:
         return response.json()
 
     async def create_logo(self, data: dict) -> dict:
-        """Create a new logo."""
+        """Create a new logo.
+
+        Returns the created logo, or raises an exception with the response body
+        if creation fails (e.g., logo already exists).
+        """
         response = await self._request("POST", "/api/channels/logos/", json=data)
         if response.status_code >= 400:
-            import sys
-            print(f"Logo creation error - Status: {response.status_code}, Body: {response.text}", file=sys.stderr, flush=True)
-        response.raise_for_status()
+            # Include response body in exception for better error handling
+            error_body = response.text
+            raise Exception(f"Logo creation failed: {response.status_code} - {error_body}")
         return response.json()
+
+    async def find_logo_by_url(self, url: str) -> Optional[dict]:
+        """Find an existing logo by its URL.
+
+        Paginates through logos to find exact URL match.
+        Uses larger page size to minimize API calls.
+        """
+        page = 1
+        page_size = 500  # Use larger page size for efficiency
+        while True:
+            result = await self.get_logos(page=page, page_size=page_size)
+            for logo in result.get("results", []):
+                if logo.get("url") == url:
+                    return logo
+            # Check if there are more pages
+            if not result.get("next"):
+                break
+            page += 1
+        return None
 
     async def update_logo(self, logo_id: int, data: dict) -> dict:
         """Update a logo."""

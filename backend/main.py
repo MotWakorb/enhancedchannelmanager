@@ -112,9 +112,11 @@ class SettingsRequest(BaseModel):
     timezone_preference: str = "both"
     show_stream_urls: bool = True
     hide_auto_sync_groups: bool = False
+    hide_ungrouped_streams: bool = True
     theme: str = "dark"
-    default_channel_profile_id: Optional[int] = None
+    default_channel_profile_ids: list[int] = []
     linked_m3u_accounts: list[list[int]] = []
+    epg_auto_match_threshold: int = 80
 
 
 class SettingsResponse(BaseModel):
@@ -130,9 +132,11 @@ class SettingsResponse(BaseModel):
     timezone_preference: str
     show_stream_urls: bool
     hide_auto_sync_groups: bool
+    hide_ungrouped_streams: bool
     theme: str
-    default_channel_profile_id: Optional[int]
+    default_channel_profile_ids: list[int]
     linked_m3u_accounts: list[list[int]]
+    epg_auto_match_threshold: int
 
 
 class TestConnectionRequest(BaseModel):
@@ -158,9 +162,11 @@ async def get_current_settings():
         timezone_preference=settings.timezone_preference,
         show_stream_urls=settings.show_stream_urls,
         hide_auto_sync_groups=settings.hide_auto_sync_groups,
+        hide_ungrouped_streams=settings.hide_ungrouped_streams,
         theme=settings.theme,
-        default_channel_profile_id=settings.default_channel_profile_id,
+        default_channel_profile_ids=settings.default_channel_profile_ids,
         linked_m3u_accounts=settings.linked_m3u_accounts,
+        epg_auto_match_threshold=settings.epg_auto_match_threshold,
     )
 
 
@@ -197,9 +203,11 @@ async def update_settings(request: SettingsRequest):
         timezone_preference=request.timezone_preference,
         show_stream_urls=request.show_stream_urls,
         hide_auto_sync_groups=request.hide_auto_sync_groups,
+        hide_ungrouped_streams=request.hide_ungrouped_streams,
         theme=request.theme,
-        default_channel_profile_id=request.default_channel_profile_id,
+        default_channel_profile_ids=request.default_channel_profile_ids,
         linked_m3u_accounts=request.linked_m3u_accounts,
+        epg_auto_match_threshold=request.epg_auto_match_threshold,
     )
     save_settings(new_settings)
     clear_settings_cache()
@@ -278,8 +286,11 @@ async def create_channel(request: CreateChannelRequest):
             data["logo_id"] = request.logo_id
         if request.tvg_id is not None:
             data["tvg_id"] = request.tvg_id
-        return await client.create_channel(data)
+        result = await client.create_channel(data)
+        logger.info(f"Created channel: id={result.get('id')}, name={result.get('name')}, number={result.get('channel_number')}")
+        return result
     except Exception as e:
+        logger.error(f"Channel creation failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -315,14 +326,23 @@ async def get_logo(logo_id: int):
 async def create_logo(request: CreateLogoRequest):
     client = get_client()
     try:
-        print(f"Creating logo: name={request.name}, url={request.url}", file=sys.stderr, flush=True)
         result = await client.create_logo({"name": request.name, "url": request.url})
-        print(f"Logo created successfully: {result}", file=sys.stderr, flush=True)
+        logger.info(f"Created new logo: id={result.get('id')}, name={result.get('name')}")
         return result
     except Exception as e:
-        print(f"Logo creation failed: {e}", file=sys.stderr, flush=True)
-        traceback.print_exc(file=sys.stderr)
-        sys.stderr.flush()
+        error_str = str(e)
+        # Check if this is a "logo already exists" error from Dispatcharr
+        if "logo with this url already exists" in error_str.lower() or "400" in error_str:
+            try:
+                existing_logo = await client.find_logo_by_url(request.url)
+                if existing_logo:
+                    logger.info(f"Found existing logo: id={existing_logo.get('id')}, name={existing_logo.get('name')}, url={existing_logo.get('url')}")
+                    return existing_logo
+                else:
+                    logger.warning(f"Logo exists but could not find it by URL: {request.url}")
+            except Exception as search_err:
+                logger.error(f"Error searching for existing logo: {search_err}")
+        logger.error(f"Logo creation failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -486,8 +506,24 @@ async def get_channel_groups():
 async def create_channel_group(request: CreateChannelGroupRequest):
     client = get_client()
     try:
-        return await client.create_channel_group(request.name)
+        result = await client.create_channel_group(request.name)
+        logger.info(f"Created channel group: id={result.get('id')}, name={result.get('name')}")
+        return result
     except Exception as e:
+        error_str = str(e)
+        # Check if this is a "group already exists" error from Dispatcharr
+        if "400" in error_str or "already exists" in error_str.lower():
+            try:
+                # Look up the existing group by name
+                groups = await client.get_channel_groups()
+                for group in groups:
+                    if group.get("name") == request.name:
+                        logger.info(f"Found existing channel group: id={group.get('id')}, name={group.get('name')}")
+                        return group
+                logger.warning(f"Group exists error but could not find group by name: {request.name}")
+            except Exception as search_err:
+                logger.error(f"Error searching for existing group: {search_err}")
+        logger.error(f"Channel group creation failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

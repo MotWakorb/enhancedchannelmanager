@@ -66,6 +66,8 @@ function App() {
   const [autoRenameChannelNumber, setAutoRenameChannelNumber] = useState(false);
   const [dispatcharrUrl, setDispatcharrUrl] = useState('');
   const [showStreamUrls, setShowStreamUrls] = useState(true);
+  const [hideUngroupedStreams, setHideUngroupedStreams] = useState(true);
+  const [epgAutoMatchThreshold, setEpgAutoMatchThreshold] = useState(80);
   const [channelDefaults, setChannelDefaults] = useState({
     includeChannelNumberInName: false,
     channelNumberSeparator: '-',
@@ -73,10 +75,10 @@ function App() {
     includeCountryInName: false,
     countrySeparator: '|',
     timezonePreference: 'both',
-    defaultChannelProfileId: null as number | null,
+    defaultChannelProfileIds: [] as number[],
   });
   // Also keep separate state for use in callbacks (to avoid stale closure issues)
-  const [defaultChannelProfileId, setDefaultChannelProfileId] = useState<number | null>(null);
+  const [defaultChannelProfileIds, setDefaultChannelProfileIds] = useState<number[]>([]);
 
   // Provider group settings (for identifying auto channel sync groups)
   const [providerGroupSettings, setProviderGroupSettings] = useState<Record<number, M3UGroupSetting>>({});
@@ -325,6 +327,8 @@ function App() {
         setAutoRenameChannelNumber(settings.auto_rename_channel_number);
         setDispatcharrUrl(settings.url);
         setShowStreamUrls(settings.show_stream_urls);
+        setHideUngroupedStreams(settings.hide_ungrouped_streams);
+        setEpgAutoMatchThreshold(settings.epg_auto_match_threshold ?? 80);
         setChannelDefaults({
           includeChannelNumberInName: settings.include_channel_number_in_name,
           channelNumberSeparator: settings.channel_number_separator,
@@ -332,9 +336,9 @@ function App() {
           includeCountryInName: settings.include_country_in_name,
           countrySeparator: settings.country_separator,
           timezonePreference: settings.timezone_preference,
-          defaultChannelProfileId: settings.default_channel_profile_id,
+          defaultChannelProfileIds: settings.default_channel_profile_ids,
         });
-        setDefaultChannelProfileId(settings.default_channel_profile_id);
+        setDefaultChannelProfileIds(settings.default_channel_profile_ids);
 
         // Apply hide_auto_sync_groups setting to channelListFilters
         setChannelListFilters(prev => ({
@@ -464,6 +468,8 @@ function App() {
       setAutoRenameChannelNumber(settings.auto_rename_channel_number);
       setDispatcharrUrl(settings.url);
       setShowStreamUrls(settings.show_stream_urls);
+      setHideUngroupedStreams(settings.hide_ungrouped_streams);
+      setEpgAutoMatchThreshold(settings.epg_auto_match_threshold ?? 80);
       setChannelDefaults({
         includeChannelNumberInName: settings.include_channel_number_in_name,
         channelNumberSeparator: settings.channel_number_separator,
@@ -471,9 +477,9 @@ function App() {
         includeCountryInName: settings.include_country_in_name,
         countrySeparator: settings.country_separator,
         timezonePreference: settings.timezone_preference,
-        defaultChannelProfileId: settings.default_channel_profile_id,
+        defaultChannelProfileIds: settings.default_channel_profile_ids,
       });
-      setDefaultChannelProfileId(settings.default_channel_profile_id);
+      setDefaultChannelProfileIds(settings.default_channel_profile_ids);
 
       // Apply hide_auto_sync_groups setting to channelListFilters
       // The useEffect watching showAutoChannelGroups will handle updating group selection
@@ -908,7 +914,7 @@ function App() {
   );
 
   const handleCreateChannel = useCallback(
-    async (name: string, channelNumber?: number, groupId?: number, logoId?: number, tvgId?: string, logoUrl?: string) => {
+    async (name: string, channelNumber?: number, groupId?: number, logoId?: number, tvgId?: string, logoUrl?: string, profileIds?: number[]) => {
       try {
         if (isEditMode) {
           // In edit mode, stage the creation without calling Dispatcharr API
@@ -916,12 +922,17 @@ function App() {
           // logoUrl is used as fallback if logoId is not found - the commit will create/find the logo
           const tempId = stageCreateChannel(name, channelNumber, groupId, undefined, logoId, logoUrl, tvgId);
 
-          // Track for default profile assignment after commit
-          if (defaultChannelProfileId && channelNumber !== undefined) {
+          // Track profile assignments for after commit
+          // Use passed profileIds if provided, otherwise fall back to default profiles
+          const profilesToAssign = profileIds && profileIds.length > 0
+            ? profileIds
+            : defaultChannelProfileIds;
+
+          if (profilesToAssign.length > 0 && channelNumber !== undefined) {
             pendingProfileAssignmentsRef.current.push({
               startNumber: channelNumber,
               count: 1,
-              profileIds: [defaultChannelProfileId],
+              profileIds: profilesToAssign,
             });
           }
 
@@ -954,12 +965,16 @@ function App() {
           });
           setChannels((prev) => [...prev, newChannel]);
 
-          // Apply default profile if set
-          if (defaultChannelProfileId) {
+          // Apply profile assignments - use passed profileIds if provided, otherwise fall back to defaults
+          const profilesToAssign = profileIds && profileIds.length > 0
+            ? profileIds
+            : defaultChannelProfileIds;
+
+          for (const profileId of profilesToAssign) {
             try {
-              await api.updateProfileChannel(defaultChannelProfileId, newChannel.id, { enabled: true });
+              await api.updateProfileChannel(profileId, newChannel.id, { enabled: true });
             } catch (err) {
-              console.warn(`Failed to add channel ${newChannel.id} to default profile:`, err);
+              console.warn(`Failed to add channel ${newChannel.id} to profile ${profileId}:`, err);
             }
           }
 
@@ -971,7 +986,7 @@ function App() {
         throw err;
       }
     },
-    [isEditMode, stageCreateChannel, defaultChannelProfileId]
+    [isEditMode, stageCreateChannel, defaultChannelProfileIds]
   );
 
   // Check for conflicts with existing channel numbers
@@ -984,6 +999,17 @@ function App() {
               ch.channel_number <= endNumber
     );
     return conflictingChannels.length;
+  }, [displayChannels]);
+
+  // Get the highest existing channel number (for "insert at end" option)
+  const handleGetHighestChannelNumber = useCallback((): number => {
+    let highest = 0;
+    displayChannels.forEach((ch) => {
+      if (ch.channel_number !== null && ch.channel_number > highest) {
+        highest = ch.channel_number;
+      }
+    });
+    return highest;
   }, [displayChannels]);
 
   const handleBulkCreateFromGroup = useCallback(
@@ -1089,9 +1115,17 @@ function App() {
           return numA - numB;
         });
 
+        // Detect if we should use decimal increments (e.g., 38.1 -> 38.2 -> 38.3)
+        // A number like 38.1 has a decimal part, so we increment by 0.1
+        const hasDecimal = startingNumber % 1 !== 0;
+        const increment = hasDecimal ? 0.1 : 1;
+
         let channelIndex = 0;
         for (const [normalizedName, groupedStreams] of sortedEntries) {
-          const channelNumber = startingNumber + channelIndex;
+          // Calculate channel number with proper decimal handling
+          const rawChannelNumber = startingNumber + channelIndex * increment;
+          // Round to 1 decimal place to avoid floating point precision issues
+          const channelNumber = hasDecimal ? Math.round(rawChannelNumber * 10) / 10 : rawChannelNumber;
           channelIndex++;
 
           // Build channel name with proper prefixes
@@ -1163,10 +1197,10 @@ function App() {
         }
 
         // Store pending profile assignments to be applied after commit
-        // Use explicit profileIds if provided, otherwise fall back to default profile
+        // Use explicit profileIds if provided, otherwise fall back to default profiles
         const profileIdsToApply = (profileIds && profileIds.length > 0)
           ? profileIds
-          : (defaultChannelProfileId ? [defaultChannelProfileId] : []);
+          : defaultChannelProfileIds;
 
         if (profileIdsToApply.length > 0) {
           pendingProfileAssignmentsRef.current.push({
@@ -1182,7 +1216,7 @@ function App() {
         throw err;
       }
     },
-    [isEditMode, stageCreateChannel, stageAddStream, stageUpdateChannel, startBatch, endBatch, displayChannels, defaultChannelProfileId]
+    [isEditMode, stageCreateChannel, stageAddStream, stageUpdateChannel, startBatch, endBatch, displayChannels, defaultChannelProfileIds]
   );
 
   // Handle stream group drop on channels pane (triggers bulk create modal in streams pane)
@@ -1528,12 +1562,17 @@ function App() {
               onBulkStreamsDrop={handleBulkStreamsDrop}
               onBulkCreateFromGroup={handleBulkCreateFromGroup}
               onCheckConflicts={handleCheckConflicts}
+              onGetHighestChannelNumber={handleGetHighestChannelNumber}
 
               // Dispatcharr URL for channel stream URLs
               dispatcharrUrl={dispatcharrUrl}
 
               // Appearance settings
               showStreamUrls={showStreamUrls}
+              hideUngroupedStreams={hideUngroupedStreams}
+
+              // EPG matching settings
+              epgAutoMatchThreshold={epgAutoMatchThreshold}
 
               // Refresh streams (bypasses cache)
               onRefreshStreams={refreshStreams}

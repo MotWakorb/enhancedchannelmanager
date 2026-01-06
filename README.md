@@ -4,13 +4,33 @@ A professional-grade web interface for managing IPTV configurations with Dispatc
 
 ## Application Tabs
 
-- **M3U Manager** - M3U playlist management (coming soon)
+- **M3U Manager** - Full M3U account management with linked accounts and group synchronization
 - **EPG Manager** - Manage EPG sources with drag-and-drop priority ordering
 - **Channel Manager** - Full-featured channel and stream management with split-pane layout
 - **Logo Manager** - Logo management (coming soon)
-- **Settings** - Configure Dispatcharr connection and channel defaults with sidebar navigation
+- **Settings** - Configure Dispatcharr connection, channel defaults, and channel profiles
 
 ## Features
+
+### M3U Manager
+
+- **Full CRUD Operations** - Create, edit, and delete M3U accounts
+- **Account Types** - Support for Standard M3U, XtreamCodes, and HD Homerun
+- **HD Homerun Simplified Setup** - Just enter the IP address; the lineup URL is auto-constructed
+- **Linked M3U Accounts** - Link multiple accounts (e.g., same provider with different regions) so group enable/disable changes cascade automatically
+- **Sync Groups** - One-click sync of enabled groups across all linked accounts using Union (OR) logic
+- **Manage Groups Modal** - Enable/disable groups per account, configure auto-sync settings
+- **Natural Sorting** - Accounts sorted with Standard M3U first, XtreamCodes second, then natural sort by name
+- **Hide Disabled Filter** - Optionally hide disabled groups in the manage groups modal
+- **Auto-Refresh** - New accounts automatically refresh after creation (no "Pending Setup" state)
+- **Server Group Filtering** - Filter M3U accounts by server group
+
+### Channel Profiles
+
+- **Profile Management** - View and manage stream transcoding profiles
+- **Default Profile** - Set a default channel profile in Settings
+- **Profile Selection** - Choose profiles when creating channels (single or bulk)
+- **Profile Assignment** - Assign profiles to existing channels
 
 ### Channel Management
 
@@ -46,6 +66,7 @@ A professional-grade web interface for managing IPTV configurations with Dispatc
 
 ### Bulk Channel Creation
 
+- **Channel Profile Selection** - Choose which stream profile to apply to all created channels
 - **Create from Stream Group** - Create multiple channels from an entire M3U stream group at once
 - **Multi-Group Creation** - Select and drag multiple stream groups at once to create channels from all of them
   - **Separate Groups Mode** - Create a separate channel group for each stream group with independent naming and numbering
@@ -163,6 +184,7 @@ The Settings tab features sidebar navigation with multiple sections:
 #### Channel Defaults
 Default options applied when using bulk channel creation:
 
+- **Default Channel Profile** - Set the default stream profile for new channels
 - **Auto-Rename on Number Change** - Update channel names when numbers change
 - **Include Channel Number in Name** - Add number prefix to channel names (e.g., "101 - Sports Channel")
 - **Number Separator** - Choose hyphen (-), colon (:), or pipe (|) for number prefix
@@ -192,10 +214,11 @@ Fine-tune which groups appear in the channel list:
 
 ### Provider Management
 
-- **View Providers** - See all configured M3U accounts
-- **Provider Groups** - View stream groups from each provider
-- **Auto-Channel Sync** - Configure automatic channel synchronization
-- **Group Settings** - Per-group provider configuration
+- **View Providers** - See all configured M3U accounts with status and stream counts
+- **Provider Groups** - View and manage stream groups from each provider
+- **Linked Accounts** - Link accounts together to sync group settings across providers
+- **Auto-Channel Sync** - Configure automatic channel synchronization per group
+- **Group Settings** - Per-group provider configuration with start channel numbers
 
 ## Technical Stack
 

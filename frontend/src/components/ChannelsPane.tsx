@@ -41,7 +41,7 @@ interface ChannelsPaneProps {
   onChannelDrop: (channelId: number, streamId: number) => void;
   onBulkStreamDrop: (channelId: number, streamIds: number[]) => void;
   onChannelReorder: (channelIds: number[], startingNumber: number) => void;
-  onCreateChannel: (name: string, channelNumber?: number, groupId?: number, logoId?: number, tvgId?: string, logoUrl?: string) => Promise<Channel>;
+  onCreateChannel: (name: string, channelNumber?: number, groupId?: number, logoId?: number, tvgId?: string, logoUrl?: string, profileIds?: number[]) => Promise<Channel>;
   onDeleteChannel: (channelId: number) => Promise<void>;
   searchTerm: string;
   onSearchChange: (term: string) => void;
@@ -114,6 +114,8 @@ interface ChannelsPaneProps {
   onBulkStreamsDrop?: (streamIds: number[], groupId: number | null, startingNumber: number) => void;
   // Appearance settings
   showStreamUrls?: boolean;
+  // EPG matching settings
+  epgAutoMatchThreshold?: number;
 }
 
 interface GroupState {
@@ -305,7 +307,7 @@ function SortableChannel({
     <div
       ref={setNodeRef}
       style={style}
-      className={`channel-item ${isSelected && isEditMode ? 'selected' : ''} ${isMultiSelected ? 'multi-selected' : ''} ${isDragOver ? 'drag-over' : ''} ${isDragging ? 'dragging' : ''} ${isModified ? 'channel-modified' : ''}`}
+      className={`channel-item ${isSelected && isEditMode ? 'selected' : ''} ${isMultiSelected ? 'multi-selected' : ''} ${isDragOver ? 'drag-over' : ''} ${isDragging ? 'dragging' : ''} ${isModified ? 'channel-modified' : ''} ${channel.streams.length === 0 ? 'no-streams' : ''}`}
       onClick={onClick}
       onDragOver={onStreamDragOver}
       onDragLeave={onStreamDragLeave}
@@ -412,7 +414,8 @@ function SortableChannel({
           {channelUrl}
         </span>
       )}
-      <span className="channel-streams-count">
+      <span className={`channel-streams-count ${channel.streams.length === 0 ? 'no-streams' : ''}`}>
+        {channel.streams.length === 0 && <span className="material-icons warning-icon">warning</span>}
         {channel.streams.length} stream{channel.streams.length !== 1 ? 's' : ''}
       </span>
       {onCopyChannelUrl && (
@@ -693,7 +696,11 @@ function EditChannelModal({
   const [newLogoUrl, setNewLogoUrl] = useState('');
   const [addingLogo, setAddingLogo] = useState(false);
   const [uploadingLogo, setUploadingLogo] = useState(false);
+  const [addingEpgLogo, setAddingEpgLogo] = useState(false);
+  const [pendingLogo, setPendingLogo] = useState<Logo | null>(null); // Track newly created logo before props update
+  const [immediateLogoUrl, setImmediateLogoUrl] = useState<string | null>(null); // For instant display of EPG logo
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const epgDropdownRef = useRef<HTMLDivElement>(null);
 
   // Metadata state
   const [tvgId, setTvgId] = useState<string>(channel.tvg_id || '');
@@ -717,8 +724,10 @@ function EditChannelModal({
     logo.name.toLowerCase().includes(logoSearch.toLowerCase())
   );
 
-  // Get currently selected logo
-  const currentLogo = selectedLogoId ? logos.find((l) => l.id === selectedLogoId) : null;
+  // Get currently selected logo (use pendingLogo if not yet in logos array)
+  const currentLogo = selectedLogoId
+    ? (logos.find((l) => l.id === selectedLogoId) || (pendingLogo?.id === selectedLogoId ? pendingLogo : null))
+    : null;
 
   // Get currently selected EPG data
   const currentEpgData = selectedEpgDataId ? epgData.find((e) => e.id === selectedEpgDataId) : null;
@@ -782,6 +791,7 @@ function EditChannelModal({
     setAddingLogo(true);
     try {
       const newLogo = await onLogoCreate(newLogoUrl.trim());
+      setPendingLogo(newLogo); // Store for immediate display before logos prop updates
       setSelectedLogoId(newLogo.id);
       setNewLogoUrl('');
     } catch (err) {
@@ -803,8 +813,8 @@ function EditChannelModal({
 
     setUploadingLogo(true);
     try {
-      const newLogo = await onLogoUpload(file);
-      setSelectedLogoId(newLogo.id);
+      // Upload the logo but don't auto-select it - user must manually select after upload
+      await onLogoUpload(file);
     } catch (err) {
       console.error('Failed to upload logo:', err);
     } finally {
@@ -815,6 +825,42 @@ function EditChannelModal({
       }
     }
   };
+
+  // Handle using EPG logo
+  const handleUseEpgLogo = async () => {
+    if (!currentEpgData?.icon_url) return;
+
+    // Set immediate URL for instant display while we resolve the logo
+    setImmediateLogoUrl(currentEpgData.icon_url);
+    setAddingEpgLogo(true);
+    try {
+      const newLogo = await onLogoCreate(currentEpgData.icon_url);
+      if (newLogo && newLogo.id) {
+        setPendingLogo(newLogo); // Store for immediate display before logos prop updates
+        setSelectedLogoId(newLogo.id);
+      }
+    } catch (err) {
+      console.error('Failed to create logo from EPG:', err);
+      setImmediateLogoUrl(null); // Clear on error
+    } finally {
+      setAddingEpgLogo(false);
+    }
+  };
+
+  // Clear pending logo once it appears in the logos array
+  // Note: We keep immediateLogoUrl until user changes logo selection to prevent image flicker
+  useEffect(() => {
+    if (pendingLogo && logos.find((l) => l.id === pendingLogo.id)) {
+      setPendingLogo(null);
+    }
+  }, [logos, pendingLogo]);
+
+  // Clear immediate URL when logo selection changes (to a different logo or no logo)
+  useEffect(() => {
+    if (immediateLogoUrl && (!selectedLogoId || (currentLogo && currentLogo.url !== immediateLogoUrl))) {
+      setImmediateLogoUrl(null);
+    }
+  }, [selectedLogoId, currentLogo, immediateLogoUrl]);
 
   const handleEpgSearch = (value: string) => {
     setEpgSearch(value);
@@ -851,6 +897,20 @@ function EditChannelModal({
     setTvgIdPickerOpen(false);
     setTvgIdSearch('');
   };
+
+  // Close EPG dropdown when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (epgDropdownRef.current && !epgDropdownRef.current.contains(event.target as Node)) {
+        setEpgDropdownOpen(false);
+      }
+    };
+
+    if (epgDropdownOpen) {
+      document.addEventListener('mousedown', handleClickOutside);
+      return () => document.removeEventListener('mousedown', handleClickOutside);
+    }
+  }, [epgDropdownOpen]);
 
   return (
     <div className="edit-channel-modal-overlay">
@@ -1003,7 +1063,7 @@ function EditChannelModal({
               </button>
             </div>
           )}
-          <div className="epg-search-container">
+          <div className="epg-search-container" ref={epgDropdownRef}>
             <input
               type="text"
               className="edit-channel-text-input"
@@ -1078,22 +1138,44 @@ function EditChannelModal({
 
         {/* Logo Section */}
         <div className="edit-channel-section">
-          <label>Channel Logo</label>
+          <div className="logo-section-header">
+            <label>Channel Logo</label>
+            {currentEpgData?.icon_url && (
+              <button
+                onClick={handleUseEpgLogo}
+                disabled={addingEpgLogo}
+                className="logo-epg-btn"
+                title="Use the logo from the assigned EPG data"
+              >
+                <span className="material-icons">live_tv</span>
+                {addingEpgLogo ? 'Adding...' : 'Use EPG Logo'}
+              </button>
+            )}
+          </div>
 
           {/* Current logo preview */}
           {currentLogo && (
             <div className="current-logo-preview">
               <img
-                src={currentLogo.cache_url || currentLogo.url}
+                src={immediateLogoUrl || currentLogo.cache_url || currentLogo.url}
                 alt={currentLogo.name}
                 onError={(e) => {
-                  (e.target as HTMLImageElement).src = currentLogo.url;
+                  // If immediate URL fails, try cache_url, then original url
+                  const target = e.target as HTMLImageElement;
+                  if (immediateLogoUrl && target.src === immediateLogoUrl) {
+                    target.src = currentLogo.cache_url || currentLogo.url;
+                  } else if (currentLogo.cache_url && target.src === currentLogo.cache_url) {
+                    target.src = currentLogo.url;
+                  }
                 }}
               />
               <span>{currentLogo.name}</span>
               <button
                 className="current-logo-remove-btn"
-                onClick={() => setSelectedLogoId(null)}
+                onClick={() => {
+                  setSelectedLogoId(null);
+                  setImmediateLogoUrl(null);
+                }}
               >
                 Remove
               </button>
@@ -1297,6 +1379,8 @@ export function ChannelsPane({
   onBulkStreamsDrop,
   // Appearance settings
   showStreamUrls = true,
+  // EPG matching settings
+  epgAutoMatchThreshold = 80,
 }: ChannelsPaneProps) {
   // Suppress unused variable warnings - these are passed through but handled in parent
   void _onStageBulkAssignNumbers;
@@ -1825,8 +1909,9 @@ export function ChannelsPane({
       // In edit mode, stage the delete operations for undo support
       if (isEditMode && onStageDeleteChannel && onStartBatch && onEndBatch) {
         // Find groups that would be emptied by this delete (if checkbox is checked)
+        // Only check when no search filter is active (otherwise user can't select all channels in a group)
         const groupsToDelete: ChannelGroup[] = [];
-        if (deleteEmptyGroups && onStageDeleteChannelGroup) {
+        if (deleteEmptyGroups && onStageDeleteChannelGroup && !searchTerm) {
           for (const group of channelGroups) {
             const channelsInGroup = channels.filter(ch => ch.channel_group_id === group.id);
             if (channelsInGroup.length > 0) {
@@ -2214,13 +2299,17 @@ export function ChannelsPane({
         finalName = `${channelNum} ${newChannelNumberSeparator} ${finalName}`;
       }
 
+      // Pass profile IDs to onCreateChannel - it handles both edit mode (pending assignments) and normal mode (immediate API calls)
+      const profileIdsArray = newChannelSelectedProfiles.size > 0 ? Array.from(newChannelSelectedProfiles) : undefined;
+
       const newChannel = await onCreateChannel(
         finalName,
         channelNum,
         newChannelGroup !== '' ? newChannelGroup : undefined,
         newChannelLogoId ?? undefined,
         newChannelTvgId ?? undefined,
-        newChannelLogoUrl ?? undefined
+        newChannelLogoUrl ?? undefined,
+        profileIdsArray
       );
 
       // Assign the streams to the channel if any were dropped
@@ -2243,16 +2332,8 @@ export function ChannelsPane({
         }
       }
 
-      // Assign channel to selected profiles
-      if (newChannelSelectedProfiles.size > 0 && newChannel?.id) {
-        for (const profileId of newChannelSelectedProfiles) {
-          try {
-            await api.updateProfileChannel(profileId, newChannel.id, { enabled: true });
-          } catch (err) {
-            console.error(`Failed to add channel ${newChannel.id} to profile ${profileId}:`, err);
-          }
-        }
-      }
+      // Profile assignment is now handled by onCreateChannel (in normal mode it makes API calls immediately,
+      // in edit mode it stores them in pendingProfileAssignmentsRef to apply after commit)
 
       // In edit mode, the channel is added to workingCopy by stageCreateChannel,
       // which flows through the channels prop and syncs to localChannels via useEffect.
@@ -2638,6 +2719,14 @@ export function ChannelsPane({
   }
 
   const visibleChannels = localChannels.filter((ch) => {
+    // First, apply search filter if there's a search term
+    if (searchTerm) {
+      const searchLower = searchTerm.toLowerCase();
+      const nameMatch = ch.name?.toLowerCase().includes(searchLower);
+      const numberMatch = ch.channel_number?.toString().includes(searchTerm);
+      if (!nameMatch && !numberMatch) return false;
+    }
+
     if (!ch.auto_created) return true; // Always show manual channels
     // For auto-created channels, check if their group is related to auto_channel_sync
     const groupId = ch.channel_group_id;
@@ -3801,6 +3890,42 @@ export function ChannelsPane({
       <div className={`pane-header ${isEditMode ? 'edit-mode' : ''}`}>
         <div className="pane-header-title">
           <h2>Channels</h2>
+          {(() => {
+            const channelsMissingStreams = channels.filter(ch => ch.streams.length === 0);
+            const missingStreamsCount = channelsMissingStreams.length;
+            if (missingStreamsCount === 0) return null;
+
+            // Get unique group IDs that have channels missing streams
+            const groupsWithMissingStreams = new Set(
+              channelsMissingStreams.map(ch => ch.channel_group_id).filter((id): id is number => id !== null)
+            );
+            // Include ungrouped (null group) as group ID 0 for expansion
+            const hasUngrouped = channelsMissingStreams.some(ch => ch.channel_group_id === null);
+
+            const handleExpandMissingGroups = () => {
+              setExpandedGroups(prev => {
+                const newState = { ...prev };
+                groupsWithMissingStreams.forEach(groupId => {
+                  newState[groupId] = true;
+                });
+                if (hasUngrouped) {
+                  newState[0] = true; // 0 represents ungrouped
+                }
+                return newState;
+              });
+            };
+
+            return (
+              <button
+                className="missing-streams-alert"
+                title={`${missingStreamsCount} channel${missingStreamsCount !== 1 ? 's' : ''} without streams - click to expand affected groups`}
+                onClick={handleExpandMissingGroups}
+              >
+                <span className="material-icons">warning</span>
+                {missingStreamsCount}
+              </button>
+            );
+          })()}
           {isEditMode && selectedChannelIds.size > 0 && (
             <div className="selection-info">
               <span className="selection-count">{selectedChannelIds.size} selected</span>
@@ -4363,8 +4488,14 @@ export function ChannelsPane({
       {/* Bulk Delete Channels Confirmation Dialog */}
       {showBulkDeleteConfirm && selectedChannelIds.size > 0 && (() => {
         // Compute which groups would be emptied by this bulk delete
+        // Use the channels prop (which is displayChannels from edit mode hook, containing all channels)
+        // NOT localChannels which may have stale data
         const groupsToEmpty: ChannelGroup[] = [];
-        if (isEditMode && onStageDeleteChannelGroup) {
+        // Only offer to delete empty groups if:
+        // 1. In edit mode with the staging function available
+        // 2. No search filter is active (when search is active, user can only select visible channels,
+        //    so they can't actually select ALL channels in a group)
+        if (isEditMode && onStageDeleteChannelGroup && !searchTerm) {
           // For each group, check if ALL its channels are selected for deletion
           for (const group of channelGroups) {
             const channelsInGroup = channels.filter(ch => ch.channel_group_id === group.id);
@@ -4437,6 +4568,7 @@ export function ChannelsPane({
         epgSources={epgSources || []}
         onClose={() => setShowBulkEPGModal(false)}
         onAssign={handleBulkEPGAssign}
+        epgAutoMatchThreshold={epgAutoMatchThreshold}
       />
 
       {/* Edit Channel Modal */}
@@ -4505,11 +4637,17 @@ export function ChannelsPane({
             setChannelToEdit(null);
           }}
           onLogoCreate={async (url: string) => {
+            // First check if logo already exists in our loaded logos array (instant!)
+            const existingLogo = logos.find(l => l.url === url);
+            if (existingLogo) {
+              return existingLogo;
+            }
+            // Otherwise create new logo via API
             try {
               const name = url.split('/').pop()?.split('?')[0] || 'Logo';
               const newLogo = await api.createLogo({ name, url });
               if (onLogosChange) {
-                onLogosChange();
+                await onLogosChange(); // Wait for logos to refresh so the new logo is available
               }
               return newLogo;
             } catch (err) {

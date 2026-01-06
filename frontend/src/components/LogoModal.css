@@ -1,0 +1,258 @@
+/* Logo Modal Styles */
+/* Extends SettingsModal.css base styles */
+
+.logo-modal {
+  max-width: 480px;
+}
+
+.logo-modal .modal-body {
+  max-height: 70vh;
+  overflow-y: auto;
+}
+
+/* ===================== */
+/* DROP ZONE             */
+/* ===================== */
+
+.drop-zone {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 180px;
+  padding: 1.5rem;
+  background-color: var(--input-bg);
+  border: 2px dashed var(--border-secondary);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: border-color 0.2s, background-color 0.2s;
+}
+
+.drop-zone:hover:not(.has-file) {
+  border-color: var(--accent-primary);
+  background-color: rgba(59, 130, 246, 0.05);
+}
+
+.drop-zone.dragging {
+  border-color: var(--accent-primary);
+  background-color: rgba(59, 130, 246, 0.1);
+  border-style: solid;
+}
+
+.drop-zone.has-file {
+  cursor: default;
+  border-style: solid;
+  border-color: var(--border-secondary);
+}
+
+/* Drop zone content (empty state) */
+.drop-zone-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.5rem;
+  text-align: center;
+}
+
+.drop-icon {
+  font-size: 48px;
+  color: var(--text-muted);
+}
+
+.drop-zone:hover:not(.has-file) .drop-icon,
+.drop-zone.dragging .drop-icon {
+  color: var(--accent-primary);
+}
+
+.drop-text {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 0.95rem;
+  line-height: 1.5;
+}
+
+.drop-subtext {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+.file-types {
+  margin: 0.5rem 0 0 0;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+/* File preview (after drop) */
+.file-preview {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  width: 100%;
+  padding: 0.5rem;
+}
+
+.preview-thumbnail {
+  width: 64px;
+  height: 64px;
+  object-fit: contain;
+  background-color: var(--bg-primary);
+  border-radius: 4px;
+  padding: 4px;
+}
+
+.file-info {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  min-width: 0;
+}
+
+.file-name {
+  font-size: 0.9rem;
+  font-weight: 500;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-size {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.clear-file-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  background: none;
+  border: none;
+  border-radius: 4px;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: background-color 0.15s, color 0.15s;
+}
+
+.clear-file-btn:hover {
+  background-color: rgba(239, 68, 68, 0.2);
+  color: var(--error);
+}
+
+.clear-file-btn .material-icons {
+  font-size: 20px;
+}
+
+/* ===================== */
+/* URL TOGGLE            */
+/* ===================== */
+
+.url-toggle {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  margin: 1.25rem 0;
+}
+
+.divider-line {
+  flex: 1;
+  height: 1px;
+  background-color: var(--border-primary);
+}
+
+.toggle-url-btn {
+  background: none;
+  border: none;
+  color: var(--accent-primary);
+  font-size: 0.85rem;
+  cursor: pointer;
+  padding: 0.25rem 0.5rem;
+  transition: color 0.15s;
+}
+
+.toggle-url-btn:hover {
+  color: var(--text-primary);
+  text-decoration: underline;
+}
+
+/* ===================== */
+/* URL PREVIEW           */
+/* ===================== */
+
+.url-preview {
+  display: flex;
+  justify-content: center;
+  margin-top: 0.75rem;
+  padding: 1rem;
+  background-color: var(--bg-primary);
+  border-radius: 6px;
+  border: 1px solid var(--border-primary);
+}
+
+.url-preview img {
+  max-width: 100%;
+  max-height: 120px;
+  object-fit: contain;
+}
+
+/* ===================== */
+/* CURRENT LOGO (EDIT)   */
+/* ===================== */
+
+.current-logo-preview {
+  margin-bottom: 1rem;
+}
+
+.current-logo-preview label {
+  display: block;
+  margin-bottom: 0.5rem;
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+}
+
+.preview-image-container {
+  display: flex;
+  justify-content: center;
+  padding: 1.5rem;
+  background-color: var(--input-bg);
+  border-radius: 8px;
+  border: 1px solid var(--border-secondary);
+}
+
+.preview-image-container img {
+  max-width: 100%;
+  max-height: 150px;
+  object-fit: contain;
+}
+
+/* ===================== */
+/* RESPONSIVE            */
+/* ===================== */
+
+@media (max-width: 500px) {
+  .logo-modal {
+    max-width: 95%;
+    margin: 0 1rem;
+  }
+
+  .drop-zone {
+    min-height: 150px;
+    padding: 1rem;
+  }
+
+  .drop-icon {
+    font-size: 36px;
+  }
+
+  .file-preview {
+    flex-direction: column;
+    text-align: center;
+  }
+
+  .file-info {
+    align-items: center;
+  }
+}

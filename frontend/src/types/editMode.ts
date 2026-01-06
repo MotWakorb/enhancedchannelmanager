@@ -67,6 +67,7 @@ export interface EditModeSummary {
   streamsReordered: number;
   channelNumberChanges: number;
   channelNameChanges: number;
+  epgChanges: number;
   newChannels: number;
   deletedChannels: number;
   newGroups: number;

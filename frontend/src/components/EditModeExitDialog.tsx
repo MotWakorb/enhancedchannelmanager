@@ -55,6 +55,11 @@ export function EditModeExitDialog({
                     {summary.streamsReordered} stream reorder{summary.streamsReordered !== 1 ? 's' : ''}
                   </li>
                 )}
+                {summary.epgChanges > 0 && (
+                  <li>
+                    {summary.epgChanges} EPG assignment{summary.epgChanges !== 1 ? 's' : ''}
+                  </li>
+                )}
                 {summary.newChannels > 0 && (
                   <li>
                     {summary.newChannels} new channel{summary.newChannels !== 1 ? 's' : ''} created

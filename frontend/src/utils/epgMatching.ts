@@ -18,6 +18,19 @@ const QUALITY_SUFFIXES = [
 // Timezone/regional suffixes to strip
 const TIMEZONE_SUFFIXES = ['EAST', 'WEST', 'ET', 'PT', 'CT', 'MT'];
 
+// Broadcast call sign patterns for US/Canada local TV stations
+// US call signs: K or W followed by 2-4 letters, optionally with -DT, -TV, -HD suffix
+// Examples: KATU, KOIN, KGW, WKOW, WHA-DT, KPTV-DT, WMTV
+const BROADCAST_CALL_SIGN_PATTERN = /\b([KW][A-Z]{2,4})(?:[-]?(?:DT|TV|HD|LP|CD|CA|LD))?\b/i;
+
+/**
+ * EPG match with confidence score
+ */
+export interface EPGMatchWithScore {
+  epg: EPGData;
+  confidence: number; // 0-100 confidence score
+}
+
 /**
  * Result of EPG matching for a single channel
  */
@@ -26,6 +39,8 @@ export interface EPGMatchResult {
   detectedCountry: string | null;
   normalizedName: string;
   matches: EPGData[];
+  matchesWithScores: EPGMatchWithScore[]; // Matches with confidence scores
+  bestScore: number; // Highest confidence score among matches
   status: 'exact' | 'multiple' | 'none';
 }
 
@@ -37,6 +52,29 @@ export interface EPGAssignment {
   channelName: string;
   tvg_id: string | null;
   epg_data_id: number | null;
+}
+
+/**
+ * Extract broadcast call sign from a channel name.
+ * US/Canada broadcast stations use call signs starting with K (west of Mississippi)
+ * or W (east of Mississippi), followed by 2-4 letters, optionally with -DT/-TV/-HD suffix.
+ *
+ * Examples:
+ *   "21.1 | PBS: WHA-DT Madison" -> "wha"
+ *   "2.2 | ABC: KATU Portland" -> "katu"
+ *   "6.1 | CBS: KOIN Portland" -> "koin"
+ *   "ESPN" -> null (not a broadcast call sign)
+ *
+ * @param name - Channel name to extract call sign from
+ * @returns Lowercase call sign (without suffix) or null if none found
+ */
+export function extractBroadcastCallSign(name: string): string | null {
+  const match = name.match(BROADCAST_CALL_SIGN_PATTERN);
+  if (match) {
+    // Return just the base call sign (e.g., "WHA" from "WHA-DT"), normalized to lowercase
+    return match[1].toLowerCase();
+  }
+  return null;
 }
 
 /**
@@ -218,7 +256,7 @@ function buildEPGLookup(epgData: EPGData[]): EPGLookup {
       allNormalizedNames.push({ normalized: epgNormalizedName, epg });
     }
 
-    // Extract and add call sign if present
+    // Extract and add call sign if present in parentheses (e.g., "AdultSwim(ADSM)")
     const callSignMatch = epg.tvg_id.match(/\(([^)]+)\)/);
     if (callSignMatch) {
       const callSign = callSignMatch[1].toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -238,6 +276,18 @@ function buildEPGLookup(epgData: EPGData[]): EPGLookup {
             byCallSign.set(baseCallSign, baseExisting);
           }
         }
+      }
+    }
+
+    // Also extract broadcast call signs from EPG tvg_id and name
+    // This handles local TV stations like "KATU Portland" or TVG-IDs like "KATU.us"
+    const epgBroadcastCallSign = extractBroadcastCallSign(epg.tvg_id) || extractBroadcastCallSign(epg.name);
+    if (epgBroadcastCallSign) {
+      const existing = byCallSign.get(epgBroadcastCallSign) || [];
+      // Only add if not already in the array (avoid duplicates)
+      if (!existing.some(e => e.id === epg.id)) {
+        existing.push(epg);
+        byCallSign.set(epgBroadcastCallSign, existing);
       }
     }
   }
@@ -276,6 +326,12 @@ function findEPGMatchesWithLookup(
     }
   }
 
+  // Default to US if no country detected - this ensures US EPG entries
+  // are preferred over international ones when no explicit country is set
+  if (!detectedCountry) {
+    detectedCountry = 'us';
+  }
+
   // Normalize the channel name
   const normalizedName = normalizeForEPGMatch(channel.name);
 
@@ -285,6 +341,8 @@ function findEPGMatchesWithLookup(
       detectedCountry,
       normalizedName,
       matches: [],
+      matchesWithScores: [],
+      bestScore: 0,
       status: 'none',
     };
   }
@@ -309,21 +367,29 @@ function findEPGMatchesWithLookup(
     matchQuality.set(epg.id, 'exact');
   }
 
-  // Check call sign matches
+  // Check call sign matches using normalized name
   const callSignMatches = lookup.byCallSign.get(normalizedName) || [];
   for (const epg of callSignMatches) {
     matchSet.set(epg.id, epg);
     matchQuality.set(epg.id, 'exact');
   }
 
-  // Try prefix matching if:
-  // 1. No exact matches found and name is long enough, OR
-  // 2. Name is very short (1-2 chars) - single letters are too generic, need more context
-  const shouldTryPrefixMatching =
-    (matchSet.size === 0 && normalizedName.length >= MIN_PREFIX_LENGTH) ||
-    (normalizedName.length <= 2);
+  // Extract broadcast call sign from channel name (e.g., "KATU" from "2.2 | ABC: KATU Portland")
+  // and look up EPG entries that have matching call signs
+  const broadcastCallSign = extractBroadcastCallSign(channel.name);
+  if (broadcastCallSign) {
+    const broadcastCallSignMatches = lookup.byCallSign.get(broadcastCallSign) || [];
+    for (const epg of broadcastCallSignMatches) {
+      matchSet.set(epg.id, epg);
+      matchQuality.set(epg.id, 'exact');
+    }
+  }
 
-  if (shouldTryPrefixMatching) {
+  // Always try prefix matching to find additional matches
+  // This ensures we find entries like "DiscoveryChannel.us" even if there's
+  // an exact match for "Discovery.be" - country sorting will then prefer the right one
+  // Only skip prefix matching for very short names (1-2 chars) that are too generic
+  if (normalizedName.length >= MIN_PREFIX_LENGTH) {
     // Check if channel name is a prefix of any EPG TVG-ID
     for (const { normalized, epg } of lookup.allNormalizedTvgIds) {
       // Channel name starts with EPG name, or EPG name starts with channel name
@@ -354,9 +420,9 @@ function findEPGMatchesWithLookup(
   const channelSpecialChars = channel.name.match(/[!@#$%^*]/g) || [];
 
   // Sort matches with priority:
-  // 1. Exact matches over prefix matches (but not for very short names)
-  // 2. Matching special punctuation (e.g., "!" in channel name matches "!" in EPG)
-  // 3. Matching country over non-matching country
+  // 1. Matching country over non-matching country (highest priority)
+  // 2. Exact matches over prefix matches (but not for very short names)
+  // 3. Matching special punctuation (e.g., "!" in channel name matches "!" in EPG)
   // 4. Name similarity (prefer EPG names closer in length to channel name)
   // 5. Regional preference: match channel's region hint, or default to East
   // 6. HD + call sign combined: prefer HD unless non-HD has much better call sign
@@ -368,10 +434,17 @@ function findEPGMatchesWithLookup(
     const aCountry = lookup.countryByEpgId.get(a.id);
     const bCountry = lookup.countryByEpgId.get(b.id);
 
+    // FIRST: Country matching - this is the highest priority
+    // A US channel should prefer US EPG entries over international ones
+    if (detectedCountry) {
+      if (aCountry === detectedCountry && bCountry !== detectedCountry) return -1;
+      if (bCountry === detectedCountry && aCountry !== detectedCountry) return 1;
+    }
+
     // For short names (1-2 chars), don't prioritize exact matches over prefix
     // because single letters are too generic
     if (normalizedName.length > 2) {
-      // Exact matches first
+      // Exact matches first (within same country)
       if (aQuality === 'exact' && bQuality !== 'exact') return -1;
       if (bQuality === 'exact' && aQuality !== 'exact') return 1;
     }
@@ -383,12 +456,6 @@ function findEPGMatchesWithLookup(
       const bHasSpecialChar = channelSpecialChars.some(char => b.tvg_id.includes(char) || b.name.includes(char));
       if (aHasSpecialChar && !bHasSpecialChar) return -1;
       if (bHasSpecialChar && !aHasSpecialChar) return 1;
-    }
-
-    // Then matching country
-    if (detectedCountry) {
-      if (aCountry === detectedCountry && bCountry !== detectedCountry) return -1;
-      if (bCountry === detectedCountry && aCountry !== detectedCountry) return 1;
     }
 
     // Prefer matches where channel name is a prefix of EPG name (not the reverse)
@@ -525,11 +592,90 @@ function findEPGMatchesWithLookup(
     return a.name.localeCompare(b.name);
   });
 
+  // Calculate confidence scores for each match
+  // Scoring factors (total 100 points):
+  // - Country match: 40 points (most important)
+  // - Exact vs prefix match: 25 points
+  // - Name length similarity: 20 points (closer length = higher score)
+  // - Call sign match: 10 points
+  // - HD variant: 5 points
+  const matchesWithScores: EPGMatchWithScore[] = matches.map(epg => {
+    let confidence = 0;
+    const epgCountry = lookup.countryByEpgId.get(epg.id);
+    const epgNormalized = lookup.normalizedTvgIdByEpgId.get(epg.id) || '';
+    const quality = matchQuality.get(epg.id) || 'prefix';
+
+    // Country match: 40 points
+    if (detectedCountry && epgCountry === detectedCountry) {
+      confidence += 40;
+    } else if (!epgCountry && detectedCountry === 'us') {
+      // No country in EPG, but we're looking for US - give partial credit
+      confidence += 20;
+    }
+
+    // Exact vs prefix match: 25 points
+    if (quality === 'exact') {
+      confidence += 25;
+    } else {
+      // Prefix match - score based on how close the match is
+      const isChannelPrefix = epgNormalized.startsWith(normalizedName);
+      const isEpgPrefix = normalizedName.startsWith(epgNormalized);
+      if (isChannelPrefix && isEpgPrefix) {
+        confidence += 25; // Both are prefixes of each other = exact
+      } else if (isChannelPrefix) {
+        confidence += 20; // Channel name is prefix of EPG name
+      } else if (isEpgPrefix) {
+        confidence += 15; // EPG name is prefix of channel name
+      }
+    }
+
+    // Name length similarity: 20 points
+    const lengthDiff = Math.abs(epgNormalized.length - normalizedName.length);
+    const maxLength = Math.max(epgNormalized.length, normalizedName.length, 1);
+    const lengthSimilarity = 1 - (lengthDiff / maxLength);
+    confidence += Math.round(lengthSimilarity * 20);
+
+    // Call sign match: 10 points
+    const callSignMatch = epg.tvg_id.match(/\(([^)]+)\)/);
+    if (callSignMatch) {
+      const callSign = callSignMatch[1].toLowerCase().replace(/[^a-z0-9]/g, '');
+      const callSignBase = callSign.replace(/(hd|sd|fhd|uhd)$/, '');
+      if (callSign === normalizedName || callSignBase === normalizedName) {
+        confidence += 10; // Exact call sign match
+      } else if (callSign.startsWith(normalizedName) || callSignBase.startsWith(normalizedName)) {
+        confidence += 7; // Call sign starts with channel name
+      } else if (normalizedName.startsWith(callSignBase)) {
+        confidence += 5; // Channel name starts with call sign
+      }
+    }
+
+    // HD variant: 5 points
+    const hasHD = /hd\)?\./i.test(epg.tvg_id) || /HD$/i.test(epg.name);
+    if (hasHD) {
+      confidence += 5;
+    }
+
+    // Cap at 100
+    confidence = Math.min(100, confidence);
+
+    return { epg, confidence };
+  });
+
+  // Sort by confidence score (highest first), keeping the original sort order as tiebreaker
+  matchesWithScores.sort((a, b) => b.confidence - a.confidence);
+
+  // Get the best score
+  const bestScore = matchesWithScores.length > 0 ? matchesWithScores[0].confidence : 0;
+
+  // Re-order matches array to match confidence score order (highest first)
+  // This ensures result.matches[0] is always the best match by confidence
+  const sortedMatches = matchesWithScores.map(m => m.epg);
+
   // Determine status
   let status: 'exact' | 'multiple' | 'none';
-  if (matches.length === 0) {
+  if (sortedMatches.length === 0) {
     status = 'none';
-  } else if (matches.length === 1) {
+  } else if (sortedMatches.length === 1) {
     status = 'exact';
   } else {
     status = 'multiple';
@@ -539,7 +685,9 @@ function findEPGMatchesWithLookup(
     channel,
     detectedCountry,
     normalizedName,
-    matches,
+    matches: sortedMatches,
+    matchesWithScores,
+    bestScore,
     status,
   };
 }
@@ -620,18 +768,35 @@ export function batchFindEPGMatches(
 /**
  * Process multiple channels for EPG matching with async progress updates.
  * Yields control periodically to allow UI updates.
+ *
+ * @param channels - Channels to match
+ * @param allStreams - All available streams
+ * @param epgData - All available EPG data (should already be filtered by selected sources)
+ * @param onProgress - Optional callback for progress updates
+ * @param sourceOrder - Optional array of source IDs in priority order (first = highest priority)
+ *                      When provided, matches from higher-priority sources are preferred
+ * @returns Array of match results
  */
 export async function batchFindEPGMatchesAsync(
   channels: Channel[],
   allStreams: Stream[],
   epgData: EPGData[],
-  onProgress?: (progress: BatchMatchProgress) => void
+  onProgress?: (progress: BatchMatchProgress) => void,
+  sourceOrder?: number[]
 ): Promise<EPGMatchResult[]> {
   // Build lookup maps ONCE for all EPG data
   const epgLookup = buildEPGLookup(epgData);
 
   // Create a lookup map for streams by ID
   const streamMap = new Map(allStreams.map(s => [s.id, s]));
+
+  // Create source priority map for sorting (lower index = higher priority)
+  const sourcePriorityMap = new Map<number, number>();
+  if (sourceOrder) {
+    sourceOrder.forEach((sourceId, index) => {
+      sourcePriorityMap.set(sourceId, index);
+    });
+  }
 
   const results: EPGMatchResult[] = [];
   const total = channels.length;
@@ -650,7 +815,32 @@ export async function batchFindEPGMatchesAsync(
       .map(id => streamMap.get(id))
       .filter((s): s is Stream => s !== undefined);
 
-    results.push(findEPGMatchesWithLookup(channel, channelStreams, epgLookup));
+    const result = findEPGMatchesWithLookup(channel, channelStreams, epgLookup);
+
+    // If we have source priority order, re-sort matches by source priority
+    if (sourceOrder && sourceOrder.length > 0 && result.matches.length > 1) {
+      result.matches.sort((a, b) => {
+        const aPriority = sourcePriorityMap.get(a.epg_source) ?? 999;
+        const bPriority = sourcePriorityMap.get(b.epg_source) ?? 999;
+        // Lower priority number = higher priority (comes first)
+        return aPriority - bPriority;
+      });
+
+      // If the top match is from the highest priority source, and there's only one match
+      // from that source, treat it as an exact match
+      const topSourceId = result.matches[0].epg_source;
+      const topPriority = sourcePriorityMap.get(topSourceId) ?? 999;
+      const matchesFromTopSource = result.matches.filter(
+        m => (sourcePriorityMap.get(m.epg_source) ?? 999) === topPriority
+      );
+      if (matchesFromTopSource.length === 1 && result.status === 'multiple') {
+        // Single match from highest priority source - treat as exact
+        result.matches = matchesFromTopSource;
+        result.status = 'exact';
+      }
+    }
+
+    results.push(result);
 
     // Yield control every BATCH_SIZE channels to allow UI updates
     if ((i + 1) % BATCH_SIZE === 0) {

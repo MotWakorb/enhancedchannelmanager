@@ -30,12 +30,18 @@ class DispatcharrSettings(BaseModel):
     # Appearance settings
     show_stream_urls: bool = True  # Show stream URLs in the UI (can hide for screenshots)
     hide_auto_sync_groups: bool = False  # Hide auto-sync channel groups by default
+    hide_ungrouped_streams: bool = True  # Hide ungrouped streams in the streams pane
     theme: str = "dark"  # Theme: "dark", "light", or "high-contrast"
-    # Default channel profile for new channels (None means no default)
-    default_channel_profile_id: int | None = None
+    # Default channel profiles for new channels (empty list means no defaults)
+    default_channel_profile_ids: list[int] = []
     # Linked M3U accounts - groups of account IDs that should sync group settings
     # Each inner list is a group of linked account IDs, e.g. [[1, 2], [3, 4, 5]]
     linked_m3u_accounts: list[list[int]] = []
+    # EPG auto-match confidence threshold (0-100)
+    # Matches with confidence >= this value are considered "auto-matched"
+    # Set to 0 to disable auto-matching (all matches need review)
+    # Set to 100 to require perfect confidence for auto-match
+    epg_auto_match_threshold: int = 80
 
     def is_configured(self) -> bool:
         return bool(self.url and self.username and self.password)
