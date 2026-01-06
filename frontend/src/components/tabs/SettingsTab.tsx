@@ -28,11 +28,13 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
   const [includeCountryInName, setIncludeCountryInName] = useState(false);
   const [countrySeparator, setCountrySeparator] = useState('|');
   const [timezonePreference, setTimezonePreference] = useState('both');
-  const [defaultChannelProfileId, setDefaultChannelProfileId] = useState<number | null>(null);
+  const [defaultChannelProfileIds, setDefaultChannelProfileIds] = useState<number[]>([]);
+  const [epgAutoMatchThreshold, setEpgAutoMatchThreshold] = useState(80);
 
   // Appearance settings
   const [showStreamUrls, setShowStreamUrls] = useState(true);
   const [hideAutoSyncGroups, setHideAutoSyncGroups] = useState(false);
+  const [hideUngroupedStreams, setHideUngroupedStreams] = useState(true);
   const [theme, setTheme] = useState<Theme>('dark');
 
   // UI state
@@ -67,8 +69,10 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
       setTimezonePreference(settings.timezone_preference);
       setShowStreamUrls(settings.show_stream_urls);
       setHideAutoSyncGroups(settings.hide_auto_sync_groups);
+      setHideUngroupedStreams(settings.hide_ungrouped_streams);
       setTheme(settings.theme || 'dark');
-      setDefaultChannelProfileId(settings.default_channel_profile_id);
+      setDefaultChannelProfileIds(settings.default_channel_profile_ids);
+      setEpgAutoMatchThreshold(settings.epg_auto_match_threshold ?? 80);
       setTestResult(null);
       setError(null);
     } catch (err) {
@@ -140,8 +144,10 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
         timezone_preference: timezonePreference,
         show_stream_urls: showStreamUrls,
         hide_auto_sync_groups: hideAutoSyncGroups,
+        hide_ungrouped_streams: hideUngroupedStreams,
         theme: theme,
-        default_channel_profile_id: defaultChannelProfileId,
+        default_channel_profile_ids: defaultChannelProfileIds,
+        epg_auto_match_threshold: epgAutoMatchThreshold,
       });
       setOriginalUrl(url);
       setOriginalUsername(username);
@@ -350,6 +356,22 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
             </p>
           </div>
         </div>
+
+        <div className="checkbox-group">
+          <input
+            id="hideUngroupedStreams"
+            type="checkbox"
+            checked={hideUngroupedStreams}
+            onChange={(e) => setHideUngroupedStreams(e.target.checked)}
+          />
+          <div className="checkbox-content">
+            <label htmlFor="hideUngroupedStreams">Hide ungrouped streams</label>
+            <p>
+              Hide streams that don't have a group assigned (no group-title in M3U).
+              These streams appear under "Ungrouped" in the Streams pane.
+            </p>
+          </div>
+        </div>
       </div>
 
       <div className="settings-actions">
@@ -421,74 +443,107 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
         </div>
 
         {includeChannelNumberInName && (
-          <div className="form-group indent">
-            <label htmlFor="separator">Number separator</label>
-            <select
-              id="separator"
-              value={channelNumberSeparator}
-              onChange={(e) => setChannelNumberSeparator(e.target.value)}
-            >
-              <option value="-">Hyphen (101 - Channel)</option>
-              <option value=":">Colon (101: Channel)</option>
-              <option value="|">Pipe (101 | Channel)</option>
-            </select>
+          <div className="separator-row indent">
+            <span className="separator-row-label">Separator:</span>
+            <div className="separator-buttons">
+              <button
+                type="button"
+                className={`separator-btn ${channelNumberSeparator === '-' ? 'active' : ''}`}
+                onClick={() => setChannelNumberSeparator('-')}
+              >
+                -
+              </button>
+              <button
+                type="button"
+                className={`separator-btn ${channelNumberSeparator === ':' ? 'active' : ''}`}
+                onClick={() => setChannelNumberSeparator(':')}
+              >
+                :
+              </button>
+              <button
+                type="button"
+                className={`separator-btn ${channelNumberSeparator === '|' ? 'active' : ''}`}
+                onClick={() => setChannelNumberSeparator('|')}
+              >
+                |
+              </button>
+            </div>
+            <span className="separator-preview">e.g., "101 {channelNumberSeparator} Sports Channel"</span>
           </div>
         )}
 
-        <div className="checkbox-group">
-          <input
-            id="removeCountry"
-            type="checkbox"
-            checked={removeCountryPrefix}
-            onChange={(e) => {
-              setRemoveCountryPrefix(e.target.checked);
-              // If enabling remove, disable include
-              if (e.target.checked) {
-                setIncludeCountryInName(false);
-              }
-            }}
-          />
-          <div className="checkbox-content">
-            <label htmlFor="removeCountry">Remove country prefix from names</label>
-            <p>
-              Strip country codes (US, UK, CA, etc.) from channel names when creating channels.
-            </p>
-          </div>
-        </div>
-
-        <div className="checkbox-group">
-          <input
-            id="includeCountry"
-            type="checkbox"
-            checked={includeCountryInName}
-            onChange={(e) => {
-              setIncludeCountryInName(e.target.checked);
-              // If enabling include, disable remove
-              if (e.target.checked) {
-                setRemoveCountryPrefix(false);
-              }
-            }}
-          />
-          <div className="checkbox-content">
-            <label htmlFor="includeCountry">Include country prefix in name (normalized)</label>
-            <p>
-              Keep country codes in channel names with a consistent separator (e.g., "US | Sports Channel").
-            </p>
+        <div className="form-group">
+          <label>Country prefix handling</label>
+          <div className="radio-group">
+            <label className="radio-option">
+              <input
+                type="radio"
+                name="countryPrefix"
+                checked={removeCountryPrefix}
+                onChange={() => {
+                  setRemoveCountryPrefix(true);
+                  setIncludeCountryInName(false);
+                }}
+              />
+              <span className="radio-label">Remove</span>
+              <span className="radio-description">Strip country codes (US, UK, CA) from names</span>
+            </label>
+            <label className="radio-option">
+              <input
+                type="radio"
+                name="countryPrefix"
+                checked={!removeCountryPrefix && !includeCountryInName}
+                onChange={() => {
+                  setRemoveCountryPrefix(false);
+                  setIncludeCountryInName(false);
+                }}
+              />
+              <span className="radio-label">Keep as-is</span>
+              <span className="radio-description">Leave country prefixes unchanged</span>
+            </label>
+            <label className="radio-option">
+              <input
+                type="radio"
+                name="countryPrefix"
+                checked={includeCountryInName}
+                onChange={() => {
+                  setRemoveCountryPrefix(false);
+                  setIncludeCountryInName(true);
+                }}
+              />
+              <span className="radio-label">Normalize</span>
+              <span className="radio-description">Keep with consistent separator</span>
+            </label>
           </div>
         </div>
 
         {includeCountryInName && (
-          <div className="form-group indent">
-            <label htmlFor="countrySeparator">Country separator</label>
-            <select
-              id="countrySeparator"
-              value={countrySeparator}
-              onChange={(e) => setCountrySeparator(e.target.value)}
-            >
-              <option value="-">Hyphen (US - Channel)</option>
-              <option value=":">Colon (US: Channel)</option>
-              <option value="|">Pipe (US | Channel)</option>
-            </select>
+          <div className="separator-row indent">
+            <span className="separator-row-label">Separator:</span>
+            <div className="separator-buttons">
+              <button
+                type="button"
+                className={`separator-btn ${countrySeparator === '-' ? 'active' : ''}`}
+                onClick={() => setCountrySeparator('-')}
+              >
+                -
+              </button>
+              <button
+                type="button"
+                className={`separator-btn ${countrySeparator === ':' ? 'active' : ''}`}
+                onClick={() => setCountrySeparator(':')}
+              >
+                :
+              </button>
+              <button
+                type="button"
+                className={`separator-btn ${countrySeparator === '|' ? 'active' : ''}`}
+                onClick={() => setCountrySeparator('|')}
+              >
+                |
+              </button>
+            </div>
+            <span className="separator-preview">e.g., "US {countrySeparator} Sports Channel"</span>
           </div>
         )}
       </div>
@@ -523,24 +578,65 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
         </div>
 
         <div className="form-group">
-          <label htmlFor="defaultProfile">Default channel profile for new channels</label>
-          <select
-            id="defaultProfile"
-            value={defaultChannelProfileId ?? ''}
-            onChange={(e) => setDefaultChannelProfileId(e.target.value ? Number(e.target.value) : null)}
-          >
-            <option value="">None (don't auto-add to profiles)</option>
-            {channelProfiles.map((profile) => (
-              <option key={profile.id} value={profile.id}>
-                {profile.name}
-              </option>
-            ))}
-          </select>
-          <p className="form-hint">
-            Newly created channels will automatically be added to this profile.
+          <label>Default profiles for new channels</label>
+          <p className="form-hint" style={{ marginTop: 0, marginBottom: '0.75rem' }}>
+            Newly created channels will automatically be added to the selected profiles.
             {channelProfiles.length === 0 && (
               <span className="form-hint-warning"> No profiles available. Create profiles in the Channel Manager.</span>
             )}
+          </p>
+          {channelProfiles.length > 0 && (
+            <div className="profile-checkbox-list">
+              {channelProfiles.map((profile) => (
+                <label key={profile.id} className="profile-checkbox">
+                  <input
+                    type="checkbox"
+                    checked={defaultChannelProfileIds.includes(profile.id)}
+                    onChange={(e) => {
+                      if (e.target.checked) {
+                        setDefaultChannelProfileIds([...defaultChannelProfileIds, profile.id]);
+                      } else {
+                        setDefaultChannelProfileIds(defaultChannelProfileIds.filter(id => id !== profile.id));
+                      }
+                    }}
+                  />
+                  <span className="profile-checkbox-label">{profile.name}</span>
+                </label>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div className="settings-section">
+        <div className="settings-section-header">
+          <span className="material-icons">tv_guide</span>
+          <h3>EPG Matching</h3>
+        </div>
+
+        <div className="form-group">
+          <div className="threshold-label-row">
+            <label htmlFor="epgThreshold">Auto-match confidence threshold</label>
+            <div className="threshold-input-group">
+              <input
+                id="epgThreshold"
+                type="number"
+                min="0"
+                max="100"
+                value={epgAutoMatchThreshold}
+                onChange={(e) => {
+                  const value = Math.max(0, Math.min(100, Number(e.target.value) || 0));
+                  setEpgAutoMatchThreshold(value);
+                }}
+                className="threshold-input"
+              />
+              <span className="threshold-percent">%</span>
+            </div>
+          </div>
+          <p className="form-hint">
+            EPG matches with a confidence score at or above this threshold will be automatically assigned.
+            Lower values match more channels automatically but may be less accurate.
+            Set to 0 to require manual review for all matches.
           </p>
         </div>
       </div>

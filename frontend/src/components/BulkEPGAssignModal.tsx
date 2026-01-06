@@ -27,6 +27,8 @@ interface BulkEPGAssignModalProps {
   epgSources: EPGSource[];
   onClose: () => void;
   onAssign: (assignments: EPGAssignment[]) => void;
+  /** Confidence threshold (0-100) for auto-matching. Matches >= threshold are considered "exact". Default: 80 */
+  epgAutoMatchThreshold?: number;
 }
 
 type Phase = 'analyzing' | 'review';
@@ -39,6 +41,7 @@ export function BulkEPGAssignModal({
   epgSources,
   onClose,
   onAssign,
+  epgAutoMatchThreshold = 80,
 }: BulkEPGAssignModalProps) {
   const [phase, setPhase] = useState<Phase>('analyzing');
   const [matchResults, setMatchResults] = useState<EPGMatchResult[]>([]);
@@ -50,9 +53,91 @@ export function BulkEPGAssignModal({
   const [progress, setProgress] = useState<BatchMatchProgress | null>(null);
   const [epgSearchFilter, setEpgSearchFilter] = useState('');
 
+  // Unmatched channel search state
+  const [unmatchedSelections, setUnmatchedSelections] = useState<Map<number, EPGData>>(new Map());
+  const [searchingUnmatchedId, setSearchingUnmatchedId] = useState<number | null>(null);
+  const [unmatchedSearchTerm, setUnmatchedSearchTerm] = useState('');
+
+  // Auto-match override state (for editing auto-matched items)
+  const [autoMatchOverrides, setAutoMatchOverrides] = useState<Map<number, EPGData | null>>(new Map());
+  const [editingAutoMatchId, setEditingAutoMatchId] = useState<number | null>(null);
+  const [autoMatchSearchTerm, setAutoMatchSearchTerm] = useState('');
+
+  // EPG Source selection state - simple Set of selected source IDs
+  const [selectedSourceIds, setSelectedSourceIds] = useState<Set<number> | null>(null);
+  const [sourceDropdownOpen, setSourceDropdownOpen] = useState(false);
+  const sourceDropdownRef = useRef<HTMLDivElement>(null);
+
   // Track if we've already analyzed for this modal session
   const hasAnalyzedRef = useRef(false);
 
+  // Get available sources (exclude dummy EPG sources)
+  const availableSources = useMemo(() => {
+    if (!epgSources || !Array.isArray(epgSources)) return [];
+    return epgSources.filter(s => s.source_type !== 'dummy' && s.is_active);
+  }, [epgSources]);
+
+  // Initialize selected sources when modal opens (select all by default)
+  const effectiveSelectedSourceIds = useMemo(() => {
+    if (selectedSourceIds !== null) return selectedSourceIds;
+    // Default: all available sources selected
+    return new Set(availableSources.map(s => s.id));
+  }, [selectedSourceIds, availableSources]);
+
+  // Filter EPG data based on selected sources
+  const filteredEpgData = useMemo(() => {
+    if (!epgData || !Array.isArray(epgData)) return [];
+    if (effectiveSelectedSourceIds.size === 0) return [];
+    return epgData.filter(e => effectiveSelectedSourceIds.has(e.epg_source));
+  }, [epgData, effectiveSelectedSourceIds]);
+
+  // Close dropdown when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (sourceDropdownRef.current && !sourceDropdownRef.current.contains(event.target as Node)) {
+        setSourceDropdownOpen(false);
+      }
+    };
+    if (sourceDropdownOpen) {
+      document.addEventListener('mousedown', handleClickOutside);
+    }
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [sourceDropdownOpen]);
+
+  // Toggle source selection
+  const handleToggleSource = useCallback((sourceId: number) => {
+    setSelectedSourceIds(prev => {
+      const current = prev ?? new Set(availableSources.map(s => s.id));
+      const next = new Set(current);
+      if (next.has(sourceId)) {
+        next.delete(sourceId);
+      } else {
+        next.add(sourceId);
+      }
+      return next;
+    });
+  }, [availableSources]);
+
+  // Select/deselect all sources
+  const handleSelectAllSources = useCallback(() => {
+    setSelectedSourceIds(new Set(availableSources.map(s => s.id)));
+  }, [availableSources]);
+
+  const handleClearAllSources = useCallback(() => {
+    setSelectedSourceIds(new Set());
+  }, []);
+
+  // Re-run analysis with current source selection
+  const handleRerunAnalysis = useCallback(() => {
+    hasAnalyzedRef.current = false;
+    setPhase('analyzing');
+    setMatchResults([]);
+    setConflictResolutions(new Map());
+    setShowConflictReview(false);
+    setCurrentConflictIndex(0);
+  }, []);
 
   // Run matching when modal opens
   useEffect(() => {
@@ -67,11 +152,19 @@ export function BulkEPGAssignModal({
       setShowConflictReview(false);
       setProgress(null);
       setEpgSearchFilter('');
+      setUnmatchedSelections(new Map());
+      setSearchingUnmatchedId(null);
+      setUnmatchedSearchTerm('');
+      setAutoMatchOverrides(new Map());
+      setEditingAutoMatchId(null);
+      setAutoMatchSearchTerm('');
+      setSelectedSourceIds(null); // Reset to default (all selected)
+      setSourceDropdownOpen(false);
       hasAnalyzedRef.current = false;
       return;
     }
 
-    // Only run analysis once per modal open
+    // Only run analysis once per modal open (or when re-run is triggered)
     if (hasAnalyzedRef.current) {
       return;
     }
@@ -80,13 +173,16 @@ export function BulkEPGAssignModal({
     setPhase('analyzing');
     hasAnalyzedRef.current = true;
 
+    // Capture current filtered data for async operation
+    const epgDataToUse = filteredEpgData;
+
     // Run async analysis
     const runAnalysis = async () => {
       try {
         console.log('[BulkEPGAssign] Running analysis...');
         console.log('[BulkEPGAssign] Selected channels:', selectedChannels.length);
         console.log('[BulkEPGAssign] Available streams:', streams.length);
-        console.log('[BulkEPGAssign] EPG data entries:', epgData.length);
+        console.log('[BulkEPGAssign] EPG data entries (filtered):', epgDataToUse.length);
 
         // Early exit if no channels selected
         if (selectedChannels.length === 0) {
@@ -99,7 +195,7 @@ export function BulkEPGAssignModal({
         const results = await batchFindEPGMatchesAsync(
           selectedChannels,
           streams,
-          epgData,
+          epgDataToUse,
           (prog) => setProgress(prog)
         );
         console.log('[BulkEPGAssign] Match results:', results);
@@ -118,21 +214,28 @@ export function BulkEPGAssignModal({
     };
 
     runAnalysis();
-  }, [isOpen, selectedChannels, streams, epgData]);
+  // Note: filteredEpgData changes when source selection changes, but we only want to re-run
+  // when hasAnalyzedRef is reset (via handleRerunAnalysis), not on every source toggle
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen, selectedChannels, streams]);
 
   // Categorize results and sort A-Z by channel name
+  // Uses confidence threshold to determine auto-matching
   const { autoMatched, conflicts, unmatched } = useMemo(() => {
     const auto: EPGMatchResult[] = [];
     const conf: EPGMatchResult[] = [];
     const none: EPGMatchResult[] = [];
 
     for (const result of matchResults) {
-      if (result.status === 'exact') {
-        auto.push(result);
-      } else if (result.status === 'multiple') {
-        conf.push(result);
-      } else {
+      if (result.status === 'none') {
+        // No matches found
         none.push(result);
+      } else if (result.bestScore >= epgAutoMatchThreshold) {
+        // High confidence match (single or multiple) - auto-match
+        auto.push(result);
+      } else {
+        // Below threshold - needs review
+        conf.push(result);
       }
     }
 
@@ -145,7 +248,7 @@ export function BulkEPGAssignModal({
       conflicts: conf.sort(sortByChannelName),
       unmatched: none.sort(sortByChannelName),
     };
-  }, [matchResults]);
+  }, [matchResults, epgAutoMatchThreshold]);
 
 
   // Pre-select recommended matches for all conflicts when entering review phase
@@ -185,11 +288,17 @@ export function BulkEPGAssignModal({
     setCurrentConflictIndex(prev => Math.max(prev - 1, 0));
   }, []);
 
-  // Get recommended EPG for a result (first match with matching country, or first match)
+  // Get recommended EPG for a result (the one with highest confidence score)
   const getRecommendedEpg = useCallback((result: EPGMatchResult): EPGData | null => {
-    if (result.matches.length === 0) return null;
-    // matches are already sorted with matching country first
-    return result.matches[0];
+    if (result.matchesWithScores.length === 0) return null;
+    // Return the match with highest confidence score
+    let best = result.matchesWithScores[0];
+    for (const match of result.matchesWithScores) {
+      if (match.confidence > best.confidence) {
+        best = match;
+      }
+    }
+    return best.epg;
   }, []);
 
   // Accept all recommended matches for unresolved conflicts
@@ -199,7 +308,7 @@ export function BulkEPGAssignModal({
       for (const result of conflicts) {
         // Only set if not already resolved
         if (!next.has(result.channel.id)) {
-          const recommended = result.matches[0]; // First match is recommended
+          const recommended = getRecommendedEpg(result);
           if (recommended) {
             next.set(result.channel.id, recommended);
           }
@@ -207,37 +316,129 @@ export function BulkEPGAssignModal({
       }
       return next;
     });
-  }, [conflicts]);
+  }, [conflicts, getRecommendedEpg]);
 
   // Count unresolved conflicts
   const unresolvedCount = useMemo(() => {
     return conflicts.filter(c => !conflictResolutions.has(c.channel.id)).length;
   }, [conflicts, conflictResolutions]);
 
+  // Handle unmatched channel EPG selection
+  const handleUnmatchedSelect = useCallback((channelId: number, epgData: EPGData | null) => {
+    setUnmatchedSelections(prev => {
+      const next = new Map(prev);
+      if (epgData) {
+        next.set(channelId, epgData);
+      } else {
+        next.delete(channelId);
+      }
+      return next;
+    });
+    setSearchingUnmatchedId(null);
+    setUnmatchedSearchTerm('');
+  }, []);
+
+  // Open search for an unmatched channel
+  const handleOpenUnmatchedSearch = useCallback((result: EPGMatchResult) => {
+    setSearchingUnmatchedId(result.channel.id);
+    setUnmatchedSearchTerm(result.normalizedName || result.channel.name);
+  }, []);
+
+  // Close unmatched search without selecting
+  const handleCloseUnmatchedSearch = useCallback(() => {
+    setSearchingUnmatchedId(null);
+    setUnmatchedSearchTerm('');
+  }, []);
+
+  // Handle auto-match override selection
+  const handleAutoMatchOverride = useCallback((channelId: number, epgData: EPGData | null) => {
+    setAutoMatchOverrides(prev => {
+      const next = new Map(prev);
+      if (epgData) {
+        next.set(channelId, epgData);
+      } else {
+        next.delete(channelId);
+      }
+      return next;
+    });
+    setEditingAutoMatchId(null);
+    setAutoMatchSearchTerm('');
+  }, []);
+
+  // Open edit for an auto-matched channel
+  const handleOpenAutoMatchEdit = useCallback((result: EPGMatchResult) => {
+    setEditingAutoMatchId(result.channel.id);
+    setAutoMatchSearchTerm('');
+  }, []);
+
+  // Close auto-match edit without changing
+  const handleCloseAutoMatchEdit = useCallback(() => {
+    setEditingAutoMatchId(null);
+    setAutoMatchSearchTerm('');
+  }, []);
+
+  // Reset an auto-match override back to original
+  const handleResetAutoMatchOverride = useCallback((channelId: number) => {
+    setAutoMatchOverrides(prev => {
+      const next = new Map(prev);
+      next.delete(channelId);
+      return next;
+    });
+  }, []);
+
   // Count how many assignments will be made
   const assignmentCount = useMemo(() => {
-    let count = autoMatched.length;
+    // Count auto-matched, accounting for overrides
+    let count = 0;
+    for (const result of autoMatched) {
+      if (autoMatchOverrides.has(result.channel.id)) {
+        // Has an override - count if not null
+        if (autoMatchOverrides.get(result.channel.id) !== null) {
+          count++;
+        }
+      } else {
+        // No override - count the original auto-match
+        count++;
+      }
+    }
     for (const [, selected] of conflictResolutions) {
       if (selected !== null) {
         count++;
       }
     }
+    // Add unmatched selections
+    count += unmatchedSelections.size;
     return count;
-  }, [autoMatched, conflictResolutions]);
+  }, [autoMatched, autoMatchOverrides, conflictResolutions, unmatchedSelections]);
 
   // Handle assign button click
   const handleAssign = useCallback(() => {
     const assignments: EPGAssignment[] = [];
 
-    // Add auto-matched channels
+    // Add auto-matched channels (with override support)
     for (const result of autoMatched) {
-      const match = result.matches[0];
-      assignments.push({
-        channelId: result.channel.id,
-        channelName: result.channel.name,
-        tvg_id: match.tvg_id,
-        epg_data_id: match.id,
-      });
+      if (autoMatchOverrides.has(result.channel.id)) {
+        // Use override if set
+        const override = autoMatchOverrides.get(result.channel.id);
+        if (override) {
+          assignments.push({
+            channelId: result.channel.id,
+            channelName: result.channel.name,
+            tvg_id: override.tvg_id,
+            epg_data_id: override.id,
+          });
+        }
+        // If override is null, skip this channel (user chose to not assign)
+      } else {
+        // Use original auto-match
+        const match = result.matches[0];
+        assignments.push({
+          channelId: result.channel.id,
+          channelName: result.channel.name,
+          tvg_id: match.tvg_id,
+          epg_data_id: match.id,
+        });
+      }
     }
 
     // Add resolved conflicts
@@ -255,8 +456,21 @@ export function BulkEPGAssignModal({
       }
     }
 
+    // Add unmatched selections
+    for (const [channelId, selected] of unmatchedSelections) {
+      const channel = selectedChannels.find(c => c.id === channelId);
+      if (channel) {
+        assignments.push({
+          channelId,
+          channelName: channel.name,
+          tvg_id: selected.tvg_id,
+          epg_data_id: selected.id,
+        });
+      }
+    }
+
     onAssign(assignments);
-  }, [autoMatched, conflictResolutions, selectedChannels, onAssign]);
+  }, [autoMatched, autoMatchOverrides, conflictResolutions, unmatchedSelections, selectedChannels, onAssign]);
 
   if (!isOpen) return null;
 
@@ -269,6 +483,84 @@ export function BulkEPGAssignModal({
             <span className="material-icons">close</span>
           </button>
         </div>
+
+        {/* EPG Source Filter */}
+        {availableSources.length > 0 && (
+          <div className="bulk-epg-source-filter">
+            <span className="source-filter-label">EPG Sources:</span>
+            <div className="source-filter-dropdown" ref={sourceDropdownRef}>
+              <button
+                className="source-filter-button"
+                onClick={() => setSourceDropdownOpen(!sourceDropdownOpen)}
+                type="button"
+              >
+                <span>
+                  {effectiveSelectedSourceIds.size === availableSources.length
+                    ? `All Sources (${availableSources.length})`
+                    : effectiveSelectedSourceIds.size === 0
+                      ? 'No Sources'
+                      : `${effectiveSelectedSourceIds.size} source${effectiveSelectedSourceIds.size !== 1 ? 's' : ''}`
+                  }
+                </span>
+                <span className="dropdown-arrow">▼</span>
+              </button>
+              {sourceDropdownOpen && (
+                <div className="source-filter-menu">
+                  <div className="source-filter-actions">
+                    <button
+                      type="button"
+                      className="source-filter-action"
+                      onClick={handleSelectAllSources}
+                    >
+                      Select All
+                    </button>
+                    <button
+                      type="button"
+                      className="source-filter-action"
+                      onClick={handleClearAllSources}
+                    >
+                      Clear
+                    </button>
+                  </div>
+                  <div className="source-filter-options">
+                    {availableSources.map(source => {
+                      const epgCount = epgData.filter(e => e.epg_source === source.id).length;
+                      return (
+                        <div
+                          key={source.id}
+                          className={`source-filter-option ${effectiveSelectedSourceIds.has(source.id) ? 'selected' : ''}`}
+                        >
+                          <label className="source-option-label">
+                            <input
+                              type="checkbox"
+                              checked={effectiveSelectedSourceIds.has(source.id)}
+                              onChange={() => handleToggleSource(source.id)}
+                            />
+                            <span className="source-option-name">{source.name}</span>
+                            <span className="source-option-count">({epgCount})</span>
+                          </label>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <div className="source-filter-apply">
+                    <button
+                      type="button"
+                      className="source-apply-btn"
+                      onClick={() => {
+                        setSourceDropdownOpen(false);
+                        handleRerunAnalysis();
+                      }}
+                    >
+                      <span className="material-icons">refresh</span>
+                      Re-analyze
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
 
         <div className="bulk-epg-body">
           {phase === 'analyzing' ? (
@@ -297,11 +589,25 @@ export function BulkEPGAssignModal({
               <div className="bulk-epg-summary">
                 <div className="summary-item success">
                   <span className="material-icons">check_circle</span>
-                  <span>{autoMatched.length} matched</span>
+                  <span>
+                    {autoMatched.length} matched
+                    {autoMatched.length > 0 && (
+                      <span className="score-range">
+                        ({Math.min(...autoMatched.map(r => r.bestScore))}-{Math.max(...autoMatched.map(r => r.bestScore))}%)
+                      </span>
+                    )}
+                  </span>
                 </div>
                 <div className="summary-item warning">
                   <span className="material-icons">help</span>
-                  <span>{conflicts.length} need review</span>
+                  <span>
+                    {conflicts.length} need review
+                    {conflicts.length > 0 && (
+                      <span className="score-range">
+                        ({Math.min(...conflicts.map(r => r.bestScore))}-{Math.max(...conflicts.map(r => r.bestScore))}%)
+                      </span>
+                    )}
+                  </span>
                 </div>
                 <div className="summary-item neutral">
                   <span className="material-icons">remove_circle_outline</span>
@@ -394,6 +700,7 @@ export function BulkEPGAssignModal({
                     <ConflictCard
                       result={conflicts[currentConflictIndex]}
                       epgSources={epgSources}
+                      allEpgData={filteredEpgData}
                       selectedEpg={conflictResolutions.get(conflicts[currentConflictIndex].channel.id)}
                       onSelect={epg => handleConflictSelect(conflicts[currentConflictIndex].channel.id, epg)}
                       recommendedEpg={getRecommendedEpg(conflicts[currentConflictIndex])}
@@ -413,27 +720,73 @@ export function BulkEPGAssignModal({
                   >
                     <span className="material-icons">check_circle</span>
                     Auto-Matched ({autoMatched.length})
+                    {autoMatchOverrides.size > 0 && (
+                      <span className="override-count">({autoMatchOverrides.size} modified)</span>
+                    )}
                     <span className="material-icons expand-icon">
                       {autoMatchedExpanded ? 'expand_less' : 'expand_more'}
                     </span>
                   </button>
                   {autoMatchedExpanded && (
                     <div className="matched-list">
-                      {autoMatched.map(result => (
-                        <div key={result.channel.id} className="matched-item">
-                          <div className="matched-channel">
-                            <span className="channel-name">{result.channel.name}</span>
-                            {result.detectedCountry && (
-                              <span className="country-badge">{result.detectedCountry.toUpperCase()}</span>
+                      {autoMatched.map(result => {
+                        const override = autoMatchOverrides.get(result.channel.id);
+                        const hasOverride = autoMatchOverrides.has(result.channel.id);
+                        const displayEpg = hasOverride && override ? override : result.matches[0];
+                        const isEditing = editingAutoMatchId === result.channel.id;
+
+                        return (
+                          <div key={result.channel.id}>
+                            <div className={`matched-item ${hasOverride ? 'has-override' : ''}`}>
+                              <div className="matched-channel">
+                                <span className="channel-name" title={result.channel.name}>{result.channel.name}</span>
+                                {result.detectedCountry && (
+                                  <span className="country-badge">{result.detectedCountry.toUpperCase()}</span>
+                                )}
+                              </div>
+                              <span className="material-icons arrow">arrow_forward</span>
+                              <div className="matched-epg">
+                                <span className="epg-name" title={displayEpg.name}>
+                                  {displayEpg.name}
+                                  {hasOverride && <span className="modified-tag">Modified</span>}
+                                </span>
+                                <span className="epg-tvgid" title={displayEpg.tvg_id}>{displayEpg.tvg_id}</span>
+                              </div>
+                              <span className="confidence-badge" title="Confidence score">{result.bestScore}%</span>
+                              <button
+                                className="edit-match-btn"
+                                onClick={() => handleOpenAutoMatchEdit(result)}
+                                title="Change EPG assignment"
+                              >
+                                <span className="material-icons">edit</span>
+                              </button>
+                              {hasOverride && (
+                                <button
+                                  className="reset-match-btn"
+                                  onClick={() => handleResetAutoMatchOverride(result.channel.id)}
+                                  title="Reset to original match"
+                                >
+                                  <span className="material-icons">undo</span>
+                                </button>
+                              )}
+                            </div>
+                            {isEditing && (
+                              <EPGSearchCard
+                                channelName={result.channel.name}
+                                normalizedName={result.normalizedName || result.channel.name}
+                                detectedCountry={result.detectedCountry}
+                                epgData={filteredEpgData}
+                                epgSources={epgSources}
+                                selectedEpg={displayEpg}
+                                onSelect={(epg) => handleAutoMatchOverride(result.channel.id, epg)}
+                                onClose={handleCloseAutoMatchEdit}
+                                searchTerm={autoMatchSearchTerm}
+                                onSearchChange={setAutoMatchSearchTerm}
+                              />
                             )}
                           </div>
-                          <span className="material-icons arrow">arrow_forward</span>
-                          <div className="matched-epg">
-                            <span className="epg-name">{result.matches[0].name}</span>
-                            <span className="epg-tvgid">{result.matches[0].tvg_id}</span>
-                          </div>
-                        </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   )}
                 </div>
@@ -448,21 +801,59 @@ export function BulkEPGAssignModal({
                   >
                     <span className="material-icons">remove_circle_outline</span>
                     Unmatched ({unmatched.length})
+                    {unmatchedSelections.size > 0 && (
+                      <span className="assigned-count">({unmatchedSelections.size} assigned)</span>
+                    )}
                     <span className="material-icons expand-icon">
                       {unmatchedExpanded ? 'expand_less' : 'expand_more'}
                     </span>
                   </button>
                   {unmatchedExpanded && (
                     <div className="unmatched-list">
-                      {unmatched.map(result => (
-                        <div key={result.channel.id} className="unmatched-item">
-                          <span className="channel-name">{result.channel.name}</span>
-                          {result.detectedCountry && (
-                            <span className="country-badge">{result.detectedCountry.toUpperCase()}</span>
-                          )}
-                          <span className="normalized-name">({result.normalizedName || 'empty'})</span>
-                        </div>
-                      ))}
+                      {unmatched.map(result => {
+                        const assignedEpg = unmatchedSelections.get(result.channel.id);
+                        const isSearching = searchingUnmatchedId === result.channel.id;
+                        return (
+                          <div key={result.channel.id}>
+                            <div
+                              className={`unmatched-item clickable ${assignedEpg ? 'assigned' : ''}`}
+                              onClick={() => handleOpenUnmatchedSearch(result)}
+                            >
+                              <div className="unmatched-item-main">
+                                <span className="channel-name" title={result.channel.name}>{result.channel.name}</span>
+                                {result.detectedCountry && (
+                                  <span className="country-badge">{result.detectedCountry.toUpperCase()}</span>
+                                )}
+                                {!assignedEpg && (
+                                  <span className="normalized-name">({result.normalizedName || 'empty'})</span>
+                                )}
+                              </div>
+                              {assignedEpg ? (
+                                <div className="assigned-epg-info">
+                                  <span className="material-icons assigned-icon">check_circle</span>
+                                  <span className="assigned-epg-name" title={assignedEpg.name}>{assignedEpg.name}</span>
+                                </div>
+                              ) : (
+                                <span className="material-icons search-icon">search</span>
+                              )}
+                            </div>
+                            {isSearching && (
+                              <EPGSearchCard
+                                channelName={result.channel.name}
+                                normalizedName={result.normalizedName || result.channel.name}
+                                detectedCountry={result.detectedCountry}
+                                epgData={filteredEpgData}
+                                epgSources={epgSources}
+                                selectedEpg={assignedEpg}
+                                onSelect={(epg) => handleUnmatchedSelect(result.channel.id, epg)}
+                                onClose={handleCloseUnmatchedSearch}
+                                searchTerm={unmatchedSearchTerm}
+                                onSearchChange={setUnmatchedSearchTerm}
+                              />
+                            )}
+                          </div>
+                        );
+                      })}
                     </div>
                   )}
                 </div>
@@ -492,6 +883,7 @@ export function BulkEPGAssignModal({
 interface ConflictCardProps {
   result: EPGMatchResult;
   epgSources: EPGSource[];
+  allEpgData: EPGData[];  // All EPG data for "Search All" mode
   selectedEpg: EPGData | null | undefined;
   onSelect: (epg: EPGData | null) => void;
   recommendedEpg: EPGData | null;
@@ -499,23 +891,72 @@ interface ConflictCardProps {
   onSearchChange: (filter: string) => void;
 }
 
-function ConflictCard({ result, epgSources, selectedEpg, onSelect, recommendedEpg, searchFilter, onSearchChange }: ConflictCardProps) {
-  // Filter matches based on search
+const MAX_ALL_EPG_RESULTS = 50;
+
+function ConflictCard({ result, epgSources, allEpgData, selectedEpg, onSelect, recommendedEpg, searchFilter, onSearchChange }: ConflictCardProps) {
+  // State for "Search All EPG" mode
+  const [searchAllMode, setSearchAllMode] = useState(false);
+
+  // Fuzzy multi-word search matcher
+  // Splits search into words and checks if all words appear in the EPG entry
+  const matchesSearch = useCallback((epg: EPGData, searchWords: string[]): boolean => {
+    const lowerName = epg.name.toLowerCase();
+    const lowerTvgId = epg.tvg_id.toLowerCase();
+    const normalizedName = lowerName.replace(/[^a-z0-9]/g, '');
+    const normalizedTvgId = lowerTvgId.replace(/[^a-z0-9]/g, '');
+    const sourceName = getEPGSourceName(epg, epgSources).toLowerCase();
+
+    return searchWords.every(word => {
+      const normalizedWord = word.replace(/[^a-z0-9]/g, '');
+      return lowerName.includes(word) ||
+             lowerTvgId.includes(word) ||
+             normalizedName.includes(normalizedWord) ||
+             normalizedTvgId.includes(normalizedWord) ||
+             sourceName.includes(word);
+    });
+  }, [epgSources]);
+
+  // Build a map from EPG id to confidence score for quick lookup
+  const scoreByEpgId = useMemo(() => {
+    const map = new Map<number, number>();
+    for (const match of result.matchesWithScores) {
+      map.set(match.epg.id, match.confidence);
+    }
+    return map;
+  }, [result.matchesWithScores]);
+
+  // Filter matches based on search - either from suggestions or all EPG data
   const filteredMatches = useMemo(() => {
-    if (!searchFilter.trim()) return result.matches;
-    const lowerFilter = searchFilter.toLowerCase();
-    return result.matches.filter(epg =>
-      epg.name.toLowerCase().includes(lowerFilter) ||
-      epg.tvg_id.toLowerCase().includes(lowerFilter) ||
-      getEPGSourceName(epg, epgSources).toLowerCase().includes(lowerFilter)
-    );
-  }, [result.matches, searchFilter, epgSources]);
+    if (searchAllMode) {
+      // Search all EPG data with fuzzy multi-word matching
+      if (!searchFilter.trim()) return [];
+      const searchWords = searchFilter.toLowerCase().split(/\s+/).filter(w => w.length > 0);
+      if (searchWords.length === 0) return [];
+      const results = allEpgData.filter(epg => matchesSearch(epg, searchWords));
+      return results.slice(0, MAX_ALL_EPG_RESULTS);
+    } else {
+      // Filter within suggestions with fuzzy multi-word matching
+      if (!searchFilter.trim()) return result.matches;
+      const searchWords = searchFilter.toLowerCase().split(/\s+/).filter(w => w.length > 0);
+      if (searchWords.length === 0) return result.matches;
+      return result.matches.filter(epg => matchesSearch(epg, searchWords));
+    }
+  }, [searchAllMode, result.matches, allEpgData, searchFilter, matchesSearch]);
+
+  // Check if there are more results when in search all mode
+  const hasMoreResults = useMemo(() => {
+    if (!searchAllMode || !searchFilter.trim()) return false;
+    const searchWords = searchFilter.toLowerCase().split(/\s+/).filter(w => w.length > 0);
+    if (searchWords.length === 0) return false;
+    const totalCount = allEpgData.filter(epg => matchesSearch(epg, searchWords)).length;
+    return totalCount > MAX_ALL_EPG_RESULTS;
+  }, [searchAllMode, allEpgData, searchFilter, matchesSearch]);
 
   return (
     <div className="conflict-card">
       <div className="conflict-card-header">
         <div className="conflict-channel">
-          <span className="channel-name">{result.channel.name}</span>
+          <span className="channel-name" title={result.channel.name}>{result.channel.name}</span>
           {result.detectedCountry && (
             <span className="country-badge">{result.detectedCountry.toUpperCase()}</span>
           )}
@@ -526,7 +967,7 @@ function ConflictCard({ result, epgSources, selectedEpg, onSelect, recommendedEp
         <span className="material-icons">search</span>
         <input
           type="text"
-          placeholder="Filter EPG matches..."
+          placeholder={searchAllMode ? "Search all EPG data..." : "Filter suggestions..."}
           value={searchFilter}
           onChange={e => onSearchChange(e.target.value)}
         />
@@ -536,10 +977,28 @@ function ConflictCard({ result, epgSources, selectedEpg, onSelect, recommendedEp
           </button>
         )}
       </div>
+      <div className="conflict-card-mode-toggle">
+        <button
+          className={`mode-btn ${!searchAllMode ? 'active' : ''}`}
+          onClick={() => { setSearchAllMode(false); onSearchChange(''); }}
+        >
+          Suggestions ({result.matches.length})
+        </button>
+        <button
+          className={`mode-btn ${searchAllMode ? 'active' : ''}`}
+          onClick={() => { setSearchAllMode(true); onSearchChange(result.normalizedName || ''); }}
+        >
+          Search All EPG
+        </button>
+      </div>
       <div className="conflict-card-body">
         <div className="conflict-options">
+          {searchAllMode && !searchFilter.trim() && (
+            <div className="search-prompt">Type to search across all EPG entries</div>
+          )}
           {filteredMatches.map(epg => {
-            const isRecommended = recommendedEpg?.id === epg.id;
+            const isRecommended = !searchAllMode && recommendedEpg?.id === epg.id;
+            const confidence = scoreByEpgId.get(epg.id);
             return (
               <label
                 key={epg.id}
@@ -556,19 +1015,30 @@ function ConflictCard({ result, epgSources, selectedEpg, onSelect, recommendedEp
                     <img src={epg.icon_url} alt="" className="epg-icon" />
                   )}
                   <div className="option-info">
-                    <span className="epg-name">
+                    <span className="epg-name" title={epg.name}>
                       {epg.name}
                       {isRecommended && <span className="recommended-tag">Recommended</span>}
                     </span>
-                    <span className="epg-tvgid">{epg.tvg_id}</span>
+                    <span className="epg-tvgid" title={epg.tvg_id}>{epg.tvg_id}</span>
                     <span className="epg-source">{getEPGSourceName(epg, epgSources)}</span>
                   </div>
+                  {confidence !== undefined && (
+                    <span className="option-confidence" title="Confidence score">{confidence}%</span>
+                  )}
                 </div>
               </label>
             );
           })}
-          {filteredMatches.length === 0 && searchFilter && (
+          {filteredMatches.length === 0 && searchFilter && !searchAllMode && (
             <div className="no-matches">No matches found for "{searchFilter}"</div>
+          )}
+          {filteredMatches.length === 0 && searchFilter && searchAllMode && (
+            <div className="no-matches">No EPG entries found for "{searchFilter}"</div>
+          )}
+          {hasMoreResults && (
+            <div className="more-results">
+              Showing first {MAX_ALL_EPG_RESULTS} results. Refine your search for more specific matches.
+            </div>
           )}
           <label className={`conflict-option skip-option ${selectedEpg === null ? 'selected' : ''}`}>
             <input
@@ -580,6 +1050,158 @@ function ConflictCard({ result, epgSources, selectedEpg, onSelect, recommendedEp
             <span className="skip-label">Skip this channel</span>
           </label>
         </div>
+      </div>
+    </div>
+  );
+}
+
+// EPG Search Card - for searching ALL EPG data (used for unmatched channels)
+interface EPGSearchCardProps {
+  channelName: string;
+  normalizedName: string;
+  detectedCountry: string | null;
+  epgData: EPGData[];
+  epgSources: EPGSource[];
+  selectedEpg: EPGData | undefined;
+  onSelect: (epg: EPGData | null) => void;
+  onClose: () => void;
+  searchTerm: string;
+  onSearchChange: (term: string) => void;
+}
+
+const MAX_SEARCH_RESULTS = 50;
+
+function EPGSearchCard({
+  channelName,
+  normalizedName,
+  detectedCountry,
+  epgData,
+  epgSources,
+  selectedEpg,
+  onSelect,
+  onClose,
+  searchTerm,
+  onSearchChange,
+}: EPGSearchCardProps) {
+  // Search across all EPG data with fuzzy multi-word matching
+  // Splits search into words and checks if all words appear in the EPG entry
+  // This allows "BBC News US" to match "BBCNews(BBCNEEU).us"
+  const matchesSearch = useCallback((epg: EPGData, searchWords: string[]): boolean => {
+    const lowerName = epg.name.toLowerCase();
+    const lowerTvgId = epg.tvg_id.toLowerCase();
+    // Also create a version with spaces removed for matching against concatenated names
+    const normalizedName = lowerName.replace(/[^a-z0-9]/g, '');
+    const normalizedTvgId = lowerTvgId.replace(/[^a-z0-9]/g, '');
+
+    // Each search word must appear in either name, tvg_id, or their normalized versions
+    return searchWords.every(word => {
+      const normalizedWord = word.replace(/[^a-z0-9]/g, '');
+      return lowerName.includes(word) ||
+             lowerTvgId.includes(word) ||
+             normalizedName.includes(normalizedWord) ||
+             normalizedTvgId.includes(normalizedWord);
+    });
+  }, []);
+
+  const searchResults = useMemo(() => {
+    if (!searchTerm.trim()) return [];
+    const searchWords = searchTerm.toLowerCase().split(/\s+/).filter(w => w.length > 0);
+    if (searchWords.length === 0) return [];
+
+    const results = epgData.filter(epg => matchesSearch(epg, searchWords));
+    // Limit results for performance
+    return results.slice(0, MAX_SEARCH_RESULTS);
+  }, [epgData, searchTerm, matchesSearch]);
+
+  const hasMoreResults = useMemo(() => {
+    if (!searchTerm.trim()) return false;
+    const searchWords = searchTerm.toLowerCase().split(/\s+/).filter(w => w.length > 0);
+    if (searchWords.length === 0) return false;
+
+    const totalCount = epgData.filter(epg => matchesSearch(epg, searchWords)).length;
+    return totalCount > MAX_SEARCH_RESULTS;
+  }, [epgData, searchTerm, matchesSearch]);
+
+  return (
+    <div className="epg-search-card">
+      <div className="epg-search-card-header">
+        <div className="epg-search-channel">
+          <span className="channel-name" title={channelName}>{channelName}</span>
+          {detectedCountry && (
+            <span className="country-badge">{detectedCountry.toUpperCase()}</span>
+          )}
+        </div>
+        <button className="close-btn" onClick={onClose} title="Close">
+          <span className="material-icons">close</span>
+        </button>
+      </div>
+      <div className="epg-search-card-search">
+        <span className="material-icons">search</span>
+        <input
+          type="text"
+          placeholder="Search all EPG data..."
+          value={searchTerm}
+          onChange={e => onSearchChange(e.target.value)}
+          autoFocus
+        />
+        {searchTerm && (
+          <button className="clear-search" onClick={() => onSearchChange('')}>
+            <span className="material-icons">close</span>
+          </button>
+        )}
+      </div>
+      <div className="epg-search-hint">
+        Searching for: "{normalizedName}"
+      </div>
+      <div className="epg-search-card-body">
+        {searchTerm.trim() === '' ? (
+          <div className="search-prompt">Type to search across all EPG entries</div>
+        ) : searchResults.length === 0 ? (
+          <div className="no-matches">No EPG entries found for "{searchTerm}"</div>
+        ) : (
+          <div className="epg-search-options">
+            {searchResults.map(epg => (
+              <label
+                key={epg.id}
+                className={`conflict-option ${selectedEpg?.id === epg.id ? 'selected' : ''}`}
+              >
+                <input
+                  type="radio"
+                  name="epg-search-select"
+                  checked={selectedEpg?.id === epg.id}
+                  onChange={() => onSelect(epg)}
+                />
+                <div className="option-content">
+                  {epg.icon_url && (
+                    <img src={epg.icon_url} alt="" className="epg-icon" />
+                  )}
+                  <div className="option-info">
+                    <span className="epg-name" title={epg.name}>{epg.name}</span>
+                    <span className="epg-tvgid" title={epg.tvg_id}>{epg.tvg_id}</span>
+                    <span className="epg-source">{getEPGSourceName(epg, epgSources)}</span>
+                  </div>
+                </div>
+              </label>
+            ))}
+            {hasMoreResults && (
+              <div className="more-results">
+                Showing first {MAX_SEARCH_RESULTS} results. Refine your search for more specific matches.
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+      <div className="epg-search-card-footer">
+        <button className="btn-cancel" onClick={onClose}>
+          Cancel
+        </button>
+        <button
+          className="btn-primary"
+          onClick={() => onSelect(selectedEpg || null)}
+          disabled={!selectedEpg}
+        >
+          {selectedEpg ? 'Assign EPG' : 'Select an EPG'}
+        </button>
       </div>
     </div>
   );

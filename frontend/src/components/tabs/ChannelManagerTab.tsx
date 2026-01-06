@@ -112,6 +112,10 @@ export interface ChannelManagerTabProps {
 
   // Appearance settings
   showStreamUrls?: boolean;
+  hideUngroupedStreams?: boolean;
+
+  // EPG matching settings
+  epgAutoMatchThreshold?: number;
 
   // Refresh streams (bypasses cache)
   onRefreshStreams?: () => void;
@@ -148,6 +152,8 @@ export interface ChannelManagerTabProps {
   ) => Promise<void>;
   // Callback to check for conflicts with existing channel numbers
   onCheckConflicts?: (startingNumber: number, count: number) => number;
+  // Callback to get the highest existing channel number (for "insert at end" option)
+  onGetHighestChannelNumber?: () => number;
 }
 
 export function ChannelManagerTab({
@@ -259,6 +265,10 @@ export function ChannelManagerTab({
 
   // Appearance settings
   showStreamUrls = true,
+  hideUngroupedStreams = true,
+
+  // EPG matching settings
+  epgAutoMatchThreshold = 80,
 
   // Refresh streams
   onRefreshStreams,
@@ -274,6 +284,7 @@ export function ChannelManagerTab({
   onBulkStreamsDrop,
   onBulkCreateFromGroup,
   onCheckConflicts,
+  onGetHighestChannelNumber,
 }: ChannelManagerTabProps) {
   return (
     <SplitPane
@@ -348,6 +359,7 @@ export function ChannelManagerTab({
           onStreamGroupDrop={onStreamGroupDrop}
           onBulkStreamsDrop={onBulkStreamsDrop}
           showStreamUrls={showStreamUrls}
+          epgAutoMatchThreshold={epgAutoMatchThreshold}
         />
       }
       right={
@@ -378,7 +390,9 @@ export function ChannelManagerTab({
           onExternalTriggerHandled={onExternalTriggerHandled}
           onBulkCreateFromGroup={onBulkCreateFromGroup}
           onCheckConflicts={onCheckConflicts}
+          onGetHighestChannelNumber={onGetHighestChannelNumber}
           showStreamUrls={showStreamUrls}
+          hideUngroupedStreams={hideUngroupedStreams}
           onRefreshStreams={onRefreshStreams}
         />
       }

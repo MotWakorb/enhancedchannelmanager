@@ -73,8 +73,11 @@ interface StreamsPaneProps {
   // Callback to check for conflicts with existing channel numbers
   // Returns the number of conflicting channels
   onCheckConflicts?: (startingNumber: number, count: number) => number;
+  // Callback to get the highest existing channel number (for "insert at end" option)
+  onGetHighestChannelNumber?: () => number;
   // Appearance settings
   showStreamUrls?: boolean;
+  hideUngroupedStreams?: boolean;
   // Refresh streams (bypasses cache)
   onRefreshStreams?: () => void;
 }
@@ -106,7 +109,9 @@ export function StreamsPane({
   onExternalTriggerHandled,
   onBulkCreateFromGroup,
   onCheckConflicts,
+  onGetHighestChannelNumber,
   showStreamUrls = true,
+  hideUngroupedStreams = true,
   onRefreshStreams,
 }: StreamsPaneProps) {
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
@@ -131,11 +136,14 @@ export function StreamsPane({
     });
 
     // Sort groups alphabetically with natural sort (Ungrouped at end) and flatten
-    const sortedGroupNames = Array.from(groups.keys()).sort((a, b) => {
-      if (a === 'Ungrouped') return 1;
-      if (b === 'Ungrouped') return -1;
-      return naturalCompare(a, b);
-    });
+    // Filter out Ungrouped if hideUngroupedStreams is true
+    const sortedGroupNames = Array.from(groups.keys())
+      .filter((name) => !hideUngroupedStreams || name !== 'Ungrouped')
+      .sort((a, b) => {
+        if (a === 'Ungrouped') return 1;
+        if (b === 'Ungrouped') return -1;
+        return naturalCompare(a, b);
+      });
 
     // Flatten to single array in display order
     const result: Stream[] = [];
@@ -143,13 +151,12 @@ export function StreamsPane({
       result.push(...groups.get(groupName)!);
     }
     return result;
-  }, [streams]);
+  }, [streams, hideUngroupedStreams]);
 
   // Use display order for selection so shift-click works correctly
   const {
     selectedIds,
     selectedCount,
-    handleSelect,
     toggleSelect,
     selectMultiple,
     deselectMultiple,
@@ -178,6 +185,7 @@ export function StreamsPane({
   const [bulkCreateLoading, setBulkCreateLoading] = useState(false);
   const [bulkCreateShowConflict, setBulkCreateShowConflict] = useState(false);
   const [bulkCreateConflictCount, setBulkCreateConflictCount] = useState(0);
+  const [bulkCreateEndOfSequenceNumber, setBulkCreateEndOfSequenceNumber] = useState(0);
   const [bulkCreateTimezone, setBulkCreateTimezone] = useState<TimezonePreference>('both');
   const [bulkCreateStripCountry, setBulkCreateStripCountry] = useState(false);
   const [bulkCreateKeepCountry, setBulkCreateKeepCountry] = useState(false);
@@ -187,6 +195,9 @@ export function StreamsPane({
   const [bulkCreatePrefixOrder, setBulkCreatePrefixOrder] = useState<PrefixOrder>('number-first');
   const [bulkCreateStripNetwork, setBulkCreateStripNetwork] = useState(false);
   const [bulkCreateSelectedProfiles, setBulkCreateSelectedProfiles] = useState<Set<number>>(new Set());
+  const [bulkCreateGroupSearch, setBulkCreateGroupSearch] = useState('');
+  const [bulkCreateGroupDropdownOpen, setBulkCreateGroupDropdownOpen] = useState(false);
+  const bulkCreateGroupDropdownRef = useRef<HTMLDivElement>(null);
   const [profilesExpanded, setProfilesExpanded] = useState(false);
   const [namingOptionsExpanded, setNamingOptionsExpanded] = useState(false);
   const [channelGroupExpanded, setChannelGroupExpanded] = useState(false);
@@ -209,6 +220,9 @@ export function StreamsPane({
       if (groupDropdownRef.current && !groupDropdownRef.current.contains(event.target as Node)) {
         setGroupDropdownOpen(false);
         setGroupSearchFilter('');
+      }
+      if (bulkCreateGroupDropdownRef.current && !bulkCreateGroupDropdownRef.current.contains(event.target as Node)) {
+        setBulkCreateGroupDropdownOpen(false);
       }
     };
     document.addEventListener('mousedown', handleClickOutside);
@@ -246,6 +260,8 @@ export function StreamsPane({
 
     // Convert to array and sort groups alphabetically with natural sort (Ungrouped at end)
     const sortedGroups = Array.from(groups.entries())
+      // Filter out Ungrouped if hideUngroupedStreams is true
+      .filter(([name]) => !hideUngroupedStreams || name !== 'Ungrouped')
       .sort(([a], [b]) => {
         if (a === 'Ungrouped') return 1;
         if (b === 'Ungrouped') return -1;
@@ -258,7 +274,7 @@ export function StreamsPane({
       }));
 
     return sortedGroups;
-  }, [streams, expandedGroups]);
+  }, [streams, expandedGroups, hideUngroupedStreams]);
 
 
   const toggleGroup = useCallback((groupName: string) => {
@@ -272,6 +288,20 @@ export function StreamsPane({
       return next;
     });
   }, []);
+
+  // Expand all groups
+  const expandAllGroups = useCallback(() => {
+    setExpandedGroups(new Set(groupedStreams.map(g => g.name)));
+  }, [groupedStreams]);
+
+  // Collapse all groups
+  const collapseAllGroups = useCallback(() => {
+    setExpandedGroups(new Set());
+  }, []);
+
+  // Check if all groups are expanded or collapsed
+  const allExpanded = groupedStreams.length > 0 && expandedGroups.size === groupedStreams.length;
+  const allCollapsed = expandedGroups.size === 0;
 
   // Clear selection when streams change (new search/filter)
   useEffect(() => {
@@ -340,13 +370,6 @@ export function StreamsPane({
       }
     },
     [isSelected, selectedCount, selectedIds]
-  );
-
-  const handleItemClick = useCallback(
-    (e: React.MouseEvent, stream: Stream) => {
-      handleSelect(stream.id, e);
-    },
-    [handleSelect]
   );
 
   // Handle dragging a stream group header (for drop onto channels pane)
@@ -718,16 +741,43 @@ export function StreamsPane({
       stripNetworkPrefix: bulkCreateStripNetwork,
     };
 
-    const streamsByNormalizedName = new Map<string, Stream[]>();
+    const unsortedStreamsByNormalizedName = new Map<string, Stream[]>();
     for (const stream of filteredStreams) {
       const normalizedName = normalizeStreamName(stream.name, normalizeOptions);
-      const existing = streamsByNormalizedName.get(normalizedName);
+      const existing = unsortedStreamsByNormalizedName.get(normalizedName);
       if (existing) {
         existing.push(stream);
       } else {
-        streamsByNormalizedName.set(normalizedName, [stream]);
+        unsortedStreamsByNormalizedName.set(normalizedName, [stream]);
       }
     }
+
+    // Sort entries using natural sort (same logic as App.tsx handleBulkCreateFromGroup)
+    // This ensures preview matches actual creation order
+    const sortedEntries = Array.from(unsortedStreamsByNormalizedName.entries()).sort((a, b) => {
+      const nameA = a[0];
+      const nameB = b[0];
+
+      // Extract base name and trailing number (if any)
+      const matchA = nameA.match(/^(.+?)(\s*\d+)?$/);
+      const matchB = nameB.match(/^(.+?)(\s*\d+)?$/);
+
+      const baseA = matchA?.[1]?.trim() || nameA;
+      const baseB = matchB?.[1]?.trim() || nameB;
+      const numA = matchA?.[2] ? parseInt(matchA[2].trim(), 10) : 0;
+      const numB = matchB?.[2] ? parseInt(matchB[2].trim(), 10) : 0;
+
+      // First compare base names
+      const baseCompare = baseA.localeCompare(baseB, undefined, { sensitivity: 'base' });
+      if (baseCompare !== 0) return baseCompare;
+
+      // If base names are equal, sort by number (0 = no number, comes first)
+      return numA - numB;
+    });
+
+    // Rebuild Map in sorted order
+    const streamsByNormalizedName = new Map<string, Stream[]>(sortedEntries);
+
     const uniqueCount = streamsByNormalizedName.size;
     const duplicateCount = filteredStreams.length - uniqueCount;
     const hasDuplicates = duplicateCount > 0;
@@ -735,57 +785,9 @@ export function StreamsPane({
     return { uniqueCount, duplicateCount, hasDuplicates, streamsByNormalizedName, excludedCount };
   }, [streamsToCreate, bulkCreateTimezone, bulkCreateStripCountry, bulkCreateKeepCountry, bulkCreateCountrySeparator, bulkCreateStripNetwork]);
 
-  // Check for conflicts and show dialog, or proceed directly if no conflicts
-  const handleBulkCreate = useCallback(async () => {
-    if (streamsToCreate.length === 0 || !onBulkCreateFromGroup) return;
-
-    // For separate groups mode, we use per-group starting numbers
-    // For other modes, we need a valid global starting number
-    const useSeparateMode = isFromMultipleGroups && bulkCreateMultiGroupOption === 'separate';
-
-    if (useSeparateMode) {
-      // Check that at least the first group has a starting number
-      const firstGroupStart = bulkCreateGroupStartNumbers.get(bulkCreateGroups[0]?.name);
-      if (!firstGroupStart || isNaN(parseInt(firstGroupStart, 10)) || parseInt(firstGroupStart, 10) < 0) {
-        alert('Please enter a valid starting channel number for the first group');
-        return;
-      }
-    } else {
-      const startingNum = parseInt(bulkCreateStartingNumber, 10);
-      if (isNaN(startingNum) || startingNum < 0) {
-        alert('Please enter a valid starting channel number');
-        return;
-      }
-    }
-
-    // Check for conflicts before proceeding
-    if (onCheckConflicts && !useSeparateMode) {
-      const startingNum = parseInt(bulkCreateStartingNumber, 10);
-      const conflictCount = onCheckConflicts(startingNum, bulkCreateStats.uniqueCount);
-      if (conflictCount > 0) {
-        // Show conflict dialog
-        setBulkCreateConflictCount(conflictCount);
-        setBulkCreateShowConflict(true);
-        return;
-      }
-    }
-
-    // No conflicts or separate mode - proceed with creation
-    await doBulkCreate(false);
-  }, [
-    streamsToCreate,
-    isFromMultipleGroups,
-    bulkCreateMultiGroupOption,
-    bulkCreateGroupStartNumbers,
-    bulkCreateGroups,
-    bulkCreateStartingNumber,
-    bulkCreateStats.uniqueCount,
-    onBulkCreateFromGroup,
-    onCheckConflicts,
-  ]);
-
   // Actually perform the bulk create with the specified pushDown option
-  const doBulkCreate = useCallback(async (pushDown: boolean) => {
+  // startingNumberOverride: optionally override the starting number (used by "insert at end" option)
+  const doBulkCreate = useCallback(async (pushDown: boolean, startingNumberOverride?: number) => {
     if (streamsToCreate.length === 0 || !onBulkCreateFromGroup) return;
 
     const useSeparateMode = isFromMultipleGroups && bulkCreateMultiGroupOption === 'separate';
@@ -834,7 +836,9 @@ export function StreamsPane({
         }
       } else {
         // Single group or combined mode
-        const startingNum = parseInt(bulkCreateStartingNumber, 10);
+        // Use parseFloat to support decimal channel numbers (e.g., 38.1, 38.2)
+        // If startingNumberOverride is provided (from "insert at end" option), use that instead
+        const startingNum = startingNumberOverride !== undefined ? startingNumberOverride : parseFloat(bulkCreateStartingNumber);
         let groupId: number | null = null;
         let newGroupName: string | undefined;
 
@@ -916,6 +920,60 @@ export function StreamsPane({
     closeBulkCreateModal,
   ]);
 
+  // Check for conflicts and show dialog, or proceed directly if no conflicts
+  const handleBulkCreate = useCallback(async () => {
+    if (streamsToCreate.length === 0 || !onBulkCreateFromGroup) return;
+
+    // For separate groups mode, we use per-group starting numbers
+    // For other modes, we need a valid global starting number
+    const useSeparateMode = isFromMultipleGroups && bulkCreateMultiGroupOption === 'separate';
+
+    if (useSeparateMode) {
+      // Check that at least the first group has a starting number
+      const firstGroupStart = bulkCreateGroupStartNumbers.get(bulkCreateGroups[0]?.name);
+      if (!firstGroupStart || isNaN(parseFloat(firstGroupStart)) || parseFloat(firstGroupStart) < 0) {
+        alert('Please enter a valid starting channel number for the first group');
+        return;
+      }
+    } else {
+      const startingNum = parseFloat(bulkCreateStartingNumber);
+      if (isNaN(startingNum) || startingNum < 0) {
+        alert('Please enter a valid starting channel number');
+        return;
+      }
+    }
+
+    // Check for conflicts before proceeding (use floor for conflict check since it checks integer ranges)
+    if (onCheckConflicts && !useSeparateMode) {
+      const startingNum = Math.floor(parseFloat(bulkCreateStartingNumber));
+      const conflictCount = onCheckConflicts(startingNum, bulkCreateStats.uniqueCount);
+      if (conflictCount > 0) {
+        // Calculate end-of-sequence number (highest existing + 1)
+        const highestNumber = onGetHighestChannelNumber ? onGetHighestChannelNumber() : 0;
+        setBulkCreateEndOfSequenceNumber(highestNumber + 1);
+        // Show conflict dialog
+        setBulkCreateConflictCount(conflictCount);
+        setBulkCreateShowConflict(true);
+        return;
+      }
+    }
+
+    // No conflicts or separate mode - proceed with creation
+    await doBulkCreate(false);
+  }, [
+    streamsToCreate,
+    isFromMultipleGroups,
+    bulkCreateMultiGroupOption,
+    bulkCreateGroupStartNumbers,
+    bulkCreateGroups,
+    bulkCreateStartingNumber,
+    bulkCreateStats.uniqueCount,
+    onBulkCreateFromGroup,
+    onCheckConflicts,
+    onGetHighestChannelNumber,
+    doBulkCreate,
+  ]);
+
   return (
     <div className="streams-pane">
       <div className="pane-header">
@@ -941,8 +999,25 @@ export function StreamsPane({
             {isEditMode && onBulkCreateFromGroup && (
               <button
                 className="create-channels-btn"
-                onClick={selectedGroupNames.size > 1 ? openBulkCreateModalForGroups : openBulkCreateModalForSelection}
-                title={selectedGroupNames.size > 1 ? 'Create channels from selected groups' : 'Create channels from selected streams'}
+                onClick={() => {
+                  if (selectedGroupNames.size > 1) {
+                    // Multiple groups selected - use multi-group modal
+                    openBulkCreateModalForGroups();
+                  } else if (selectedGroupNames.size === 1) {
+                    // Single group selected - use the same modal as drag-and-drop
+                    const groupName = Array.from(selectedGroupNames)[0];
+                    const group = groupedStreams.find(g => g.name === groupName);
+                    if (group) {
+                      openBulkCreateModal(group);
+                    } else {
+                      openBulkCreateModalForSelection();
+                    }
+                  } else {
+                    // Individual streams selected (not grouped) - use selection modal
+                    openBulkCreateModalForSelection();
+                  }
+                }}
+                title={selectedGroupNames.size > 1 ? 'Create channels from selected groups' : selectedGroupNames.size === 1 ? 'Create channels from selected group' : 'Create channels from selected streams'}
               >
                 <span className="material-icons">playlist_add</span>
                 Create
@@ -958,15 +1033,35 @@ export function StreamsPane({
         )}
       </div>
 
-      <div className="pane-filters">
-        <input
-          type="text"
-          placeholder="Search streams..."
-          value={searchTerm}
-          onChange={(e) => onSearchChange(e.target.value)}
-          className="search-input"
-        />
-        <div className="filter-row">
+      <div className="streams-pane-filters">
+        <div className="search-row">
+          <input
+            type="text"
+            placeholder="Search streams..."
+            value={searchTerm}
+            onChange={(e) => onSearchChange(e.target.value)}
+            className="search-input"
+          />
+          <div className="expand-collapse-buttons">
+            <button
+              className="expand-collapse-btn"
+              onClick={expandAllGroups}
+              disabled={allExpanded || groupedStreams.length === 0}
+              title="Expand all groups"
+            >
+              <span className="material-icons">unfold_more</span>
+            </button>
+            <button
+              className="expand-collapse-btn"
+              onClick={collapseAllGroups}
+              disabled={allCollapsed || groupedStreams.length === 0}
+              title="Collapse all groups"
+            >
+              <span className="material-icons">unfold_less</span>
+            </button>
+          </div>
+        </div>
+        <div className="streams-filter-row">
           {/* Provider Filter Dropdown */}
           {useMultiSelectProviders ? (
             <div className="filter-dropdown" ref={providerDropdownRef}>
@@ -1228,11 +1323,23 @@ export function StreamsPane({
                       {group.streams.map((stream) => (
                         <div
                           key={stream.id}
-                          className={`stream-item ${isSelected(stream.id) && isEditMode ? 'selected' : ''}`}
-                          draggable={isEditMode}
-                          onClick={(e) => handleItemClick(e, stream)}
-                          onDragStart={(e) => handleDragStart(e, stream)}
+                          className={`stream-item ${isSelected(stream.id) && isEditMode ? 'selected' : ''} ${isEditMode ? 'edit-mode' : ''}`}
+                          onClick={(e) => {
+                            // In edit mode, clicking the row does nothing (use checkbox to select)
+                            // Outside edit mode, clicking the row does nothing either
+                            e.stopPropagation();
+                          }}
                         >
+                          {/* Drag handle - only in edit mode, positioned first like channel groups */}
+                          {isEditMode && (
+                            <span
+                              className="drag-handle"
+                              draggable={true}
+                              onDragStart={(e) => handleDragStart(e, stream)}
+                            >
+                              ⋮⋮
+                            </span>
+                          )}
                           {isEditMode && (
                             <span
                               className="selection-checkbox"
@@ -1286,7 +1393,6 @@ export function StreamsPane({
                               <span className="material-icons">content_copy</span>
                             </button>
                           )}
-                          <span className="drag-handle">⋮⋮</span>
                         </div>
                       ))}
                     </div>
@@ -1432,15 +1538,24 @@ export function StreamsPane({
                   <input
                     type="number"
                     min="0"
+                    step="any"
                     value={bulkCreateStartingNumber}
                     onChange={(e) => setBulkCreateStartingNumber(e.target.value)}
-                    placeholder="e.g., 100"
+                    placeholder="e.g., 100 or 38.1"
                     className="form-input"
                     autoFocus
                   />
-                  {bulkCreateStartingNumber && !isNaN(parseInt(bulkCreateStartingNumber, 10)) && (
+                  {bulkCreateStartingNumber && !isNaN(parseFloat(bulkCreateStartingNumber)) && (
                     <div className="number-range-preview">
-                      Channels {bulkCreateStartingNumber} - {parseInt(bulkCreateStartingNumber, 10) + bulkCreateStats.uniqueCount - 1}
+                      {(() => {
+                        const startNum = parseFloat(bulkCreateStartingNumber);
+                        const hasDecimal = bulkCreateStartingNumber.includes('.');
+                        const increment = hasDecimal ? 0.1 : 1;
+                        const endNum = startNum + (bulkCreateStats.uniqueCount - 1) * increment;
+                        // Format end number to match decimal places of start
+                        const endNumStr = hasDecimal ? endNum.toFixed(1) : Math.floor(endNum).toString();
+                        return `Channels ${bulkCreateStartingNumber} - ${endNumStr}`;
+                      })()}
                     </div>
                   )}
                 </div>
@@ -1506,16 +1621,67 @@ export function StreamsPane({
                         <span>Select existing group</span>
                       </label>
                       {bulkCreateGroupOption === 'existing' && (
-                        <select
-                          value={bulkCreateSelectedGroupId ?? ''}
-                          onChange={(e) => setBulkCreateSelectedGroupId(e.target.value ? parseInt(e.target.value, 10) : null)}
-                          className="form-select"
-                        >
-                          <option value="">-- Select a group --</option>
-                          {channelGroups.map((g) => (
-                            <option key={g.id} value={g.id}>{g.name}</option>
-                          ))}
-                        </select>
+                        <div className="searchable-dropdown" ref={bulkCreateGroupDropdownRef}>
+                          <div
+                            className="dropdown-trigger"
+                            onClick={() => setBulkCreateGroupDropdownOpen(!bulkCreateGroupDropdownOpen)}
+                          >
+                            <span className="dropdown-value">
+                              {bulkCreateSelectedGroupId
+                                ? channelGroups.find(g => g.id === bulkCreateSelectedGroupId)?.name ?? '-- Select a group --'
+                                : '-- Select a group --'}
+                            </span>
+                            <span className="material-icons dropdown-arrow">
+                              {bulkCreateGroupDropdownOpen ? 'expand_less' : 'expand_more'}
+                            </span>
+                          </div>
+                          {bulkCreateGroupDropdownOpen && (
+                            <div className="dropdown-menu">
+                              <div className="dropdown-search">
+                                <span className="material-icons">search</span>
+                                <input
+                                  type="text"
+                                  placeholder="Search groups..."
+                                  value={bulkCreateGroupSearch}
+                                  onChange={(e) => setBulkCreateGroupSearch(e.target.value)}
+                                  onClick={(e) => e.stopPropagation()}
+                                  autoFocus
+                                />
+                                {bulkCreateGroupSearch && (
+                                  <button
+                                    className="clear-search"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setBulkCreateGroupSearch('');
+                                    }}
+                                  >
+                                    <span className="material-icons">close</span>
+                                  </button>
+                                )}
+                              </div>
+                              <div className="dropdown-options">
+                                {channelGroups
+                                  .filter(g => !bulkCreateGroupSearch || g.name.toLowerCase().includes(bulkCreateGroupSearch.toLowerCase()))
+                                  .map((g) => (
+                                    <div
+                                      key={g.id}
+                                      className={`dropdown-option ${bulkCreateSelectedGroupId === g.id ? 'selected' : ''}`}
+                                      onClick={() => {
+                                        setBulkCreateSelectedGroupId(g.id);
+                                        setBulkCreateGroupDropdownOpen(false);
+                                        setBulkCreateGroupSearch('');
+                                      }}
+                                    >
+                                      {g.name}
+                                    </div>
+                                  ))}
+                                {channelGroups.filter(g => !bulkCreateGroupSearch || g.name.toLowerCase().includes(bulkCreateGroupSearch.toLowerCase())).length === 0 && (
+                                  <div className="dropdown-no-results">No groups found</div>
+                                )}
+                              </div>
+                            </div>
+                          )}
+                        </div>
                       )}
 
                       <label className="radio-option">
@@ -1914,7 +2080,17 @@ export function StreamsPane({
                   <label>Preview (first 10 channels)</label>
                   <div className="preview-list">
                     {Array.from(bulkCreateStats.streamsByNormalizedName.entries()).slice(0, 10).map(([normalizedName, groupedStreams], idx) => {
-                      const num = bulkCreateStartingNumber ? parseInt(bulkCreateStartingNumber, 10) + idx : '?';
+                      // Support decimal channel numbers (e.g., 38.1, 38.2, 38.3)
+                      let num: string | number = '?';
+                      if (bulkCreateStartingNumber) {
+                        const startNum = parseFloat(bulkCreateStartingNumber);
+                        if (!isNaN(startNum)) {
+                          const hasDecimal = bulkCreateStartingNumber.includes('.');
+                          const increment = hasDecimal ? 0.1 : 1;
+                          const channelNum = startNum + idx * increment;
+                          num = hasDecimal ? channelNum.toFixed(1) : Math.floor(channelNum);
+                        }
+                      }
                       // Build display name based on options and prefix order
                       let displayName = normalizedName;
                       if (bulkCreateAddNumber && bulkCreateKeepCountry) {
@@ -2008,6 +2184,17 @@ export function StreamsPane({
                 <div className="conflict-option-text">
                   <strong>Push channels down</strong>
                   <span>Insert at {bulkCreateStartingNumber} and shift existing channels by {bulkCreateStats.uniqueCount}</span>
+                </div>
+              </button>
+              <button
+                className="conflict-option-btn insert-at-end"
+                onClick={() => doBulkCreate(false, bulkCreateEndOfSequenceNumber)}
+                disabled={bulkCreateLoading}
+              >
+                <span className="material-icons">last_page</span>
+                <div className="conflict-option-text">
+                  <strong>Insert at end</strong>
+                  <span>Start at channel {bulkCreateEndOfSequenceNumber} (after all existing channels)</span>
                 </div>
               </button>
               <button
