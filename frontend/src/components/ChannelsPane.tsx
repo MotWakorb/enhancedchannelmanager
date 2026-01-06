@@ -4487,11 +4487,13 @@ export function ChannelsPane({
       {/* Bulk Delete Channels Confirmation Dialog */}
       {showBulkDeleteConfirm && selectedChannelIds.size > 0 && (() => {
         // Compute which groups would be emptied by this bulk delete
+        // Use localChannels in edit mode (reflects staged changes), channels otherwise
+        const sourceChannels = isEditMode ? localChannels : channels;
         const groupsToEmpty: ChannelGroup[] = [];
         if (isEditMode && onStageDeleteChannelGroup) {
           // For each group, check if ALL its channels are selected for deletion
           for (const group of channelGroups) {
-            const channelsInGroup = channels.filter(ch => ch.channel_group_id === group.id);
+            const channelsInGroup = sourceChannels.filter(ch => ch.channel_group_id === group.id);
             if (channelsInGroup.length > 0) {
               const allSelected = channelsInGroup.every(ch => selectedChannelIds.has(ch.id));
               if (allSelected) {
