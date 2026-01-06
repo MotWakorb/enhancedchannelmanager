@@ -1909,8 +1909,9 @@ export function ChannelsPane({
       // In edit mode, stage the delete operations for undo support
       if (isEditMode && onStageDeleteChannel && onStartBatch && onEndBatch) {
         // Find groups that would be emptied by this delete (if checkbox is checked)
+        // Only check when no search filter is active (otherwise user can't select all channels in a group)
         const groupsToDelete: ChannelGroup[] = [];
-        if (deleteEmptyGroups && onStageDeleteChannelGroup) {
+        if (deleteEmptyGroups && onStageDeleteChannelGroup && !searchTerm) {
           for (const group of channelGroups) {
             const channelsInGroup = channels.filter(ch => ch.channel_group_id === group.id);
             if (channelsInGroup.length > 0) {
@@ -4487,13 +4488,17 @@ export function ChannelsPane({
       {/* Bulk Delete Channels Confirmation Dialog */}
       {showBulkDeleteConfirm && selectedChannelIds.size > 0 && (() => {
         // Compute which groups would be emptied by this bulk delete
-        // Use localChannels in edit mode (reflects staged changes), channels otherwise
-        const sourceChannels = isEditMode ? localChannels : channels;
+        // Use the channels prop (which is displayChannels from edit mode hook, containing all channels)
+        // NOT localChannels which may have stale data
         const groupsToEmpty: ChannelGroup[] = [];
-        if (isEditMode && onStageDeleteChannelGroup) {
+        // Only offer to delete empty groups if:
+        // 1. In edit mode with the staging function available
+        // 2. No search filter is active (when search is active, user can only select visible channels,
+        //    so they can't actually select ALL channels in a group)
+        if (isEditMode && onStageDeleteChannelGroup && !searchTerm) {
           // For each group, check if ALL its channels are selected for deletion
           for (const group of channelGroups) {
-            const channelsInGroup = sourceChannels.filter(ch => ch.channel_group_id === group.id);
+            const channelsInGroup = channels.filter(ch => ch.channel_group_id === group.id);
             if (channelsInGroup.length > 0) {
               const allSelected = channelsInGroup.every(ch => selectedChannelIds.has(ch.id));
               if (allSelected) {
