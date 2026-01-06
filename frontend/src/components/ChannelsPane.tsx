@@ -2718,6 +2718,14 @@ export function ChannelsPane({
   }
 
   const visibleChannels = localChannels.filter((ch) => {
+    // First, apply search filter if there's a search term
+    if (searchTerm) {
+      const searchLower = searchTerm.toLowerCase();
+      const nameMatch = ch.name?.toLowerCase().includes(searchLower);
+      const numberMatch = ch.channel_number?.toString().includes(searchTerm);
+      if (!nameMatch && !numberMatch) return false;
+    }
+
     if (!ch.auto_created) return true; // Always show manual channels
     // For auto-created channels, check if their group is related to auto_channel_sync
     const groupId = ch.channel_group_id;
