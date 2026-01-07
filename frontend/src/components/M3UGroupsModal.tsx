@@ -1,7 +1,8 @@
 import { useState, useEffect, useMemo } from 'react';
-import type { M3UAccount, ChannelGroupM3UAccount, ChannelGroup } from '../types';
+import type { M3UAccount, ChannelGroupM3UAccount, ChannelGroup, AutoSyncCustomProperties, ChannelProfile, StreamProfile, EPGSource } from '../types';
 import * as api from '../services/api';
 import { naturalCompare } from '../utils/naturalSort';
+import { AutoSyncSettingsModal } from './AutoSyncSettingsModal';
 import './M3UGroupsModal.css';
 
 interface M3UGroupsModalProps {
@@ -11,6 +12,11 @@ interface M3UGroupsModalProps {
   account: M3UAccount;
   allAccounts?: M3UAccount[];         // All M3U accounts for cascading to linked accounts
   linkedAccountGroups?: number[][];   // Link groups from settings
+  // For auto-sync settings modal
+  epgSources?: EPGSource[];
+  channelGroups?: ChannelGroup[];
+  channelProfiles?: ChannelProfile[];
+  streamProfiles?: StreamProfile[];
 }
 
 // Extended type with name from channel groups lookup
@@ -25,6 +31,10 @@ export function M3UGroupsModal({
   account,
   allAccounts = [],
   linkedAccountGroups = [],
+  epgSources = [],
+  channelGroups: allChannelGroups = [],
+  channelProfiles = [],
+  streamProfiles = [],
 }: M3UGroupsModalProps) {
   const [groups, setGroups] = useState<GroupWithName[]>([]);
   const [search, setSearch] = useState('');
@@ -33,6 +43,8 @@ export function M3UGroupsModal({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [hasChanges, setHasChanges] = useState(false);
+  // Auto-sync settings modal state
+  const [settingsModalGroup, setSettingsModalGroup] = useState<GroupWithName | null>(null);
 
   // Find linked accounts for this account
   const linkedAccountInfo = useMemo(() => {
@@ -140,6 +152,26 @@ export function M3UGroupsModal({
     setHasChanges(true);
   };
 
+  // Handle auto-sync settings save
+  const handleAutoSyncSettingsSave = (groupId: number, customProperties: AutoSyncCustomProperties) => {
+    setGroups(prev => prev.map(g =>
+      g.channel_group === groupId
+        ? { ...g, custom_properties: Object.keys(customProperties).length > 0 ? customProperties : null }
+        : g
+    ));
+    setHasChanges(true);
+  };
+
+  // Check if a group has custom properties configured
+  const hasCustomProperties = (group: GroupWithName): boolean => {
+    if (!group.custom_properties) return false;
+    return Object.keys(group.custom_properties).some(key => {
+      const value = group.custom_properties?.[key as keyof AutoSyncCustomProperties];
+      if (Array.isArray(value)) return value.length > 0;
+      return value !== undefined && value !== null && value !== '';
+    });
+  };
+
   const handleSave = async () => {
     setSaving(true);
     setError(null);
@@ -153,6 +185,7 @@ export function M3UGroupsModal({
         enabled: g.enabled,
         auto_channel_sync: g.auto_channel_sync,
         auto_sync_channel_start: g.auto_sync_channel_start,
+        custom_properties: g.custom_properties,
       }));
 
       // Save this account first
@@ -267,7 +300,8 @@ export function M3UGroupsModal({
                 <span className="col-name">Group Name</span>
                 <span className="col-enabled">Enabled</span>
                 <span className="col-autosync">Auto-Sync</span>
-                <span className="col-start">Start Channel</span>
+                <span className="col-start">Start #</span>
+                <span className="col-settings">Settings</span>
               </div>
               {filteredGroups.map(group => (
                 <div key={group.channel_group} className="group-row">
@@ -305,6 +339,16 @@ export function M3UGroupsModal({
                       disabled={!group.auto_channel_sync}
                     />
                   </div>
+                  <div className="group-settings">
+                    <button
+                      className={`settings-btn ${hasCustomProperties(group) ? 'has-settings' : ''}`}
+                      onClick={() => setSettingsModalGroup(group)}
+                      disabled={!group.auto_channel_sync}
+                      title={group.auto_channel_sync ? 'Configure auto-sync settings' : 'Enable auto-sync to configure settings'}
+                    >
+                      <span className="material-icons">settings</span>
+                    </button>
+                  </div>
                 </div>
               ))}
             </div>
@@ -332,6 +376,24 @@ export function M3UGroupsModal({
           </div>
         </div>
       </div>
+
+      {/* Auto-Sync Settings Modal */}
+      {settingsModalGroup && (
+        <AutoSyncSettingsModal
+          isOpen={true}
+          onClose={() => setSettingsModalGroup(null)}
+          onSave={(customProperties) => {
+            handleAutoSyncSettingsSave(settingsModalGroup.channel_group, customProperties);
+            setSettingsModalGroup(null);
+          }}
+          groupName={settingsModalGroup.name}
+          customProperties={settingsModalGroup.custom_properties}
+          epgSources={epgSources}
+          channelGroups={allChannelGroups}
+          channelProfiles={channelProfiles}
+          streamProfiles={streamProfiles}
+        />
+      )}
     </div>
   );
 }

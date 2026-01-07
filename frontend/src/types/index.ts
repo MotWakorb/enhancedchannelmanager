@@ -93,6 +93,19 @@ export interface M3UAccountProfile {
   status: string;
 }
 
+// Auto-sync custom properties for channel groups
+export interface AutoSyncCustomProperties {
+  xc_id?: string | null;                    // Force EPG Source ID (string for API compatibility)
+  group_override?: number | null;           // Override Channel Group ID
+  name_regex_pattern?: string;              // Find pattern (regex)
+  name_replace_pattern?: string;            // Replace pattern
+  channel_name_filter?: string;             // Channel name filter (regex)
+  channel_profile_ids?: string[];           // Channel Profile IDs (strings for API compatibility)
+  channel_sort_order?: 'asc' | 'desc' | null; // Sort order
+  stream_profile_id?: number | null;        // Stream Profile ID
+  custom_logo_id?: number | null;           // Custom Logo ID
+}
+
 export interface ChannelGroupM3UAccount {
   id: number;
   channel_group: number;
@@ -102,7 +115,7 @@ export interface ChannelGroupM3UAccount {
   enabled_series: boolean;
   auto_channel_sync: boolean;
   auto_sync_channel_start: number | null;
-  custom_properties: Record<string, unknown> | null;
+  custom_properties: AutoSyncCustomProperties | null;
 }
 
 export interface M3UAccount {
