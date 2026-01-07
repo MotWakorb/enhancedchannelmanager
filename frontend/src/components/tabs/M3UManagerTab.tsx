@@ -85,9 +85,10 @@ function M3UAccountRow({
     return date.toLocaleString();
   };
 
-  // Count enabled groups
+  // Count enabled groups and auto-sync groups
   const enabledGroupCount = account.channel_groups.filter(g => g.enabled).length;
   const totalGroupCount = account.channel_groups.length;
+  const autoSyncGroupCount = account.channel_groups.filter(g => g.auto_channel_sync).length;
 
   return (
     <div className={`m3u-account-row ${!account.is_active ? 'inactive' : ''}`}>
@@ -128,9 +129,15 @@ function M3UAccountRow({
       </div>
 
       <div className="account-groups">
-        <span className="group-count">
+        <span className="group-count" title={`${enabledGroupCount} enabled out of ${totalGroupCount} total groups`}>
           {enabledGroupCount} / {totalGroupCount} groups
         </span>
+        {autoSyncGroupCount > 0 && (
+          <span className="auto-sync-count" title={`${autoSyncGroupCount} groups set to auto-sync`}>
+            <span className="material-icons">sync</span>
+            {autoSyncGroupCount} auto-sync
+          </span>
+        )}
       </div>
 
       <div className="account-settings">
