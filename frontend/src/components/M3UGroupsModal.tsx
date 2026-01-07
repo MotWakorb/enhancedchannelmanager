@@ -147,9 +147,16 @@ export function M3UGroupsModal({
   }, [groups, search, hideDisabled, showOnlyAutoSync]);
 
   const handleToggleEnabled = (groupId: number) => {
-    setGroups(prev => prev.map(g =>
-      g.channel_group === groupId ? { ...g, enabled: !g.enabled } : g
-    ));
+    setGroups(prev => prev.map(g => {
+      if (g.channel_group !== groupId) return g;
+      const newEnabled = !g.enabled;
+      // If disabling the group, also disable auto-sync
+      return {
+        ...g,
+        enabled: newEnabled,
+        auto_channel_sync: newEnabled ? g.auto_channel_sync : false,
+      };
+    }));
     setHasChanges(true);
   };
 
