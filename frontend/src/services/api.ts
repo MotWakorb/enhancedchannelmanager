@@ -434,6 +434,10 @@ export async function getEPGSources(): Promise<EPGSource[]> {
   return fetchJson(`${API_BASE}/epg/sources`);
 }
 
+export async function getEPGSource(id: number): Promise<EPGSource> {
+  return fetchJson(`${API_BASE}/epg/sources/${id}`);
+}
+
 export interface CreateEPGSourceRequest {
   name: string;
   source_type: 'xmltv' | 'schedules_direct' | 'dummy';

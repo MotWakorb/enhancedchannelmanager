@@ -479,9 +479,15 @@ export function EPGManagerTab({ onSourcesChange }: EPGManagerTabProps) {
     setModalOpen(true);
   };
 
-  const handleEditSource = (source: EPGSource) => {
-    setEditingSource(source);
-    setModalOpen(true);
+  const handleEditSource = async (source: EPGSource) => {
+    try {
+      // Fetch full source details to ensure we have all properties
+      const fullSource = await api.getEPGSource(source.id);
+      setEditingSource(fullSource);
+      setModalOpen(true);
+    } catch (err) {
+      setError('Failed to load EPG source details');
+    }
   };
 
   const handleDeleteSource = async (source: EPGSource) => {
@@ -547,9 +553,15 @@ export function EPGManagerTab({ onSourcesChange }: EPGManagerTabProps) {
     setDummyModalOpen(true);
   };
 
-  const handleEditDummySource = (source: EPGSource) => {
-    setEditingDummySource(source);
-    setDummyModalOpen(true);
+  const handleEditDummySource = async (source: EPGSource) => {
+    try {
+      // Fetch full source details to get custom_properties
+      const fullSource = await api.getEPGSource(source.id);
+      setEditingDummySource(fullSource);
+      setDummyModalOpen(true);
+    } catch (err) {
+      setError('Failed to load EPG source details');
+    }
   };
 
   const handleDeleteDummySource = async (source: EPGSource) => {
