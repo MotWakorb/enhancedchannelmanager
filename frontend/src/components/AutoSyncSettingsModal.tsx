@@ -36,6 +36,7 @@ export function AutoSyncSettingsModal({
   const [channelNameFilter, setChannelNameFilter] = useState<string>('');
   const [selectedProfileIds, setSelectedProfileIds] = useState<Set<string>>(new Set());
   const [sortOrder, setSortOrder] = useState<string>('');
+  const [sortReverse, setSortReverse] = useState<boolean>(false);
   const [streamProfileId, setStreamProfileId] = useState<string>('');
   const [customLogoId, setCustomLogoId] = useState<string>('');
 
@@ -80,6 +81,7 @@ export function AutoSyncSettingsModal({
       setChannelNameFilter(customProperties?.channel_name_filter ?? '');
       setSelectedProfileIds(new Set(customProperties?.channel_profile_ids ?? []));
       setSortOrder(customProperties?.channel_sort_order ?? '');
+      setSortReverse(customProperties?.channel_sort_reverse ?? false);
       setStreamProfileId(customProperties?.stream_profile_id?.toString() ?? '');
       setCustomLogoId(customProperties?.custom_logo_id?.toString() ?? '');
       setRegexError(null);
@@ -234,7 +236,8 @@ export function AutoSyncSettingsModal({
     if (nameReplacePattern !== undefined && nameRegexPattern) props.name_replace_pattern = nameReplacePattern;
     if (channelNameFilter) props.channel_name_filter = channelNameFilter;
     if (selectedProfileIds.size > 0) props.channel_profile_ids = Array.from(selectedProfileIds);
-    if (sortOrder) props.channel_sort_order = sortOrder as 'asc' | 'desc' | 'provider';
+    if (sortOrder) props.channel_sort_order = sortOrder as 'provider' | 'name' | 'tvg_id' | 'updated_at';
+    if (sortReverse) props.channel_sort_reverse = sortReverse;
     if (streamProfileId) props.stream_profile_id = parseInt(streamProfileId, 10);
     if (customLogoId) props.custom_logo_id = parseInt(customLogoId, 10);
 
@@ -251,6 +254,7 @@ export function AutoSyncSettingsModal({
     setChannelNameFilter('');
     setSelectedProfileIds(new Set());
     setSortOrder('');
+    setSortReverse(false);
     setStreamProfileId('');
     setCustomLogoId('');
     setRegexError(null);
@@ -267,10 +271,11 @@ export function AutoSyncSettingsModal({
       channelNameFilter ||
       selectedProfileIds.size > 0 ||
       sortOrder ||
+      sortReverse ||
       streamProfileId ||
       customLogoId
     );
-  }, [epgSourceId, groupOverride, nameRegexPattern, nameReplacePattern, channelNameFilter, selectedProfileIds, sortOrder, streamProfileId, customLogoId]);
+  }, [epgSourceId, groupOverride, nameRegexPattern, nameReplacePattern, channelNameFilter, selectedProfileIds, sortOrder, sortReverse, streamProfileId, customLogoId]);
 
   if (!isOpen) return null;
 
@@ -512,12 +517,21 @@ export function AutoSyncSettingsModal({
                 value={sortOrder}
                 onChange={(e) => setSortOrder(e.target.value)}
               >
-                <option value="">-- None --</option>
-                <option value="provider">Provider Default</option>
-                <option value="asc">Ascending (A-Z)</option>
-                <option value="desc">Descending (Z-A)</option>
+                <option value="">Select sort order...</option>
+                <option value="provider">Provider Order (Default)</option>
+                <option value="name">Name</option>
+                <option value="tvg_id">TVG ID</option>
+                <option value="updated_at">Updated At</option>
               </select>
-              <span className="form-hint">Sort channels within the group (Provider Default uses M3U order)</span>
+              <label className="checkbox-row">
+                <input
+                  type="checkbox"
+                  checked={sortReverse}
+                  onChange={(e) => setSortReverse(e.target.checked)}
+                />
+                <span>Reverse sort order</span>
+              </label>
+              <span className="form-hint">Sort channels within the group</span>
             </div>
 
             {/* Stream Profile Assignment */}

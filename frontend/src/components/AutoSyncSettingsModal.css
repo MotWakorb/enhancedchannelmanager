@@ -103,6 +103,24 @@
   color: var(--error);
 }
 
+/* Checkbox Row */
+.auto-sync-settings-modal .checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+  font-size: 0.875rem;
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.auto-sync-settings-modal .checkbox-row input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+  accent-color: var(--accent-primary);
+}
+
 /* Dual Input (Pattern/Replace) */
 .dual-input {
   display: flex;
