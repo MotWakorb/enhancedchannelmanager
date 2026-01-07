@@ -3292,7 +3292,7 @@ export function ChannelsPane({
   const handleCrossGroupMoveConfirm = (keepChannelNumber: boolean, startingChannelNumber?: number, shouldRenumberSource?: boolean) => {
     if (!crossGroupMoveData) return;
 
-    const { channels: channelsToMove, targetGroupId, targetGroupName, sourceGroupId, sourceGroupName, insertAtPosition, sourceGroupMinChannel } = crossGroupMoveData;
+    const { channels: channelsToMove, targetGroupId, targetGroupName, sourceGroupId, sourceGroupName, sourceGroupMinChannel } = crossGroupMoveData;
 
     // Build updates for moved channels
     const channelUpdates: Array<{
@@ -3315,9 +3315,11 @@ export function ChannelsPane({
       finalName: string;
     }> = [];
 
-    // If inserting at a position, we need to shift existing channels
-    if (!keepChannelNumber && startingChannelNumber !== undefined && insertAtPosition) {
-      // Get existing channels in the target group that are at or after the insertion point
+    // Check if we need to shift existing channels to avoid duplicates
+    // This applies when assigning new numbers (not keeping current) and any moved channel
+    // would conflict with an existing channel in the target group
+    if (!keepChannelNumber && startingChannelNumber !== undefined) {
+      // Get existing channels in the target group
       const targetGroupChannels = localChannels.filter((ch) => {
         if (targetGroupId === null) {
           return ch.channel_group_id === null;
@@ -3325,27 +3327,41 @@ export function ChannelsPane({
         return ch.channel_group_id === targetGroupId;
       });
 
-      // Find channels that need to be shifted (at or after insertion point)
-      const channelsToShift = targetGroupChannels.filter((ch) => {
-        return ch.channel_number !== null && ch.channel_number >= startingChannelNumber;
+      // Calculate the range of channel numbers that will be used by the moved channels
+      const movedRangeStart = startingChannelNumber;
+      const movedRangeEnd = startingChannelNumber + channelsToMove.length - 1;
+
+      // Find channels that would conflict (their number falls within the moved range)
+      const conflictingChannels = targetGroupChannels.filter((ch) => {
+        return ch.channel_number !== null &&
+               ch.channel_number >= movedRangeStart &&
+               ch.channel_number <= movedRangeEnd;
       });
 
-      // Sort by channel number to process in order
-      channelsToShift.sort((a, b) => (a.channel_number ?? 0) - (b.channel_number ?? 0));
+      // If there are conflicts, we need to shift existing channels
+      if (conflictingChannels.length > 0) {
+        // Find all channels at or after the insertion point that need to be shifted
+        const channelsToShift = targetGroupChannels.filter((ch) => {
+          return ch.channel_number !== null && ch.channel_number >= startingChannelNumber;
+        });
 
-      // Shift each channel up by the number of channels being inserted
-      const shiftAmount = channelsToMove.length;
-      for (const channel of channelsToShift) {
-        const newNumber = (channel.channel_number ?? 0) + shiftAmount;
-        let finalName = channel.name;
+        // Sort by channel number to process in order
+        channelsToShift.sort((a, b) => (a.channel_number ?? 0) - (b.channel_number ?? 0));
 
-        // Apply auto-rename if enabled
-        const newName = computeAutoRename(channel.name, channel.channel_number, newNumber);
-        if (newName) {
-          finalName = newName;
+        // Shift each channel up by the number of channels being inserted
+        const shiftAmount = channelsToMove.length;
+        for (const channel of channelsToShift) {
+          const newNumber = (channel.channel_number ?? 0) + shiftAmount;
+          let finalName = channel.name;
+
+          // Apply auto-rename if enabled
+          const newName = computeAutoRename(channel.name, channel.channel_number, newNumber);
+          if (newName) {
+            finalName = newName;
+          }
+
+          shiftUpdates.push({ channel, finalChannelNumber: newNumber, finalName });
         }
-
-        shiftUpdates.push({ channel, finalChannelNumber: newNumber, finalName });
       }
     }
 
