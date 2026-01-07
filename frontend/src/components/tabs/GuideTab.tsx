@@ -278,6 +278,23 @@ export function GuideTab({ channels: propChannels, logos: propLogos }: GuideTabP
   // Calculate total timeline width
   const timelineWidth = timeSlots.length * SLOT_WIDTH_PX;
 
+  // Calculate current time indicator position
+  const nowIndicatorPosition = useMemo(() => {
+    const now = new Date();
+    const isToday = selectedDate === now.toISOString().split('T')[0];
+
+    if (!isToday) return null;
+
+    // Check if current time is within the visible range
+    if (now < timeRange.start || now >= timeRange.end) return null;
+
+    // Calculate position in pixels from the start of the timeline
+    const minutesSinceStart = (now.getTime() - timeRange.start.getTime()) / (1000 * 60);
+    const position = (minutesSinceStart / SLOT_MINUTES) * SLOT_WIDTH_PX;
+
+    return position;
+  }, [selectedDate, timeRange]);
+
   if (loading && channels.length === 0) {
     return (
       <div className="guide-tab">
@@ -352,8 +369,16 @@ export function GuideTab({ channels: propChannels, logos: propLogos }: GuideTabP
           ref={gridContentRef}
           onScroll={handleContentScroll}
         >
-          <div className="guide-channels">
-            {sortedChannels.map(renderChannelRow)}
+          <div className="guide-channels-wrapper">
+            <div className="guide-channels">
+              {sortedChannels.map(renderChannelRow)}
+            </div>
+            {nowIndicatorPosition !== null && (
+              <div
+                className="now-indicator"
+                style={{ left: `${200 + nowIndicatorPosition}px` }}
+              />
+            )}
           </div>
         </div>
       </div>
