@@ -160,34 +160,6 @@
   flex: 1;
 }
 
-/* Group Styles */
-.guide-group {
-  border-bottom: 1px solid var(--border-primary);
-}
-
-.guide-group-header {
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
-  padding: 0.5rem 1rem;
-  background-color: var(--bg-tertiary);
-  border-bottom: 1px solid var(--border-primary);
-  position: sticky;
-  left: 0;
-  z-index: 5;
-}
-
-.group-name {
-  font-size: 0.875rem;
-  font-weight: 600;
-  color: var(--text-primary);
-}
-
-.group-count {
-  font-size: 0.75rem;
-  color: var(--text-muted);
-}
-
 /* Channel Row */
 .guide-row {
   display: flex;
