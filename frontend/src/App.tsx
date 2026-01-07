@@ -1590,7 +1590,7 @@ function App() {
             />
           )}
           {activeTab === 'm3u-manager' && <M3UManagerTab />}
-          {activeTab === 'epg-manager' && <EPGManagerTab />}
+          {activeTab === 'epg-manager' && <EPGManagerTab onSourcesChange={loadEpgSources} />}
           {activeTab === 'logo-manager' && <LogoManagerTab />}
           {activeTab === 'settings' && <SettingsTab onSaved={handleSettingsSaved} channelProfiles={channelProfiles} />}
         </Suspense>

@@ -397,7 +397,11 @@ function EPGSourceModal({ isOpen, source, onClose, onSave }: EPGSourceModalProps
   );
 }
 
-export function EPGManagerTab() {
+interface EPGManagerTabProps {
+  onSourcesChange?: () => void;
+}
+
+export function EPGManagerTab({ onSourcesChange }: EPGManagerTabProps) {
   const [sources, setSources] = useState<EPGSource[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -479,6 +483,7 @@ export function EPGManagerTab() {
     try {
       await api.deleteEPGSource(source.id);
       await loadSources();
+      onSourcesChange?.();
     } catch (err) {
       setError('Failed to delete EPG source');
     }
@@ -524,6 +529,7 @@ export function EPGManagerTab() {
       await api.createEPGSource(data);
     }
     await loadSources();
+    onSourcesChange?.();
   };
 
   const handleRefreshAll = async () => {
