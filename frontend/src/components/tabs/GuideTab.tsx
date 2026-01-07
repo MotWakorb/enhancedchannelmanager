@@ -1,7 +1,6 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
-import type { Channel, ChannelGroup, Logo, EPGProgram } from '../../types';
+import type { Channel, Logo, EPGProgram } from '../../types';
 import * as api from '../../services/api';
-import { naturalCompare } from '../../utils/naturalSort';
 import './GuideTab.css';
 
 // Constants for grid layout
@@ -12,14 +11,12 @@ const HOURS_TO_SHOW = 6; // Total hours to display in grid
 interface GuideTabProps {
   // Optional: pass existing data from parent to avoid re-fetching
   channels?: Channel[];
-  channelGroups?: ChannelGroup[];
   logos?: Logo[];
 }
 
-export function GuideTab({ channels: propChannels, channelGroups: propGroups, logos: propLogos }: GuideTabProps) {
+export function GuideTab({ channels: propChannels, logos: propLogos }: GuideTabProps) {
   // Data state
   const [channels, setChannels] = useState<Channel[]>(propChannels ?? []);
-  const [channelGroups, setChannelGroups] = useState<ChannelGroup[]>(propGroups ?? []);
   const [logos, setLogos] = useState<Logo[]>(propLogos ?? []);
   const [programs, setPrograms] = useState<EPGProgram[]>([]);
 
@@ -65,31 +62,13 @@ export function GuideTab({ channels: propChannels, channelGroups: propGroups, lo
     return map;
   }, [programs]);
 
-  // Build group map for quick lookup
-  const groupMap = useMemo(() => {
-    const map = new Map<number, ChannelGroup>();
-    channelGroups.forEach(group => map.set(group.id, group));
-    return map;
-  }, [channelGroups]);
-
-  // Sort channels by channel number and group by channel_group_id
+  // Sort channels by channel number
   const sortedChannels = useMemo(() => {
     return [...channels]
       .filter(ch => ch.channel_number !== null)
       .sort((a, b) => (a.channel_number ?? 0) - (b.channel_number ?? 0));
   }, [channels]);
 
-  // Group channels by their channel_group_id
-  const channelsByGroup = useMemo(() => {
-    const map = new Map<number | null, Channel[]>();
-    sortedChannels.forEach(channel => {
-      const groupId = channel.channel_group_id;
-      const existing = map.get(groupId) || [];
-      existing.push(channel);
-      map.set(groupId, existing);
-    });
-    return map;
-  }, [sortedChannels]);
 
   // Calculate time range for the grid
   const timeRange = useMemo(() => {
@@ -120,15 +99,13 @@ export function GuideTab({ channels: propChannels, channelGroups: propGroups, lo
 
       try {
         // Fetch all needed data in parallel
-        const [channelsData, groupsData, logosData, programsData] = await Promise.all([
+        const [channelsData, logosData, programsData] = await Promise.all([
           propChannels ? Promise.resolve({ results: propChannels }) : api.getChannels({ pageSize: 5000 }),
-          propGroups ? Promise.resolve(propGroups) : api.getChannelGroups(),
           propLogos ? Promise.resolve({ results: propLogos }) : api.getLogos({ pageSize: 10000 }),
           api.getEPGGrid(),
         ]);
 
         if (!propChannels) setChannels((channelsData as { results: Channel[] }).results);
-        if (!propGroups) setChannelGroups(groupsData as ChannelGroup[]);
         if (!propLogos) setLogos((logosData as { results: Logo[] }).results);
         setPrograms(programsData);
       } catch (err) {
@@ -139,7 +116,7 @@ export function GuideTab({ channels: propChannels, channelGroups: propGroups, lo
     };
 
     loadData();
-  }, [propChannels, propGroups, propLogos]);
+  }, [propChannels, propLogos]);
 
   // Refresh programs only
   const handleRefresh = useCallback(async () => {
@@ -293,21 +270,6 @@ export function GuideTab({ channels: propChannels, channelGroups: propGroups, lo
     );
   };
 
-  // Render group header
-  const renderGroupHeader = (groupId: number | null, groupChannels: Channel[]) => {
-    const group = groupId !== null ? groupMap.get(groupId) : null;
-    const groupName = group?.name ?? 'Ungrouped';
-
-    return (
-      <div key={`group-${groupId}`} className="guide-group">
-        <div className="guide-group-header">
-          <span className="group-name">{groupName}</span>
-          <span className="group-count">{groupChannels.length} channels</span>
-        </div>
-        {groupChannels.map(renderChannelRow)}
-      </div>
-    );
-  };
 
   // Calculate total timeline width
   const timelineWidth = timeSlots.length * SLOT_WIDTH_PX;
@@ -387,16 +349,7 @@ export function GuideTab({ channels: propChannels, channelGroups: propGroups, lo
           onScroll={handleContentScroll}
         >
           <div className="guide-channels">
-            {/* Sort groups by name, ungrouped last */}
-            {[...channelsByGroup.entries()]
-              .sort(([aId], [bId]) => {
-                if (aId === null) return 1;
-                if (bId === null) return -1;
-                const aName = groupMap.get(aId)?.name ?? '';
-                const bName = groupMap.get(bId)?.name ?? '';
-                return naturalCompare(aName, bName);
-              })
-              .map(([groupId, groupChannels]) => renderGroupHeader(groupId, groupChannels))}
+            {sortedChannels.map(renderChannelRow)}
           </div>
         </div>
       </div>

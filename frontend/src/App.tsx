@@ -1600,7 +1600,7 @@ function App() {
             />
           )}
           {activeTab === 'epg-manager' && <EPGManagerTab onSourcesChange={loadEpgSources} />}
-          {activeTab === 'guide' && <GuideTab channels={channels} channelGroups={channelGroups} logos={logos} />}
+          {activeTab === 'guide' && <GuideTab channels={channels} logos={logos} />}
           {activeTab === 'logo-manager' && <LogoManagerTab />}
           {activeTab === 'settings' && <SettingsTab onSaved={handleSettingsSaved} channelProfiles={channelProfiles} />}
         </Suspense>
