@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
-import type { M3UAccount, ServerGroup } from '../../types';
+import type { M3UAccount, ServerGroup, EPGSource, ChannelGroup, ChannelProfile, StreamProfile } from '../../types';
 import * as api from '../../services/api';
 import { naturalCompare } from '../../utils/naturalSort';
 import { M3UAccountModal } from '../M3UAccountModal';
@@ -7,6 +7,13 @@ import { M3UGroupsModal } from '../M3UGroupsModal';
 import { M3UFiltersModal } from '../M3UFiltersModal';
 import { M3ULinkedAccountsModal } from '../M3ULinkedAccountsModal';
 import './M3UManagerTab.css';
+
+interface M3UManagerTabProps {
+  epgSources?: EPGSource[];
+  channelGroups?: ChannelGroup[];
+  channelProfiles?: ChannelProfile[];
+  streamProfiles?: StreamProfile[];
+}
 
 interface M3UAccountRowProps {
   account: M3UAccount;
@@ -192,7 +199,12 @@ function M3UAccountRow({
   );
 }
 
-export function M3UManagerTab() {
+export function M3UManagerTab({
+  epgSources = [],
+  channelGroups = [],
+  channelProfiles = [],
+  streamProfiles = [],
+}: M3UManagerTabProps) {
   const [accounts, setAccounts] = useState<M3UAccount[]>([]);
   const [serverGroups, setServerGroups] = useState<ServerGroup[]>([]);
   const [loading, setLoading] = useState(true);
@@ -562,6 +574,10 @@ export function M3UManagerTab() {
           account={groupsAccount}
           allAccounts={accounts}
           linkedAccountGroups={linkedM3UAccounts}
+          epgSources={epgSources}
+          channelGroups={channelGroups}
+          channelProfiles={channelProfiles}
+          streamProfiles={streamProfiles}
         />
       )}
 

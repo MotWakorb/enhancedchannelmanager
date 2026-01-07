@@ -1589,7 +1589,14 @@ function App() {
               onRefreshStreams={refreshStreams}
             />
           )}
-          {activeTab === 'm3u-manager' && <M3UManagerTab />}
+          {activeTab === 'm3u-manager' && (
+            <M3UManagerTab
+              epgSources={epgSources}
+              channelGroups={channelGroups}
+              channelProfiles={channelProfiles}
+              streamProfiles={streamProfiles}
+            />
+          )}
           {activeTab === 'epg-manager' && <EPGManagerTab onSourcesChange={loadEpgSources} />}
           {activeTab === 'logo-manager' && <LogoManagerTab />}
           {activeTab === 'settings' && <SettingsTab onSaved={handleSettingsSaved} channelProfiles={channelProfiles} />}

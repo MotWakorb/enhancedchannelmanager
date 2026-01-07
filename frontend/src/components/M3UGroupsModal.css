@@ -174,7 +174,7 @@
 
 .groups-header {
   display: grid;
-  grid-template-columns: 1fr 80px 80px 100px;
+  grid-template-columns: 1fr 80px 80px 80px 50px;
   gap: 1rem;
   padding: 0.75rem 1.5rem;
   background-color: var(--input-bg);
@@ -191,7 +191,7 @@
 
 .group-row {
   display: grid;
-  grid-template-columns: 1fr 80px 80px 100px;
+  grid-template-columns: 1fr 80px 80px 80px 50px;
   gap: 1rem;
   padding: 0.75rem 1.5rem;
   border-bottom: 1px solid var(--border-primary);
@@ -243,6 +243,47 @@
 
 .group-start input::placeholder {
   color: var(--text-muted);
+}
+
+/* Settings Button */
+.group-settings {
+  display: flex;
+  justify-content: center;
+}
+
+.settings-btn {
+  background: none;
+  border: none;
+  padding: 0.25rem;
+  cursor: pointer;
+  color: var(--text-muted);
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: color 0.15s, background-color 0.15s;
+}
+
+.settings-btn:hover:not(:disabled) {
+  color: var(--text-primary);
+  background-color: var(--input-bg);
+}
+
+.settings-btn:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+.settings-btn .material-icons {
+  font-size: 20px;
+}
+
+.settings-btn.has-settings {
+  color: var(--accent-primary);
+}
+
+.settings-btn.has-settings:hover:not(:disabled) {
+  color: var(--accent-primary);
 }
 
 /* Toggle Switch */
