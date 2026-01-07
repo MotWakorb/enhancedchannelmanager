@@ -156,8 +156,35 @@
   display: flex;
 }
 
+.guide-channels-wrapper {
+  position: relative;
+  flex: 1;
+}
+
 .guide-channels {
   flex: 1;
+}
+
+/* Now Indicator - vertical line showing current time */
+.now-indicator {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background-color: #e53935;
+  z-index: 15;
+  pointer-events: none;
+}
+
+.now-indicator::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -4px;
+  width: 10px;
+  height: 10px;
+  background-color: #e53935;
+  border-radius: 50%;
 }
 
 /* Channel Row */
