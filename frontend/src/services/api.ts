@@ -588,7 +588,7 @@ const QUALITY_SUFFIXES = [
 const NETWORK_PREFIXES = [
   // Sports networks
   'CHAMP', 'CHAMPIONSHIP', 'PPV', 'PAY PER VIEW',
-  'PREMIER', 'PREMIER LEAGUE', 'PL',
+  'PREMIER', 'PREMIER LEAGUE', 'PL', 'PRIME',
   'NFL', 'NBA', 'MLB', 'NHL', 'MLS', 'NCAA',
   'UFC', 'WWE', 'AEW', 'BOXING',
   'GOLF', 'TENNIS', 'CRICKET', 'RUGBY',
