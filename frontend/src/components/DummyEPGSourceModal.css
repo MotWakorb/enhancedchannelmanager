@@ -16,6 +16,15 @@
   overflow: hidden;
 }
 
+/* Form element needs to be a flex container to maintain the layout */
+.dummy-epg-modal > form {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
 .dummy-epg-modal .modal-header {
   display: flex;
   justify-content: space-between;
