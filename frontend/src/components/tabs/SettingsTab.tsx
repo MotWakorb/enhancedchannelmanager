@@ -688,12 +688,24 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
                 }
                 setNewPrefixInput('');
               }}
-              disabled={!newPrefixInput.trim() || NETWORK_PREFIXES.includes(newPrefixInput.trim())}
+              disabled={!newPrefixInput.trim() || NETWORK_PREFIXES.includes(newPrefixInput.trim()) || customNetworkPrefixes.includes(newPrefixInput.trim())}
             >
               <span className="material-icons">add</span>
               Add
             </button>
           </div>
+
+          {newPrefixInput.trim() && NETWORK_PREFIXES.includes(newPrefixInput.trim()) && (
+            <p className="custom-prefix-warning">
+              "{newPrefixInput.trim()}" is already a built-in prefix
+            </p>
+          )}
+
+          {newPrefixInput.trim() && !NETWORK_PREFIXES.includes(newPrefixInput.trim()) && customNetworkPrefixes.includes(newPrefixInput.trim()) && (
+            <p className="custom-prefix-warning">
+              "{newPrefixInput.trim()}" is already in your custom list
+            </p>
+          )}
 
           {customNetworkPrefixes.length > 0 && (
             <div className="custom-prefix-list">
