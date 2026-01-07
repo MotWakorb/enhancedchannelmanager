@@ -45,9 +45,14 @@ export function AutoSyncSettingsModal({
   const [loadingLogos, setLoadingLogos] = useState(false);
   const [logoSearch, setLogoSearch] = useState('');
   const [logoDropdownOpen, setLogoDropdownOpen] = useState(false);
+  const [groupDropdownOpen, setGroupDropdownOpen] = useState(false);
+  const [groupSearch, setGroupSearch] = useState('');
+  const [logoUrlInput, setLogoUrlInput] = useState('');
+  const [uploadingLogo, setUploadingLogo] = useState(false);
 
   const profileDropdownRef = useRef<HTMLDivElement>(null);
   const logoDropdownRef = useRef<HTMLDivElement>(null);
+  const groupDropdownRef = useRef<HTMLDivElement>(null);
 
   // Load logos when modal opens
   useEffect(() => {
@@ -85,6 +90,9 @@ export function AutoSyncSettingsModal({
       }
       if (logoDropdownRef.current && !logoDropdownRef.current.contains(event.target as Node)) {
         setLogoDropdownOpen(false);
+      }
+      if (groupDropdownRef.current && !groupDropdownRef.current.contains(event.target as Node)) {
+        setGroupDropdownOpen(false);
       }
     };
 
@@ -141,10 +149,52 @@ export function AutoSyncSettingsModal({
       .join(', ');
   }, [selectedProfileIds, channelProfiles]);
 
-  // Filter active EPG sources (exclude dummy)
+  // Filter active EPG sources (include dummy)
   const activeEpgSources = useMemo(() => {
-    return epgSources.filter(s => s.source_type !== 'dummy' && s.is_active);
+    return epgSources.filter(s => s.is_active);
   }, [epgSources]);
+
+  // Filter channel groups by search
+  const filteredGroups = useMemo(() => {
+    if (!groupSearch.trim()) return channelGroups;
+    const search = groupSearch.toLowerCase();
+    return channelGroups.filter(group => group.name.toLowerCase().includes(search));
+  }, [channelGroups, groupSearch]);
+
+  // Get selected group
+  const selectedGroup = useMemo(() => {
+    if (!groupOverride) return null;
+    return channelGroups.find(g => g.id.toString() === groupOverride);
+  }, [channelGroups, groupOverride]);
+
+  // Handle logo URL upload
+  const handleLogoUrlUpload = async () => {
+    if (!logoUrlInput.trim()) return;
+
+    setUploadingLogo(true);
+    try {
+      // Check if logo already exists
+      const existingLogo = logos.find(l => l.url === logoUrlInput);
+      if (existingLogo) {
+        setCustomLogoId(existingLogo.id.toString());
+        setLogoUrlInput('');
+        setLogoDropdownOpen(false);
+        return;
+      }
+
+      // Create new logo
+      const name = logoUrlInput.split('/').pop()?.split('?')[0] || 'Custom Logo';
+      const newLogo = await api.createLogo({ name, url: logoUrlInput });
+      setLogos(prev => [...prev, newLogo]);
+      setCustomLogoId(newLogo.id.toString());
+      setLogoUrlInput('');
+      setLogoDropdownOpen(false);
+    } catch (err) {
+      console.error('Failed to create logo:', err);
+    } finally {
+      setUploadingLogo(false);
+    }
+  };
 
   // Build and save custom properties
   const handleSave = () => {
@@ -156,7 +206,7 @@ export function AutoSyncSettingsModal({
     if (nameReplacePattern !== undefined && nameRegexPattern) props.name_replace_pattern = nameReplacePattern;
     if (channelNameFilter) props.channel_name_filter = channelNameFilter;
     if (selectedProfileIds.size > 0) props.channel_profile_ids = Array.from(selectedProfileIds);
-    if (sortOrder) props.channel_sort_order = sortOrder as 'asc' | 'desc';
+    if (sortOrder) props.channel_sort_order = sortOrder as 'asc' | 'desc' | 'provider';
     if (streamProfileId) props.stream_profile_id = parseInt(streamProfileId, 10);
     if (customLogoId) props.custom_logo_id = parseInt(customLogoId, 10);
 
@@ -229,19 +279,62 @@ export function AutoSyncSettingsModal({
             </div>
 
             {/* Override Channel Group */}
-            <div className="form-group">
+            <div className="form-group" ref={groupDropdownRef}>
               <label>Override Channel Group</label>
-              <select
-                value={groupOverride}
-                onChange={(e) => setGroupOverride(e.target.value)}
-              >
-                <option value="">-- None --</option>
-                {channelGroups.map(group => (
-                  <option key={group.id} value={group.id.toString()}>
-                    {group.name}
-                  </option>
-                ))}
-              </select>
+              <div className="searchable-select-dropdown">
+                <button
+                  type="button"
+                  className="dropdown-trigger"
+                  onClick={() => setGroupDropdownOpen(!groupDropdownOpen)}
+                >
+                  <span className="dropdown-value">
+                    {selectedGroup ? selectedGroup.name : '-- None --'}
+                  </span>
+                  <span className="material-icons">expand_more</span>
+                </button>
+                {groupDropdownOpen && (
+                  <div className="dropdown-menu">
+                    <div className="dropdown-search">
+                      <span className="material-icons">search</span>
+                      <input
+                        type="text"
+                        placeholder="Search groups..."
+                        value={groupSearch}
+                        onChange={(e) => setGroupSearch(e.target.value)}
+                        autoFocus
+                      />
+                    </div>
+                    <div className="dropdown-options">
+                      <div
+                        className={`dropdown-option-item ${!groupOverride ? 'selected' : ''}`}
+                        onClick={() => {
+                          setGroupOverride('');
+                          setGroupDropdownOpen(false);
+                          setGroupSearch('');
+                        }}
+                      >
+                        <span className="no-selection">-- None --</span>
+                      </div>
+                      {filteredGroups.map(group => (
+                        <div
+                          key={group.id}
+                          className={`dropdown-option-item ${groupOverride === group.id.toString() ? 'selected' : ''}`}
+                          onClick={() => {
+                            setGroupOverride(group.id.toString());
+                            setGroupDropdownOpen(false);
+                            setGroupSearch('');
+                          }}
+                        >
+                          <span>{group.name}</span>
+                        </div>
+                      ))}
+                      {filteredGroups.length === 0 && groupSearch && (
+                        <div className="dropdown-empty">No matching groups</div>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
               <span className="form-hint">Move synced channels to a different channel group</span>
             </div>
 
@@ -340,10 +433,11 @@ export function AutoSyncSettingsModal({
                 onChange={(e) => setSortOrder(e.target.value)}
               >
                 <option value="">-- None --</option>
+                <option value="provider">Provider Default</option>
                 <option value="asc">Ascending (A-Z)</option>
                 <option value="desc">Descending (Z-A)</option>
               </select>
-              <span className="form-hint">Sort channels alphabetically within the group</span>
+              <span className="form-hint">Sort channels within the group (Provider Default uses M3U order)</span>
             </div>
 
             {/* Stream Profile Assignment */}
@@ -394,6 +488,33 @@ export function AutoSyncSettingsModal({
                         autoFocus
                       />
                     </div>
+                    {/* URL Input Section */}
+                    <div className="logo-url-input">
+                      <input
+                        type="text"
+                        placeholder="Or enter logo URL..."
+                        value={logoUrlInput}
+                        onChange={(e) => setLogoUrlInput(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault();
+                            handleLogoUrlUpload();
+                          }
+                        }}
+                      />
+                      <button
+                        type="button"
+                        onClick={handleLogoUrlUpload}
+                        disabled={!logoUrlInput.trim() || uploadingLogo}
+                        title="Add logo from URL"
+                      >
+                        {uploadingLogo ? (
+                          <span className="material-icons spinning">sync</span>
+                        ) : (
+                          <span className="material-icons">add</span>
+                        )}
+                      </button>
+                    </div>
                     <div className="dropdown-options logo-options">
                       <div
                         className={`logo-option ${!customLogoId ? 'selected' : ''}`}
@@ -406,6 +527,10 @@ export function AutoSyncSettingsModal({
                       </div>
                       {loadingLogos ? (
                         <div className="dropdown-loading">Loading logos...</div>
+                      ) : filteredLogos.length === 0 ? (
+                        <div className="dropdown-empty">
+                          {logoSearch ? 'No matching logos' : 'No logos available'}
+                        </div>
                       ) : (
                         filteredLogos.map(logo => (
                           <div
