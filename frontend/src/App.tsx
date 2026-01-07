@@ -15,6 +15,7 @@ import './App.css';
 // Lazy load non-primary tabs
 const M3UManagerTab = lazy(() => import('./components/tabs/M3UManagerTab').then(m => ({ default: m.M3UManagerTab })));
 const EPGManagerTab = lazy(() => import('./components/tabs/EPGManagerTab').then(m => ({ default: m.EPGManagerTab })));
+const GuideTab = lazy(() => import('./components/tabs/GuideTab').then(m => ({ default: m.GuideTab })));
 const LogoManagerTab = lazy(() => import('./components/tabs/LogoManagerTab').then(m => ({ default: m.LogoManagerTab })));
 const SettingsTab = lazy(() => import('./components/tabs/SettingsTab').then(m => ({ default: m.SettingsTab })));
 
@@ -1599,6 +1600,7 @@ function App() {
             />
           )}
           {activeTab === 'epg-manager' && <EPGManagerTab onSourcesChange={loadEpgSources} />}
+          {activeTab === 'guide' && <GuideTab channels={channels} channelGroups={channelGroups} logos={logos} />}
           {activeTab === 'logo-manager' && <LogoManagerTab />}
           {activeTab === 'settings' && <SettingsTab onSaved={handleSettingsSaved} channelProfiles={channelProfiles} />}
         </Suspense>

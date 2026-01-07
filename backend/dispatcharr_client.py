@@ -612,6 +612,18 @@ class DispatcharrClient:
         response.raise_for_status()
         return response.json()
 
+    async def get_epg_grid(self) -> list:
+        """Get EPG grid (programs from previous hour + next 24 hours)."""
+        response = await self._request("GET", "/api/epg/grid/")
+        response.raise_for_status()
+        data = response.json()
+        # Handle both list and dict responses
+        if isinstance(data, list):
+            return data
+        elif isinstance(data, dict):
+            return data.get("data", data.get("results", []))
+        return []
+
     # -------------------------------------------------------------------------
     # Stream Profiles
     # -------------------------------------------------------------------------

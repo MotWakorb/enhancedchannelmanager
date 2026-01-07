@@ -81,6 +81,16 @@ export interface EPGData {
   epg_source: number;
 }
 
+export interface EPGProgram {
+  id: number;
+  start_time: string;
+  end_time: string;
+  title: string;
+  sub_title?: string | null;
+  description?: string | null;
+  tvg_id?: string | null;
+}
+
 export interface StreamProfile {
   id: number;
   name: string;

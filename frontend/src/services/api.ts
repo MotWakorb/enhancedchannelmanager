@@ -14,6 +14,7 @@ import type {
   PaginatedResponse,
   EPGSource,
   EPGData,
+  EPGProgram,
   StreamProfile,
   DummyEPGCustomProperties,
 } from '../types';
@@ -494,6 +495,11 @@ export async function getEPGData(params?: {
 
 export async function getEPGDataById(id: number): Promise<EPGData> {
   return fetchJson(`${API_BASE}/epg/data/${id}`);
+}
+
+// EPG Grid (programs for previous hour + next 24 hours)
+export async function getEPGGrid(): Promise<EPGProgram[]> {
+  return fetchJson(`${API_BASE}/epg/grid`);
 }
 
 // Stream Profiles

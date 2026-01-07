@@ -753,6 +753,16 @@ async def get_epg_data_by_id(data_id: int):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/api/epg/grid")
+async def get_epg_grid():
+    """Get EPG grid (programs from previous hour + next 24 hours)."""
+    client = get_client()
+    try:
+        return await client.get_epg_grid()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # Stream Profiles
 @app.get("/api/stream-profiles")
 async def get_stream_profiles():
