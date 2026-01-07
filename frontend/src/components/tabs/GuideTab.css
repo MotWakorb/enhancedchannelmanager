@@ -158,11 +158,12 @@
 
 .guide-channels-wrapper {
   position: relative;
-  flex: 1;
+  display: inline-block;
+  min-width: 100%;
 }
 
 .guide-channels {
-  flex: 1;
+  /* Channels container */
 }
 
 /* Now Indicator - vertical line showing current time */
