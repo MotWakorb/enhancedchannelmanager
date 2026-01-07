@@ -346,12 +346,27 @@
 
 /* Account Groups */
 .account-groups {
-  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.25rem;
 }
 
 .group-count {
   font-size: 0.875rem;
   color: var(--text-secondary);
+}
+
+.auto-sync-count {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  font-size: 0.75rem;
+  color: var(--accent-primary);
+}
+
+.auto-sync-count .material-icons {
+  font-size: 14px;
 }
 
 /* Account Settings */
