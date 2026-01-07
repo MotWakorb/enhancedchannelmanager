@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import {
   DndContext,
   DragOverlay,
@@ -3574,6 +3574,65 @@ export function ChannelsPane({
     }
   };
 
+  // Compute conflicts for cross-group move based on selected numbering option
+  const getMoveConflicts = useMemo(() => {
+    if (!crossGroupMoveData) return { hasConflicts: false, conflicts: [], startNumber: 0 };
+
+    const { channels: channelsToMove, targetGroupId } = crossGroupMoveData;
+
+    // Get the starting number based on selected option
+    let startNumber: number | null = null;
+    if (selectedNumberingOption === 'keep') {
+      // When keeping numbers, check each channel individually for conflicts
+      const keptNumbers = channelsToMove.map(ch => ch.channel_number).filter((n): n is number => n !== null);
+      if (keptNumbers.length === 0) return { hasConflicts: false, conflicts: [], startNumber: 0 };
+
+      // Get existing channels in target group (excluding the ones being moved)
+      const movedIds = new Set(channelsToMove.map(ch => ch.id));
+      const targetGroupChannels = localChannels.filter(ch => {
+        if (movedIds.has(ch.id)) return false;
+        if (targetGroupId === null) return ch.channel_group_id === null;
+        return ch.channel_group_id === targetGroupId;
+      });
+
+      // Find conflicts for "keep current" option
+      const conflicts = targetGroupChannels.filter(ch =>
+        ch.channel_number !== null && keptNumbers.includes(ch.channel_number)
+      ).sort((a, b) => (a.channel_number ?? 0) - (b.channel_number ?? 0));
+
+      return { hasConflicts: conflicts.length > 0, conflicts, startNumber: null };
+    } else if (selectedNumberingOption === 'suggested') {
+      startNumber = crossGroupMoveData.suggestedChannelNumber;
+    } else if (selectedNumberingOption === 'custom') {
+      const customNum = parseInt(customStartingNumber, 10);
+      if (!isNaN(customNum) && customNum >= 1) {
+        startNumber = customNum;
+      }
+    }
+
+    if (startNumber === null) return { hasConflicts: false, conflicts: [], startNumber: 0 };
+
+    // Get existing channels in target group (excluding the ones being moved)
+    const movedIds = new Set(channelsToMove.map(ch => ch.id));
+    const targetGroupChannels = localChannels.filter(ch => {
+      if (movedIds.has(ch.id)) return false;
+      if (targetGroupId === null) return ch.channel_group_id === null;
+      return ch.channel_group_id === targetGroupId;
+    });
+
+    // Calculate the range of numbers that will be used
+    const endNumber = startNumber + channelsToMove.length - 1;
+
+    // Find channels with numbers in this range
+    const conflicts = targetGroupChannels.filter(ch =>
+      ch.channel_number !== null &&
+      ch.channel_number >= startNumber! &&
+      ch.channel_number <= endNumber
+    ).sort((a, b) => (a.channel_number ?? 0) - (b.channel_number ?? 0));
+
+    return { hasConflicts: conflicts.length > 0, conflicts, startNumber };
+  }, [crossGroupMoveData, selectedNumberingOption, customStartingNumber, localChannels]);
+
   // Check if Move button should be enabled
   const isMoveButtonEnabled = () => {
     if (selectedNumberingOption === 'custom') {
@@ -4821,6 +4880,33 @@ export function ChannelsPane({
                 </label>
               </div>
             </div>
+
+            {/* Channel Number Conflict Warning */}
+            {getMoveConflicts.hasConflicts && (
+              <div className="cross-group-move-conflict-warning">
+                <span className="material-icons conflict-icon">swap_vert</span>
+                <div className="conflict-warning-text">
+                  <strong>Channel numbers will shift</strong>
+                  {selectedNumberingOption === 'keep' ? (
+                    <p>
+                      {getMoveConflicts.conflicts.length === 1 ? (
+                        <>Channel <strong>{getMoveConflicts.conflicts[0].channel_number}</strong> ({getMoveConflicts.conflicts[0].name}) already exists in this group and will have duplicate number.</>
+                      ) : (
+                        <>Channels {getMoveConflicts.conflicts.slice(0, 3).map(ch => ch.channel_number).join(', ')}{getMoveConflicts.conflicts.length > 3 ? ` and ${getMoveConflicts.conflicts.length - 3} more` : ''} already exist in this group and will have duplicate numbers.</>
+                      )}
+                    </p>
+                  ) : (
+                    <p>
+                      {getMoveConflicts.conflicts.length === 1 ? (
+                        <>Channel <strong>{getMoveConflicts.conflicts[0].channel_number}</strong> ({getMoveConflicts.conflicts[0].name}) will be shifted to {(getMoveConflicts.conflicts[0].channel_number ?? 0) + crossGroupMoveData.channels.length}.</>
+                      ) : (
+                        <>Existing channels ({getMoveConflicts.conflicts.slice(0, 3).map(ch => ch.channel_number).join(', ')}{getMoveConflicts.conflicts.length > 3 ? `, +${getMoveConflicts.conflicts.length - 3} more` : ''}) will be shifted up by {crossGroupMoveData.channels.length} to make room.</>
+                      )}
+                    </p>
+                  )}
+                </div>
+              </div>
+            )}
 
             {/* Source Group Renumbering Option */}
             {crossGroupMoveData.sourceGroupHasGaps && (
