@@ -174,7 +174,7 @@
 
 .groups-header {
   display: grid;
-  grid-template-columns: 1fr 80px 80px 80px 50px;
+  grid-template-columns: 1fr 80px 120px 80px 50px;
   gap: 1rem;
   padding: 0.75rem 1.5rem;
   background-color: var(--input-bg);
@@ -191,7 +191,7 @@
 
 .group-row {
   display: grid;
-  grid-template-columns: 1fr 80px 80px 80px 50px;
+  grid-template-columns: 1fr 80px 120px 80px 50px;
   gap: 1rem;
   padding: 0.75rem 1.5rem;
   border-bottom: 1px solid var(--border-primary);
@@ -218,6 +218,31 @@
 .group-autosync {
   display: flex;
   justify-content: center;
+}
+
+/* Auto-sync owned by another account indicator */
+.autosync-owned {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  padding: 0.25rem 0.5rem;
+  background-color: var(--input-bg);
+  border-radius: 4px;
+  max-width: 100%;
+  overflow: hidden;
+}
+
+.autosync-owned .material-icons {
+  font-size: 14px;
+  flex-shrink: 0;
+}
+
+.autosync-owned .owned-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .group-start input {

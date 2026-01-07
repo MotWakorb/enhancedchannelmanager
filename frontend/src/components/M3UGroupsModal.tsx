@@ -64,6 +64,24 @@ export function M3UGroupsModal({
     return { isLinked: true, linkedAccountIds, linkedAccountNames };
   }, [account.id, linkedAccountGroups, allAccounts]);
 
+  // Find groups that are already auto-synced on OTHER accounts
+  // These should not be allowed to have auto-sync enabled on this account
+  const autoSyncedByOtherAccounts = useMemo(() => {
+    const result = new Map<number, string>(); // channel_group ID -> account name that owns it
+
+    for (const otherAccount of allAccounts) {
+      if (otherAccount.id === account.id) continue; // Skip current account
+
+      for (const group of otherAccount.channel_groups) {
+        if (group.auto_channel_sync) {
+          result.set(group.channel_group, otherAccount.name);
+        }
+      }
+    }
+
+    return result;
+  }, [allAccounts, account.id]);
+
   // Fetch fresh account data and channel groups when modal opens
   useEffect(() => {
     if (isOpen && account) {
@@ -321,15 +339,22 @@ export function M3UGroupsModal({
                     </label>
                   </div>
                   <div className="group-autosync">
-                    <label className="toggle">
-                      <input
-                        type="checkbox"
-                        checked={group.auto_channel_sync}
-                        onChange={() => handleToggleAutoSync(group.channel_group)}
-                        disabled={!group.enabled}
-                      />
-                      <span className="toggle-slider"></span>
-                    </label>
+                    {autoSyncedByOtherAccounts.has(group.channel_group) ? (
+                      <div className="autosync-owned" title={`Auto-synced by: ${autoSyncedByOtherAccounts.get(group.channel_group)}`}>
+                        <span className="material-icons">link</span>
+                        <span className="owned-text">{autoSyncedByOtherAccounts.get(group.channel_group)}</span>
+                      </div>
+                    ) : (
+                      <label className="toggle">
+                        <input
+                          type="checkbox"
+                          checked={group.auto_channel_sync}
+                          onChange={() => handleToggleAutoSync(group.channel_group)}
+                          disabled={!group.enabled}
+                        />
+                        <span className="toggle-slider"></span>
+                      </label>
+                    )}
                   </div>
                   <div className="group-start">
                     <input
@@ -338,15 +363,21 @@ export function M3UGroupsModal({
                       placeholder="--"
                       value={group.auto_sync_channel_start ?? ''}
                       onChange={(e) => handleStartChannelChange(group.channel_group, e.target.value)}
-                      disabled={!group.auto_channel_sync}
+                      disabled={!group.auto_channel_sync || autoSyncedByOtherAccounts.has(group.channel_group)}
                     />
                   </div>
                   <div className="group-settings">
                     <button
                       className={`settings-btn ${hasCustomProperties(group) ? 'has-settings' : ''}`}
                       onClick={() => setSettingsModalGroup(group)}
-                      disabled={!group.auto_channel_sync}
-                      title={group.auto_channel_sync ? 'Configure auto-sync settings' : 'Enable auto-sync to configure settings'}
+                      disabled={!group.auto_channel_sync || autoSyncedByOtherAccounts.has(group.channel_group)}
+                      title={
+                        autoSyncedByOtherAccounts.has(group.channel_group)
+                          ? `Auto-synced by: ${autoSyncedByOtherAccounts.get(group.channel_group)}`
+                          : group.auto_channel_sync
+                            ? 'Configure auto-sync settings'
+                            : 'Enable auto-sync to configure settings'
+                      }
                     >
                       <span className="material-icons">settings</span>
                     </button>
