@@ -1595,6 +1595,7 @@ function App() {
               channelGroups={channelGroups}
               channelProfiles={channelProfiles}
               streamProfiles={streamProfiles}
+              onChannelGroupsChange={loadChannelGroups}
             />
           )}
           {activeTab === 'epg-manager' && <EPGManagerTab onSourcesChange={loadEpgSources} />}

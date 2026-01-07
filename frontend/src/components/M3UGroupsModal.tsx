@@ -17,6 +17,7 @@ interface M3UGroupsModalProps {
   channelGroups?: ChannelGroup[];
   channelProfiles?: ChannelProfile[];
   streamProfiles?: StreamProfile[];
+  onChannelGroupsChange?: () => void; // Called when channel groups are created/changed
 }
 
 // Extended type with name from channel groups lookup
@@ -35,6 +36,7 @@ export function M3UGroupsModal({
   channelGroups: allChannelGroups = [],
   channelProfiles = [],
   streamProfiles = [],
+  onChannelGroupsChange,
 }: M3UGroupsModalProps) {
   const [groups, setGroups] = useState<GroupWithName[]>([]);
   const [search, setSearch] = useState('');
@@ -392,6 +394,7 @@ export function M3UGroupsModal({
           channelGroups={allChannelGroups}
           channelProfiles={channelProfiles}
           streamProfiles={streamProfiles}
+          onGroupsChange={onChannelGroupsChange}
         />
       )}
     </div>

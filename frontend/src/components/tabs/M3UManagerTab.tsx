@@ -13,6 +13,7 @@ interface M3UManagerTabProps {
   channelGroups?: ChannelGroup[];
   channelProfiles?: ChannelProfile[];
   streamProfiles?: StreamProfile[];
+  onChannelGroupsChange?: () => void;
 }
 
 interface M3UAccountRowProps {
@@ -204,6 +205,7 @@ export function M3UManagerTab({
   channelGroups = [],
   channelProfiles = [],
   streamProfiles = [],
+  onChannelGroupsChange,
 }: M3UManagerTabProps) {
   const [accounts, setAccounts] = useState<M3UAccount[]>([]);
   const [serverGroups, setServerGroups] = useState<ServerGroup[]>([]);
@@ -578,6 +580,7 @@ export function M3UManagerTab({
           channelGroups={channelGroups}
           channelProfiles={channelProfiles}
           streamProfiles={streamProfiles}
+          onChannelGroupsChange={onChannelGroupsChange}
         />
       )}
 
