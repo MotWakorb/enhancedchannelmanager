@@ -460,13 +460,14 @@
 .logo-options {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 0.5rem;
+  padding: 0.5rem;
 }
 
-.logo-option {
+/* None option - full width */
+.logo-option-none {
   display: flex;
   align-items: center;
-  gap: 0.75rem;
   padding: 0.5rem;
   border-radius: 4px;
   cursor: pointer;
@@ -474,20 +475,51 @@
   color: var(--text-primary);
 }
 
-.logo-option:hover {
+.logo-option-none:hover {
   background-color: var(--input-bg);
 }
 
-.logo-option.selected {
+.logo-option-none.selected {
   background-color: rgba(100, 108, 255, 0.15);
 }
 
-.logo-preview {
-  width: 24px;
-  height: 24px;
+/* Logo grid layout */
+.logo-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.5rem;
+  max-height: 250px;
+  overflow-y: auto;
+}
+
+.logo-grid-item {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  aspect-ratio: 1;
+  padding: 0.375rem;
+  background-color: var(--input-bg);
+  border: 2px solid transparent;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: border-color 0.15s, background-color 0.15s;
+}
+
+.logo-grid-item:hover {
+  background-color: var(--border-primary);
+}
+
+.logo-grid-item.selected {
+  border-color: var(--accent-primary);
+  background-color: rgba(100, 108, 255, 0.1);
+}
+
+.logo-grid-preview {
+  width: 100%;
+  height: 100%;
+  max-width: 56px;
+  max-height: 56px;
   object-fit: contain;
-  border-radius: 2px;
-  background-color: var(--bg-primary);
 }
 
 .selected-logo {

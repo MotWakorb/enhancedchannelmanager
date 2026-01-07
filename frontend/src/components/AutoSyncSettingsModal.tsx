@@ -611,7 +611,7 @@ export function AutoSyncSettingsModal({
                     </div>
                     <div className="dropdown-options logo-options">
                       <div
-                        className={`logo-option ${!customLogoId ? 'selected' : ''}`}
+                        className={`logo-option-none ${!customLogoId ? 'selected' : ''}`}
                         onClick={() => {
                           setCustomLogoId('');
                           setLogoDropdownOpen(false);
@@ -626,19 +626,21 @@ export function AutoSyncSettingsModal({
                           {logoSearch ? 'No matching logos' : 'No logos available'}
                         </div>
                       ) : (
-                        filteredLogos.map(logo => (
-                          <div
-                            key={logo.id}
-                            className={`logo-option ${customLogoId === logo.id.toString() ? 'selected' : ''}`}
-                            onClick={() => {
-                              setCustomLogoId(logo.id.toString());
-                              setLogoDropdownOpen(false);
-                            }}
-                          >
-                            <img src={logo.cache_url || logo.url} alt="" className="logo-preview" />
-                            <span>{logo.name}</span>
-                          </div>
-                        ))
+                        <div className="logo-grid">
+                          {filteredLogos.map(logo => (
+                            <div
+                              key={logo.id}
+                              className={`logo-grid-item ${customLogoId === logo.id.toString() ? 'selected' : ''}`}
+                              onClick={() => {
+                                setCustomLogoId(logo.id.toString());
+                                setLogoDropdownOpen(false);
+                              }}
+                              title={logo.name}
+                            >
+                              <img src={logo.cache_url || logo.url} alt={logo.name} className="logo-grid-preview" />
+                            </div>
+                          ))}
+                        </div>
                       )}
                     </div>
                   </div>
