@@ -76,6 +76,7 @@ function App() {
     countrySeparator: '|',
     timezonePreference: 'both',
     defaultChannelProfileIds: [] as number[],
+    customNetworkPrefixes: [] as string[],
   });
   // Also keep separate state for use in callbacks (to avoid stale closure issues)
   const [defaultChannelProfileIds, setDefaultChannelProfileIds] = useState<number[]>([]);
@@ -342,6 +343,7 @@ function App() {
           countrySeparator: settings.country_separator,
           timezonePreference: settings.timezone_preference,
           defaultChannelProfileIds: settings.default_channel_profile_ids,
+          customNetworkPrefixes: settings.custom_network_prefixes ?? [],
         });
         setDefaultChannelProfileIds(settings.default_channel_profile_ids);
 
@@ -483,6 +485,7 @@ function App() {
         countrySeparator: settings.country_separator,
         timezonePreference: settings.timezone_preference,
         defaultChannelProfileIds: settings.default_channel_profile_ids,
+        customNetworkPrefixes: settings.custom_network_prefixes ?? [],
       });
       setDefaultChannelProfileIds(settings.default_channel_profile_ids);
 
@@ -1031,6 +1034,7 @@ function App() {
       countrySeparator?: api.NumberSeparator,
       prefixOrder?: api.PrefixOrder,
       stripNetworkPrefix?: boolean,
+      customNetworkPrefixes?: string[],
       profileIds?: number[],
       pushDownOnConflict?: boolean
     ) => {
@@ -1055,6 +1059,7 @@ function App() {
           keepCountryPrefix: keepCountryPrefix ?? false,
           countrySeparator: countrySeparator ?? '|',
           stripNetworkPrefix: stripNetworkPrefix ?? false,
+          customNetworkPrefixes: customNetworkPrefixes,
         };
 
         // Filter streams by timezone preference

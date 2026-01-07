@@ -323,6 +323,7 @@ export interface SettingsResponse {
   default_channel_profile_ids: number[];
   linked_m3u_accounts: number[][];  // List of link groups, each is a list of account IDs
   epg_auto_match_threshold: number;  // 0-100, confidence score threshold for auto-matching
+  custom_network_prefixes: string[];  // User-defined network prefixes to strip
 }
 
 export interface TestConnectionResult {
@@ -352,6 +353,7 @@ export async function saveSettings(settings: {
   default_channel_profile_ids?: number[];  // Optional - empty array means no defaults
   linked_m3u_accounts?: number[][];  // Optional - list of link groups
   epg_auto_match_threshold?: number;  // Optional - 0-100, defaults to 80
+  custom_network_prefixes?: string[];  // Optional - user-defined network prefixes
 }): Promise<{ status: string; configured: boolean }> {
   return fetchJson(`${API_BASE}/settings`, {
     method: 'POST',
@@ -731,12 +733,20 @@ export type TimezonePreference = 'east' | 'west' | 'both';
  * - "PPV | UFC 300" → "UFC 300"
  * - "ESPN" → "ESPN" (no change - it's the channel name itself)
  * - "ESPN2" → "ESPN2" (no change - suffix is part of channel identity)
+ *
+ * @param name - The stream name to process
+ * @param customPrefixes - Optional additional prefixes to check (merged with built-in list)
  */
-export function stripNetworkPrefix(name: string): string {
+export function stripNetworkPrefix(name: string, customPrefixes?: string[]): string {
   const trimmedName = name.trim();
 
+  // Merge built-in prefixes with custom prefixes (if provided)
+  const allPrefixes = customPrefixes && customPrefixes.length > 0
+    ? [...NETWORK_PREFIXES, ...customPrefixes]
+    : NETWORK_PREFIXES;
+
   // Sort prefixes by length (longest first) to match more specific ones first
-  const sortedPrefixes = [...NETWORK_PREFIXES].sort((a, b) => b.length - a.length);
+  const sortedPrefixes = [...allPrefixes].sort((a, b) => b.length - a.length);
 
   for (const prefix of sortedPrefixes) {
     // Pattern: prefix at start, followed by separator (|, :, -, /)
@@ -754,16 +764,16 @@ export function stripNetworkPrefix(name: string): string {
 /**
  * Detect if a stream name has a network prefix that can be stripped.
  */
-export function hasNetworkPrefix(name: string): boolean {
-  return stripNetworkPrefix(name) !== name.trim();
+export function hasNetworkPrefix(name: string, customPrefixes?: string[]): boolean {
+  return stripNetworkPrefix(name, customPrefixes) !== name.trim();
 }
 
 /**
  * Detect if a list of streams has network prefixes.
  */
-export function detectNetworkPrefixes(streams: { name: string }[]): boolean {
+export function detectNetworkPrefixes(streams: { name: string }[], customPrefixes?: string[]): boolean {
   for (const stream of streams) {
-    if (hasNetworkPrefix(stream.name)) {
+    if (hasNetworkPrefix(stream.name, customPrefixes)) {
       return true;
     }
   }
@@ -888,6 +898,7 @@ export interface NormalizeOptions {
   keepCountryPrefix?: boolean;       // Keep and normalize country prefix format
   countrySeparator?: NumberSeparator; // Separator to use when keeping country prefix
   stripNetworkPrefix?: boolean;      // Strip network prefixes like "CHAMP |", "PPV |" etc.
+  customNetworkPrefixes?: string[];  // Additional user-defined prefixes to strip
 }
 
 // Normalize a stream name for matching purposes
@@ -905,6 +916,7 @@ export function normalizeStreamName(name: string, timezonePreferenceOrOptions: T
   let keepCountry = false;
   let countrySeparator: NumberSeparator = '|';
   let stripNetwork = false;
+  let customNetworkPrefixes: string[] | undefined;
 
   if (typeof timezonePreferenceOrOptions === 'object') {
     timezonePreference = timezonePreferenceOrOptions.timezonePreference ?? 'both';
@@ -912,6 +924,7 @@ export function normalizeStreamName(name: string, timezonePreferenceOrOptions: T
     keepCountry = timezonePreferenceOrOptions.keepCountryPrefix ?? false;
     countrySeparator = timezonePreferenceOrOptions.countrySeparator ?? '|';
     stripNetwork = timezonePreferenceOrOptions.stripNetworkPrefix ?? false;
+    customNetworkPrefixes = timezonePreferenceOrOptions.customNetworkPrefixes;
   } else {
     timezonePreference = timezonePreferenceOrOptions;
   }
@@ -921,7 +934,7 @@ export function normalizeStreamName(name: string, timezonePreferenceOrOptions: T
   // Strip network prefix first (before country prefix, as network prefix may come before country)
   // e.g., "CHAMP | US: Queens Park Rangers" → "US: Queens Park Rangers" → then handle country
   if (stripNetwork) {
-    normalized = stripNetworkPrefix(normalized);
+    normalized = stripNetworkPrefix(normalized, customNetworkPrefixes);
   }
 
   // Handle country prefix based on options
@@ -1026,6 +1039,7 @@ export interface BulkCreateOptions {
   keepCountryPrefix?: boolean;       // Keep and normalize country prefix (e.g., "US: ESPN" -> "US | ESPN")
   countrySeparator?: NumberSeparator; // Separator for country prefix when keeping
   stripNetworkPrefix?: boolean;      // Strip network prefixes like "CHAMP |", "PPV |" etc.
+  customNetworkPrefixes?: string[];  // Additional user-defined prefixes to strip
   addChannelNumber?: boolean;
   numberSeparator?: NumberSeparator;
   prefixOrder?: PrefixOrder;         // Order of prefixes: 'number-first' (100 | US | Name) or 'country-first' (US | 100 | Name)
@@ -1045,6 +1059,7 @@ export async function bulkCreateChannelsFromStreams(
   let keepCountry = false;
   let countrySeparator: NumberSeparator = '|';
   let stripNetwork = false;
+  let customNetworkPrefixes: string[] | undefined;
   let addChannelNumber = false;
   let numberSeparator: NumberSeparator = '|';
   let prefixOrder: PrefixOrder = 'number-first';
@@ -1055,6 +1070,7 @@ export async function bulkCreateChannelsFromStreams(
     keepCountry = timezonePreferenceOrOptions.keepCountryPrefix ?? false;
     countrySeparator = timezonePreferenceOrOptions.countrySeparator ?? '|';
     stripNetwork = timezonePreferenceOrOptions.stripNetworkPrefix ?? false;
+    customNetworkPrefixes = timezonePreferenceOrOptions.customNetworkPrefixes;
     addChannelNumber = timezonePreferenceOrOptions.addChannelNumber ?? false;
     numberSeparator = timezonePreferenceOrOptions.numberSeparator ?? '|';
     prefixOrder = timezonePreferenceOrOptions.prefixOrder ?? 'number-first';
@@ -1080,6 +1096,7 @@ export async function bulkCreateChannelsFromStreams(
       keepCountryPrefix: keepCountry,
       countrySeparator,
       stripNetworkPrefix: stripNetwork,
+      customNetworkPrefixes,
     });
     const existing = streamsByNormalizedName.get(normalizedName);
     if (existing) {
