@@ -183,7 +183,7 @@ export interface UseEditModeReturn {
 
   // Commit/Discard
   getSummary: () => EditModeSummary;
-  commit: () => Promise<CommitResult>;
+  commit: (onProgress?: (progress: CommitProgress) => void) => Promise<CommitResult>;
   discard: () => void;
 
   // Check for conflicts with server
@@ -211,6 +211,15 @@ export interface EditModeBannerProps {
 }
 
 /**
+ * Progress info for commit operation
+ */
+export interface CommitProgress {
+  current: number;
+  total: number;
+  currentOperation: string;
+}
+
+/**
  * Props for EditModeExitDialog component
  */
 export interface EditModeExitDialogProps {
@@ -220,4 +229,5 @@ export interface EditModeExitDialogProps {
   onDiscard: () => void;
   onKeepEditing: () => void;
   isCommitting?: boolean;
+  commitProgress?: CommitProgress | null;
 }

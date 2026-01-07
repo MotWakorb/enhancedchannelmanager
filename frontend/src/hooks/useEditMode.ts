@@ -7,6 +7,7 @@ import type {
   UndoEntry,
   EditModeSummary,
   CommitResult,
+  CommitProgress,
   UseEditModeReturn,
   ApiCallSpec,
   Logo,
@@ -810,7 +811,7 @@ export function useEditMode({
   }, [state.baselineSnapshot, state.modifiedChannelIds]);
 
   // Commit all staged operations to server
-  const commit = useCallback(async (): Promise<CommitResult> => {
+  const commit = useCallback(async (onProgress?: (progress: CommitProgress) => void): Promise<CommitResult> => {
     if (!state.isActive || state.stagedOperations.length === 0) {
       return {
         success: true,
@@ -838,21 +839,32 @@ export function useEditMode({
     // Cache for logos to avoid creating duplicates
     const logoCache = new Map<string, Logo>();
 
-    try {
-      // First pass: collect all new group names that need to be created
-      // (from createChannel operations with newGroupName)
-      const newGroupNames = new Set<string>();
-      for (const operation of state.stagedOperations) {
-        if (operation.apiCall.type === 'createChannel') {
-          if (operation.apiCall.newGroupName) {
-            newGroupNames.add(operation.apiCall.newGroupName);
-          }
+    // Calculate total operations (groups + staged operations + fetch step)
+    const newGroupNames = new Set<string>();
+    for (const operation of state.stagedOperations) {
+      if (operation.apiCall.type === 'createChannel') {
+        if (operation.apiCall.newGroupName) {
+          newGroupNames.add(operation.apiCall.newGroupName);
         }
       }
+    }
+    const totalOperations = newGroupNames.size + state.stagedOperations.length + 1; // +1 for fetching updated channels
+    let currentOperation = 0;
 
+    const reportProgress = (description: string) => {
+      currentOperation++;
+      onProgress?.({
+        current: currentOperation,
+        total: totalOperations,
+        currentOperation: description,
+      });
+    };
+
+    try {
       // Create all new groups first
       for (const groupName of newGroupNames) {
         try {
+          reportProgress(`Creating group "${groupName}"`);
           const newGroup = await api.createChannelGroup(groupName);
           newGroupIdMap.set(groupName, newGroup.id);
           result.operationsApplied++;
@@ -879,6 +891,7 @@ export function useEditMode({
       for (const operation of state.stagedOperations) {
         try {
           const { apiCall } = operation;
+          reportProgress(operation.description);
 
           // Replace temp IDs with real IDs
           const resolveId = (id: number): number => tempIdMap.get(id) ?? id;
@@ -970,6 +983,7 @@ export function useEditMode({
       }
 
       // Fetch updated channels
+      reportProgress('Fetching updated channels');
       const allChannels: Channel[] = [];
       let page = 1;
       let hasMore = true;
