@@ -15,6 +15,7 @@ import type {
   EPGSource,
   EPGData,
   StreamProfile,
+  DummyEPGCustomProperties,
 } from '../types';
 
 const API_BASE = '/api';
@@ -441,6 +442,7 @@ export interface CreateEPGSourceRequest {
   is_active?: boolean;
   refresh_interval?: number;
   priority?: number;
+  custom_properties?: DummyEPGCustomProperties | Record<string, unknown> | null;
 }
 
 export async function createEPGSource(data: CreateEPGSourceRequest): Promise<EPGSource> {
