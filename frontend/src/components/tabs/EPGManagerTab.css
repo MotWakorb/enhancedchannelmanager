@@ -1,9 +1,11 @@
 .epg-manager-tab {
   display: flex;
   flex-direction: column;
+  min-height: 0;
   height: 100%;
   padding: 1.5rem;
-  overflow: auto;
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 
 .epg-header {
@@ -179,6 +181,7 @@
   border-radius: 8px;
   border: 1px solid var(--border-primary);
   overflow: hidden;
+  flex-shrink: 0;
 }
 
 .list-header {
@@ -627,7 +630,9 @@
 .dummy-epg-section {
   margin-top: 2rem;
   padding-top: 1.5rem;
+  padding-bottom: 1rem;
   border-top: 1px solid var(--border-primary);
+  flex-shrink: 0;
 }
 
 .section-header {

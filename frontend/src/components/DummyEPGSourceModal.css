@@ -1,10 +1,19 @@
 /* Dummy EPG Source Modal Styles */
 
+/* Ensure page behind modal doesn't scroll */
+.modal-overlay:has(.dummy-epg-modal) {
+  overflow: hidden;
+}
+
 .dummy-epg-modal {
   max-width: 700px;
   max-height: 90vh;
   display: flex;
   flex-direction: column;
+  background-color: var(--bg-tertiary);
+  border-radius: 12px;
+  width: 100%;
+  overflow: hidden;
 }
 
 .dummy-epg-modal .modal-header {
@@ -13,6 +22,7 @@
   align-items: center;
   padding: 1rem 1.5rem;
   border-bottom: 1px solid var(--border-primary);
+  flex-shrink: 0;
 }
 
 .dummy-epg-modal .modal-header h2 {
@@ -39,7 +49,9 @@
 .dummy-epg-modal .modal-body {
   flex: 1;
   overflow-y: auto;
+  overflow-x: hidden;
   padding: 1.5rem;
+  min-height: 0;
 }
 
 /* Form Elements */
@@ -292,6 +304,7 @@
   align-items: center;
   padding: 1rem 1.5rem;
   border-top: 1px solid var(--border-primary);
+  flex-shrink: 0;
 }
 
 .dummy-epg-modal .footer-buttons {
