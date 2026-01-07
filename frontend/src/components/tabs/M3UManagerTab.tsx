@@ -310,17 +310,24 @@ export function M3UManagerTab({
   const handleRefreshAll = async () => {
     setRefreshingAll(true);
     try {
-      await api.refreshAllM3UAccounts();
-      // Mark all active accounts as fetching
+      // Filter out the hidden "custom" account - don't refresh it
+      const accountsToRefresh = accounts.filter(
+        a => a.is_active && a.name.toLowerCase() !== 'custom'
+      );
+
+      // Trigger refresh for each account individually
+      await Promise.all(accountsToRefresh.map(a => api.refreshM3UAccount(a.id)));
+
+      // Mark these accounts as fetching
       setAccounts(prev => prev.map(a =>
-        a.is_active ? { ...a, status: 'fetching' } : a
+        a.is_active && a.name.toLowerCase() !== 'custom' ? { ...a, status: 'fetching' } : a
       ));
       // Poll for status updates
       const pollInterval = setInterval(async () => {
         const updatedAccounts = await api.getM3UAccounts();
         setAccounts(updatedAccounts);
         const stillRefreshing = updatedAccounts.some(
-          a => a.is_active && (a.status === 'fetching' || a.status === 'parsing')
+          a => a.is_active && a.name.toLowerCase() !== 'custom' && (a.status === 'fetching' || a.status === 'parsing')
         );
         if (!stillRefreshing) {
           clearInterval(pollInterval);
