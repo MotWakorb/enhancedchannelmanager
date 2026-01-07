@@ -13,6 +13,7 @@ interface AutoSyncSettingsModalProps {
   channelGroups: ChannelGroup[];
   channelProfiles: ChannelProfile[];
   streamProfiles: StreamProfile[];
+  onGroupsChange?: () => void;
 }
 
 export function AutoSyncSettingsModal({
@@ -25,6 +26,7 @@ export function AutoSyncSettingsModal({
   channelGroups,
   channelProfiles,
   streamProfiles,
+  onGroupsChange,
 }: AutoSyncSettingsModalProps) {
   // Form state
   const [epgSourceId, setEpgSourceId] = useState<string>('');
@@ -49,6 +51,9 @@ export function AutoSyncSettingsModal({
   const [groupSearch, setGroupSearch] = useState('');
   const [logoUrlInput, setLogoUrlInput] = useState('');
   const [uploadingLogo, setUploadingLogo] = useState(false);
+  const [showNewGroupInput, setShowNewGroupInput] = useState(false);
+  const [newGroupName, setNewGroupName] = useState('');
+  const [creatingGroup, setCreatingGroup] = useState(false);
 
   const profileDropdownRef = useRef<HTMLDivElement>(null);
   const logoDropdownRef = useRef<HTMLDivElement>(null);
@@ -196,6 +201,29 @@ export function AutoSyncSettingsModal({
     }
   };
 
+  // Handle creating a new channel group
+  const handleCreateGroup = async () => {
+    if (!newGroupName.trim()) return;
+
+    setCreatingGroup(true);
+    try {
+      const newGroup = await api.createChannelGroup(newGroupName.trim());
+      setGroupOverride(newGroup.id.toString());
+      setNewGroupName('');
+      setShowNewGroupInput(false);
+      setGroupDropdownOpen(false);
+      setGroupSearch('');
+      // Refresh the groups list
+      if (onGroupsChange) {
+        onGroupsChange();
+      }
+    } catch (err) {
+      console.error('Failed to create group:', err);
+    } finally {
+      setCreatingGroup(false);
+    }
+  };
+
   // Build and save custom properties
   const handleSave = () => {
     const props: AutoSyncCustomProperties = {};
@@ -304,6 +332,58 @@ export function AutoSyncSettingsModal({
                         autoFocus
                       />
                     </div>
+                    {/* Add New Group Input */}
+                    {showNewGroupInput ? (
+                      <div className="new-group-input">
+                        <input
+                          type="text"
+                          placeholder="New group name..."
+                          value={newGroupName}
+                          onChange={(e) => setNewGroupName(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              e.preventDefault();
+                              handleCreateGroup();
+                            } else if (e.key === 'Escape') {
+                              setShowNewGroupInput(false);
+                              setNewGroupName('');
+                            }
+                          }}
+                          autoFocus
+                        />
+                        <button
+                          type="button"
+                          onClick={handleCreateGroup}
+                          disabled={!newGroupName.trim() || creatingGroup}
+                          title="Create group"
+                        >
+                          {creatingGroup ? (
+                            <span className="material-icons spinning">sync</span>
+                          ) : (
+                            <span className="material-icons">check</span>
+                          )}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setShowNewGroupInput(false);
+                            setNewGroupName('');
+                          }}
+                          title="Cancel"
+                          className="cancel-btn"
+                        >
+                          <span className="material-icons">close</span>
+                        </button>
+                      </div>
+                    ) : (
+                      <div
+                        className="dropdown-option-item add-new-option"
+                        onClick={() => setShowNewGroupInput(true)}
+                      >
+                        <span className="material-icons">add</span>
+                        <span>Add new group...</span>
+                      </div>
+                    )}
                     <div className="dropdown-options">
                       <div
                         className={`dropdown-option-item ${!groupOverride ? 'selected' : ''}`}
