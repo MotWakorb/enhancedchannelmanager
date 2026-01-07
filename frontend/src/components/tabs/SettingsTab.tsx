@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import * as api from '../../services/api';
+import { NETWORK_PREFIXES } from '../../services/api';
 import type { Theme } from '../../services/api';
 import type { ChannelProfile } from '../../types';
 import './SettingsTab.css';
@@ -667,7 +668,8 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
                 if (e.key === 'Enter' && newPrefixInput.trim()) {
                   e.preventDefault();
                   const prefix = newPrefixInput.trim();
-                  if (!customNetworkPrefixes.includes(prefix)) {
+                  // Check if prefix already exists in custom list or built-in list
+                  if (!customNetworkPrefixes.includes(prefix) && !NETWORK_PREFIXES.includes(prefix)) {
                     setCustomNetworkPrefixes([...customNetworkPrefixes, prefix]);
                   }
                   setNewPrefixInput('');
@@ -680,12 +682,13 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
               className="btn-secondary custom-prefix-add-btn"
               onClick={() => {
                 const prefix = newPrefixInput.trim();
-                if (prefix && !customNetworkPrefixes.includes(prefix)) {
+                // Check if prefix already exists in custom list or built-in list
+                if (prefix && !customNetworkPrefixes.includes(prefix) && !NETWORK_PREFIXES.includes(prefix)) {
                   setCustomNetworkPrefixes([...customNetworkPrefixes, prefix]);
                 }
                 setNewPrefixInput('');
               }}
-              disabled={!newPrefixInput.trim()}
+              disabled={!newPrefixInput.trim() || NETWORK_PREFIXES.includes(newPrefixInput.trim())}
             >
               <span className="material-icons">add</span>
               Add

@@ -587,7 +587,7 @@ const QUALITY_SUFFIXES = [
 // Network/channel prefixes that should be stripped when followed by content names
 // These are networks that often prefix their content with their branding
 // Format: "NETWORK | Content Name" or "NETWORK: Content Name"
-const NETWORK_PREFIXES = [
+export const NETWORK_PREFIXES = [
   // Sports networks
   'CHAMP', 'CHAMPIONSHIP', 'PPV', 'PAY PER VIEW',
   'PREMIER', 'PREMIER LEAGUE', 'PL', 'PRIME',
