@@ -8,7 +8,7 @@ import {
 import { ChannelManagerTab } from './components/tabs/ChannelManagerTab';
 import { useChangeHistory, useEditMode } from './hooks';
 import * as api from './services/api';
-import type { Channel, ChannelGroup, ChannelProfile, Stream, M3UAccount, M3UGroupSetting, Logo, ChangeInfo, EPGData, StreamProfile, EPGSource, ChannelListFilterSettings } from './types';
+import type { Channel, ChannelGroup, ChannelProfile, Stream, M3UAccount, M3UGroupSetting, Logo, ChangeInfo, EPGData, StreamProfile, EPGSource, ChannelListFilterSettings, CommitProgress } from './types';
 import packageJson from '../package.json';
 import './App.css';
 
@@ -111,6 +111,7 @@ function App() {
 
   // Edit mode exit dialog state
   const [showExitDialog, setShowExitDialog] = useState(false);
+  const [commitProgress, setCommitProgress] = useState<CommitProgress | null>(null);
 
   // Tab navigation state
   const [activeTab, setActiveTab] = useState<TabId>('channel-manager');
@@ -255,7 +256,11 @@ function App() {
 
   // Handle dialog actions
   const handleApplyChanges = useCallback(async () => {
-    await commit();
+    setCommitProgress({ current: 0, total: 1, currentOperation: 'Starting...' });
+    await commit((progress) => {
+      setCommitProgress(progress);
+    });
+    setCommitProgress(null);
     setShowExitDialog(false);
     // Switch to pending tab if there was one
     if (pendingTabChange) {
@@ -1435,6 +1440,7 @@ function App() {
         onDiscard={handleDiscardChanges}
         onKeepEditing={handleKeepEditing}
         isCommitting={isCommitting}
+        commitProgress={commitProgress}
       />
 
       {/* Keep SettingsModal for first-run configuration */}
