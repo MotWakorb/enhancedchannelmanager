@@ -217,12 +217,16 @@ export function GuideTab({ channels: propChannels, logos: propLogos }: GuideTabP
     return options;
   }, []);
 
-  // Get hour options
+  // Get hour options (12-hour format)
   const hourOptions = useMemo(() => {
-    return Array.from({ length: 24 }, (_, i) => ({
-      value: i,
-      label: `${i.toString().padStart(2, '0')}:00`,
-    }));
+    return Array.from({ length: 24 }, (_, i) => {
+      const hour12 = i === 0 ? 12 : i > 12 ? i - 12 : i;
+      const ampm = i < 12 ? 'AM' : 'PM';
+      return {
+        value: i,
+        label: `${hour12}:00 ${ampm}`,
+      };
+    });
   }, []);
 
   // Render channel row
