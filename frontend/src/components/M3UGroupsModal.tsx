@@ -41,6 +41,7 @@ export function M3UGroupsModal({
   const [groups, setGroups] = useState<GroupWithName[]>([]);
   const [search, setSearch] = useState('');
   const [hideDisabled, setHideDisabled] = useState(false);
+  const [showOnlyAutoSync, setShowOnlyAutoSync] = useState(false);
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -121,13 +122,18 @@ export function M3UGroupsModal({
     }
   }, [isOpen, account?.id]);
 
-  // Filter and sort groups by search and hideDisabled
+  // Filter and sort groups by search, hideDisabled, and showOnlyAutoSync
   const filteredGroups = useMemo(() => {
     let filtered = groups;
 
     // Filter by hideDisabled
     if (hideDisabled) {
       filtered = filtered.filter(g => g.enabled);
+    }
+
+    // Filter by showOnlyAutoSync
+    if (showOnlyAutoSync) {
+      filtered = filtered.filter(g => g.auto_channel_sync);
     }
 
     // Filter by search
@@ -138,7 +144,7 @@ export function M3UGroupsModal({
 
     // Sort alphabetically with natural sort
     return [...filtered].sort((a, b) => naturalCompare(a.name, b.name));
-  }, [groups, search, hideDisabled]);
+  }, [groups, search, hideDisabled, showOnlyAutoSync]);
 
   const handleToggleEnabled = (groupId: number) => {
     setGroups(prev => prev.map(g =>
@@ -308,6 +314,8 @@ export function M3UGroupsModal({
             <div className="empty-state">
               {search ? (
                 <p>No groups match "{search}"</p>
+              ) : showOnlyAutoSync ? (
+                <p>No auto-sync groups. Uncheck "Auto-sync only" to see all groups.</p>
               ) : hideDisabled ? (
                 <p>No enabled groups. Uncheck "Hide disabled" to see all groups.</p>
               ) : (
@@ -391,14 +399,24 @@ export function M3UGroupsModal({
         </div>
 
         <div className="modal-footer">
-          <label className="hide-disabled-checkbox">
-            <input
-              type="checkbox"
-              checked={hideDisabled}
-              onChange={(e) => setHideDisabled(e.target.checked)}
-            />
-            <span>Hide disabled</span>
-          </label>
+          <div className="footer-filters">
+            <label className="filter-checkbox">
+              <input
+                type="checkbox"
+                checked={hideDisabled}
+                onChange={(e) => setHideDisabled(e.target.checked)}
+              />
+              <span>Hide disabled</span>
+            </label>
+            <label className="filter-checkbox">
+              <input
+                type="checkbox"
+                checked={showOnlyAutoSync}
+                onChange={(e) => setShowOnlyAutoSync(e.target.checked)}
+              />
+              <span>Auto-sync only</span>
+            </label>
+          </div>
           <div className="footer-buttons">
             <button className="btn-secondary" onClick={onClose} disabled={saving}>
               Cancel

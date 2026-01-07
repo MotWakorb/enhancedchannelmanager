@@ -117,7 +117,14 @@
   font-size: 16px;
 }
 
-.hide-disabled-checkbox {
+/* Footer Filters */
+.footer-filters {
+  display: flex;
+  align-items: center;
+  gap: 1.25rem;
+}
+
+.filter-checkbox {
   display: flex;
   align-items: center;
   gap: 0.5rem;
@@ -127,7 +134,7 @@
   user-select: none;
 }
 
-.hide-disabled-checkbox input[type="checkbox"] {
+.filter-checkbox input[type="checkbox"] {
   width: 16px;
   height: 16px;
   cursor: pointer;
