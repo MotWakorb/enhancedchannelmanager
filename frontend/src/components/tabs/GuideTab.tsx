@@ -60,6 +60,9 @@ export function GuideTab({
     return now.getHours();
   });
 
+  // Current time state for now-playing highlights (updates every minute)
+  const [currentTime, setCurrentTime] = useState(() => new Date());
+
   // Refs for synchronized scrolling
   const gridContentRef = useRef<HTMLDivElement>(null);
   const timelineHeaderRef = useRef<HTMLDivElement>(null);
@@ -165,21 +168,28 @@ export function GuideTab({
     }
   }, []);
 
+  // Update current time every minute for now-playing highlights
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setCurrentTime(new Date());
+    }, 60000); // Update every minute
+    return () => clearInterval(interval);
+  }, []);
+
   // Auto-scroll to current time on load
   useEffect(() => {
     if (!loading && gridContentRef.current) {
-      const now = new Date();
-      const isToday = selectedDate === now.toISOString().split('T')[0];
+      const isToday = selectedDate === currentTime.toISOString().split('T')[0];
 
       if (isToday) {
         // Calculate scroll position to center current time
-        const minutesSinceStart = (now.getHours() - startHour) * 60 + now.getMinutes();
+        const minutesSinceStart = (currentTime.getHours() - startHour) * 60 + currentTime.getMinutes();
         const scrollPosition = (minutesSinceStart / SLOT_MINUTES) * SLOT_WIDTH_PX;
         const centerOffset = gridContentRef.current.clientWidth / 2;
         gridContentRef.current.scrollLeft = Math.max(0, scrollPosition - centerOffset);
       }
     }
-  }, [loading, selectedDate, startHour]);
+  }, [loading, selectedDate, startHour, currentTime]);
 
   // Get programs for a channel within the visible time range
   const getChannelPrograms = useCallback((channel: Channel): EPGProgram[] => {
@@ -216,11 +226,10 @@ export function GuideTab({
 
   // Check if a program is currently airing
   const isNowPlaying = useCallback((program: EPGProgram): boolean => {
-    const now = new Date();
     const progStart = new Date(program.start_time);
     const progEnd = new Date(program.end_time);
-    return now >= progStart && now < progEnd;
-  }, []);
+    return currentTime >= progStart && currentTime < progEnd;
+  }, [currentTime]);
 
   // Format time for display
   const formatTime = (date: Date): string => {
@@ -320,20 +329,19 @@ export function GuideTab({
 
   // Calculate current time indicator position
   const nowIndicatorPosition = useMemo(() => {
-    const now = new Date();
-    const isToday = selectedDate === now.toISOString().split('T')[0];
+    const isToday = selectedDate === currentTime.toISOString().split('T')[0];
 
     if (!isToday) return null;
 
     // Check if current time is within the visible range
-    if (now < timeRange.start || now >= timeRange.end) return null;
+    if (currentTime < timeRange.start || currentTime >= timeRange.end) return null;
 
     // Calculate position in pixels from the start of the timeline
-    const minutesSinceStart = (now.getTime() - timeRange.start.getTime()) / (1000 * 60);
+    const minutesSinceStart = (currentTime.getTime() - timeRange.start.getTime()) / (1000 * 60);
     const position = (minutesSinceStart / SLOT_MINUTES) * SLOT_WIDTH_PX;
 
     return position;
-  }, [selectedDate, timeRange]);
+  }, [selectedDate, timeRange, currentTime]);
 
   if (loading && channels.length === 0) {
     return (
