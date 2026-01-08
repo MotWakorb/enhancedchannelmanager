@@ -7,6 +7,7 @@ A professional-grade web interface for managing IPTV configurations with Dispatc
 - **M3U Manager** - Full M3U account management with linked accounts and group synchronization
 - **EPG Manager** - Manage EPG sources with drag-and-drop priority ordering
 - **Channel Manager** - Full-featured channel and stream management with split-pane layout
+- **Guide** - TV Guide with EPG grid view showing program schedules
 - **Logo Manager** - Logo management (coming soon)
 - **Settings** - Configure Dispatcharr connection, channel defaults, and channel profiles
 
@@ -57,12 +58,28 @@ A professional-grade web interface for managing IPTV configurations with Dispatc
 ### EPG Management
 
 - **Add EPG Sources** - Configure XMLTV URLs or Schedules Direct accounts
+- **Dummy EPG Sources** - Create custom EPG entries for channels without guide data
+  - Configure title patterns, descriptions, and colors
+  - Set custom time slots and durations
+  - Preview how dummy EPG will appear before saving
 - **Drag-and-Drop Priority** - Reorder EPG sources to set matching priority (higher priority sources take precedence)
 - **Source Status** - View status of each source (success, error, fetching, parsing)
 - **Refresh Sources** - Manually refresh individual sources or all at once
 - **Enable/Disable** - Toggle sources active/inactive without deleting
 - **Channel Count** - See how many EPG channels each source provides
 - **Last Updated** - Track when each source was last refreshed
+
+### TV Guide
+
+- **EPG Grid View** - Full program guide showing all channels with their schedules
+- **Now-Playing Highlight** - Currently airing programs are highlighted with accent color
+- **Current Time Indicator** - Red vertical line shows the current time position
+- **Channel Profile Filter** - Filter the guide by channel profile to see only specific channels
+- **Date Navigation** - Browse programs from past days through upcoming week
+- **Time Navigation** - Jump to any hour of the day
+- **Click-to-Edit** - Click any channel in the guide to edit its metadata (logo, EPG, name, etc.)
+- **Auto-Scroll** - Guide automatically centers on current time when viewing today
+- **Program Details** - Hover over programs to see full title, subtitle, and time range
 
 ### Bulk Channel Creation
 
@@ -301,7 +318,12 @@ uvicorn main:app --reload
 
 ### EPG
 - `GET /api/epg/sources` - List EPG sources
+- `POST /api/epg/sources` - Create EPG source (including dummy sources)
+- `PATCH /api/epg/sources/{id}` - Update EPG source
+- `DELETE /api/epg/sources/{id}` - Delete EPG source
+- `POST /api/epg/sources/{id}/refresh` - Refresh EPG source
 - `GET /api/epg/data` - Search EPG data (paginated)
+- `GET /api/epg/grid` - Get EPG program grid for guide view
 
 ### Stream Profiles
 - `GET /api/stream-profiles` - List available profiles
