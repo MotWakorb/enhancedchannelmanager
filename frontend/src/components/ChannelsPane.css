@@ -347,6 +347,18 @@
   flex: 1;
 }
 
+/* Search row with expand/collapse buttons */
+.search-row {
+  display: flex;
+  gap: 0.5rem;
+  align-items: stretch;
+}
+
+.search-row .search-input {
+  flex: 1;
+  min-width: 0;
+}
+
 .search-input {
   width: 100%;
   padding: 0.5rem;
@@ -525,6 +537,47 @@
 .group-option-count {
   font-size: 0.75rem;
   color: var(--text-secondary);
+}
+
+/* Expand/Collapse All Buttons */
+.expand-collapse-buttons {
+  display: flex;
+  gap: 2px;
+}
+
+.expand-collapse-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  background-color: var(--input-bg);
+  border: 1px solid var(--border-secondary);
+  border-radius: 4px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: background-color 0.15s, border-color 0.15s, color 0.15s;
+  padding: 0;
+}
+
+.expand-collapse-btn:first-child {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+  border-right: none;
+}
+
+.expand-collapse-btn:last-child {
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+}
+
+.expand-collapse-btn:hover {
+  background-color: var(--bg-hover);
+  border-color: var(--border-secondary);
+  color: var(--text-primary);
+}
+
+.expand-collapse-btn .material-icons {
+  font-size: 18px;
 }
 
 /* Filter Settings Dropdown */
@@ -2694,6 +2747,48 @@
   color: var(--warning);
   font-size: 0.85rem;
   line-height: 1.4;
+}
+
+/* Conflict warning (info style - blue) */
+.cross-group-move-conflict-warning {
+  display: flex;
+  gap: 0.75rem;
+  padding: 0.875rem;
+  background-color: rgba(59, 130, 246, 0.1);
+  border: 1px solid rgba(59, 130, 246, 0.3);
+  border-radius: 6px;
+  margin-bottom: 1.25rem;
+}
+
+.cross-group-move-conflict-warning .conflict-icon {
+  color: #3b82f6;
+  font-size: 1.25rem;
+  flex-shrink: 0;
+}
+
+.cross-group-move-conflict-warning .conflict-warning-text {
+  flex: 1;
+}
+
+.cross-group-move-conflict-warning .conflict-warning-text strong {
+  display: block;
+  color: #60a5fa;
+  font-size: 0.9rem;
+  margin-bottom: 0.25rem;
+}
+
+.cross-group-move-conflict-warning .conflict-warning-text p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+  line-height: 1.4;
+}
+
+.cross-group-move-conflict-warning .conflict-warning-text p strong {
+  display: inline;
+  color: var(--text-primary);
+  font-size: inherit;
+  margin-bottom: 0;
 }
 
 .cross-group-move-options {

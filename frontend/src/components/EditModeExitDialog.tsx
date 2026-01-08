@@ -9,6 +9,7 @@ export function EditModeExitDialog({
   onDiscard,
   onKeepEditing,
   isCommitting = false,
+  commitProgress = null,
 }: EditModeExitDialogProps) {
   const [showDetails, setShowDetails] = useState(false);
 
@@ -16,15 +17,38 @@ export function EditModeExitDialog({
 
   const hasChanges = summary.totalOperations > 0;
 
+  // Calculate progress percentage
+  const progressPercent = commitProgress
+    ? Math.round((commitProgress.current / commitProgress.total) * 100)
+    : 0;
+
   return (
-    <div className="edit-mode-dialog-overlay" onClick={onKeepEditing}>
+    <div className="edit-mode-dialog-overlay" onClick={isCommitting ? undefined : onKeepEditing}>
       <div className="edit-mode-dialog" onClick={(e) => e.stopPropagation()}>
         <div className="edit-mode-dialog-header">
-          <h2>Exit Edit Mode</h2>
+          <h2>{isCommitting ? 'Applying Changes' : 'Exit Edit Mode'}</h2>
         </div>
 
         <div className="edit-mode-dialog-content">
-          {hasChanges ? (
+          {isCommitting && commitProgress ? (
+            <div className="commit-progress-section">
+              <div className="commit-progress-bar-container">
+                <div
+                  className="commit-progress-bar"
+                  style={{ width: `${progressPercent}%` }}
+                />
+              </div>
+              <div className="commit-progress-info">
+                <span className="commit-progress-count">
+                  {commitProgress.current} / {commitProgress.total}
+                </span>
+                <span className="commit-progress-percent">{progressPercent}%</span>
+              </div>
+              <div className="commit-progress-operation">
+                {commitProgress.currentOperation}
+              </div>
+            </div>
+          ) : hasChanges ? (
             <>
               <p className="edit-mode-dialog-summary-intro">
                 You have {summary.totalOperations} pending change{summary.totalOperations !== 1 ? 's' : ''}:
@@ -117,31 +141,30 @@ export function EditModeExitDialog({
           )}
         </div>
 
-        <div className="edit-mode-dialog-actions">
-          <button
-            className="edit-mode-dialog-btn secondary"
-            onClick={onKeepEditing}
-            disabled={isCommitting}
-          >
-            Keep Editing
-          </button>
-          <button
-            className="edit-mode-dialog-btn danger"
-            onClick={onDiscard}
-            disabled={isCommitting}
-          >
-            Discard
-          </button>
-          {hasChanges && (
+        {!isCommitting && (
+          <div className="edit-mode-dialog-actions">
             <button
-              className="edit-mode-dialog-btn primary"
-              onClick={onApply}
-              disabled={isCommitting}
+              className="edit-mode-dialog-btn secondary"
+              onClick={onKeepEditing}
             >
-              {isCommitting ? 'Applying...' : 'Apply All'}
+              Keep Editing
             </button>
-          )}
-        </div>
+            <button
+              className="edit-mode-dialog-btn danger"
+              onClick={onDiscard}
+            >
+              Discard
+            </button>
+            {hasChanges && (
+              <button
+                className="edit-mode-dialog-btn primary"
+                onClick={onApply}
+              >
+                Apply All
+              </button>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );

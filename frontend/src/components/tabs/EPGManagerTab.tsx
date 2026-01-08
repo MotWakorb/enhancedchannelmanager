@@ -18,6 +18,7 @@ import {
 import { CSS } from '@dnd-kit/utilities';
 import type { EPGSource, EPGSourceType } from '../../types';
 import * as api from '../../services/api';
+import { DummyEPGSourceModal } from '../DummyEPGSourceModal';
 import './EPGManagerTab.css';
 
 interface SortableEPGSourceRowProps {
@@ -397,13 +398,21 @@ function EPGSourceModal({ isOpen, source, onClose, onSave }: EPGSourceModalProps
   );
 }
 
-export function EPGManagerTab() {
+interface EPGManagerTabProps {
+  onSourcesChange?: () => void;
+}
+
+export function EPGManagerTab({ onSourcesChange }: EPGManagerTabProps) {
   const [sources, setSources] = useState<EPGSource[]>([]);
+  const [dummySources, setDummySources] = useState<EPGSource[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
   const [editingSource, setEditingSource] = useState<EPGSource | null>(null);
   const [refreshingAll, setRefreshingAll] = useState(false);
+  // Dummy EPG modal state
+  const [dummyModalOpen, setDummyModalOpen] = useState(false);
+  const [editingDummySource, setEditingDummySource] = useState<EPGSource | null>(null);
 
   const sensors = useSensors(
     useSensor(PointerSensor),
@@ -415,11 +424,15 @@ export function EPGManagerTab() {
   const loadSources = useCallback(async () => {
     try {
       const data = await api.getEPGSources();
-      // Filter out dummy EPG sources and sort by priority (descending)
+      // Separate standard and dummy EPG sources, sort by priority (descending)
       const standardSources = data
         .filter(s => s.source_type !== 'dummy')
         .sort((a, b) => b.priority - a.priority);
+      const dummyEpgSources = data
+        .filter(s => s.source_type === 'dummy')
+        .sort((a, b) => a.name.localeCompare(b.name));
       setSources(standardSources);
+      setDummySources(dummyEpgSources);
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load EPG sources');
@@ -466,9 +479,15 @@ export function EPGManagerTab() {
     setModalOpen(true);
   };
 
-  const handleEditSource = (source: EPGSource) => {
-    setEditingSource(source);
-    setModalOpen(true);
+  const handleEditSource = async (source: EPGSource) => {
+    try {
+      // Fetch full source details to ensure we have all properties
+      const fullSource = await api.getEPGSource(source.id);
+      setEditingSource(fullSource);
+      setModalOpen(true);
+    } catch (err) {
+      setError('Failed to load EPG source details');
+    }
   };
 
   const handleDeleteSource = async (source: EPGSource) => {
@@ -479,6 +498,7 @@ export function EPGManagerTab() {
     try {
       await api.deleteEPGSource(source.id);
       await loadSources();
+      onSourcesChange?.();
     } catch (err) {
       setError('Failed to delete EPG source');
     }
@@ -524,6 +544,57 @@ export function EPGManagerTab() {
       await api.createEPGSource(data);
     }
     await loadSources();
+    onSourcesChange?.();
+  };
+
+  // Dummy EPG handlers
+  const handleAddDummySource = () => {
+    setEditingDummySource(null);
+    setDummyModalOpen(true);
+  };
+
+  const handleEditDummySource = async (source: EPGSource) => {
+    try {
+      // Fetch full source details to get custom_properties
+      const fullSource = await api.getEPGSource(source.id);
+      setEditingDummySource(fullSource);
+      setDummyModalOpen(true);
+    } catch (err) {
+      setError('Failed to load EPG source details');
+    }
+  };
+
+  const handleDeleteDummySource = async (source: EPGSource) => {
+    if (!confirm(`Are you sure you want to delete "${source.name}"?`)) {
+      return;
+    }
+
+    try {
+      await api.deleteEPGSource(source.id);
+      await loadSources();
+      onSourcesChange?.();
+    } catch (err) {
+      setError('Failed to delete dummy EPG source');
+    }
+  };
+
+  const handleToggleDummyActive = async (source: EPGSource) => {
+    try {
+      await api.updateEPGSource(source.id, { is_active: !source.is_active });
+      await loadSources();
+    } catch (err) {
+      setError('Failed to update dummy EPG source');
+    }
+  };
+
+  const handleSaveDummySource = async (data: api.CreateEPGSourceRequest) => {
+    if (editingDummySource) {
+      await api.updateEPGSource(editingDummySource.id, data);
+    } else {
+      await api.createEPGSource(data);
+    }
+    await loadSources();
+    onSourcesChange?.();
   };
 
   const handleRefreshAll = async () => {
@@ -647,11 +718,85 @@ export function EPGManagerTab() {
         </div>
       )}
 
+      {/* Dummy EPG Sources Section */}
+      <div className="dummy-epg-section">
+        <div className="section-header">
+          <div className="section-title">
+            <h3>Dummy EPG Sources</h3>
+            <p className="section-description">
+              Pattern-based EPG sources that generate programs from channel/stream names.
+            </p>
+          </div>
+          <button className="btn-primary" onClick={handleAddDummySource}>
+            <span className="material-icons">add</span>
+            Add Dummy EPG
+          </button>
+        </div>
+
+        {dummySources.length === 0 ? (
+          <div className="dummy-empty-state">
+            <span className="material-icons">auto_fix_high</span>
+            <p>No dummy EPG sources. Create one to generate EPG data from channel names using regex patterns.</p>
+          </div>
+        ) : (
+          <div className="dummy-sources-list">
+            {dummySources.map((source) => (
+              <div key={source.id} className={`dummy-source-row ${!source.is_active ? 'inactive' : ''}`}>
+                <div className={`dummy-status ${source.is_active ? 'active' : 'disabled'}`}>
+                  <span className="material-icons">
+                    {source.is_active ? 'check_circle' : 'block'}
+                  </span>
+                </div>
+                <div className="dummy-info">
+                  <div className="dummy-name">{source.name}</div>
+                  <div className="dummy-details">
+                    <span className="dummy-type">Dummy</span>
+                    <span className="dummy-pattern">Pattern-based generation</span>
+                  </div>
+                </div>
+                <div className="dummy-actions">
+                  <button
+                    className="action-btn"
+                    onClick={() => handleToggleDummyActive(source)}
+                    title={source.is_active ? 'Disable' : 'Enable'}
+                  >
+                    <span className="material-icons">
+                      {source.is_active ? 'toggle_on' : 'toggle_off'}
+                    </span>
+                  </button>
+                  <button
+                    className="action-btn"
+                    onClick={() => handleEditDummySource(source)}
+                    title="Edit"
+                  >
+                    <span className="material-icons">edit</span>
+                  </button>
+                  <button
+                    className="action-btn delete"
+                    onClick={() => handleDeleteDummySource(source)}
+                    title="Delete"
+                  >
+                    <span className="material-icons">delete</span>
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
       <EPGSourceModal
         isOpen={modalOpen}
         source={editingSource}
         onClose={() => setModalOpen(false)}
         onSave={handleSaveSource}
+      />
+
+      <DummyEPGSourceModal
+        isOpen={dummyModalOpen}
+        source={editingDummySource}
+        onClose={() => setDummyModalOpen(false)}
+        onSave={handleSaveDummySource}
       />
     </div>
   );

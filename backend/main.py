@@ -6,8 +6,6 @@ from pydantic import BaseModel
 from typing import Optional
 import os
 import re
-import sys
-import traceback
 import logging
 
 from dispatcharr_client import get_client, reset_client
@@ -117,6 +115,7 @@ class SettingsRequest(BaseModel):
     default_channel_profile_ids: list[int] = []
     linked_m3u_accounts: list[list[int]] = []
     epg_auto_match_threshold: int = 80
+    custom_network_prefixes: list[str] = []
 
 
 class SettingsResponse(BaseModel):
@@ -137,6 +136,7 @@ class SettingsResponse(BaseModel):
     default_channel_profile_ids: list[int]
     linked_m3u_accounts: list[list[int]]
     epg_auto_match_threshold: int
+    custom_network_prefixes: list[str]
 
 
 class TestConnectionRequest(BaseModel):
@@ -167,6 +167,7 @@ async def get_current_settings():
         default_channel_profile_ids=settings.default_channel_profile_ids,
         linked_m3u_accounts=settings.linked_m3u_accounts,
         epg_auto_match_threshold=settings.epg_auto_match_threshold,
+        custom_network_prefixes=settings.custom_network_prefixes,
     )
 
 
@@ -208,6 +209,7 @@ async def update_settings(request: SettingsRequest):
         default_channel_profile_ids=request.default_channel_profile_ids,
         linked_m3u_accounts=request.linked_m3u_accounts,
         epg_auto_match_threshold=request.epg_auto_match_threshold,
+        custom_network_prefixes=request.custom_network_prefixes,
     )
     save_settings(new_settings)
     clear_settings_cache()
@@ -747,6 +749,19 @@ async def get_epg_data_by_id(data_id: int):
     client = get_client()
     try:
         return await client.get_epg_data_by_id(data_id)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/epg/grid")
+async def get_epg_grid(start: Optional[str] = None, end: Optional[str] = None):
+    """Get EPG grid (programs from previous hour + next 24 hours).
+
+    Optionally accepts start and end datetime parameters in ISO format.
+    """
+    client = get_client()
+    try:
+        return await client.get_epg_grid(start=start, end=end)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

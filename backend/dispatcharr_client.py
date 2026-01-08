@@ -612,6 +612,25 @@ class DispatcharrClient:
         response.raise_for_status()
         return response.json()
 
+    async def get_epg_grid(self, start: str = None, end: str = None) -> list:
+        """Get EPG programs.
+
+        Uses /api/epg/programs/ endpoint which returns all programs.
+
+        Args:
+            start: Optional start datetime in ISO format (not currently used)
+            end: Optional end datetime in ISO format (not currently used)
+        """
+        response = await self._request("GET", "/api/epg/programs/")
+        response.raise_for_status()
+        data = response.json()
+        # Handle both list and dict responses
+        if isinstance(data, list):
+            return data
+        elif isinstance(data, dict):
+            return data.get("data", data.get("results", []))
+        return []
+
     # -------------------------------------------------------------------------
     # Stream Profiles
     # -------------------------------------------------------------------------
@@ -619,12 +638,6 @@ class DispatcharrClient:
     async def get_stream_profiles(self) -> list:
         """Get all stream profiles."""
         response = await self._request("GET", "/api/core/streamprofiles/")
-        response.raise_for_status()
-        return response.json()
-
-    async def get_stream_profile(self, profile_id: int) -> dict:
-        """Get a single stream profile by ID."""
-        response = await self._request("GET", f"/api/core/streamprofiles/{profile_id}/")
         response.raise_for_status()
         return response.json()
 
