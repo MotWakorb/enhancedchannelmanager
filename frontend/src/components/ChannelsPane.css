@@ -813,6 +813,13 @@
   color: var(--button-text);
 }
 
+.group-subtext {
+  font-size: 0.75rem;
+  font-weight: 400;
+  color: var(--text-muted);
+  font-style: italic;
+}
+
 .group-count {
   font-size: 0.8rem;
   color: var(--text-muted);
