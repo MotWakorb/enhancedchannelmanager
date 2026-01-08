@@ -140,6 +140,7 @@ A unique workflow that lets you stage changes locally before committing to the s
 - **Shift + Click** - Select range of channels
 - **Visual Indicators** - Selection checkboxes and highlighting
 - **Bulk Operations** - Move or modify multiple channels at once
+- **Normalize Names** - Standardize selected channel names with title case and league prefix formatting (e.g., "NFL ARIZONA CARDINALS" → "NFL: Arizona Cardinals")
 
 ### Sort & Renumber
 

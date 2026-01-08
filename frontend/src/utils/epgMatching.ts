@@ -941,3 +941,88 @@ export function getEPGSourceName(
   const source = epgSources.find(s => s.id === epgData.epg_source);
   return source?.name || 'Unknown';
 }
+
+/**
+ * Convert a string to title case, keeping certain small words lowercase
+ * (except at the start of the string).
+ *
+ * Examples:
+ *   "ARIZONA CARDINALS" -> "Arizona Cardinals"
+ *   "the quick brown fox" -> "The Quick Brown Fox"
+ *   "war of the worlds" -> "War of the Worlds"
+ */
+function toTitleCase(str: string): string {
+  // Common words that should stay lowercase (except at start)
+  const smallWords = ['a', 'an', 'the', 'and', 'but', 'or', 'for', 'nor', 'of', 'at', 'by', 'to', 'in', 'on'];
+
+  return str
+    .toLowerCase()
+    .split(/\s+/)
+    .map((word, index) => {
+      if (index > 0 && smallWords.includes(word)) return word;
+      return word.charAt(0).toUpperCase() + word.slice(1);
+    })
+    .join(' ');
+}
+
+/**
+ * Normalize a channel display name by:
+ * 1. Preserving channel number prefix (e.g., "700 | ")
+ * 2. Detecting and standardizing league prefix (e.g., "NFL" from "NFL ARIZONA CARDINALS")
+ * 3. Applying title case to the content name
+ * 4. Re-joining with a standardized separator
+ *
+ * Examples:
+ *   "700 | NFL ARIZONA CARDINALS" -> "700 | NFL: Arizona Cardinals"
+ *   "701 | NFL ATLANTA FALCONS" -> "701 | NFL: Atlanta Falcons"
+ *   "NBA CHICAGO BULLS" -> "NBA: Chicago Bulls"
+ *   "ESPN HD" -> "Espn Hd"
+ *
+ * @param name - The channel name to normalize
+ * @param separator - The separator to use between league and name (default: ':')
+ * @returns The normalized channel name
+ */
+export function normalizeChannelDisplayName(name: string, separator: string = ':'): string {
+  // Extract channel number prefix (e.g., "700 | ")
+  // Support formats: "700 | Name", "700 - Name", "700: Name"
+  const numberMatch = name.match(/^(\d+(?:\.\d+)?\s*[|\-:]\s*)(.+)$/);
+  const numberPrefix = numberMatch ? numberMatch[1] : '';
+  const baseName = numberMatch ? numberMatch[2] : name;
+
+  // Check for league prefix
+  const leagueInfo = extractLeaguePrefix(baseName);
+  if (leagueInfo) {
+    const titleCasedName = toTitleCase(leagueInfo.name);
+    const league = leagueInfo.league.toUpperCase();
+    return `${numberPrefix}${league}${separator} ${titleCasedName}`;
+  }
+
+  // No league prefix - just apply title case
+  return `${numberPrefix}${toTitleCase(baseName)}`;
+}
+
+/**
+ * Preview channel name normalizations for a list of channels.
+ * Returns only channels whose names would actually change.
+ *
+ * @param channels - Array of channels to preview
+ * @returns Array of changes with id, current name, and normalized name
+ */
+export function previewNameNormalizations(
+  channels: Array<{ id: number; name: string }>
+): Array<{ id: number; current: string; normalized: string }> {
+  const changes: Array<{ id: number; current: string; normalized: string }> = [];
+
+  for (const channel of channels) {
+    const normalized = normalizeChannelDisplayName(channel.name);
+    if (normalized !== channel.name) {
+      changes.push({
+        id: channel.id,
+        current: channel.name,
+        normalized,
+      });
+    }
+  }
+
+  return changes;
+}
