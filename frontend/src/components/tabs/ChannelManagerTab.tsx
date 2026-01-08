@@ -148,6 +148,8 @@ export interface ChannelManagerTabProps {
     prefixOrder?: PrefixOrder,
     stripNetworkPrefix?: boolean,
     customNetworkPrefixes?: string[],
+    stripNetworkSuffix?: boolean,
+    customNetworkSuffixes?: string[],
     profileIds?: number[],
     pushDownOnConflict?: boolean
   ) => Promise<void>;

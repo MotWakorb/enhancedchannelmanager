@@ -326,6 +326,7 @@ export interface SettingsResponse {
   linked_m3u_accounts: number[][];  // List of link groups, each is a list of account IDs
   epg_auto_match_threshold: number;  // 0-100, confidence score threshold for auto-matching
   custom_network_prefixes: string[];  // User-defined network prefixes to strip
+  custom_network_suffixes: string[];  // User-defined network suffixes to strip
 }
 
 export interface TestConnectionResult {
@@ -356,6 +357,7 @@ export async function saveSettings(settings: {
   linked_m3u_accounts?: number[][];  // Optional - list of link groups
   epg_auto_match_threshold?: number;  // Optional - 0-100, defaults to 80
   custom_network_prefixes?: string[];  // Optional - user-defined network prefixes
+  custom_network_suffixes?: string[];  // Optional - user-defined network suffixes
 }): Promise<{ status: string; configured: boolean }> {
   return fetchJson(`${API_BASE}/settings`, {
     method: 'POST',
@@ -614,6 +616,22 @@ export const NETWORK_PREFIXES = [
   'RSN',
 ];
 
+// Network/channel suffixes that should be stripped from channel names
+// These are commonly appended tags that don't contribute to channel identity
+// Format: "Channel Name (SUFFIX)" or "Channel Name [SUFFIX]" or "Channel Name SUFFIX"
+export const NETWORK_SUFFIXES = [
+  // Language/region tags
+  'ENGLISH', 'ENG', 'SPANISH', 'ESP', 'FRENCH', 'FRA', 'GERMAN', 'DEU', 'PORTUGUESE', 'POR',
+  // Content type tags
+  'LIVE', 'REPLAY', 'DELAY', 'BACKUP', 'ALT', 'ALTERNATE', 'MAIN',
+  // Source/provider tags
+  'FEED', 'MULTI', 'CLEAN', 'RAW', 'PRIMARY', 'SECONDARY',
+  // Event-specific tags
+  'PPV', 'EVENT', 'SPECIAL', 'EXCLUSIVE',
+  // Technical tags (less commonly used - quality tags are handled separately)
+  'MPEG2', 'MPEG4', 'AVC', 'STEREO', 'MONO', '5.1', 'SURROUND',
+];
+
 // Quality priority for stream ordering (lower number = higher priority/quality)
 // Streams without quality indicators default to 720p position (priority 30)
 const QUALITY_PRIORITY: Record<string, number> = {
@@ -792,6 +810,87 @@ export function detectNetworkPrefixes(streams: { name: string }[], customPrefixe
   return false;
 }
 
+/**
+ * Strip network suffix from a stream name if present.
+ * Network suffixes are things like "(ENGLISH)", "[LIVE]", "BACKUP" that follow content names.
+ * Handles parentheses, brackets, and bare suffixes.
+ *
+ * Examples:
+ * - "ESPN (ENGLISH)" → "ESPN"
+ * - "Sky Sports [LIVE]" → "Sky Sports"
+ * - "HBO BACKUP" → "HBO"
+ * - "CNN Feed" → "CNN"
+ *
+ * @param name - The stream name to process
+ * @param customSuffixes - Optional additional suffixes to check (merged with built-in list)
+ */
+export function stripNetworkSuffix(name: string, customSuffixes?: string[]): string {
+  let result = name.trim();
+
+  // Merge built-in suffixes with custom suffixes (if provided)
+  const allSuffixes = customSuffixes && customSuffixes.length > 0
+    ? [...NETWORK_SUFFIXES, ...customSuffixes]
+    : NETWORK_SUFFIXES;
+
+  // Sort suffixes by length (longest first) to match more specific ones first
+  const sortedSuffixes = [...allSuffixes].sort((a, b) => b.length - a.length);
+
+  for (const suffix of sortedSuffixes) {
+    // Pattern 1: Suffix in parentheses at end - e.g., "ESPN (ENGLISH)"
+    const parenPattern = new RegExp(`\\s*\\(\\s*${suffix}\\s*\\)\\s*$`, 'i');
+    if (parenPattern.test(result)) {
+      result = result.replace(parenPattern, '').trim();
+      continue;
+    }
+
+    // Pattern 2: Suffix in brackets at end - e.g., "ESPN [LIVE]"
+    const bracketPattern = new RegExp(`\\s*\\[\\s*${suffix}\\s*\\]\\s*$`, 'i');
+    if (bracketPattern.test(result)) {
+      result = result.replace(bracketPattern, '').trim();
+      continue;
+    }
+
+    // Pattern 3: Bare suffix at end with separator - e.g., "ESPN - ENGLISH", "ESPN | BACKUP"
+    // The content before must be at least 3 characters (to avoid stripping too much)
+    const bareSepPattern = new RegExp(`^(.{3,})[\\s\\-|:]+${suffix}\\s*$`, 'i');
+    const bareSepMatch = result.match(bareSepPattern);
+    if (bareSepMatch) {
+      result = bareSepMatch[1].trim();
+      continue;
+    }
+
+    // Pattern 4: Bare suffix at end with just space - e.g., "ESPN BACKUP"
+    // Must have word boundary before suffix
+    const bareSpacePattern = new RegExp(`^(.{3,})\\s+${suffix}\\s*$`, 'i');
+    const bareSpaceMatch = result.match(bareSpacePattern);
+    if (bareSpaceMatch) {
+      result = bareSpaceMatch[1].trim();
+      continue;
+    }
+  }
+
+  return result;
+}
+
+/**
+ * Detect if a stream name has a network suffix that can be stripped.
+ */
+export function hasNetworkSuffix(name: string, customSuffixes?: string[]): boolean {
+  return stripNetworkSuffix(name, customSuffixes) !== name.trim();
+}
+
+/**
+ * Detect if a list of streams has network suffixes.
+ */
+export function detectNetworkSuffixes(streams: { name: string }[], customSuffixes?: string[]): boolean {
+  for (const stream of streams) {
+    if (hasNetworkSuffix(stream.name, customSuffixes)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 // Common country prefixes found in stream names
 // These typically appear at the start of the name followed by a separator
 const COUNTRY_PREFIXES = [
@@ -911,6 +1010,8 @@ export interface NormalizeOptions {
   countrySeparator?: NumberSeparator; // Separator to use when keeping country prefix
   stripNetworkPrefix?: boolean;      // Strip network prefixes like "CHAMP |", "PPV |" etc.
   customNetworkPrefixes?: string[];  // Additional user-defined prefixes to strip
+  stripNetworkSuffix?: boolean;      // Strip network suffixes like "(ENGLISH)", "[LIVE]", "BACKUP" etc.
+  customNetworkSuffixes?: string[];  // Additional user-defined suffixes to strip
 }
 
 // Normalize a stream name for matching purposes
@@ -929,6 +1030,8 @@ export function normalizeStreamName(name: string, timezonePreferenceOrOptions: T
   let countrySeparator: NumberSeparator = '|';
   let stripNetwork = false;
   let customNetworkPrefixes: string[] | undefined;
+  let stripSuffix = false;
+  let customNetworkSuffixes: string[] | undefined;
 
   if (typeof timezonePreferenceOrOptions === 'object') {
     timezonePreference = timezonePreferenceOrOptions.timezonePreference ?? 'both';
@@ -937,6 +1040,8 @@ export function normalizeStreamName(name: string, timezonePreferenceOrOptions: T
     countrySeparator = timezonePreferenceOrOptions.countrySeparator ?? '|';
     stripNetwork = timezonePreferenceOrOptions.stripNetworkPrefix ?? false;
     customNetworkPrefixes = timezonePreferenceOrOptions.customNetworkPrefixes;
+    stripSuffix = timezonePreferenceOrOptions.stripNetworkSuffix ?? false;
+    customNetworkSuffixes = timezonePreferenceOrOptions.customNetworkSuffixes;
   } else {
     timezonePreference = timezonePreferenceOrOptions;
   }
@@ -947,6 +1052,12 @@ export function normalizeStreamName(name: string, timezonePreferenceOrOptions: T
   // e.g., "CHAMP | US: Queens Park Rangers" → "US: Queens Park Rangers" → then handle country
   if (stripNetwork) {
     normalized = stripNetworkPrefix(normalized, customNetworkPrefixes);
+  }
+
+  // Strip network suffix (after prefix, before country handling)
+  // e.g., "ESPN (ENGLISH)" → "ESPN"
+  if (stripSuffix) {
+    normalized = stripNetworkSuffix(normalized, customNetworkSuffixes);
   }
 
   // Handle country prefix based on options
@@ -1052,6 +1163,8 @@ export interface BulkCreateOptions {
   countrySeparator?: NumberSeparator; // Separator for country prefix when keeping
   stripNetworkPrefix?: boolean;      // Strip network prefixes like "CHAMP |", "PPV |" etc.
   customNetworkPrefixes?: string[];  // Additional user-defined prefixes to strip
+  stripNetworkSuffix?: boolean;      // Strip network suffixes like "(ENGLISH)", "[LIVE]", "BACKUP" etc.
+  customNetworkSuffixes?: string[];  // Additional user-defined suffixes to strip
   addChannelNumber?: boolean;
   numberSeparator?: NumberSeparator;
   prefixOrder?: PrefixOrder;         // Order of prefixes: 'number-first' (100 | US | Name) or 'country-first' (US | 100 | Name)
@@ -1072,6 +1185,8 @@ export async function bulkCreateChannelsFromStreams(
   let countrySeparator: NumberSeparator = '|';
   let stripNetwork = false;
   let customNetworkPrefixes: string[] | undefined;
+  let stripSuffix = false;
+  let customNetworkSuffixes: string[] | undefined;
   let addChannelNumber = false;
   let numberSeparator: NumberSeparator = '|';
   let prefixOrder: PrefixOrder = 'number-first';
@@ -1083,6 +1198,8 @@ export async function bulkCreateChannelsFromStreams(
     countrySeparator = timezonePreferenceOrOptions.countrySeparator ?? '|';
     stripNetwork = timezonePreferenceOrOptions.stripNetworkPrefix ?? false;
     customNetworkPrefixes = timezonePreferenceOrOptions.customNetworkPrefixes;
+    stripSuffix = timezonePreferenceOrOptions.stripNetworkSuffix ?? false;
+    customNetworkSuffixes = timezonePreferenceOrOptions.customNetworkSuffixes;
     addChannelNumber = timezonePreferenceOrOptions.addChannelNumber ?? false;
     numberSeparator = timezonePreferenceOrOptions.numberSeparator ?? '|';
     prefixOrder = timezonePreferenceOrOptions.prefixOrder ?? 'number-first';
@@ -1109,6 +1226,8 @@ export async function bulkCreateChannelsFromStreams(
       countrySeparator,
       stripNetworkPrefix: stripNetwork,
       customNetworkPrefixes,
+      stripNetworkSuffix: stripSuffix,
+      customNetworkSuffixes,
     });
     const existing = streamsByNormalizedName.get(normalizedName);
     if (existing) {

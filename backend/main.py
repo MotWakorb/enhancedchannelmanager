@@ -116,6 +116,7 @@ class SettingsRequest(BaseModel):
     linked_m3u_accounts: list[list[int]] = []
     epg_auto_match_threshold: int = 80
     custom_network_prefixes: list[str] = []
+    custom_network_suffixes: list[str] = []
 
 
 class SettingsResponse(BaseModel):
@@ -137,6 +138,7 @@ class SettingsResponse(BaseModel):
     linked_m3u_accounts: list[list[int]]
     epg_auto_match_threshold: int
     custom_network_prefixes: list[str]
+    custom_network_suffixes: list[str]
 
 
 class TestConnectionRequest(BaseModel):
@@ -168,6 +170,7 @@ async def get_current_settings():
         linked_m3u_accounts=settings.linked_m3u_accounts,
         epg_auto_match_threshold=settings.epg_auto_match_threshold,
         custom_network_prefixes=settings.custom_network_prefixes,
+        custom_network_suffixes=settings.custom_network_suffixes,
     )
 
 
@@ -210,6 +213,7 @@ async def update_settings(request: SettingsRequest):
         linked_m3u_accounts=request.linked_m3u_accounts,
         epg_auto_match_threshold=request.epg_auto_match_threshold,
         custom_network_prefixes=request.custom_network_prefixes,
+        custom_network_suffixes=request.custom_network_suffixes,
     )
     save_settings(new_settings)
     clear_settings_cache()
