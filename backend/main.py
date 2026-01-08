@@ -754,11 +754,14 @@ async def get_epg_data_by_id(data_id: int):
 
 
 @app.get("/api/epg/grid")
-async def get_epg_grid():
-    """Get EPG grid (programs from previous hour + next 24 hours)."""
+async def get_epg_grid(start: Optional[str] = None, end: Optional[str] = None):
+    """Get EPG grid (programs from previous hour + next 24 hours).
+
+    Optionally accepts start and end datetime parameters in ISO format.
+    """
     client = get_client()
     try:
-        return await client.get_epg_grid()
+        return await client.get_epg_grid(start=start, end=end)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
