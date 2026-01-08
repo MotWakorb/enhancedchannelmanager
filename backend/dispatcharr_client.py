@@ -613,19 +613,15 @@ class DispatcharrClient:
         return response.json()
 
     async def get_epg_grid(self, start: str = None, end: str = None) -> list:
-        """Get EPG grid (programs from previous hour + next 24 hours).
+        """Get EPG programs.
+
+        Uses /api/epg/programs/ endpoint which returns all programs.
 
         Args:
-            start: Optional start datetime in ISO format
-            end: Optional end datetime in ISO format
+            start: Optional start datetime in ISO format (not currently used)
+            end: Optional end datetime in ISO format (not currently used)
         """
-        params = {}
-        if start:
-            params["start"] = start
-        if end:
-            params["end"] = end
-
-        response = await self._request("GET", "/api/epg/grid/", params=params)
+        response = await self._request("GET", "/api/epg/programs/")
         response.raise_for_status()
         data = response.json()
         # Handle both list and dict responses

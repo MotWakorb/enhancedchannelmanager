@@ -788,6 +788,12 @@ function App() {
     setSelectedChannel(channel);
   };
 
+  // Handle channel click from Guide tab - navigate to channel manager and select the channel
+  const handleGuideChannelClick = useCallback((channel: Channel) => {
+    setSelectedChannel(channel);
+    setActiveTab('channel-manager');
+  }, []);
+
   // Multi-select handlers
   const handleToggleChannelSelection = useCallback((channelId: number, addToSelection: boolean) => {
     setSelectedChannelIds((prev) => {
@@ -1600,7 +1606,7 @@ function App() {
             />
           )}
           {activeTab === 'epg-manager' && <EPGManagerTab onSourcesChange={loadEpgSources} />}
-          {activeTab === 'guide' && <GuideTab channels={channels} logos={logos} />}
+          {activeTab === 'guide' && <GuideTab channels={channels} logos={logos} onChannelClick={handleGuideChannelClick} />}
           {activeTab === 'logo-manager' && <LogoManagerTab />}
           {activeTab === 'settings' && <SettingsTab onSaved={handleSettingsSaved} channelProfiles={channelProfiles} />}
         </Suspense>

@@ -212,6 +212,15 @@
   position: sticky;
   left: 0;
   z-index: 10;
+  transition: background-color 0.15s;
+}
+
+.channel-info.clickable {
+  cursor: pointer;
+}
+
+.channel-info.clickable:hover {
+  background-color: var(--bg-tertiary);
 }
 
 .channel-number {

@@ -12,9 +12,11 @@ interface GuideTabProps {
   // Optional: pass existing data from parent to avoid re-fetching
   channels?: Channel[];
   logos?: Logo[];
+  // Callback when a channel is clicked for editing
+  onChannelClick?: (channel: Channel) => void;
 }
 
-export function GuideTab({ channels: propChannels, logos: propLogos }: GuideTabProps) {
+export function GuideTab({ channels: propChannels, logos: propLogos, onChannelClick }: GuideTabProps) {
   // Data state
   const [channels, setChannels] = useState<Channel[]>(propChannels ?? []);
   const [logos, setLogos] = useState<Logo[]>(propLogos ?? []);
@@ -235,9 +237,19 @@ export function GuideTab({ channels: propChannels, logos: propLogos }: GuideTabP
     const hasEpg = channelPrograms.length > 0;
     const logo = channel.logo_id ? logoMap.get(channel.logo_id) : null;
 
+    const handleChannelClick = () => {
+      if (onChannelClick) {
+        onChannelClick(channel);
+      }
+    };
+
     return (
       <div key={channel.id} className="guide-row">
-        <div className="channel-info">
+        <div
+          className={`channel-info ${onChannelClick ? 'clickable' : ''}`}
+          onClick={handleChannelClick}
+          title={onChannelClick ? `Click to edit ${channel.name}` : undefined}
+        >
           <span className="channel-number">{channel.channel_number}</span>
           {logo && (
             <img
