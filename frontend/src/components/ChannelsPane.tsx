@@ -1129,7 +1129,9 @@ export function ChannelsPane({
   const handleMoveToGroup = (targetGroupId: number | null) => {
     if (!contextMenu) return;
 
-    const channelsToMove = localChannels.filter(ch => contextMenu.channelIds.includes(ch.id));
+    const channelsToMove = localChannels
+      .filter(ch => contextMenu.channelIds.includes(ch.id))
+      .sort((a, b) => naturalCompare(a.name, b.name));
     if (channelsToMove.length === 0) return;
 
     const targetGroupName = targetGroupId === null
@@ -1619,7 +1621,9 @@ export function ChannelsPane({
 
       // If we have selected channels (from context menu), move them to the new group
       if (selectedChannelIds.size > 0) {
-        const channelsToMove = localChannels.filter(ch => selectedChannelIds.has(ch.id));
+        const channelsToMove = localChannels
+          .filter(ch => selectedChannelIds.has(ch.id))
+          .sort((a, b) => naturalCompare(a.name, b.name));
         if (channelsToMove.length > 0) {
           const sourceGroupId = channelsToMove[0].channel_group_id;
           const sourceGroupName = sourceGroupId === null
