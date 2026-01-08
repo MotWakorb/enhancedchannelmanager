@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import type { Stream, M3UAccount, ChannelGroup, ChannelProfile } from '../types';
 import { useSelection } from '../hooks';
-import { normalizeStreamName, detectRegionalVariants, filterStreamsByTimezone, detectCountryPrefixes, getUniqueCountryPrefixes, detectNetworkPrefixes, type TimezonePreference, type NormalizeOptions, type NumberSeparator, type PrefixOrder } from '../services/api';
+import { normalizeStreamName, detectRegionalVariants, filterStreamsByTimezone, detectCountryPrefixes, getUniqueCountryPrefixes, detectNetworkPrefixes, detectNetworkSuffixes, type TimezonePreference, type NormalizeOptions, type NumberSeparator, type PrefixOrder } from '../services/api';
 import { naturalCompare } from '../utils/naturalSort';
 import './StreamsPane.css';
 
@@ -21,6 +21,7 @@ export interface ChannelDefaults {
   timezonePreference: string;
   defaultChannelProfileId?: number | null;
   customNetworkPrefixes?: string[];
+  customNetworkSuffixes?: string[];
 }
 
 interface StreamsPaneProps {
@@ -69,6 +70,8 @@ interface StreamsPaneProps {
     prefixOrder?: PrefixOrder,
     stripNetworkPrefix?: boolean,
     customNetworkPrefixes?: string[],
+    stripNetworkSuffix?: boolean,
+    customNetworkSuffixes?: string[],
     profileIds?: number[],
     pushDownOnConflict?: boolean
   ) => Promise<void>;
@@ -196,6 +199,7 @@ export function StreamsPane({
   const [bulkCreateSeparator, setBulkCreateSeparator] = useState<NumberSeparator>('|');
   const [bulkCreatePrefixOrder, setBulkCreatePrefixOrder] = useState<PrefixOrder>('number-first');
   const [bulkCreateStripNetwork, setBulkCreateStripNetwork] = useState(false);
+  const [bulkCreateStripSuffix, setBulkCreateStripSuffix] = useState(false);
   const [bulkCreateSelectedProfiles, setBulkCreateSelectedProfiles] = useState<Set<number>>(new Set());
   const [bulkCreateGroupSearch, setBulkCreateGroupSearch] = useState('');
   const [bulkCreateGroupDropdownOpen, setBulkCreateGroupDropdownOpen] = useState(false);
@@ -722,6 +726,11 @@ export function StreamsPane({
     return detectNetworkPrefixes(streamsToCreate, channelDefaults?.customNetworkPrefixes);
   }, [streamsToCreate, channelDefaults?.customNetworkPrefixes]);
 
+  // Detect if streams have network suffixes (ENGLISH, LIVE, BACKUP, etc. + custom)
+  const hasNetworkSuffixes = useMemo(() => {
+    return detectNetworkSuffixes(streamsToCreate, channelDefaults?.customNetworkSuffixes);
+  }, [streamsToCreate, channelDefaults?.customNetworkSuffixes]);
+
   // Get unique country prefixes for display
   const uniqueCountryPrefixes = useMemo(() => {
     return getUniqueCountryPrefixes(streamsToCreate);
@@ -742,6 +751,8 @@ export function StreamsPane({
       countrySeparator: bulkCreateCountrySeparator,
       stripNetworkPrefix: bulkCreateStripNetwork,
       customNetworkPrefixes: channelDefaults?.customNetworkPrefixes,
+      stripNetworkSuffix: bulkCreateStripSuffix,
+      customNetworkSuffixes: channelDefaults?.customNetworkSuffixes,
     };
 
     const unsortedStreamsByNormalizedName = new Map<string, Stream[]>();
@@ -786,7 +797,7 @@ export function StreamsPane({
     const hasDuplicates = duplicateCount > 0;
     const excludedCount = streamsToCreate.length - filteredStreams.length;
     return { uniqueCount, duplicateCount, hasDuplicates, streamsByNormalizedName, excludedCount };
-  }, [streamsToCreate, bulkCreateTimezone, bulkCreateStripCountry, bulkCreateKeepCountry, bulkCreateCountrySeparator, bulkCreateStripNetwork]);
+  }, [streamsToCreate, bulkCreateTimezone, bulkCreateStripCountry, bulkCreateKeepCountry, bulkCreateCountrySeparator, bulkCreateStripNetwork, bulkCreateStripSuffix]);
 
   // Actually perform the bulk create with the specified pushDown option
   // startingNumberOverride: optionally override the starting number (used by "insert at end" option)
@@ -831,6 +842,8 @@ export function StreamsPane({
             bulkCreatePrefixOrder,
             bulkCreateStripNetwork,
             channelDefaults?.customNetworkPrefixes,
+            bulkCreateStripSuffix,
+            channelDefaults?.customNetworkSuffixes,
             bulkCreateSelectedProfiles.size > 0 ? Array.from(bulkCreateSelectedProfiles) : undefined,
             pushDown
           );
@@ -879,6 +892,8 @@ export function StreamsPane({
           bulkCreatePrefixOrder,
           bulkCreateStripNetwork,
           channelDefaults?.customNetworkPrefixes,
+          bulkCreateStripSuffix,
+          channelDefaults?.customNetworkSuffixes,
           bulkCreateSelectedProfiles.size > 0 ? Array.from(bulkCreateSelectedProfiles) : undefined,
           pushDown
         );
@@ -918,6 +933,7 @@ export function StreamsPane({
     bulkCreateSeparator,
     bulkCreatePrefixOrder,
     bulkCreateStripNetwork,
+    bulkCreateStripSuffix,
     bulkCreateSelectedProfiles,
     channelGroups,
     onBulkCreateFromGroup,
@@ -1788,7 +1804,8 @@ export function StreamsPane({
                   <span className="naming-options-summary">
                     {(() => {
                       const options: string[] = [];
-                      if (bulkCreateStripNetwork) options.push('Strip network');
+                      if (bulkCreateStripNetwork) options.push('Strip prefix');
+                      if (bulkCreateStripSuffix) options.push('Strip suffix');
                       if (bulkCreateStripCountry) options.push('Remove country');
                       if (bulkCreateKeepCountry) options.push(`Keep country (${bulkCreateCountrySeparator})`);
                       if (bulkCreateAddNumber) options.push(`Add numbers (${bulkCreateSeparator})`);
@@ -1818,6 +1835,21 @@ export function StreamsPane({
                           <span>Strip network prefixes</span>
                         </label>
                         <span className="option-hint">e.g., "CHAMP | Queens Park Rangers" → "Queens Park Rangers"</span>
+                      </div>
+                    )}
+
+                    {/* Network suffix option - only show if network suffixes detected */}
+                    {hasNetworkSuffixes && (
+                      <div className="naming-option-group">
+                        <label className="checkbox-option">
+                          <input
+                            type="checkbox"
+                            checked={bulkCreateStripSuffix}
+                            onChange={(e) => setBulkCreateStripSuffix(e.target.checked)}
+                          />
+                          <span>Strip network suffixes</span>
+                        </label>
+                        <span className="option-hint">e.g., "ESPN (ENGLISH)" → "ESPN"</span>
                       </div>
                     )}
 

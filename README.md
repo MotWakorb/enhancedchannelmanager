@@ -97,6 +97,7 @@ A professional-grade web interface for managing IPTV configurations with Dispatc
 - **Quality Variant Normalization** - Streams with quality suffixes (FHD, UHD, HD, SD, 4K, 1080P, etc.) are automatically merged into one channel
 - **Smart Stream Ordering** - Streams are automatically ordered by quality (UHD/4K → FHD/1080p → HD/720p → SD) and interleaved by provider for failover redundancy (e.g., Provider1-FHD, Provider2-FHD, Provider1-HD, Provider2-HD)
 - **Network Prefix Stripping** - Option to strip network prefixes (e.g., "CHAMP | Queens Park Rangers" → "Queens Park Rangers") to merge streams from different networks into the same channel
+- **Network Suffix Stripping** - Option to strip network suffixes (e.g., "ESPN (ENGLISH)" → "ESPN", "HBO BACKUP" → "HBO") to clean up channel names and merge language/feed variants
 - **East/West Timezone Preference** - When streams have regional variants (e.g., "Movies Channel" and "Movies Channel West"), choose to create East feeds only, West feeds only, or keep both as separate channels
 - **Country Prefix Options** - Choose to remove country prefixes (e.g., "US: Sports Channel" → "Sports Channel") or keep them with normalized formatting (e.g., "US: Sports Channel" → "US | Sports Channel") with configurable separator
 - **Channel Number Prefix** - Option to prepend channel numbers to names with configurable separator (-, :, or |), e.g., "100 | Sports Channel"
@@ -197,6 +198,12 @@ The Settings tab features sidebar navigation with multiple sections:
 #### General Settings
 - **Dispatcharr Connection** - Configure server URL, username, and password
 - **Test Connection** - Verify connectivity before saving
+
+#### Custom Network Prefixes
+Add custom prefixes to strip during bulk channel creation. These are merged with the built-in list (CHAMP, PPV, NFL, NBA, etc.) when "Strip network prefixes" is enabled.
+
+#### Custom Network Suffixes
+Add custom suffixes to strip during bulk channel creation. These are merged with the built-in list (ENGLISH, LIVE, BACKUP, FEED, etc.) when "Strip network suffixes" is enabled.
 
 #### Channel Defaults
 Default options applied when using bulk channel creation:

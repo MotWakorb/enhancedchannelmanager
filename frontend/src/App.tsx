@@ -1078,6 +1078,8 @@ function App() {
       prefixOrder?: api.PrefixOrder,
       stripNetworkPrefix?: boolean,
       customNetworkPrefixes?: string[],
+      stripNetworkSuffix?: boolean,
+      customNetworkSuffixes?: string[],
       profileIds?: number[],
       pushDownOnConflict?: boolean
     ) => {
@@ -1103,6 +1105,8 @@ function App() {
           countrySeparator: countrySeparator ?? '|',
           stripNetworkPrefix: stripNetworkPrefix ?? false,
           customNetworkPrefixes: customNetworkPrefixes,
+          stripNetworkSuffix: stripNetworkSuffix ?? false,
+          customNetworkSuffixes: customNetworkSuffixes,
         };
 
         // Filter streams by timezone preference

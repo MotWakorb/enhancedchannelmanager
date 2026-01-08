@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import * as api from '../../services/api';
-import { NETWORK_PREFIXES } from '../../services/api';
+import { NETWORK_PREFIXES, NETWORK_SUFFIXES } from '../../services/api';
 import type { Theme } from '../../services/api';
 import type { ChannelProfile } from '../../types';
 import './SettingsTab.css';
@@ -33,6 +33,8 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
   const [epgAutoMatchThreshold, setEpgAutoMatchThreshold] = useState(80);
   const [customNetworkPrefixes, setCustomNetworkPrefixes] = useState<string[]>([]);
   const [newPrefixInput, setNewPrefixInput] = useState('');
+  const [customNetworkSuffixes, setCustomNetworkSuffixes] = useState<string[]>([]);
+  const [newSuffixInput, setNewSuffixInput] = useState('');
 
   // Appearance settings
   const [showStreamUrls, setShowStreamUrls] = useState(true);
@@ -77,6 +79,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
       setDefaultChannelProfileIds(settings.default_channel_profile_ids);
       setEpgAutoMatchThreshold(settings.epg_auto_match_threshold ?? 80);
       setCustomNetworkPrefixes(settings.custom_network_prefixes ?? []);
+      setCustomNetworkSuffixes(settings.custom_network_suffixes ?? []);
       setTestResult(null);
       setError(null);
     } catch (err) {
@@ -153,6 +156,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
         default_channel_profile_ids: defaultChannelProfileIds,
         epg_auto_match_threshold: epgAutoMatchThreshold,
         custom_network_prefixes: customNetworkPrefixes,
+        custom_network_suffixes: customNetworkSuffixes,
       });
       setOriginalUrl(url);
       setOriginalUsername(username);
@@ -727,6 +731,91 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
 
           {customNetworkPrefixes.length === 0 && (
             <p className="custom-prefix-empty">No custom prefixes defined. Built-in prefixes will be used.</p>
+          )}
+        </div>
+      </div>
+
+      <div className="settings-section">
+        <div className="settings-section-header">
+          <span className="material-icons">label_off</span>
+          <h3>Custom Network Suffixes</h3>
+        </div>
+
+        <div className="form-group">
+          <p className="form-hint" style={{ marginTop: 0, marginBottom: '0.75rem' }}>
+            Add custom suffixes to strip during bulk channel creation. These are merged with the built-in
+            list (ENGLISH, LIVE, BACKUP, etc.) when "Strip network suffixes" is enabled.
+          </p>
+
+          <div className="custom-prefix-input-row">
+            <input
+              type="text"
+              placeholder="Enter suffix (e.g., SIMULCAST)"
+              value={newSuffixInput}
+              onChange={(e) => setNewSuffixInput(e.target.value.toUpperCase())}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && newSuffixInput.trim()) {
+                  e.preventDefault();
+                  const suffix = newSuffixInput.trim();
+                  // Check if suffix already exists in custom list or built-in list
+                  if (!customNetworkSuffixes.includes(suffix) && !NETWORK_SUFFIXES.includes(suffix)) {
+                    setCustomNetworkSuffixes([...customNetworkSuffixes, suffix]);
+                  }
+                  setNewSuffixInput('');
+                }
+              }}
+              className="custom-prefix-input"
+            />
+            <button
+              type="button"
+              className="btn-secondary custom-prefix-add-btn"
+              onClick={() => {
+                const suffix = newSuffixInput.trim();
+                // Check if suffix already exists in custom list or built-in list
+                if (suffix && !customNetworkSuffixes.includes(suffix) && !NETWORK_SUFFIXES.includes(suffix)) {
+                  setCustomNetworkSuffixes([...customNetworkSuffixes, suffix]);
+                }
+                setNewSuffixInput('');
+              }}
+              disabled={!newSuffixInput.trim() || NETWORK_SUFFIXES.includes(newSuffixInput.trim()) || customNetworkSuffixes.includes(newSuffixInput.trim())}
+            >
+              <span className="material-icons">add</span>
+              Add
+            </button>
+          </div>
+
+          {newSuffixInput.trim() && NETWORK_SUFFIXES.includes(newSuffixInput.trim()) && (
+            <p className="custom-prefix-warning">
+              "{newSuffixInput.trim()}" is already a built-in suffix
+            </p>
+          )}
+
+          {newSuffixInput.trim() && !NETWORK_SUFFIXES.includes(newSuffixInput.trim()) && customNetworkSuffixes.includes(newSuffixInput.trim()) && (
+            <p className="custom-prefix-warning">
+              "{newSuffixInput.trim()}" is already in your custom list
+            </p>
+          )}
+
+          {customNetworkSuffixes.length > 0 && (
+            <div className="custom-prefix-list">
+              {customNetworkSuffixes.map((suffix) => (
+                <div key={suffix} className="custom-prefix-tag">
+                  <span>{suffix}</span>
+                  <button
+                    type="button"
+                    className="custom-prefix-remove"
+                    onClick={() => setCustomNetworkSuffixes(customNetworkSuffixes.filter(s => s !== suffix))}
+                    title="Remove suffix"
+                  >
+                    <span className="material-icons">close</span>
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {customNetworkSuffixes.length === 0 && (
+            <p className="custom-prefix-empty">No custom suffixes defined. Built-in suffixes will be used.</p>
           )}
         </div>
       </div>

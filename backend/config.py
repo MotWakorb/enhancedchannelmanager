@@ -45,6 +45,9 @@ class DispatcharrSettings(BaseModel):
     # Custom network prefixes to strip during bulk channel creation
     # These are merged with the built-in list (CHAMP, PPV, NFL, etc.)
     custom_network_prefixes: list[str] = []
+    # Custom network suffixes to strip during bulk channel creation
+    # These are merged with the built-in list (ENGLISH, LIVE, BACKUP, etc.)
+    custom_network_suffixes: list[str] = []
 
     def is_configured(self) -> bool:
         return bool(self.url and self.username and self.password)
