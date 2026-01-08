@@ -4980,8 +4980,8 @@ export function ChannelsPane({
               };
               submenu.appendChild(uncategorizedOption);
 
-              // Group options
-              channelGroups.forEach(group => {
+              // Group options (only show visible/selected groups)
+              channelGroups.filter(group => selectedGroups.includes(group.id)).forEach(group => {
                 const option = document.createElement('div');
                 option.className = 'context-menu-item';
                 option.textContent = group.name;
