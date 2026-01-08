@@ -254,6 +254,7 @@ function App() {
       setShowExitDialog(true);
     } else {
       rawExitEditMode();
+      setSelectedChannelIds(new Set());
     }
   }, [stagedOperationCount, rawExitEditMode]);
 
@@ -274,6 +275,7 @@ function App() {
 
   const handleDiscardChanges = useCallback(() => {
     discard();
+    setSelectedChannelIds(new Set());
     setShowExitDialog(false);
     // Switch to pending tab if there was one
     if (pendingTabChange) {
@@ -299,6 +301,7 @@ function App() {
     if (isEditMode && newTab !== 'channel-manager') {
       // Exit edit mode when leaving Channel Manager
       rawExitEditMode();
+      setSelectedChannelIds(new Set());
     }
 
     setActiveTab(newTab);
