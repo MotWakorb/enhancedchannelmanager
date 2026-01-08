@@ -67,7 +67,10 @@ export interface EPGAssignment {
 /**
  * Extract league prefix from a channel name.
  * Returns the league code and the remaining name without the prefix.
- * e.g., "NFL: Arizona Cardinals" -> { league: "nfl", name: "Arizona Cardinals" }
+ * Handles multiple formats:
+ * - "NFL: Arizona Cardinals" -> { league: "nfl", name: "Arizona Cardinals" }
+ * - "NFL | Arizona Cardinals" -> { league: "nfl", name: "Arizona Cardinals" }
+ * - "NFL ARIZONA CARDINALS" -> { league: "nfl", name: "ARIZONA CARDINALS" }
  *
  * @param name - Channel name to extract league from
  * @returns Object with league (lowercase) and remaining name, or null if no league found
@@ -79,13 +82,26 @@ export function extractLeaguePrefix(name: string): { league: string; name: strin
   const sortedPrefixes = [...LEAGUE_PREFIXES].sort((a, b) => b.length - a.length);
 
   for (const prefix of sortedPrefixes) {
-    // Match prefix followed by separator (colon, pipe, dash) and content
-    const pattern = new RegExp(`^${prefix}\\s*[:|\\-]\\s*(.+)$`, 'i');
-    const match = trimmed.match(pattern);
-    if (match) {
+    // Pattern 1: Match prefix followed by separator (colon, pipe, dash) and content
+    // e.g., "NFL: Arizona Cardinals", "NFL | Atlanta Falcons", "NFL - Chicago Bears"
+    const separatorPattern = new RegExp(`^${prefix}\\s*[:|\\-]\\s*(.+)$`, 'i');
+    const separatorMatch = trimmed.match(separatorPattern);
+    if (separatorMatch) {
       return {
         league: prefix.toLowerCase().replace(/\s+/g, ''),
-        name: match[1].trim(),
+        name: separatorMatch[1].trim(),
+      };
+    }
+
+    // Pattern 2: Match prefix followed by space and content (no separator)
+    // e.g., "NFL ARIZONA CARDINALS", "NBA CHICAGO BULLS"
+    // Must have at least one space after prefix and content must start with a letter
+    const spacePattern = new RegExp(`^${prefix}\\s+([A-Za-z].+)$`, 'i');
+    const spaceMatch = trimmed.match(spacePattern);
+    if (spaceMatch) {
+      return {
+        league: prefix.toLowerCase().replace(/\s+/g, ''),
+        name: spaceMatch[1].trim(),
       };
     }
   }
