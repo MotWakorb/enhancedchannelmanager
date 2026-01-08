@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
-import type { Channel, Logo, EPGProgram, EPGData, EPGSource, StreamProfile } from '../../types';
+import type { Channel, Logo, EPGProgram, EPGData, EPGSource, StreamProfile, ChannelProfile } from '../../types';
 import * as api from '../../services/api';
 import { EditChannelModal, type ChannelMetadataChanges } from '../EditChannelModal';
 import './GuideTab.css';
@@ -49,6 +49,8 @@ export function GuideTab({
   const [channels, setChannels] = useState<Channel[]>(propChannels ?? []);
   const [logos, setLogos] = useState<Logo[]>(propLogos ?? []);
   const [programs, setPrograms] = useState<EPGProgram[]>([]);
+  const [channelProfiles, setChannelProfiles] = useState<ChannelProfile[]>([]);
+  const [selectedProfileId, setSelectedProfileId] = useState<number | null>(null);
 
   // Edit channel modal state
   const [channelToEdit, setChannelToEdit] = useState<Channel | null>(null);
@@ -96,12 +98,24 @@ export function GuideTab({
     return map;
   }, [programs]);
 
-  // Sort channels by channel number
+  // Get selected profile for filtering
+  const selectedProfile = useMemo(() => {
+    if (selectedProfileId === null) return null;
+    return channelProfiles.find(p => p.id === selectedProfileId) ?? null;
+  }, [selectedProfileId, channelProfiles]);
+
+  // Sort channels by channel number, optionally filtered by profile
   const sortedChannels = useMemo(() => {
-    return [...channels]
-      .filter(ch => ch.channel_number !== null)
-      .sort((a, b) => (a.channel_number ?? 0) - (b.channel_number ?? 0));
-  }, [channels]);
+    let filtered = [...channels].filter(ch => ch.channel_number !== null);
+
+    // If a profile is selected, only show channels in that profile
+    if (selectedProfile) {
+      const profileChannelIds = new Set(selectedProfile.channels);
+      filtered = filtered.filter(ch => profileChannelIds.has(ch.id));
+    }
+
+    return filtered.sort((a, b) => (a.channel_number ?? 0) - (b.channel_number ?? 0));
+  }, [channels, selectedProfile]);
 
 
   // Calculate time range for the grid
@@ -133,15 +147,17 @@ export function GuideTab({
 
       try {
         // Fetch all needed data in parallel
-        const [channelsData, logosData, programsData] = await Promise.all([
+        const [channelsData, logosData, programsData, profilesData] = await Promise.all([
           propChannels ? Promise.resolve({ results: propChannels }) : api.getChannels({ pageSize: 5000 }),
           propLogos ? Promise.resolve({ results: propLogos }) : api.getLogos({ pageSize: 10000 }),
           api.getEPGGrid(),
+          api.getChannelProfiles(),
         ]);
 
         if (!propChannels) setChannels((channelsData as { results: Channel[] }).results);
         if (!propLogos) setLogos((logosData as { results: Logo[] }).results);
         setPrograms(programsData);
+        setChannelProfiles(profilesData);
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Failed to load guide data');
       } finally {
@@ -386,6 +402,21 @@ export function GuideTab({
             ))}
           </select>
         </div>
+
+        {channelProfiles.length > 0 && (
+          <div className="control-group">
+            <label>Profile:</label>
+            <select
+              value={selectedProfileId ?? ''}
+              onChange={(e) => setSelectedProfileId(e.target.value ? Number(e.target.value) : null)}
+            >
+              <option value="">All Channels</option>
+              {channelProfiles.map(profile => (
+                <option key={profile.id} value={profile.id}>{profile.name}</option>
+              ))}
+            </select>
+          </div>
+        )}
 
         <button
           className="refresh-btn"
