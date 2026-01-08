@@ -131,6 +131,7 @@ A unique workflow that lets you stage changes locally before committing to the s
 - **Create from Stream** - Drag a stream onto a group header (not a channel) to create a new channel with the stream name pre-populated
 - **Reorder Channels** - Drag channels to reorder within a group (edit mode)
 - **Move Between Groups** - Drag channels to different groups with confirmation modal
+- **Ungroup Channels** - Drag channels to the "Uncategorized" group at the top to remove them from their group
 - **Reorder Streams** - Drag to reorder streams within a channel
 - **Visual Feedback** - Drop indicators and highlighting
 
