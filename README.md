@@ -135,6 +135,12 @@ A unique workflow that lets you stage changes locally before committing to the s
 - **Reorder Streams** - Drag to reorder streams within a channel
 - **Visual Feedback** - Drop indicators and highlighting
 
+### Context Menu (Right-Click)
+
+- **Move channels to...** - Right-click selected channels to show a submenu of groups to move them to
+- **Create new group and move** - Right-click selected channels to create a new group and move them there
+- Works in edit mode when one or more channels are selected
+
 ### Multi-Select Channels
 
 - **Ctrl/Cmd + Click** - Toggle individual channel selection
