@@ -9,6 +9,14 @@ const SLOT_WIDTH_PX = 200; // Width of each 30-minute slot
 const SLOT_MINUTES = 30;
 const HOURS_TO_SHOW = 6; // Total hours to display in grid
 
+// Helper to get local date string in YYYY-MM-DD format
+const getLocalDateString = (date: Date): string => {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
 interface GuideTabProps {
   // Optional: pass existing data from parent to avoid re-fetching
   channels?: Channel[];
@@ -51,10 +59,7 @@ export function GuideTab({
   const [error, setError] = useState<string | null>(null);
 
   // Time selection state
-  const [selectedDate, setSelectedDate] = useState(() => {
-    const today = new Date();
-    return today.toISOString().split('T')[0]; // YYYY-MM-DD
-  });
+  const [selectedDate, setSelectedDate] = useState(() => getLocalDateString(new Date()));
   const [startHour, setStartHour] = useState(() => {
     const now = new Date();
     return now.getHours();
@@ -179,7 +184,7 @@ export function GuideTab({
   // Auto-scroll to current time on load
   useEffect(() => {
     if (!loading && gridContentRef.current) {
-      const isToday = selectedDate === currentTime.toISOString().split('T')[0];
+      const isToday = selectedDate === getLocalDateString(currentTime);
 
       if (isToday) {
         // Calculate scroll position to center current time
@@ -244,7 +249,7 @@ export function GuideTab({
     for (let i = -2; i <= 5; i++) {
       const date = new Date(today);
       date.setDate(date.getDate() + i);
-      const value = date.toISOString().split('T')[0];
+      const value = getLocalDateString(date);
       const label = i === 0 ? 'Today' : i === -1 ? 'Yesterday' : i === 1 ? 'Tomorrow' : date.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
       options.push({ value, label });
     }
@@ -329,7 +334,7 @@ export function GuideTab({
 
   // Calculate current time indicator position
   const nowIndicatorPosition = useMemo(() => {
-    const isToday = selectedDate === currentTime.toISOString().split('T')[0];
+    const isToday = selectedDate === getLocalDateString(currentTime);
 
     if (!isToday) return null;
 
