@@ -282,10 +282,10 @@
 }
 
 .program-block.now-playing {
-  border-color: #4caf50;
+  border-color: var(--accent-primary);
   border-width: 2px;
-  background-color: rgba(76, 175, 80, 0.15);
-  box-shadow: 0 0 8px rgba(76, 175, 80, 0.3);
+  background-color: var(--accent-hover);
+  box-shadow: 0 0 8px rgba(100, 108, 255, 0.4);
 }
 
 .program-title {
