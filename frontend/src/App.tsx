@@ -790,9 +790,17 @@ function App() {
 
   // Handle channel click from Guide tab - navigate to channel manager and select the channel
   const handleGuideChannelClick = useCallback((channel: Channel) => {
-    setSelectedChannel(channel);
+    // Find the channel in displayChannels (used by channel manager) by ID
+    const mainChannel = displayChannels.find(c => c.id === channel.id);
+    if (mainChannel) {
+      setSelectedChannel(mainChannel);
+    } else {
+      // Fallback to channels array
+      const fallbackChannel = channels.find(c => c.id === channel.id);
+      setSelectedChannel(fallbackChannel ?? channel);
+    }
     setActiveTab('channel-manager');
-  }, []);
+  }, [displayChannels, channels]);
 
   // Multi-select handlers
   const handleToggleChannelSelection = useCallback((channelId: number, addToSelection: boolean) => {
