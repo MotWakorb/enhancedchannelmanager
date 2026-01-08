@@ -4699,6 +4699,13 @@ export function ChannelsPane({
             onDragOver={handleDragOver}
             onDragEnd={handleDragEnd}
           >
+            {/* Always render Uncategorized at the top (even when empty) */}
+            {renderGroup(
+              'ungrouped',
+              'Uncategorized',
+              channelsByGroup.ungrouped || [],
+              (channelsByGroup.ungrouped?.length ?? 0) === 0
+            )}
             {/* Render filtered groups with channels */}
             {filteredChannelGroups.map((group) =>
               renderGroup(group.id, group.name, channelsByGroup[group.id] || [])
@@ -4726,9 +4733,6 @@ export function ChannelsPane({
                 return group ? renderGroup(group.id, group.name, [], true) : null;
               })
             }
-            {/* Always render Uncategorized if it has channels */}
-            {channelsByGroup.ungrouped?.length > 0 &&
-              renderGroup('ungrouped', 'Uncategorized', channelsByGroup.ungrouped)}
 
             {/* Drag overlay - shows what's being dragged */}
             <DragOverlay dropAnimation={null}>
