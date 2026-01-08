@@ -592,7 +592,12 @@ function DroppableGroupHeader({
         </span>
       )}
       <span className="group-toggle">{isExpanded ? '▼' : '▶'}</span>
-      <span className="group-name">{groupName}</span>
+      <span className="group-name">
+        {groupName}
+        {groupId === 'ungrouped' && (
+          <span className="group-subtext"> – Channels without a specific group</span>
+        )}
+      </span>
       {isAutoSync && (
         <span className="group-auto-sync-badge" title="Auto-populated by channel sync">
           Auto-Sync
