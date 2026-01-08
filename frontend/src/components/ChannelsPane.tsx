@@ -483,6 +483,7 @@ interface DroppableGroupHeaderProps {
   onDeleteGroup?: () => void;
   onSelectAll?: () => void;
   onStreamDropOnGroup?: (groupId: number | 'ungrouped', streamIds: number[]) => void;
+  onContextMenu?: (e: React.MouseEvent) => void;
 }
 
 function DroppableGroupHeader({
@@ -501,6 +502,7 @@ function DroppableGroupHeader({
   onDeleteGroup,
   onSelectAll,
   onStreamDropOnGroup,
+  onContextMenu,
 }: DroppableGroupHeaderProps) {
   const droppableId = `group-${groupId}`;
   const { isOver, setNodeRef } = useDroppable({
@@ -579,6 +581,7 @@ function DroppableGroupHeader({
       ref={setNodeRef}
       className={`group-header ${isOver && isEditMode ? 'drop-target' : ''} ${streamDragOver ? 'stream-drag-over' : ''}`}
       onClick={onToggle}
+      onContextMenu={onContextMenu}
       onDragOver={handleStreamDragOver}
       onDragLeave={handleStreamDragLeave}
       onDrop={handleStreamDrop}
@@ -1215,6 +1218,27 @@ export function ChannelsPane({
     setContextMenu(null);
     setShowCreateGroupModal(true);
     setNewGroupName('');
+  };
+
+  // Handle context menu on group header (when entire group is selected)
+  const handleGroupContextMenu = (groupChannelIds: number[], e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+
+    // Only show context menu in edit mode when channels in this group are selected
+    if (!isEditMode || selectedChannelIds.size === 0) return;
+
+    // Get the intersection of selected channels and channels in this group
+    const selectedInGroup = groupChannelIds.filter(id => selectedChannelIds.has(id));
+
+    if (selectedInGroup.length === 0) return;
+
+    setContextMenu({
+      visible: true,
+      x: e.clientX,
+      y: e.clientY,
+      channelIds: selectedInGroup,
+    });
   };
 
   // Handle removing a stream from the selected channel
@@ -3366,6 +3390,7 @@ export function ChannelsPane({
           onDeleteGroup={group ? () => handleDeleteGroupClick(group) : undefined}
           onSelectAll={handleSelectAllInGroup}
           onStreamDropOnGroup={handleStreamDropOnGroup}
+          onContextMenu={(e) => handleGroupContextMenu(groupChannels.map(ch => ch.id), e)}
         />
         {isExpanded && isEmpty && (
           <div className="group-channels empty-group-placeholder">
