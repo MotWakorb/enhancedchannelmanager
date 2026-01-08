@@ -619,7 +619,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
 
       <div className="settings-section">
         <div className="settings-section-header">
-          <span className="material-icons">tv_guide</span>
+          <span className="material-icons">live_tv</span>
           <h3>EPG Matching</h3>
         </div>
 
