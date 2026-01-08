@@ -231,10 +231,12 @@ export function normalizeForEPGMatchWithLeague(name: string): { normalized: stri
   // This catches cases like "5033 | CW" where separator char wasn't matched
   normalized = normalized.replace(/^\d+/, '');
 
-  // Strip leading article prefixes (the, a, an) only if remaining text is long enough
+  // Strip leading article prefixes (the, an) only if remaining text is long enough
   // This allows "Bob Ross Channel" to match "TheBobRossChannel"
   // but prevents "AWE" from being reduced to "WE"
-  const articleMatch = normalized.match(/^(the|a|an)([a-z]+)$/);
+  // NOTE: We only strip "the" and "an" - NOT "a" because single "a" at the start
+  // is too commonly part of actual words (arizona, atlanta, american, etc.)
+  const articleMatch = normalized.match(/^(the|an)([a-z]+)$/);
   if (articleMatch && articleMatch[2].length >= 4) {
     normalized = articleMatch[2];
   }
