@@ -3384,3 +3384,50 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
+/* Context Menu */
+.context-menu {
+  background-color: var(--bg-secondary);
+  border: 1px solid var(--border-primary);
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  min-width: 200px;
+  padding: 4px 0;
+  font-size: 0.9rem;
+}
+
+.context-menu-item {
+  padding: 8px 16px;
+  cursor: pointer;
+  color: var(--button-text);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  transition: background-color 0.15s ease;
+}
+
+.context-menu-item:hover {
+  background-color: var(--bg-hover);
+}
+
+.context-menu-arrow {
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  margin-left: 12px;
+}
+
+.context-menu-submenu {
+  background-color: var(--bg-secondary);
+  border: 1px solid var(--border-primary);
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  min-width: 180px;
+  padding: 4px 0;
+  z-index: 10001;
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.context-menu-submenu .context-menu-item {
+  padding: 8px 16px;
+}

@@ -158,6 +158,7 @@ interface SortableChannelProps {
   onDelete: () => void;
   onEditChannel: () => void;
   onCopyChannelUrl?: () => void;
+  onContextMenu?: (e: React.MouseEvent) => void;
   channelUrl?: string;
   showStreamUrls?: boolean;
 }
@@ -274,6 +275,7 @@ function SortableChannel({
   onDelete,
   onEditChannel,
   onCopyChannelUrl,
+  onContextMenu,
   channelUrl,
   showStreamUrls = true,
 }: SortableChannelProps) {
@@ -314,6 +316,7 @@ function SortableChannel({
       style={style}
       className={`channel-item ${isSelected && isEditMode ? 'selected' : ''} ${isMultiSelected ? 'multi-selected' : ''} ${isDragOver ? 'drag-over' : ''} ${isDragging ? 'dragging' : ''} ${isModified ? 'channel-modified' : ''} ${channel.streams.length === 0 ? 'no-streams' : ''}`}
       onClick={onClick}
+      onContextMenu={onContextMenu}
       onDragOver={onStreamDragOver}
       onDragLeave={onStreamDragLeave}
       onDrop={onStreamDrop}
@@ -842,6 +845,14 @@ export function ChannelsPane({
   // Normalize names modal state
   const [showNormalizeModal, setShowNormalizeModal] = useState(false);
 
+  // Context menu state
+  const [contextMenu, setContextMenu] = useState<{
+    visible: boolean;
+    x: number;
+    y: number;
+    channelIds: number[];
+  } | null>(null);
+
   // Cross-group move modal state
   const [showCrossGroupMoveModal, setShowCrossGroupMoveModal] = useState(false);
   const [crossGroupMoveData, setCrossGroupMoveData] = useState<{
@@ -955,6 +966,28 @@ export function ChannelsPane({
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
+  // Close context menu when clicking outside or pressing escape
+  useEffect(() => {
+    const handleClickOutside = () => {
+      if (contextMenu) {
+        setContextMenu(null);
+      }
+    };
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && contextMenu) {
+        setContextMenu(null);
+      }
+    };
+    if (contextMenu) {
+      document.addEventListener('mousedown', handleClickOutside);
+      document.addEventListener('keydown', handleEscape);
+      return () => {
+        document.removeEventListener('mousedown', handleClickOutside);
+        document.removeEventListener('keydown', handleEscape);
+      };
+    }
+  }, [contextMenu]);
+
   // Filter channel groups based on search text (for create modal dropdown)
   const searchFilteredChannelGroups = channelGroups.filter((group) =>
     group.name.toLowerCase().includes(groupSearchText.toLowerCase())
@@ -1061,6 +1094,125 @@ export function ChannelsPane({
       // Toggle this channel's selection (add to existing if Ctrl held, otherwise just this one)
       onToggleChannelSelection(channel.id, isCtrlOrCmd || selectedChannelIds.size > 0);
     }
+  };
+
+  // Handle context menu (right-click)
+  const handleContextMenu = (channel: Channel, e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+
+    // Only show context menu in edit mode when channels are selected
+    if (!isEditMode || selectedChannelIds.size === 0) return;
+
+    // If right-clicked channel isn't selected, select only it
+    if (!selectedChannelIds.has(channel.id)) {
+      if (onToggleChannelSelection) {
+        onToggleChannelSelection(channel.id, false);
+      }
+      setContextMenu({
+        visible: true,
+        x: e.clientX,
+        y: e.clientY,
+        channelIds: [channel.id],
+      });
+    } else {
+      // Use all selected channels
+      setContextMenu({
+        visible: true,
+        x: e.clientX,
+        y: e.clientY,
+        channelIds: Array.from(selectedChannelIds),
+      });
+    }
+  };
+
+  const handleMoveToGroup = (targetGroupId: number | null) => {
+    if (!contextMenu) return;
+
+    const channelsToMove = localChannels.filter(ch => contextMenu.channelIds.includes(ch.id));
+    if (channelsToMove.length === 0) return;
+
+    const targetGroupName = targetGroupId === null
+      ? 'Uncategorized'
+      : channelGroups.find((g) => g.id === targetGroupId)?.name ?? 'Unknown Group';
+
+    const sourceGroupId = channelsToMove[0].channel_group_id;
+    const sourceGroupName = sourceGroupId === null
+      ? 'Uncategorized'
+      : channelGroups.find((g) => g.id === sourceGroupId)?.name ?? 'Unknown Group';
+
+    // Check if target group is an auto-sync group
+    const isTargetAutoSync = targetGroupId !== null && autoSyncRelatedGroups.has(targetGroupId);
+
+    // Calculate channel number range in target group
+    const targetGroupChannels = targetGroupId === null
+      ? channelsByGroup.ungrouped || []
+      : channelsByGroup[targetGroupId] || [];
+
+    let minChannelInGroup: number | null = null;
+    let maxChannelInGroup: number | null = null;
+    let suggestedChannelNumber: number | null = null;
+
+    if (targetGroupChannels.length > 0) {
+      const channelNumbers = targetGroupChannels
+        .map(ch => ch.channel_number)
+        .filter((n): n is number => n !== null)
+        .sort((a, b) => a - b);
+
+      if (channelNumbers.length > 0) {
+        minChannelInGroup = channelNumbers[0];
+        maxChannelInGroup = channelNumbers[channelNumbers.length - 1];
+        suggestedChannelNumber = maxChannelInGroup + 1;
+      }
+    }
+
+    // Calculate source group info for renumbering option
+    const sourceGroupChannels = sourceGroupId === null
+      ? channelsByGroup.ungrouped || []
+      : channelsByGroup[sourceGroupId] || [];
+
+    const movedChannelIds = new Set(channelsToMove.map(ch => ch.id));
+    const remainingSourceChannelNumbers = sourceGroupChannels
+      .filter(ch => !movedChannelIds.has(ch.id))
+      .map(ch => ch.channel_number)
+      .filter((n): n is number => n !== null)
+      .sort((a, b) => a - b);
+
+    let sourceGroupHasGaps = false;
+    let sourceGroupMinChannel: number | null = null;
+    if (remainingSourceChannelNumbers.length > 1) {
+      sourceGroupMinChannel = remainingSourceChannelNumbers[0];
+      for (let i = 1; i < remainingSourceChannelNumbers.length; i++) {
+        if (remainingSourceChannelNumbers[i] - remainingSourceChannelNumbers[i - 1] > 1) {
+          sourceGroupHasGaps = true;
+          break;
+        }
+      }
+    }
+
+    setCrossGroupMoveData({
+      channels: channelsToMove,
+      targetGroupId,
+      targetGroupName,
+      sourceGroupId,
+      sourceGroupName,
+      isTargetAutoSync,
+      suggestedChannelNumber,
+      minChannelInGroup,
+      maxChannelInGroup,
+      insertAtPosition: false,
+      sourceGroupHasGaps,
+      sourceGroupMinChannel,
+    });
+    setShowCrossGroupMoveModal(true);
+    setContextMenu(null);
+  };
+
+  const handleCreateGroupAndMove = () => {
+    if (!contextMenu) return;
+    setContextMenu(null);
+    setShowCreateGroupModal(true);
+    setNewGroupName('');
   };
 
   // Handle removing a stream from the selected channel
@@ -1464,6 +1616,39 @@ export function ChannelsPane({
       if (!selectedGroups.includes(newGroup.id)) {
         onSelectedGroupsChange([...selectedGroups, newGroup.id]);
       }
+
+      // If we have selected channels (from context menu), move them to the new group
+      if (selectedChannelIds.size > 0) {
+        const channelsToMove = localChannels.filter(ch => selectedChannelIds.has(ch.id));
+        if (channelsToMove.length > 0) {
+          const sourceGroupId = channelsToMove[0].channel_group_id;
+          const sourceGroupName = sourceGroupId === null
+            ? 'Uncategorized'
+            : channelGroups.find((g) => g.id === sourceGroupId)?.name ?? 'Unknown Group';
+
+          // Calculate target group info (new group is empty, so no existing channels)
+          const minChannelInGroup: number | null = null;
+          const maxChannelInGroup: number | null = null;
+          const suggestedChannelNumber: number | null = null;
+
+          setCrossGroupMoveData({
+            channels: channelsToMove,
+            targetGroupId: newGroup.id,
+            targetGroupName: newGroup.name,
+            sourceGroupId,
+            sourceGroupName,
+            isTargetAutoSync: false,
+            suggestedChannelNumber,
+            minChannelInGroup,
+            maxChannelInGroup,
+            insertAtPosition: false,
+            sourceGroupHasGaps: false,
+            sourceGroupMinChannel: null,
+          });
+          setShowCrossGroupMoveModal(true);
+        }
+      }
+
       handleCloseCreateGroupModal();
     } catch (err) {
       console.error('Failed to create channel group:', err);
@@ -3309,6 +3494,7 @@ export function ChannelsPane({
                       onDelete={() => handleDeleteChannelClick(channel)}
                       onEditChannel={() => handleEditChannel(channel)}
                       onCopyChannelUrl={dispatcharrUrl && channel.uuid ? () => navigator.clipboard.writeText(`${dispatcharrUrl}/proxy/ts/stream/${channel.uuid}`) : undefined}
+                      onContextMenu={(e) => handleContextMenu(channel, e)}
                       channelUrl={dispatcharrUrl && channel.uuid ? `${dispatcharrUrl}/proxy/ts/stream/${channel.uuid}` : undefined}
                       showStreamUrls={showStreamUrls}
                     />
@@ -4762,6 +4948,67 @@ export function ChannelsPane({
               })()}
             </DragOverlay>
           </DndContext>
+        )}
+
+        {/* Context menu */}
+        {contextMenu && (
+          <div
+            className="context-menu"
+            style={{
+              position: 'fixed',
+              top: contextMenu.y,
+              left: contextMenu.x,
+              zIndex: 10000,
+            }}
+            onMouseDown={(e) => e.stopPropagation()}
+          >
+            <div className="context-menu-item" onClick={() => {
+              // Show submenu of groups to move to
+              const submenu = document.createElement('div');
+              submenu.className = 'context-menu-submenu';
+              submenu.style.position = 'fixed';
+              submenu.style.top = `${contextMenu.y}px`;
+              submenu.style.left = `${contextMenu.x + 200}px`;
+
+              // Uncategorized option
+              const uncategorizedOption = document.createElement('div');
+              uncategorizedOption.className = 'context-menu-item';
+              uncategorizedOption.textContent = 'Uncategorized';
+              uncategorizedOption.onclick = () => {
+                handleMoveToGroup(null);
+                document.body.removeChild(submenu);
+              };
+              submenu.appendChild(uncategorizedOption);
+
+              // Group options
+              channelGroups.forEach(group => {
+                const option = document.createElement('div');
+                option.className = 'context-menu-item';
+                option.textContent = group.name;
+                option.onclick = () => {
+                  handleMoveToGroup(group.id);
+                  document.body.removeChild(submenu);
+                };
+                submenu.appendChild(option);
+              });
+
+              document.body.appendChild(submenu);
+
+              // Close submenu when clicking outside
+              const closeSubmenu = (e: MouseEvent) => {
+                if (!submenu.contains(e.target as Node)) {
+                  document.body.removeChild(submenu);
+                  document.removeEventListener('mousedown', closeSubmenu);
+                }
+              };
+              setTimeout(() => document.addEventListener('mousedown', closeSubmenu), 0);
+            }}>
+              Move channels to... <span className="context-menu-arrow">▶</span>
+            </div>
+            <div className="context-menu-item" onClick={handleCreateGroupAndMove}>
+              Create new group and move
+            </div>
+          </div>
         )}
       </div>
     </div>
