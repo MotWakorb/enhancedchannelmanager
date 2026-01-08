@@ -728,7 +728,7 @@ function findEPGMatchesWithLookup(
 
   // Calculate confidence scores for each match
   // Scoring factors (total 100 points):
-  // - Country match: 40 points (most important)
+  // - Country OR League match: 40 points (most important - league match for sports teams)
   // - Exact vs prefix match: 25 points
   // - Name length similarity: 20 points (closer length = higher score)
   // - Call sign match: 10 points
@@ -736,14 +736,20 @@ function findEPGMatchesWithLookup(
   const matchesWithScores: EPGMatchWithScore[] = matches.map(epg => {
     let confidence = 0;
     const epgCountry = lookup.countryByEpgId.get(epg.id);
+    const epgLeague = lookup.leagueByEpgId.get(epg.id);
     const epgNormalized = lookup.normalizedTvgIdByEpgId.get(epg.id) || '';
     const quality = matchQuality.get(epg.id) || 'prefix';
 
-    // Country match: 40 points
-    if (detectedCountry && epgCountry === detectedCountry) {
+    // Country OR League match: 40 points
+    // For sports team channels (NFL: Arizona Cardinals), league match is equivalent to country match
+    if (detectedLeague && epgLeague === detectedLeague) {
+      // League match (e.g., channel has NFL prefix and EPG has .nfl suffix)
       confidence += 40;
-    } else if (!epgCountry && detectedCountry === 'us') {
-      // No country in EPG, but we're looking for US - give partial credit
+    } else if (detectedCountry && epgCountry === detectedCountry) {
+      // Country match
+      confidence += 40;
+    } else if (!epgCountry && !epgLeague && detectedCountry === 'us') {
+      // No country/league in EPG, but we're looking for US - give partial credit
       confidence += 20;
     }
 
