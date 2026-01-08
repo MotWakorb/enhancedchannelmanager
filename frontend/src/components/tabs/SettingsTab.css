@@ -596,6 +596,7 @@
   width: 18px;
   height: 18px;
   margin: 0;
+  margin-right: 0.5rem;
   accent-color: var(--accent-primary);
   cursor: pointer;
   flex-shrink: 0;
@@ -606,6 +607,7 @@
   font-size: 0.9rem;
   color: var(--text-primary);
   line-height: 18px;
+  margin-left: 0.25rem;
 }
 
 /* Slider group for threshold settings */

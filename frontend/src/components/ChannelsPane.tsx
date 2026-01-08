@@ -467,6 +467,7 @@ interface DroppableGroupHeaderProps {
   groupId: number | 'ungrouped';
   groupName: string;
   channelCount: number;
+  channelRange: { min: number | null; max: number | null } | null;
   isEmpty: boolean;
   isExpanded: boolean;
   isEditMode: boolean;
@@ -484,6 +485,7 @@ function DroppableGroupHeader({
   groupId,
   groupName,
   channelCount,
+  channelRange,
   isEmpty,
   isExpanded,
   isEditMode,
@@ -596,6 +598,13 @@ function DroppableGroupHeader({
         </span>
       )}
       <span className="group-count">{channelCount}</span>
+      {channelRange && channelRange.min !== null && channelRange.max !== null && (
+        <span className="group-range" title="Channel number range">
+          {channelRange.min === channelRange.max
+            ? `#${channelRange.min}`
+            : `#${channelRange.min}–${channelRange.max}`}
+        </span>
+      )}
       {isEmpty && <span className="group-empty-badge">Empty</span>}
       {isEditMode && !isEmpty && onSortAndRenumber && (
         <button
@@ -3103,6 +3112,14 @@ export function ChannelsPane({
     const selectedCountInGroup = groupChannels.filter(ch => selectedChannelIds.has(ch.id)).length;
     const allGroupChannelIds = groupChannels.map(ch => ch.id);
 
+    // Calculate channel number range for this group
+    const channelNumbers = groupChannels
+      .map(ch => ch.channel_number)
+      .filter((num): num is number => num !== null && num !== undefined);
+    const channelRange = channelNumbers.length > 0
+      ? { min: Math.min(...channelNumbers), max: Math.max(...channelNumbers) }
+      : null;
+
     // Handler to select/deselect all channels in this group
     const handleSelectAllInGroup = () => {
       if (!onSelectGroupChannels) return;
@@ -3117,6 +3134,7 @@ export function ChannelsPane({
           groupId={groupId}
           groupName={groupName}
           channelCount={groupChannels.length}
+          channelRange={channelRange}
           isEmpty={isEmpty}
           isExpanded={isExpanded}
           isEditMode={isEditMode}

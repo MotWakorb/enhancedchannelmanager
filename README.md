@@ -39,6 +39,7 @@ A professional-grade web interface for managing IPTV configurations with Dispatc
 - **Channel Numbering** - Assign channel numbers (including decimal numbers like 4.1)
 - **Auto-Rename** - Optionally update channel names when numbers change (e.g., "101 | Sports Channel" becomes "102 | Sports Channel")
 - **Channel Groups** - Organize channels into groups for better organization
+- **Group Channel Range** - Each group header displays the channel number range (e.g., #100–150)
 - **Delete Groups** - Delete channel groups with option to also delete contained channels
 - **Bulk Delete** - Select multiple channels and delete them at once
 - **Search & Filter** - Search channels by name, filter by one or more groups

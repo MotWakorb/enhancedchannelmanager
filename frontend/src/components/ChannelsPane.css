@@ -798,6 +798,13 @@
   border-radius: 10px;
 }
 
+.group-range {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  font-weight: 500;
+  opacity: 0.8;
+}
+
 .group-channels {
   margin-left: 1rem;
 }
