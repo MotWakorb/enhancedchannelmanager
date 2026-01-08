@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
-import type { Channel, Logo, EPGProgram } from '../../types';
+import type { Channel, Logo, EPGProgram, EPGData, EPGSource, StreamProfile } from '../../types';
 import * as api from '../../services/api';
+import { EditChannelModal, type ChannelMetadataChanges } from '../EditChannelModal';
 import './GuideTab.css';
 
 // Constants for grid layout
@@ -12,15 +13,38 @@ interface GuideTabProps {
   // Optional: pass existing data from parent to avoid re-fetching
   channels?: Channel[];
   logos?: Logo[];
-  // Callback when a channel is clicked for editing
-  onChannelClick?: (channel: Channel) => void;
+  // EPG data for edit modal
+  epgData?: EPGData[];
+  epgSources?: EPGSource[];
+  streamProfiles?: StreamProfile[];
+  epgDataLoading?: boolean;
+  // Callbacks for edit modal
+  onChannelUpdate?: (channel: Channel, changes: ChannelMetadataChanges) => Promise<void>;
+  onLogoCreate?: (url: string) => Promise<Logo>;
+  onLogoUpload?: (file: File) => Promise<Logo>;
+  onLogosChange?: () => Promise<void>;
 }
 
-export function GuideTab({ channels: propChannels, logos: propLogos, onChannelClick }: GuideTabProps) {
+export function GuideTab({
+  channels: propChannels,
+  logos: propLogos,
+  epgData = [],
+  epgSources = [],
+  streamProfiles = [],
+  epgDataLoading = false,
+  onChannelUpdate,
+  onLogoCreate,
+  onLogoUpload,
+  onLogosChange,
+}: GuideTabProps) {
   // Data state
   const [channels, setChannels] = useState<Channel[]>(propChannels ?? []);
   const [logos, setLogos] = useState<Logo[]>(propLogos ?? []);
   const [programs, setPrograms] = useState<EPGProgram[]>([]);
+
+  // Edit channel modal state
+  const [channelToEdit, setChannelToEdit] = useState<Channel | null>(null);
+  const [showEditModal, setShowEditModal] = useState(false);
 
   // Loading state
   const [loading, setLoading] = useState(true);
@@ -231,6 +255,9 @@ export function GuideTab({ channels: propChannels, logos: propLogos, onChannelCl
     });
   }, []);
 
+  // Check if edit modal can be shown
+  const canEdit = onChannelUpdate && onLogoCreate && onLogoUpload;
+
   // Render channel row
   const renderChannelRow = (channel: Channel) => {
     const channelPrograms = getChannelPrograms(channel);
@@ -238,17 +265,18 @@ export function GuideTab({ channels: propChannels, logos: propLogos, onChannelCl
     const logo = channel.logo_id ? logoMap.get(channel.logo_id) : null;
 
     const handleChannelClick = () => {
-      if (onChannelClick) {
-        onChannelClick(channel);
+      if (canEdit) {
+        setChannelToEdit(channel);
+        setShowEditModal(true);
       }
     };
 
     return (
       <div key={channel.id} className="guide-row">
         <div
-          className={`channel-info ${onChannelClick ? 'clickable' : ''}`}
+          className={`channel-info ${canEdit ? 'clickable' : ''}`}
           onClick={handleChannelClick}
-          title={onChannelClick ? `Click to edit ${channel.name}` : undefined}
+          title={canEdit ? `Click to edit ${channel.name}` : undefined}
         >
           <span className="channel-number">{channel.channel_number}</span>
           {logo && (
@@ -401,6 +429,53 @@ export function GuideTab({ channels: propChannels, logos: propLogos, onChannelCl
           {sortedChannels.length} channels | {programs.length} programs loaded
         </span>
       </div>
+
+      {/* Edit Channel Modal */}
+      {showEditModal && channelToEdit && onChannelUpdate && onLogoCreate && onLogoUpload && (
+        <EditChannelModal
+          channel={channelToEdit}
+          logos={logos}
+          epgData={epgData.map(e => ({
+            id: e.id,
+            tvg_id: e.tvg_id,
+            name: e.name,
+            icon_url: e.icon_url,
+            epg_source: e.epg_source,
+          }))}
+          epgSources={epgSources.map(s => ({ id: s.id, name: s.name }))}
+          streamProfiles={streamProfiles.map(p => ({ id: p.id, name: p.name, is_active: p.is_active }))}
+          epgDataLoading={epgDataLoading}
+          onClose={() => {
+            setShowEditModal(false);
+            setChannelToEdit(null);
+          }}
+          onSave={async (changes) => {
+            await onChannelUpdate(channelToEdit, changes);
+            // Update local channel state with the changes
+            setChannels(prev => prev.map(ch =>
+              ch.id === channelToEdit.id
+                ? { ...ch, ...changes }
+                : ch
+            ));
+            setShowEditModal(false);
+            setChannelToEdit(null);
+          }}
+          onLogoCreate={async (url) => {
+            const logo = await onLogoCreate(url);
+            if (onLogosChange) {
+              await onLogosChange();
+            }
+            return logo;
+          }}
+          onLogoUpload={async (file) => {
+            const logo = await onLogoUpload(file);
+            if (onLogosChange) {
+              await onLogosChange();
+            }
+            return logo;
+          }}
+        />
+      )}
     </div>
   );
 }

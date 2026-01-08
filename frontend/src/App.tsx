@@ -30,6 +30,7 @@ function App() {
   const [selectedChannel, setSelectedChannel] = useState<Channel | null>(null);
   const [selectedChannelIds, setSelectedChannelIds] = useState<Set<number>>(new Set());
   const [lastSelectedChannelId, setLastSelectedChannelId] = useState<number | null>(null);
+  const [channelToEditFromGuide, setChannelToEditFromGuide] = useState<Channel | null>(null);
   const [channelsLoading, setChannelsLoading] = useState(true);
   const [channelSearch, setChannelSearch] = useState('');
   const [channelGroupFilter, setChannelGroupFilter] = useState<number[]>([]);
@@ -788,19 +789,46 @@ function App() {
     setSelectedChannel(channel);
   };
 
-  // Handle channel click from Guide tab - navigate to channel manager and select the channel
-  const handleGuideChannelClick = useCallback((channel: Channel) => {
-    // Find the channel in displayChannels (used by channel manager) by ID
-    const mainChannel = displayChannels.find(c => c.id === channel.id);
-    if (mainChannel) {
-      setSelectedChannel(mainChannel);
-    } else {
-      // Fallback to channels array
-      const fallbackChannel = channels.find(c => c.id === channel.id);
-      setSelectedChannel(fallbackChannel ?? channel);
+  // Handle channel update from Guide tab edit modal
+  const handleGuideChannelUpdate = useCallback(async (channel: Channel, changes: {
+    channel_number?: number;
+    name?: string;
+    logo_id?: number | null;
+    tvg_id?: string | null;
+    tvc_guide_stationid?: string | null;
+    epg_data_id?: number | null;
+    stream_profile_id?: number | null;
+  }) => {
+    try {
+      // Update the channel via API
+      const updatedChannel = await api.updateChannel(channel.id, changes);
+
+      // Update local state
+      setChannels(prev => prev.map(ch =>
+        ch.id === channel.id ? { ...ch, ...updatedChannel } : ch
+      ));
+    } catch (err) {
+      console.error('Failed to update channel from Guide:', err);
+      throw err;
     }
-    setActiveTab('channel-manager');
-  }, [displayChannels, channels]);
+  }, []);
+
+  // Clear the external channel edit trigger after it's been handled
+  const handleExternalChannelEditHandled = useCallback(() => {
+    setChannelToEditFromGuide(null);
+  }, []);
+
+  // Handle logo creation from URL (for Guide tab edit modal)
+  const handleLogoCreate = useCallback(async (url: string) => {
+    const logo = await api.createLogo({ url, name: url.split('/').pop() || 'Logo' });
+    return logo;
+  }, []);
+
+  // Handle logo upload (for Guide tab edit modal)
+  const handleLogoUpload = useCallback(async (file: File) => {
+    const logo = await api.uploadLogo(file);
+    return logo;
+  }, []);
 
   // Multi-select handlers
   const handleToggleChannelSelection = useCallback((channelId: number, addToSelection: boolean) => {
@@ -1602,6 +1630,10 @@ function App() {
 
               // Refresh streams (bypasses cache)
               onRefreshStreams={refreshStreams}
+
+              // External trigger to open edit modal from Guide tab
+              externalChannelToEdit={channelToEditFromGuide}
+              onExternalChannelEditHandled={handleExternalChannelEditHandled}
             />
           )}
           {activeTab === 'm3u-manager' && (
@@ -1614,7 +1646,20 @@ function App() {
             />
           )}
           {activeTab === 'epg-manager' && <EPGManagerTab onSourcesChange={loadEpgSources} />}
-          {activeTab === 'guide' && <GuideTab channels={channels} logos={logos} onChannelClick={handleGuideChannelClick} />}
+          {activeTab === 'guide' && (
+            <GuideTab
+              channels={channels}
+              logos={logos}
+              epgData={epgData}
+              epgSources={epgSources}
+              streamProfiles={streamProfiles}
+              epgDataLoading={epgDataLoading}
+              onChannelUpdate={handleGuideChannelUpdate}
+              onLogoCreate={handleLogoCreate}
+              onLogoUpload={handleLogoUpload}
+              onLogosChange={loadLogos}
+            />
+          )}
           {activeTab === 'logo-manager' && <LogoManagerTab />}
           {activeTab === 'settings' && <SettingsTab onSaved={handleSettingsSaved} channelProfiles={channelProfiles} />}
         </Suspense>
