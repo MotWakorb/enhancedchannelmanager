@@ -18,6 +18,16 @@ const QUALITY_SUFFIXES = [
 // Timezone/regional suffixes to strip
 const TIMEZONE_SUFFIXES = ['EAST', 'WEST', 'ET', 'PT', 'CT', 'MT'];
 
+// League/network prefixes that appear before team names
+// These should be stripped from channel names and matched as EPG suffixes
+// e.g., "NFL: Arizona Cardinals" -> "arizonacardinals" which matches "arizonacardinals.nfl"
+const LEAGUE_PREFIXES = [
+  'NFL', 'NBA', 'MLB', 'NHL', 'MLS', 'WNBA', 'NCAA', 'CFB', 'CBB',
+  'EPL', 'PREMIER LEAGUE', 'LA LIGA', 'LALIGA', 'BUNDESLIGA', 'SERIE A', 'LIGUE 1',
+  'UEFA', 'FIFA', 'F1', 'NASCAR', 'PGA', 'ATP', 'WTA',
+  'WWE', 'UFC', 'AEW', 'BOXING',
+];
+
 // Broadcast call sign patterns for US/Canada local TV stations
 // US call signs: K or W followed by 2-4 letters, optionally with -DT, -TV, -HD suffix
 // Examples: KATU, KOIN, KGW, WKOW, WHA-DT, KPTV-DT, WMTV
@@ -52,6 +62,35 @@ export interface EPGAssignment {
   channelName: string;
   tvg_id: string | null;
   epg_data_id: number | null;
+}
+
+/**
+ * Extract league prefix from a channel name.
+ * Returns the league code and the remaining name without the prefix.
+ * e.g., "NFL: Arizona Cardinals" -> { league: "nfl", name: "Arizona Cardinals" }
+ *
+ * @param name - Channel name to extract league from
+ * @returns Object with league (lowercase) and remaining name, or null if no league found
+ */
+export function extractLeaguePrefix(name: string): { league: string; name: string } | null {
+  const trimmed = name.trim();
+
+  // Sort league prefixes by length (longest first) to match "PREMIER LEAGUE" before "EPL"
+  const sortedPrefixes = [...LEAGUE_PREFIXES].sort((a, b) => b.length - a.length);
+
+  for (const prefix of sortedPrefixes) {
+    // Match prefix followed by separator (colon, pipe, dash) and content
+    const pattern = new RegExp(`^${prefix}\\s*[:|\\-]\\s*(.+)$`, 'i');
+    const match = trimmed.match(pattern);
+    if (match) {
+      return {
+        league: prefix.toLowerCase().replace(/\s+/g, ''),
+        name: match[1].trim(),
+      };
+    }
+  }
+
+  return null;
 }
 
 /**
@@ -110,14 +149,27 @@ export function detectCountryFromStreams(streams: Stream[]): string | null {
 
 /**
  * Normalize a channel/EPG name for matching purposes.
- * Strips channel number prefix, country prefix, quality suffixes, timezone suffixes,
- * and normalizes to lowercase alphanumeric only.
+ * Strips channel number prefix, country prefix, league prefix, quality suffixes,
+ * timezone suffixes, and normalizes to lowercase alphanumeric only.
  *
  * @param name - Channel or EPG name to normalize
  * @returns Normalized name (lowercase, alphanumeric only)
  */
 export function normalizeForEPGMatch(name: string): string {
+  const result = normalizeForEPGMatchWithLeague(name);
+  return result.normalized;
+}
+
+/**
+ * Extended normalization that also returns detected league prefix.
+ * Used for matching channels like "NFL: Arizona Cardinals" to "arizonacardinals.nfl"
+ *
+ * @param name - Channel or EPG name to normalize
+ * @returns Object with normalized name and detected league (if any)
+ */
+export function normalizeForEPGMatchWithLeague(name: string): { normalized: string; league: string | null } {
   let normalized = name.trim();
+  let league: string | null = null;
 
   // Strip channel number prefix - multiple approaches to handle various formats
   // Pattern 1: "107 | Channel", "107 - Channel", "107: Channel", "107. Channel"
@@ -131,6 +183,13 @@ export function normalizeForEPGMatch(name: string): string {
 
   // Strip country prefix
   normalized = stripCountryPrefix(normalized);
+
+  // Extract and strip league prefix (e.g., "NFL: Arizona Cardinals" -> "Arizona Cardinals")
+  const leagueInfo = extractLeaguePrefix(normalized);
+  if (leagueInfo) {
+    league = leagueInfo.league;
+    normalized = leagueInfo.name;
+  }
 
   // Strip quality suffixes
   for (const suffix of QUALITY_SUFFIXES) {
@@ -164,29 +223,47 @@ export function normalizeForEPGMatch(name: string): string {
     normalized = articleMatch[2];
   }
 
-  return normalized;
+  return { normalized, league };
 }
 
+// League suffixes that appear at the end of TVG-IDs (lowercase)
+// e.g., "arizonacardinals.nfl", "atlanta-hawks.nba"
+const LEAGUE_SUFFIXES = [
+  'nfl', 'nba', 'mlb', 'nhl', 'mls', 'wnba', 'ncaa', 'cfb', 'cbb',
+  'epl', 'premierleague', 'laliga', 'bundesliga', 'seriea', 'ligue1',
+  'uefa', 'fifa', 'f1', 'nascar', 'pga', 'atp', 'wta',
+  'wwe', 'ufc', 'aew', 'boxing',
+];
+
 /**
- * Parse a TVG-ID into its name and country components.
- * TVG-IDs typically follow the format: "ChannelName.country" or "ChannelName(variant).country"
+ * Parse a TVG-ID into its name, country, and league components.
+ * TVG-IDs typically follow the format:
+ * - "ChannelName.country" (e.g., "ESPN.us")
+ * - "ChannelName(variant).country" (e.g., "AdultSwim(ADSM).ca")
+ * - "teamname.league" (e.g., "arizonacardinals.nfl")
  * Call signs in parentheses are stripped to get the base channel name.
  *
- * @param tvgId - The TVG-ID to parse (e.g., "ESPN.us", "BBCNews(America).us", "AdultSwim(ADSM).ca")
- * @returns Tuple of [normalizedName, countryCode] where countryCode may be null
+ * @param tvgId - The TVG-ID to parse
+ * @returns Object with normalizedName, countryCode (may be null), and league (may be null)
  */
-export function parseTvgId(tvgId: string): [string, string | null] {
+export function parseTvgId(tvgId: string): [string, string | null, string | null] {
   const lowerTvgId = tvgId.toLowerCase();
   const lastDot = lowerTvgId.lastIndexOf('.');
 
   let nameToNormalize = tvgId;
   let country: string | null = null;
+  let league: string | null = null;
 
   if (lastDot !== -1) {
     const suffix = lowerTvgId.slice(lastDot + 1);
 
+    // Check if suffix is a known league
+    if (LEAGUE_SUFFIXES.includes(suffix)) {
+      nameToNormalize = tvgId.slice(0, lastDot);
+      league = suffix;
+    }
     // Check if suffix looks like a country code (2-3 lowercase letters)
-    if (suffix.length >= 2 && suffix.length <= 3 && /^[a-z]+$/.test(suffix)) {
+    else if (suffix.length >= 2 && suffix.length <= 3 && /^[a-z]+$/.test(suffix)) {
       nameToNormalize = tvgId.slice(0, lastDot);
       country = suffix;
     }
@@ -196,7 +273,7 @@ export function parseTvgId(tvgId: string): [string, string | null] {
   // This converts "AdultSwim(ADSM)" or "AdultSwim(IPFeed)(ASIP)" to "AdultSwim"
   nameToNormalize = nameToNormalize.replace(/\([^)]+\)/g, '');
 
-  return [normalizeForEPGMatch(nameToNormalize), country];
+  return [normalizeForEPGMatch(nameToNormalize), country, league];
 }
 
 /**
@@ -208,8 +285,12 @@ interface EPGLookup {
   byNormalizedTvgId: Map<string, EPGData[]>;
   byNormalizedName: Map<string, EPGData[]>;
   byCallSign: Map<string, EPGData[]>;
+  // Map from "normalizedName.league" -> array of EPG entries (for league-based matching)
+  byNormalizedNameWithLeague: Map<string, EPGData[]>;
   // Pre-parsed country codes for sorting
   countryByEpgId: Map<number, string | null>;
+  // Pre-parsed league codes for matching
+  leagueByEpgId: Map<number, string | null>;
   // Normalized TVG-ID name for each EPG entry (for sorting by name similarity)
   normalizedTvgIdByEpgId: Map<number, string>;
   // For prefix matching: list of all normalized TVG-IDs with their EPG entries
@@ -226,16 +307,28 @@ function buildEPGLookup(epgData: EPGData[]): EPGLookup {
   const byNormalizedTvgId = new Map<string, EPGData[]>();
   const byNormalizedName = new Map<string, EPGData[]>();
   const byCallSign = new Map<string, EPGData[]>();
+  const byNormalizedNameWithLeague = new Map<string, EPGData[]>();
   const countryByEpgId = new Map<number, string | null>();
+  const leagueByEpgId = new Map<number, string | null>();
   const normalizedTvgIdByEpgId = new Map<number, string>();
   const allNormalizedTvgIds: Array<{ normalized: string; epg: EPGData }> = [];
   const allNormalizedNames: Array<{ normalized: string; epg: EPGData }> = [];
 
   for (const epg of epgData) {
     // Parse and normalize TVG-ID
-    const [epgNormalizedTvgId, country] = parseTvgId(epg.tvg_id);
+    const [epgNormalizedTvgId, country, league] = parseTvgId(epg.tvg_id);
     countryByEpgId.set(epg.id, country);
+    leagueByEpgId.set(epg.id, league);
     normalizedTvgIdByEpgId.set(epg.id, epgNormalizedTvgId);
+
+    // If this EPG entry has a league suffix, add it to the league lookup
+    // This allows "arizonacardinals" + league "nfl" to be looked up
+    if (league && epgNormalizedTvgId) {
+      const key = `${epgNormalizedTvgId}.${league}`;
+      const existing = byNormalizedNameWithLeague.get(key) || [];
+      existing.push(epg);
+      byNormalizedNameWithLeague.set(key, existing);
+    }
 
     // Add to TVG-ID lookup
     if (epgNormalizedTvgId) {
@@ -296,7 +389,9 @@ function buildEPGLookup(epgData: EPGData[]): EPGLookup {
     byNormalizedTvgId,
     byNormalizedName,
     byCallSign,
+    byNormalizedNameWithLeague,
     countryByEpgId,
+    leagueByEpgId,
     normalizedTvgIdByEpgId,
     allNormalizedTvgIds,
     allNormalizedNames,
@@ -332,8 +427,8 @@ function findEPGMatchesWithLookup(
     detectedCountry = 'us';
   }
 
-  // Normalize the channel name
-  const normalizedName = normalizeForEPGMatch(channel.name);
+  // Normalize the channel name and extract league prefix
+  const { normalized: normalizedName, league: detectedLeague } = normalizeForEPGMatchWithLeague(channel.name);
 
   if (!normalizedName) {
     return {
@@ -352,6 +447,17 @@ function findEPGMatchesWithLookup(
 
   // Collect matches from all lookup maps (using Map to dedupe by EPG id)
   const matchSet = new Map<number, EPGData>();
+
+  // If channel has a league prefix (e.g., "NFL: Arizona Cardinals"),
+  // first try to match against EPG entries with that league suffix (e.g., "arizonacardinals.nfl")
+  if (detectedLeague) {
+    const leagueKey = `${normalizedName}.${detectedLeague}`;
+    const leagueMatches = lookup.byNormalizedNameWithLeague.get(leagueKey) || [];
+    for (const epg of leagueMatches) {
+      matchSet.set(epg.id, epg);
+      matchQuality.set(epg.id, 'exact');
+    }
+  }
 
   // Check exact TVG-ID matches
   const tvgIdMatches = lookup.byNormalizedTvgId.get(normalizedName) || [];
@@ -420,21 +526,31 @@ function findEPGMatchesWithLookup(
   const channelSpecialChars = channel.name.match(/[!@#$%^*]/g) || [];
 
   // Sort matches with priority:
-  // 1. Matching country over non-matching country (highest priority)
-  // 2. Exact matches over prefix matches (but not for very short names)
-  // 3. Matching special punctuation (e.g., "!" in channel name matches "!" in EPG)
-  // 4. Name similarity (prefer EPG names closer in length to channel name)
-  // 5. Regional preference: match channel's region hint, or default to East
-  // 6. HD + call sign combined: prefer HD unless non-HD has much better call sign
+  // 1. Matching league over non-matching league (highest priority for team channels)
+  // 2. Matching country over non-matching country (highest priority)
+  // 3. Exact matches over prefix matches (but not for very short names)
+  // 4. Matching special punctuation (e.g., "!" in channel name matches "!" in EPG)
+  // 5. Name similarity (prefer EPG names closer in length to channel name)
+  // 6. Regional preference: match channel's region hint, or default to East
+  // 7. HD + call sign combined: prefer HD unless non-HD has much better call sign
   //    (e.g., TVLandHD beats TVLand, but Nosey(NOSEY) beats Nosey(VIZNOSE)-HD)
-  // 7. Alphabetically by name
+  // 8. Alphabetically by name
   const matches = matchArray.sort((a, b) => {
     const aQuality = matchQuality.get(a.id) || 'prefix';
     const bQuality = matchQuality.get(b.id) || 'prefix';
     const aCountry = lookup.countryByEpgId.get(a.id);
     const bCountry = lookup.countryByEpgId.get(b.id);
+    const aLeague = lookup.leagueByEpgId.get(a.id);
+    const bLeague = lookup.leagueByEpgId.get(b.id);
 
-    // FIRST: Country matching - this is the highest priority
+    // FIRST: League matching - if channel has a league prefix (e.g., "NFL: Arizona Cardinals"),
+    // prefer EPG entries with that league suffix (e.g., "arizonacardinals.nfl")
+    if (detectedLeague) {
+      if (aLeague === detectedLeague && bLeague !== detectedLeague) return -1;
+      if (bLeague === detectedLeague && aLeague !== detectedLeague) return 1;
+    }
+
+    // SECOND: Country matching
     // A US channel should prefer US EPG entries over international ones
     if (detectedCountry) {
       if (aCountry === detectedCountry && bCountry !== detectedCountry) return -1;

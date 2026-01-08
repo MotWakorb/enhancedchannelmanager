@@ -803,6 +803,7 @@
   color: var(--text-secondary);
   font-weight: 500;
   opacity: 0.8;
+  margin-left: 0.5rem;
 }
 
 .group-channels {
