@@ -1,7 +1,8 @@
 import { useState, useEffect, useMemo } from 'react';
-import type { M3UAccount, ChannelGroupM3UAccount, ChannelGroup } from '../types';
+import type { M3UAccount, ChannelGroupM3UAccount, ChannelGroup, AutoSyncCustomProperties, ChannelProfile, StreamProfile, EPGSource } from '../types';
 import * as api from '../services/api';
 import { naturalCompare } from '../utils/naturalSort';
+import { AutoSyncSettingsModal } from './AutoSyncSettingsModal';
 import './M3UGroupsModal.css';
 
 interface M3UGroupsModalProps {
@@ -11,6 +12,12 @@ interface M3UGroupsModalProps {
   account: M3UAccount;
   allAccounts?: M3UAccount[];         // All M3U accounts for cascading to linked accounts
   linkedAccountGroups?: number[][];   // Link groups from settings
+  // For auto-sync settings modal
+  epgSources?: EPGSource[];
+  channelGroups?: ChannelGroup[];
+  channelProfiles?: ChannelProfile[];
+  streamProfiles?: StreamProfile[];
+  onChannelGroupsChange?: () => void; // Called when channel groups are created/changed
 }
 
 // Extended type with name from channel groups lookup
@@ -25,14 +32,22 @@ export function M3UGroupsModal({
   account,
   allAccounts = [],
   linkedAccountGroups = [],
+  epgSources = [],
+  channelGroups: allChannelGroups = [],
+  channelProfiles = [],
+  streamProfiles = [],
+  onChannelGroupsChange,
 }: M3UGroupsModalProps) {
   const [groups, setGroups] = useState<GroupWithName[]>([]);
   const [search, setSearch] = useState('');
   const [hideDisabled, setHideDisabled] = useState(false);
+  const [showOnlyAutoSync, setShowOnlyAutoSync] = useState(false);
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [hasChanges, setHasChanges] = useState(false);
+  // Auto-sync settings modal state
+  const [settingsModalGroup, setSettingsModalGroup] = useState<GroupWithName | null>(null);
 
   // Find linked accounts for this account
   const linkedAccountInfo = useMemo(() => {
@@ -49,6 +64,24 @@ export function M3UGroupsModal({
 
     return { isLinked: true, linkedAccountIds, linkedAccountNames };
   }, [account.id, linkedAccountGroups, allAccounts]);
+
+  // Find groups that are already auto-synced on OTHER accounts
+  // These should not be allowed to have auto-sync enabled on this account
+  const autoSyncedByOtherAccounts = useMemo(() => {
+    const result = new Map<number, string>(); // channel_group ID -> account name that owns it
+
+    for (const otherAccount of allAccounts) {
+      if (otherAccount.id === account.id) continue; // Skip current account
+
+      for (const group of otherAccount.channel_groups) {
+        if (group.auto_channel_sync) {
+          result.set(group.channel_group, otherAccount.name);
+        }
+      }
+    }
+
+    return result;
+  }, [allAccounts, account.id]);
 
   // Fetch fresh account data and channel groups when modal opens
   useEffect(() => {
@@ -89,13 +122,18 @@ export function M3UGroupsModal({
     }
   }, [isOpen, account?.id]);
 
-  // Filter and sort groups by search and hideDisabled
+  // Filter and sort groups by search, hideDisabled, and showOnlyAutoSync
   const filteredGroups = useMemo(() => {
     let filtered = groups;
 
     // Filter by hideDisabled
     if (hideDisabled) {
       filtered = filtered.filter(g => g.enabled);
+    }
+
+    // Filter by showOnlyAutoSync
+    if (showOnlyAutoSync) {
+      filtered = filtered.filter(g => g.auto_channel_sync);
     }
 
     // Filter by search
@@ -106,12 +144,19 @@ export function M3UGroupsModal({
 
     // Sort alphabetically with natural sort
     return [...filtered].sort((a, b) => naturalCompare(a.name, b.name));
-  }, [groups, search, hideDisabled]);
+  }, [groups, search, hideDisabled, showOnlyAutoSync]);
 
   const handleToggleEnabled = (groupId: number) => {
-    setGroups(prev => prev.map(g =>
-      g.channel_group === groupId ? { ...g, enabled: !g.enabled } : g
-    ));
+    setGroups(prev => prev.map(g => {
+      if (g.channel_group !== groupId) return g;
+      const newEnabled = !g.enabled;
+      // If disabling the group, also disable auto-sync
+      return {
+        ...g,
+        enabled: newEnabled,
+        auto_channel_sync: newEnabled ? g.auto_channel_sync : false,
+      };
+    }));
     setHasChanges(true);
   };
 
@@ -140,6 +185,26 @@ export function M3UGroupsModal({
     setHasChanges(true);
   };
 
+  // Handle auto-sync settings save
+  const handleAutoSyncSettingsSave = (groupId: number, customProperties: AutoSyncCustomProperties) => {
+    setGroups(prev => prev.map(g =>
+      g.channel_group === groupId
+        ? { ...g, custom_properties: Object.keys(customProperties).length > 0 ? customProperties : null }
+        : g
+    ));
+    setHasChanges(true);
+  };
+
+  // Check if a group has custom properties configured
+  const hasCustomProperties = (group: GroupWithName): boolean => {
+    if (!group.custom_properties) return false;
+    return Object.keys(group.custom_properties).some(key => {
+      const value = group.custom_properties?.[key as keyof AutoSyncCustomProperties];
+      if (Array.isArray(value)) return value.length > 0;
+      return value !== undefined && value !== null && value !== '';
+    });
+  };
+
   const handleSave = async () => {
     setSaving(true);
     setError(null);
@@ -153,6 +218,7 @@ export function M3UGroupsModal({
         enabled: g.enabled,
         auto_channel_sync: g.auto_channel_sync,
         auto_sync_channel_start: g.auto_sync_channel_start,
+        custom_properties: g.custom_properties,
       }));
 
       // Save this account first
@@ -255,6 +321,8 @@ export function M3UGroupsModal({
             <div className="empty-state">
               {search ? (
                 <p>No groups match "{search}"</p>
+              ) : showOnlyAutoSync ? (
+                <p>No auto-sync groups. Uncheck "Auto-sync only" to see all groups.</p>
               ) : hideDisabled ? (
                 <p>No enabled groups. Uncheck "Hide disabled" to see all groups.</p>
               ) : (
@@ -267,7 +335,8 @@ export function M3UGroupsModal({
                 <span className="col-name">Group Name</span>
                 <span className="col-enabled">Enabled</span>
                 <span className="col-autosync">Auto-Sync</span>
-                <span className="col-start">Start Channel</span>
+                <span className="col-start">Start #</span>
+                <span className="col-settings">Settings</span>
               </div>
               {filteredGroups.map(group => (
                 <div key={group.channel_group} className="group-row">
@@ -285,15 +354,22 @@ export function M3UGroupsModal({
                     </label>
                   </div>
                   <div className="group-autosync">
-                    <label className="toggle">
-                      <input
-                        type="checkbox"
-                        checked={group.auto_channel_sync}
-                        onChange={() => handleToggleAutoSync(group.channel_group)}
-                        disabled={!group.enabled}
-                      />
-                      <span className="toggle-slider"></span>
-                    </label>
+                    {autoSyncedByOtherAccounts.has(group.channel_group) ? (
+                      <div className="autosync-owned" title={`Auto-synced by: ${autoSyncedByOtherAccounts.get(group.channel_group)}`}>
+                        <span className="material-icons">link</span>
+                        <span className="owned-text">{autoSyncedByOtherAccounts.get(group.channel_group)}</span>
+                      </div>
+                    ) : (
+                      <label className="toggle">
+                        <input
+                          type="checkbox"
+                          checked={group.auto_channel_sync}
+                          onChange={() => handleToggleAutoSync(group.channel_group)}
+                          disabled={!group.enabled}
+                        />
+                        <span className="toggle-slider"></span>
+                      </label>
+                    )}
                   </div>
                   <div className="group-start">
                     <input
@@ -302,8 +378,24 @@ export function M3UGroupsModal({
                       placeholder="--"
                       value={group.auto_sync_channel_start ?? ''}
                       onChange={(e) => handleStartChannelChange(group.channel_group, e.target.value)}
-                      disabled={!group.auto_channel_sync}
+                      disabled={!group.auto_channel_sync || autoSyncedByOtherAccounts.has(group.channel_group)}
                     />
+                  </div>
+                  <div className="group-settings">
+                    <button
+                      className={`settings-btn ${hasCustomProperties(group) ? 'has-settings' : ''}`}
+                      onClick={() => setSettingsModalGroup(group)}
+                      disabled={!group.auto_channel_sync || autoSyncedByOtherAccounts.has(group.channel_group)}
+                      title={
+                        autoSyncedByOtherAccounts.has(group.channel_group)
+                          ? `Auto-synced by: ${autoSyncedByOtherAccounts.get(group.channel_group)}`
+                          : group.auto_channel_sync
+                            ? 'Configure auto-sync settings'
+                            : 'Enable auto-sync to configure settings'
+                      }
+                    >
+                      <span className="material-icons">settings</span>
+                    </button>
                   </div>
                 </div>
               ))}
@@ -314,14 +406,24 @@ export function M3UGroupsModal({
         </div>
 
         <div className="modal-footer">
-          <label className="hide-disabled-checkbox">
-            <input
-              type="checkbox"
-              checked={hideDisabled}
-              onChange={(e) => setHideDisabled(e.target.checked)}
-            />
-            <span>Hide disabled</span>
-          </label>
+          <div className="footer-filters">
+            <label className="filter-checkbox">
+              <input
+                type="checkbox"
+                checked={hideDisabled}
+                onChange={(e) => setHideDisabled(e.target.checked)}
+              />
+              <span>Hide disabled</span>
+            </label>
+            <label className="filter-checkbox">
+              <input
+                type="checkbox"
+                checked={showOnlyAutoSync}
+                onChange={(e) => setShowOnlyAutoSync(e.target.checked)}
+              />
+              <span>Auto-sync only</span>
+            </label>
+          </div>
           <div className="footer-buttons">
             <button className="btn-secondary" onClick={onClose} disabled={saving}>
               Cancel
@@ -332,6 +434,25 @@ export function M3UGroupsModal({
           </div>
         </div>
       </div>
+
+      {/* Auto-Sync Settings Modal */}
+      {settingsModalGroup && (
+        <AutoSyncSettingsModal
+          isOpen={true}
+          onClose={() => setSettingsModalGroup(null)}
+          onSave={(customProperties) => {
+            handleAutoSyncSettingsSave(settingsModalGroup.channel_group, customProperties);
+            setSettingsModalGroup(null);
+          }}
+          groupName={settingsModalGroup.name}
+          customProperties={settingsModalGroup.custom_properties}
+          epgSources={epgSources}
+          channelGroups={allChannelGroups}
+          channelProfiles={channelProfiles}
+          streamProfiles={streamProfiles}
+          onGroupsChange={onChannelGroupsChange}
+        />
+      )}
     </div>
   );
 }

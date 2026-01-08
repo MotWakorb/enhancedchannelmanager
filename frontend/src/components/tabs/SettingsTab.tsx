@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import * as api from '../../services/api';
+import { NETWORK_PREFIXES } from '../../services/api';
 import type { Theme } from '../../services/api';
 import type { ChannelProfile } from '../../types';
 import './SettingsTab.css';
@@ -30,6 +31,8 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
   const [timezonePreference, setTimezonePreference] = useState('both');
   const [defaultChannelProfileIds, setDefaultChannelProfileIds] = useState<number[]>([]);
   const [epgAutoMatchThreshold, setEpgAutoMatchThreshold] = useState(80);
+  const [customNetworkPrefixes, setCustomNetworkPrefixes] = useState<string[]>([]);
+  const [newPrefixInput, setNewPrefixInput] = useState('');
 
   // Appearance settings
   const [showStreamUrls, setShowStreamUrls] = useState(true);
@@ -73,6 +76,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
       setTheme(settings.theme || 'dark');
       setDefaultChannelProfileIds(settings.default_channel_profile_ids);
       setEpgAutoMatchThreshold(settings.epg_auto_match_threshold ?? 80);
+      setCustomNetworkPrefixes(settings.custom_network_prefixes ?? []);
       setTestResult(null);
       setError(null);
     } catch (err) {
@@ -148,6 +152,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
         theme: theme,
         default_channel_profile_ids: defaultChannelProfileIds,
         epg_auto_match_threshold: epgAutoMatchThreshold,
+        custom_network_prefixes: customNetworkPrefixes,
       });
       setOriginalUrl(url);
       setOriginalUsername(username);
@@ -638,6 +643,91 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
             Lower values match more channels automatically but may be less accurate.
             Set to 0 to require manual review for all matches.
           </p>
+        </div>
+      </div>
+
+      <div className="settings-section">
+        <div className="settings-section-header">
+          <span className="material-icons">label</span>
+          <h3>Custom Network Prefixes</h3>
+        </div>
+
+        <div className="form-group">
+          <p className="form-hint" style={{ marginTop: 0, marginBottom: '0.75rem' }}>
+            Add custom prefixes to strip during bulk channel creation. These are merged with the built-in
+            list (CHAMP, PPV, NFL, NBA, etc.) when "Strip network prefixes" is enabled.
+          </p>
+
+          <div className="custom-prefix-input-row">
+            <input
+              type="text"
+              placeholder="Enter prefix (e.g., MARQUEE)"
+              value={newPrefixInput}
+              onChange={(e) => setNewPrefixInput(e.target.value.toUpperCase())}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && newPrefixInput.trim()) {
+                  e.preventDefault();
+                  const prefix = newPrefixInput.trim();
+                  // Check if prefix already exists in custom list or built-in list
+                  if (!customNetworkPrefixes.includes(prefix) && !NETWORK_PREFIXES.includes(prefix)) {
+                    setCustomNetworkPrefixes([...customNetworkPrefixes, prefix]);
+                  }
+                  setNewPrefixInput('');
+                }
+              }}
+              className="custom-prefix-input"
+            />
+            <button
+              type="button"
+              className="btn-secondary custom-prefix-add-btn"
+              onClick={() => {
+                const prefix = newPrefixInput.trim();
+                // Check if prefix already exists in custom list or built-in list
+                if (prefix && !customNetworkPrefixes.includes(prefix) && !NETWORK_PREFIXES.includes(prefix)) {
+                  setCustomNetworkPrefixes([...customNetworkPrefixes, prefix]);
+                }
+                setNewPrefixInput('');
+              }}
+              disabled={!newPrefixInput.trim() || NETWORK_PREFIXES.includes(newPrefixInput.trim()) || customNetworkPrefixes.includes(newPrefixInput.trim())}
+            >
+              <span className="material-icons">add</span>
+              Add
+            </button>
+          </div>
+
+          {newPrefixInput.trim() && NETWORK_PREFIXES.includes(newPrefixInput.trim()) && (
+            <p className="custom-prefix-warning">
+              "{newPrefixInput.trim()}" is already a built-in prefix
+            </p>
+          )}
+
+          {newPrefixInput.trim() && !NETWORK_PREFIXES.includes(newPrefixInput.trim()) && customNetworkPrefixes.includes(newPrefixInput.trim()) && (
+            <p className="custom-prefix-warning">
+              "{newPrefixInput.trim()}" is already in your custom list
+            </p>
+          )}
+
+          {customNetworkPrefixes.length > 0 && (
+            <div className="custom-prefix-list">
+              {customNetworkPrefixes.map((prefix) => (
+                <div key={prefix} className="custom-prefix-tag">
+                  <span>{prefix}</span>
+                  <button
+                    type="button"
+                    className="custom-prefix-remove"
+                    onClick={() => setCustomNetworkPrefixes(customNetworkPrefixes.filter(p => p !== prefix))}
+                    title="Remove prefix"
+                  >
+                    <span className="material-icons">close</span>
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {customNetworkPrefixes.length === 0 && (
+            <p className="custom-prefix-empty">No custom prefixes defined. Built-in prefixes will be used.</p>
+          )}
         </div>
       </div>
 

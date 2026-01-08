@@ -327,3 +327,48 @@
   width: 3px;
   background-color: var(--accent-primary);
 }
+
+/* Commit Progress Bar */
+.commit-progress-section {
+  padding: 0.5rem 0;
+}
+
+.commit-progress-bar-container {
+  height: 8px;
+  background-color: var(--border-primary);
+  border-radius: 4px;
+  overflow: hidden;
+  margin-bottom: 0.75rem;
+}
+
+.commit-progress-bar {
+  height: 100%;
+  background-color: var(--accent-primary);
+  border-radius: 4px;
+  transition: width 0.2s ease-out;
+}
+
+.commit-progress-info {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 0.5rem;
+}
+
+.commit-progress-count {
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+}
+
+.commit-progress-percent {
+  color: var(--accent-primary);
+  font-weight: 600;
+  font-size: 0.85rem;
+}
+
+.commit-progress-operation {
+  color: var(--text-primary);
+  font-size: 0.9rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

@@ -20,6 +20,7 @@ export interface ChannelDefaults {
   countrySeparator: string;
   timezonePreference: string;
   defaultChannelProfileId?: number | null;
+  customNetworkPrefixes?: string[];
 }
 
 interface StreamsPaneProps {
@@ -67,6 +68,7 @@ interface StreamsPaneProps {
     countrySeparator?: NumberSeparator,
     prefixOrder?: PrefixOrder,
     stripNetworkPrefix?: boolean,
+    customNetworkPrefixes?: string[],
     profileIds?: number[],
     pushDownOnConflict?: boolean
   ) => Promise<void>;
@@ -715,10 +717,10 @@ export function StreamsPane({
     return detectCountryPrefixes(streamsToCreate);
   }, [streamsToCreate]);
 
-  // Detect if streams have network prefixes (CHAMP, PPV, etc.)
+  // Detect if streams have network prefixes (CHAMP, PPV, etc. + custom)
   const hasNetworkPrefixes = useMemo(() => {
-    return detectNetworkPrefixes(streamsToCreate);
-  }, [streamsToCreate]);
+    return detectNetworkPrefixes(streamsToCreate, channelDefaults?.customNetworkPrefixes);
+  }, [streamsToCreate, channelDefaults?.customNetworkPrefixes]);
 
   // Get unique country prefixes for display
   const uniqueCountryPrefixes = useMemo(() => {
@@ -739,6 +741,7 @@ export function StreamsPane({
       keepCountryPrefix: bulkCreateKeepCountry,
       countrySeparator: bulkCreateCountrySeparator,
       stripNetworkPrefix: bulkCreateStripNetwork,
+      customNetworkPrefixes: channelDefaults?.customNetworkPrefixes,
     };
 
     const unsortedStreamsByNormalizedName = new Map<string, Stream[]>();
@@ -827,6 +830,7 @@ export function StreamsPane({
             bulkCreateCountrySeparator,
             bulkCreatePrefixOrder,
             bulkCreateStripNetwork,
+            channelDefaults?.customNetworkPrefixes,
             bulkCreateSelectedProfiles.size > 0 ? Array.from(bulkCreateSelectedProfiles) : undefined,
             pushDown
           );
@@ -874,6 +878,7 @@ export function StreamsPane({
           bulkCreateCountrySeparator,
           bulkCreatePrefixOrder,
           bulkCreateStripNetwork,
+          channelDefaults?.customNetworkPrefixes,
           bulkCreateSelectedProfiles.size > 0 ? Array.from(bulkCreateSelectedProfiles) : undefined,
           pushDown
         );

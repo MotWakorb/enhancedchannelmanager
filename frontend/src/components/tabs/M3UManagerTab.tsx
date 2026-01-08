@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
-import type { M3UAccount, ServerGroup } from '../../types';
+import type { M3UAccount, ServerGroup, EPGSource, ChannelGroup, ChannelProfile, StreamProfile } from '../../types';
 import * as api from '../../services/api';
 import { naturalCompare } from '../../utils/naturalSort';
 import { M3UAccountModal } from '../M3UAccountModal';
@@ -7,6 +7,14 @@ import { M3UGroupsModal } from '../M3UGroupsModal';
 import { M3UFiltersModal } from '../M3UFiltersModal';
 import { M3ULinkedAccountsModal } from '../M3ULinkedAccountsModal';
 import './M3UManagerTab.css';
+
+interface M3UManagerTabProps {
+  epgSources?: EPGSource[];
+  channelGroups?: ChannelGroup[];
+  channelProfiles?: ChannelProfile[];
+  streamProfiles?: StreamProfile[];
+  onChannelGroupsChange?: () => void;
+}
 
 interface M3UAccountRowProps {
   account: M3UAccount;
@@ -77,9 +85,10 @@ function M3UAccountRow({
     return date.toLocaleString();
   };
 
-  // Count enabled groups
+  // Count enabled groups and auto-sync groups
   const enabledGroupCount = account.channel_groups.filter(g => g.enabled).length;
   const totalGroupCount = account.channel_groups.length;
+  const autoSyncGroupCount = account.channel_groups.filter(g => g.auto_channel_sync).length;
 
   return (
     <div className={`m3u-account-row ${!account.is_active ? 'inactive' : ''}`}>
@@ -120,9 +129,15 @@ function M3UAccountRow({
       </div>
 
       <div className="account-groups">
-        <span className="group-count">
+        <span className="group-count" title={`${enabledGroupCount} enabled out of ${totalGroupCount} total groups`}>
           {enabledGroupCount} / {totalGroupCount} groups
         </span>
+        {autoSyncGroupCount > 0 && (
+          <span className="auto-sync-count" title={`${autoSyncGroupCount} groups set to auto-sync`}>
+            <span className="material-icons">sync</span>
+            {autoSyncGroupCount} auto-sync
+          </span>
+        )}
       </div>
 
       <div className="account-settings">
@@ -192,7 +207,13 @@ function M3UAccountRow({
   );
 }
 
-export function M3UManagerTab() {
+export function M3UManagerTab({
+  epgSources = [],
+  channelGroups = [],
+  channelProfiles = [],
+  streamProfiles = [],
+  onChannelGroupsChange,
+}: M3UManagerTabProps) {
   const [accounts, setAccounts] = useState<M3UAccount[]>([]);
   const [serverGroups, setServerGroups] = useState<ServerGroup[]>([]);
   const [loading, setLoading] = useState(true);
@@ -289,17 +310,24 @@ export function M3UManagerTab() {
   const handleRefreshAll = async () => {
     setRefreshingAll(true);
     try {
-      await api.refreshAllM3UAccounts();
-      // Mark all active accounts as fetching
+      // Filter out the hidden "custom" account - don't refresh it
+      const accountsToRefresh = accounts.filter(
+        a => a.is_active && a.name.toLowerCase() !== 'custom'
+      );
+
+      // Trigger refresh for each account individually
+      await Promise.all(accountsToRefresh.map(a => api.refreshM3UAccount(a.id)));
+
+      // Mark these accounts as fetching
       setAccounts(prev => prev.map(a =>
-        a.is_active ? { ...a, status: 'fetching' } : a
+        a.is_active && a.name.toLowerCase() !== 'custom' ? { ...a, status: 'fetching' } : a
       ));
       // Poll for status updates
       const pollInterval = setInterval(async () => {
         const updatedAccounts = await api.getM3UAccounts();
         setAccounts(updatedAccounts);
         const stillRefreshing = updatedAccounts.some(
-          a => a.is_active && (a.status === 'fetching' || a.status === 'parsing')
+          a => a.is_active && a.name.toLowerCase() !== 'custom' && (a.status === 'fetching' || a.status === 'parsing')
         );
         if (!stillRefreshing) {
           clearInterval(pollInterval);
@@ -562,6 +590,11 @@ export function M3UManagerTab() {
           account={groupsAccount}
           allAccounts={accounts}
           linkedAccountGroups={linkedM3UAccounts}
+          epgSources={epgSources}
+          channelGroups={channelGroups}
+          channelProfiles={channelProfiles}
+          streamProfiles={streamProfiles}
+          onChannelGroupsChange={onChannelGroupsChange}
         />
       )}
 

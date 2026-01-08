@@ -147,6 +147,7 @@ export interface ChannelManagerTabProps {
     countrySeparator?: NumberSeparator,
     prefixOrder?: PrefixOrder,
     stripNetworkPrefix?: boolean,
+    customNetworkPrefixes?: string[],
     profileIds?: number[],
     pushDownOnConflict?: boolean
   ) => Promise<void>;
@@ -154,6 +155,10 @@ export interface ChannelManagerTabProps {
   onCheckConflicts?: (startingNumber: number, count: number) => number;
   // Callback to get the highest existing channel number (for "insert at end" option)
   onGetHighestChannelNumber?: () => number;
+
+  // External trigger to open edit modal from Guide tab
+  externalChannelToEdit?: Channel | null;
+  onExternalChannelEditHandled?: () => void;
 }
 
 export function ChannelManagerTab({
@@ -285,6 +290,10 @@ export function ChannelManagerTab({
   onBulkCreateFromGroup,
   onCheckConflicts,
   onGetHighestChannelNumber,
+
+  // External trigger to open edit modal from Guide tab
+  externalChannelToEdit,
+  onExternalChannelEditHandled,
 }: ChannelManagerTabProps) {
   return (
     <SplitPane
@@ -360,6 +369,8 @@ export function ChannelManagerTab({
           onBulkStreamsDrop={onBulkStreamsDrop}
           showStreamUrls={showStreamUrls}
           epgAutoMatchThreshold={epgAutoMatchThreshold}
+          externalChannelToEdit={externalChannelToEdit}
+          onExternalChannelEditHandled={onExternalChannelEditHandled}
         />
       }
       right={

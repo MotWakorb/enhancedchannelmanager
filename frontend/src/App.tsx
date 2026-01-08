@@ -8,13 +8,14 @@ import {
 import { ChannelManagerTab } from './components/tabs/ChannelManagerTab';
 import { useChangeHistory, useEditMode } from './hooks';
 import * as api from './services/api';
-import type { Channel, ChannelGroup, ChannelProfile, Stream, M3UAccount, M3UGroupSetting, Logo, ChangeInfo, EPGData, StreamProfile, EPGSource, ChannelListFilterSettings } from './types';
+import type { Channel, ChannelGroup, ChannelProfile, Stream, M3UAccount, M3UGroupSetting, Logo, ChangeInfo, EPGData, StreamProfile, EPGSource, ChannelListFilterSettings, CommitProgress } from './types';
 import packageJson from '../package.json';
 import './App.css';
 
 // Lazy load non-primary tabs
 const M3UManagerTab = lazy(() => import('./components/tabs/M3UManagerTab').then(m => ({ default: m.M3UManagerTab })));
 const EPGManagerTab = lazy(() => import('./components/tabs/EPGManagerTab').then(m => ({ default: m.EPGManagerTab })));
+const GuideTab = lazy(() => import('./components/tabs/GuideTab').then(m => ({ default: m.GuideTab })));
 const LogoManagerTab = lazy(() => import('./components/tabs/LogoManagerTab').then(m => ({ default: m.LogoManagerTab })));
 const SettingsTab = lazy(() => import('./components/tabs/SettingsTab').then(m => ({ default: m.SettingsTab })));
 
@@ -29,6 +30,7 @@ function App() {
   const [selectedChannel, setSelectedChannel] = useState<Channel | null>(null);
   const [selectedChannelIds, setSelectedChannelIds] = useState<Set<number>>(new Set());
   const [lastSelectedChannelId, setLastSelectedChannelId] = useState<number | null>(null);
+  const [channelToEditFromGuide, setChannelToEditFromGuide] = useState<Channel | null>(null);
   const [channelsLoading, setChannelsLoading] = useState(true);
   const [channelSearch, setChannelSearch] = useState('');
   const [channelGroupFilter, setChannelGroupFilter] = useState<number[]>([]);
@@ -76,6 +78,7 @@ function App() {
     countrySeparator: '|',
     timezonePreference: 'both',
     defaultChannelProfileIds: [] as number[],
+    customNetworkPrefixes: [] as string[],
   });
   // Also keep separate state for use in callbacks (to avoid stale closure issues)
   const [defaultChannelProfileIds, setDefaultChannelProfileIds] = useState<number[]>([]);
@@ -111,6 +114,7 @@ function App() {
 
   // Edit mode exit dialog state
   const [showExitDialog, setShowExitDialog] = useState(false);
+  const [commitProgress, setCommitProgress] = useState<CommitProgress | null>(null);
 
   // Tab navigation state
   const [activeTab, setActiveTab] = useState<TabId>('channel-manager');
@@ -255,7 +259,11 @@ function App() {
 
   // Handle dialog actions
   const handleApplyChanges = useCallback(async () => {
-    await commit();
+    setCommitProgress({ current: 0, total: 1, currentOperation: 'Starting...' });
+    await commit((progress) => {
+      setCommitProgress(progress);
+    });
+    setCommitProgress(null);
     setShowExitDialog(false);
     // Switch to pending tab if there was one
     if (pendingTabChange) {
@@ -337,6 +345,7 @@ function App() {
           countrySeparator: settings.country_separator,
           timezonePreference: settings.timezone_preference,
           defaultChannelProfileIds: settings.default_channel_profile_ids,
+          customNetworkPrefixes: settings.custom_network_prefixes ?? [],
         });
         setDefaultChannelProfileIds(settings.default_channel_profile_ids);
 
@@ -478,6 +487,7 @@ function App() {
         countrySeparator: settings.country_separator,
         timezonePreference: settings.timezone_preference,
         defaultChannelProfileIds: settings.default_channel_profile_ids,
+        customNetworkPrefixes: settings.custom_network_prefixes ?? [],
       });
       setDefaultChannelProfileIds(settings.default_channel_profile_ids);
 
@@ -779,6 +789,47 @@ function App() {
     setSelectedChannel(channel);
   };
 
+  // Handle channel update from Guide tab edit modal
+  const handleGuideChannelUpdate = useCallback(async (channel: Channel, changes: {
+    channel_number?: number;
+    name?: string;
+    logo_id?: number | null;
+    tvg_id?: string | null;
+    tvc_guide_stationid?: string | null;
+    epg_data_id?: number | null;
+    stream_profile_id?: number | null;
+  }) => {
+    try {
+      // Update the channel via API
+      const updatedChannel = await api.updateChannel(channel.id, changes);
+
+      // Update local state
+      setChannels(prev => prev.map(ch =>
+        ch.id === channel.id ? { ...ch, ...updatedChannel } : ch
+      ));
+    } catch (err) {
+      console.error('Failed to update channel from Guide:', err);
+      throw err;
+    }
+  }, []);
+
+  // Clear the external channel edit trigger after it's been handled
+  const handleExternalChannelEditHandled = useCallback(() => {
+    setChannelToEditFromGuide(null);
+  }, []);
+
+  // Handle logo creation from URL (for Guide tab edit modal)
+  const handleLogoCreate = useCallback(async (url: string) => {
+    const logo = await api.createLogo({ url, name: url.split('/').pop() || 'Logo' });
+    return logo;
+  }, []);
+
+  // Handle logo upload (for Guide tab edit modal)
+  const handleLogoUpload = useCallback(async (file: File) => {
+    const logo = await api.uploadLogo(file);
+    return logo;
+  }, []);
+
   // Multi-select handlers
   const handleToggleChannelSelection = useCallback((channelId: number, addToSelection: boolean) => {
     setSelectedChannelIds((prev) => {
@@ -1026,6 +1077,7 @@ function App() {
       countrySeparator?: api.NumberSeparator,
       prefixOrder?: api.PrefixOrder,
       stripNetworkPrefix?: boolean,
+      customNetworkPrefixes?: string[],
       profileIds?: number[],
       pushDownOnConflict?: boolean
     ) => {
@@ -1050,6 +1102,7 @@ function App() {
           keepCountryPrefix: keepCountryPrefix ?? false,
           countrySeparator: countrySeparator ?? '|',
           stripNetworkPrefix: stripNetworkPrefix ?? false,
+          customNetworkPrefixes: customNetworkPrefixes,
         };
 
         // Filter streams by timezone preference
@@ -1435,6 +1488,7 @@ function App() {
         onDiscard={handleDiscardChanges}
         onKeepEditing={handleKeepEditing}
         isCommitting={isCommitting}
+        commitProgress={commitProgress}
       />
 
       {/* Keep SettingsModal for first-run configuration */}
@@ -1576,10 +1630,36 @@ function App() {
 
               // Refresh streams (bypasses cache)
               onRefreshStreams={refreshStreams}
+
+              // External trigger to open edit modal from Guide tab
+              externalChannelToEdit={channelToEditFromGuide}
+              onExternalChannelEditHandled={handleExternalChannelEditHandled}
             />
           )}
-          {activeTab === 'm3u-manager' && <M3UManagerTab />}
-          {activeTab === 'epg-manager' && <EPGManagerTab />}
+          {activeTab === 'm3u-manager' && (
+            <M3UManagerTab
+              epgSources={epgSources}
+              channelGroups={channelGroups}
+              channelProfiles={channelProfiles}
+              streamProfiles={streamProfiles}
+              onChannelGroupsChange={loadChannelGroups}
+            />
+          )}
+          {activeTab === 'epg-manager' && <EPGManagerTab onSourcesChange={loadEpgSources} />}
+          {activeTab === 'guide' && (
+            <GuideTab
+              channels={channels}
+              logos={logos}
+              epgData={epgData}
+              epgSources={epgSources}
+              streamProfiles={streamProfiles}
+              epgDataLoading={epgDataLoading}
+              onChannelUpdate={handleGuideChannelUpdate}
+              onLogoCreate={handleLogoCreate}
+              onLogoUpload={handleLogoUpload}
+              onLogosChange={loadLogos}
+            />
+          )}
           {activeTab === 'logo-manager' && <LogoManagerTab />}
           {activeTab === 'settings' && <SettingsTab onSaved={handleSettingsSaved} channelProfiles={channelProfiles} />}
         </Suspense>

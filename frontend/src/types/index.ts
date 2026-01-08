@@ -20,6 +20,41 @@ export interface Channel {
 export type EPGSourceType = 'xmltv' | 'schedules_direct' | 'dummy';
 export type EPGSourceStatus = 'idle' | 'fetching' | 'parsing' | 'error' | 'success' | 'disabled';
 
+// Custom properties for Dummy EPG sources
+export interface DummyEPGCustomProperties {
+  // Pattern Configuration
+  name_source?: 'channel' | 'stream';       // What to parse (channel name or stream name)
+  stream_index?: number;                     // Which stream (1-based) if name_source is 'stream'
+  title_pattern?: string;                    // Regex with named groups to extract info
+  time_pattern?: string;                     // Optional time extraction regex
+  date_pattern?: string;                     // Optional date extraction regex
+
+  // Output Templates
+  title_template?: string;                   // Format EPG title using extracted groups
+  description_template?: string;             // Format EPG description
+
+  // Upcoming/Ended Templates
+  upcoming_title_template?: string;          // Title for programs before event starts
+  upcoming_description_template?: string;    // Description before event
+  ended_title_template?: string;             // Title for programs after event ends
+  ended_description_template?: string;       // Description after event
+
+  // Fallback Templates (when patterns don't match)
+  fallback_title_template?: string;
+  fallback_description_template?: string;
+
+  // EPG Settings
+  event_timezone?: string;                   // Timezone of event times (e.g., "US/Eastern")
+  output_timezone?: string;                  // Optional different display timezone
+  program_duration?: number;                 // Minutes (default 180)
+  categories?: string;                       // Comma-separated categories
+  channel_logo_url?: string;                 // URL template with placeholders
+  program_poster_url?: string;               // URL template for program icons
+  include_date_tag?: boolean;                // Add <date> tag to EPG output
+  include_live_tag?: boolean;                // Mark programs as live content
+  include_new_tag?: boolean;                 // Mark programs as new content
+}
+
 export interface EPGSource {
   id: number;
   name: string;
@@ -34,7 +69,7 @@ export interface EPGSource {
   last_message: string | null;
   created_at: string;
   updated_at: string | null;
-  custom_properties: Record<string, unknown> | null;
+  custom_properties: DummyEPGCustomProperties | Record<string, unknown> | null;
   epg_data_count: string;
 }
 
@@ -44,6 +79,16 @@ export interface EPGData {
   name: string;
   icon_url: string | null;
   epg_source: number;
+}
+
+export interface EPGProgram {
+  id: number;
+  start_time: string;
+  end_time: string;
+  title: string;
+  sub_title?: string | null;
+  description?: string | null;
+  tvg_id?: string | null;
 }
 
 export interface StreamProfile {
@@ -93,6 +138,20 @@ export interface M3UAccountProfile {
   status: string;
 }
 
+// Auto-sync custom properties for channel groups
+export interface AutoSyncCustomProperties {
+  xc_id?: string | null;                    // Force EPG Source ID (string for API compatibility)
+  group_override?: number | null;           // Override Channel Group ID
+  name_regex_pattern?: string;              // Find pattern (regex)
+  name_replace_pattern?: string;            // Replace pattern
+  channel_name_filter?: string;             // Channel name filter (regex)
+  channel_profile_ids?: string[];           // Channel Profile IDs (strings for API compatibility)
+  channel_sort_order?: 'provider' | 'name' | 'tvg_id' | 'updated_at' | null; // Sort field
+  channel_sort_reverse?: boolean; // Reverse sort order
+  stream_profile_id?: number | null;        // Stream Profile ID
+  custom_logo_id?: number | null;           // Custom Logo ID
+}
+
 export interface ChannelGroupM3UAccount {
   id: number;
   channel_group: number;
@@ -102,7 +161,7 @@ export interface ChannelGroupM3UAccount {
   enabled_series: boolean;
   auto_channel_sync: boolean;
   auto_sync_channel_start: number | null;
-  custom_properties: Record<string, unknown> | null;
+  custom_properties: AutoSyncCustomProperties | null;
 }
 
 export interface M3UAccount {
@@ -208,22 +267,6 @@ export interface PaginatedResponse<T> {
   next: string | null;
   previous: string | null;
   results: T[];
-}
-
-export interface BulkChannelCreateRequest {
-  streams: Stream[];
-  startingNumber: number;
-  channelGroupId: number | null;
-  channelGroupName?: string; // For creating new group with this name
-}
-
-export interface ChannelWithStreams extends Channel {
-  streamDetails?: Stream[];
-}
-
-export interface ChannelGroupWithChannels extends ChannelGroup {
-  channels: Channel[];
-  expanded?: boolean;
 }
 
 // Re-export history types

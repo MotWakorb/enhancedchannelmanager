@@ -693,76 +693,12 @@ function findEPGMatchesWithLookup(
 }
 
 /**
- * Find EPG matches for a channel based on name similarity and country filtering.
- * NOTE: For batch operations, use batchFindEPGMatches instead for better performance.
- *
- * @param channel - The channel to find matches for
- * @param channelStreams - Streams associated with this channel
- * @param epgData - All available EPG data entries
- * @returns Match result with categorized matches
- */
-export function findEPGMatches(
-  channel: Channel,
-  channelStreams: Stream[],
-  epgData: EPGData[]
-): EPGMatchResult {
-  // For single channel, build lookup and use it
-  const lookup = buildEPGLookup(epgData);
-  return findEPGMatchesWithLookup(channel, channelStreams, lookup);
-}
-
-/**
  * Progress callback for batch matching
  */
 export interface BatchMatchProgress {
   current: number;
   total: number;
   channelName: string;
-}
-
-/**
- * Process multiple channels for EPG matching.
- * Uses pre-built lookup maps for O(n + m) performance instead of O(n * m)
- * where n = channels and m = EPG entries.
- *
- * @param channels - Channels to match
- * @param allStreams - All available streams
- * @param epgData - All available EPG data
- * @param onProgress - Optional callback for progress updates
- * @returns Array of match results
- */
-export function batchFindEPGMatches(
-  channels: Channel[],
-  allStreams: Stream[],
-  epgData: EPGData[],
-  onProgress?: (progress: BatchMatchProgress) => void
-): EPGMatchResult[] {
-  // Build lookup maps ONCE for all EPG data
-  const epgLookup = buildEPGLookup(epgData);
-
-  // Create a lookup map for streams by ID
-  const streamMap = new Map(allStreams.map(s => [s.id, s]));
-
-  const results: EPGMatchResult[] = [];
-  const total = channels.length;
-
-  for (let i = 0; i < channels.length; i++) {
-    const channel = channels[i];
-
-    // Report progress
-    if (onProgress) {
-      onProgress({ current: i + 1, total, channelName: channel.name });
-    }
-
-    // Get streams associated with this channel
-    const channelStreams = channel.streams
-      .map(id => streamMap.get(id))
-      .filter((s): s is Stream => s !== undefined);
-
-    results.push(findEPGMatchesWithLookup(channel, channelStreams, epgLookup));
-  }
-
-  return results;
 }
 
 /**
