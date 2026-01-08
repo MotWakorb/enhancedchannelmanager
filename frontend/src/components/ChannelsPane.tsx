@@ -28,6 +28,7 @@ import type { NumberSeparator } from '../services/api';
 import { HistoryToolbar } from './HistoryToolbar';
 import { BulkEPGAssignModal, type EPGAssignment } from './BulkEPGAssignModal';
 import { EditChannelModal, type ChannelMetadataChanges } from './EditChannelModal';
+import { NormalizeNamesModal } from './NormalizeNamesModal';
 import { naturalCompare } from '../utils/naturalSort';
 import './ChannelsPane.css';
 
@@ -833,6 +834,9 @@ export function ChannelsPane({
   // Bulk EPG assignment modal state
   const [showBulkEPGModal, setShowBulkEPGModal] = useState(false);
 
+  // Normalize names modal state
+  const [showNormalizeModal, setShowNormalizeModal] = useState(false);
+
   // Cross-group move modal state
   const [showCrossGroupMoveModal, setShowCrossGroupMoveModal] = useState(false);
   const [crossGroupMoveData, setCrossGroupMoveData] = useState<{
@@ -1370,6 +1374,28 @@ export function ChannelsPane({
 
     // Close modal and clear selection
     setShowBulkEPGModal(false);
+    if (onClearChannelSelection) {
+      onClearChannelSelection();
+    }
+  };
+
+  // Handle normalize names
+  const handleNormalizeNames = (channelUpdates: Array<{ id: number; newName: string }>) => {
+    if (!isEditMode || !onStageUpdateChannel) return;
+
+    if (channelUpdates.length > 1 && onStartBatch && onEndBatch) {
+      onStartBatch(`Normalize ${channelUpdates.length} channel names`);
+    }
+
+    for (const update of channelUpdates) {
+      onStageUpdateChannel(update.id, { name: update.newName }, `Normalize name to "${update.newName}"`);
+    }
+
+    if (channelUpdates.length > 1 && onStartBatch && onEndBatch) {
+      onEndBatch();
+    }
+
+    setShowNormalizeModal(false);
     if (onClearChannelSelection) {
       onClearChannelSelection();
     }
@@ -3397,6 +3423,14 @@ export function ChannelsPane({
                 EPG
               </button>
               <button
+                className="bulk-normalize-btn"
+                onClick={() => setShowNormalizeModal(true)}
+                title="Normalize channel names (title case with league prefix)"
+              >
+                <span className="material-icons">text_format</span>
+                Normalize
+              </button>
+              <button
                 className="bulk-delete-btn"
                 onClick={handleBulkDeleteClick}
                 title="Delete selected channels"
@@ -4029,6 +4063,15 @@ export function ChannelsPane({
         onAssign={handleBulkEPGAssign}
         epgAutoMatchThreshold={epgAutoMatchThreshold}
       />
+
+      {/* Normalize Names Modal */}
+      {showNormalizeModal && selectedChannelIds.size > 0 && (
+        <NormalizeNamesModal
+          channels={channels.filter(c => selectedChannelIds.has(c.id))}
+          onConfirm={handleNormalizeNames}
+          onCancel={() => setShowNormalizeModal(false)}
+        />
+      )}
 
       {/* Edit Channel Modal */}
       {showEditChannelModal && channelToEdit && (
