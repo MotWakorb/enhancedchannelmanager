@@ -36,7 +36,10 @@ export function HistoryToolbar({
   isEditMode = false,
 }: HistoryToolbarProps) {
   const [savePointDropdownOpen, setSavePointDropdownOpen] = useState(false);
+  const [showNameModal, setShowNameModal] = useState(false);
+  const [checkpointName, setCheckpointName] = useState('');
   const dropdownRef = useRef<HTMLDivElement>(null);
+  const nameInputRef = useRef<HTMLInputElement>(null);
 
   // Close dropdown on outside click
   useEffect(() => {
@@ -49,8 +52,36 @@ export function HistoryToolbar({
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
+  // Focus input when modal opens
+  useEffect(() => {
+    if (showNameModal && nameInputRef.current) {
+      nameInputRef.current.focus();
+    }
+  }, [showNameModal]);
+
   const handleCreateSavePoint = () => {
-    onCreateSavePoint();
+    setCheckpointName('');
+    setShowNameModal(true);
+  };
+
+  const handleConfirmCheckpoint = () => {
+    const name = checkpointName.trim() || `Checkpoint ${savePoints.length + 1}`;
+    onCreateSavePoint(name);
+    setShowNameModal(false);
+    setCheckpointName('');
+  };
+
+  const handleCancelCheckpoint = () => {
+    setShowNameModal(false);
+    setCheckpointName('');
+  };
+
+  const handleNameKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter') {
+      handleConfirmCheckpoint();
+    } else if (e.key === 'Escape') {
+      handleCancelCheckpoint();
+    }
   };
 
   const formatTime = (timestamp: number) => {
@@ -164,6 +195,32 @@ export function HistoryToolbar({
 
       {/* Operation Pending Indicator */}
       {isOperationPending && <span className="pending-indicator">...</span>}
+
+      {/* Checkpoint Name Modal */}
+      {showNameModal && (
+        <div className="checkpoint-name-modal-overlay" onClick={handleCancelCheckpoint}>
+          <div className="checkpoint-name-modal" onClick={(e) => e.stopPropagation()}>
+            <h4>Create Checkpoint</h4>
+            <input
+              ref={nameInputRef}
+              type="text"
+              value={checkpointName}
+              onChange={(e) => setCheckpointName(e.target.value)}
+              onKeyDown={handleNameKeyDown}
+              placeholder={`Checkpoint ${savePoints.length + 1}`}
+              className="checkpoint-name-input"
+            />
+            <div className="checkpoint-name-actions">
+              <button className="checkpoint-name-btn cancel" onClick={handleCancelCheckpoint}>
+                Cancel
+              </button>
+              <button className="checkpoint-name-btn confirm" onClick={handleConfirmCheckpoint}>
+                Create
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

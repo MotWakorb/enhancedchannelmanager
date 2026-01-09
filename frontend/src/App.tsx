@@ -258,6 +258,30 @@ function App() {
     }
   }, [stagedOperationCount, rawExitEditMode]);
 
+  // Change history for undo/redo
+  const {
+    canUndo,
+    canRedo,
+    undoCount,
+    redoCount,
+    savePoints,
+    hasUnsavedChanges,
+    lastChange,
+    isOperationPending,
+    recordChange,
+    undo,
+    redo,
+    createSavePoint,
+    revertToSavePoint,
+    deleteSavePoint,
+    initializeBaseline,
+    clearHistory,
+  } = useChangeHistory({
+    channels,
+    onChannelsRestore: setChannels,
+    onError: setError,
+  });
+
   // Handle dialog actions
   const handleApplyChanges = useCallback(async () => {
     setCommitProgress({ current: 0, total: 1, currentOperation: 'Starting...' });
@@ -266,23 +290,27 @@ function App() {
     });
     setCommitProgress(null);
     setShowExitDialog(false);
+    // Clear checkpoints when exiting edit mode
+    clearHistory();
     // Switch to pending tab if there was one
     if (pendingTabChange) {
       setActiveTab(pendingTabChange);
       setPendingTabChange(null);
     }
-  }, [commit, pendingTabChange]);
+  }, [commit, clearHistory, pendingTabChange]);
 
   const handleDiscardChanges = useCallback(() => {
     discard();
     setSelectedChannelIds(new Set());
     setShowExitDialog(false);
+    // Clear checkpoints when exiting edit mode
+    clearHistory();
     // Switch to pending tab if there was one
     if (pendingTabChange) {
       setActiveTab(pendingTabChange);
       setPendingTabChange(null);
     }
-  }, [discard, pendingTabChange]);
+  }, [discard, clearHistory, pendingTabChange]);
 
   const handleKeepEditing = useCallback(() => {
     setShowExitDialog(false);
@@ -306,29 +334,6 @@ function App() {
 
     setActiveTab(newTab);
   }, [isEditMode, stagedOperationCount, rawExitEditMode]);
-
-  // Change history for undo/redo
-  const {
-    canUndo,
-    canRedo,
-    undoCount,
-    redoCount,
-    savePoints,
-    hasUnsavedChanges,
-    lastChange,
-    isOperationPending,
-    recordChange,
-    undo,
-    redo,
-    createSavePoint,
-    revertToSavePoint,
-    deleteSavePoint,
-    initializeBaseline,
-  } = useChangeHistory({
-    channels,
-    onChannelsRestore: setChannels,
-    onError: setError,
-  });
 
   // Check settings and load initial data
   useEffect(() => {
