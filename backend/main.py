@@ -1278,32 +1278,53 @@ async def update_m3u_group_settings(account_id: int, request: Request):
     """Update group settings for an M3U account."""
     client = get_client()
     try:
-        # Get account info
+        # Get account info and current group settings before update
         account = await client.get_m3u_account(account_id)
         account_name = account.get("name", "Unknown")
+        before_groups = {g.get("channel_group"): g.get("enabled") for g in account.get("channel_groups", [])}
 
         data = await request.json()
         result = await client.update_m3u_group_settings(account_id, data)
 
-        # Log to journal - track enabled/disabled groups
-        enabled_groups = data.get("enabled_groups", [])
-        disabled_groups = data.get("disabled_groups", [])
+        # Log to journal - compare before/after enabled states
+        group_settings = data.get("group_settings", [])
+        if group_settings:
+            enabled_count = 0
+            disabled_count = 0
+            changed_groups = []
 
-        if enabled_groups or disabled_groups:
-            changes = []
-            if enabled_groups:
-                changes.append(f"enabled {len(enabled_groups)} group(s)")
-            if disabled_groups:
-                changes.append(f"disabled {len(disabled_groups)} group(s)")
+            for gs in group_settings:
+                channel_group_id = gs.get("channel_group")
+                new_enabled = gs.get("enabled")
+                old_enabled = before_groups.get(channel_group_id)
 
-            journal.log_entry(
-                category="m3u",
-                action_type="update",
-                entity_id=account_id,
-                entity_name=account_name,
-                description=f"Updated group settings: {', '.join(changes)}",
-                after_value={"enabled_groups": enabled_groups, "disabled_groups": disabled_groups},
-            )
+                if old_enabled is not None and new_enabled != old_enabled:
+                    if new_enabled:
+                        enabled_count += 1
+                    else:
+                        disabled_count += 1
+                    changed_groups.append({
+                        "channel_group": channel_group_id,
+                        "was_enabled": old_enabled,
+                        "now_enabled": new_enabled,
+                    })
+
+            if changed_groups:
+                changes = []
+                if enabled_count:
+                    changes.append(f"enabled {enabled_count} group(s)")
+                if disabled_count:
+                    changes.append(f"disabled {disabled_count} group(s)")
+
+                journal.log_entry(
+                    category="m3u",
+                    action_type="update",
+                    entity_id=account_id,
+                    entity_name=account_name,
+                    description=f"Updated group settings: {', '.join(changes)}",
+                    before_value={"groups": before_groups},
+                    after_value={"changed_groups": changed_groups},
+                )
 
         return result
     except Exception as e:
