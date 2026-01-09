@@ -8,7 +8,12 @@
       "Bash(bd update:*)",
       "Bash(git add:*)",
       "Bash(git commit:*)",
-      "Bash(git push:*)"
+      "Bash(git push:*)",
+      "Bash(git commit -m \"$\\(cat <<''EOF''\nFix entrypoint line endings for cross-platform compatibility\n\nAdd sed command to convert Windows CRLF to Unix LF line endings\nduring Docker build, ensuring the entrypoint script works regardless\nof whether source files have Windows or Unix line endings.\n\n🤖 Generated with [Claude Code]\\(https://claude.com/claude-code\\)\n\nCo-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>\nEOF\n\\)\")",
+      "Bash(npm run build:*)",
+      "Bash(npm install)",
+      "Bash(bd create enhancedchannelmanager \"Add Stats tab with live stream monitoring\")",
+      "Bash(bd:*)"
     ],
     "deny": [],
     "ask": []
