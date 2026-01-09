@@ -319,7 +319,7 @@ export interface ChannelStats {
   audio_bitrate?: string;
 
   // Speed & performance
-  ffmpeg_speed?: string;
+  ffmpeg_speed?: number | string;  // Can be number (1.02) or string ("1.02x")
   ffmpeg_fps?: number;
   actual_fps?: number;
   source_fps?: number;
@@ -336,7 +336,7 @@ export interface ChannelStats {
   resolution?: string;
   pixel_format?: string;
   sample_rate?: number;
-  audio_channels?: number;
+  audio_channels?: string | number;  // Can be "stereo", "5.1", or number
   stream_type?: string;
 
   // Stream source info (from Dispatcharr)

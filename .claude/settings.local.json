@@ -14,7 +14,8 @@
       "Bash(npm install)",
       "Bash(bd create enhancedchannelmanager \"Add Stats tab with live stream monitoring\")",
       "Bash(bd:*)",
-      "Bash(curl:*)"
+      "Bash(curl:*)",
+      "Bash(python -m json.tool:*)"
     ],
     "deny": [],
     "ask": []

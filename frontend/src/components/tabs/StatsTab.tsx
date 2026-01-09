@@ -79,14 +79,28 @@ function formatEventTime(isoString: string): string {
   });
 }
 
-// Get speed class based on value
-function getSpeedClass(speed: string | undefined): string {
-  if (!speed) return '';
-  const numSpeed = parseFloat(speed);
+// Get speed class based on value (can be number or string)
+function getSpeedClass(speed: number | string | undefined): string {
+  if (speed === undefined || speed === null) return '';
+  const numSpeed = typeof speed === 'number' ? speed : parseFloat(speed);
   if (isNaN(numSpeed)) return '';
   if (numSpeed >= 0.98) return 'speed-good';
   if (numSpeed >= 0.90) return 'speed-warning';
   return 'speed-bad';
+}
+
+// Format speed for display (can be number or string)
+function formatSpeed(speed: number | string | undefined): string {
+  if (speed === undefined || speed === null) return '-';
+  const numSpeed = typeof speed === 'number' ? speed : parseFloat(speed);
+  if (isNaN(numSpeed)) return String(speed);
+  return `${numSpeed.toFixed(2)}x`;
+}
+
+// Format FPS for display
+function formatFps(fps: number | undefined): string {
+  if (fps === undefined || fps === null) return '-';
+  return fps.toFixed(2);
 }
 
 // Get event type display info
@@ -468,8 +482,12 @@ export function StatsTab() {
                   <div className="stat-item">
                     <span className="stat-label">Speed</span>
                     <span className={`stat-value ${getSpeedClass(channel.ffmpeg_speed)}`}>
-                      {channel.ffmpeg_speed || '-'}
+                      {formatSpeed(channel.ffmpeg_speed)}
                     </span>
+                  </div>
+                  <div className="stat-item">
+                    <span className="stat-label">FPS</span>
+                    <span className="stat-value">{formatFps(channel.source_fps || channel.actual_fps || channel.ffmpeg_fps)}</span>
                   </div>
                   <div className="stat-item">
                     <span className="stat-label">Resolution</span>
@@ -501,7 +519,7 @@ export function StatsTab() {
                         </div>
                         <div className="detail-row">
                           <span className="label">FPS</span>
-                          <span className="value">{channel.actual_fps?.toFixed(1) || channel.ffmpeg_fps || '-'}</span>
+                          <span className="value">{formatFps(channel.source_fps || channel.actual_fps || channel.ffmpeg_fps)}</span>
                         </div>
                       </div>
 
