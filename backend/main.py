@@ -1281,7 +1281,14 @@ async def update_m3u_group_settings(account_id: int, request: Request):
         # Get account info and current group settings before update
         account = await client.get_m3u_account(account_id)
         account_name = account.get("name", "Unknown")
-        before_groups = {g.get("channel_group"): g.get("enabled") for g in account.get("channel_groups", [])}
+        # Store full settings for each group (enabled, auto_channel_sync, auto_sync_channel_start)
+        before_groups = {}
+        for g in account.get("channel_groups", []):
+            before_groups[g.get("channel_group")] = {
+                "enabled": g.get("enabled"),
+                "auto_channel_sync": g.get("auto_channel_sync"),
+                "auto_sync_channel_start": g.get("auto_sync_channel_start"),
+            }
 
         # Get channel groups for name lookup
         channel_groups = await client.get_channel_groups()
@@ -1290,29 +1297,55 @@ async def update_m3u_group_settings(account_id: int, request: Request):
         data = await request.json()
         result = await client.update_m3u_group_settings(account_id, data)
 
-        # Log to journal - compare before/after enabled states
+        # Log to journal - compare before/after states for all settings
         group_settings = data.get("group_settings", [])
         if group_settings:
             enabled_names = []
             disabled_names = []
+            auto_sync_enabled_names = []
+            auto_sync_disabled_names = []
+            start_channel_changed = []
             changed_groups = []
 
             for gs in group_settings:
                 channel_group_id = gs.get("channel_group")
-                new_enabled = gs.get("enabled")
-                old_enabled = before_groups.get(channel_group_id)
+                before = before_groups.get(channel_group_id, {})
+                group_name = group_name_map.get(channel_group_id, f"Group {channel_group_id}")
 
+                changes_for_group = {}
+
+                # Check enabled change
+                new_enabled = gs.get("enabled")
+                old_enabled = before.get("enabled")
                 if old_enabled is not None and new_enabled != old_enabled:
-                    group_name = group_name_map.get(channel_group_id, f"Group {channel_group_id}")
                     if new_enabled:
                         enabled_names.append(group_name)
                     else:
                         disabled_names.append(group_name)
+                    changes_for_group["enabled"] = {"was": old_enabled, "now": new_enabled}
+
+                # Check auto_channel_sync change
+                new_auto_sync = gs.get("auto_channel_sync")
+                old_auto_sync = before.get("auto_channel_sync")
+                if old_auto_sync is not None and new_auto_sync != old_auto_sync:
+                    if new_auto_sync:
+                        auto_sync_enabled_names.append(group_name)
+                    else:
+                        auto_sync_disabled_names.append(group_name)
+                    changes_for_group["auto_channel_sync"] = {"was": old_auto_sync, "now": new_auto_sync}
+
+                # Check auto_sync_channel_start change
+                new_start = gs.get("auto_sync_channel_start")
+                old_start = before.get("auto_sync_channel_start")
+                if old_start != new_start:
+                    start_channel_changed.append(f"{group_name} ({old_start} → {new_start})")
+                    changes_for_group["auto_sync_channel_start"] = {"was": old_start, "now": new_start}
+
+                if changes_for_group:
                     changed_groups.append({
                         "channel_group": channel_group_id,
                         "name": group_name,
-                        "was_enabled": old_enabled,
-                        "now_enabled": new_enabled,
+                        "changes": changes_for_group,
                     })
 
             if changed_groups:
@@ -1321,6 +1354,12 @@ async def update_m3u_group_settings(account_id: int, request: Request):
                     changes.append(f"Enabled: {', '.join(enabled_names)}")
                 if disabled_names:
                     changes.append(f"Disabled: {', '.join(disabled_names)}")
+                if auto_sync_enabled_names:
+                    changes.append(f"Auto-sync on: {', '.join(auto_sync_enabled_names)}")
+                if auto_sync_disabled_names:
+                    changes.append(f"Auto-sync off: {', '.join(auto_sync_disabled_names)}")
+                if start_channel_changed:
+                    changes.append(f"Start channel: {', '.join(start_channel_changed)}")
 
                 journal.log_entry(
                     category="m3u",
