@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import type { ChannelStatsResponse, SystemEvent, Channel } from '../../types';
+import type { ChannelStatsResponse, SystemEvent } from '../../types';
 import * as api from '../../services/api';
 import './StatsTab.css';
 
@@ -137,7 +137,6 @@ export function StatsTab() {
   // Data state
   const [channelStats, setChannelStats] = useState<ChannelStatsResponse | null>(null);
   const [events, setEvents] = useState<SystemEvent[]>([]);
-  const [, setChannels] = useState<Channel[]>([]);  // ECM channels for name lookup (used to trigger re-render)
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
@@ -153,24 +152,50 @@ export function StatsTab() {
   // Event filter state
   const [eventFilter, setEventFilter] = useState<string>('');
 
-  // Build a lookup map for channel names by UUID
+  // Build lookup maps for channel names by UUID and stream profiles by ID
   const channelNameMap = useRef<Map<string, { name: string; number: number | null }>>(new Map());
+  const streamProfileMap = useRef<Map<string, string>>(new Map());
 
-  // Load channels for name lookup (only once on mount)
-  const loadChannels = useCallback(async () => {
+  // Load all channels for name lookup (paginated to get all)
+  const loadAllChannels = useCallback(async () => {
     try {
-      const result = await api.getChannels({ pageSize: 1000 });
-      setChannels(result.results || []);
-      // Build lookup map by UUID
       const map = new Map<string, { name: string; number: number | null }>();
-      for (const ch of result.results || []) {
-        if (ch.uuid) {
-          map.set(ch.uuid, { name: ch.name, number: ch.channel_number });
+      let page = 1;
+      let hasMore = true;
+      const pageSize = 500;
+
+      while (hasMore) {
+        const result = await api.getChannels({ page, pageSize });
+        for (const ch of result.results || []) {
+          if (ch.uuid) {
+            map.set(ch.uuid, { name: ch.name, number: ch.channel_number });
+          }
         }
+        hasMore = result.next !== null;
+        page++;
+        // Safety limit to prevent infinite loops
+        if (page > 20) break;
       }
+
       channelNameMap.current = map;
+      console.log(`Loaded ${map.size} channels for lookup`);
     } catch (err) {
       console.error('Failed to load channels for name lookup:', err);
+    }
+  }, []);
+
+  // Load stream profiles for lookup
+  const loadStreamProfiles = useCallback(async () => {
+    try {
+      const profiles = await api.getStreamProfiles();
+      const map = new Map<string, string>();
+      for (const profile of profiles) {
+        map.set(String(profile.id), profile.name);
+      }
+      streamProfileMap.current = map;
+      console.log(`Loaded ${map.size} stream profiles for lookup`);
+    } catch (err) {
+      console.error('Failed to load stream profiles:', err);
     }
   }, []);
 
@@ -198,15 +223,21 @@ export function StatsTab() {
     }
   }, []);
 
-  // Initial load - fetch channels once for name lookup
+  // Initial load - fetch lookups first, then stats
   useEffect(() => {
-    loadChannels();
-  }, [loadChannels]);
-
-  // Initial load of stats
-  useEffect(() => {
-    fetchData(true);
-  }, [fetchData]);
+    const loadLookups = async () => {
+      setLoading(true);
+      // Load channels and stream profiles in parallel
+      await Promise.all([
+        loadAllChannels(),
+        loadStreamProfiles(),
+      ]);
+      // Now load stats
+      await fetchData(false);
+      setLoading(false);
+    };
+    loadLookups();
+  }, [loadAllChannels, loadStreamProfiles, fetchData]);
 
   // Auto-refresh timer
   useEffect(() => {
@@ -370,6 +401,11 @@ export function StatsTab() {
               // M3U source info
               const m3uSource = channel.m3u_profile_name || null;
 
+              // Stream profile lookup
+              const streamProfileName = channel.stream_profile
+                ? streamProfileMap.current.get(channel.stream_profile)
+                : null;
+
               return (
               <div key={channel.channel_id} className="channel-card">
                 <div className="channel-card-header">
@@ -385,6 +421,11 @@ export function StatsTab() {
                     {m3uSource && (
                       <span className="m3u-source" title={`M3U Source: ${m3uSource}`}>
                         {m3uSource}
+                      </span>
+                    )}
+                    {streamProfileName && (
+                      <span className="stream-profile" title={`Stream Profile: ${streamProfileName}`}>
+                        {streamProfileName}
                       </span>
                     )}
                     <span className={`channel-state ${channel.state?.toLowerCase() || ''}`}>
