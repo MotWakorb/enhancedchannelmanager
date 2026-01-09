@@ -1406,3 +1406,10 @@ export async function stopClient(channelId: number | string): Promise<{ success:
     method: 'POST',
   });
 }
+
+/**
+ * Get bandwidth usage summary for all time periods.
+ */
+export async function getBandwidthStats(): Promise<import('../types').BandwidthSummary> {
+  return fetchJson(`${API_BASE}/stats/bandwidth`);
+}

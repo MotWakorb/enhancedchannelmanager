@@ -380,3 +380,21 @@ export interface SystemEventsResponse {
   next?: string | null;
   previous?: string | null;
 }
+
+// Daily bandwidth record
+export interface BandwidthDailyRecord {
+  date: string;
+  bytes_transferred: number;
+  peak_channels: number;
+  peak_clients: number;
+}
+
+// Response from /api/stats/bandwidth
+export interface BandwidthSummary {
+  today: number;
+  this_week: number;
+  this_month: number;
+  this_year: number;
+  all_time: number;
+  daily_history: BandwidthDailyRecord[];
+}

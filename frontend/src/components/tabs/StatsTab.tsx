@@ -1,11 +1,13 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import type { ChannelStatsResponse, SystemEvent } from '../../types';
+import type { ChannelStatsResponse, SystemEvent, BandwidthSummary } from '../../types';
 import * as api from '../../services/api';
 import {
   LineChart,
   Line,
   AreaChart,
   Area,
+  BarChart,
+  Bar,
   XAxis,
   YAxis,
   Tooltip,
@@ -215,6 +217,7 @@ export function StatsTab() {
   // Data state
   const [channelStats, setChannelStats] = useState<ChannelStatsResponse | null>(null);
   const [events, setEvents] = useState<SystemEvent[]>([]);
+  const [bandwidthStats, setBandwidthStats] = useState<BandwidthSummary | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
@@ -287,9 +290,10 @@ export function StatsTab() {
     setError(null);
 
     try {
-      const [statsResult, eventsResult] = await Promise.all([
+      const [statsResult, eventsResult, bandwidthResult] = await Promise.all([
         api.getChannelStats(),
         api.getSystemEvents({ limit: 50 }),
+        api.getBandwidthStats().catch(() => null), // Don't fail if bandwidth stats unavailable
       ]);
 
       // Accumulate historical data for charts
@@ -343,6 +347,9 @@ export function StatsTab() {
 
       setChannelStats(statsResult);
       setEvents(eventsResult.results || []);
+      if (bandwidthResult) {
+        setBandwidthStats(bandwidthResult);
+      }
       lastRefreshRef.current = new Date();
     } catch (err) {
       console.error('Failed to fetch stats:', err);
@@ -861,6 +868,69 @@ export function StatsTab() {
                 );
               })}
             </div>
+          </div>
+        )}
+
+        {/* Bandwidth Usage Summary */}
+        {bandwidthStats && (
+          <div className="bandwidth-section">
+            <h3 className="section-title">Bandwidth Usage</h3>
+            <div className="bandwidth-summary">
+              <div className="bandwidth-stat">
+                <span className="bandwidth-label">Today</span>
+                <span className="bandwidth-value">{formatBytes(bandwidthStats.today)}</span>
+              </div>
+              <div className="bandwidth-stat">
+                <span className="bandwidth-label">This Week</span>
+                <span className="bandwidth-value">{formatBytes(bandwidthStats.this_week)}</span>
+              </div>
+              <div className="bandwidth-stat">
+                <span className="bandwidth-label">This Month</span>
+                <span className="bandwidth-value">{formatBytes(bandwidthStats.this_month)}</span>
+              </div>
+              <div className="bandwidth-stat">
+                <span className="bandwidth-label">This Year</span>
+                <span className="bandwidth-value">{formatBytes(bandwidthStats.this_year)}</span>
+              </div>
+              <div className="bandwidth-stat">
+                <span className="bandwidth-label">All Time</span>
+                <span className="bandwidth-value">{formatBytes(bandwidthStats.all_time)}</span>
+              </div>
+            </div>
+            {bandwidthStats.daily_history && bandwidthStats.daily_history.length > 0 && (
+              <div className="bandwidth-chart">
+                <div className="chart-title">Last 7 Days</div>
+                <ResponsiveContainer width="100%" height={120}>
+                  <BarChart
+                    data={bandwidthStats.daily_history.map(d => ({
+                      date: new Date(d.date).toLocaleDateString('en-US', { weekday: 'short' }),
+                      bytes: d.bytes_transferred,
+                    }))}
+                    margin={{ top: 5, right: 5, bottom: 5, left: 5 }}
+                  >
+                    <XAxis
+                      dataKey="date"
+                      tick={{ fontSize: 10, fill: 'var(--text-muted)' }}
+                      axisLine={{ stroke: 'var(--border-primary)' }}
+                      tickLine={false}
+                    />
+                    <YAxis
+                      tick={{ fontSize: 10, fill: 'var(--text-muted)' }}
+                      axisLine={{ stroke: 'var(--border-primary)' }}
+                      tickLine={false}
+                      tickFormatter={(v) => formatBytes(v)}
+                      width={55}
+                    />
+                    <Tooltip content={<DataTooltip />} />
+                    <Bar
+                      dataKey="bytes"
+                      fill="var(--accent-primary)"
+                      radius={[4, 4, 0, 0]}
+                    />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            )}
           </div>
         )}
       </div>
