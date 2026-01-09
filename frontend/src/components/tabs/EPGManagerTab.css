@@ -180,8 +180,10 @@
   background-color: var(--bg-primary);
   border-radius: 8px;
   border: 1px solid var(--border-primary);
-  overflow: hidden;
+  overflow-x: auto;
+  overflow-y: hidden;
   flex-shrink: 0;
+  min-width: 0;
 }
 
 .list-header {
@@ -196,11 +198,22 @@
   color: var(--text-secondary);
   text-transform: uppercase;
   letter-spacing: 0.05em;
+  white-space: nowrap;
+  align-items: center;
+  min-width: 0;
 }
 
 .list-header span[title] {
   cursor: help;
   border-bottom: 1px dotted #666;
+}
+
+.list-header span,
+.epg-source-row > div,
+.epg-source-row > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .epg-source-row {
