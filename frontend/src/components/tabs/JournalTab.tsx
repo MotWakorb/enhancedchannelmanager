@@ -161,19 +161,19 @@ export function JournalTab() {
           <h2>Journal</h2>
           {stats && (
             <div className="header-stats">
-              <span className="header-stat">
+              <span className="header-stat" title="Channel entries">
                 <span className="material-icons">tv</span>
                 {stats.by_category.channel || 0}
               </span>
-              <span className="header-stat">
+              <span className="header-stat" title="EPG entries">
                 <span className="material-icons">calendar_month</span>
                 {stats.by_category.epg || 0}
               </span>
-              <span className="header-stat">
+              <span className="header-stat" title="M3U entries">
                 <span className="material-icons">playlist_play</span>
                 {stats.by_category.m3u || 0}
               </span>
-              <span className="header-total">({stats.total_entries.toLocaleString()} total)</span>
+              <span className="header-total" title="Total journal entries">({stats.total_entries.toLocaleString()} total)</span>
             </div>
           )}
         </div>
