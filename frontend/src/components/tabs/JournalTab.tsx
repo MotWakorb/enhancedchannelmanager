@@ -65,7 +65,7 @@ export function JournalTab() {
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
   const [totalCount, setTotalCount] = useState(0);
-  const pageSize = 50;
+  const [pageSize, setPageSize] = useState(50);
 
   // Filter state
   const [category, setCategory] = useState<JournalCategory | ''>('');
@@ -127,10 +127,14 @@ export function JournalTab() {
     return () => clearTimeout(timer);
   }, [searchInput]);
 
-  // Reset page when filters change
+  // Reset page when filters or page size change
   useEffect(() => {
     setPage(1);
-  }, [category, actionType]);
+  }, [category, actionType, pageSize]);
+
+  const handlePageSizeChange = (newSize: number) => {
+    setPageSize(newSize);
+  };
 
   const handleRefresh = () => {
     loadEntries();
@@ -321,8 +325,21 @@ export function JournalTab() {
           </div>
 
           {/* Pagination */}
-          {totalPages > 1 && (
-            <div className="pagination">
+          <div className="pagination">
+            <div className="pagination-left">
+              <select
+                value={pageSize}
+                onChange={(e) => handlePageSizeChange(Number(e.target.value))}
+                className="page-size-select"
+              >
+                <option value={25}>25</option>
+                <option value={50}>50</option>
+                <option value={100}>100</option>
+                <option value={250}>250</option>
+              </select>
+              <span className="page-size-label">per page</span>
+            </div>
+            <div className="pagination-center">
               <button
                 className="btn-secondary"
                 onClick={() => setPage(1)}
@@ -338,7 +355,7 @@ export function JournalTab() {
                 <span className="material-icons">chevron_left</span>
               </button>
               <span className="page-info">
-                Page {page} of {totalPages} ({totalCount.toLocaleString()} entries)
+                Page {page} of {totalPages}
               </span>
               <button
                 className="btn-secondary"
@@ -355,7 +372,12 @@ export function JournalTab() {
                 <span className="material-icons">last_page</span>
               </button>
             </div>
-          )}
+            <div className="pagination-right">
+              <span className="entries-count">
+                {Math.min((page - 1) * pageSize + 1, totalCount)}-{Math.min(page * pageSize, totalCount)} of {totalCount.toLocaleString()} entries
+              </span>
+            </div>
+          </div>
         </>
       )}
     </div>
