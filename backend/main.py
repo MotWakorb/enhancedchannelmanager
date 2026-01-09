@@ -1278,8 +1278,34 @@ async def update_m3u_group_settings(account_id: int, request: Request):
     """Update group settings for an M3U account."""
     client = get_client()
     try:
+        # Get account info
+        account = await client.get_m3u_account(account_id)
+        account_name = account.get("name", "Unknown")
+
         data = await request.json()
-        return await client.update_m3u_group_settings(account_id, data)
+        result = await client.update_m3u_group_settings(account_id, data)
+
+        # Log to journal - track enabled/disabled groups
+        enabled_groups = data.get("enabled_groups", [])
+        disabled_groups = data.get("disabled_groups", [])
+
+        if enabled_groups or disabled_groups:
+            changes = []
+            if enabled_groups:
+                changes.append(f"enabled {len(enabled_groups)} group(s)")
+            if disabled_groups:
+                changes.append(f"disabled {len(disabled_groups)} group(s)")
+
+            journal.log_entry(
+                category="m3u",
+                action_type="update",
+                entity_id=account_id,
+                entity_name=account_name,
+                description=f"Updated group settings: {', '.join(changes)}",
+                after_value={"enabled_groups": enabled_groups, "disabled_groups": disabled_groups},
+            )
+
+        return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -1304,7 +1330,21 @@ async def create_server_group(request: Request):
     client = get_client()
     try:
         data = await request.json()
-        return await client.create_server_group(data)
+        result = await client.create_server_group(data)
+
+        # Log to journal
+        group_name = data.get("name", "Unknown")
+        account_ids = data.get("account_ids", [])
+        journal.log_entry(
+            category="m3u",
+            action_type="create",
+            entity_id=result.get("id"),
+            entity_name=group_name,
+            description=f"Created server group '{group_name}' linking {len(account_ids)} M3U account(s)",
+            after_value={"name": group_name, "account_ids": account_ids},
+        )
+
+        return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -1314,8 +1354,36 @@ async def update_server_group(group_id: int, request: Request):
     """Update a server group."""
     client = get_client()
     try:
+        # Get current group info
+        groups = await client.get_server_groups()
+        before_group = next((g for g in groups if g.get("id") == group_id), {})
+        before_name = before_group.get("name", "Unknown")
+
         data = await request.json()
-        return await client.update_server_group(group_id, data)
+        result = await client.update_server_group(group_id, data)
+
+        # Log to journal
+        new_name = data.get("name", before_name)
+        account_ids = data.get("account_ids", [])
+
+        changes = []
+        if "name" in data and data["name"] != before_name:
+            changes.append(f"renamed to '{new_name}'")
+        if "account_ids" in data:
+            changes.append(f"updated to {len(account_ids)} M3U account(s)")
+
+        if changes:
+            journal.log_entry(
+                category="m3u",
+                action_type="update",
+                entity_id=group_id,
+                entity_name=new_name,
+                description=f"Updated server group: {', '.join(changes)}",
+                before_value={"name": before_name, "account_ids": before_group.get("account_ids", [])},
+                after_value=data,
+            )
+
+        return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -1325,7 +1393,23 @@ async def delete_server_group(group_id: int):
     """Delete a server group."""
     client = get_client()
     try:
+        # Get group info before deleting
+        groups = await client.get_server_groups()
+        group = next((g for g in groups if g.get("id") == group_id), {})
+        group_name = group.get("name", "Unknown")
+
         await client.delete_server_group(group_id)
+
+        # Log to journal
+        journal.log_entry(
+            category="m3u",
+            action_type="delete",
+            entity_id=group_id,
+            entity_name=group_name,
+            description=f"Deleted server group '{group_name}'",
+            before_value={"name": group_name, "account_ids": group.get("account_ids", [])},
+        )
+
         return {"status": "deleted"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
