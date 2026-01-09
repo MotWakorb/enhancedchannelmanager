@@ -15,7 +15,14 @@
       "Bash(bd create enhancedchannelmanager \"Add Stats tab with live stream monitoring\")",
       "Bash(bd:*)",
       "Bash(curl:*)",
-      "Bash(python -m json.tool:*)"
+      "Bash(python -m json.tool:*)",
+      "Bash(bd sync:*)",
+      "Bash(bd list:*)",
+      "Bash(bd show:*)",
+      "Bash(git pull:*)",
+      "Bash(docker compose:*)",
+      "Bash(npm install:*)",
+      "Bash(bd close:*)"
     ],
     "deny": [],
     "ask": []
