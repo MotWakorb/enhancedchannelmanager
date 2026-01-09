@@ -327,17 +327,9 @@ export function JournalTab() {
           {/* Pagination */}
           <div className="pagination">
             <div className="pagination-left">
-              <select
-                value={pageSize}
-                onChange={(e) => handlePageSizeChange(Number(e.target.value))}
-                className="page-size-select"
-              >
-                <option value={25}>25</option>
-                <option value={50}>50</option>
-                <option value={100}>100</option>
-                <option value={250}>250</option>
-              </select>
-              <span className="page-size-label">per page</span>
+              <span className="entries-count">
+                {Math.min((page - 1) * pageSize + 1, totalCount)}-{Math.min(page * pageSize, totalCount)} of {totalCount.toLocaleString()} entries
+              </span>
             </div>
             <div className="pagination-center">
               <button
@@ -373,9 +365,17 @@ export function JournalTab() {
               </button>
             </div>
             <div className="pagination-right">
-              <span className="entries-count">
-                {Math.min((page - 1) * pageSize + 1, totalCount)}-{Math.min(page * pageSize, totalCount)} of {totalCount.toLocaleString()} entries
-              </span>
+              <select
+                value={pageSize}
+                onChange={(e) => handlePageSizeChange(Number(e.target.value))}
+                className="page-size-select"
+              >
+                <option value={25}>25</option>
+                <option value={50}>50</option>
+                <option value={100}>100</option>
+                <option value={250}>250</option>
+              </select>
+              <span className="page-size-label">per page</span>
             </div>
           </div>
         </>
