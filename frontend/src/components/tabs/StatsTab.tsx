@@ -1,7 +1,29 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import type { ChannelStatsResponse, SystemEvent } from '../../types';
 import * as api from '../../services/api';
+import {
+  LineChart,
+  Line,
+  AreaChart,
+  Area,
+  XAxis,
+  YAxis,
+  Tooltip,
+  ReferenceLine,
+  ResponsiveContainer,
+} from 'recharts';
 import './StatsTab.css';
+
+// Historical data point for charts
+interface HistoricalDataPoint {
+  timestamp: number;
+  ffmpegSpeed: number;
+  totalBytes: number;
+  label: string; // Relative time label for X-axis
+}
+
+// Max number of data points to keep per channel
+const MAX_HISTORY_POINTS = 60;
 
 // Refresh interval options (in seconds)
 const REFRESH_OPTIONS = [
@@ -147,6 +169,48 @@ function parseUserAgent(ua: string | undefined): string {
   return ua.length > 30 ? ua.substring(0, 30) + '...' : ua;
 }
 
+// Format relative time for chart X-axis
+function formatRelativeTime(timestamp: number, now: number): string {
+  const diffSec = Math.floor((now - timestamp) / 1000);
+  if (diffSec < 60) return `${diffSec}s`;
+  const diffMin = Math.floor(diffSec / 60);
+  return `${diffMin}m`;
+}
+
+// Prepare chart data with relative time labels
+function prepareChartData(history: HistoricalDataPoint[]): HistoricalDataPoint[] {
+  if (!history || history.length === 0) return [];
+  const now = Date.now();
+  return history.map(point => ({
+    ...point,
+    label: formatRelativeTime(point.timestamp, now),
+  }));
+}
+
+// Custom tooltip for speed chart
+function SpeedTooltip({ active, payload }: { active?: boolean; payload?: Array<{ value: number }> }) {
+  if (active && payload && payload.length) {
+    return (
+      <div className="chart-tooltip">
+        <span className="tooltip-value">{payload[0].value.toFixed(2)}x</span>
+      </div>
+    );
+  }
+  return null;
+}
+
+// Custom tooltip for data chart
+function DataTooltip({ active, payload }: { active?: boolean; payload?: Array<{ value: number }> }) {
+  if (active && payload && payload.length) {
+    return (
+      <div className="chart-tooltip">
+        <span className="tooltip-value">{formatBytes(payload[0].value)}</span>
+      </div>
+    );
+  }
+  return null;
+}
+
 export function StatsTab() {
   // Data state
   const [channelStats, setChannelStats] = useState<ChannelStatsResponse | null>(null);
@@ -169,6 +233,9 @@ export function StatsTab() {
   // Build lookup maps for channel names by UUID and stream profiles by ID
   const channelNameMap = useRef<Map<string, { name: string; number: number | null }>>(new Map());
   const streamProfileMap = useRef<Map<string, string>>(new Map());
+
+  // Historical data for charts (per channel)
+  const channelHistory = useRef<Map<string, HistoricalDataPoint[]>>(new Map());
 
   // Load all channels for name lookup (paginated to get all)
   const loadAllChannels = useCallback(async () => {
@@ -224,6 +291,55 @@ export function StatsTab() {
         api.getChannelStats(),
         api.getSystemEvents({ limit: 50 }),
       ]);
+
+      // Accumulate historical data for charts
+      const now = Date.now();
+      const activeChannelIds = new Set<string>();
+
+      if (statsResult?.channels) {
+        for (const channel of statsResult.channels) {
+          const channelId = String(channel.channel_id);
+          activeChannelIds.add(channelId);
+
+          // Parse ffmpeg_speed (can be number or string like "1.02x")
+          let speed = 0;
+          if (channel.ffmpeg_speed !== undefined && channel.ffmpeg_speed !== null) {
+            speed = typeof channel.ffmpeg_speed === 'number'
+              ? channel.ffmpeg_speed
+              : parseFloat(String(channel.ffmpeg_speed));
+            if (isNaN(speed)) speed = 0;
+          }
+
+          // Get total bytes
+          const totalBytes = channel.total_bytes || 0;
+
+          // Create data point
+          const dataPoint: HistoricalDataPoint = {
+            timestamp: now,
+            ffmpegSpeed: speed,
+            totalBytes: totalBytes,
+            label: '', // Will be computed when rendering
+          };
+
+          // Add to history
+          const history = channelHistory.current.get(channelId) || [];
+          history.push(dataPoint);
+
+          // Trim to max points
+          if (history.length > MAX_HISTORY_POINTS) {
+            history.shift();
+          }
+
+          channelHistory.current.set(channelId, history);
+        }
+      }
+
+      // Clean up history for channels that are no longer active
+      for (const channelId of channelHistory.current.keys()) {
+        if (!activeChannelIds.has(channelId)) {
+          channelHistory.current.delete(channelId);
+        }
+      }
 
       setChannelStats(statsResult);
       setEvents(eventsResult.results || []);
@@ -506,6 +622,104 @@ export function StatsTab() {
                 {/* Expanded Details */}
                 {expandedChannels.has(channel.channel_id) && (
                   <div className="channel-details">
+                    {/* Performance Graphs */}
+                    {(() => {
+                      const history = channelHistory.current.get(channelIdStr) || [];
+                      const chartData = prepareChartData(history);
+                      if (chartData.length < 2) {
+                        return (
+                          <div className="channel-graphs">
+                            <div className="graph-container graph-placeholder">
+                              <div className="graph-title">FFmpeg Speed</div>
+                              <div className="graph-waiting">
+                                <span className="material-icons">hourglass_empty</span>
+                                <span>Collecting data...</span>
+                              </div>
+                            </div>
+                            <div className="graph-container graph-placeholder">
+                              <div className="graph-title">Data Transfer</div>
+                              <div className="graph-waiting">
+                                <span className="material-icons">hourglass_empty</span>
+                                <span>Collecting data...</span>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      }
+                      return (
+                        <div className="channel-graphs">
+                          <div className="graph-container">
+                            <div className="graph-title">FFmpeg Speed</div>
+                            <ResponsiveContainer width="100%" height={160}>
+                              <LineChart data={chartData} margin={{ top: 5, right: 5, bottom: 5, left: 5 }}>
+                                <XAxis
+                                  dataKey="label"
+                                  tick={{ fontSize: 10, fill: 'var(--text-muted)' }}
+                                  axisLine={{ stroke: 'var(--border-primary)' }}
+                                  tickLine={false}
+                                  interval="preserveStartEnd"
+                                />
+                                <YAxis
+                                  domain={[0.8, 1.2]}
+                                  tick={{ fontSize: 10, fill: 'var(--text-muted)' }}
+                                  axisLine={{ stroke: 'var(--border-primary)' }}
+                                  tickLine={false}
+                                  tickFormatter={(v) => `${v}x`}
+                                  width={35}
+                                />
+                                <Tooltip content={<SpeedTooltip />} />
+                                <ReferenceLine
+                                  y={1}
+                                  stroke="var(--success)"
+                                  strokeDasharray="3 3"
+                                  strokeOpacity={0.5}
+                                />
+                                <Line
+                                  type="monotone"
+                                  dataKey="ffmpegSpeed"
+                                  stroke="var(--accent-primary)"
+                                  strokeWidth={2}
+                                  dot={false}
+                                  isAnimationActive={false}
+                                />
+                              </LineChart>
+                            </ResponsiveContainer>
+                          </div>
+                          <div className="graph-container">
+                            <div className="graph-title">Data Transfer</div>
+                            <ResponsiveContainer width="100%" height={160}>
+                              <AreaChart data={chartData} margin={{ top: 5, right: 5, bottom: 5, left: 5 }}>
+                                <XAxis
+                                  dataKey="label"
+                                  tick={{ fontSize: 10, fill: 'var(--text-muted)' }}
+                                  axisLine={{ stroke: 'var(--border-primary)' }}
+                                  tickLine={false}
+                                  interval="preserveStartEnd"
+                                />
+                                <YAxis
+                                  tick={{ fontSize: 10, fill: 'var(--text-muted)' }}
+                                  axisLine={{ stroke: 'var(--border-primary)' }}
+                                  tickLine={false}
+                                  tickFormatter={(v) => formatBytes(v)}
+                                  width={55}
+                                />
+                                <Tooltip content={<DataTooltip />} />
+                                <Area
+                                  type="monotone"
+                                  dataKey="totalBytes"
+                                  stroke="var(--accent-secondary)"
+                                  fill="var(--accent-primary)"
+                                  fillOpacity={0.3}
+                                  strokeWidth={2}
+                                  isAnimationActive={false}
+                                />
+                              </AreaChart>
+                            </ResponsiveContainer>
+                          </div>
+                        </div>
+                      );
+                    })()}
+
                     <div className="details-grid">
                       <div className="detail-group">
                         <div className="detail-group-title">Video</div>
