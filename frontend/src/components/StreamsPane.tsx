@@ -45,6 +45,7 @@ interface StreamsPaneProps {
   // Bulk channel creation
   isEditMode?: boolean;
   channelGroups?: ChannelGroup[];
+  selectedChannelGroups?: number[]; // IDs of enabled/visible channel groups
   channelProfiles?: ChannelProfile[];
   channelDefaults?: ChannelDefaults;
   // External trigger to open bulk create modal for stream groups (set by dropping on channels pane)
@@ -105,6 +106,7 @@ export function StreamsPane({
   onClearStreamFilters,
   isEditMode = false,
   channelGroups = [],
+  selectedChannelGroups = [],
   channelProfiles = [],
   channelDefaults,
   externalTriggerGroupNames = null,
@@ -1555,8 +1557,9 @@ export function StreamsPane({
               submenu.className = 'streams-context-submenu';
               submenu.style.cssText = `position:fixed;left:${contextMenu.x + 220}px;top:${contextMenu.y}px;z-index:10001;`;
 
-              // Add channel groups as options
-              channelGroups.forEach(group => {
+              // Add channel groups as options (only enabled/visible groups)
+              const enabledGroups = channelGroups.filter(group => selectedChannelGroups.includes(group.id));
+              enabledGroups.forEach(group => {
                 const option = document.createElement('div');
                 option.className = 'streams-context-menu-item';
                 option.textContent = group.name;
@@ -1570,10 +1573,10 @@ export function StreamsPane({
               });
 
               // Add "no groups" message if empty
-              if (channelGroups.length === 0) {
+              if (enabledGroups.length === 0) {
                 const noGroups = document.createElement('div');
                 noGroups.className = 'streams-context-menu-item disabled';
-                noGroups.textContent = 'No channel groups available';
+                noGroups.textContent = 'No enabled channel groups';
                 submenu.appendChild(noGroups);
               }
 
