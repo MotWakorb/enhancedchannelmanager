@@ -888,6 +888,11 @@ export function ChannelsPane({
   const [sortRenumberStartingNumber, setSortRenumberStartingNumber] = useState<string>('');
   const [sortStripNumbers, setSortStripNumbers] = useState<boolean>(true);
 
+  // Mass Renumber modal state
+  const [showMassRenumberModal, setShowMassRenumberModal] = useState(false);
+  const [massRenumberStartingNumber, setMassRenumberStartingNumber] = useState<string>('');
+  const [massRenumberChannels, setMassRenumberChannels] = useState<Channel[]>([]);
+
   // Drag overlay state
   const [activeDragId, setActiveDragId] = useState<number | null>(null);
   // Drop indicator state - tracks where to show the drop indicator line
@@ -3334,6 +3339,135 @@ export function ChannelsPane({
     setSortStripNumbers(true);
   };
 
+  // Mass Renumber handlers
+  const handleMassRenumberClick = () => {
+    // Get selected channels, sorted by current channel number
+    const channelsToRenumber = localChannels
+      .filter(ch => selectedChannelIds.has(ch.id))
+      .sort((a, b) => (a.channel_number ?? 9999) - (b.channel_number ?? 9999));
+
+    if (channelsToRenumber.length === 0) return;
+
+    // Default starting number: minimum of selected channel numbers, or 1
+    const minNumber = channelsToRenumber
+      .map(ch => ch.channel_number)
+      .filter((n): n is number => n !== null)
+      .sort((a, b) => a - b)[0] ?? 1;
+
+    setMassRenumberChannels(channelsToRenumber);
+    setMassRenumberStartingNumber(String(minNumber));
+    setShowMassRenumberModal(true);
+  };
+
+  // Calculate conflicts for mass renumber
+  const getMassRenumberConflicts = useMemo(() => {
+    if (!showMassRenumberModal || massRenumberChannels.length === 0) {
+      return { hasConflicts: false, conflicts: [] as Channel[], shiftRequired: 0 };
+    }
+
+    const startNum = parseInt(massRenumberStartingNumber, 10);
+    if (isNaN(startNum) || startNum < 1) {
+      return { hasConflicts: false, conflicts: [] as Channel[], shiftRequired: 0 };
+    }
+
+    const endNum = startNum + massRenumberChannels.length - 1;
+    const renumberingIds = new Set(massRenumberChannels.map(ch => ch.id));
+
+    // Find all channels NOT being renumbered that have numbers in the target range
+    const conflicts = localChannels.filter(ch =>
+      !renumberingIds.has(ch.id) &&
+      ch.channel_number !== null &&
+      ch.channel_number >= startNum &&
+      ch.channel_number <= endNum
+    ).sort((a, b) => (a.channel_number ?? 0) - (b.channel_number ?? 0));
+
+    // Calculate how much to shift: move conflicting channels past the end of renumbered range
+    const shiftRequired = conflicts.length > 0 ? endNum - (conflicts[0].channel_number ?? 0) + 1 : 0;
+
+    return { hasConflicts: conflicts.length > 0, conflicts, shiftRequired };
+  }, [showMassRenumberModal, massRenumberChannels, massRenumberStartingNumber, localChannels]);
+
+  const handleMassRenumberConfirm = (shiftConflicts: boolean) => {
+    if (!onStageUpdateChannel || massRenumberChannels.length === 0) return;
+
+    const startNum = parseInt(massRenumberStartingNumber, 10);
+    if (isNaN(startNum) || startNum < 1) return;
+
+    const { conflicts } = getMassRenumberConflicts;
+
+    // Start batch
+    if ((massRenumberChannels.length + (shiftConflicts ? conflicts.length : 0)) > 1 && onStartBatch) {
+      onStartBatch(`Renumber ${massRenumberChannels.length} channel${massRenumberChannels.length !== 1 ? 's' : ''} starting at ${startNum}`);
+    }
+
+    // If shifting conflicts, do that first (shift UP)
+    if (shiftConflicts && conflicts.length > 0) {
+      const endNum = startNum + massRenumberChannels.length - 1;
+      // Shift conflicting channels to start after the renumbered range
+      // Process from highest to lowest number to avoid intermediate collisions
+      const sortedConflicts = [...conflicts].sort((a, b) => (b.channel_number ?? 0) - (a.channel_number ?? 0));
+
+      sortedConflicts.forEach((channel, index) => {
+        // New number = endNum + 1 + (position from the end of conflicts)
+        const newNumber = endNum + 1 + (sortedConflicts.length - 1 - index);
+        let updates: Partial<Channel> = { channel_number: newNumber };
+
+        // Apply auto-rename if enabled
+        if (autoRenameChannelNumber && channel.channel_number !== null) {
+          const newName = computeAutoRename(channel.name, channel.channel_number, newNumber);
+          if (newName && newName !== channel.name) {
+            updates.name = newName;
+          }
+        }
+
+        const description = updates.name
+          ? `Shift "${channel.name}" to ch.${newNumber} (was ${channel.channel_number})`
+          : `Shift ch.${channel.channel_number} → ${newNumber}`;
+        onStageUpdateChannel(channel.id, updates, description);
+      });
+    }
+
+    // Now renumber the selected channels
+    massRenumberChannels.forEach((channel, index) => {
+      const newNumber = startNum + index;
+      if (channel.channel_number !== newNumber) {
+        let updates: Partial<Channel> = { channel_number: newNumber };
+
+        // Apply auto-rename if enabled
+        if (autoRenameChannelNumber && channel.channel_number !== null) {
+          const newName = computeAutoRename(channel.name, channel.channel_number, newNumber);
+          if (newName && newName !== channel.name) {
+            updates.name = newName;
+          }
+        }
+
+        const description = updates.name
+          ? `Renumber "${channel.name}" to ch.${newNumber}`
+          : `Renumber ch.${channel.channel_number ?? '?'} → ${newNumber}`;
+        onStageUpdateChannel(channel.id, updates, description);
+      }
+    });
+
+    // End batch
+    if ((massRenumberChannels.length + (shiftConflicts ? conflicts.length : 0)) > 1 && onEndBatch) {
+      onEndBatch();
+    }
+
+    // Close modal and clear selection
+    setShowMassRenumberModal(false);
+    setMassRenumberChannels([]);
+    setMassRenumberStartingNumber('');
+    if (onClearChannelSelection) {
+      onClearChannelSelection();
+    }
+  };
+
+  const handleMassRenumberCancel = () => {
+    setShowMassRenumberModal(false);
+    setMassRenumberChannels([]);
+    setMassRenumberStartingNumber('');
+  };
+
   const renderGroup = (groupId: number | 'ungrouped', groupName: string, groupChannels: Channel[], isEmpty: boolean = false) => {
     // Only show empty groups if explicitly marked (selected in filter or newly created)
     if (groupChannels.length === 0 && !isEmpty) return null;
@@ -3649,6 +3783,14 @@ export function ChannelsPane({
               >
                 <span className="material-icons">text_format</span>
                 Normalize
+              </button>
+              <button
+                className="bulk-renumber-btn"
+                onClick={handleMassRenumberClick}
+                title="Renumber selected channels from a new starting number"
+              >
+                <span className="material-icons">tag</span>
+                Renumber
               </button>
               <button
                 className="bulk-delete-btn"
@@ -4677,6 +4819,116 @@ export function ChannelsPane({
               >
                 Sort & Renumber
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Mass Renumber Modal */}
+      {showMassRenumberModal && massRenumberChannels.length > 0 && (
+        <div className="modal-overlay">
+          <div className="modal-content mass-renumber-dialog" onClick={(e) => e.stopPropagation()}>
+            <h3>Renumber Channels</h3>
+
+            <div className="mass-renumber-info">
+              <p>
+                Assign new sequential numbers to <strong>{massRenumberChannels.length} selected channel{massRenumberChannels.length !== 1 ? 's' : ''}</strong>.
+              </p>
+            </div>
+
+            <div className="mass-renumber-options">
+              <div className="mass-renumber-field">
+                <label htmlFor="mass-renumber-start">Starting Channel Number</label>
+                <input
+                  id="mass-renumber-start"
+                  type="number"
+                  min="1"
+                  value={massRenumberStartingNumber}
+                  onChange={(e) => setMassRenumberStartingNumber(e.target.value)}
+                  className="mass-renumber-input"
+                  autoFocus
+                />
+                {massRenumberStartingNumber && !isNaN(parseInt(massRenumberStartingNumber, 10)) && parseInt(massRenumberStartingNumber, 10) >= 1 && (
+                  <span className="mass-renumber-range">
+                    Channels will be numbered {parseInt(massRenumberStartingNumber, 10)} – {parseInt(massRenumberStartingNumber, 10) + massRenumberChannels.length - 1}
+                  </span>
+                )}
+              </div>
+            </div>
+
+            {/* Conflict Warning */}
+            {getMassRenumberConflicts.hasConflicts && (
+              <div className="mass-renumber-conflict-warning">
+                <span className="material-icons conflict-icon">warning</span>
+                <div className="conflict-warning-content">
+                  <strong>{getMassRenumberConflicts.conflicts.length} channel{getMassRenumberConflicts.conflicts.length !== 1 ? 's' : ''} will be displaced</strong>
+                  <p>
+                    The following channels are in the target range ({parseInt(massRenumberStartingNumber, 10)} – {parseInt(massRenumberStartingNumber, 10) + massRenumberChannels.length - 1}):
+                  </p>
+                  <ul className="conflict-channel-list">
+                    {getMassRenumberConflicts.conflicts.slice(0, 5).map(ch => (
+                      <li key={ch.id}>
+                        <span className="conflict-channel-number">{ch.channel_number}</span>
+                        <span className="conflict-channel-name">{ch.name}</span>
+                      </li>
+                    ))}
+                    {getMassRenumberConflicts.conflicts.length > 5 && (
+                      <li className="more-conflicts">...and {getMassRenumberConflicts.conflicts.length - 5} more</li>
+                    )}
+                  </ul>
+                </div>
+              </div>
+            )}
+
+            {/* Preview */}
+            <div className="mass-renumber-preview">
+              <label>Preview</label>
+              <ul className="mass-renumber-preview-list">
+                {massRenumberChannels.slice(0, 5).map((ch, index) => {
+                  const startNum = parseInt(massRenumberStartingNumber, 10) || 1;
+                  const newNumber = startNum + index;
+                  const hasChange = ch.channel_number !== newNumber;
+                  return (
+                    <li key={ch.id} className={hasChange ? 'has-change' : ''}>
+                      <span className="preview-old-number">{ch.channel_number ?? '-'}</span>
+                      <span className="preview-arrow">→</span>
+                      <span className="preview-new-number">{newNumber}</span>
+                      <span className="preview-name">{ch.name}</span>
+                    </li>
+                  );
+                })}
+                {massRenumberChannels.length > 5 && (
+                  <li className="more-channels">...and {massRenumberChannels.length - 5} more</li>
+                )}
+              </ul>
+            </div>
+
+            <div className="modal-actions">
+              <button
+                className="modal-btn cancel"
+                onClick={handleMassRenumberCancel}
+              >
+                Cancel
+              </button>
+              {getMassRenumberConflicts.hasConflicts ? (
+                <button
+                  className="modal-btn primary"
+                  onClick={() => handleMassRenumberConfirm(true)}
+                  disabled={!massRenumberStartingNumber || isNaN(parseInt(massRenumberStartingNumber, 10)) || parseInt(massRenumberStartingNumber, 10) < 1}
+                  title={`Shift ${getMassRenumberConflicts.conflicts.length} conflicting channel(s) to numbers ${parseInt(massRenumberStartingNumber, 10) + massRenumberChannels.length} and up`}
+                >
+                  <span className="material-icons">swap_vert</span>
+                  Shift & Renumber
+                </button>
+              ) : (
+                <button
+                  className="modal-btn primary"
+                  onClick={() => handleMassRenumberConfirm(false)}
+                  disabled={!massRenumberStartingNumber || isNaN(parseInt(massRenumberStartingNumber, 10)) || parseInt(massRenumberStartingNumber, 10) < 1}
+                >
+                  Renumber
+                </button>
+              )}
             </div>
           </div>
         </div>
