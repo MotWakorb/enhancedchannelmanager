@@ -1392,7 +1392,7 @@ export async function getSystemEvents(params?: {
 /**
  * Stop a channel and release all associated resources.
  */
-export async function stopChannel(channelId: number): Promise<{ success: boolean }> {
+export async function stopChannel(channelId: number | string): Promise<{ success: boolean }> {
   return fetchJson(`${API_BASE}/stats/channels/${channelId}/stop`, {
     method: 'POST',
   });
@@ -1401,7 +1401,7 @@ export async function stopChannel(channelId: number): Promise<{ success: boolean
 /**
  * Stop a specific client connection.
  */
-export async function stopClient(channelId: number): Promise<{ success: boolean }> {
+export async function stopClient(channelId: number | string): Promise<{ success: boolean }> {
   return fetchJson(`${API_BASE}/stats/channels/${channelId}/stop-client`, {
     method: 'POST',
   });

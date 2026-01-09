@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import type { ChannelStatsResponse, SystemEvent } from '../../types';
+import type { ChannelStatsResponse, SystemEvent, Channel } from '../../types';
 import * as api from '../../services/api';
 import './StatsTab.css';
 
@@ -112,6 +112,7 @@ export function StatsTab() {
   // Data state
   const [channelStats, setChannelStats] = useState<ChannelStatsResponse | null>(null);
   const [events, setEvents] = useState<SystemEvent[]>([]);
+  const [, setChannels] = useState<Channel[]>([]);  // ECM channels for name lookup (used to trigger re-render)
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
@@ -122,12 +123,33 @@ export function StatsTab() {
   const lastRefreshRef = useRef<Date>(new Date());
 
   // Expanded channel state
-  const [expandedChannels, setExpandedChannels] = useState<Set<number>>(new Set());
+  const [expandedChannels, setExpandedChannels] = useState<Set<string | number>>(new Set());
 
   // Event filter state
   const [eventFilter, setEventFilter] = useState<string>('');
 
-  // Fetch data
+  // Build a lookup map for channel names by UUID
+  const channelNameMap = useRef<Map<string, { name: string; number: number | null }>>(new Map());
+
+  // Load channels for name lookup (only once on mount)
+  const loadChannels = useCallback(async () => {
+    try {
+      const result = await api.getChannels({ pageSize: 1000 });
+      setChannels(result.results || []);
+      // Build lookup map by UUID
+      const map = new Map<string, { name: string; number: number | null }>();
+      for (const ch of result.results || []) {
+        if (ch.uuid) {
+          map.set(ch.uuid, { name: ch.name, number: ch.channel_number });
+        }
+      }
+      channelNameMap.current = map;
+    } catch (err) {
+      console.error('Failed to load channels for name lookup:', err);
+    }
+  }, []);
+
+  // Fetch stats data
   const fetchData = useCallback(async (showLoading = false) => {
     if (showLoading) setLoading(true);
     setRefreshing(true);
@@ -151,7 +173,12 @@ export function StatsTab() {
     }
   }, []);
 
-  // Initial load
+  // Initial load - fetch channels once for name lookup
+  useEffect(() => {
+    loadChannels();
+  }, [loadChannels]);
+
+  // Initial load of stats
   useEffect(() => {
     fetchData(true);
   }, [fetchData]);
@@ -177,7 +204,7 @@ export function StatsTab() {
   }, [refreshInterval, fetchData]);
 
   // Handle stop channel
-  const handleStopChannel = async (channelId: number) => {
+  const handleStopChannel = async (channelId: string | number) => {
     if (!confirm('Are you sure you want to stop this channel?')) return;
 
     try {
@@ -190,7 +217,7 @@ export function StatsTab() {
   };
 
   // Toggle expanded channel
-  const toggleExpanded = (channelId: number) => {
+  const toggleExpanded = (channelId: string | number) => {
     setExpandedChannels(prev => {
       const next = new Set(prev);
       if (next.has(channelId)) {
@@ -299,15 +326,33 @@ export function StatsTab() {
           <div className="active-channels">
             <h3 className="section-title">Active Channels</h3>
 
-            {channelStats?.channels?.map((channel) => (
+            {channelStats?.channels?.map((channel) => {
+              // Try to look up channel name from ECM's channel data by UUID
+              const channelIdStr = String(channel.channel_id);
+              const isUUID = channelIdStr.includes('-') && channelIdStr.length > 20;
+              const lookupData = isUUID ? channelNameMap.current.get(channelIdStr) : null;
+
+              // Determine the best name to display (priority: ECM lookup > stream_name > channel_name > fallback)
+              const displayName = lookupData?.name
+                || channel.stream_name
+                || channel.channel_name
+                || (isUUID ? `Channel ${channelIdStr.substring(0, 8)}...` : `Channel ${channelIdStr}`);
+
+              // Determine channel number (priority: ECM lookup > API channel_number > short ID)
+              const channelNum = lookupData?.number || channel.channel_number;
+              const displayNumber = channelNum
+                ? `Ch ${channelNum}`
+                : (isUUID ? `#${channelIdStr.substring(0, 8)}` : `#${channelIdStr}`);
+
+              return (
               <div key={channel.channel_id} className="channel-card">
                 <div className="channel-card-header">
                   <div className="channel-info">
-                    <span className="channel-number">
-                      {channel.channel_number || `#${channel.channel_id}`}
+                    <span className="channel-number" title={`ID: ${channelIdStr}`}>
+                      {displayNumber}
                     </span>
-                    <span className="channel-name">
-                      {channel.channel_name || `Channel ${channel.channel_id}`}
+                    <span className="channel-name" title={displayName}>
+                      {displayName}
                     </span>
                     <span className={`channel-state ${channel.state?.toLowerCase() || ''}`}>
                       <span className="material-icons">
@@ -459,7 +504,8 @@ export function StatsTab() {
                   </div>
                 )}
               </div>
-            ))}
+            );
+            })}
           </div>
         )}
 
