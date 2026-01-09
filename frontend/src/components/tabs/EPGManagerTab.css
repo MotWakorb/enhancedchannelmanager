@@ -188,7 +188,7 @@
 
 .list-header {
   display: grid;
-  grid-template-columns: 40px 60px 80px 1fr 140px 160px 140px;
+  grid-template-columns: 40px 70px 80px 1fr 140px 160px 140px;
   gap: 1rem;
   padding: 0.75rem 1rem;
   background-color: var(--input-bg);
@@ -198,9 +198,8 @@
   color: var(--text-secondary);
   text-transform: uppercase;
   letter-spacing: 0.05em;
-  white-space: nowrap;
   align-items: center;
-  min-width: 0;
+  min-width: 900px;
 }
 
 .list-header span[title] {
@@ -218,13 +217,14 @@
 
 .epg-source-row {
   display: grid;
-  grid-template-columns: 40px 60px 80px 1fr 140px 160px 140px;
+  grid-template-columns: 40px 70px 80px 1fr 140px 160px 140px;
   gap: 1rem;
   padding: 1rem;
   border-bottom: 1px solid var(--border-primary);
   align-items: center;
   background-color: var(--bg-primary);
   transition: background-color 0.15s;
+  min-width: 900px;
 }
 
 .epg-source-row:last-child {
