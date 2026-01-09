@@ -277,3 +277,107 @@ export * from './editMode';
 
 // Re-export journal types
 export * from './journal';
+
+// =============================================================================
+// Stats & Monitoring Types
+// =============================================================================
+
+// Client connection info for an active stream
+export interface StreamClient {
+  client_id: string;
+  ip_address: string;
+  user_agent: string;
+  connected_at: string;
+  last_active: string;
+  connection_duration?: string;
+  bytes_sent?: number;
+  avg_rate_KBps?: number;
+  current_rate_KBps?: number;
+}
+
+// Active channel stats from /proxy/ts/status
+export interface ChannelStats {
+  channel_id: number;
+  channel_name?: string;
+  channel_number?: number;
+
+  // State & timing
+  state?: string;
+  uptime?: string;
+  started_at?: string;
+  state_duration?: string;
+
+  // Clients
+  client_count: number;
+  clients?: StreamClient[];
+
+  // Bitrate & bandwidth
+  avg_bitrate?: string;
+  avg_bitrate_kbps?: number;
+  source_bitrate?: string;
+  ffmpeg_bitrate?: string;
+  audio_bitrate?: string;
+
+  // Speed & performance
+  ffmpeg_speed?: string;
+  ffmpeg_fps?: number;
+  actual_fps?: number;
+  source_fps?: number;
+
+  // Buffer & data
+  buffer_index?: number;
+  total_bytes?: number;
+  total_data?: string;
+  avg_chunk_size?: number;
+
+  // Stream quality
+  video_codec?: string;
+  audio_codec?: string;
+  resolution?: string;
+  pixel_format?: string;
+  sample_rate?: number;
+  audio_channels?: number;
+  stream_type?: string;
+
+  // Stream source info
+  current_stream_id?: number;
+  current_stream_url?: string;
+}
+
+// Response from /proxy/ts/status
+export interface ChannelStatsResponse {
+  channels: ChannelStats[];
+  count: number;
+}
+
+// System event types
+export type SystemEventType =
+  | 'channel_start'
+  | 'channel_stop'
+  | 'client_connect'
+  | 'client_disconnect'
+  | 'buffering'
+  | 'stream_switch'
+  | 'error';
+
+// System event from /api/core/system-events/
+export interface SystemEvent {
+  id: number;
+  event_type: SystemEventType | string;
+  channel_id?: number;
+  channel_name?: string;
+  client_id?: string;
+  ip_address?: string;
+  message?: string;
+  details?: Record<string, unknown>;
+  timestamp: string;
+  created_at: string;
+}
+
+// Response from /api/core/system-events/
+export interface SystemEventsResponse {
+  results: SystemEvent[];
+  count: number;
+  next?: string | null;
+  previous?: string | null;
+}

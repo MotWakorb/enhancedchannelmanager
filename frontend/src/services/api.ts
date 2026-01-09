@@ -20,6 +20,9 @@ import type {
   JournalQueryParams,
   JournalResponse,
   JournalStats,
+  ChannelStatsResponse,
+  ChannelStats,
+  SystemEventsResponse,
 } from '../types';
 
 const API_BASE = '/api';
@@ -1346,5 +1349,60 @@ export async function getJournalStats(): Promise<JournalStats> {
 export async function purgeJournalEntries(days: number): Promise<{ deleted_count: number }> {
   return fetchJson(`${API_BASE}/journal/purge?days=${days}`, {
     method: 'DELETE',
+  });
+}
+
+// =============================================================================
+// Stats & Monitoring
+// =============================================================================
+
+/**
+ * Get status of all active channels.
+ * Returns summary including active channels, client counts, bitrates, speeds, etc.
+ */
+export async function getChannelStats(): Promise<ChannelStatsResponse> {
+  return fetchJson(`${API_BASE}/stats/channels`);
+}
+
+/**
+ * Get detailed stats for a specific channel.
+ * Includes per-client information, buffer status, codec details, etc.
+ */
+export async function getChannelStatsDetail(channelId: number): Promise<ChannelStats> {
+  return fetchJson(`${API_BASE}/stats/channels/${channelId}`);
+}
+
+/**
+ * Get recent system events (channel start/stop, buffering, client connections).
+ */
+export async function getSystemEvents(params?: {
+  limit?: number;
+  offset?: number;
+  eventType?: string;
+}): Promise<SystemEventsResponse> {
+  const searchParams = new URLSearchParams();
+  if (params?.limit) searchParams.append('limit', params.limit.toString());
+  if (params?.offset) searchParams.append('offset', params.offset.toString());
+  if (params?.eventType) searchParams.append('event_type', params.eventType);
+
+  const query = searchParams.toString();
+  return fetchJson(`${API_BASE}/stats/events${query ? `?${query}` : ''}`);
+}
+
+/**
+ * Stop a channel and release all associated resources.
+ */
+export async function stopChannel(channelId: number): Promise<{ success: boolean }> {
+  return fetchJson(`${API_BASE}/stats/channels/${channelId}/stop`, {
+    method: 'POST',
+  });
+}
+
+/**
+ * Stop a specific client connection.
+ */
+export async function stopClient(channelId: number): Promise<{ success: boolean }> {
+  return fetchJson(`${API_BASE}/stats/channels/${channelId}/stop-client`, {
+    method: 'POST',
   });
 }
