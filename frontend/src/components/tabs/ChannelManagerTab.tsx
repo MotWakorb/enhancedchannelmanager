@@ -394,6 +394,7 @@ export function ChannelManagerTab({
           onClearStreamFilters={onClearStreamFilters}
           isEditMode={isEditMode}
           channelGroups={channelGroups}
+          selectedChannelGroups={selectedGroups}
           channelProfiles={channelProfiles}
           channelDefaults={channelDefaults}
           externalTriggerGroupNames={externalTriggerGroupNames}
