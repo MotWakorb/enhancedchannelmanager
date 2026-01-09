@@ -26,10 +26,10 @@ COPY backend/ ./
 COPY --from=frontend-builder /app/frontend/dist ./static
 
 # Create config directory and set ownership
-RUN mkdir -p /config && chown -R appuser:appuser /config /app
-
-# Make entrypoint executable
-RUN chmod +x /app/entrypoint.sh
+# Convert entrypoint line endings (handles Windows CRLF -> Unix LF)
+RUN mkdir -p /config && chown -R appuser:appuser /config /app \
+    && sed -i 's/\r$//' /app/entrypoint.sh \
+    && chmod +x /app/entrypoint.sh
 
 # Environment
 ENV CONFIG_DIR=/config
