@@ -344,6 +344,7 @@ export interface ChannelStats {
   stream_name?: string;
   m3u_profile_id?: number;
   m3u_profile_name?: string;
+  stream_profile?: string;  // Stream profile ID as string
   url?: string;
 }
 

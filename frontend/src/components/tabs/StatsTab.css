@@ -253,6 +253,20 @@
   text-overflow: ellipsis;
 }
 
+.stream-profile {
+  font-size: 0.7rem;
+  padding: 0.2rem 0.5rem;
+  border-radius: 4px;
+  background: var(--accent-primary);
+  color: var(--bg-primary);
+  flex-shrink: 0;
+  white-space: nowrap;
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  opacity: 0.85;
+}
+
 .channel-state {
   display: flex;
   align-items: center;
