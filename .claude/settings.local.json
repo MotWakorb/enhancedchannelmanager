@@ -13,7 +13,8 @@
       "Bash(npm run build:*)",
       "Bash(npm install)",
       "Bash(bd create enhancedchannelmanager \"Add Stats tab with live stream monitoring\")",
-      "Bash(bd:*)"
+      "Bash(bd:*)",
+      "Bash(curl:*)"
     ],
     "deny": [],
     "ask": []

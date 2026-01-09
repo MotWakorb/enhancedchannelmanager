@@ -12,22 +12,47 @@ const REFRESH_OPTIONS = [
   { value: 30, label: '30s' },
 ];
 
-// Format duration from seconds or duration string
+// Format duration from seconds or duration string to HH:MM:SS
 function formatDuration(duration: string | number | undefined): string {
   if (!duration) return '-';
-  if (typeof duration === 'string') return duration;
 
-  const seconds = Math.floor(duration);
-  const hours = Math.floor(seconds / 3600);
-  const minutes = Math.floor((seconds % 3600) / 60);
-  const secs = seconds % 60;
+  let totalSeconds: number;
 
-  if (hours > 0) {
-    return `${hours}h ${minutes}m`;
-  } else if (minutes > 0) {
-    return `${minutes}m ${secs}s`;
+  if (typeof duration === 'string') {
+    // Check if already in HH:MM:SS format
+    if (duration.includes(':')) {
+      return duration;
+    }
+    // Try to parse existing format like "1h 23m" or "45m 30s" or "30s"
+    const hourMatch = duration.match(/(\d+)h/);
+    const minMatch = duration.match(/(\d+)m/);
+    const secMatch = duration.match(/(\d+)s/);
+
+    const hours = hourMatch ? parseInt(hourMatch[1], 10) : 0;
+    const mins = minMatch ? parseInt(minMatch[1], 10) : 0;
+    const secs = secMatch ? parseInt(secMatch[1], 10) : 0;
+
+    if (!hourMatch && !minMatch && !secMatch) {
+      // Try parsing as seconds
+      totalSeconds = parseFloat(duration);
+      if (isNaN(totalSeconds)) return duration;
+    } else {
+      totalSeconds = hours * 3600 + mins * 60 + secs;
+    }
+  } else {
+    totalSeconds = Math.floor(duration);
   }
-  return `${secs}s`;
+
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const secs = Math.floor(totalSeconds % 60);
+
+  // Format as HH:MM:SS
+  const hh = hours.toString().padStart(2, '0');
+  const mm = minutes.toString().padStart(2, '0');
+  const ss = secs.toString().padStart(2, '0');
+
+  return `${hh}:${mm}:${ss}`;
 }
 
 // Format bytes to human readable
@@ -332,28 +357,36 @@ export function StatsTab() {
               const isUUID = channelIdStr.includes('-') && channelIdStr.length > 20;
               const lookupData = isUUID ? channelNameMap.current.get(channelIdStr) : null;
 
-              // Determine the best name to display (priority: ECM lookup > stream_name > channel_name > fallback)
+              // Determine the best name to display (priority: ECM lookup > channel_name > stream_name > fallback)
               const displayName = lookupData?.name
-                || channel.stream_name
                 || channel.channel_name
+                || channel.stream_name
                 || (isUUID ? `Channel ${channelIdStr.substring(0, 8)}...` : `Channel ${channelIdStr}`);
 
-              // Determine channel number (priority: ECM lookup > API channel_number > short ID)
+              // Determine channel number (priority: ECM lookup > API channel_number > none)
               const channelNum = lookupData?.number || channel.channel_number;
-              const displayNumber = channelNum
-                ? `Ch ${channelNum}`
-                : (isUUID ? `#${channelIdStr.substring(0, 8)}` : `#${channelIdStr}`);
+              const displayNumber = channelNum ? `Ch ${channelNum}` : null;
+
+              // M3U source info
+              const m3uSource = channel.m3u_profile_name || null;
 
               return (
               <div key={channel.channel_id} className="channel-card">
                 <div className="channel-card-header">
                   <div className="channel-info">
-                    <span className="channel-number" title={`ID: ${channelIdStr}`}>
-                      {displayNumber}
-                    </span>
-                    <span className="channel-name" title={displayName}>
+                    {displayNumber && (
+                      <span className="channel-number" title={`ID: ${channelIdStr}`}>
+                        {displayNumber}
+                      </span>
+                    )}
+                    <span className="channel-name" title={`${displayName}${channel.stream_name && channel.stream_name !== displayName ? ` (Stream: ${channel.stream_name})` : ''}`}>
                       {displayName}
                     </span>
+                    {m3uSource && (
+                      <span className="m3u-source" title={`M3U Source: ${m3uSource}`}>
+                        {m3uSource}
+                      </span>
+                    )}
                     <span className={`channel-state ${channel.state?.toLowerCase() || ''}`}>
                       <span className="material-icons">
                         {channel.state === 'buffering' ? 'hourglass_empty' : 'play_arrow'}
@@ -403,7 +436,7 @@ export function StatsTab() {
                   </div>
                   <div className="stat-item">
                     <span className="stat-label">Uptime</span>
-                    <span className="stat-value">{channel.uptime || '-'}</span>
+                    <span className="stat-value">{formatDuration(channel.uptime)}</span>
                   </div>
                   <div className="stat-item">
                     <span className="stat-label">Data</span>
