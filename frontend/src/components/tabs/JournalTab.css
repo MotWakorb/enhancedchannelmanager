@@ -456,19 +456,65 @@
 .pagination {
   display: flex;
   align-items: center;
-  justify-content: center;
+  justify-content: space-between;
   gap: 0.5rem;
   padding: 0.5rem 0;
   margin-top: 0.5rem;
   flex-shrink: 0;
 }
 
+.pagination-left {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 120px;
+}
+
+.pagination-center {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.pagination-right {
+  display: flex;
+  align-items: center;
+  min-width: 120px;
+  justify-content: flex-end;
+}
+
+.page-size-select {
+  padding: 0.375rem 0.5rem;
+  background-color: var(--input-bg);
+  border: 1px solid var(--border-secondary);
+  border-radius: 6px;
+  color: var(--text-primary);
+  font-size: 0.8rem;
+  cursor: pointer;
+  min-width: 60px;
+}
+
+.page-size-select:focus {
+  outline: none;
+  border-color: var(--accent-primary);
+}
+
+.page-size-label {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.entries-count {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+
 .pagination .btn-secondary {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 36px;
-  height: 36px;
+  width: 32px;
+  height: 32px;
   padding: 0;
   background-color: var(--input-bg);
   border: 1px solid var(--border-secondary);
@@ -488,13 +534,14 @@
 }
 
 .pagination .btn-secondary .material-icons {
-  font-size: 20px;
+  font-size: 18px;
 }
 
 .page-info {
-  padding: 0 1rem;
-  font-size: 0.875rem;
+  padding: 0 0.75rem;
+  font-size: 0.8rem;
   color: var(--text-secondary);
+  white-space: nowrap;
 }
 
 /* Responsive */
