@@ -19,6 +19,8 @@ from config import (
     CONFIG_FILE,
 )
 from cache import get_cache
+from database import init_db
+import journal
 
 # Configure logging
 logging.basicConfig(
@@ -48,6 +50,9 @@ async def startup_event():
     """Log configuration status on startup."""
     logger.info("=" * 60)
     logger.info("Enhanced Channel Manager starting up")
+
+    # Initialize journal database
+    init_db()
     logger.info(f"CONFIG_DIR: {CONFIG_DIR}")
     logger.info(f"CONFIG_FILE: {CONFIG_FILE}")
     logger.info(f"CONFIG_DIR exists: {CONFIG_DIR.exists()}")
@@ -294,6 +299,17 @@ async def create_channel(request: CreateChannelRequest):
             data["tvg_id"] = request.tvg_id
         result = await client.create_channel(data)
         logger.info(f"Created channel: id={result.get('id')}, name={result.get('name')}, number={result.get('channel_number')}")
+
+        # Log to journal
+        journal.log_entry(
+            category="channel",
+            action_type="create",
+            entity_id=result.get("id"),
+            entity_name=result.get("name", "Unknown"),
+            description=f"Created channel '{result.get('name')}'" + (f" with number {result.get('channel_number')}" if result.get('channel_number') else ""),
+            after_value={"channel_number": result.get("channel_number"), "name": result.get("name")},
+        )
+
         return result
     except Exception as e:
         logger.error(f"Channel creation failed: {e}")
@@ -394,7 +410,38 @@ async def get_channel_streams(channel_id: int):
 async def update_channel(channel_id: int, data: dict):
     client = get_client()
     try:
-        return await client.update_channel(channel_id, data)
+        # Get before state for logging
+        before_channel = await client.get_channel(channel_id)
+        before_value = {
+            "name": before_channel.get("name"),
+            "channel_number": before_channel.get("channel_number"),
+        }
+
+        result = await client.update_channel(channel_id, data)
+
+        # Determine what changed for description
+        changes = []
+        if "name" in data and data["name"] != before_channel.get("name"):
+            changes.append(f"name to '{data['name']}'")
+        if "channel_number" in data and data["channel_number"] != before_channel.get("channel_number"):
+            changes.append(f"number to {data['channel_number']}")
+        if "tvg_id" in data:
+            changes.append("EPG mapping")
+        if "logo_id" in data:
+            changes.append("logo")
+
+        if changes:
+            journal.log_entry(
+                category="channel",
+                action_type="update",
+                entity_id=channel_id,
+                entity_name=result.get("name", before_channel.get("name", "Unknown")),
+                description=f"Updated channel: {', '.join(changes)}",
+                before_value=before_value,
+                after_value={k: data[k] for k in data if k in ["name", "channel_number", "tvg_id", "logo_id"]},
+            )
+
+        return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -403,7 +450,22 @@ async def update_channel(channel_id: int, data: dict):
 async def delete_channel(channel_id: int):
     client = get_client()
     try:
+        # Get channel info before deleting for logging
+        channel = await client.get_channel(channel_id)
+        channel_name = channel.get("name", "Unknown")
+
         await client.delete_channel(channel_id)
+
+        # Log to journal
+        journal.log_entry(
+            category="channel",
+            action_type="delete",
+            entity_id=channel_id,
+            entity_name=channel_name,
+            description=f"Deleted channel '{channel_name}'",
+            before_value={"name": channel_name, "channel_number": channel.get("channel_number")},
+        )
+
         return {"success": True}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -415,12 +477,27 @@ async def add_stream_to_channel(channel_id: int, request: AddStreamRequest):
     try:
         # Get current channel
         channel = await client.get_channel(channel_id)
+        channel_name = channel.get("name", "Unknown")
         current_streams = channel.get("streams", [])
 
         # Add stream if not already present
         if request.stream_id not in current_streams:
+            before_streams = list(current_streams)
             current_streams.append(request.stream_id)
-            return await client.update_channel(channel_id, {"streams": current_streams})
+            result = await client.update_channel(channel_id, {"streams": current_streams})
+
+            # Log to journal
+            journal.log_entry(
+                category="channel",
+                action_type="stream_add",
+                entity_id=channel_id,
+                entity_name=channel_name,
+                description=f"Added stream to channel '{channel_name}'",
+                before_value={"streams": before_streams},
+                after_value={"streams": current_streams},
+            )
+
+            return result
         return channel
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -432,12 +509,27 @@ async def remove_stream_from_channel(channel_id: int, request: RemoveStreamReque
     try:
         # Get current channel
         channel = await client.get_channel(channel_id)
+        channel_name = channel.get("name", "Unknown")
         current_streams = channel.get("streams", [])
 
         # Remove stream if present
         if request.stream_id in current_streams:
+            before_streams = list(current_streams)
             current_streams.remove(request.stream_id)
-            return await client.update_channel(channel_id, {"streams": current_streams})
+            result = await client.update_channel(channel_id, {"streams": current_streams})
+
+            # Log to journal
+            journal.log_entry(
+                category="channel",
+                action_type="stream_remove",
+                entity_id=channel_id,
+                entity_name=channel_name,
+                description=f"Removed stream from channel '{channel_name}'",
+                before_value={"streams": before_streams},
+                after_value={"streams": current_streams},
+            )
+
+            return result
         return channel
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -447,7 +539,25 @@ async def remove_stream_from_channel(channel_id: int, request: RemoveStreamReque
 async def reorder_channel_streams(channel_id: int, request: ReorderStreamsRequest):
     client = get_client()
     try:
-        return await client.update_channel(channel_id, {"streams": request.stream_ids})
+        # Get before state
+        channel = await client.get_channel(channel_id)
+        channel_name = channel.get("name", "Unknown")
+        before_streams = channel.get("streams", [])
+
+        result = await client.update_channel(channel_id, {"streams": request.stream_ids})
+
+        # Log to journal
+        journal.log_entry(
+            category="channel",
+            action_type="stream_reorder",
+            entity_id=channel_id,
+            entity_name=channel_name,
+            description=f"Reordered streams in channel '{channel_name}'",
+            before_value={"streams": before_streams},
+            after_value={"streams": request.stream_ids},
+        )
+
+        return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -492,6 +602,19 @@ async def assign_channel_numbers(request: AssignNumbersRequest):
             except Exception:
                 # Don't fail the whole operation if a name update fails
                 pass
+
+        # Log to journal (batch operation)
+        import uuid
+        batch_id = str(uuid.uuid4())[:8]
+        journal.log_entry(
+            category="channel",
+            action_type="reorder",
+            entity_id=None,
+            entity_name=f"{len(request.channel_ids)} channels",
+            description=f"Renumbered {len(request.channel_ids)} channels starting from {request.starting_number}",
+            after_value={"channel_ids": request.channel_ids, "starting_number": request.starting_number},
+            batch_id=batch_id,
+        )
 
         return result
     except Exception as e:
@@ -685,7 +808,19 @@ async def create_epg_source(request: Request):
     client = get_client()
     try:
         data = await request.json()
-        return await client.create_epg_source(data)
+        result = await client.create_epg_source(data)
+
+        # Log to journal
+        journal.log_entry(
+            category="epg",
+            action_type="create",
+            entity_id=result.get("id"),
+            entity_name=result.get("name", data.get("name", "Unknown")),
+            description=f"Created EPG source '{result.get('name', data.get('name'))}'",
+            after_value={"name": result.get("name"), "url": data.get("url")},
+        )
+
+        return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -694,8 +829,23 @@ async def create_epg_source(request: Request):
 async def update_epg_source(source_id: int, request: Request):
     client = get_client()
     try:
+        # Get before state
+        before_source = await client.get_epg_source(source_id)
         data = await request.json()
-        return await client.update_epg_source(source_id, data)
+        result = await client.update_epg_source(source_id, data)
+
+        # Log to journal
+        journal.log_entry(
+            category="epg",
+            action_type="update",
+            entity_id=source_id,
+            entity_name=result.get("name", before_source.get("name", "Unknown")),
+            description=f"Updated EPG source '{result.get('name', before_source.get('name'))}'",
+            before_value={"name": before_source.get("name"), "enabled": before_source.get("enabled")},
+            after_value=data,
+        )
+
+        return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -704,7 +854,22 @@ async def update_epg_source(source_id: int, request: Request):
 async def delete_epg_source(source_id: int):
     client = get_client()
     try:
+        # Get source info before deleting
+        source = await client.get_epg_source(source_id)
+        source_name = source.get("name", "Unknown")
+
         await client.delete_epg_source(source_id)
+
+        # Log to journal
+        journal.log_entry(
+            category="epg",
+            action_type="delete",
+            entity_id=source_id,
+            entity_name=source_name,
+            description=f"Deleted EPG source '{source_name}'",
+            before_value={"name": source_name},
+        )
+
         return {"status": "deleted"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -714,7 +879,22 @@ async def delete_epg_source(source_id: int):
 async def refresh_epg_source(source_id: int):
     client = get_client()
     try:
-        return await client.refresh_epg_source(source_id)
+        # Get source info
+        source = await client.get_epg_source(source_id)
+        source_name = source.get("name", "Unknown")
+
+        result = await client.refresh_epg_source(source_id)
+
+        # Log to journal
+        journal.log_entry(
+            category="epg",
+            action_type="refresh",
+            entity_id=source_id,
+            entity_name=source_name,
+            description=f"Refreshed EPG source '{source_name}'",
+        )
+
+        return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -879,7 +1059,19 @@ async def create_m3u_account(request: Request):
     client = get_client()
     try:
         data = await request.json()
-        return await client.create_m3u_account(data)
+        result = await client.create_m3u_account(data)
+
+        # Log to journal
+        journal.log_entry(
+            category="m3u",
+            action_type="create",
+            entity_id=result.get("id"),
+            entity_name=result.get("name", data.get("name", "Unknown")),
+            description=f"Created M3U account '{result.get('name', data.get('name'))}'",
+            after_value={"name": result.get("name"), "server_url": data.get("server_url")},
+        )
+
+        return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -889,8 +1081,22 @@ async def update_m3u_account(account_id: int, request: Request):
     """Update an M3U account (full update)."""
     client = get_client()
     try:
+        before_account = await client.get_m3u_account(account_id)
         data = await request.json()
-        return await client.update_m3u_account(account_id, data)
+        result = await client.update_m3u_account(account_id, data)
+
+        # Log to journal
+        journal.log_entry(
+            category="m3u",
+            action_type="update",
+            entity_id=account_id,
+            entity_name=result.get("name", before_account.get("name", "Unknown")),
+            description=f"Updated M3U account '{result.get('name', before_account.get('name'))}'",
+            before_value={"name": before_account.get("name")},
+            after_value={"name": data.get("name")},
+        )
+
+        return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -900,8 +1106,29 @@ async def patch_m3u_account(account_id: int, request: Request):
     """Partially update an M3U account (e.g., toggle is_active)."""
     client = get_client()
     try:
+        before_account = await client.get_m3u_account(account_id)
         data = await request.json()
-        return await client.patch_m3u_account(account_id, data)
+        result = await client.patch_m3u_account(account_id, data)
+
+        # Log to journal
+        changes = []
+        if "is_active" in data:
+            changes.append(f"{'enabled' if data['is_active'] else 'disabled'}")
+        if "name" in data:
+            changes.append(f"renamed to '{data['name']}'")
+
+        if changes:
+            journal.log_entry(
+                category="m3u",
+                action_type="update",
+                entity_id=account_id,
+                entity_name=result.get("name", before_account.get("name", "Unknown")),
+                description=f"M3U account {', '.join(changes)}",
+                before_value={"is_active": before_account.get("is_active")},
+                after_value=data,
+            )
+
+        return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -911,7 +1138,22 @@ async def delete_m3u_account(account_id: int):
     """Delete an M3U account."""
     client = get_client()
     try:
+        # Get account info before deleting
+        account = await client.get_m3u_account(account_id)
+        account_name = account.get("name", "Unknown")
+
         await client.delete_m3u_account(account_id)
+
+        # Log to journal
+        journal.log_entry(
+            category="m3u",
+            action_type="delete",
+            entity_id=account_id,
+            entity_name=account_name,
+            description=f"Deleted M3U account '{account_name}'",
+            before_value={"name": account_name},
+        )
+
         return {"status": "deleted"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -936,7 +1178,22 @@ async def refresh_m3u_account(account_id: int):
     """Trigger refresh for a single M3U account."""
     client = get_client()
     try:
-        return await client.refresh_m3u_account(account_id)
+        # Get account info
+        account = await client.get_m3u_account(account_id)
+        account_name = account.get("name", "Unknown")
+
+        result = await client.refresh_m3u_account(account_id)
+
+        # Log to journal
+        journal.log_entry(
+            category="m3u",
+            action_type="refresh",
+            entity_id=account_id,
+            entity_name=account_name,
+            description=f"Refreshed M3U account '{account_name}'",
+        )
+
+        return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -1058,6 +1315,63 @@ async def delete_server_group(group_id: int):
         return {"status": "deleted"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# Journal API
+@app.get("/api/journal")
+async def get_journal_entries(
+    page: int = 1,
+    page_size: int = 50,
+    category: Optional[str] = None,
+    action_type: Optional[str] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    search: Optional[str] = None,
+    user_initiated: Optional[bool] = None,
+):
+    """Query journal entries with filtering and pagination."""
+    from datetime import datetime
+
+    # Parse date strings to datetime
+    date_from_dt = None
+    date_to_dt = None
+    if date_from:
+        try:
+            date_from_dt = datetime.fromisoformat(date_from.replace("Z", "+00:00"))
+        except ValueError:
+            pass
+    if date_to:
+        try:
+            date_to_dt = datetime.fromisoformat(date_to.replace("Z", "+00:00"))
+        except ValueError:
+            pass
+
+    # Validate page_size
+    page_size = min(max(page_size, 1), 200)
+
+    return journal.get_entries(
+        page=page,
+        page_size=page_size,
+        category=category,
+        action_type=action_type,
+        date_from=date_from_dt,
+        date_to=date_to_dt,
+        search=search,
+        user_initiated=user_initiated,
+    )
+
+
+@app.get("/api/journal/stats")
+async def get_journal_stats():
+    """Get summary statistics for the journal."""
+    return journal.get_stats()
+
+
+@app.delete("/api/journal/purge")
+async def purge_journal_entries(days: int = 90):
+    """Delete journal entries older than the specified number of days."""
+    deleted_count = journal.purge_old_entries(days=days)
+    return {"deleted": deleted_count, "days": days}
 
 
 # Serve static files in production

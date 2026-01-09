@@ -274,3 +274,6 @@ export * from './history';
 
 // Re-export edit mode types
 export * from './editMode';
+
+// Re-export journal types
+export * from './journal';

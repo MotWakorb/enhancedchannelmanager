@@ -17,6 +17,9 @@ import type {
   EPGProgram,
   StreamProfile,
   DummyEPGCustomProperties,
+  JournalQueryParams,
+  JournalResponse,
+  JournalStats,
 } from '../types';
 
 const API_BASE = '/api';
@@ -1318,4 +1321,30 @@ export async function bulkCreateChannelsFromStreams(
   }
 
   return { created, errors, mergedCount };
+}
+
+// Journal API
+export async function getJournalEntries(params?: JournalQueryParams): Promise<JournalResponse> {
+  const searchParams = new URLSearchParams();
+  if (params?.page) searchParams.set('page', String(params.page));
+  if (params?.page_size) searchParams.set('page_size', String(params.page_size));
+  if (params?.category) searchParams.set('category', params.category);
+  if (params?.action_type) searchParams.set('action_type', params.action_type);
+  if (params?.date_from) searchParams.set('date_from', params.date_from);
+  if (params?.date_to) searchParams.set('date_to', params.date_to);
+  if (params?.search) searchParams.set('search', params.search);
+  if (params?.user_initiated !== undefined) searchParams.set('user_initiated', String(params.user_initiated));
+
+  const query = searchParams.toString();
+  return fetchJson(`${API_BASE}/journal${query ? `?${query}` : ''}`);
+}
+
+export async function getJournalStats(): Promise<JournalStats> {
+  return fetchJson(`${API_BASE}/journal/stats`);
+}
+
+export async function purgeJournalEntries(days: number): Promise<{ deleted_count: number }> {
+  return fetchJson(`${API_BASE}/journal/purge?days=${days}`, {
+    method: 'DELETE',
+  });
 }
