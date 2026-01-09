@@ -505,7 +505,7 @@ export function StatsTab() {
 
     // Build stats for all M3U accounts (exclude "Custom" M3U)
     return m3uAccounts
-      .filter(account => account.is_active && account.name !== 'Custom')
+      .filter(account => account.is_active && account.name.toLowerCase() !== 'custom')
       .map(account => ({
         id: account.id,
         name: account.name,
