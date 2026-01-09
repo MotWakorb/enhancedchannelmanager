@@ -3768,45 +3768,43 @@ export function ChannelsPane({
           {isEditMode && selectedChannelIds.size > 0 && (
             <div className="selection-info">
               <span className="selection-count">{selectedChannelIds.size} selected</span>
-              <button
-                className="bulk-epg-btn"
-                onClick={() => setShowBulkEPGModal(true)}
-                title="Assign EPG to selected channels"
-              >
-                <span className="material-icons">live_tv</span>
-                EPG
-              </button>
-              <button
-                className="bulk-normalize-btn"
-                onClick={() => setShowNormalizeModal(true)}
-                title="Normalize channel names (title case with league prefix)"
-              >
-                <span className="material-icons">text_format</span>
-                Normalize
-              </button>
-              <button
-                className="bulk-renumber-btn"
-                onClick={handleMassRenumberClick}
-                title="Renumber selected channels from a new starting number"
-              >
-                <span className="material-icons">tag</span>
-                Renumber
-              </button>
-              <button
-                className="bulk-delete-btn"
-                onClick={handleBulkDeleteClick}
-                title="Delete selected channels"
-              >
-                <span className="material-icons">delete</span>
-                Delete
-              </button>
-              <button
-                className="clear-selection-btn"
-                onClick={onClearChannelSelection}
-                title="Clear selection"
-              >
-                Clear
-              </button>
+              <div className="selection-actions">
+                <button
+                  className="bulk-action-btn"
+                  onClick={() => setShowBulkEPGModal(true)}
+                  title="Assign EPG to selected channels"
+                >
+                  <span className="material-icons">live_tv</span>
+                </button>
+                <button
+                  className="bulk-action-btn"
+                  onClick={() => setShowNormalizeModal(true)}
+                  title="Normalize channel names"
+                >
+                  <span className="material-icons">text_format</span>
+                </button>
+                <button
+                  className="bulk-action-btn"
+                  onClick={handleMassRenumberClick}
+                  title="Renumber channels"
+                >
+                  <span className="material-icons">tag</span>
+                </button>
+                <button
+                  className="bulk-action-btn bulk-action-btn--danger"
+                  onClick={handleBulkDeleteClick}
+                  title="Delete selected channels"
+                >
+                  <span className="material-icons">delete</span>
+                </button>
+                <button
+                  className="bulk-action-btn bulk-action-btn--clear"
+                  onClick={onClearChannelSelection}
+                  title="Clear selection"
+                >
+                  <span className="material-icons">close</span>
+                </button>
+              </div>
             </div>
           )}
         </div>
