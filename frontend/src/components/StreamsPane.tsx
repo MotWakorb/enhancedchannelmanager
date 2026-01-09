@@ -209,6 +209,14 @@ export function StreamsPane({
   const [channelGroupExpanded, setChannelGroupExpanded] = useState(false);
   const [timezoneExpanded, setTimezoneExpanded] = useState(false);
 
+  // Context menu state
+  const [contextMenu, setContextMenu] = useState<{
+    visible: boolean;
+    x: number;
+    y: number;
+    streamIds: number[];
+  } | null>(null);
+
   // Dropdown state
   const [providerDropdownOpen, setProviderDropdownOpen] = useState(false);
   const [groupDropdownOpen, setGroupDropdownOpen] = useState(false);
@@ -333,15 +341,34 @@ export function StreamsPane({
           selectAll();
         }
       }
-      // Escape to clear selection
+      // Escape to clear selection or close context menu
       if (e.key === 'Escape') {
-        clearSelection();
+        if (contextMenu) {
+          setContextMenu(null);
+        } else {
+          clearSelection();
+        }
       }
     };
 
     document.addEventListener('keydown', handleKeyDown);
     return () => document.removeEventListener('keydown', handleKeyDown);
-  }, [selectAll, clearSelection]);
+  }, [selectAll, clearSelection, contextMenu]);
+
+  // Close context menu when clicking outside
+  useEffect(() => {
+    if (!contextMenu) return;
+
+    const handleClickOutside = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      if (!target.closest('.streams-context-menu') && !target.closest('.streams-context-submenu')) {
+        setContextMenu(null);
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [contextMenu]);
 
   const handleDragStart = useCallback(
     (e: React.DragEvent, stream: Stream) => {
@@ -548,6 +575,70 @@ export function StreamsPane({
     setBulkCreateGroupStartNumbers(new Map());
     setBulkCreateSelectedProfiles(new Set());
   }, []);
+
+  // Context menu handlers
+  const closeContextMenu = useCallback(() => setContextMenu(null), []);
+
+  const handleContextMenu = useCallback((stream: Stream, e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!isEditMode) return;
+
+    // If right-clicked stream is not selected, select only it
+    let streamIds: number[];
+    if (!isSelected(stream.id)) {
+      clearSelection();
+      toggleSelect(stream.id);
+      streamIds = [stream.id];
+    } else {
+      streamIds = Array.from(selectedIds);
+    }
+
+    setContextMenu({
+      visible: true,
+      x: e.clientX,
+      y: e.clientY,
+      streamIds,
+    });
+  }, [isEditMode, isSelected, clearSelection, toggleSelect, selectedIds]);
+
+  // Handler for "Create channel(s) in existing group" from context menu
+  const handleCreateInGroup = useCallback((groupId: number) => {
+    if (!contextMenu) return;
+    openBulkCreateModalForStreamIds(contextMenu.streamIds, groupId);
+    closeContextMenu();
+  }, [contextMenu, openBulkCreateModalForStreamIds, closeContextMenu]);
+
+  // Handler for "Create channel(s) in new group" from context menu
+  const handleCreateInNewGroup = useCallback(() => {
+    if (!contextMenu) return;
+    const streamsList = streams.filter(s => contextMenu.streamIds.includes(s.id));
+    setBulkCreateGroup(null);
+    setBulkCreateGroups([]);
+    setBulkCreateStreams(streamsList);
+    setBulkCreateStartingNumber('');
+    setBulkCreateGroupOption('new');
+    setBulkCreateSelectedGroupId(null);
+    setBulkCreateNewGroupName('');
+    // Apply settings defaults
+    setBulkCreateTimezone((channelDefaults?.timezonePreference as TimezonePreference) || 'both');
+    setBulkCreateStripCountry(channelDefaults?.removeCountryPrefix ?? false);
+    setBulkCreateKeepCountry(channelDefaults?.includeCountryInName ?? false);
+    setBulkCreateCountrySeparator((channelDefaults?.countrySeparator as NumberSeparator) || '|');
+    setBulkCreateAddNumber(channelDefaults?.includeChannelNumberInName ?? false);
+    setBulkCreateSeparator((channelDefaults?.channelNumberSeparator as NumberSeparator) || '|');
+    setBulkCreatePrefixOrder('number-first');
+    setBulkCreateStripNetwork(false);
+    // Apply default channel profile from settings
+    setBulkCreateSelectedProfiles(
+      channelDefaults?.defaultChannelProfileId ? new Set([channelDefaults.defaultChannelProfileId]) : new Set()
+    );
+    setNamingOptionsExpanded(false);
+    setChannelGroupExpanded(true); // Expand channel group section so user sees the "new group" option
+    setTimezoneExpanded(false);
+    setBulkCreateModalOpen(true);
+    closeContextMenu();
+  }, [contextMenu, streams, channelDefaults, closeContextMenu]);
 
   // Toggle group selection (select/deselect all streams in group)
   const toggleGroupSelection = useCallback((group: StreamGroup) => {
@@ -1350,6 +1441,7 @@ export function StreamsPane({
                             // Outside edit mode, clicking the row does nothing either
                             e.stopPropagation();
                           }}
+                          onContextMenu={(e) => handleContextMenu(stream, e)}
                         >
                           {/* Drag handle - only in edit mode, positioned first like channel groups */}
                           {isEditMode && (
@@ -1424,6 +1516,70 @@ export function StreamsPane({
           </>
         )}
       </div>
+
+      {/* Context Menu */}
+      {contextMenu && (
+        <div
+          className="streams-context-menu"
+          style={{
+            position: 'fixed',
+            left: contextMenu.x,
+            top: contextMenu.y,
+            zIndex: 10000,
+          }}
+        >
+          <div
+            className="streams-context-menu-item"
+            onClick={(e) => {
+              e.stopPropagation();
+              // Create submenu with channel groups
+              const submenu = document.createElement('div');
+              submenu.className = 'streams-context-submenu';
+              submenu.style.cssText = `position:fixed;left:${contextMenu.x + 220}px;top:${contextMenu.y}px;z-index:10001;`;
+
+              // Add channel groups as options
+              channelGroups.forEach(group => {
+                const option = document.createElement('div');
+                option.className = 'streams-context-menu-item';
+                option.textContent = group.name;
+                option.onclick = () => {
+                  handleCreateInGroup(group.id);
+                  if (document.body.contains(submenu)) {
+                    document.body.removeChild(submenu);
+                  }
+                };
+                submenu.appendChild(option);
+              });
+
+              // Add "no groups" message if empty
+              if (channelGroups.length === 0) {
+                const noGroups = document.createElement('div');
+                noGroups.className = 'streams-context-menu-item disabled';
+                noGroups.textContent = 'No channel groups available';
+                submenu.appendChild(noGroups);
+              }
+
+              document.body.appendChild(submenu);
+
+              // Close submenu when clicking outside
+              const closeSubmenu = (evt: MouseEvent) => {
+                if (!submenu.contains(evt.target as Node)) {
+                  if (document.body.contains(submenu)) {
+                    document.body.removeChild(submenu);
+                  }
+                  document.removeEventListener('mousedown', closeSubmenu);
+                }
+              };
+              setTimeout(() => document.addEventListener('mousedown', closeSubmenu), 0);
+            }}
+          >
+            Create channel(s) in group <span className="streams-context-menu-arrow">▶</span>
+          </div>
+          <div className="streams-context-menu-item" onClick={handleCreateInNewGroup}>
+            Create channel(s) in new group
+          </div>
+        </div>
+      )}
 
       {/* Bulk Create Modal */}
       {bulkCreateModalOpen && streamsToCreate.length > 0 && (

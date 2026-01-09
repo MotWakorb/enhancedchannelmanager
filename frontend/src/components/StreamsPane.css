@@ -1658,3 +1658,55 @@
   color: var(--text-secondary);
   font-style: italic;
 }
+
+
+/* Context Menu Styles */
+.streams-context-menu {
+  background-color: var(--bg-secondary);
+  border: 1px solid var(--border-primary);
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  min-width: 220px;
+  padding: 4px 0;
+  font-size: 0.9rem;
+}
+
+.streams-context-menu-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 16px;
+  cursor: pointer;
+  color: var(--button-text);
+  transition: background-color 0.15s ease;
+}
+
+.streams-context-menu-item:hover {
+  background-color: var(--bg-hover);
+}
+
+.streams-context-menu-item.disabled {
+  color: var(--text-muted);
+  cursor: default;
+}
+
+.streams-context-menu-item.disabled:hover {
+  background-color: transparent;
+}
+
+.streams-context-menu-arrow {
+  font-size: 0.75rem;
+  opacity: 0.6;
+}
+
+.streams-context-submenu {
+  background-color: var(--bg-secondary);
+  border: 1px solid var(--border-primary);
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  min-width: 200px;
+  max-height: 300px;
+  overflow-y: auto;
+  padding: 4px 0;
+  font-size: 0.9rem;
+}
