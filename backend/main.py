@@ -1344,9 +1344,13 @@ async def update_m3u_group_settings(account_id: int, request: Request):
                     changes_for_group["auto_sync_channel_start"] = {"was": old_start, "now": new_start}
 
                 # Check custom_properties change
+                # Normalize empty dict and None to be equivalent
                 new_custom = gs.get("custom_properties")
                 old_custom = before.get("custom_properties")
-                if old_custom != new_custom:
+                # Treat empty dict {} as equivalent to None
+                new_custom_normalized = new_custom if new_custom else None
+                old_custom_normalized = old_custom if old_custom else None
+                if old_custom_normalized != new_custom_normalized:
                     settings_changed_names.append(group_name)
                     changes_for_group["custom_properties"] = {"was": old_custom, "now": new_custom}
 
