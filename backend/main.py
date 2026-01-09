@@ -568,13 +568,21 @@ async def assign_channel_numbers(request: AssignNumbersRequest):
     settings = get_settings()
 
     try:
-        # If auto-rename is enabled, we need to get current channel data first
-        # to calculate name updates
+        # Get current channel data for all affected channels (needed for journal and auto-rename)
+        import uuid
+        batch_id = str(uuid.uuid4())[:8]
+        channels_before = {}
         name_updates = {}
-        if settings.auto_rename_channel_number and request.starting_number is not None:
-            # Get current channel data for all affected channels
-            for idx, channel_id in enumerate(request.channel_ids):
-                channel = await client.get_channel(channel_id)
+
+        for idx, channel_id in enumerate(request.channel_ids):
+            channel = await client.get_channel(channel_id)
+            channels_before[channel_id] = {
+                "name": channel.get("name", ""),
+                "channel_number": channel.get("channel_number"),
+            }
+
+            # If auto-rename is enabled, calculate name updates
+            if settings.auto_rename_channel_number and request.starting_number is not None:
                 old_number = channel.get("channel_number")
                 new_number = request.starting_number + idx
                 channel_name = channel.get("name", "")
@@ -603,18 +611,24 @@ async def assign_channel_numbers(request: AssignNumbersRequest):
                 # Don't fail the whole operation if a name update fails
                 pass
 
-        # Log to journal (batch operation)
-        import uuid
-        batch_id = str(uuid.uuid4())[:8]
-        journal.log_entry(
-            category="channel",
-            action_type="reorder",
-            entity_id=None,
-            entity_name=f"{len(request.channel_ids)} channels",
-            description=f"Renumbered {len(request.channel_ids)} channels starting from {request.starting_number}",
-            after_value={"channel_ids": request.channel_ids, "starting_number": request.starting_number},
-            batch_id=batch_id,
-        )
+        # Log individual journal entries for each channel
+        for idx, channel_id in enumerate(request.channel_ids):
+            before_data = channels_before.get(channel_id, {})
+            old_number = before_data.get("channel_number")
+            new_number = request.starting_number + idx
+            channel_name = before_data.get("name", f"Channel {channel_id}")
+            new_name = name_updates.get(channel_id, channel_name)
+
+            journal.log_entry(
+                category="channel",
+                action_type="reorder",
+                entity_id=channel_id,
+                entity_name=channel_name,
+                description=f"Changed channel number from {old_number} to {new_number}",
+                before_value={"channel_number": old_number, "name": channel_name},
+                after_value={"channel_number": new_number, "name": new_name},
+                batch_id=batch_id,
+            )
 
         return result
     except Exception as e:

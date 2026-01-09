@@ -3,34 +3,19 @@ import type { JournalEntry, JournalCategory, JournalActionType, JournalStats, Jo
 import * as api from '../../services/api';
 import './JournalTab.css';
 
-// Helper to format timestamp
+// Helper to format timestamp - always show actual date and time
 function formatTimestamp(isoString: string): string {
   const date = new Date(isoString);
   const now = new Date();
-  const diffMs = now.getTime() - date.getTime();
-  const diffMins = Math.floor(diffMs / 60000);
-  const diffHours = Math.floor(diffMins / 60);
-  const diffDays = Math.floor(diffHours / 24);
 
-  // If within last hour, show minutes ago
-  if (diffMins < 60) {
-    return diffMins <= 1 ? 'Just now' : `${diffMins} minutes ago`;
-  }
-  // If within last 24 hours, show hours ago
-  if (diffHours < 24) {
-    return diffHours === 1 ? '1 hour ago' : `${diffHours} hours ago`;
-  }
-  // If within last 7 days, show days ago
-  if (diffDays < 7) {
-    return diffDays === 1 ? 'Yesterday' : `${diffDays} days ago`;
-  }
-  // Otherwise show full date
+  // Format: "Jan 8, 2026 2:35 PM" or "Jan 8 2:35 PM" if same year
   return date.toLocaleDateString('en-US', {
     month: 'short',
     day: 'numeric',
     year: date.getFullYear() !== now.getFullYear() ? 'numeric' : undefined,
-    hour: '2-digit',
+    hour: 'numeric',
     minute: '2-digit',
+    hour12: true,
   });
 }
 
@@ -170,14 +155,27 @@ export function JournalTab() {
 
   return (
     <div className="journal-tab">
-      {/* Header */}
+      {/* Header with inline stats */}
       <div className="journal-header">
-        <div className="header-title">
+        <div className="header-left">
           <h2>Journal</h2>
-          <p className="header-description">
-            Change history for channels, EPG sources, and M3U accounts
-            {stats && ` (${stats.total_entries.toLocaleString()} total entries)`}
-          </p>
+          {stats && (
+            <div className="header-stats">
+              <span className="header-stat">
+                <span className="material-icons">tv</span>
+                {stats.by_category.channel || 0}
+              </span>
+              <span className="header-stat">
+                <span className="material-icons">calendar_month</span>
+                {stats.by_category.epg || 0}
+              </span>
+              <span className="header-stat">
+                <span className="material-icons">playlist_play</span>
+                {stats.by_category.m3u || 0}
+              </span>
+              <span className="header-total">({stats.total_entries.toLocaleString()} total)</span>
+            </div>
+          )}
         </div>
         <div className="header-actions">
           <button className="btn-secondary" onClick={handleRefresh} disabled={loading}>
@@ -186,33 +184,6 @@ export function JournalTab() {
           </button>
         </div>
       </div>
-
-      {/* Stats Summary */}
-      {stats && (
-        <div className="stats-summary">
-          <div className="stat-card">
-            <span className="material-icons">tv</span>
-            <div className="stat-info">
-              <span className="stat-value">{stats.by_category.channel || 0}</span>
-              <span className="stat-label">Channel</span>
-            </div>
-          </div>
-          <div className="stat-card">
-            <span className="material-icons">calendar_month</span>
-            <div className="stat-info">
-              <span className="stat-value">{stats.by_category.epg || 0}</span>
-              <span className="stat-label">EPG</span>
-            </div>
-          </div>
-          <div className="stat-card">
-            <span className="material-icons">playlist_play</span>
-            <div className="stat-info">
-              <span className="stat-value">{stats.by_category.m3u || 0}</span>
-              <span className="stat-label">M3U</span>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* Filters */}
       <div className="filters-bar">
