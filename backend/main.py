@@ -21,6 +21,7 @@ from config import (
 from cache import get_cache
 from database import init_db
 import journal
+from bandwidth_tracker import BandwidthTracker, set_tracker, get_tracker
 
 # Configure logging
 logging.basicConfig(
@@ -70,7 +71,28 @@ async def startup_event():
     logger.info(f"Settings configured: {settings.is_configured()}")
     if settings.url:
         logger.info(f"Dispatcharr URL: {settings.url}")
+
+    # Start bandwidth tracker if configured
+    if settings.is_configured():
+        try:
+            tracker = BandwidthTracker(get_client())
+            set_tracker(tracker)
+            await tracker.start()
+        except Exception as e:
+            logger.error(f"Failed to start bandwidth tracker: {e}")
+
     logger.info("=" * 60)
+
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Clean up on shutdown."""
+    logger.info("Enhanced Channel Manager shutting down")
+
+    # Stop bandwidth tracker
+    tracker = get_tracker()
+    if tracker:
+        await tracker.stop()
 
 
 # Request models
@@ -1658,6 +1680,16 @@ async def stop_client(channel_id: str):
         return await client.stop_client(channel_id)
     except Exception as e:
         logger.error(f"Failed to stop client for channel {channel_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/stats/bandwidth")
+async def get_bandwidth_stats():
+    """Get bandwidth usage summary for all time periods."""
+    try:
+        return BandwidthTracker.get_bandwidth_summary()
+    except Exception as e:
+        logger.error(f"Failed to get bandwidth stats: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

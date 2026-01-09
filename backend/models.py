@@ -1,8 +1,8 @@
 """
-SQLAlchemy ORM models for the Journal feature.
+SQLAlchemy ORM models for the Journal and Bandwidth tracking features.
 """
-from datetime import datetime
-from sqlalchemy import Column, Integer, String, Text, Boolean, DateTime, Index
+from datetime import datetime, date
+from sqlalchemy import Column, Integer, BigInteger, String, Text, Boolean, DateTime, Date, Index
 from database import Base
 
 
@@ -51,3 +51,33 @@ class JournalEntry(Base):
 
     def __repr__(self):
         return f"<JournalEntry(id={self.id}, category={self.category}, action={self.action_type}, entity={self.entity_name})>"
+
+
+class BandwidthDaily(Base):
+    """
+    Daily aggregated bandwidth statistics.
+    One row per day with totals and peaks.
+    """
+    __tablename__ = "bandwidth_daily"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    date = Column(Date, nullable=False, unique=True)
+    bytes_transferred = Column(BigInteger, default=0, nullable=False)
+    peak_channels = Column(Integer, default=0, nullable=False)
+    peak_clients = Column(Integer, default=0, nullable=False)
+
+    __table_args__ = (
+        Index("idx_bandwidth_daily_date", date.desc()),
+    )
+
+    def to_dict(self) -> dict:
+        """Convert to dictionary for API responses."""
+        return {
+            "date": self.date.isoformat() if self.date else None,
+            "bytes_transferred": self.bytes_transferred,
+            "peak_channels": self.peak_channels,
+            "peak_clients": self.peak_clients,
+        }
+
+    def __repr__(self):
+        return f"<BandwidthDaily(date={self.date}, bytes={self.bytes_transferred})>"
