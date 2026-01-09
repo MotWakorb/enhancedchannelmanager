@@ -906,7 +906,8 @@ export function StatsTab() {
                       date: new Date(d.date).toLocaleDateString('en-US', { weekday: 'short' }),
                       bytes: d.bytes_transferred,
                     }))}
-                    margin={{ top: 10, right: 10, bottom: 5, left: 5 }}
+                    margin={{ top: 10, right: 20, bottom: 5, left: 10 }}
+                    barCategoryGap="20%"
                   >
                     <XAxis
                       dataKey="date"
@@ -915,20 +916,20 @@ export function StatsTab() {
                       tickLine={false}
                     />
                     <YAxis
-                      domain={[0, 'dataMax']}
+                      domain={[0, (dataMax: number) => Math.max(dataMax * 1.1, 1024)]}
                       tick={{ fontSize: 10, fill: 'var(--text-muted)' }}
                       axisLine={{ stroke: 'var(--border-primary)' }}
                       tickLine={false}
                       tickFormatter={(v) => formatBytes(v)}
-                      width={60}
-                      padding={{ top: 10 }}
+                      width={65}
                     />
                     <Tooltip content={<DataTooltip />} />
                     <Bar
                       dataKey="bytes"
                       fill="var(--accent-primary)"
                       radius={[4, 4, 0, 0]}
-                      minPointSize={3}
+                      maxBarSize={80}
+                      minPointSize={5}
                     />
                   </BarChart>
                 </ResponsiveContainer>
