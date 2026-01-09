@@ -1582,6 +1582,24 @@ export function StreamsPane({
 
               document.body.appendChild(submenu);
 
+              // Add scroll indicator if content is scrollable
+              const checkScrollable = () => {
+                if (submenu.scrollHeight > submenu.clientHeight) {
+                  submenu.classList.add('scrollable');
+                  // Update scroll indicator based on position
+                  const updateScrollIndicator = () => {
+                    const atTop = submenu.scrollTop <= 0;
+                    const atBottom = submenu.scrollTop + submenu.clientHeight >= submenu.scrollHeight - 1;
+                    submenu.classList.toggle('scroll-top', !atTop);
+                    submenu.classList.toggle('scroll-bottom', !atBottom);
+                  };
+                  updateScrollIndicator();
+                  submenu.addEventListener('scroll', updateScrollIndicator);
+                }
+              };
+              // Check after render
+              requestAnimationFrame(checkScrollable);
+
               // Close submenu when clicking outside
               const closeSubmenu = (evt: MouseEvent) => {
                 if (!submenu.contains(evt.target as Node)) {

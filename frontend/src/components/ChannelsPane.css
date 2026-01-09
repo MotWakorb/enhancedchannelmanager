@@ -3428,6 +3428,57 @@
   overflow-y: auto;
 }
 
+/* Scrollbar styling for context submenu */
+.context-menu-submenu::-webkit-scrollbar {
+  width: 6px;
+}
+
+.context-menu-submenu::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.context-menu-submenu::-webkit-scrollbar-thumb {
+  background-color: var(--text-muted);
+  border-radius: 3px;
+}
+
+.context-menu-submenu::-webkit-scrollbar-thumb:hover {
+  background-color: var(--text-secondary);
+}
+
+/* Scroll indicator shadows */
+.context-menu-submenu.scrollable {
+  position: relative;
+}
+
+.context-menu-submenu.scroll-top::before {
+  content: '';
+  position: sticky;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 20px;
+  margin-bottom: -20px;
+  background: linear-gradient(to bottom, var(--bg-secondary) 0%, transparent 100%);
+  pointer-events: none;
+  z-index: 1;
+  display: block;
+}
+
+.context-menu-submenu.scroll-bottom::after {
+  content: '';
+  position: sticky;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 20px;
+  margin-top: -20px;
+  background: linear-gradient(to top, var(--bg-secondary) 0%, transparent 100%);
+  pointer-events: none;
+  z-index: 1;
+  display: block;
+}
+
 .context-menu-submenu .context-menu-item {
   padding: 8px 16px;
 }

@@ -1710,3 +1710,54 @@
   padding: 4px 0;
   font-size: 0.9rem;
 }
+
+/* Scrollbar styling for context submenu */
+.streams-context-submenu::-webkit-scrollbar {
+  width: 6px;
+}
+
+.streams-context-submenu::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.streams-context-submenu::-webkit-scrollbar-thumb {
+  background-color: var(--text-muted);
+  border-radius: 3px;
+}
+
+.streams-context-submenu::-webkit-scrollbar-thumb:hover {
+  background-color: var(--text-secondary);
+}
+
+/* Scroll indicator shadows */
+.streams-context-submenu.scrollable {
+  position: relative;
+}
+
+.streams-context-submenu.scroll-top::before {
+  content: '';
+  position: sticky;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 20px;
+  margin-bottom: -20px;
+  background: linear-gradient(to bottom, var(--bg-secondary) 0%, transparent 100%);
+  pointer-events: none;
+  z-index: 1;
+  display: block;
+}
+
+.streams-context-submenu.scroll-bottom::after {
+  content: '';
+  position: sticky;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 20px;
+  margin-top: -20px;
+  background: linear-gradient(to top, var(--bg-secondary) 0%, transparent 100%);
+  pointer-events: none;
+  z-index: 1;
+  display: block;
+}
