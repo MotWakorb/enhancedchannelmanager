@@ -297,7 +297,7 @@ export interface StreamClient {
 
 // Active channel stats from /proxy/ts/status
 export interface ChannelStats {
-  channel_id: number;
+  channel_id: number | string;  // Can be UUID string
   channel_name?: string;
   channel_number?: number;
 
@@ -339,9 +339,12 @@ export interface ChannelStats {
   audio_channels?: number;
   stream_type?: string;
 
-  // Stream source info
-  current_stream_id?: number;
-  current_stream_url?: string;
+  // Stream source info (from Dispatcharr)
+  stream_id?: number;
+  stream_name?: string;
+  m3u_profile_id?: number;
+  m3u_profile_name?: string;
+  url?: string;
 }
 
 // Response from /proxy/ts/status

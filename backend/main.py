@@ -1640,7 +1640,7 @@ async def get_system_events(
 
 
 @app.post("/api/stats/channels/{channel_id}/stop")
-async def stop_channel(channel_id: int):
+async def stop_channel(channel_id: str):
     """Stop a channel and release all associated resources."""
     client = get_client()
     try:
@@ -1651,7 +1651,7 @@ async def stop_channel(channel_id: int):
 
 
 @app.post("/api/stats/channels/{channel_id}/stop-client")
-async def stop_client(channel_id: int):
+async def stop_client(channel_id: str):
     """Stop a specific client connection."""
     client = get_client()
     try:
