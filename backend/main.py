@@ -412,23 +412,43 @@ async def update_channel(channel_id: int, data: dict):
     try:
         # Get before state for logging
         before_channel = await client.get_channel(channel_id)
-        before_value = {
-            "name": before_channel.get("name"),
-            "channel_number": before_channel.get("channel_number"),
-        }
 
         result = await client.update_channel(channel_id, data)
 
-        # Determine what changed for description
+        # Determine what changed for description and build before/after values
         changes = []
+        before_value = {}
+        after_value = {}
+
         if "name" in data and data["name"] != before_channel.get("name"):
             changes.append(f"name to '{data['name']}'")
+            before_value["name"] = before_channel.get("name")
+            after_value["name"] = data["name"]
+
         if "channel_number" in data and data["channel_number"] != before_channel.get("channel_number"):
             changes.append(f"number to {data['channel_number']}")
-        if "tvg_id" in data:
-            changes.append("EPG mapping")
-        if "logo_id" in data:
-            changes.append("logo")
+            before_value["channel_number"] = before_channel.get("channel_number")
+            after_value["channel_number"] = data["channel_number"]
+
+        if "tvg_id" in data and data["tvg_id"] != before_channel.get("tvg_id"):
+            old_tvg = before_channel.get("tvg_id")
+            new_tvg = data["tvg_id"]
+            if new_tvg:
+                changes.append(f"EPG mapping to '{new_tvg}'")
+            else:
+                changes.append("cleared EPG mapping")
+            before_value["tvg_id"] = old_tvg
+            after_value["tvg_id"] = new_tvg
+
+        if "logo_id" in data and data["logo_id"] != before_channel.get("logo_id"):
+            old_logo = before_channel.get("logo_id")
+            new_logo = data["logo_id"]
+            if new_logo:
+                changes.append("logo")
+            else:
+                changes.append("cleared logo")
+            before_value["logo_id"] = old_logo
+            after_value["logo_id"] = new_logo
 
         if changes:
             journal.log_entry(
@@ -438,7 +458,7 @@ async def update_channel(channel_id: int, data: dict):
                 entity_name=result.get("name", before_channel.get("name", "Unknown")),
                 description=f"Updated channel: {', '.join(changes)}",
                 before_value=before_value,
-                after_value={k: data[k] for k in data if k in ["name", "channel_number", "tvg_id", "logo_id"]},
+                after_value=after_value,
             )
 
         return result

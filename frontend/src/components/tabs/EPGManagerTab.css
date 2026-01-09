@@ -188,7 +188,7 @@
 
 .list-header {
   display: grid;
-  grid-template-columns: 40px 70px 80px 1fr 140px 160px 140px;
+  grid-template-columns: 40px 70px 100px 1fr 150px 160px 120px;
   gap: 1rem;
   padding: 0.75rem 1rem;
   background-color: var(--input-bg);
@@ -200,6 +200,7 @@
   letter-spacing: 0.05em;
   align-items: center;
   min-width: 900px;
+  white-space: nowrap;
 }
 
 .list-header span[title] {
@@ -217,7 +218,7 @@
 
 .epg-source-row {
   display: grid;
-  grid-template-columns: 40px 70px 80px 1fr 140px 160px 140px;
+  grid-template-columns: 40px 70px 100px 1fr 150px 160px 120px;
   gap: 1rem;
   padding: 1rem;
   border-bottom: 1px solid var(--border-primary);
