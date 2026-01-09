@@ -1581,6 +1581,86 @@ async def purge_journal_entries(days: int = 90):
     return {"deleted": deleted_count, "days": days}
 
 
+# =============================================================================
+# Stats & Monitoring
+# =============================================================================
+
+
+@app.get("/api/stats/channels")
+async def get_channel_stats():
+    """Get status of all active channels.
+
+    Returns summary including active channels, client counts, bitrates, speeds, etc.
+    """
+    client = get_client()
+    try:
+        return await client.get_channel_stats()
+    except Exception as e:
+        logger.error(f"Failed to get channel stats: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/stats/channels/{channel_id}")
+async def get_channel_stats_detail(channel_id: int):
+    """Get detailed stats for a specific channel.
+
+    Includes per-client information, buffer status, codec details, etc.
+    """
+    client = get_client()
+    try:
+        return await client.get_channel_stats_detail(channel_id)
+    except Exception as e:
+        logger.error(f"Failed to get channel stats for {channel_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/stats/events")
+async def get_system_events(
+    limit: int = 100,
+    offset: int = 0,
+    event_type: Optional[str] = None,
+):
+    """Get recent system events (channel start/stop, buffering, client connections).
+
+    Args:
+        limit: Number of events to return (default 100, max 1000)
+        offset: Pagination offset
+        event_type: Optional filter by event type
+    """
+    client = get_client()
+    try:
+        return await client.get_system_events(
+            limit=min(limit, 1000),
+            offset=offset,
+            event_type=event_type,
+        )
+    except Exception as e:
+        logger.error(f"Failed to get system events: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/stats/channels/{channel_id}/stop")
+async def stop_channel(channel_id: int):
+    """Stop a channel and release all associated resources."""
+    client = get_client()
+    try:
+        return await client.stop_channel(channel_id)
+    except Exception as e:
+        logger.error(f"Failed to stop channel {channel_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/stats/channels/{channel_id}/stop-client")
+async def stop_client(channel_id: int):
+    """Stop a specific client connection."""
+    client = get_client()
+    try:
+        return await client.stop_client(channel_id)
+    except Exception as e:
+        logger.error(f"Failed to stop client for channel {channel_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # Serve static files in production
 static_dir = os.path.join(os.path.dirname(__file__), "static")
 if os.path.exists(static_dir):

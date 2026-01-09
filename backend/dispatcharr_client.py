@@ -715,6 +715,61 @@ class DispatcharrClient:
         return response.json() if response.content else {"success": True}
 
     # -------------------------------------------------------------------------
+    # Stats & Monitoring
+    # -------------------------------------------------------------------------
+
+    async def get_channel_stats(self) -> dict:
+        """Get status of all active channels.
+
+        Returns summary including active channels, client counts, bitrates, etc.
+        """
+        response = await self._request("GET", "/proxy/ts/status")
+        response.raise_for_status()
+        return response.json()
+
+    async def get_channel_stats_detail(self, channel_id: int) -> dict:
+        """Get detailed stats for a specific channel.
+
+        Includes per-client information, buffer status, codec details, etc.
+        """
+        response = await self._request("GET", f"/proxy/ts/status/{channel_id}")
+        response.raise_for_status()
+        return response.json()
+
+    async def get_system_events(
+        self,
+        limit: int = 100,
+        offset: int = 0,
+        event_type: Optional[str] = None,
+    ) -> dict:
+        """Get recent system events (channel start/stop, buffering, client connections).
+
+        Args:
+            limit: Number of events to return (max 1000)
+            offset: Pagination offset
+            event_type: Optional filter by event type
+        """
+        params = {"limit": limit, "offset": offset}
+        if event_type:
+            params["event_type"] = event_type
+
+        response = await self._request("GET", "/api/core/system-events/", params=params)
+        response.raise_for_status()
+        return response.json()
+
+    async def stop_channel(self, channel_id: int) -> dict:
+        """Stop a channel and release all associated resources."""
+        response = await self._request("POST", f"/proxy/ts/stop/{channel_id}")
+        response.raise_for_status()
+        return response.json() if response.content else {"success": True}
+
+    async def stop_client(self, channel_id: int) -> dict:
+        """Stop a specific client connection."""
+        response = await self._request("POST", f"/proxy/ts/stop_client/{channel_id}")
+        response.raise_for_status()
+        return response.json() if response.content else {"success": True}
+
+    # -------------------------------------------------------------------------
     # Cleanup
     # -------------------------------------------------------------------------
 
