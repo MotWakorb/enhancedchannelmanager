@@ -1281,13 +1281,14 @@ async def update_m3u_group_settings(account_id: int, request: Request):
         # Get account info and current group settings before update
         account = await client.get_m3u_account(account_id)
         account_name = account.get("name", "Unknown")
-        # Store full settings for each group (enabled, auto_channel_sync, auto_sync_channel_start)
+        # Store full settings for each group (all auto-sync related fields)
         before_groups = {}
         for g in account.get("channel_groups", []):
             before_groups[g.get("channel_group")] = {
                 "enabled": g.get("enabled"),
                 "auto_channel_sync": g.get("auto_channel_sync"),
                 "auto_sync_channel_start": g.get("auto_sync_channel_start"),
+                "custom_properties": g.get("custom_properties"),
             }
 
         # Get channel groups for name lookup
@@ -1305,6 +1306,7 @@ async def update_m3u_group_settings(account_id: int, request: Request):
             auto_sync_enabled_names = []
             auto_sync_disabled_names = []
             start_channel_changed = []
+            settings_changed_names = []
             changed_groups = []
 
             for gs in group_settings:
@@ -1341,6 +1343,13 @@ async def update_m3u_group_settings(account_id: int, request: Request):
                     start_channel_changed.append(f"{group_name} ({old_start} → {new_start})")
                     changes_for_group["auto_sync_channel_start"] = {"was": old_start, "now": new_start}
 
+                # Check custom_properties change
+                new_custom = gs.get("custom_properties")
+                old_custom = before.get("custom_properties")
+                if old_custom != new_custom:
+                    settings_changed_names.append(group_name)
+                    changes_for_group["custom_properties"] = {"was": old_custom, "now": new_custom}
+
                 if changes_for_group:
                     changed_groups.append({
                         "channel_group": channel_group_id,
@@ -1360,6 +1369,8 @@ async def update_m3u_group_settings(account_id: int, request: Request):
                     changes.append(f"Auto-sync off: {', '.join(auto_sync_disabled_names)}")
                 if start_channel_changed:
                     changes.append(f"Start channel: {', '.join(start_channel_changed)}")
+                if settings_changed_names:
+                    changes.append(f"Settings: {', '.join(settings_changed_names)}")
 
                 journal.log_entry(
                     category="m3u",
