@@ -900,32 +900,35 @@ export function StatsTab() {
             {bandwidthStats.daily_history && bandwidthStats.daily_history.length > 0 && (
               <div className="bandwidth-chart">
                 <div className="chart-title">Last 7 Days</div>
-                <ResponsiveContainer width="100%" height={120}>
+                <ResponsiveContainer width="100%" height={150}>
                   <BarChart
                     data={bandwidthStats.daily_history.map(d => ({
                       date: new Date(d.date).toLocaleDateString('en-US', { weekday: 'short' }),
                       bytes: d.bytes_transferred,
                     }))}
-                    margin={{ top: 5, right: 5, bottom: 5, left: 5 }}
+                    margin={{ top: 10, right: 10, bottom: 5, left: 5 }}
                   >
                     <XAxis
                       dataKey="date"
-                      tick={{ fontSize: 10, fill: 'var(--text-muted)' }}
+                      tick={{ fontSize: 11, fill: 'var(--text-muted)' }}
                       axisLine={{ stroke: 'var(--border-primary)' }}
                       tickLine={false}
                     />
                     <YAxis
+                      domain={[0, 'dataMax']}
                       tick={{ fontSize: 10, fill: 'var(--text-muted)' }}
                       axisLine={{ stroke: 'var(--border-primary)' }}
                       tickLine={false}
                       tickFormatter={(v) => formatBytes(v)}
-                      width={55}
+                      width={60}
+                      padding={{ top: 10 }}
                     />
                     <Tooltip content={<DataTooltip />} />
                     <Bar
                       dataKey="bytes"
                       fill="var(--accent-primary)"
                       radius={[4, 4, 0, 0]}
+                      minPointSize={3}
                     />
                   </BarChart>
                 </ResponsiveContainer>
