@@ -1376,14 +1376,22 @@ async def update_m3u_group_settings(account_id: int, request: Request):
                 if settings_changed_names:
                     changes.append(f"Settings: {', '.join(settings_changed_names)}")
 
+                # Only include before state for groups that actually changed
+                changed_group_ids = {g["channel_group"] for g in changed_groups}
+                before_changed_only = {
+                    gid: {**before_groups[gid], "name": group_name_map.get(gid, f"Group {gid}")}
+                    for gid in changed_group_ids
+                    if gid in before_groups
+                }
+
                 journal.log_entry(
                     category="m3u",
                     action_type="update",
                     entity_id=account_id,
                     entity_name=account_name,
                     description=f"Updated group settings - {'; '.join(changes)}",
-                    before_value={"groups": before_groups},
-                    after_value={"changed_groups": changed_groups},
+                    before_value=before_changed_only,
+                    after_value=changed_groups,
                 )
 
         return result
