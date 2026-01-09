@@ -199,28 +199,39 @@ interface BandwidthChartPoint {
 }
 
 function prepareBandwidthChartData(dailyHistory: Array<{ date: string; bytes_transferred: number }>): BandwidthChartPoint[] {
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-
   // Create a map of existing data by date string
   const dataMap = new Map<string, number>();
   for (const record of dailyHistory) {
     dataMap.set(record.date, record.bytes_transferred);
   }
 
-  // Generate last 7 days
+  // Get today's date at midnight local time
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  // Format date as YYYY-MM-DD in local timezone
+  const formatDate = (d: Date): string => {
+    const year = d.getFullYear();
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  };
+
+  const todayStr = formatDate(today);
+
+  // Generate last 7 days (from 6 days ago to today)
   const result: BandwidthChartPoint[] = [];
   for (let i = 6; i >= 0; i--) {
-    const date = new Date(today);
-    date.setDate(date.getDate() - i);
-    const dateStr = date.toISOString().split('T')[0]; // YYYY-MM-DD format
+    const date = new Date(today.getTime() - i * 24 * 60 * 60 * 1000);
+    const dateStr = formatDate(date);
     const dayLabel = date.toLocaleDateString('en-US', { weekday: 'short' });
+    const bytes = dataMap.get(dateStr) || 0;
 
     result.push({
       date: dayLabel,
       dateStr: dateStr,
-      bytes: dataMap.get(dateStr) || 0,
-      isToday: i === 0,
+      bytes: bytes,
+      isToday: dateStr === todayStr,
     });
   }
 
@@ -937,6 +948,8 @@ export function StatsTab() {
             </div>
             {(() => {
               const chartData = prepareBandwidthChartData(bandwidthStats.daily_history || []);
+              // Find max for scaling - ensure we have a reasonable minimum
+              const maxBytes = Math.max(...chartData.map(d => d.bytes), 1024);
               return (
                 <div className="bandwidth-chart">
                   <div className="chart-title">Last 7 Days</div>
@@ -944,7 +957,7 @@ export function StatsTab() {
                     <BarChart
                       data={chartData}
                       margin={{ top: 10, right: 20, bottom: 5, left: 10 }}
-                      barCategoryGap="20%"
+                      barCategoryGap="15%"
                     >
                       <XAxis
                         dataKey="date"
@@ -953,7 +966,7 @@ export function StatsTab() {
                         tickLine={false}
                       />
                       <YAxis
-                        domain={[0, (dataMax: number) => Math.max(dataMax * 1.1, 1024)]}
+                        domain={[0, maxBytes * 1.1]}
                         tick={{ fontSize: 10, fill: 'var(--text-muted)' }}
                         axisLine={{ stroke: 'var(--border-primary)' }}
                         tickLine={false}
@@ -964,8 +977,7 @@ export function StatsTab() {
                       <Bar
                         dataKey="bytes"
                         radius={[4, 4, 0, 0]}
-                        maxBarSize={80}
-                        minPointSize={5}
+                        maxBarSize={60}
                       >
                         {chartData.map((entry, index) => (
                           <Cell
