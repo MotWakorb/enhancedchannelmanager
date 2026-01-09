@@ -479,6 +479,30 @@ export function StatsTab() {
   const totalClients = channelStats?.channels?.reduce((sum, ch) => sum + (ch.client_count || 0), 0) || 0;
   const activeChannels = channelStats?.count || 0;
 
+  // Calculate connections per M3U
+  const m3uConnections = (() => {
+    const connections = new Map<string, { id: number; name: string; count: number }>();
+    if (channelStats?.channels) {
+      for (const ch of channelStats.channels) {
+        if (ch.m3u_profile_id && ch.m3u_profile_name) {
+          const key = String(ch.m3u_profile_id);
+          const existing = connections.get(key);
+          if (existing) {
+            existing.count += 1;
+          } else {
+            connections.set(key, {
+              id: ch.m3u_profile_id,
+              name: ch.m3u_profile_name,
+              count: 1,
+            });
+          }
+        }
+      }
+    }
+    // Sort by name for consistent display
+    return Array.from(connections.values()).sort((a, b) => a.name.localeCompare(b.name));
+  })();
+
   if (loading) {
     return (
       <div className="stats-tab">
@@ -511,6 +535,16 @@ export function StatsTab() {
                 <div className="stat-label">Connected Clients</div>
               </div>
             </div>
+            {m3uConnections.length > 0 && (
+              <div className="m3u-connections">
+                {m3uConnections.map((m3u) => (
+                  <div key={m3u.id} className="m3u-stat">
+                    <span className="m3u-count">{m3u.count}</span>
+                    <span className="m3u-name">{m3u.name}</span>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         </div>
 
