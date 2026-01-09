@@ -22,7 +22,9 @@
       "Bash(git pull:*)",
       "Bash(docker compose:*)",
       "Bash(npm install:*)",
-      "Bash(bd close:*)"
+      "Bash(bd close:*)",
+      "Bash(python3:*)",
+      "Bash(docker exec:*)"
     ],
     "deny": [],
     "ask": []
