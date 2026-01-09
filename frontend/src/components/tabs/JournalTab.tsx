@@ -54,6 +54,18 @@ function formatActionType(actionType: string): string {
   return actionType.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
+// Format category for display
+function formatCategory(category: JournalCategory): string {
+  switch (category) {
+    case 'm3u':
+      return 'M3U';
+    case 'epg':
+      return 'EPG';
+    case 'channel':
+      return 'Channel';
+  }
+}
+
 export function JournalTab() {
   // Data state
   const [entries, setEntries] = useState<JournalEntry[]>([]);
@@ -266,7 +278,7 @@ export function JournalTab() {
                   <span className="entry-category">
                     <span className={`category-badge category-${entry.category}`}>
                       <span className="material-icons">{getCategoryIcon(entry.category)}</span>
-                      {entry.category}
+                      {formatCategory(entry.category)}
                     </span>
                   </span>
                   <span className="entry-action">
