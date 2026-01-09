@@ -640,6 +640,23 @@ export function StreamsPane({
     closeContextMenu();
   }, [contextMenu, streams, channelDefaults, closeContextMenu]);
 
+  // Handler for right-clicking on a stream group header
+  const handleGroupContextMenu = useCallback((group: StreamGroup, e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!isEditMode) return;
+
+    // Get all stream IDs in this group
+    const streamIds = group.streams.map(s => s.id);
+
+    setContextMenu({
+      visible: true,
+      x: e.clientX,
+      y: e.clientY,
+      streamIds,
+    });
+  }, [isEditMode]);
+
   // Toggle group selection (select/deselect all streams in group)
   const toggleGroupSelection = useCallback((group: StreamGroup) => {
     const groupStreamIds = group.streams.map(s => s.id);
@@ -1379,6 +1396,7 @@ export function StreamsPane({
                   <div
                     className="stream-group-header"
                     onClick={() => toggleGroup(group.name)}
+                    onContextMenu={(e) => handleGroupContextMenu(group, e)}
                     draggable={isEditMode && !!onBulkCreateFromGroup}
                     onDragStart={(e) => {
                       if (isEditMode && onBulkCreateFromGroup) {
