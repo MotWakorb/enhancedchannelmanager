@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import type { ChannelStatsResponse, SystemEvent, BandwidthSummary } from '../../types';
+import type { ChannelStatsResponse, SystemEvent, BandwidthSummary, M3UAccount } from '../../types';
 import * as api from '../../services/api';
 import {
   LineChart,
@@ -266,6 +266,7 @@ export function StatsTab() {
   const [channelStats, setChannelStats] = useState<ChannelStatsResponse | null>(null);
   const [events, setEvents] = useState<SystemEvent[]>([]);
   const [bandwidthStats, setBandwidthStats] = useState<BandwidthSummary | null>(null);
+  const [m3uAccounts, setM3uAccounts] = useState<M3UAccount[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
@@ -408,21 +409,32 @@ export function StatsTab() {
     }
   }, []);
 
+  // Load M3U accounts for display
+  const loadM3UAccounts = useCallback(async () => {
+    try {
+      const accounts = await api.getM3UAccounts();
+      setM3uAccounts(accounts);
+    } catch (err) {
+      console.error('Failed to load M3U accounts:', err);
+    }
+  }, []);
+
   // Initial load - fetch lookups first, then stats
   useEffect(() => {
     const loadLookups = async () => {
       setLoading(true);
-      // Load channels and stream profiles in parallel
+      // Load channels, stream profiles, and M3U accounts in parallel
       await Promise.all([
         loadAllChannels(),
         loadStreamProfiles(),
+        loadM3UAccounts(),
       ]);
       // Now load stats
       await fetchData(false);
       setLoading(false);
     };
     loadLookups();
-  }, [loadAllChannels, loadStreamProfiles, fetchData]);
+  }, [loadAllChannels, loadStreamProfiles, loadM3UAccounts, fetchData]);
 
   // Auto-refresh timer
   useEffect(() => {
@@ -479,28 +491,28 @@ export function StatsTab() {
   const totalClients = channelStats?.channels?.reduce((sum, ch) => sum + (ch.client_count || 0), 0) || 0;
   const activeChannels = channelStats?.count || 0;
 
-  // Calculate connections per M3U
-  const m3uConnections = (() => {
-    const connections = new Map<string, { id: number; name: string; count: number }>();
+  // Calculate connections per M3U (current/max for all accounts)
+  const m3uConnectionStats = (() => {
+    // Count active connections per M3U account ID
+    const activeCount = new Map<number, number>();
     if (channelStats?.channels) {
       for (const ch of channelStats.channels) {
-        if (ch.m3u_profile_id && ch.m3u_profile_name) {
-          const key = String(ch.m3u_profile_id);
-          const existing = connections.get(key);
-          if (existing) {
-            existing.count += 1;
-          } else {
-            connections.set(key, {
-              id: ch.m3u_profile_id,
-              name: ch.m3u_profile_name,
-              count: 1,
-            });
-          }
+        if (ch.m3u_profile_id) {
+          activeCount.set(ch.m3u_profile_id, (activeCount.get(ch.m3u_profile_id) || 0) + 1);
         }
       }
     }
-    // Sort by name for consistent display
-    return Array.from(connections.values()).sort((a, b) => a.name.localeCompare(b.name));
+
+    // Build stats for all M3U accounts
+    return m3uAccounts
+      .filter(account => account.is_active)
+      .map(account => ({
+        id: account.id,
+        name: account.name,
+        current: activeCount.get(account.id) || 0,
+        max: account.max_streams,
+      }))
+      .sort((a, b) => a.name.localeCompare(b.name));
   })();
 
   if (loading) {
@@ -535,16 +547,15 @@ export function StatsTab() {
                 <div className="stat-label">Connected Clients</div>
               </div>
             </div>
-            {m3uConnections.length > 0 && (
-              <div className="m3u-connections">
-                {m3uConnections.map((m3u) => (
-                  <div key={m3u.id} className="m3u-stat">
-                    <span className="m3u-count">{m3u.count}</span>
-                    <span className="m3u-name">{m3u.name}</span>
-                  </div>
-                ))}
+            {m3uConnectionStats.map((m3u) => (
+              <div key={m3u.id} className="summary-stat">
+                <span className="material-icons">cloud_queue</span>
+                <div>
+                  <div className="stat-value">{m3u.current}/{m3u.max}</div>
+                  <div className="stat-label">{m3u.name}</div>
+                </div>
               </div>
-            )}
+            ))}
           </div>
         </div>
 
