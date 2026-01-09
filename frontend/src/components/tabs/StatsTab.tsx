@@ -8,7 +8,6 @@ import {
   Area,
   BarChart,
   Bar,
-  Cell,
   XAxis,
   YAxis,
   Tooltip,
@@ -950,6 +949,31 @@ export function StatsTab() {
               const chartData = prepareBandwidthChartData(bandwidthStats.daily_history || []);
               // Find max for scaling - ensure we have a reasonable minimum
               const maxBytes = Math.max(...chartData.map(d => d.bytes), 1024);
+
+              // Custom bar shape to handle fill color
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              const CustomBar = (props: any) => {
+                const { x = 0, y = 0, width = 0, height = 0, payload } = props;
+                const fill = payload?.isToday ? '#14b8a6' : '#3b82f6';
+                const radius = 4;
+                // Render empty rect if no height
+                if (height <= 0) {
+                  return <rect x={x} y={y} width={width} height={0} fill="transparent" />;
+                }
+                return (
+                  <path
+                    d={`M${x},${y + height}
+                        L${x},${y + radius}
+                        Q${x},${y} ${x + radius},${y}
+                        L${x + width - radius},${y}
+                        Q${x + width},${y} ${x + width},${y + radius}
+                        L${x + width},${y + height}
+                        Z`}
+                    fill={fill}
+                  />
+                );
+              };
+
               return (
                 <div className="bandwidth-chart">
                   <div className="chart-title">Last 7 Days</div>
@@ -976,16 +1000,10 @@ export function StatsTab() {
                       <Tooltip content={<DataTooltip />} />
                       <Bar
                         dataKey="bytes"
-                        radius={[4, 4, 0, 0]}
                         maxBarSize={60}
-                      >
-                        {chartData.map((entry, index) => (
-                          <Cell
-                            key={`cell-${index}`}
-                            fill={entry.isToday ? '#14b8a6' : '#3b82f6'}
-                          />
-                        ))}
-                      </Bar>
+                        isAnimationActive={false}
+                        shape={CustomBar}
+                      />
                     </BarChart>
                   </ResponsiveContainer>
                 </div>
