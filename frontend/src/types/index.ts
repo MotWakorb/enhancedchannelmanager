@@ -296,14 +296,15 @@ export interface StreamClient {
 }
 
 // Active channel stats from /proxy/ts/status
+// Note: Fields match what Dispatcharr actually returns
 export interface ChannelStats {
-  channel_id: number | string;  // Can be UUID string
+  channel_id: number | string;  // UUID string from Dispatcharr
   channel_name?: string;
   channel_number?: number;
 
   // State & timing
   state?: string;
-  uptime?: string;
+  uptime?: string | number;  // Can be number (seconds) or string
   started_at?: string;
   state_duration?: string;
 
@@ -311,33 +312,27 @@ export interface ChannelStats {
   client_count: number;
   clients?: StreamClient[];
 
-  // Bitrate & bandwidth
-  avg_bitrate?: string;
-  avg_bitrate_kbps?: number;
-  source_bitrate?: string;
-  ffmpeg_bitrate?: string;
-  audio_bitrate?: string;
+  // Bitrate & bandwidth (Dispatcharr provides avg_bitrate and avg_bitrate_kbps)
+  avg_bitrate?: string;         // e.g., "4.40 Mbps"
+  avg_bitrate_kbps?: number;    // e.g., 4403.08
 
   // Speed & performance
   ffmpeg_speed?: number | string;  // Can be number (1.02) or string ("1.02x")
   ffmpeg_fps?: number;
   actual_fps?: number;
-  source_fps?: number;
+  source_fps?: number;  // This is what Dispatcharr returns
 
   // Buffer & data
   buffer_index?: number;
   total_bytes?: number;
   total_data?: string;
-  avg_chunk_size?: number;
 
   // Stream quality
   video_codec?: string;
   audio_codec?: string;
   resolution?: string;
-  pixel_format?: string;
-  sample_rate?: number;
   audio_channels?: string | number;  // Can be "stereo", "5.1", or number
-  stream_type?: string;
+  stream_type?: string;  // e.g., "mpegts"
 
   // Stream source info (from Dispatcharr)
   stream_id?: number;

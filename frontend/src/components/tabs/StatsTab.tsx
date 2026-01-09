@@ -477,7 +477,7 @@ export function StatsTab() {
                   </div>
                   <div className="stat-item">
                     <span className="stat-label">Bitrate</span>
-                    <span className="stat-value">{channel.avg_bitrate || channel.ffmpeg_bitrate || '-'}</span>
+                    <span className="stat-value">{channel.avg_bitrate || '-'}</span>
                   </div>
                   <div className="stat-item">
                     <span className="stat-label">Speed</span>
@@ -530,24 +530,24 @@ export function StatsTab() {
                           <span className="value">{channel.audio_codec || '-'}</span>
                         </div>
                         <div className="detail-row">
-                          <span className="label">Sample Rate</span>
-                          <span className="value">{channel.sample_rate ? `${channel.sample_rate} Hz` : '-'}</span>
-                        </div>
-                        <div className="detail-row">
                           <span className="label">Channels</span>
                           <span className="value">{channel.audio_channels || '-'}</span>
                         </div>
                       </div>
 
                       <div className="detail-group">
-                        <div className="detail-group-title">Buffer</div>
+                        <div className="detail-group-title">Stream</div>
                         <div className="detail-row">
-                          <span className="label">Index</span>
+                          <span className="label">Type</span>
+                          <span className="value">{channel.stream_type || '-'}</span>
+                        </div>
+                        <div className="detail-row">
+                          <span className="label">Buffer Index</span>
                           <span className="value">{channel.buffer_index ?? '-'}</span>
                         </div>
                         <div className="detail-row">
-                          <span className="label">Avg Chunk</span>
-                          <span className="value">{channel.avg_chunk_size ? formatBytes(channel.avg_chunk_size) : '-'}</span>
+                          <span className="label">Avg Bitrate</span>
+                          <span className="value">{channel.avg_bitrate || (channel.avg_bitrate_kbps ? `${channel.avg_bitrate_kbps.toFixed(2)} kbps` : '-')}</span>
                         </div>
                       </div>
 
@@ -555,11 +555,15 @@ export function StatsTab() {
                         <div className="detail-group-title">Performance</div>
                         <div className="detail-row">
                           <span className="label">FFmpeg Speed</span>
-                          <span className="value">{channel.ffmpeg_speed || '-'}</span>
+                          <span className="value">{formatSpeed(channel.ffmpeg_speed)}</span>
                         </div>
                         <div className="detail-row">
-                          <span className="label">Source Bitrate</span>
-                          <span className="value">{channel.source_bitrate || '-'}</span>
+                          <span className="label">Total Data</span>
+                          <span className="value">{channel.total_data || formatBytes(channel.total_bytes)}</span>
+                        </div>
+                        <div className="detail-row">
+                          <span className="label">Stream ID</span>
+                          <span className="value">{channel.stream_id || '-'}</span>
                         </div>
                       </div>
                     </div>
