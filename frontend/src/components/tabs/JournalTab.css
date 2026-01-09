@@ -96,8 +96,8 @@
   display: flex;
   gap: 0.75rem;
   margin-bottom: 0.75rem;
-  flex-wrap: wrap;
   flex-shrink: 0;
+  align-items: center;
 }
 
 .search-box {
@@ -109,8 +109,8 @@
   border: 1px solid var(--border-secondary);
   border-radius: 6px;
   flex: 1;
-  min-width: 200px;
-  max-width: 300px;
+  min-width: 150px;
+  max-width: 250px;
 }
 
 .search-box .material-icons {
@@ -139,7 +139,7 @@
   color: var(--text-primary);
   font-size: 0.875rem;
   cursor: pointer;
-  min-width: 140px;
+  min-width: 120px;
 }
 
 .filter-select:focus {
@@ -524,6 +524,17 @@
 
   .details-grid {
     grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 768px) {
+  .filters-bar {
+    flex-wrap: wrap;
+  }
+
+  .search-box {
+    flex: 1 1 100%;
+    max-width: none;
   }
 }
 
