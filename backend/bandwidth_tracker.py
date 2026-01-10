@@ -4,7 +4,7 @@ Polls Dispatcharr stats periodically and accumulates bandwidth data.
 """
 import asyncio
 import logging
-from datetime import datetime, date, timedelta
+from datetime import datetime, date, timedelta, timezone
 from typing import Optional
 
 from database import get_session
@@ -136,8 +136,8 @@ class BandwidthTracker:
             self._update_watch_counts(newly_active_channels)
 
     def _update_daily_record(self, bytes_delta: int, active_channels: int, total_clients: int):
-        """Update today's bandwidth record in the database."""
-        today = date.today()
+        """Update today's bandwidth record in the database (using UTC)."""
+        today = datetime.now(timezone.utc).date()
 
         session = get_session()
         try:
@@ -171,7 +171,7 @@ class BandwidthTracker:
         """Update watch counts for channels that just became active."""
         session = get_session()
         try:
-            now = datetime.utcnow()
+            now = datetime.now(timezone.utc)
             for ch in channels:
                 channel_id = ch["channel_id"]
                 channel_name = ch["channel_name"]
@@ -206,13 +206,13 @@ class BandwidthTracker:
     @staticmethod
     def get_bandwidth_summary() -> dict:
         """
-        Get bandwidth summary for all time periods.
+        Get bandwidth summary for all time periods (using UTC).
 
         Returns:
             dict with today, this_week, this_month, this_year, all_time bytes,
             and daily_history for last 7 days
         """
-        today = date.today()
+        today = datetime.now(timezone.utc).date()
         week_ago = today - timedelta(days=7)
         month_start = today.replace(day=1)
         year_start = today.replace(month=1, day=1)
@@ -288,8 +288,8 @@ class BandwidthTracker:
 
     @staticmethod
     def purge_old_records(days: int = 90):
-        """Remove records older than specified days."""
-        cutoff = date.today() - timedelta(days=days)
+        """Remove records older than specified days (using UTC)."""
+        cutoff = datetime.now(timezone.utc).date() - timedelta(days=days)
 
         session = get_session()
         try:
