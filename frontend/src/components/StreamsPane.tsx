@@ -1515,16 +1515,28 @@ export function StreamsPane({
                             )}
                           </div>
                           {stream.url && (
-                            <button
-                              className="copy-url-btn"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                navigator.clipboard.writeText(stream.url!);
-                              }}
-                              title="Copy stream URL"
-                            >
-                              <span className="material-icons">content_copy</span>
-                            </button>
+                            <>
+                              <button
+                                className="vlc-btn"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  window.open(`vlc://${stream.url}`, '_blank');
+                                }}
+                                title="Open in VLC"
+                              >
+                                <span className="material-icons">play_circle</span>
+                              </button>
+                              <button
+                                className="copy-url-btn"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  navigator.clipboard.writeText(stream.url!);
+                                }}
+                                title="Copy stream URL"
+                              >
+                                <span className="material-icons">content_copy</span>
+                              </button>
+                            </>
                           )}
                         </div>
                       ))}

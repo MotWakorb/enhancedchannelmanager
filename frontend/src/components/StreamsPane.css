@@ -487,8 +487,28 @@
   font-size: 1rem;
 }
 
-.stream-item:hover .copy-url-btn {
+.stream-item:hover .copy-url-btn,
+.stream-item:hover .vlc-btn {
   opacity: 1;
+}
+
+.vlc-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.25rem;
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  border-radius: 4px;
+  transition: color 0.15s, background 0.15s, opacity 0.15s;
+  opacity: 0;
+}
+
+.vlc-btn:hover {
+  color: #ff8800;
+  background: rgba(255, 136, 0, 0.1);
 }
 
 .load-more-btn {

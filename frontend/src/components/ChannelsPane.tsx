@@ -216,6 +216,18 @@ function SortableStreamItem({ stream, providerName, isEditMode, onRemove, onCopy
         )}
         {providerName && <span className="inline-stream-provider">{providerName}</span>}
       </div>
+      {stream.url && (
+        <button
+          className="vlc-btn"
+          onClick={(e) => {
+            e.stopPropagation();
+            window.open(`vlc://${stream.url}`, '_blank');
+          }}
+          title="Open in VLC"
+        >
+          <span className="material-icons">play_circle</span>
+        </button>
+      )}
       {onCopyUrl && (
         <button
           className="copy-url-btn"
@@ -426,6 +438,18 @@ function SortableChannel({
         {channel.streams.length === 0 && <span className="material-icons warning-icon">warning</span>}
         {channel.streams.length} stream{channel.streams.length !== 1 ? 's' : ''}
       </span>
+      {channelUrl && (
+        <button
+          className="vlc-btn channel-vlc-btn"
+          onClick={(e) => {
+            e.stopPropagation();
+            window.open(`vlc://${channelUrl}`, '_blank');
+          }}
+          title="Open channel in VLC"
+        >
+          <span className="material-icons">play_circle</span>
+        </button>
+      )}
       {onCopyChannelUrl && (
         <button
           className="copy-url-btn channel-copy-url-btn"
