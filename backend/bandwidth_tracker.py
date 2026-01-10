@@ -117,9 +117,14 @@ class BandwidthTracker:
 
         for channel in channels:
             channel_id = str(channel.get("channel_id", ""))
-            channel_name = channel.get("channel_name", f"Channel {channel_id}")
+            # Get channel name - Dispatcharr provides this
+            channel_name = channel.get("channel_name") or channel.get("name") or f"Channel {channel_id[:8]}..."
             bytes_now = channel.get("total_bytes", 0) or 0
             client_count = channel.get("client_count", 0) or 0
+
+            # Extract client IP addresses
+            clients = channel.get("clients", [])
+            client_ips = [c.get("ip_address") for c in clients if c.get("ip_address")]
 
             current_bytes[channel_id] = bytes_now
             total_clients += client_count
@@ -134,6 +139,7 @@ class BandwidthTracker:
                     newly_active_channels.append({
                         "channel_id": channel_id,
                         "channel_name": channel_name,
+                        "client_ips": client_ips,
                     })
                 else:
                     # Channel was active last poll and still is - accumulate watch time
@@ -211,6 +217,7 @@ class BandwidthTracker:
             for ch in channels:
                 channel_id = ch["channel_id"]
                 channel_name = ch["channel_name"]
+                client_ips = ch.get("client_ips", [])
 
                 # Get or create watch stats record
                 record = session.query(ChannelWatchStats).filter(
@@ -232,14 +239,22 @@ class BandwidthTracker:
                 # Update channel name in case it changed
                 record.channel_name = channel_name
 
+                # Build description with IP addresses
+                ip_str = ", ".join(client_ips) if client_ips else "unknown"
+                description = f"Started watching {channel_name} from {ip_str}"
+
                 # Log journal entry for watch start
                 log_entry(
                     category="watch",
                     action_type="start",
                     entity_name=channel_name,
-                    description=f"Started watching {channel_name}",
+                    description=description,
                     user_initiated=False,
-                    after_value={"channel_id": channel_id, "watch_count": record.watch_count},
+                    after_value={
+                        "channel_id": channel_id,
+                        "watch_count": record.watch_count,
+                        "client_ips": client_ips,
+                    },
                 )
 
             session.commit()
