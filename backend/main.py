@@ -145,6 +145,7 @@ class SettingsRequest(BaseModel):
     custom_network_prefixes: list[str] = []
     custom_network_suffixes: list[str] = []
     stats_poll_interval: int = 10
+    user_timezone: str = ""
 
 
 class SettingsResponse(BaseModel):
@@ -168,6 +169,7 @@ class SettingsResponse(BaseModel):
     custom_network_prefixes: list[str]
     custom_network_suffixes: list[str]
     stats_poll_interval: int
+    user_timezone: str
 
 
 class TestConnectionRequest(BaseModel):
@@ -201,6 +203,7 @@ async def get_current_settings():
         custom_network_prefixes=settings.custom_network_prefixes,
         custom_network_suffixes=settings.custom_network_suffixes,
         stats_poll_interval=settings.stats_poll_interval,
+        user_timezone=settings.user_timezone,
     )
 
 
@@ -245,6 +248,7 @@ async def update_settings(request: SettingsRequest):
         custom_network_prefixes=request.custom_network_prefixes,
         custom_network_suffixes=request.custom_network_suffixes,
         stats_poll_interval=request.stats_poll_interval,
+        user_timezone=request.user_timezone,
     )
     save_settings(new_settings)
     clear_settings_cache()

@@ -812,6 +812,34 @@
   color: var(--accent-primary);
 }
 
+/* Timezone Select */
+.timezone-select {
+  padding: 0.375rem 0.5rem;
+  border: 1px solid var(--border-primary);
+  border-radius: 4px;
+  background-color: var(--input-bg);
+  color: var(--text-primary);
+  font-size: 0.875rem;
+  min-width: 180px;
+  cursor: pointer;
+}
+
+.timezone-select:focus {
+  outline: none;
+  border-color: var(--accent-primary);
+  box-shadow: 0 0 0 2px rgba(100, 108, 255, 0.2);
+}
+
+.timezone-select optgroup {
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.timezone-select option {
+  color: var(--text-primary);
+  background-color: var(--bg-secondary);
+}
+
 /* Custom Network Prefixes */
 .custom-prefix-input-row {
   display: flex;

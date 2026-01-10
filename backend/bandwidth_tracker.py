@@ -6,11 +6,30 @@ import asyncio
 import logging
 from datetime import datetime, date, timedelta, timezone
 from typing import Optional
+from zoneinfo import ZoneInfo
 
 from database import get_session
 from models import BandwidthDaily, ChannelWatchStats
 
 logger = logging.getLogger(__name__)
+
+
+def get_user_timezone() -> timezone:
+    """Get the user's configured timezone, or UTC if not set/invalid."""
+    try:
+        from config import get_settings
+        settings = get_settings()
+        if settings.user_timezone:
+            return ZoneInfo(settings.user_timezone)
+    except Exception as e:
+        logger.debug(f"Could not get user timezone: {e}")
+    return timezone.utc
+
+
+def get_current_date() -> date:
+    """Get current date in user's timezone."""
+    tz = get_user_timezone()
+    return datetime.now(tz).date()
 
 # Default polling interval in seconds (used if not configured)
 DEFAULT_POLL_INTERVAL = 10
@@ -136,8 +155,8 @@ class BandwidthTracker:
             self._update_watch_counts(newly_active_channels)
 
     def _update_daily_record(self, bytes_delta: int, active_channels: int, total_clients: int):
-        """Update today's bandwidth record in the database (using UTC)."""
-        today = datetime.now(timezone.utc).date()
+        """Update today's bandwidth record in the database (using user's timezone)."""
+        today = get_current_date()
 
         session = get_session()
         try:
@@ -171,7 +190,7 @@ class BandwidthTracker:
         """Update watch counts for channels that just became active."""
         session = get_session()
         try:
-            now = datetime.now(timezone.utc)
+            now = datetime.now(get_user_timezone())
             for ch in channels:
                 channel_id = ch["channel_id"]
                 channel_name = ch["channel_name"]
@@ -206,13 +225,13 @@ class BandwidthTracker:
     @staticmethod
     def get_bandwidth_summary() -> dict:
         """
-        Get bandwidth summary for all time periods (using UTC).
+        Get bandwidth summary for all time periods (using user's timezone).
 
         Returns:
             dict with today, this_week, this_month, this_year, all_time bytes,
             and daily_history for last 7 days
         """
-        today = datetime.now(timezone.utc).date()
+        today = get_current_date()
         week_ago = today - timedelta(days=7)
         month_start = today.replace(day=1)
         year_start = today.replace(month=1, day=1)
@@ -288,8 +307,8 @@ class BandwidthTracker:
 
     @staticmethod
     def purge_old_records(days: int = 90):
-        """Remove records older than specified days (using UTC)."""
-        cutoff = datetime.now(timezone.utc).date() - timedelta(days=days)
+        """Remove records older than specified days (using user's timezone)."""
+        cutoff = get_current_date() - timedelta(days=days)
 
         session = get_session()
         try:

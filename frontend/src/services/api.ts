@@ -334,6 +334,7 @@ export interface SettingsResponse {
   custom_network_prefixes: string[];  // User-defined network prefixes to strip
   custom_network_suffixes: string[];  // User-defined network suffixes to strip
   stats_poll_interval: number;  // Seconds between stats polling (default 10)
+  user_timezone: string;  // IANA timezone name (e.g. "America/Los_Angeles")
 }
 
 export interface TestConnectionResult {
@@ -366,6 +367,7 @@ export async function saveSettings(settings: {
   custom_network_prefixes?: string[];  // Optional - user-defined network prefixes
   custom_network_suffixes?: string[];  // Optional - user-defined network suffixes
   stats_poll_interval?: number;  // Optional - seconds between stats polling, defaults to 10
+  user_timezone?: string;  // Optional - IANA timezone name (e.g. "America/Los_Angeles")
 }): Promise<{ status: string; configured: boolean }> {
   return fetchJson(`${API_BASE}/settings`, {
     method: 'POST',

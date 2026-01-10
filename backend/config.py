@@ -50,6 +50,9 @@ class DispatcharrSettings(BaseModel):
     custom_network_suffixes: list[str] = []
     # Stats polling interval in seconds (how often to check Dispatcharr for channel stats)
     stats_poll_interval: int = 10
+    # User timezone for stats display (IANA timezone name, e.g. "America/Los_Angeles")
+    # Empty string means use UTC
+    user_timezone: str = ""
 
     def is_configured(self) -> bool:
         return bool(self.url and self.username and self.password)
