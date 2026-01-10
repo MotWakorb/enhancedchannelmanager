@@ -1728,10 +1728,10 @@ async def get_bandwidth_stats():
 
 
 @app.get("/api/stats/top-watched")
-async def get_top_watched_channels(limit: int = 10):
-    """Get the top watched channels by watch count."""
+async def get_top_watched_channels(limit: int = 10, sort_by: str = "views"):
+    """Get the top watched channels by watch count or watch time."""
     try:
-        return BandwidthTracker.get_top_watched_channels(limit=limit)
+        return BandwidthTracker.get_top_watched_channels(limit=limit, sort_by=sort_by)
     except Exception as e:
         logger.error(f"Failed to get top watched channels: {e}")
         raise HTTPException(status_code=500, detail=str(e))

@@ -404,5 +404,9 @@ export interface ChannelWatchStats {
   channel_id: number | string;  // Can be UUID string from Dispatcharr
   channel_name: string;
   watch_count: number;
+  total_watch_seconds: number;
   last_watched: string | null;
 }
+
+// Sort mode for top watched channels
+export type TopWatchedSortBy = 'views' | 'time';
