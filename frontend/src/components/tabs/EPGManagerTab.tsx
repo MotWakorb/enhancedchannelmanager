@@ -720,17 +720,19 @@ export function EPGManagerTab({ onSourcesChange }: EPGManagerTabProps) {
 
       {/* Dummy EPG Sources Section */}
       <div className="dummy-epg-section">
-        <div className="section-header">
-          <div className="section-title">
-            <h3>Dummy EPG Sources</h3>
-            <p className="section-description">
+        <div className="epg-header">
+          <div className="header-title">
+            <h2>Dummy EPG Sources</h2>
+            <p className="header-description">
               Pattern-based EPG sources that generate programs from channel/stream names.
             </p>
           </div>
-          <button className="btn-primary" onClick={handleAddDummySource}>
-            <span className="material-icons">add</span>
-            Add Dummy EPG
-          </button>
+          <div className="header-actions">
+            <button className="btn-primary" onClick={handleAddDummySource}>
+              <span className="material-icons">add</span>
+              Add Dummy EPG
+            </button>
+          </div>
         </div>
 
         {dummySources.length === 0 ? (
