@@ -81,3 +81,34 @@ class BandwidthDaily(Base):
 
     def __repr__(self):
         return f"<BandwidthDaily(date={self.date}, bytes={self.bytes_transferred})>"
+
+
+class ChannelWatchStats(Base):
+    """
+    Tracks watch counts per channel.
+    Each time a channel is seen active in stats, we increment its watch count.
+    """
+    __tablename__ = "channel_watch_stats"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    channel_id = Column(Integer, nullable=False, unique=True)  # Dispatcharr channel ID
+    channel_name = Column(String(255), nullable=False)  # Channel name (for display)
+    watch_count = Column(Integer, default=0, nullable=False)  # Number of times seen watching
+    last_watched = Column(DateTime, nullable=True)  # Last time this channel was active
+
+    __table_args__ = (
+        Index("idx_channel_watch_count", watch_count.desc()),
+        Index("idx_channel_watch_channel_id", channel_id),
+    )
+
+    def to_dict(self) -> dict:
+        """Convert to dictionary for API responses."""
+        return {
+            "channel_id": self.channel_id,
+            "channel_name": self.channel_name,
+            "watch_count": self.watch_count,
+            "last_watched": self.last_watched.isoformat() + "Z" if self.last_watched else None,
+        }
+
+    def __repr__(self):
+        return f"<ChannelWatchStats(channel_id={self.channel_id}, name={self.channel_name}, count={self.watch_count})>"

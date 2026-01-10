@@ -42,6 +42,9 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
   const [hideUngroupedStreams, setHideUngroupedStreams] = useState(true);
   const [theme, setTheme] = useState<Theme>('dark');
 
+  // Stats settings
+  const [statsPollInterval, setStatsPollInterval] = useState(10);
+
   // UI state
   const [loading, setLoading] = useState(false);
   const [testing, setTesting] = useState(false);
@@ -80,6 +83,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
       setEpgAutoMatchThreshold(settings.epg_auto_match_threshold ?? 80);
       setCustomNetworkPrefixes(settings.custom_network_prefixes ?? []);
       setCustomNetworkSuffixes(settings.custom_network_suffixes ?? []);
+      setStatsPollInterval(settings.stats_poll_interval ?? 10);
       setTestResult(null);
       setError(null);
     } catch (err) {
@@ -157,6 +161,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
         epg_auto_match_threshold: epgAutoMatchThreshold,
         custom_network_prefixes: customNetworkPrefixes,
         custom_network_suffixes: customNetworkSuffixes,
+        stats_poll_interval: statsPollInterval,
       });
       setOriginalUrl(url);
       setOriginalUsername(username);
@@ -242,6 +247,39 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
             />
             <p className="form-hint">Only required when changing URL or username</p>
           </div>
+        </div>
+      </div>
+
+      <div className="settings-section">
+        <div className="settings-section-header">
+          <span className="material-icons">speed</span>
+          <h3>Stats Polling</h3>
+        </div>
+
+        <div className="form-group">
+          <div className="threshold-label-row">
+            <label htmlFor="statsPollInterval">Poll interval (seconds)</label>
+            <div className="threshold-input-group">
+              <input
+                id="statsPollInterval"
+                type="number"
+                min="5"
+                max="300"
+                value={statsPollInterval}
+                onChange={(e) => {
+                  const value = Math.max(5, Math.min(300, Number(e.target.value) || 10));
+                  setStatsPollInterval(value);
+                }}
+                className="threshold-input"
+              />
+              <span className="threshold-percent">sec</span>
+            </div>
+          </div>
+          <p className="form-hint">
+            How often to poll Dispatcharr for channel statistics and bandwidth tracking.
+            Lower values provide more frequent updates but use more resources.
+            Requires a restart to take effect.
+          </p>
         </div>
       </div>
 

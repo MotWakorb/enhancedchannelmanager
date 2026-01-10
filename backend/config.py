@@ -48,6 +48,8 @@ class DispatcharrSettings(BaseModel):
     # Custom network suffixes to strip during bulk channel creation
     # These are merged with the built-in list (ENGLISH, LIVE, BACKUP, etc.)
     custom_network_suffixes: list[str] = []
+    # Stats polling interval in seconds (how often to check Dispatcharr for channel stats)
+    stats_poll_interval: int = 10
 
     def is_configured(self) -> bool:
         return bool(self.url and self.username and self.password)

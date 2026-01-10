@@ -200,7 +200,7 @@
 }
 
 /* Channel Info (Sticky Left) */
-.channel-info {
+.guide-row .channel-info {
   width: 200px;
   flex-shrink: 0;
   display: flex;
@@ -215,11 +215,11 @@
   transition: background-color 0.15s;
 }
 
-.channel-info.clickable {
+.guide-row .channel-info.clickable {
   cursor: pointer;
 }
 
-.channel-info.clickable:hover {
+.guide-row .channel-info.clickable:hover {
   background-color: var(--bg-tertiary);
 }
 

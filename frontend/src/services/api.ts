@@ -333,6 +333,7 @@ export interface SettingsResponse {
   epg_auto_match_threshold: number;  // 0-100, confidence score threshold for auto-matching
   custom_network_prefixes: string[];  // User-defined network prefixes to strip
   custom_network_suffixes: string[];  // User-defined network suffixes to strip
+  stats_poll_interval: number;  // Seconds between stats polling (default 10)
 }
 
 export interface TestConnectionResult {
@@ -364,6 +365,7 @@ export async function saveSettings(settings: {
   epg_auto_match_threshold?: number;  // Optional - 0-100, defaults to 80
   custom_network_prefixes?: string[];  // Optional - user-defined network prefixes
   custom_network_suffixes?: string[];  // Optional - user-defined network suffixes
+  stats_poll_interval?: number;  // Optional - seconds between stats polling, defaults to 10
 }): Promise<{ status: string; configured: boolean }> {
   return fetchJson(`${API_BASE}/settings`, {
     method: 'POST',
@@ -1412,4 +1414,11 @@ export async function stopClient(channelId: number | string): Promise<{ success:
  */
 export async function getBandwidthStats(): Promise<import('../types').BandwidthSummary> {
   return fetchJson(`${API_BASE}/stats/bandwidth`);
+}
+
+/**
+ * Get top watched channels by watch count.
+ */
+export async function getTopWatchedChannels(limit: number = 10): Promise<import('../types').ChannelWatchStats[]> {
+  return fetchJson(`${API_BASE}/stats/top-watched?limit=${limit}`);
 }
