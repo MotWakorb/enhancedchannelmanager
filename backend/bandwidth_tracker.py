@@ -35,7 +35,7 @@ class BandwidthTracker:
         self._task: Optional[asyncio.Task] = None
         self._running = False
         self._last_bytes: dict[str, int] = {}  # Track per-channel bytes to compute deltas
-        self._last_active_channels: set[int] = set()  # Track which channels were active last poll
+        self._last_active_channels: set[str] = set()  # Track which channels were active last poll (UUIDs)
 
     async def start(self):
         """Start the background polling task."""
@@ -95,12 +95,11 @@ class BandwidthTracker:
         total_clients = 0
 
         current_bytes: dict[str, int] = {}
-        current_active_channels: set[int] = set()
+        current_active_channels: set[str] = set()
         newly_active_channels: list[dict] = []
 
         for channel in channels:
             channel_id = str(channel.get("channel_id", ""))
-            channel_id_int = channel.get("channel_id")
             channel_name = channel.get("channel_name", f"Channel {channel_id}")
             bytes_now = channel.get("total_bytes", 0) or 0
             client_count = channel.get("client_count", 0) or 0
@@ -108,13 +107,13 @@ class BandwidthTracker:
             current_bytes[channel_id] = bytes_now
             total_clients += client_count
 
-            # Track active channels for watch counting
-            if channel_id_int is not None:
-                current_active_channels.add(channel_id_int)
+            # Track active channels for watch counting (use string ID for UUID support)
+            if channel_id:
+                current_active_channels.add(channel_id)
                 # Check if this channel just became active (wasn't in last poll)
-                if channel_id_int not in self._last_active_channels:
+                if channel_id not in self._last_active_channels:
                     newly_active_channels.append({
-                        "channel_id": channel_id_int,
+                        "channel_id": channel_id,
                         "channel_name": channel_name,
                     })
 

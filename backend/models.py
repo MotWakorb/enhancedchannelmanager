@@ -91,7 +91,7 @@ class ChannelWatchStats(Base):
     __tablename__ = "channel_watch_stats"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    channel_id = Column(Integer, nullable=False, unique=True)  # Dispatcharr channel ID
+    channel_id = Column(String(64), nullable=False, unique=True)  # Dispatcharr channel UUID
     channel_name = Column(String(255), nullable=False)  # Channel name (for display)
     watch_count = Column(Integer, default=0, nullable=False)  # Number of times seen watching
     last_watched = Column(DateTime, nullable=True)  # Last time this channel was active

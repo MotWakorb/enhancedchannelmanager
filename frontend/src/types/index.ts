@@ -401,7 +401,7 @@ export interface BandwidthSummary {
 
 // Channel watch statistics
 export interface ChannelWatchStats {
-  channel_id: number;
+  channel_id: number | string;  // Can be UUID string from Dispatcharr
   channel_name: string;
   watch_count: number;
   last_watched: string | null;

@@ -972,13 +972,21 @@ export function StatsTab() {
           <div className="top-watched-section">
             <h3 className="section-title">Top Watched Channels</h3>
             <div className="top-watched-list">
-              {topWatchedChannels.map((channel, index) => (
-                <div key={channel.channel_id} className="top-watched-item">
-                  <span className="top-watched-rank">#{index + 1}</span>
-                  <span className="top-watched-name">{channel.channel_name}</span>
-                  <span className="top-watched-count">{channel.watch_count} views</span>
-                </div>
-              ))}
+              {topWatchedChannels.map((channel, index) => {
+                // Look up channel name from our channel map (channel_id might be UUID)
+                const channelIdStr = String(channel.channel_id);
+                const isUUID = channelIdStr.includes('-') && channelIdStr.length > 20;
+                const lookupData = isUUID ? channelNameMap.current.get(channelIdStr) : null;
+                const displayName = lookupData?.name || channel.channel_name || `Channel ${channelIdStr.substring(0, 8)}...`;
+
+                return (
+                  <div key={channel.channel_id} className="top-watched-item">
+                    <span className="top-watched-rank">#{index + 1}</span>
+                    <span className="top-watched-name">{displayName}</span>
+                    <span className="top-watched-count">{channel.watch_count} views</span>
+                  </div>
+                );
+              })}
             </div>
           </div>
         )}
