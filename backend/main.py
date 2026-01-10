@@ -75,7 +75,7 @@ async def startup_event():
     # Start bandwidth tracker if configured
     if settings.is_configured():
         try:
-            tracker = BandwidthTracker(get_client())
+            tracker = BandwidthTracker(get_client(), poll_interval=settings.stats_poll_interval)
             set_tracker(tracker)
             await tracker.start()
         except Exception as e:
@@ -144,6 +144,7 @@ class SettingsRequest(BaseModel):
     epg_auto_match_threshold: int = 80
     custom_network_prefixes: list[str] = []
     custom_network_suffixes: list[str] = []
+    stats_poll_interval: int = 10
 
 
 class SettingsResponse(BaseModel):
@@ -166,6 +167,7 @@ class SettingsResponse(BaseModel):
     epg_auto_match_threshold: int
     custom_network_prefixes: list[str]
     custom_network_suffixes: list[str]
+    stats_poll_interval: int
 
 
 class TestConnectionRequest(BaseModel):
@@ -198,6 +200,7 @@ async def get_current_settings():
         epg_auto_match_threshold=settings.epg_auto_match_threshold,
         custom_network_prefixes=settings.custom_network_prefixes,
         custom_network_suffixes=settings.custom_network_suffixes,
+        stats_poll_interval=settings.stats_poll_interval,
     )
 
 
@@ -241,6 +244,7 @@ async def update_settings(request: SettingsRequest):
         epg_auto_match_threshold=request.epg_auto_match_threshold,
         custom_network_prefixes=request.custom_network_prefixes,
         custom_network_suffixes=request.custom_network_suffixes,
+        stats_poll_interval=request.stats_poll_interval,
     )
     save_settings(new_settings)
     clear_settings_cache()
@@ -1690,6 +1694,16 @@ async def get_bandwidth_stats():
         return BandwidthTracker.get_bandwidth_summary()
     except Exception as e:
         logger.error(f"Failed to get bandwidth stats: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/stats/top-watched")
+async def get_top_watched_channels(limit: int = 10):
+    """Get the top watched channels by watch count."""
+    try:
+        return BandwidthTracker.get_top_watched_channels(limit=limit)
+    except Exception as e:
+        logger.error(f"Failed to get top watched channels: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

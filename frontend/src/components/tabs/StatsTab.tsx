@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import type { ChannelStatsResponse, SystemEvent, BandwidthSummary, M3UAccount } from '../../types';
+import type { ChannelStatsResponse, SystemEvent, BandwidthSummary, M3UAccount, ChannelWatchStats } from '../../types';
 import * as api from '../../services/api';
 import {
   LineChart,
@@ -266,6 +266,7 @@ export function StatsTab() {
   const [channelStats, setChannelStats] = useState<ChannelStatsResponse | null>(null);
   const [events, setEvents] = useState<SystemEvent[]>([]);
   const [bandwidthStats, setBandwidthStats] = useState<BandwidthSummary | null>(null);
+  const [topWatchedChannels, setTopWatchedChannels] = useState<ChannelWatchStats[]>([]);
   const [m3uAccounts, setM3uAccounts] = useState<M3UAccount[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -339,10 +340,11 @@ export function StatsTab() {
     setError(null);
 
     try {
-      const [statsResult, eventsResult, bandwidthResult] = await Promise.all([
+      const [statsResult, eventsResult, bandwidthResult, topWatchedResult] = await Promise.all([
         api.getChannelStats(),
         api.getSystemEvents({ limit: 50 }),
         api.getBandwidthStats().catch(() => null), // Don't fail if bandwidth stats unavailable
+        api.getTopWatchedChannels(10).catch(() => []), // Don't fail if top watched unavailable
       ]);
 
       // Accumulate historical data for charts
@@ -399,6 +401,7 @@ export function StatsTab() {
       if (bandwidthResult) {
         setBandwidthStats(bandwidthResult);
       }
+      setTopWatchedChannels(topWatchedResult || []);
       lastRefreshRef.current = new Date();
     } catch (err) {
       console.error('Failed to fetch stats:', err);
@@ -960,6 +963,22 @@ export function StatsTab() {
                   </div>
                 );
               })}
+            </div>
+          </div>
+        )}
+
+        {/* Top Watched Channels */}
+        {topWatchedChannels.length > 0 && (
+          <div className="top-watched-section">
+            <h3 className="section-title">Top Watched Channels</h3>
+            <div className="top-watched-list">
+              {topWatchedChannels.map((channel, index) => (
+                <div key={channel.channel_id} className="top-watched-item">
+                  <span className="top-watched-rank">#{index + 1}</span>
+                  <span className="top-watched-name">{channel.channel_name}</span>
+                  <span className="top-watched-count">{channel.watch_count} views</span>
+                </div>
+              ))}
             </div>
           </div>
         )}

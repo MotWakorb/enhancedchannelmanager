@@ -24,7 +24,8 @@
       "Bash(npm install:*)",
       "Bash(bd close:*)",
       "Bash(python3:*)",
-      "Bash(docker exec:*)"
+      "Bash(docker exec:*)",
+      "Bash(grep:*)"
     ],
     "deny": [],
     "ask": []

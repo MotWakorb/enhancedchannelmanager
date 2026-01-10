@@ -212,7 +212,7 @@
   gap: 1rem;
 }
 
-.channel-info {
+.channel-card .channel-info {
   display: flex;
   align-items: center;
   gap: 1rem;
@@ -220,7 +220,7 @@
   min-width: 0;
 }
 
-.channel-number {
+.channel-card .channel-number {
   font-size: 0.875rem;
   font-weight: 600;
   color: var(--accent-primary);
@@ -228,7 +228,7 @@
   flex-shrink: 0;
 }
 
-.channel-name {
+.channel-card .channel-name {
   font-size: 0.9rem;
   font-weight: 500;
   color: var(--text-primary);
@@ -693,6 +693,53 @@
 
 .detail-row .value {
   color: var(--text-primary);
+  font-family: monospace;
+}
+
+/* Top Watched Channels Section */
+.top-watched-section {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-primary);
+  border-radius: 8px;
+  padding: 1rem;
+  margin-top: 1.5rem;
+}
+
+.top-watched-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.top-watched-item {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.5rem 0.75rem;
+  background: var(--bg-tertiary);
+  border-radius: 6px;
+  border: 1px solid var(--border-primary);
+}
+
+.top-watched-rank {
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: var(--accent-primary);
+  min-width: 2rem;
+}
+
+.top-watched-name {
+  flex: 1;
+  font-size: 0.9rem;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.top-watched-count {
+  font-size: 0.8rem;
+  color: var(--text-muted);
   font-family: monospace;
 }
 

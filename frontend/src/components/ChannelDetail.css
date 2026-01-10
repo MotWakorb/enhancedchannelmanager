@@ -31,28 +31,28 @@
   color: var(--text-primary);
 }
 
-.channel-info {
+.channel-detail .channel-info {
   flex: 1;
   min-width: 0;
 }
 
-.channel-number-row {
+.channel-detail .channel-number-row {
   margin-bottom: 0.25rem;
 }
 
-.channel-number {
+.channel-detail .channel-number {
   font-size: 0.9rem;
   color: var(--text-secondary);
   font-family: monospace;
 }
 
-.channel-number.editable {
+.channel-detail .channel-number.editable {
   cursor: pointer;
   padding: 0.125rem 0.25rem;
   border-radius: 3px;
 }
 
-.channel-number.editable:hover {
+.channel-detail .channel-number.editable:hover {
   background-color: var(--border-primary);
   color: var(--text-primary);
 }
@@ -72,7 +72,7 @@
   outline: none;
 }
 
-.channel-name {
+.channel-detail .channel-name {
   font-size: 1.1rem;
   font-weight: 500;
   margin: 0;

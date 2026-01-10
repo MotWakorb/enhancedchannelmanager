@@ -398,3 +398,11 @@ export interface BandwidthSummary {
   all_time: number;
   daily_history: BandwidthDailyRecord[];
 }
+
+// Channel watch statistics
+export interface ChannelWatchStats {
+  channel_id: number;
+  channel_name: string;
+  watch_count: number;
+  last_watched: string | null;
+}

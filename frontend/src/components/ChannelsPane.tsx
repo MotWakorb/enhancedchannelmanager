@@ -887,6 +887,7 @@ export function ChannelsPane({
   } | null>(null);
   const [sortRenumberStartingNumber, setSortRenumberStartingNumber] = useState<string>('');
   const [sortStripNumbers, setSortStripNumbers] = useState<boolean>(true);
+  const [sortIgnoreCountry, setSortIgnoreCountry] = useState<boolean>(false);
 
   // Mass Renumber modal state
   const [showMassRenumberModal, setShowMassRenumberModal] = useState(false);
@@ -2128,6 +2129,24 @@ export function ChannelsPane({
     return channelName;
   };
 
+  // Helper function to strip country prefix from channel name for sorting
+  // Common patterns: "US | Name", "UK: Name", "CA - Name", "AU Name"
+  // Country codes are typically 2-3 uppercase letters at the start
+  const stripCountryPrefix = (channelName: string): string => {
+    // Match country code (2-3 uppercase letters) followed by separator and the rest
+    // Supports: "US | Name", "UK: Name", "CA - Name", "USA | Name", etc.
+    const match = channelName.match(/^[A-Z]{2,3}\s*[|:\-]\s*(.+)$/);
+    if (match) {
+      return match[1].trim();
+    }
+    // Also try without separator: "US Name" (2-3 uppercase followed by space and uppercase)
+    const noSepMatch = channelName.match(/^[A-Z]{2,3}\s+([A-Z].+)$/);
+    if (noSepMatch) {
+      return noSepMatch[1].trim();
+    }
+    return channelName;
+  };
+
   // Handle editing channel number
   const handleStartEditNumber = (e: React.MouseEvent, channel: Channel) => {
     e.stopPropagation();
@@ -3288,6 +3307,7 @@ export function ChannelsPane({
     setSortRenumberData(null);
     setSortRenumberStartingNumber('');
     setSortStripNumbers(true);
+    setSortIgnoreCountry(false);
   };
 
   const handleSortRenumberConfirm = () => {
@@ -3297,10 +3317,20 @@ export function ChannelsPane({
     if (isNaN(startingNumber) || startingNumber < 1) return;
 
     // Sort channels alphabetically by name (case-insensitive, natural sort for numbers)
-    // If sortStripNumbers is enabled, strip channel numbers from names before comparing
+    // Apply optional transformations for sorting
     const sortedChannels = [...sortRenumberData.channels].sort((a, b) => {
-      const nameA = sortStripNumbers ? getNameForSorting(a.name) : a.name;
-      const nameB = sortStripNumbers ? getNameForSorting(b.name) : b.name;
+      let nameA = a.name;
+      let nameB = b.name;
+      // Strip channel numbers if enabled
+      if (sortStripNumbers) {
+        nameA = getNameForSorting(nameA);
+        nameB = getNameForSorting(nameB);
+      }
+      // Strip country prefix if enabled
+      if (sortIgnoreCountry) {
+        nameA = stripCountryPrefix(nameA);
+        nameB = stripCountryPrefix(nameB);
+      }
       return naturalCompare(nameA.toLowerCase(), nameB.toLowerCase());
     });
 
@@ -3337,6 +3367,7 @@ export function ChannelsPane({
     setSortRenumberData(null);
     setSortRenumberStartingNumber('');
     setSortStripNumbers(true);
+    setSortIgnoreCountry(false);
   };
 
   // Mass Renumber handlers
@@ -4772,6 +4803,14 @@ export function ChannelsPane({
                 />
                 <span>Ignore channel numbers in names when sorting</span>
               </label>
+              <label className="sort-renumber-checkbox">
+                <input
+                  type="checkbox"
+                  checked={sortIgnoreCountry}
+                  onChange={(e) => setSortIgnoreCountry(e.target.checked)}
+                />
+                <span>Ignore country prefix when sorting (e.g., "US | ", "UK: ")</span>
+              </label>
             </div>
 
             {/* Preview of sorted order */}
@@ -4780,8 +4819,16 @@ export function ChannelsPane({
               <ul className="sort-renumber-preview-list">
                 {[...sortRenumberData.channels]
                   .sort((a, b) => {
-                    const nameA = sortStripNumbers ? getNameForSorting(a.name) : a.name;
-                    const nameB = sortStripNumbers ? getNameForSorting(b.name) : b.name;
+                    let nameA = a.name;
+                    let nameB = b.name;
+                    if (sortStripNumbers) {
+                      nameA = getNameForSorting(nameA);
+                      nameB = getNameForSorting(nameB);
+                    }
+                    if (sortIgnoreCountry) {
+                      nameA = stripCountryPrefix(nameA);
+                      nameB = stripCountryPrefix(nameB);
+                    }
                     return naturalCompare(nameA.toLowerCase(), nameB.toLowerCase());
                   })
                   .slice(0, 5)
