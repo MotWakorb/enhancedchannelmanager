@@ -657,19 +657,15 @@
 }
 
 .dummy-epg-section .section-title {
-  /* Reset any conflicting styles from other components */
-  text-transform: none;
-  font-size: inherit;
-  font-weight: inherit;
-  color: inherit;
-  letter-spacing: normal;
-  padding-bottom: 0;
-  border-bottom: none;
+  /* Reset all conflicting styles from StatsTab's .section-title */
+  all: unset;
+  display: block;
 }
 
 .dummy-epg-section .section-title h3 {
   margin: 0 0 0.25rem 0;
   font-size: 1.5rem;
+  font-weight: 600;
   color: var(--text-primary);
 }
 
@@ -677,7 +673,6 @@
   margin: 0;
   font-size: 0.875rem;
   color: var(--text-secondary);
-  text-transform: none;
 }
 
 .section-header .btn-primary {
