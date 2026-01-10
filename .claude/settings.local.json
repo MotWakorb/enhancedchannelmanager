@@ -25,7 +25,8 @@
       "Bash(bd close:*)",
       "Bash(python3:*)",
       "Bash(docker exec:*)",
-      "Bash(grep:*)"
+      "Bash(grep:*)",
+      "Bash(docker logs:*)"
     ],
     "deny": [],
     "ask": []
