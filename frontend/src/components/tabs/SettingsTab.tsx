@@ -57,8 +57,9 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
   const [originalUrl, setOriginalUrl] = useState('');
   const [originalUsername, setOriginalUsername] = useState('');
 
-  // Track original poll interval to detect if restart is needed
+  // Track original poll interval and timezone to detect if restart is needed
   const [originalPollInterval, setOriginalPollInterval] = useState(10);
+  const [originalTimezone, setOriginalTimezone] = useState('');
   const [needsRestart, setNeedsRestart] = useState(false);
   const [restarting, setRestarting] = useState(false);
   const [restartResult, setRestartResult] = useState<{ success: boolean; message: string } | null>(null);
@@ -93,6 +94,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
       setStatsPollInterval(settings.stats_poll_interval ?? 10);
       setOriginalPollInterval(settings.stats_poll_interval ?? 10);
       setUserTimezone(settings.user_timezone ?? '');
+      setOriginalTimezone(settings.user_timezone ?? '');
       setNeedsRestart(false);
       setRestartResult(null);
       setTestResult(null);
@@ -179,8 +181,8 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
       setOriginalUsername(username);
       setPassword('');
       setSaveSuccess(true);
-      // Check if poll interval changed and needs restart
-      if (statsPollInterval !== originalPollInterval) {
+      // Check if poll interval or timezone changed and needs restart
+      if (statsPollInterval !== originalPollInterval || userTimezone !== originalTimezone) {
         setNeedsRestart(true);
       }
       onSaved();
@@ -201,6 +203,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
       setRestartResult(result);
       if (result.success) {
         setOriginalPollInterval(statsPollInterval);
+        setOriginalTimezone(userTimezone);
         setNeedsRestart(false);
         // Clear result after 3 seconds
         setTimeout(() => setRestartResult(null), 3000);
@@ -324,7 +327,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
           {needsRestart && (
             <div className="restart-notice">
               <span className="material-icons">info</span>
-              <span>Poll interval changed. Restart services to apply.</span>
+              <span>Stats settings changed. Restart services to apply.</span>
               <button
                 className="btn-restart"
                 onClick={handleRestart}
