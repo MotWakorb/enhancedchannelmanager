@@ -1,5 +1,6 @@
 import { useState, useMemo } from 'react';
 import type { M3UAccount } from '../types';
+import { naturalCompare } from '../utils/naturalSort';
 import './M3ULinkedAccountsModal.css';
 
 interface M3ULinkedAccountsModalProps {
@@ -46,17 +47,31 @@ export function M3ULinkedAccountsModal({
     return ids;
   }, [linkGroups]);
 
+  // Filter out "Custom" account and sort by type then name
+  const sortedAccounts = useMemo(() => {
+    return accounts
+      .filter(a => a.name.toLowerCase() !== 'custom')
+      .sort((a, b) => {
+        // First sort by type: STD (Standard M3U) before XC (XtreamCodes)
+        if (a.account_type !== b.account_type) {
+          return a.account_type === 'STD' ? -1 : 1;
+        }
+        // Then natural sort by name within each type
+        return naturalCompare(a.name, b.name);
+      });
+  }, [accounts]);
+
   // Available accounts for adding to a new/edited link group
   const availableAccounts = useMemo(() => {
     if (editingGroupIndex === null) {
       // Creating new group - exclude accounts already in any group
-      return accounts.filter(a => !accountsInLinkGroups.has(a.id));
+      return sortedAccounts.filter(a => !accountsInLinkGroups.has(a.id));
     } else {
       // Editing existing group - include accounts in this group + unlinked accounts
       const currentGroupIds = new Set(linkGroups[editingGroupIndex]);
-      return accounts.filter(a => !accountsInLinkGroups.has(a.id) || currentGroupIds.has(a.id));
+      return sortedAccounts.filter(a => !accountsInLinkGroups.has(a.id) || currentGroupIds.has(a.id));
     }
-  }, [accounts, accountsInLinkGroups, editingGroupIndex, linkGroups]);
+  }, [sortedAccounts, accountsInLinkGroups, editingGroupIndex, linkGroups]);
 
   const handleStartCreate = () => {
     setEditingGroupIndex(-1); // -1 means creating new
