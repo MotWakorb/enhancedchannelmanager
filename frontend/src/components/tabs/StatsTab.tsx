@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import type { ChannelStatsResponse, SystemEvent, BandwidthSummary, M3UAccount, ChannelWatchStats } from '../../types';
+import type { ChannelStatsResponse, SystemEvent, BandwidthSummary, M3UAccount, ChannelWatchStats, TopWatchedSortBy } from '../../types';
 import * as api from '../../services/api';
 import {
   LineChart,
@@ -90,6 +90,17 @@ function formatBytes(bytes: number | undefined): string {
     unitIndex++;
   }
   return `${value.toFixed(1)} ${units[unitIndex]}`;
+}
+
+// Format seconds to human readable duration
+function formatWatchTime(seconds: number | undefined): string {
+  if (!seconds) return '0m';
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  if (hours > 0) {
+    return `${hours}h ${minutes}m`;
+  }
+  return `${minutes}m`;
 }
 
 // Format timestamp for events
@@ -283,6 +294,9 @@ export function StatsTab() {
   // Event filter state
   const [eventFilter, setEventFilter] = useState<string>('');
 
+  // Top watched sort mode
+  const [topWatchedSortBy, setTopWatchedSortBy] = useState<TopWatchedSortBy>('views');
+
   // Build lookup maps for channel names by UUID and stream profiles by ID
   const channelNameMap = useRef<Map<string, { name: string; number: number | null }>>(new Map());
   const streamProfileMap = useRef<Map<string, string>>(new Map());
@@ -344,7 +358,7 @@ export function StatsTab() {
         api.getChannelStats(),
         api.getSystemEvents({ limit: 50 }),
         api.getBandwidthStats().catch(() => null), // Don't fail if bandwidth stats unavailable
-        api.getTopWatchedChannels(10).catch(() => []), // Don't fail if top watched unavailable
+        api.getTopWatchedChannels(10, topWatchedSortBy).catch(() => []), // Don't fail if top watched unavailable
       ]);
 
       // Accumulate historical data for charts
@@ -410,7 +424,7 @@ export function StatsTab() {
       setLoading(false);
       setRefreshing(false);
     }
-  }, []);
+  }, [topWatchedSortBy]);
 
   // Load M3U accounts for display
   const loadM3UAccounts = useCallback(async () => {
@@ -970,7 +984,23 @@ export function StatsTab() {
         {/* Top Watched Channels */}
         {topWatchedChannels.length > 0 && (
           <div className="top-watched-section">
-            <h3 className="section-title">Top Watched Channels</h3>
+            <div className="top-watched-header">
+              <h3 className="section-title">Top Watched Channels</h3>
+              <div className="top-watched-toggle">
+                <button
+                  className={`toggle-btn ${topWatchedSortBy === 'views' ? 'active' : ''}`}
+                  onClick={() => setTopWatchedSortBy('views')}
+                >
+                  By Views
+                </button>
+                <button
+                  className={`toggle-btn ${topWatchedSortBy === 'time' ? 'active' : ''}`}
+                  onClick={() => setTopWatchedSortBy('time')}
+                >
+                  By Time
+                </button>
+              </div>
+            </div>
             <div className="top-watched-list">
               {topWatchedChannels.map((channel, index) => {
                 // Look up channel name from our channel map (channel_id might be UUID)
@@ -983,7 +1013,11 @@ export function StatsTab() {
                   <div key={channel.channel_id} className="top-watched-item">
                     <span className="top-watched-rank">#{index + 1}</span>
                     <span className="top-watched-name">{displayName}</span>
-                    <span className="top-watched-count">{channel.watch_count} views</span>
+                    <span className="top-watched-count">
+                      {topWatchedSortBy === 'views'
+                        ? `${channel.watch_count} views`
+                        : formatWatchTime(channel.total_watch_seconds)}
+                    </span>
                   </div>
                 );
               })}

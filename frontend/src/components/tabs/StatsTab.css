@@ -705,6 +705,45 @@
   margin-top: 1.5rem;
 }
 
+.top-watched-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.75rem;
+}
+
+.top-watched-header .section-title {
+  margin-bottom: 0;
+}
+
+.top-watched-toggle {
+  display: flex;
+  gap: 0.25rem;
+  background: var(--bg-tertiary);
+  border-radius: 6px;
+  padding: 0.125rem;
+}
+
+.top-watched-toggle .toggle-btn {
+  padding: 0.25rem 0.75rem;
+  font-size: 0.75rem;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.top-watched-toggle .toggle-btn:hover {
+  color: var(--text-primary);
+}
+
+.top-watched-toggle .toggle-btn.active {
+  background: var(--accent-primary);
+  color: white;
+}
+
 .top-watched-list {
   display: flex;
   flex-direction: column;

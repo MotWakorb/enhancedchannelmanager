@@ -85,8 +85,9 @@ class BandwidthDaily(Base):
 
 class ChannelWatchStats(Base):
     """
-    Tracks watch counts per channel.
+    Tracks watch counts and time per channel.
     Each time a channel is seen active in stats, we increment its watch count.
+    Watch time accumulates while a channel remains active.
     """
     __tablename__ = "channel_watch_stats"
 
@@ -94,10 +95,12 @@ class ChannelWatchStats(Base):
     channel_id = Column(String(64), nullable=False, unique=True)  # Dispatcharr channel UUID
     channel_name = Column(String(255), nullable=False)  # Channel name (for display)
     watch_count = Column(Integer, default=0, nullable=False)  # Number of times seen watching
+    total_watch_seconds = Column(Integer, default=0, nullable=False)  # Total seconds watched
     last_watched = Column(DateTime, nullable=True)  # Last time this channel was active
 
     __table_args__ = (
         Index("idx_channel_watch_count", watch_count.desc()),
+        Index("idx_channel_watch_time", total_watch_seconds.desc()),
         Index("idx_channel_watch_channel_id", channel_id),
     )
 
@@ -107,6 +110,7 @@ class ChannelWatchStats(Base):
             "channel_id": self.channel_id,
             "channel_name": self.channel_name,
             "watch_count": self.watch_count,
+            "total_watch_seconds": self.total_watch_seconds,
             "last_watched": self.last_watched.isoformat() + "Z" if self.last_watched else None,
         }
 

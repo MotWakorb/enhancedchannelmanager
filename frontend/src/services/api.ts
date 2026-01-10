@@ -1425,8 +1425,8 @@ export async function getBandwidthStats(): Promise<import('../types').BandwidthS
 }
 
 /**
- * Get top watched channels by watch count.
+ * Get top watched channels by watch count or watch time.
  */
-export async function getTopWatchedChannels(limit: number = 10): Promise<import('../types').ChannelWatchStats[]> {
-  return fetchJson(`${API_BASE}/stats/top-watched?limit=${limit}`);
+export async function getTopWatchedChannels(limit: number = 10, sortBy: 'views' | 'time' = 'views'): Promise<import('../types').ChannelWatchStats[]> {
+  return fetchJson(`${API_BASE}/stats/top-watched?limit=${limit}&sort_by=${sortBy}`);
 }

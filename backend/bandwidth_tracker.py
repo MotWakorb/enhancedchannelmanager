@@ -55,6 +55,7 @@ class BandwidthTracker:
         self._running = False
         self._last_bytes: dict[str, int] = {}  # Track per-channel bytes to compute deltas
         self._last_active_channels: set[str] = set()  # Track which channels were active last poll (UUIDs)
+        self._channel_names: dict[str, str] = {}  # Cache channel names for stop events
 
     async def start(self):
         """Start the background polling task."""
@@ -103,10 +104,6 @@ class BandwidthTracker:
             return
 
         channels = stats.get("channels", [])
-        if not channels:
-            # No active channels - clear tracking
-            self._last_active_channels = set()
-            return
 
         # Calculate totals from all active channels
         total_bytes_delta = 0
@@ -116,6 +113,7 @@ class BandwidthTracker:
         current_bytes: dict[str, int] = {}
         current_active_channels: set[str] = set()
         newly_active_channels: list[dict] = []
+        still_active_channels: list[dict] = []
 
         for channel in channels:
             channel_id = str(channel.get("channel_id", ""))
@@ -129,9 +127,17 @@ class BandwidthTracker:
             # Track active channels for watch counting (use string ID for UUID support)
             if channel_id:
                 current_active_channels.add(channel_id)
+                self._channel_names[channel_id] = channel_name  # Cache name for stop events
+
                 # Check if this channel just became active (wasn't in last poll)
                 if channel_id not in self._last_active_channels:
                     newly_active_channels.append({
+                        "channel_id": channel_id,
+                        "channel_name": channel_name,
+                    })
+                else:
+                    # Channel was active last poll and still is - accumulate watch time
+                    still_active_channels.append({
                         "channel_id": channel_id,
                         "channel_name": channel_name,
                     })
@@ -142,6 +148,11 @@ class BandwidthTracker:
                 if bytes_now > prev_bytes:
                     total_bytes_delta += bytes_now - prev_bytes
 
+        # Check for channels that stopped being watched
+        stopped_channels = self._last_active_channels - current_active_channels
+        if stopped_channels:
+            self._log_watch_stop_events(stopped_channels)
+
         # Update last bytes tracking
         self._last_bytes = current_bytes
         self._last_active_channels = current_active_channels
@@ -150,9 +161,13 @@ class BandwidthTracker:
         if total_bytes_delta > 0 or active_channels > 0:
             self._update_daily_record(total_bytes_delta, active_channels, total_clients)
 
-        # Update watch counts for newly active channels
+        # Update watch counts for newly active channels (and log start events)
         if newly_active_channels:
             self._update_watch_counts(newly_active_channels)
+
+        # Accumulate watch time for still-active channels
+        if still_active_channels:
+            self._update_watch_time(still_active_channels)
 
     def _update_daily_record(self, bytes_delta: int, active_channels: int, total_clients: int):
         """Update today's bandwidth record in the database (using user's timezone)."""
@@ -187,7 +202,9 @@ class BandwidthTracker:
             session.close()
 
     def _update_watch_counts(self, channels: list[dict]):
-        """Update watch counts for channels that just became active."""
+        """Update watch counts for channels that just became active and log journal events."""
+        from journal import log_entry
+
         session = get_session()
         try:
             now = datetime.now(get_user_timezone())
@@ -205,6 +222,7 @@ class BandwidthTracker:
                         channel_id=channel_id,
                         channel_name=channel_name,
                         watch_count=0,
+                        total_watch_seconds=0,
                     )
                     session.add(record)
 
@@ -214,11 +232,88 @@ class BandwidthTracker:
                 # Update channel name in case it changed
                 record.channel_name = channel_name
 
+                # Log journal entry for watch start
+                log_entry(
+                    category="watch",
+                    action_type="start",
+                    entity_name=channel_name,
+                    description=f"Started watching {channel_name}",
+                    user_initiated=False,
+                    after_value={"channel_id": channel_id, "watch_count": record.watch_count},
+                )
+
             session.commit()
             logger.debug(f"Updated watch counts for {len(channels)} channels")
         except Exception as e:
             logger.error(f"Failed to update watch counts: {e}")
             session.rollback()
+        finally:
+            session.close()
+
+    def _update_watch_time(self, channels: list[dict]):
+        """Accumulate watch time for channels that are still active."""
+        session = get_session()
+        try:
+            now = datetime.now(get_user_timezone())
+            for ch in channels:
+                channel_id = ch["channel_id"]
+                channel_name = ch["channel_name"]
+
+                record = session.query(ChannelWatchStats).filter(
+                    ChannelWatchStats.channel_id == channel_id
+                ).first()
+
+                if record:
+                    # Add poll interval seconds to watch time
+                    record.total_watch_seconds += self.poll_interval
+                    record.last_watched = now
+                    record.channel_name = channel_name
+
+            session.commit()
+        except Exception as e:
+            logger.error(f"Failed to update watch time: {e}")
+            session.rollback()
+        finally:
+            session.close()
+
+    def _log_watch_stop_events(self, channel_ids: set[str]):
+        """Log journal entries when channels stop being watched."""
+        from journal import log_entry
+
+        session = get_session()
+        try:
+            for channel_id in channel_ids:
+                # Get channel name from cache or database
+                channel_name = self._channel_names.get(channel_id)
+                if not channel_name:
+                    record = session.query(ChannelWatchStats).filter(
+                        ChannelWatchStats.channel_id == channel_id
+                    ).first()
+                    channel_name = record.channel_name if record else f"Channel {channel_id[:8]}..."
+
+                # Get current stats for the log
+                record = session.query(ChannelWatchStats).filter(
+                    ChannelWatchStats.channel_id == channel_id
+                ).first()
+
+                watch_time = record.total_watch_seconds if record else 0
+
+                # Log journal entry for watch stop
+                log_entry(
+                    category="watch",
+                    action_type="stop",
+                    entity_name=channel_name,
+                    description=f"Stopped watching {channel_name}",
+                    user_initiated=False,
+                    after_value={
+                        "channel_id": channel_id,
+                        "total_watch_seconds": watch_time,
+                    },
+                )
+
+            logger.debug(f"Logged watch stop events for {len(channel_ids)} channels")
+        except Exception as e:
+            logger.error(f"Failed to log watch stop events: {e}")
         finally:
             session.close()
 
@@ -285,21 +380,27 @@ class BandwidthTracker:
             session.close()
 
     @staticmethod
-    def get_top_watched_channels(limit: int = 10) -> list[dict]:
+    def get_top_watched_channels(limit: int = 10, sort_by: str = "views") -> list[dict]:
         """
-        Get the top watched channels by watch count.
+        Get the top watched channels by watch count or watch time.
 
         Args:
             limit: Maximum number of channels to return (default 10)
+            sort_by: "views" for watch count, "time" for total watch time (default "views")
 
         Returns:
-            List of channel watch stats dicts, ordered by watch_count desc
+            List of channel watch stats dicts, ordered by selected metric desc
         """
         session = get_session()
         try:
-            records = session.query(ChannelWatchStats).order_by(
-                ChannelWatchStats.watch_count.desc()
-            ).limit(limit).all()
+            if sort_by == "time":
+                records = session.query(ChannelWatchStats).order_by(
+                    ChannelWatchStats.total_watch_seconds.desc()
+                ).limit(limit).all()
+            else:
+                records = session.query(ChannelWatchStats).order_by(
+                    ChannelWatchStats.watch_count.desc()
+                ).limit(limit).all()
 
             return [record.to_dict() for record in records]
         finally:
