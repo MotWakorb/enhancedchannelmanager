@@ -44,6 +44,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
 
   // Stats settings
   const [statsPollInterval, setStatsPollInterval] = useState(10);
+  const [userTimezone, setUserTimezone] = useState('');
 
   // UI state
   const [loading, setLoading] = useState(false);
@@ -91,6 +92,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
       setCustomNetworkSuffixes(settings.custom_network_suffixes ?? []);
       setStatsPollInterval(settings.stats_poll_interval ?? 10);
       setOriginalPollInterval(settings.stats_poll_interval ?? 10);
+      setUserTimezone(settings.user_timezone ?? '');
       setNeedsRestart(false);
       setRestartResult(null);
       setTestResult(null);
@@ -171,6 +173,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
         custom_network_prefixes: customNetworkPrefixes,
         custom_network_suffixes: customNetworkSuffixes,
         stats_poll_interval: statsPollInterval,
+        user_timezone: userTimezone,
       });
       setOriginalUrl(url);
       setOriginalUsername(username);
@@ -343,6 +346,49 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
               {restartResult.message}
             </div>
           )}
+        </div>
+
+        <div className="form-group">
+          <div className="threshold-label-row">
+            <label htmlFor="userTimezone">Timezone for stats</label>
+            <select
+              id="userTimezone"
+              value={userTimezone}
+              onChange={(e) => setUserTimezone(e.target.value)}
+              className="timezone-select"
+            >
+              <option value="">UTC (Default)</option>
+              <optgroup label="US & Canada">
+                <option value="America/New_York">Eastern Time (ET)</option>
+                <option value="America/Chicago">Central Time (CT)</option>
+                <option value="America/Denver">Mountain Time (MT)</option>
+                <option value="America/Los_Angeles">Pacific Time (PT)</option>
+                <option value="America/Anchorage">Alaska Time (AKT)</option>
+                <option value="Pacific/Honolulu">Hawaii Time (HT)</option>
+              </optgroup>
+              <optgroup label="Europe">
+                <option value="Europe/London">London (GMT/BST)</option>
+                <option value="Europe/Paris">Paris (CET/CEST)</option>
+                <option value="Europe/Berlin">Berlin (CET/CEST)</option>
+                <option value="Europe/Amsterdam">Amsterdam (CET/CEST)</option>
+                <option value="Europe/Rome">Rome (CET/CEST)</option>
+                <option value="Europe/Madrid">Madrid (CET/CEST)</option>
+              </optgroup>
+              <optgroup label="Asia & Pacific">
+                <option value="Asia/Tokyo">Tokyo (JST)</option>
+                <option value="Asia/Shanghai">Shanghai (CST)</option>
+                <option value="Asia/Hong_Kong">Hong Kong (HKT)</option>
+                <option value="Asia/Singapore">Singapore (SGT)</option>
+                <option value="Asia/Dubai">Dubai (GST)</option>
+                <option value="Australia/Sydney">Sydney (AEST/AEDT)</option>
+                <option value="Australia/Melbourne">Melbourne (AEST/AEDT)</option>
+                <option value="Pacific/Auckland">Auckland (NZST/NZDT)</option>
+              </optgroup>
+            </select>
+          </div>
+          <p className="form-hint">
+            Timezone used for daily bandwidth statistics. "Today" will roll over at midnight in your selected timezone.
+          </p>
         </div>
       </div>
 
