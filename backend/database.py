@@ -54,7 +54,29 @@ def init_db() -> None:
 
     # Create all tables
     Base.metadata.create_all(bind=_engine)
+
+    # Run migrations for existing tables (add new columns if missing)
+    _run_migrations(_engine)
+
     logger.info("Journal database initialized successfully")
+
+
+def _run_migrations(engine) -> None:
+    """Run database migrations to add new columns to existing tables."""
+    from sqlalchemy import text
+
+    with engine.connect() as conn:
+        # Check if total_watch_seconds column exists in channel_watch_stats
+        result = conn.execute(text("PRAGMA table_info(channel_watch_stats)"))
+        columns = [row[1] for row in result.fetchall()]
+
+        if "total_watch_seconds" not in columns:
+            logger.info("Adding total_watch_seconds column to channel_watch_stats")
+            conn.execute(text(
+                "ALTER TABLE channel_watch_stats ADD COLUMN total_watch_seconds INTEGER DEFAULT 0 NOT NULL"
+            ))
+            conn.commit()
+            logger.info("Migration complete: added total_watch_seconds column")
 
 
 def get_session():
