@@ -299,6 +299,12 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
                 max="300"
                 value={statsPollInterval}
                 onChange={(e) => {
+                  const value = Number(e.target.value);
+                  if (!isNaN(value)) {
+                    setStatsPollInterval(value);
+                  }
+                }}
+                onBlur={(e) => {
                   const value = Math.max(5, Math.min(300, Number(e.target.value) || 10));
                   setStatsPollInterval(value);
                 }}
