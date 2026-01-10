@@ -1239,17 +1239,43 @@
   font-size: 1rem;
 }
 
-.inline-stream-item:hover .copy-url-btn {
+.inline-stream-item:hover .copy-url-btn,
+.inline-stream-item:hover .vlc-btn {
   opacity: 1;
 }
 
-.channel-item:hover .channel-copy-url-btn {
+.channel-item:hover .channel-copy-url-btn,
+.channel-item:hover .channel-vlc-btn {
   opacity: 1;
 }
 
 .channel-copy-url-btn {
   margin-left: auto;
   margin-right: 0.25rem;
+}
+
+.channel-vlc-btn {
+  margin-left: auto;
+  margin-right: 0;
+}
+
+.vlc-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.25rem;
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  border-radius: 4px;
+  transition: color 0.15s, background 0.15s, opacity 0.15s;
+  opacity: 0;
+}
+
+.vlc-btn:hover {
+  color: #ff8800;
+  background: rgba(255, 136, 0, 0.1);
 }
 
 /* Modal styles */
