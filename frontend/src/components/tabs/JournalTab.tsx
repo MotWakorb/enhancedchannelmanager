@@ -28,6 +28,8 @@ function getCategoryIcon(category: JournalCategory): string {
       return 'calendar_month';
     case 'm3u':
       return 'playlist_play';
+    case 'watch':
+      return 'visibility';
     default:
       return 'article';
   }
@@ -44,6 +46,10 @@ function getActionClass(actionType: JournalActionType): string {
       return 'action-update';
     case 'refresh':
       return 'action-refresh';
+    case 'start':
+      return 'action-create';  // Green for watch start
+    case 'stop':
+      return 'action-delete';  // Red for watch stop
     default:
       return 'action-other';
   }
@@ -63,6 +69,8 @@ function formatCategory(category: JournalCategory): string {
       return 'EPG';
     case 'channel':
       return 'Channel';
+    case 'watch':
+      return 'Watch';
   }
 }
 
@@ -221,6 +229,7 @@ export function JournalTab() {
           <option value="channel">Channel</option>
           <option value="epg">EPG</option>
           <option value="m3u">M3U</option>
+          <option value="watch">Watch</option>
         </select>
         <select
           value={actionType}
@@ -231,6 +240,8 @@ export function JournalTab() {
           <option value="create">Create</option>
           <option value="update">Update</option>
           <option value="delete">Delete</option>
+          <option value="start">Start</option>
+          <option value="stop">Stop</option>
           <option value="refresh">Refresh</option>
           <option value="stream_add">Stream Add</option>
           <option value="stream_remove">Stream Remove</option>
