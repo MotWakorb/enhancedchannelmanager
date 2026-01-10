@@ -46,6 +46,9 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
   const [statsPollInterval, setStatsPollInterval] = useState(10);
   const [userTimezone, setUserTimezone] = useState('');
 
+  // Preserve settings not managed by this tab (to avoid overwriting them on save)
+  const [linkedM3UAccounts, setLinkedM3UAccounts] = useState<number[][]>([]);
+
   // UI state
   const [loading, setLoading] = useState(false);
   const [testing, setTesting] = useState(false);
@@ -95,6 +98,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
       setOriginalPollInterval(settings.stats_poll_interval ?? 10);
       setUserTimezone(settings.user_timezone ?? '');
       setOriginalTimezone(settings.user_timezone ?? '');
+      setLinkedM3UAccounts(settings.linked_m3u_accounts ?? []);
       setNeedsRestart(false);
       setRestartResult(null);
       setTestResult(null);
@@ -176,6 +180,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
         custom_network_suffixes: customNetworkSuffixes,
         stats_poll_interval: statsPollInterval,
         user_timezone: userTimezone,
+        linked_m3u_accounts: linkedM3UAccounts,
       });
       setOriginalUrl(url);
       setOriginalUsername(username);
