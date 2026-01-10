@@ -56,6 +56,12 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
   const [originalUrl, setOriginalUrl] = useState('');
   const [originalUsername, setOriginalUsername] = useState('');
 
+  // Track original poll interval to detect if restart is needed
+  const [originalPollInterval, setOriginalPollInterval] = useState(10);
+  const [needsRestart, setNeedsRestart] = useState(false);
+  const [restarting, setRestarting] = useState(false);
+  const [restartResult, setRestartResult] = useState<{ success: boolean; message: string } | null>(null);
+
   useEffect(() => {
     loadSettings();
   }, []);
@@ -84,6 +90,9 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
       setCustomNetworkPrefixes(settings.custom_network_prefixes ?? []);
       setCustomNetworkSuffixes(settings.custom_network_suffixes ?? []);
       setStatsPollInterval(settings.stats_poll_interval ?? 10);
+      setOriginalPollInterval(settings.stats_poll_interval ?? 10);
+      setNeedsRestart(false);
+      setRestartResult(null);
       setTestResult(null);
       setError(null);
     } catch (err) {
@@ -167,6 +176,10 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
       setOriginalUsername(username);
       setPassword('');
       setSaveSuccess(true);
+      // Check if poll interval changed and needs restart
+      if (statsPollInterval !== originalPollInterval) {
+        setNeedsRestart(true);
+      }
       onSaved();
       // Clear success message after 3 seconds
       setTimeout(() => setSaveSuccess(false), 3000);
@@ -174,6 +187,25 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
       setError('Failed to save settings');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleRestart = async () => {
+    setRestarting(true);
+    setRestartResult(null);
+    try {
+      const result = await api.restartServices();
+      setRestartResult(result);
+      if (result.success) {
+        setOriginalPollInterval(statsPollInterval);
+        setNeedsRestart(false);
+        // Clear result after 3 seconds
+        setTimeout(() => setRestartResult(null), 3000);
+      }
+    } catch (err) {
+      setRestartResult({ success: false, message: 'Failed to restart services' });
+    } finally {
+      setRestarting(false);
     }
   };
 
@@ -278,8 +310,33 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
           <p className="form-hint">
             How often to poll Dispatcharr for channel statistics and bandwidth tracking.
             Lower values provide more frequent updates but use more resources.
-            Requires a restart to take effect.
           </p>
+
+          {needsRestart && (
+            <div className="restart-notice">
+              <span className="material-icons">info</span>
+              <span>Poll interval changed. Restart services to apply.</span>
+              <button
+                className="btn-restart"
+                onClick={handleRestart}
+                disabled={restarting}
+              >
+                <span className={`material-icons ${restarting ? 'spinning' : ''}`}>
+                  {restarting ? 'sync' : 'restart_alt'}
+                </span>
+                {restarting ? 'Restarting...' : 'Restart Now'}
+              </button>
+            </div>
+          )}
+
+          {restartResult && (
+            <div className={`restart-result ${restartResult.success ? 'success' : 'error'}`}>
+              <span className="material-icons">
+                {restartResult.success ? 'check_circle' : 'error'}
+              </span>
+              {restartResult.message}
+            </div>
+          )}
         </div>
       </div>
 

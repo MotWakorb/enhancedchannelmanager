@@ -282,6 +282,32 @@ async def test_connection(request: TestConnectionRequest):
         return {"success": False, "message": str(e)}
 
 
+@app.post("/api/settings/restart-services")
+async def restart_services():
+    """Restart background services (bandwidth tracker) to apply new settings."""
+    settings = get_settings()
+
+    # Stop existing tracker
+    tracker = get_tracker()
+    if tracker:
+        await tracker.stop()
+        logger.info("Stopped existing bandwidth tracker")
+
+    # Start new tracker with current settings
+    if settings.is_configured():
+        try:
+            new_tracker = BandwidthTracker(get_client(), poll_interval=settings.stats_poll_interval)
+            set_tracker(new_tracker)
+            await new_tracker.start()
+            logger.info(f"Restarted bandwidth tracker with {settings.stats_poll_interval}s poll interval")
+            return {"success": True, "message": f"Services restarted with {settings.stats_poll_interval}s poll interval"}
+        except Exception as e:
+            logger.error(f"Failed to restart bandwidth tracker: {e}")
+            return {"success": False, "message": str(e)}
+    else:
+        return {"success": False, "message": "Settings not configured"}
+
+
 # Channels
 class CreateChannelRequest(BaseModel):
     name: str

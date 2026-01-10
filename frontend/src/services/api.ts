@@ -384,6 +384,12 @@ export async function testConnection(settings: {
   });
 }
 
+export async function restartServices(): Promise<{ success: boolean; message: string }> {
+  return fetchJson(`${API_BASE}/settings/restart-services`, {
+    method: 'POST',
+  });
+}
+
 // Logos
 export async function getLogos(params?: {
   page?: number;
