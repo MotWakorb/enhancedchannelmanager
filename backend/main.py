@@ -303,8 +303,8 @@ async def restart_services():
             new_tracker = BandwidthTracker(get_client(), poll_interval=settings.stats_poll_interval)
             set_tracker(new_tracker)
             await new_tracker.start()
-            logger.info(f"Restarted bandwidth tracker with {settings.stats_poll_interval}s poll interval")
-            return {"success": True, "message": f"Services restarted with {settings.stats_poll_interval}s poll interval"}
+            logger.info(f"Restarted bandwidth tracker with {settings.stats_poll_interval}s poll interval, timezone: {settings.user_timezone or 'UTC'}")
+            return {"success": True, "message": "Services restarted with new settings"}
         except Exception as e:
             logger.error(f"Failed to restart bandwidth tracker: {e}")
             return {"success": False, "message": str(e)}
