@@ -30,6 +30,7 @@ import { BulkEPGAssignModal, type EPGAssignment } from './BulkEPGAssignModal';
 import { EditChannelModal, type ChannelMetadataChanges } from './EditChannelModal';
 import { NormalizeNamesModal } from './NormalizeNamesModal';
 import { naturalCompare } from '../utils/naturalSort';
+import { openInVLC } from '../utils/vlc';
 import './ChannelsPane.css';
 
 interface ChannelsPaneProps {
@@ -221,7 +222,7 @@ function SortableStreamItem({ stream, providerName, isEditMode, onRemove, onCopy
           className="vlc-btn"
           onClick={(e) => {
             e.stopPropagation();
-            window.open(`vlc://${stream.url}`, '_blank');
+            openInVLC(stream.url!, stream.name);
           }}
           title="Open in VLC"
         >
@@ -443,7 +444,7 @@ function SortableChannel({
           className="vlc-btn channel-vlc-btn"
           onClick={(e) => {
             e.stopPropagation();
-            window.open(`vlc://${channelUrl}`, '_blank');
+            openInVLC(channelUrl, channel.name);
           }}
           title="Open channel in VLC"
         >
