@@ -3,6 +3,7 @@ import type { Stream, M3UAccount, ChannelGroup, ChannelProfile } from '../types'
 import { useSelection } from '../hooks';
 import { normalizeStreamName, detectRegionalVariants, filterStreamsByTimezone, detectCountryPrefixes, getUniqueCountryPrefixes, detectNetworkPrefixes, detectNetworkSuffixes, type TimezonePreference, type NormalizeOptions, type NumberSeparator, type PrefixOrder } from '../services/api';
 import { naturalCompare } from '../utils/naturalSort';
+import { openInVLC } from '../utils/vlc';
 import './StreamsPane.css';
 
 interface StreamGroup {
@@ -1520,7 +1521,7 @@ export function StreamsPane({
                                 className="vlc-btn"
                                 onClick={(e) => {
                                   e.stopPropagation();
-                                  window.open(`vlc://${stream.url}`, '_blank');
+                                  openInVLC(stream.url!, stream.name);
                                 }}
                                 title="Open in VLC"
                               >
