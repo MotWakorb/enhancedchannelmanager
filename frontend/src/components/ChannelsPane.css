@@ -266,7 +266,7 @@
   display: flex;
   align-items: center;
   gap: 0.375rem;
-  background-color: var(--bg-hover);
+  background-color: var(--button-bg);
   border: 1px solid var(--border-secondary);
   color: var(--button-text);
   padding: 0.375rem 0.75rem;
@@ -274,12 +274,12 @@
   font-size: 0.85rem;
   font-weight: 500;
   cursor: pointer;
-  transition: background-color 0.15s, border-color 0.15s, color 0.15s;
+  transition: all 0.15s;
 }
 
 .create-group-btn:hover {
   background-color: var(--button-hover-bg);
-  border-color: var(--border-secondary);
+  border-color: var(--accent-primary);
   color: var(--text-primary);
 }
 
@@ -287,11 +287,12 @@
   font-size: 18px;
 }
 
-.profiles-btn {
+.profiles-btn,
+.hidden-groups-btn {
   display: flex;
   align-items: center;
   gap: 0.375rem;
-  background-color: var(--bg-hover);
+  background-color: var(--button-bg);
   border: 1px solid var(--border-secondary);
   color: var(--button-text);
   padding: 0.375rem 0.75rem;
@@ -299,16 +300,18 @@
   font-size: 0.85rem;
   font-weight: 500;
   cursor: pointer;
-  transition: background-color 0.15s, border-color 0.15s;
+  transition: all 0.15s;
 }
 
-.profiles-btn:hover {
+.profiles-btn:hover,
+.hidden-groups-btn:hover {
   background-color: var(--button-hover-bg);
-  border-color: var(--border-secondary);
+  border-color: var(--accent-primary);
   color: var(--text-primary);
 }
 
-.profiles-btn .material-icons {
+.profiles-btn .material-icons,
+.hidden-groups-btn .material-icons {
   font-size: 18px;
 }
 
@@ -868,20 +871,22 @@
 }
 
 .channel-drag-handle {
-  color: var(--border-secondary);
+  color: var(--drag-handle-color);
   cursor: grab;
   padding: 0 0.25rem;
   margin-right: 0.25rem;
   user-select: none;
   font-size: 0.9rem;
+  transition: color 0.15s;
 }
 
 .channel-drag-handle:active {
   cursor: grabbing;
+  color: var(--drag-handle-hover);
 }
 
 .channel-item:hover .channel-drag-handle {
-  color: var(--text-muted);
+  color: var(--drag-handle-hover);
 }
 
 .channel-drag-handle.disabled {
@@ -1004,7 +1009,7 @@
   justify-content: center;
   background: none;
   border: none;
-  color: var(--text-muted);
+  color: var(--accent-secondary);
   cursor: pointer;
   padding: 0.25rem;
   margin-left: 0.5rem;
@@ -1018,7 +1023,7 @@
 }
 
 .channel-row-edit-btn:hover {
-  background-color: rgba(100, 108, 255, 0.2);
+  background-color: var(--accent-hover);
   color: var(--accent-primary);
 }
 
@@ -1033,7 +1038,7 @@
   justify-content: center;
   background: none;
   border: none;
-  color: var(--text-muted);
+  color: #f87171;
   cursor: pointer;
   padding: 0.25rem;
   margin-left: 0.25rem;
@@ -1047,7 +1052,7 @@
 }
 
 .channel-row-delete-btn:hover {
-  background-color: rgba(248, 113, 113, 0.2);
+  background-color: var(--error-bg);
   color: var(--error);
 }
 

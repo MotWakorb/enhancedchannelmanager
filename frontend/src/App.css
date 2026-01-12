@@ -26,25 +26,26 @@
 }
 
 .settings-btn {
-  background-color: var(--border-primary);
+  background-color: var(--button-bg);
   border: 1px solid var(--border-secondary);
   color: var(--button-text);
   padding: 0.5rem 1rem;
   border-radius: 4px;
   cursor: pointer;
   font-size: 0.9rem;
-  transition: background-color 0.15s;
+  transition: all 0.15s;
 }
 
 .settings-btn:hover {
-  background-color: #444;
+  background-color: var(--button-hover-bg);
+  border-color: var(--accent-primary);
   color: var(--text-primary);
 }
 
 /* Edit Mode Header Styles */
 .header.edit-mode-active {
-  background-color: rgba(100, 108, 255, 0.15);
-  border-bottom-color: rgba(100, 108, 255, 0.4);
+  background-color: rgba(139, 92, 246, 0.15);
+  border-bottom-color: rgba(139, 92, 246, 0.5);
 }
 
 .edit-mode-header-controls {
@@ -147,18 +148,19 @@
   display: flex;
   align-items: center;
   padding: 0.5rem 0.75rem;
-  background-color: var(--border-primary);
+  background-color: var(--button-bg);
   border: 1px solid var(--border-secondary);
   color: var(--button-text);
   border-radius: 4px;
   font-size: 0.9rem;
   font-weight: 500;
   cursor: pointer;
-  transition: background-color 0.15s, border-color 0.15s, color 0.15s;
+  transition: all 0.15s;
 }
 
 .enter-edit-mode-btn:hover {
-  background-color: #444;
+  background-color: var(--button-hover-bg);
+  border-color: var(--accent-primary);
   color: var(--text-primary);
 }
 

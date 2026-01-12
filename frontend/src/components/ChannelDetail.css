@@ -145,14 +145,20 @@
 }
 
 .stream-detail-item .drag-handle {
-  color: var(--text-muted);
+  color: var(--drag-handle-color);
   cursor: grab;
   padding: 0 0.25rem;
   user-select: none;
+  transition: color 0.15s;
+}
+
+.stream-detail-item .drag-handle:hover {
+  color: var(--drag-handle-hover);
 }
 
 .stream-detail-item .drag-handle:active {
   cursor: grabbing;
+  color: var(--drag-handle-hover);
 }
 
 .stream-detail-item .stream-logo {
