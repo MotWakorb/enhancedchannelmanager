@@ -10,6 +10,7 @@ import { useChangeHistory, useEditMode } from './hooks';
 import * as api from './services/api';
 import type { Channel, ChannelGroup, ChannelProfile, Stream, M3UAccount, M3UGroupSetting, Logo, ChangeInfo, EPGData, StreamProfile, EPGSource, ChannelListFilterSettings, CommitProgress } from './types';
 import packageJson from '../package.json';
+import { logger } from './utils/logger';
 import './App.css';
 
 // Lazy load non-primary tabs
@@ -212,7 +213,7 @@ function App() {
                 try {
                   await api.updateProfileChannel(profileId, channelId, { enabled: true });
                 } catch (err) {
-                  console.warn(`Failed to add channel ${channelId} to profile ${profileId}:`, err);
+                  logger.warn(`Failed to add channel ${channelId} to profile ${profileId}:`, err);
                 }
               }
             }
@@ -224,7 +225,7 @@ function App() {
           // Refresh channel profiles to reflect changes
           loadChannelProfiles();
         } catch (err) {
-          console.error('Failed to apply profile assignments:', err);
+          logger.error('Failed to apply profile assignments:', err);
         }
       }
     },
@@ -340,8 +341,12 @@ function App() {
   // Check settings and load initial data
   useEffect(() => {
     const init = async () => {
+      logger.info('Initializing Enhanced Channel Manager', { version: packageJson.version });
+
       try {
         const settings = await api.getSettings();
+        logger.info('Settings loaded', { configured: settings.configured, theme: settings.theme });
+
         setAutoRenameChannelNumber(settings.auto_rename_channel_number);
         setDispatcharrUrl(settings.url);
         setShowStreamUrls(settings.show_stream_urls);
@@ -368,16 +373,34 @@ function App() {
         // Apply theme setting
         if (settings.theme && settings.theme !== 'dark') {
           document.documentElement.setAttribute('data-theme', settings.theme);
+          logger.debug(`Applied theme: ${settings.theme}`);
+        }
+
+        // Apply log levels from settings
+        if (settings.frontend_log_level) {
+          const frontendLevel = settings.frontend_log_level === 'WARNING' ? 'WARN' : settings.frontend_log_level;
+          if (['DEBUG', 'INFO', 'WARN', 'ERROR'].includes(frontendLevel)) {
+            logger.setLevel(frontendLevel as 'DEBUG' | 'INFO' | 'WARN' | 'ERROR');
+            logger.info(`Frontend log level set to ${frontendLevel}`);
+          }
         }
 
         if (!settings.configured) {
+          logger.warn('Settings not configured, opening settings modal');
           setSettingsOpen(true);
           return;
         }
 
+        logger.debug('Loading initial data...');
         api.getHealth()
-          .then(setHealth)
-          .catch((err) => setError(err.message));
+          .then(health => {
+            setHealth(health);
+            logger.info('Health check passed', health);
+          })
+          .catch((err) => {
+            setError(err.message);
+            logger.error('Health check failed', err);
+          });
 
         loadChannelGroups();
         loadChannels();
@@ -391,7 +414,7 @@ function App() {
         loadEpgSources();
         loadEpgData();
       } catch (err) {
-        console.error('Failed to load settings:', err);
+        logger.exception('Failed to load settings', err as Error);
         setSettingsOpen(true);
       }
     };
@@ -508,7 +531,7 @@ function App() {
         showAutoChannelGroups: !settings.hide_auto_sync_groups,
       }));
     } catch (err) {
-      console.error('Failed to reload settings:', err);
+      logger.error('Failed to reload settings:', err);
     }
     // Reload all data after settings change
     api.getHealth()
@@ -532,7 +555,7 @@ function App() {
       const groups = await api.getChannelGroups();
       setChannelGroups(groups);
     } catch (err) {
-      console.error('Failed to load channel groups:', err);
+      logger.error('Failed to load channel groups:', err);
     }
   };
 
@@ -549,7 +572,7 @@ function App() {
       const settings = await api.getProviderGroupSettings();
       setProviderGroupSettings(settings);
     } catch (err) {
-      console.error('Failed to load provider group settings:', err);
+      logger.error('Failed to load provider group settings:', err);
     }
   };
 
@@ -604,7 +627,7 @@ function App() {
 
       setChannels(allChannels);
     } catch (err) {
-      console.error('Failed to load channels:', err);
+      logger.error('Failed to load channels:', err);
     } finally {
       setChannelsLoading(false);
     }
@@ -615,7 +638,7 @@ function App() {
       const accounts = await api.getM3UAccounts();
       setProviders(accounts);
     } catch (err) {
-      console.error('Failed to load providers:', err);
+      logger.error('Failed to load providers:', err);
     }
   };
 
@@ -624,7 +647,7 @@ function App() {
       const groups = await api.getStreamGroups();
       setStreamGroups(groups);
     } catch (err) {
-      console.error('Failed to load stream groups:', err);
+      logger.error('Failed to load stream groups:', err);
     }
   };
 
@@ -644,7 +667,7 @@ function App() {
 
       setLogos(allLogos);
     } catch (err) {
-      console.error('Failed to load logos:', err);
+      logger.error('Failed to load logos:', err);
     }
   };
 
@@ -653,7 +676,7 @@ function App() {
       const profiles = await api.getStreamProfiles();
       setStreamProfiles(profiles);
     } catch (err) {
-      console.error('Failed to load stream profiles:', err);
+      logger.error('Failed to load stream profiles:', err);
     }
   };
 
@@ -662,7 +685,7 @@ function App() {
       const profiles = await api.getChannelProfiles();
       setChannelProfiles(profiles);
     } catch (err) {
-      console.error('Failed to load channel profiles:', err);
+      logger.error('Failed to load channel profiles:', err);
     }
   };
 
@@ -671,7 +694,7 @@ function App() {
       const sources = await api.getEPGSources();
       setEpgSources(sources);
     } catch (err) {
-      console.error('Failed to load EPG sources:', err);
+      logger.error('Failed to load EPG sources:', err);
     }
   };
 
@@ -681,7 +704,7 @@ function App() {
       const data = await api.getEPGData();
       setEpgData(data);
     } catch (err) {
-      console.error('Failed to load EPG data:', err);
+      logger.error('Failed to load EPG data:', err);
     } finally {
       setEpgDataLoading(false);
     }
@@ -711,7 +734,7 @@ function App() {
 
       setStreams(allStreams);
     } catch (err) {
-      console.error('Failed to load streams:', err);
+      logger.error('Failed to load streams:', err);
     } finally {
       setStreamsLoading(false);
     }
@@ -818,7 +841,7 @@ function App() {
         ch.id === channel.id ? { ...ch, ...updatedChannel } : ch
       ));
     } catch (err) {
-      console.error('Failed to update channel from Guide:', err);
+      logger.error('Failed to update channel from Guide:', err);
       throw err;
     }
   }, []);
@@ -1042,7 +1065,7 @@ function App() {
           return newChannel;
         }
       } catch (err) {
-        console.error('Failed to create channel:', err);
+        logger.error('Failed to create channel:', err);
         setError('Failed to create channel');
         throw err;
       }
@@ -1278,7 +1301,7 @@ function App() {
         }
 
       } catch (err) {
-        console.error('Bulk create failed:', err);
+        logger.error('Bulk create failed:', err);
         setError('Failed to bulk create channels');
         throw err;
       }
@@ -1335,7 +1358,7 @@ function App() {
           setSelectedChannel(null);
         }
       } catch (err) {
-        console.error('Failed to delete channel:', err);
+        logger.error('Failed to delete channel:', err);
         setError('Failed to delete channel');
         throw err;
       }
@@ -1394,7 +1417,7 @@ function App() {
           // Reload channels to get updated numbers from server
           loadChannels();
         } catch (err) {
-          console.error('Failed to reorder channels:', err);
+          logger.error('Failed to reorder channels:', err);
           setError('Failed to reorder channels');
           // Reload to revert optimistic update
           loadChannels();

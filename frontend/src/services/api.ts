@@ -24,23 +24,35 @@ import type {
   ChannelStats,
   SystemEventsResponse,
 } from '../types';
+import { logger } from '../utils/logger';
 
 const API_BASE = '/api';
 
 async function fetchJson<T>(url: string, options?: RequestInit): Promise<T> {
-  const response = await fetch(url, {
-    ...options,
-    headers: {
-      'Content-Type': 'application/json',
-      ...options?.headers,
-    },
-  });
+  const method = options?.method || 'GET';
+  logger.debug(`API request: ${method} ${url}`);
 
-  if (!response.ok) {
-    throw new Error(`API error: ${response.status} ${response.statusText}`);
+  try {
+    const response = await fetch(url, {
+      ...options,
+      headers: {
+        'Content-Type': 'application/json',
+        ...options?.headers,
+      },
+    });
+
+    if (!response.ok) {
+      logger.error(`API error: ${method} ${url} - ${response.status} ${response.statusText}`);
+      throw new Error(`API error: ${response.status} ${response.statusText}`);
+    }
+
+    const data = await response.json();
+    logger.info(`API success: ${method} ${url} - ${response.status}`);
+    return data;
+  } catch (error) {
+    logger.exception(`API request failed: ${method} ${url}`, error as Error);
+    throw error;
   }
-
-  return response.json();
 }
 
 // Channels
@@ -602,9 +614,12 @@ export async function updateProfileChannel(
 // Helper function to get or create a logo by URL
 // Dispatcharr enforces unique URLs, so we try to create first, then search if it already exists
 export async function getOrCreateLogo(name: string, url: string, logoCache: Map<string, Logo>): Promise<Logo> {
+  logger.debug(`Getting or creating logo: ${name}`, { url });
+
   // Check cache first
   const cached = logoCache.get(url);
   if (cached) {
+    logger.debug(`Logo cache hit for: ${url}`);
     return cached;
   }
 
@@ -612,17 +627,21 @@ export async function getOrCreateLogo(name: string, url: string, logoCache: Map<
     // Try to create the logo
     const logo = await createLogo({ name, url });
     logoCache.set(url, logo);
+    logger.info(`Created new logo: ${name}`, { id: logo.id, url });
     return logo;
   } catch (error) {
+    logger.warn(`Logo creation failed, searching for existing logo: ${name}`, { url });
     // If creation failed, the logo might already exist - search for it
     // Fetch all logos and find by URL (search param may not support exact URL match)
     const allLogos = await getLogos({ pageSize: 10000 });
     const existingLogo = allLogos.results.find((l) => l.url === url);
     if (existingLogo) {
       logoCache.set(url, existingLogo);
+      logger.info(`Found existing logo: ${name}`, { id: existingLogo.id, url });
       return existingLogo;
     }
     // If we still can't find it, re-throw the original error
+    logger.error(`Logo not found and creation failed: ${name}`, { url, error });
     throw error;
   }
 }
@@ -1215,6 +1234,11 @@ export async function bulkCreateChannelsFromStreams(
   channelGroupId: number | null,
   timezonePreferenceOrOptions: TimezonePreference | BulkCreateOptions = 'both'
 ): Promise<{ created: Channel[]; errors: string[]; mergedCount: number }> {
+  logger.info(`Starting bulk channel creation from ${streams.length} streams`, {
+    startingNumber,
+    channelGroupId,
+  });
+
   // Handle both old signature (just TimezonePreference) and new signature (BulkCreateOptions)
   let timezonePreference: TimezonePreference = 'both';
   let stripCountry = false;
@@ -1244,6 +1268,15 @@ export async function bulkCreateChannelsFromStreams(
     timezonePreference = timezonePreferenceOrOptions;
   }
 
+  logger.debug('Bulk create options', {
+    timezonePreference,
+    stripCountry,
+    keepCountry,
+    stripNetwork,
+    stripSuffix,
+    addChannelNumber,
+  });
+
   const created: Channel[] = [];
   const errors: string[] = [];
   // Cache logos to avoid repeated lookups for the same URL
@@ -1251,6 +1284,7 @@ export async function bulkCreateChannelsFromStreams(
 
   // Filter streams based on timezone preference first
   const filteredStreams = filterStreamsByTimezone(streams, timezonePreference);
+  logger.debug(`Filtered ${streams.length} streams to ${filteredStreams.length} based on timezone preference`);
 
   // Group streams by normalized name to merge identical channels from different M3Us and quality variants
   // The normalized name is used as the key, but we track original names for the channel name selection
@@ -1276,6 +1310,7 @@ export async function bulkCreateChannelsFromStreams(
 
   // Count how many streams were merged (filtered streams - unique normalized names)
   const mergedCount = filteredStreams.length - streamsByNormalizedName.size;
+  logger.info(`Grouped ${filteredStreams.length} streams into ${streamsByNormalizedName.size} unique channels (${mergedCount} merged)`);
 
   // Create one channel per unique normalized name
   let channelIndex = 0;
@@ -1315,6 +1350,7 @@ export async function bulkCreateChannelsFromStreams(
 
     try {
       // Create the channel
+      logger.debug(`Creating channel ${channelIndex}/${streamsByNormalizedName.size}: ${channelName}`);
       const channel = await createChannel({
         name: channelName,
         channel_number: channelNumber,
@@ -1330,9 +1366,11 @@ export async function bulkCreateChannelsFromStreams(
           await addStreamToChannel(channel.id, stream.id);
           addedStreamIds.push(stream.id);
         } catch (streamError) {
+          logger.error(`Failed to add stream ${stream.id} to channel ${channelName}`, streamError);
           errors.push(`Channel "${channelName}" created but stream assignment failed for stream ${stream.id}: ${streamError}`);
         }
       }
+      logger.info(`Created channel: ${channelName}`, { channelId: channel.id, streamCount: addedStreamIds.length });
 
       // Use the first stream's logo if available (sorted streams, so highest quality first)
       const logoUrl = sortedStreams.find((s: { logo_url?: string | null }) => s.logo_url)?.logo_url;
@@ -1343,6 +1381,7 @@ export async function bulkCreateChannelsFromStreams(
           created.push({ ...channel, streams: addedStreamIds, logo_id: logo.id });
         } catch (logoError) {
           // Logo assignment failed, but channel was still created
+          logger.warn(`Logo assignment failed for channel: ${channelName}`, logoError);
           errors.push(`Channel "${channelName}" created but logo assignment failed: ${logoError}`);
           created.push({ ...channel, streams: addedStreamIds });
         }
@@ -1350,9 +1389,16 @@ export async function bulkCreateChannelsFromStreams(
         created.push({ ...channel, streams: addedStreamIds });
       }
     } catch (error) {
+      logger.error(`Failed to create channel: ${channelName}`, error);
       errors.push(`Failed to create channel "${channelName}": ${error}`);
     }
   }
+
+  logger.info(`Bulk channel creation complete`, {
+    channelsCreated: created.length,
+    errors: errors.length,
+    mergedCount,
+  });
 
   return { created, errors, mergedCount };
 }
