@@ -113,6 +113,15 @@ function M3UAccountRow({
             </span>
           )}
           {account.name}
+          {account.profiles && account.profiles.length > 0 && (
+            <span
+              className="profile-indicator"
+              title={`${account.profiles.length} profile${account.profiles.length !== 1 ? 's' : ''} configured${account.profiles.filter(p => p.is_active).length > 0 ? ` (${account.profiles.filter(p => p.is_active).length} active)` : ''}`}
+            >
+              <span className="material-icons">account_circle</span>
+              <span className="profile-count">{account.profiles.length}</span>
+            </span>
+          )}
         </div>
         <div className="account-details">
           <span className={`account-type ${account.account_type.toLowerCase()}`}>

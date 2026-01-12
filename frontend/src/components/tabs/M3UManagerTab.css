@@ -300,6 +300,28 @@
   font-size: 16px;
 }
 
+.profile-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.125rem 0.375rem;
+  background-color: rgba(100, 108, 255, 0.15);
+  border: 1px solid rgba(100, 108, 255, 0.3);
+  border-radius: 10px;
+  color: var(--accent-secondary);
+  margin-left: 0.5rem;
+}
+
+.profile-indicator .material-icons {
+  font-size: 14px;
+}
+
+.profile-indicator .profile-count {
+  font-size: 0.7rem;
+  font-weight: 600;
+  line-height: 1;
+}
+
 .account-details {
   display: flex;
   align-items: center;
