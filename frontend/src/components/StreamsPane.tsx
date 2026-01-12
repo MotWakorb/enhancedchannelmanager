@@ -1471,7 +1471,7 @@ export function StreamsPane({
                         </span>
                       </span>
                     )}
-                    <span className="expand-icon">{group.expanded ? '▼' : '▶'}</span>
+                    <span className="expand-icon">{group.expanded ? '▼︎' : '▶︎'}</span>
                     <span className="group-name">{group.name}</span>
                     <span className="group-count">{group.streams.length}</span>
                     {isEditMode && onBulkCreateFromGroup && (
@@ -1834,7 +1834,7 @@ export function StreamsPane({
                   className="collapsible-header"
                   onClick={() => setChannelGroupExpanded(!channelGroupExpanded)}
                 >
-                  <span className="expand-icon">{channelGroupExpanded ? '▼' : '▶'}</span>
+                  <span className="expand-icon">{channelGroupExpanded ? '▼︎' : '▶︎'}</span>
                   <span className="collapsible-title">Channel Group</span>
                   <span className="collapsible-summary">
                     {(() => {
@@ -1980,7 +1980,7 @@ export function StreamsPane({
                     className="collapsible-header"
                     onClick={() => setTimezoneExpanded(!timezoneExpanded)}
                   >
-                    <span className="expand-icon">{timezoneExpanded ? '▼' : '▶'}</span>
+                    <span className="expand-icon">{timezoneExpanded ? '▼︎' : '▶︎'}</span>
                     <span className="collapsible-title">Timezone Preference</span>
                     <span className="collapsible-summary">
                       {bulkCreateTimezone === 'east' ? 'East Coast' : bulkCreateTimezone === 'west' ? 'West Coast' : 'Keep Both'}
@@ -2043,7 +2043,7 @@ export function StreamsPane({
                   className="naming-options-header"
                   onClick={() => setNamingOptionsExpanded(!namingOptionsExpanded)}
                 >
-                  <span className="expand-icon">{namingOptionsExpanded ? '▼' : '▶'}</span>
+                  <span className="expand-icon">{namingOptionsExpanded ? '▼︎' : '▶︎'}</span>
                   <span className="naming-options-title">Naming Options</span>
                   <span className="naming-options-summary">
                     {(() => {
@@ -2258,7 +2258,7 @@ export function StreamsPane({
                     className="collapsible-header"
                     onClick={() => setProfilesExpanded(!profilesExpanded)}
                   >
-                    <span className="expand-icon">{profilesExpanded ? '▼' : '▶'}</span>
+                    <span className="expand-icon">{profilesExpanded ? '▼︎' : '▶︎'}</span>
                     <span className="collapsible-title">Channel Profiles</span>
                     <span className="collapsible-summary">
                       {bulkCreateSelectedProfiles.size === 0
