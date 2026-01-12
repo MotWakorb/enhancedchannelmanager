@@ -53,6 +53,10 @@ class DispatcharrSettings(BaseModel):
     # User timezone for stats display (IANA timezone name, e.g. "America/Los_Angeles")
     # Empty string means use UTC
     user_timezone: str = ""
+    # Backend log level: DEBUG, INFO, WARNING, ERROR, CRITICAL
+    backend_log_level: str = "INFO"
+    # Frontend log level: DEBUG, INFO, WARN, ERROR
+    frontend_log_level: str = "INFO"
 
     def is_configured(self) -> bool:
         return bool(self.url and self.username and self.password)
@@ -148,3 +152,32 @@ def log_config_status():
             logger.info(f"CONFIG_DIR contents: {contents}")
         except Exception as e:
             logger.error(f"Failed to list CONFIG_DIR: {e}")
+
+
+def get_log_level_from_env() -> str:
+    """Get log level from environment variable or default to INFO."""
+    return os.environ.get("LOG_LEVEL", "INFO").upper()
+
+
+def set_log_level(level: str) -> None:
+    """Set the logging level for all loggers dynamically."""
+    level_upper = level.upper()
+
+    # Validate log level
+    valid_levels = ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
+    if level_upper not in valid_levels:
+        logger.warning(f"Invalid log level '{level}', using INFO")
+        level_upper = "INFO"
+
+    # Get numeric level
+    numeric_level = getattr(logging, level_upper)
+
+    # Set root logger level
+    logging.getLogger().setLevel(numeric_level)
+
+    # Set level for all existing loggers
+    for logger_name in logging.root.manager.loggerDict:
+        logger_obj = logging.getLogger(logger_name)
+        logger_obj.setLevel(numeric_level)
+
+    logger.info(f"Log level set to {level_upper}")

@@ -28,7 +28,10 @@
       "Bash(grep:*)",
       "Bash(docker logs:*)",
       "Bash(sqlite3:*)",
-      "Bash(docker ps:*)"
+      "Bash(docker ps:*)",
+      "Bash(docker compose build:*)",
+      "Bash(bd --no-db list:*)",
+      "Bash(bd --no-db create enhancedchannelmanager \"Add comprehensive logging system with configurable log levels\")"
     ],
     "deny": [],
     "ask": []
