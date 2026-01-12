@@ -4,6 +4,7 @@ import type {
   ChannelProfile,
   Stream,
   M3UAccount,
+  M3UAccountProfile,
   M3UAccountCreateRequest,
   M3UGroupSetting,
   M3UFilter,
@@ -286,6 +287,39 @@ export async function updateM3UFilter(accountId: number, filterId: number, data:
 
 export async function deleteM3UFilter(accountId: number, filterId: number): Promise<{ status: string }> {
   return fetchJson(`${API_BASE}/m3u/accounts/${accountId}/filters/${filterId}`, {
+    method: 'DELETE',
+  });
+}
+
+// M3U Profiles
+export interface M3UProfileCreateRequest {
+  name: string;
+  max_streams?: number;
+  is_active?: boolean;
+  search_pattern?: string;
+  replace_pattern?: string;
+}
+
+export async function getM3UProfiles(accountId: number): Promise<M3UAccountProfile[]> {
+  return fetchJson(`${API_BASE}/m3u/accounts/${accountId}/profiles`);
+}
+
+export async function createM3UProfile(accountId: number, data: M3UProfileCreateRequest): Promise<M3UAccountProfile> {
+  return fetchJson(`${API_BASE}/m3u/accounts/${accountId}/profiles`, {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
+export async function updateM3UProfile(accountId: number, profileId: number, data: Partial<M3UAccountProfile>): Promise<M3UAccountProfile> {
+  return fetchJson(`${API_BASE}/m3u/accounts/${accountId}/profiles/${profileId}`, {
+    method: 'PATCH',
+    body: JSON.stringify(data),
+  });
+}
+
+export async function deleteM3UProfile(accountId: number, profileId: number): Promise<{ status: string }> {
+  return fetchJson(`${API_BASE}/m3u/accounts/${accountId}/profiles/${profileId}`, {
     method: 'DELETE',
   });
 }
