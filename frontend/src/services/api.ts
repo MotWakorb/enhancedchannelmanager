@@ -1507,7 +1507,7 @@ export async function getSystemEvents(params?: {
   if (params?.eventType) searchParams.append('event_type', params.eventType);
 
   const query = searchParams.toString();
-  return fetchJson(`${API_BASE}/stats/events${query ? `?${query}` : ''}`);
+  return fetchJson(`${API_BASE}/stats/activity${query ? `?${query}` : ''}`);
 }
 
 /**
