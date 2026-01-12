@@ -1800,6 +1800,63 @@ async def delete_m3u_filter(account_id: int, filter_id: int):
 
 
 # -------------------------------------------------------------------------
+# M3U Profiles
+# -------------------------------------------------------------------------
+
+@app.get("/api/m3u/accounts/{account_id}/profiles/")
+async def get_m3u_profiles(account_id: int):
+    """Get all profiles for an M3U account."""
+    client = get_client()
+    try:
+        return await client.get_m3u_profiles(account_id)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/m3u/accounts/{account_id}/profiles/")
+async def create_m3u_profile(account_id: int, request: Request):
+    """Create a new profile for an M3U account."""
+    client = get_client()
+    try:
+        data = await request.json()
+        return await client.create_m3u_profile(account_id, data)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/m3u/accounts/{account_id}/profiles/{profile_id}/")
+async def get_m3u_profile(account_id: int, profile_id: int):
+    """Get a specific profile for an M3U account."""
+    client = get_client()
+    try:
+        return await client.get_m3u_profile(account_id, profile_id)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.patch("/api/m3u/accounts/{account_id}/profiles/{profile_id}/")
+async def update_m3u_profile(account_id: int, profile_id: int, request: Request):
+    """Update a profile for an M3U account."""
+    client = get_client()
+    try:
+        data = await request.json()
+        return await client.update_m3u_profile(account_id, profile_id, data)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/api/m3u/accounts/{account_id}/profiles/{profile_id}/")
+async def delete_m3u_profile(account_id: int, profile_id: int):
+    """Delete a profile from an M3U account."""
+    client = get_client()
+    try:
+        await client.delete_m3u_profile(account_id, profile_id)
+        return {"status": "deleted"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# -------------------------------------------------------------------------
 # M3U Group Settings
 # -------------------------------------------------------------------------
 
