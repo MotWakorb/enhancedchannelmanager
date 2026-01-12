@@ -1,13 +1,16 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
-import type { Channel, Logo, EPGProgram, EPGData, EPGSource, StreamProfile, ChannelProfile } from '../../types';
+import type { Channel, Logo, EPGProgram, EPGData, EPGSource, StreamProfile, ChannelProfile, ChannelGroup } from '../../types';
 import * as api from '../../services/api';
 import { EditChannelModal, type ChannelMetadataChanges } from '../EditChannelModal';
+import { naturalCompare } from '../../utils/naturalSort';
 import './GuideTab.css';
 
 // Constants for grid layout
 const SLOT_WIDTH_PX = 200; // Width of each 30-minute slot
 const SLOT_MINUTES = 30;
 const HOURS_TO_SHOW = 6; // Total hours to display in grid
+const ROW_HEIGHT = 60; // Height of each channel row in pixels
+const OVERSCAN_COUNT = 5; // Number of extra rows to render above/below viewport
 
 // Helper to get local date string in YYYY-MM-DD format
 const getLocalDateString = (date: Date): string => {
@@ -50,6 +53,7 @@ export function GuideTab({
   const [logos, setLogos] = useState<Logo[]>(propLogos ?? []);
   const [programs, setPrograms] = useState<EPGProgram[]>([]);
   const [channelProfiles, setChannelProfiles] = useState<ChannelProfile[]>([]);
+  const [channelGroups, setChannelGroups] = useState<ChannelGroup[]>([]);
   const [selectedProfileId, setSelectedProfileId] = useState<number | null>(null);
 
   // Edit channel modal state
@@ -69,6 +73,14 @@ export function GuideTab({
 
   // Current time state for now-playing highlights (updates every minute)
   const [currentTime, setCurrentTime] = useState(() => new Date());
+
+  // Group filter state
+  const [selectedGroup, setSelectedGroup] = useState<string>('');
+  const [groupFilterMode, setGroupFilterMode] = useState<'filter' | 'jump'>('filter');
+
+  // Virtualization state
+  const [scrollTop, setScrollTop] = useState(0);
+  const [viewportHeight, setViewportHeight] = useState(600);
 
   // Refs for synchronized scrolling
   const gridContentRef = useRef<HTMLDivElement>(null);
@@ -104,7 +116,22 @@ export function GuideTab({
     return channelProfiles.find(p => p.id === selectedProfileId) ?? null;
   }, [selectedProfileId, channelProfiles]);
 
-  // Sort channels by channel number, optionally filtered by profile
+  // Get sorted list of groups that have channels, sorted naturally by name
+  const sortedGroups = useMemo(() => {
+    // Get unique group IDs that have channels with channel numbers
+    const groupIds = new Set<number>();
+    channels.forEach(ch => {
+      if (ch.channel_number !== null && ch.channel_group_id !== null) {
+        groupIds.add(ch.channel_group_id);
+      }
+    });
+    // Get the group objects and sort by name
+    return channelGroups
+      .filter(g => groupIds.has(g.id))
+      .sort((a, b) => naturalCompare(a.name, b.name));
+  }, [channels, channelGroups]);
+
+  // Sort channels by channel number, optionally filtered by profile and group
   const sortedChannels = useMemo(() => {
     let filtered = [...channels].filter(ch => ch.channel_number !== null);
 
@@ -114,8 +141,14 @@ export function GuideTab({
       filtered = filtered.filter(ch => profileChannelIds.has(ch.id));
     }
 
+    // If a group is selected and we're in filter mode, filter by group
+    if (selectedGroup && groupFilterMode === 'filter') {
+      const groupId = parseInt(selectedGroup, 10);
+      filtered = filtered.filter(ch => ch.channel_group_id === groupId);
+    }
+
     return filtered.sort((a, b) => (a.channel_number ?? 0) - (b.channel_number ?? 0));
-  }, [channels, selectedProfile]);
+  }, [channels, selectedProfile, selectedGroup, groupFilterMode]);
 
 
   // Calculate time range for the grid
@@ -139,6 +172,22 @@ export function GuideTab({
     return slots;
   }, [timeRange]);
 
+  // Virtualization: calculate which rows to render
+  const virtualizedRows = useMemo(() => {
+    const totalRows = sortedChannels.length;
+    const startIndex = Math.max(0, Math.floor(scrollTop / ROW_HEIGHT) - OVERSCAN_COUNT);
+    const visibleCount = Math.ceil(viewportHeight / ROW_HEIGHT) + 2 * OVERSCAN_COUNT;
+    const endIndex = Math.min(totalRows, startIndex + visibleCount);
+
+    return {
+      startIndex,
+      endIndex,
+      totalHeight: totalRows * ROW_HEIGHT,
+      offsetY: startIndex * ROW_HEIGHT,
+      visibleChannels: sortedChannels.slice(startIndex, endIndex),
+    };
+  }, [sortedChannels, scrollTop, viewportHeight]);
+
   // Load data on mount
   useEffect(() => {
     const loadData = async () => {
@@ -147,17 +196,19 @@ export function GuideTab({
 
       try {
         // Fetch all needed data in parallel
-        const [channelsData, logosData, programsData, profilesData] = await Promise.all([
+        const [channelsData, logosData, programsData, profilesData, groupsData] = await Promise.all([
           propChannels ? Promise.resolve({ results: propChannels }) : api.getChannels({ pageSize: 5000 }),
           propLogos ? Promise.resolve({ results: propLogos }) : api.getLogos({ pageSize: 10000 }),
           api.getEPGGrid(),
           api.getChannelProfiles(),
+          api.getChannelGroups(),
         ]);
 
         if (!propChannels) setChannels((channelsData as { results: Channel[] }).results);
         if (!propLogos) setLogos((logosData as { results: Logo[] }).results);
         setPrograms(programsData);
         setChannelProfiles(profilesData);
+        setChannelGroups(groupsData);
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Failed to load guide data');
       } finally {
@@ -182,12 +233,39 @@ export function GuideTab({
     }
   }, []);
 
-  // Synchronized scrolling between header and content
+  // Synchronized scrolling between header and content, plus virtualization scroll tracking
   const handleContentScroll = useCallback((e: React.UIEvent<HTMLDivElement>) => {
     if (timelineHeaderRef.current) {
       timelineHeaderRef.current.scrollLeft = e.currentTarget.scrollLeft;
     }
+    // Update scroll position for virtualization
+    setScrollTop(e.currentTarget.scrollTop);
   }, []);
+
+  // Handle group selection change
+  const handleGroupChange = useCallback((group: string) => {
+    setSelectedGroup(group);
+
+    // If in jump mode and a group is selected, scroll to first channel in that group
+    if (groupFilterMode === 'jump' && group && gridContentRef.current) {
+      const groupId = parseInt(group, 10);
+      const sortedWithGroup = [...channels]
+        .filter(ch => ch.channel_number !== null)
+        .sort((a, b) => (a.channel_number ?? 0) - (b.channel_number ?? 0));
+
+      // Apply profile filter if active
+      let filtered = sortedWithGroup;
+      if (selectedProfile) {
+        const profileChannelIds = new Set(selectedProfile.channels);
+        filtered = filtered.filter(ch => profileChannelIds.has(ch.id));
+      }
+
+      const firstChannelIndex = filtered.findIndex(ch => ch.channel_group_id === groupId);
+      if (firstChannelIndex >= 0) {
+        gridContentRef.current.scrollTop = firstChannelIndex * ROW_HEIGHT;
+      }
+    }
+  }, [groupFilterMode, channels, selectedProfile]);
 
   // Update current time every minute for now-playing highlights
   useEffect(() => {
@@ -211,6 +289,24 @@ export function GuideTab({
       }
     }
   }, [loading, selectedDate, startHour, currentTime]);
+
+  // Update viewport height for virtualization when container resizes
+  useEffect(() => {
+    const updateViewportHeight = () => {
+      if (gridContentRef.current) {
+        setViewportHeight(gridContentRef.current.clientHeight);
+      }
+    };
+
+    updateViewportHeight();
+
+    const resizeObserver = new ResizeObserver(updateViewportHeight);
+    if (gridContentRef.current) {
+      resizeObserver.observe(gridContentRef.current);
+    }
+
+    return () => resizeObserver.disconnect();
+  }, [loading]);
 
   // Get programs for a channel within the visible time range
   const getChannelPrograms = useCallback((channel: Channel): EPGProgram[] => {
@@ -418,6 +514,43 @@ export function GuideTab({
           </div>
         )}
 
+        {sortedGroups.length > 0 && (
+          <div className="control-group group-filter">
+            <label>Group:</label>
+            <select
+              value={selectedGroup}
+              onChange={(e) => handleGroupChange(e.target.value)}
+            >
+              <option value="">{groupFilterMode === 'filter' ? 'All Groups' : 'Jump to group...'}</option>
+              {sortedGroups.map(group => (
+                <option key={group.id} value={group.id.toString()}>{group.name}</option>
+              ))}
+            </select>
+            <div className="group-mode-toggle">
+              <button
+                className={`mode-btn ${groupFilterMode === 'filter' ? 'active' : ''}`}
+                onClick={() => {
+                  setGroupFilterMode('filter');
+                  if (selectedGroup) setSelectedGroup(''); // Reset when switching modes
+                }}
+                title="Filter: Show only channels in selected group"
+              >
+                <span className="material-icons">filter_list</span>
+              </button>
+              <button
+                className={`mode-btn ${groupFilterMode === 'jump' ? 'active' : ''}`}
+                onClick={() => {
+                  setGroupFilterMode('jump');
+                  if (selectedGroup) setSelectedGroup(''); // Reset when switching modes
+                }}
+                title="Jump: Scroll to first channel in selected group"
+              >
+                <span className="material-icons">arrow_downward</span>
+              </button>
+            </div>
+          </div>
+        )}
+
         <button
           className="refresh-btn"
           onClick={handleRefresh}
@@ -453,9 +586,15 @@ export function GuideTab({
           ref={gridContentRef}
           onScroll={handleContentScroll}
         >
-          <div className="guide-channels-wrapper">
-            <div className="guide-channels">
-              {sortedChannels.map(renderChannelRow)}
+          <div
+            className="guide-channels-wrapper"
+            style={{ height: `${virtualizedRows.totalHeight}px` }}
+          >
+            <div
+              className="guide-channels"
+              style={{ transform: `translateY(${virtualizedRows.offsetY}px)` }}
+            >
+              {virtualizedRows.visibleChannels.map(renderChannelRow)}
             </div>
             {nowIndicatorPosition !== null && (
               <div
