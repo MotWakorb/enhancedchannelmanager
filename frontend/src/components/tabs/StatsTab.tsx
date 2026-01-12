@@ -521,15 +521,19 @@ export function StatsTab() {
     }
 
     // Build stats for all M3U accounts (exclude "Custom" M3U)
-    // Include max_streams from both the account and its active profiles
+    // If profiles exist, use sum of active profile max_streams (profiles include the base account)
+    // Otherwise use account.max_streams directly
     return m3uAccounts
       .filter(account => account.is_active && account.name.toLowerCase() !== 'custom')
       .map(account => {
-        // Sum max_streams from account plus all active profiles
+        // Sum max_streams from active profiles
         const profileStreams = (account.profiles || [])
           .filter(p => p.is_active)
           .reduce((sum, p) => sum + (p.max_streams || 0), 0);
-        const totalMax = account.max_streams + profileStreams;
+
+        // If profiles exist, they include ALL accounts (base + linked), so don't add account.max_streams
+        // Otherwise, use account.max_streams as fallback
+        const totalMax = profileStreams > 0 ? profileStreams : account.max_streams;
 
         return {
           id: account.id,
