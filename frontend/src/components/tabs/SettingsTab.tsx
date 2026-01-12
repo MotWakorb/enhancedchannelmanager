@@ -291,6 +291,11 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
             <p className="form-hint">Only required when changing URL or username</p>
           </div>
         </div>
+
+        <button className="btn-test" onClick={handleTest} disabled={testing || loading}>
+          <span className="material-icons">wifi_tethering</span>
+          {testing ? 'Testing...' : 'Test Connection'}
+        </button>
       </div>
 
       <div className="settings-section">
@@ -401,12 +406,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
       </div>
 
       <div className="settings-actions">
-        <div className="settings-actions-left">
-          <button className="btn-test" onClick={handleTest} disabled={testing || loading}>
-            <span className="material-icons">wifi_tethering</span>
-            {testing ? 'Testing...' : 'Test Connection'}
-          </button>
-        </div>
+        <div className="settings-actions-left" />
         <button className="btn-primary" onClick={handleSave} disabled={loading}>
           <span className="material-icons">save</span>
           {loading ? 'Saving...' : 'Save Settings'}
