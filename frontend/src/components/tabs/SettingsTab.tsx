@@ -269,13 +269,6 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
         </div>
       )}
 
-      {saveSuccess && (
-        <div className="save-success">
-          <span className="material-icons">check_circle</span>
-          Settings saved successfully
-        </div>
-      )}
-
       <div className="settings-section">
         <div className="settings-section-header">
           <span className="material-icons">link</span>
@@ -431,6 +424,61 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
         </div>
       </div>
 
+      <div className="settings-section">
+        <div className="settings-section-header">
+          <span className="material-icons">bug_report</span>
+          <h3>Log Levels</h3>
+        </div>
+
+        <div className="form-row">
+          <div className="form-group">
+            <label htmlFor="backendLogLevel">Backend Log Level</label>
+            <select
+              id="backendLogLevel"
+              value={backendLogLevel}
+              onChange={(e) => setBackendLogLevel(e.target.value)}
+            >
+              <option value="DEBUG">DEBUG - Show all messages including debug info</option>
+              <option value="INFO">INFO - Show informational messages and above</option>
+              <option value="WARNING">WARNING - Show warnings and errors only</option>
+              <option value="ERROR">ERROR - Show errors only</option>
+              <option value="CRITICAL">CRITICAL - Show only critical errors</option>
+            </select>
+            <p className="form-help">
+              Controls Python backend logging level. Changes apply immediately.
+              Check Docker logs to see backend messages.
+            </p>
+          </div>
+        </div>
+
+        <div className="form-row">
+          <div className="form-group">
+            <label htmlFor="frontendLogLevel">Frontend Log Level</label>
+            <select
+              id="frontendLogLevel"
+              value={frontendLogLevel}
+              onChange={(e) => setFrontendLogLevel(e.target.value)}
+            >
+              <option value="DEBUG">DEBUG - Show all messages including debug info</option>
+              <option value="INFO">INFO - Show informational messages and above</option>
+              <option value="WARN">WARN - Show warnings and errors only</option>
+              <option value="ERROR">ERROR - Show errors only</option>
+            </select>
+            <p className="form-help">
+              Controls browser console logging level. Changes apply immediately.
+              Open browser DevTools (F12) to see frontend messages.
+            </p>
+          </div>
+        </div>
+      </div>
+
+      {saveSuccess && (
+        <div className="save-success">
+          <span className="material-icons">check_circle</span>
+          Settings saved successfully
+        </div>
+      )}
+
       <div className="settings-actions">
         <div className="settings-actions-left" />
         <button className="btn-primary" onClick={handleSave} disabled={loading}>
@@ -447,13 +495,6 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
         <h2>Appearance</h2>
         <p>Customize how the app displays information.</p>
       </div>
-
-      {saveSuccess && (
-        <div className="save-success">
-          <span className="material-icons">check_circle</span>
-          Settings saved successfully
-        </div>
-      )}
 
       <div className="settings-section">
         <div className="settings-section-header">
@@ -564,53 +605,12 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
         </div>
       </div>
 
-      <div className="settings-section">
-        <div className="settings-section-header">
-          <span className="material-icons">bug_report</span>
-          <h3>Log Levels</h3>
+      {saveSuccess && (
+        <div className="save-success">
+          <span className="material-icons">check_circle</span>
+          Settings saved successfully
         </div>
-
-        <div className="form-row">
-          <div className="form-group">
-            <label htmlFor="backendLogLevel">Backend Log Level</label>
-            <select
-              id="backendLogLevel"
-              value={backendLogLevel}
-              onChange={(e) => setBackendLogLevel(e.target.value)}
-            >
-              <option value="DEBUG">DEBUG - Show all messages including debug info</option>
-              <option value="INFO">INFO - Show informational messages and above</option>
-              <option value="WARNING">WARNING - Show warnings and errors only</option>
-              <option value="ERROR">ERROR - Show errors only</option>
-              <option value="CRITICAL">CRITICAL - Show only critical errors</option>
-            </select>
-            <p className="form-help">
-              Controls Python backend logging level. Changes apply immediately.
-              Check Docker logs to see backend messages.
-            </p>
-          </div>
-        </div>
-
-        <div className="form-row">
-          <div className="form-group">
-            <label htmlFor="frontendLogLevel">Frontend Log Level</label>
-            <select
-              id="frontendLogLevel"
-              value={frontendLogLevel}
-              onChange={(e) => setFrontendLogLevel(e.target.value)}
-            >
-              <option value="DEBUG">DEBUG - Show all messages including debug info</option>
-              <option value="INFO">INFO - Show informational messages and above</option>
-              <option value="WARN">WARN - Show warnings and errors only</option>
-              <option value="ERROR">ERROR - Show errors only</option>
-            </select>
-            <p className="form-help">
-              Controls browser console logging level. Changes apply immediately.
-              Open browser DevTools (F12) to see frontend messages.
-            </p>
-          </div>
-        </div>
-      </div>
+      )}
 
       <div className="settings-actions">
         <div className="settings-actions-left" />
@@ -633,13 +633,6 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
         <div className="error-message">
           <span className="material-icons">error</span>
           {error}
-        </div>
-      )}
-
-      {saveSuccess && (
-        <div className="save-success">
-          <span className="material-icons">check_circle</span>
-          Settings saved successfully
         </div>
       )}
 
@@ -1048,6 +1041,13 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
           )}
         </div>
       </div>
+
+      {saveSuccess && (
+        <div className="save-success">
+          <span className="material-icons">check_circle</span>
+          Settings saved successfully
+        </div>
+      )}
 
       <div className="settings-actions">
         <div className="settings-actions-left" />
