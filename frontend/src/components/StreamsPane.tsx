@@ -87,6 +87,8 @@ interface StreamsPaneProps {
   hideUngroupedStreams?: boolean;
   // Refresh streams (bypasses cache)
   onRefreshStreams?: () => void;
+  // Set of stream IDs that are already mapped to channels (for "hide mapped" filter)
+  mappedStreamIds?: Set<number>;
 }
 
 export function StreamsPane({
@@ -121,8 +123,20 @@ export function StreamsPane({
   showStreamUrls = true,
   hideUngroupedStreams = true,
   onRefreshStreams,
+  mappedStreamIds,
 }: StreamsPaneProps) {
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
+
+  // Hide mapped streams toggle state
+  const [hideMappedStreams, setHideMappedStreams] = useState(false);
+
+  // Filter out mapped streams if toggle is enabled
+  const filteredStreams = useMemo(() => {
+    if (!hideMappedStreams || !mappedStreamIds || mappedStreamIds.size === 0) {
+      return streams;
+    }
+    return streams.filter(stream => !mappedStreamIds.has(stream.id));
+  }, [streams, hideMappedStreams, mappedStreamIds]);
 
   // Compute streams in display order (grouped and sorted alphabetically)
   // This must be computed before useSelection so shift-click works correctly
@@ -130,7 +144,7 @@ export function StreamsPane({
     const groups = new Map<string, Stream[]>();
 
     // Group streams by channel_group_name
-    streams.forEach((stream) => {
+    filteredStreams.forEach((stream) => {
       const groupName = stream.channel_group_name || 'Ungrouped';
       if (!groups.has(groupName)) {
         groups.set(groupName, []);
@@ -159,7 +173,7 @@ export function StreamsPane({
       result.push(...groups.get(groupName)!);
     }
     return result;
-  }, [streams, hideUngroupedStreams]);
+  }, [filteredStreams, hideUngroupedStreams]);
 
   // Use display order for selection so shift-click works correctly
   const {
@@ -261,8 +275,8 @@ export function StreamsPane({
   const groupedStreams = useMemo((): StreamGroup[] => {
     const groups = new Map<string, Stream[]>();
 
-    // Group streams by channel_group_name
-    streams.forEach((stream) => {
+    // Group streams by channel_group_name (use filteredStreams to respect hide mapped toggle)
+    filteredStreams.forEach((stream) => {
       const groupName = stream.channel_group_name || 'Ungrouped';
       if (!groups.has(groupName)) {
         groups.set(groupName, []);
@@ -291,7 +305,7 @@ export function StreamsPane({
       }));
 
     return sortedGroups;
-  }, [streams, expandedGroups, hideUngroupedStreams]);
+  }, [filteredStreams, expandedGroups, hideUngroupedStreams]);
 
 
   const toggleGroup = useCallback((groupName: string) => {
@@ -1204,6 +1218,16 @@ export function StreamsPane({
               <span className="material-icons">unfold_less</span>
             </button>
           </div>
+          {mappedStreamIds && mappedStreamIds.size > 0 && (
+            <button
+              className={`hide-mapped-btn ${hideMappedStreams ? 'active' : ''}`}
+              onClick={() => setHideMappedStreams(!hideMappedStreams)}
+              title={hideMappedStreams ? 'Show all streams' : 'Hide streams already mapped to channels'}
+            >
+              <span className="material-icons">{hideMappedStreams ? 'visibility_off' : 'visibility'}</span>
+              <span className="hide-mapped-label">{hideMappedStreams ? 'Mapped hidden' : 'Hide mapped'}</span>
+            </button>
+          )}
         </div>
         <div className="streams-filter-row">
           {/* Provider Filter Dropdown */}

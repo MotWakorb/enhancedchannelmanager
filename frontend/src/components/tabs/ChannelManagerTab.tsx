@@ -1,3 +1,4 @@
+import { useMemo } from 'react';
 import { SplitPane, ChannelsPane, StreamsPane } from '../';
 import type { Channel, ChannelGroup, ChannelProfile, Stream, M3UAccount, Logo, EPGData, EPGSource, StreamProfile, M3UGroupSetting, ChannelListFilterSettings, ChangeInfo, SavePoint, ChangeRecord } from '../../types';
 import type { TimezonePreference, NumberSeparator, PrefixOrder } from '../../services/api';
@@ -297,6 +298,15 @@ export function ChannelManagerTab({
   externalChannelToEdit,
   onExternalChannelEditHandled,
 }: ChannelManagerTabProps) {
+  // Compute set of stream IDs that are already mapped to channels
+  const mappedStreamIds = useMemo(() => {
+    const ids = new Set<number>();
+    channels.forEach(ch => {
+      ch.streams.forEach(streamId => ids.add(streamId));
+    });
+    return ids;
+  }, [channels]);
+
   return (
     <SplitPane
       left={
@@ -408,6 +418,7 @@ export function ChannelManagerTab({
           showStreamUrls={showStreamUrls}
           hideUngroupedStreams={hideUngroupedStreams}
           onRefreshStreams={onRefreshStreams}
+          mappedStreamIds={mappedStreamIds}
         />
       }
     />
