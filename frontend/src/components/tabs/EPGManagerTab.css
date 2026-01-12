@@ -243,16 +243,17 @@
   align-items: center;
   justify-content: center;
   cursor: grab;
-  color: var(--text-muted);
+  color: var(--drag-handle-color);
   transition: color 0.15s;
 }
 
 .drag-handle:hover {
-  color: var(--text-muted);
+  color: var(--drag-handle-hover);
 }
 
 .drag-handle:active {
   cursor: grabbing;
+  color: var(--drag-handle-hover);
 }
 
 .source-priority {
