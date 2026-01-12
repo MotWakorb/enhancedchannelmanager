@@ -491,6 +491,45 @@ function SortableChannel({
   );
 }
 
+// Sortable Group Header wrapper for drag-and-drop group reordering
+interface SortableGroupHeaderProps extends Omit<DroppableGroupHeaderProps, 'groupId'> {
+  groupId: number | 'ungrouped';
+}
+
+function SortableGroupHeader(props: SortableGroupHeaderProps) {
+  const { groupId, isEditMode } = props;
+
+  // Don't make ungrouped sortable
+  const isSortable = groupId !== 'ungrouped' && isEditMode;
+
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({
+    id: `group-${groupId}`,
+    disabled: !isSortable,
+  });
+
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.5 : 1,
+  };
+
+  return (
+    <div ref={setNodeRef} style={style}>
+      <DroppableGroupHeader
+        {...props}
+        dragHandleProps={isSortable ? { ...attributes, ...listeners } : undefined}
+      />
+    </div>
+  );
+}
+
 // Droppable Group Header component for cross-group channel dragging
 interface DroppableGroupHeaderProps {
   groupId: number | 'ungrouped';
@@ -509,6 +548,7 @@ interface DroppableGroupHeaderProps {
   onSelectAll?: () => void;
   onStreamDropOnGroup?: (groupId: number | 'ungrouped', streamIds: number[]) => void;
   onContextMenu?: (e: React.MouseEvent) => void;
+  dragHandleProps?: any;
 }
 
 function DroppableGroupHeader({
@@ -528,6 +568,7 @@ function DroppableGroupHeader({
   onSelectAll,
   onStreamDropOnGroup,
   onContextMenu,
+  dragHandleProps,
 }: DroppableGroupHeaderProps) {
   const droppableId = `group-${groupId}`;
   const { isOver, setNodeRef } = useDroppable({
@@ -625,6 +666,7 @@ function DroppableGroupHeader({
       {isEditMode && groupId !== 'ungrouped' && (
         <span
           className="group-drag-handle"
+          {...dragHandleProps}
           title="Drag to reorder group"
         >
           ⋮⋮
@@ -797,6 +839,7 @@ export function ChannelsPane({
   void _onStageBulkAssignNumbers;
   void onLogosChange;
   const [expandedGroups, setExpandedGroups] = useState<GroupState>({});
+  const [groupOrder, setGroupOrder] = useState<number[]>([]); // Custom order for groups
   const [dragOverChannelId, setDragOverChannelId] = useState<number | null>(null);
   const [localChannels, setLocalChannels] = useState<Channel[]>(channels);
   const [groupDropdownOpen, setGroupDropdownOpen] = useState(false);
@@ -1036,6 +1079,13 @@ export function ChannelsPane({
       };
     }
   }, [contextMenu]);
+
+  // Initialize group order when channel groups change
+  useEffect(() => {
+    if (groupOrder.length === 0 && channelGroups.length > 0) {
+      setGroupOrder(channelGroups.map(g => g.id));
+    }
+  }, [channelGroups, groupOrder.length]);
 
   // Filter channel groups based on search text (for create modal dropdown)
   const searchFilteredChannelGroups = channelGroups.filter((group) =>
@@ -2492,6 +2542,19 @@ export function ChannelsPane({
   const sortedChannelGroups = [...channelGroups]
     .filter((g) => channelsByGroup[g.id]?.length > 0)
     .sort((a, b) => {
+      // If custom order exists, use it
+      if (groupOrder.length > 0) {
+        const aIndex = groupOrder.indexOf(a.id);
+        const bIndex = groupOrder.indexOf(b.id);
+        // If both in order array, use order
+        if (aIndex !== -1 && bIndex !== -1) {
+          return aIndex - bIndex;
+        }
+        // If only one is in order, prioritize the one in order
+        if (aIndex !== -1) return -1;
+        if (bIndex !== -1) return 1;
+      }
+      // Default: sort by lowest channel number
       const aMin = channelsByGroup[a.id]?.[0]?.channel_number ?? 9999;
       const bMin = channelsByGroup[b.id]?.[0]?.channel_number ?? 9999;
       return aMin - bMin;
@@ -2656,6 +2719,33 @@ export function ChannelsPane({
     const { active, over } = event;
 
     if (!over || active.id === over.id) return;
+
+    // Check if this is a group drag (not a channel drag)
+    const activeIdStr = String(active.id);
+    const overIdStr = String(over.id);
+
+    if (activeIdStr.startsWith('group-') && overIdStr.startsWith('group-')) {
+      // Extract group IDs
+      const activeGroupId = activeIdStr.replace('group-', '');
+      const overGroupId = overIdStr.replace('group-', '');
+
+      // Don't allow reordering ungrouped
+      if (activeGroupId === 'ungrouped' || overGroupId === 'ungrouped') return;
+
+      const activeGroupNumId = parseInt(activeGroupId, 10);
+      const overGroupNumId = parseInt(overGroupId, 10);
+
+      // Find indices in current order
+      const oldIndex = groupOrder.indexOf(activeGroupNumId);
+      const newIndex = groupOrder.indexOf(overGroupNumId);
+
+      if (oldIndex !== -1 && newIndex !== -1) {
+        // Reorder the groups
+        const newOrder = arrayMove(groupOrder, oldIndex, newIndex);
+        setGroupOrder(newOrder);
+      }
+      return;
+    }
 
     const activeChannel = localChannels.find((c) => c.id === active.id);
     if (!activeChannel) return;
@@ -3633,7 +3723,7 @@ export function ChannelsPane({
 
     return (
       <div key={groupId} className={`channel-group ${isEmpty ? 'empty-group' : ''}`}>
-        <DroppableGroupHeader
+        <SortableGroupHeader
           groupId={groupId}
           groupName={groupName}
           channelCount={groupChannels.length}
@@ -5407,10 +5497,16 @@ export function ChannelsPane({
               channelsByGroup.ungrouped || [],
               (channelsByGroup.ungrouped?.length ?? 0) === 0
             )}
-            {/* Render filtered groups with channels */}
-            {filteredChannelGroups.map((group) =>
-              renderGroup(group.id, group.name, channelsByGroup[group.id] || [])
-            )}
+            {/* Wrap groups in SortableContext for drag-and-drop reordering */}
+            <SortableContext
+              items={filteredChannelGroups.map((g) => `group-${g.id}`)}
+              strategy={verticalListSortingStrategy}
+            >
+              {/* Render filtered groups with channels */}
+              {filteredChannelGroups.map((group) =>
+                renderGroup(group.id, group.name, channelsByGroup[group.id] || [])
+              )}
+            </SortableContext>
             {/* Render selected empty groups that pass the filter */}
             {selectedGroups
               .filter((groupId) => {
