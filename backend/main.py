@@ -774,7 +774,17 @@ async def assign_channel_numbers(request: AssignNumbersRequest):
 async def get_channel_groups():
     client = get_client()
     try:
-        return await client.get_channel_groups()
+        groups = await client.get_channel_groups()
+
+        # Filter out hidden groups
+        from database import get_session
+        from models import HiddenChannelGroup
+
+        with get_session() as db:
+            hidden_ids = {h.group_id for h in db.query(HiddenChannelGroup).all()}
+
+        # Return only groups that aren't hidden
+        return [g for g in groups if g.get("id") not in hidden_ids]
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -817,9 +827,74 @@ async def update_channel_group(group_id: int, data: dict):
 async def delete_channel_group(group_id: int):
     client = get_client()
     try:
-        await client.delete_channel_group(group_id)
-        return {"status": "deleted"}
+        # Check if this group has M3U sync settings
+        m3u_settings = await client.get_all_m3u_group_settings()
+        has_m3u_sync = group_id in m3u_settings
+
+        if has_m3u_sync:
+            # Hide the group instead of deleting to preserve M3U sync
+            from database import get_session
+            from models import HiddenChannelGroup
+
+            # Get the group name before hiding
+            groups = await client.get_channel_groups()
+            group_name = next((g.get("name") for g in groups if g.get("id") == group_id), f"Group {group_id}")
+
+            with get_session() as db:
+                # Check if already hidden
+                existing = db.query(HiddenChannelGroup).filter_by(group_id=group_id).first()
+                if not existing:
+                    hidden_group = HiddenChannelGroup(group_id=group_id, group_name=group_name)
+                    db.add(hidden_group)
+                    db.commit()
+                    logger.info(f"Hidden channel group {group_id} ({group_name}) due to M3U sync settings")
+
+            return {"status": "hidden", "message": "Group hidden (M3U sync active)"}
+        else:
+            # No M3U sync, safe to delete
+            await client.delete_channel_group(group_id)
+            logger.info(f"Deleted channel group {group_id}")
+            return {"status": "deleted"}
     except Exception as e:
+        logger.error(f"Failed to delete/hide channel group {group_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/channel-groups/{group_id}/restore")
+async def restore_channel_group(group_id: int):
+    """Restore a hidden channel group back to the visible list."""
+    try:
+        from database import get_session
+        from models import HiddenChannelGroup
+
+        with get_session() as db:
+            hidden_group = db.query(HiddenChannelGroup).filter_by(group_id=group_id).first()
+            if hidden_group:
+                db.delete(hidden_group)
+                db.commit()
+                logger.info(f"Restored channel group {group_id} ({hidden_group.group_name})")
+                return {"status": "restored", "message": f"Group '{hidden_group.group_name}' restored"}
+            else:
+                raise HTTPException(status_code=404, detail="Group not found in hidden list")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to restore channel group {group_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/channel-groups/hidden")
+async def get_hidden_channel_groups():
+    """Get list of all hidden channel groups."""
+    try:
+        from database import get_session
+        from models import HiddenChannelGroup
+
+        with get_session() as db:
+            hidden_groups = db.query(HiddenChannelGroup).all()
+            return [g.to_dict() for g in hidden_groups]
+    except Exception as e:
+        logger.error(f"Failed to get hidden channel groups: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

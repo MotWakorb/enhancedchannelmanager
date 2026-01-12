@@ -1,7 +1,7 @@
 {
   "name": "enhanced-channel-manager",
   "private": true,
-  "version": "0.6.10108",
+  "version": "0.6.10110",
   "type": "module",
   "scripts": {
     "dev": "vite",

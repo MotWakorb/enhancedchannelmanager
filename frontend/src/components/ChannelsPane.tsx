@@ -923,6 +923,10 @@ export function ChannelsPane({
   const [massRenumberStartingNumber, setMassRenumberStartingNumber] = useState<string>('');
   const [massRenumberChannels, setMassRenumberChannels] = useState<Channel[]>([]);
 
+  // Hidden groups state
+  const [showHiddenGroupsModal, setShowHiddenGroupsModal] = useState(false);
+  const [hiddenGroups, setHiddenGroups] = useState<{ id: number; name: string; hidden_at: string }[]>([]);
+
   // Drag overlay state
   const [activeDragId, setActiveDragId] = useState<number | null>(null);
   // Drop indicator state - tracks where to show the drop indicator line
@@ -1757,6 +1761,37 @@ export function ChannelsPane({
     setNewChannelStreamIds([]);
     setGroupSearchText('');
     setShowGroupDropdown(false);
+  };
+
+  // Load hidden groups
+  const loadHiddenGroups = async () => {
+    try {
+      const groups = await api.getHiddenChannelGroups();
+      setHiddenGroups(groups);
+    } catch (error) {
+      console.error('Failed to load hidden groups:', error);
+    }
+  };
+
+  // Restore a hidden group
+  const handleRestoreGroup = async (groupId: number) => {
+    try {
+      await api.restoreChannelGroup(groupId);
+      // Reload hidden groups list
+      await loadHiddenGroups();
+      // Reload channel groups to show the restored group
+      if (onChannelGroupsChange) {
+        onChannelGroupsChange();
+      }
+    } catch (error) {
+      console.error('Failed to restore group:', error);
+    }
+  };
+
+  // Open hidden groups modal and load the list
+  const handleShowHiddenGroups = () => {
+    setShowHiddenGroupsModal(true);
+    loadHiddenGroups();
   };
 
   // Get the next available channel number at the end of a group
@@ -3956,6 +3991,14 @@ export function ChannelsPane({
                 <span className="material-icons create-channel-icon">create_new_folder</span>
                 <span>Group</span>
               </button>
+              <button
+                className="hidden-groups-btn"
+                onClick={handleShowHiddenGroups}
+                title="View and restore hidden channel groups"
+              >
+                <span className="material-icons">visibility_off</span>
+                <span>Hidden</span>
+              </button>
             </>
           )}
           <button
@@ -4248,6 +4291,59 @@ export function ChannelsPane({
         </div>
       )}
 
+      {/* Hidden Groups Modal */}
+      {showHiddenGroupsModal && (
+        <div className="modal-overlay">
+          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+            <h3>Hidden Channel Groups</h3>
+            <div className="modal-form">
+              {hiddenGroups.length === 0 ? (
+                <p style={{ padding: '20px', textAlign: 'center', color: '#888' }}>
+                  No hidden groups
+                </p>
+              ) : (
+                <div style={{ maxHeight: '400px', overflowY: 'auto' }}>
+                  {hiddenGroups.map((group) => (
+                    <div
+                      key={group.id}
+                      style={{
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'center',
+                        padding: '12px',
+                        borderBottom: '1px solid var(--border-color)',
+                      }}
+                    >
+                      <div>
+                        <div style={{ fontWeight: 'bold' }}>{group.name}</div>
+                        <div style={{ fontSize: '0.9em', color: '#888' }}>
+                          Hidden {new Date(group.hidden_at).toLocaleDateString()}
+                        </div>
+                      </div>
+                      <button
+                        className="modal-btn primary"
+                        onClick={() => handleRestoreGroup(group.id)}
+                        style={{ marginLeft: '12px' }}
+                      >
+                        Restore
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+            <div className="modal-actions">
+              <button
+                className="modal-btn cancel"
+                onClick={() => setShowHiddenGroupsModal(false)}
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Channel Number Conflict Dialog */}
       {showConflictDialog && conflictingChannelNumber !== null && (
         <div className="modal-overlay">
@@ -4375,57 +4471,57 @@ export function ChannelsPane({
 
       {/* Delete Group Confirmation Dialog */}
       {showDeleteGroupConfirm && groupToDelete && (
-        <div className="modal-overlay">
-          <div className="modal-content delete-dialog" onClick={(e) => e.stopPropagation()}>
-            <h3>Delete Group</h3>
-            <div className="delete-message">
-              <p>
-                Are you sure you want to delete the group{' '}
-                <strong>{groupToDelete.name}</strong>?
-              </p>
-              {groupToDelete.channel_count > 0 && (
-                <>
-                  <p className="delete-warning">
-                    This group contains {groupToDelete.channel_count} channel{groupToDelete.channel_count !== 1 ? 's' : ''}.
-                    {!deleteGroupChannels && ' The channels will be moved to "Ungrouped".'}
-                  </p>
-                  <div className="delete-group-option">
-                    <label className="delete-channels-checkbox">
-                      <input
-                        type="checkbox"
-                        checked={deleteGroupChannels}
-                        onChange={(e) => setDeleteGroupChannels(e.target.checked)}
-                        disabled={deletingGroup}
-                      />
-                      <span>Also delete the {groupToDelete.channel_count} channel{groupToDelete.channel_count !== 1 ? 's' : ''}</span>
-                    </label>
-                  </div>
-                </>
-              )}
-              <p className="delete-info">
-                {isEditMode
-                  ? 'Changes can be undone while in edit mode.'
-                  : 'This action cannot be undone.'}
-              </p>
-            </div>
-            <div className="modal-actions">
-              <button
-                className="modal-btn cancel"
-                onClick={handleCancelDeleteGroup}
-                disabled={deletingGroup}
-              >
-                Cancel
-              </button>
-              <button
-                className="modal-btn danger"
-                onClick={handleConfirmDeleteGroup}
-                disabled={deletingGroup}
-              >
-                {deletingGroup ? 'Deleting...' : 'Delete'}
-              </button>
+          <div className="modal-overlay">
+            <div className="modal-content delete-dialog" onClick={(e) => e.stopPropagation()}>
+              <h3>Delete Group</h3>
+              <div className="delete-message">
+                <p>
+                  Are you sure you want to delete the group{' '}
+                  <strong>{groupToDelete.name}</strong>?
+                </p>
+                {groupToDelete.channel_count > 0 && (
+                  <>
+                    <p className="delete-warning">
+                      This group contains {groupToDelete.channel_count} channel{groupToDelete.channel_count !== 1 ? 's' : ''}.
+                      {!deleteGroupChannels && ' The channels will be moved to "Ungrouped".'}
+                    </p>
+                    <div className="delete-group-option">
+                      <label className="delete-channels-checkbox">
+                        <input
+                          type="checkbox"
+                          checked={deleteGroupChannels}
+                          onChange={(e) => setDeleteGroupChannels(e.target.checked)}
+                          disabled={deletingGroup}
+                        />
+                        <span>Also delete the {groupToDelete.channel_count} channel{groupToDelete.channel_count !== 1 ? 's' : ''}</span>
+                      </label>
+                    </div>
+                  </>
+                )}
+                <p className="delete-info">
+                  {isEditMode
+                    ? 'Changes can be undone while in edit mode.'
+                    : 'This action cannot be undone.'}
+                </p>
+              </div>
+              <div className="modal-actions">
+                <button
+                  className="modal-btn cancel"
+                  onClick={handleCancelDeleteGroup}
+                  disabled={deletingGroup}
+                >
+                  Cancel
+                </button>
+                <button
+                  className="modal-btn danger"
+                  onClick={handleConfirmDeleteGroup}
+                  disabled={deletingGroup}
+                >
+                  {deletingGroup ? 'Deleting...' : 'Delete'}
+                </button>
+              </div>
             </div>
           </div>
-        </div>
       )}
 
       {/* Bulk Delete Channels Confirmation Dialog */}

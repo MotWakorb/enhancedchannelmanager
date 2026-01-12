@@ -116,3 +116,32 @@ class ChannelWatchStats(Base):
 
     def __repr__(self):
         return f"<ChannelWatchStats(channel_id={self.channel_id}, name={self.channel_name}, count={self.watch_count})>"
+
+
+class HiddenChannelGroup(Base):
+    """
+    Tracks channel groups that are hidden from the UI but still exist in Dispatcharr.
+    Used for groups with active M3U sync settings - they're hidden instead of deleted
+    to prevent breaking M3U auto-sync functionality.
+    """
+    __tablename__ = "hidden_channel_groups"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    group_id = Column(Integer, nullable=False, unique=True)  # Dispatcharr channel group ID
+    group_name = Column(String(255), nullable=False)  # Group name (for display)
+    hidden_at = Column(DateTime, default=datetime.utcnow, nullable=False)  # When it was hidden
+
+    __table_args__ = (
+        Index("idx_hidden_group_id", group_id),
+    )
+
+    def to_dict(self) -> dict:
+        """Convert to dictionary for API responses."""
+        return {
+            "id": self.group_id,
+            "name": self.group_name,
+            "hidden_at": self.hidden_at.isoformat() + "Z" if self.hidden_at else None,
+        }
+
+    def __repr__(self):
+        return f"<HiddenChannelGroup(group_id={self.group_id}, name={self.group_name})>"

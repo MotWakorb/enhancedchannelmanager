@@ -160,6 +160,16 @@ export async function deleteChannelGroup(id: number): Promise<void> {
   await fetch(`${API_BASE}/channel-groups/${id}`, { method: 'DELETE' });
 }
 
+export async function getHiddenChannelGroups(): Promise<{ id: number; name: string; hidden_at: string }[]> {
+  return fetchJson(`${API_BASE}/channel-groups/hidden`);
+}
+
+export async function restoreChannelGroup(id: number): Promise<void> {
+  await fetchJson(`${API_BASE}/channel-groups/${id}/restore`, {
+    method: 'POST',
+  });
+}
+
 // Streams
 export async function getStreams(params?: {
   page?: number;
