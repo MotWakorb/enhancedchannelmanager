@@ -521,14 +521,23 @@ export function StatsTab() {
     }
 
     // Build stats for all M3U accounts (exclude "Custom" M3U)
+    // Include max_streams from both the account and its active profiles
     return m3uAccounts
       .filter(account => account.is_active && account.name.toLowerCase() !== 'custom')
-      .map(account => ({
-        id: account.id,
-        name: account.name,
-        current: activeCount.get(account.id) || 0,
-        max: account.max_streams,
-      }))
+      .map(account => {
+        // Sum max_streams from account plus all active profiles
+        const profileStreams = (account.profiles || [])
+          .filter(p => p.is_active)
+          .reduce((sum, p) => sum + (p.max_streams || 0), 0);
+        const totalMax = account.max_streams + profileStreams;
+
+        return {
+          id: account.id,
+          name: account.name,
+          current: activeCount.get(account.id) || 0,
+          max: totalMax,
+        };
+      })
       .sort((a, b) => a.name.localeCompare(b.name));
   })();
 
