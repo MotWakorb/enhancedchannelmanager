@@ -622,6 +622,14 @@ function DroppableGroupHeader({
           </span>
         </span>
       )}
+      {isEditMode && groupId !== 'ungrouped' && (
+        <span
+          className="group-drag-handle"
+          title="Drag to reorder group"
+        >
+          ⋮⋮
+        </span>
+      )}
       <span className="group-toggle">{isExpanded ? '▼' : '▶'}</span>
       <span className="group-name">
         {groupName}
