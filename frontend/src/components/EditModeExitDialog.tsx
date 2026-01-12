@@ -84,6 +84,11 @@ export function EditModeExitDialog({
                     {summary.epgChanges} EPG assignment{summary.epgChanges !== 1 ? 's' : ''}
                   </li>
                 )}
+                {summary.gracenoteIdChanges > 0 && (
+                  <li>
+                    {summary.gracenoteIdChanges} Gracenote ID{summary.gracenoteIdChanges !== 1 ? 's' : ''} assigned
+                  </li>
+                )}
                 {summary.newChannels > 0 && (
                   <li>
                     {summary.newChannels} new channel{summary.newChannels !== 1 ? 's' : ''} created

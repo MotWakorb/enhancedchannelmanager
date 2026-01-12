@@ -68,6 +68,7 @@ export interface EditModeSummary {
   channelNumberChanges: number;
   channelNameChanges: number;
   epgChanges: number;
+  gracenoteIdChanges: number;
   newChannels: number;
   deletedChannels: number;
   newGroups: number;
