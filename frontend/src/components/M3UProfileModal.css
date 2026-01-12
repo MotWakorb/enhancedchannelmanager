@@ -319,11 +319,36 @@
 
 .form-actions {
   display: flex;
-  justify-content: flex-end;
+  justify-content: space-between;
+  align-items: center;
   gap: 0.75rem;
   margin-top: 1.5rem;
   padding-top: 1.5rem;
   border-top: 1px solid var(--border-primary);
+}
+
+.form-actions .checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--text-secondary);
+  cursor: pointer;
+  user-select: none;
+}
+
+.form-actions .checkbox-label input[type="checkbox"] {
+  cursor: pointer;
+}
+
+.form-actions .checkbox-label input[type="checkbox"]:disabled {
+  cursor: not-allowed;
+}
+
+.form-actions .button-group {
+  display: flex;
+  gap: 0.75rem;
 }
 
 .form-actions button {
