@@ -371,7 +371,7 @@ function SortableChannel({
         }}
         title="Click to expand/collapse"
       >
-        {isExpanded ? '▼' : '▶'}
+        {isExpanded ? '▼︎' : '▶︎'}
       </span>
       <div
         className="channel-logo-container"
@@ -673,7 +673,7 @@ function DroppableGroupHeader({
           ⋮⋮
         </span>
       )}
-      <span className="group-toggle">{isExpanded ? '▼' : '▶'}</span>
+      <span className="group-toggle">{isExpanded ? '▼︎' : '▶︎'}</span>
       <span className="group-name">
         {groupName}
         {groupId === 'ungrouped' && (
