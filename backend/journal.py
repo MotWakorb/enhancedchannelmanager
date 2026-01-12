@@ -82,6 +82,7 @@ def get_entries(
     Returns:
         Dict with count, page, page_size, total_pages, and results
     """
+    logger.debug(f"Querying journal entries - page: {page}, category: {category}, action: {action_type}, search: {search}")
     session: Session = get_session()
     try:
         query = session.query(JournalEntry)
@@ -114,6 +115,7 @@ def get_entries(
         # Get paginated results (newest first)
         entries = query.order_by(desc(JournalEntry.timestamp)).offset(offset).limit(page_size).all()
 
+        logger.info(f"Retrieved {len(entries)} journal entries (total: {total_count}, page {page}/{total_pages})")
         return {
             "count": total_count,
             "page": page,
@@ -121,6 +123,9 @@ def get_entries(
             "total_pages": total_pages,
             "results": [entry.to_dict() for entry in entries],
         }
+    except Exception as e:
+        logger.exception(f"Failed to query journal entries: {e}")
+        raise
     finally:
         session.close()
 
@@ -132,6 +137,7 @@ def get_stats() -> dict[str, Any]:
     Returns:
         Dict with total_entries, by_category, by_action_type, and date_range
     """
+    logger.debug("Calculating journal statistics")
     session: Session = get_session()
     try:
         # Total count
@@ -157,6 +163,7 @@ def get_stats() -> dict[str, Any]:
         oldest = session.query(func.min(JournalEntry.timestamp)).scalar()
         newest = session.query(func.max(JournalEntry.timestamp)).scalar()
 
+        logger.info(f"Journal stats: {total_count} total entries, {len(by_category)} categories, {len(by_action_type)} action types")
         return {
             "total_entries": total_count,
             "by_category": by_category,
@@ -166,6 +173,9 @@ def get_stats() -> dict[str, Any]:
                 "newest": newest.isoformat() + "Z" if newest else None,
             },
         }
+    except Exception as e:
+        logger.exception(f"Failed to calculate journal stats: {e}")
+        raise
     finally:
         session.close()
 
@@ -180,6 +190,7 @@ def purge_old_entries(days: int = 90) -> int:
     Returns:
         Number of entries deleted
     """
+    logger.debug(f"Purging journal entries older than {days} days")
     session: Session = get_session()
     try:
         cutoff_date = datetime.utcnow() - timedelta(days=days)
@@ -191,5 +202,9 @@ def purge_old_entries(days: int = 90) -> int:
         session.commit()
         logger.info(f"Purged {deleted_count} journal entries older than {days} days")
         return deleted_count
+    except Exception as e:
+        logger.exception(f"Failed to purge journal entries: {e}")
+        session.rollback()
+        raise
     finally:
         session.close()

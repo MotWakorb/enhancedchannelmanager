@@ -1,6 +1,9 @@
 import httpx
+import logging
 from typing import Optional
 from config import get_settings, DispatcharrSettings
+
+logger = logging.getLogger(__name__)
 
 
 class DispatcharrClient:
@@ -20,24 +23,35 @@ class DispatcharrClient:
 
     async def _login(self) -> None:
         """Authenticate and obtain JWT tokens."""
-        response = await self._client.post(
-            f"{self.base_url}/api/accounts/token/",
-            json={
-                "username": self.settings.username,
-                "password": self.settings.password,
-            },
-        )
-        response.raise_for_status()
-        data = response.json()
-        self.access_token = data["access"]
-        self.refresh_token = data.get("refresh")
+        logger.debug(f"Authenticating to Dispatcharr at {self.base_url}")
+        try:
+            response = await self._client.post(
+                f"{self.base_url}/api/accounts/token/",
+                json={
+                    "username": self.settings.username,
+                    "password": self.settings.password,
+                },
+            )
+            response.raise_for_status()
+            data = response.json()
+            self.access_token = data["access"]
+            self.refresh_token = data.get("refresh")
+            logger.info(f"Successfully authenticated to Dispatcharr - username: {self.settings.username}")
+        except httpx.HTTPStatusError as e:
+            logger.error(f"Authentication failed - status: {e.response.status_code}")
+            raise
+        except Exception as e:
+            logger.exception(f"Authentication error: {e}")
+            raise
 
     async def _refresh_access_token(self) -> None:
         """Refresh the access token using the refresh token."""
         if not self.refresh_token:
+            logger.debug("No refresh token available, performing full login")
             await self._login()
             return
 
+        logger.debug("Refreshing access token")
         response = await self._client.post(
             f"{self.base_url}/api/accounts/token/refresh/",
             json={"refresh": self.refresh_token},
@@ -45,8 +59,10 @@ class DispatcharrClient:
         if response.status_code == 200:
             data = response.json()
             self.access_token = data["access"]
+            logger.debug("Access token refreshed successfully")
         else:
             # Refresh token expired, do full login
+            logger.warning(f"Refresh token expired (status: {response.status_code}), performing full login")
             await self._login()
 
     async def _request(
@@ -56,22 +72,13 @@ class DispatcharrClient:
         **kwargs,
     ) -> httpx.Response:
         """Make an authenticated request with automatic token refresh."""
+        logger.debug(f"API request: {method} {path}")
         await self._ensure_authenticated()
 
         headers = kwargs.pop("headers", {})
         headers["Authorization"] = f"Bearer {self.access_token}"
 
-        response = await self._client.request(
-            method,
-            f"{self.base_url}{path}",
-            headers=headers,
-            **kwargs,
-        )
-
-        # If unauthorized, try refreshing token and retry
-        if response.status_code == 401:
-            await self._refresh_access_token()
-            headers["Authorization"] = f"Bearer {self.access_token}"
+        try:
             response = await self._client.request(
                 method,
                 f"{self.base_url}{path}",
@@ -79,7 +86,27 @@ class DispatcharrClient:
                 **kwargs,
             )
 
-        return response
+            # If unauthorized, try refreshing token and retry
+            if response.status_code == 401:
+                logger.debug(f"Got 401, refreshing token and retrying: {method} {path}")
+                await self._refresh_access_token()
+                headers["Authorization"] = f"Bearer {self.access_token}"
+                response = await self._client.request(
+                    method,
+                    f"{self.base_url}{path}",
+                    headers=headers,
+                    **kwargs,
+                )
+
+            if response.status_code >= 400:
+                logger.warning(f"API request failed: {method} {path} - status: {response.status_code}")
+            else:
+                logger.debug(f"API request successful: {method} {path} - status: {response.status_code}")
+
+            return response
+        except Exception as e:
+            logger.exception(f"API request error: {method} {path} - {e}")
+            raise
 
     # -------------------------------------------------------------------------
     # Channels

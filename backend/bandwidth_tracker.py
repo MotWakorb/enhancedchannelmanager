@@ -188,10 +188,11 @@ class BandwidthTracker:
         try:
             stats = await self.client.get_channel_stats()
         except Exception as e:
-            logger.debug(f"Failed to fetch stats: {e}")
+            logger.warning(f"Failed to fetch stats from Dispatcharr: {e}")
             return
 
         channels = stats.get("channels", [])
+        logger.debug(f"Collected stats for {len(channels)} active channels")
 
         # Calculate totals from all active channels
         total_bytes_delta = 0
@@ -268,14 +269,22 @@ class BandwidthTracker:
         # Only record if there's actual data transfer
         if total_bytes_delta > 0 or active_channels > 0:
             self._update_daily_record(total_bytes_delta, active_channels, total_clients)
+            if total_bytes_delta > 0:
+                bytes_mb = total_bytes_delta / (1024 * 1024)
+                logger.debug(f"Bandwidth delta: {bytes_mb:.2f} MB, active channels: {active_channels}, clients: {total_clients}")
 
         # Update watch counts for newly active channels (and log start events)
         if newly_active_channels:
+            logger.info(f"{len(newly_active_channels)} channel(s) started streaming")
             self._update_watch_counts(newly_active_channels)
 
         # Accumulate watch time for still-active channels
         if still_active_channels:
             self._update_watch_time(still_active_channels)
+
+        # Log stopped channels
+        if stopped_channels:
+            logger.info(f"{len(stopped_channels)} channel(s) stopped streaming")
 
     def _update_daily_record(self, bytes_delta: int, active_channels: int, total_clients: int):
         """Update today's bandwidth record in the database (using user's timezone)."""

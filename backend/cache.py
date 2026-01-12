@@ -28,6 +28,9 @@ class Cache:
         """
         self._cache: dict[str, CacheEntry] = {}
         self._default_ttl = default_ttl
+        self._hits = 0
+        self._misses = 0
+        logger.debug(f"Cache initialized with TTL: {default_ttl}s")
 
     def get(self, key: str, ttl: int | None = None) -> Any | None:
         """
@@ -42,16 +45,20 @@ class Cache:
         """
         entry = self._cache.get(key)
         if entry is None:
+            self._misses += 1
+            logger.debug(f"Cache miss for key '{key}'")
             return None
 
         effective_ttl = ttl if ttl is not None else self._default_ttl
         age = time.time() - entry.cached_at
 
         if age > effective_ttl:
+            self._misses += 1
             logger.debug(f"Cache expired for key '{key}' (age: {age:.1f}s, ttl: {effective_ttl}s)")
             del self._cache[key]
             return None
 
+        self._hits += 1
         logger.debug(f"Cache hit for key '{key}' (age: {age:.1f}s)")
         return entry.data
 
@@ -116,7 +123,7 @@ class Cache:
         Get cache statistics.
 
         Returns:
-            Dictionary with cache stats
+            Dictionary with cache stats including hit rate
         """
         now = time.time()
         entries = []
@@ -125,10 +132,20 @@ class Cache:
                 "key": key,
                 "age_seconds": round(now - entry.cached_at, 1),
             })
-        return {
+
+        total_requests = self._hits + self._misses
+        hit_rate = (self._hits / total_requests * 100) if total_requests > 0 else 0
+
+        stats = {
             "entry_count": len(self._cache),
+            "hits": self._hits,
+            "misses": self._misses,
+            "hit_rate_percent": round(hit_rate, 1),
             "entries": entries,
         }
+
+        logger.info(f"Cache stats: {len(self._cache)} entries, hit rate: {hit_rate:.1f}% ({self._hits}/{total_requests})")
+        return stats
 
 
 # Global cache instance

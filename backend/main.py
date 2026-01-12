@@ -197,7 +197,9 @@ class TestConnectionRequest(BaseModel):
 @app.get("/api/settings")
 async def get_current_settings():
     """Get current settings (password masked)."""
+    logger.debug("GET /api/settings - Retrieving current settings")
     settings = get_settings()
+    logger.info(f"Settings retrieved - configured: {settings.is_configured()}, log level: {settings.backend_log_level}")
     return SettingsResponse(
         url=settings.url,
         username=settings.username,
@@ -228,6 +230,7 @@ async def get_current_settings():
 @app.post("/api/settings")
 async def update_settings(request: SettingsRequest):
     """Update Dispatcharr connection settings."""
+    logger.debug(f"POST /api/settings - Updating settings (URL: {request.url}, username: {request.username})")
     current_settings = get_settings()
 
     # If password is not provided, keep the existing password
@@ -240,6 +243,7 @@ async def update_settings(request: SettingsRequest):
         request.username != current_settings.username
     )
     if auth_changed and not request.password:
+        logger.warning("Settings update failed: password required when changing URL or username")
         raise HTTPException(
             status_code=400,
             detail="Password is required when changing URL or username"
@@ -279,6 +283,7 @@ async def update_settings(request: SettingsRequest):
         logger.info(f"Applying new backend log level: {new_settings.backend_log_level}")
         set_log_level(new_settings.backend_log_level)
 
+    logger.info(f"Settings saved successfully - configured: {new_settings.is_configured()}, auth_changed: {auth_changed}")
     return {"status": "saved", "configured": new_settings.is_configured()}
 
 
@@ -287,6 +292,7 @@ async def test_connection(request: TestConnectionRequest):
     """Test connection to Dispatcharr with provided credentials."""
     import httpx
 
+    logger.debug(f"POST /api/settings/test - Testing connection to {request.url}")
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             url = request.url.rstrip("/")
@@ -298,17 +304,22 @@ async def test_connection(request: TestConnectionRequest):
                 },
             )
             if response.status_code == 200:
+                logger.info(f"Connection test successful - {url}")
                 return {"success": True, "message": "Connection successful"}
             else:
+                logger.warning(f"Connection test failed - {url} - status: {response.status_code}")
                 return {
                     "success": False,
                     "message": f"Authentication failed: {response.status_code}",
                 }
-    except httpx.ConnectError:
+    except httpx.ConnectError as e:
+        logger.error(f"Connection test failed - could not connect to {request.url}: {e}")
         return {"success": False, "message": "Could not connect to server"}
-    except httpx.TimeoutException:
+    except httpx.TimeoutException as e:
+        logger.error(f"Connection test failed - timeout connecting to {request.url}: {e}")
         return {"success": False, "message": "Connection timed out"}
     except Exception as e:
+        logger.exception(f"Connection test failed - unexpected error: {e}")
         return {"success": False, "message": str(e)}
 
 
@@ -354,20 +365,25 @@ async def get_channels(
     search: Optional[str] = None,
     channel_group: Optional[int] = None,
 ):
+    logger.debug(f"GET /api/channels - page: {page}, page_size: {page_size}, search: {search}, channel_group: {channel_group}")
     client = get_client()
     try:
-        return await client.get_channels(
+        result = await client.get_channels(
             page=page,
             page_size=page_size,
             search=search,
             channel_group=channel_group,
         )
+        logger.info(f"Retrieved {len(result.get('results', []))} channels (page {page}, total: {result.get('count', 0)})")
+        return result
     except Exception as e:
+        logger.exception(f"Failed to retrieve channels: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post("/api/channels")
 async def create_channel(request: CreateChannelRequest):
+    logger.debug(f"POST /api/channels - Creating channel: {request.name}, number: {request.channel_number}")
     client = get_client()
     try:
         data = {"name": request.name}
@@ -490,6 +506,7 @@ async def get_channel_streams(channel_id: int):
 
 @app.patch("/api/channels/{channel_id}")
 async def update_channel(channel_id: int, data: dict):
+    logger.debug(f"PATCH /api/channels/{channel_id} - Updating channel with data: {data}")
     client = get_client()
     try:
         # Get before state for logging
@@ -533,6 +550,7 @@ async def update_channel(channel_id: int, data: dict):
             after_value["logo_id"] = new_logo
 
         if changes:
+            logger.info(f"Updated channel {channel_id}: {', '.join(changes)}")
             journal.log_entry(
                 category="channel",
                 action_type="update",
@@ -542,14 +560,18 @@ async def update_channel(channel_id: int, data: dict):
                 before_value=before_value,
                 after_value=after_value,
             )
+        else:
+            logger.debug(f"No changes detected for channel {channel_id}")
 
         return result
     except Exception as e:
+        logger.exception(f"Failed to update channel {channel_id}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.delete("/api/channels/{channel_id}")
 async def delete_channel(channel_id: int):
+    logger.debug(f"DELETE /api/channels/{channel_id} - Deleting channel")
     client = get_client()
     try:
         # Get channel info before deleting for logging
@@ -557,6 +579,7 @@ async def delete_channel(channel_id: int):
         channel_name = channel.get("name", "Unknown")
 
         await client.delete_channel(channel_id)
+        logger.info(f"Deleted channel {channel_id}: {channel_name}")
 
         # Log to journal
         journal.log_entry(
@@ -570,11 +593,13 @@ async def delete_channel(channel_id: int):
 
         return {"success": True}
     except Exception as e:
+        logger.exception(f"Failed to delete channel {channel_id}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post("/api/channels/{channel_id}/add-stream")
 async def add_stream_to_channel(channel_id: int, request: AddStreamRequest):
+    logger.debug(f"POST /api/channels/{channel_id}/add-stream - Adding stream {request.stream_id}")
     client = get_client()
     try:
         # Get current channel
@@ -587,6 +612,7 @@ async def add_stream_to_channel(channel_id: int, request: AddStreamRequest):
             before_streams = list(current_streams)
             current_streams.append(request.stream_id)
             result = await client.update_channel(channel_id, {"streams": current_streams})
+            logger.info(f"Added stream {request.stream_id} to channel {channel_id} ({channel_name})")
 
             # Log to journal
             journal.log_entry(
@@ -600,13 +626,16 @@ async def add_stream_to_channel(channel_id: int, request: AddStreamRequest):
             )
 
             return result
+        logger.debug(f"Stream {request.stream_id} already in channel {channel_id}")
         return channel
     except Exception as e:
+        logger.exception(f"Failed to add stream {request.stream_id} to channel {channel_id}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post("/api/channels/{channel_id}/remove-stream")
 async def remove_stream_from_channel(channel_id: int, request: RemoveStreamRequest):
+    logger.debug(f"POST /api/channels/{channel_id}/remove-stream - Removing stream {request.stream_id}")
     client = get_client()
     try:
         # Get current channel
@@ -619,6 +648,7 @@ async def remove_stream_from_channel(channel_id: int, request: RemoveStreamReque
             before_streams = list(current_streams)
             current_streams.remove(request.stream_id)
             result = await client.update_channel(channel_id, {"streams": current_streams})
+            logger.info(f"Removed stream {request.stream_id} from channel {channel_id} ({channel_name})")
 
             # Log to journal
             journal.log_entry(
@@ -632,8 +662,10 @@ async def remove_stream_from_channel(channel_id: int, request: RemoveStreamReque
             )
 
             return result
+        logger.debug(f"Stream {request.stream_id} not in channel {channel_id}")
         return channel
     except Exception as e:
+        logger.exception(f"Failed to remove stream {request.stream_id} from channel {channel_id}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
