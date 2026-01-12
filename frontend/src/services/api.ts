@@ -520,6 +520,21 @@ export async function getEPGGrid(): Promise<EPGProgram[]> {
   return fetchJson(`${API_BASE}/epg/grid`);
 }
 
+// Get LCN (Logical Channel Number / Gracenote ID) for a TVG-ID from EPG sources
+export async function getEPGLcnByTvgId(tvgId: string): Promise<{ tvg_id: string; lcn: string; source: string }> {
+  return fetchJson(`${API_BASE}/epg/lcn?tvg_id=${encodeURIComponent(tvgId)}`);
+}
+
+// Batch fetch LCN for multiple TVG-IDs at once (more efficient than individual calls)
+export async function getEPGLcnBatch(tvgIds: string[]): Promise<{
+  results: Record<string, { lcn: string; source: string }>;
+}> {
+  return fetchJson(`${API_BASE}/epg/lcn/batch`, {
+    method: 'POST',
+    body: JSON.stringify({ tvg_ids: tvgIds }),
+  });
+}
+
 // Stream Profiles
 export async function getStreamProfiles(): Promise<StreamProfile[]> {
   return fetchJson(`${API_BASE}/stream-profiles`);

@@ -1040,6 +1040,327 @@ async def get_epg_grid(start: Optional[str] = None, end: Optional[str] = None):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/api/epg/lcn")
+async def get_epg_lcn_by_tvg_id(tvg_id: str):
+    """Get LCN (Logical Channel Number) for a TVG-ID from EPG XML sources.
+
+    Fetches EPG XML from source URLs and extracts the <lcn> value for the given tvg_id.
+    Returns the first LCN found across all XMLTV sources.
+
+    Args:
+        tvg_id: The TVG-ID to search for (as a query parameter)
+    """
+    import xml.etree.ElementTree as ET
+    import gzip
+    import io
+    import httpx
+
+    client = get_client()
+    try:
+        # Get all EPG sources
+        sources = await client.get_epg_sources()
+
+        # Filter to XMLTV sources that have URLs
+        xmltv_sources = [
+            s for s in sources
+            if s.get("source_type") == "xmltv" and s.get("url")
+        ]
+
+        if not xmltv_sources:
+            raise HTTPException(status_code=404, detail="No XMLTV EPG sources found")
+
+        # Fetch and parse each XML source looking for the tvg_id
+        # For large files, use streaming decompression to only read channel metadata
+        MAX_SMALL_FILE = 50 * 1024 * 1024  # 50MB - download fully
+        MAX_STREAM_BYTES = 20 * 1024 * 1024  # 20MB - max to stream from large files
+
+        async def parse_xml_for_lcn(content: bytes, source_name: str) -> dict | None:
+            """Parse XML content looking for LCN matching tvg_id."""
+            xml_stream = io.BytesIO(content)
+            root = None
+            for event, elem in ET.iterparse(xml_stream, events=["start", "end"]):
+                if event == "start" and root is None:
+                    root = elem
+                if event == "end" and elem.tag == "channel":
+                    channel_id = elem.get("id", "")
+                    if channel_id == tvg_id:
+                        lcn = None
+                        for child in elem:
+                            if child.tag == "lcn":
+                                lcn = child.text
+                                break
+                        if lcn:
+                            logger.info(f"Found LCN {lcn} for {tvg_id} in {source_name}")
+                            return {"tvg_id": tvg_id, "lcn": lcn, "source": source_name}
+                    if root is not None:
+                        root.clear()
+                if event == "end" and elem.tag == "programme":
+                    break
+            return None
+
+        async with httpx.AsyncClient(timeout=120.0) as http_client:
+            for source in xmltv_sources:
+                url = source.get("url")
+                if not url:
+                    continue
+
+                try:
+                    logger.info(f"Checking EPG XML from {url} for LCN lookup...")
+
+                    # Check file size first
+                    head_response = await http_client.head(url)
+                    content_length = head_response.headers.get('content-length')
+                    file_size = int(content_length) if content_length else 0
+
+                    if file_size == 0 or file_size <= MAX_SMALL_FILE:
+                        # Small file - download fully
+                        response = await http_client.get(url)
+                        response.raise_for_status()
+                        content = response.content
+                        logger.info(f"Downloaded {len(content)} bytes from {url}")
+
+                        # Decompress if gzipped
+                        if url.endswith('.gz') or response.headers.get('content-encoding') == 'gzip':
+                            try:
+                                content = gzip.decompress(content)
+                                logger.info(f"Decompressed to {len(content)} bytes")
+                            except gzip.BadGzipFile:
+                                pass
+
+                        result = await parse_xml_for_lcn(content, source.get("name"))
+                        if result:
+                            return result
+                    else:
+                        # Large file - stream download first portion and decompress incrementally
+                        logger.info(f"Large file ({file_size} bytes) - streaming first {MAX_STREAM_BYTES//1024//1024}MB...")
+
+                        if url.endswith('.gz'):
+                            # For gzipped files, download partial and try to decompress
+                            # Channel data is typically in first 1-2% of large EPG files
+                            download_size = min(file_size, MAX_STREAM_BYTES)
+                            headers = {"Range": f"bytes=0-{download_size}"}
+
+                            # Try range request
+                            response = await http_client.get(url, headers=headers)
+                            partial_content = response.content
+                            logger.info(f"Downloaded {len(partial_content)} bytes (partial)")
+
+                            # Decompress with decompobj to handle truncated data
+                            import zlib
+                            decompressor = zlib.decompressobj(zlib.MAX_WBITS | 16)
+                            try:
+                                decompressed = decompressor.decompress(partial_content)
+                                logger.info(f"Partially decompressed to {len(decompressed)} bytes")
+
+                                # Try to parse what we have - look for channel data
+                                # Add closing tag to make it parseable
+                                xml_partial = decompressed
+                                if b'<programme' in xml_partial:
+                                    # Truncate at first programme to avoid XML parse errors
+                                    idx = xml_partial.find(b'<programme')
+                                    xml_partial = xml_partial[:idx] + b'</tv>'
+
+                                result = await parse_xml_for_lcn(xml_partial, source.get("name"))
+                                if result:
+                                    return result
+                            except Exception as e:
+                                logger.warning(f"Failed to decompress partial {url}: {e}")
+                        else:
+                            # Non-gzipped large file - just download first portion
+                            headers = {"Range": f"bytes=0-{MAX_STREAM_BYTES}"}
+                            response = await http_client.get(url, headers=headers)
+                            content = response.content
+                            logger.info(f"Downloaded {len(content)} bytes (partial)")
+
+                            if b'<programme' in content:
+                                idx = content.find(b'<programme')
+                                content = content[:idx] + b'</tv>'
+
+                            result = await parse_xml_for_lcn(content, source.get("name"))
+                            if result:
+                                return result
+
+                except httpx.HTTPError as e:
+                    logger.warning(f"Failed to fetch EPG XML from {url}: {e}")
+                    continue
+                except ET.ParseError as e:
+                    logger.warning(f"Failed to parse EPG XML from {url}: {e}")
+                    continue
+                except Exception as e:
+                    logger.warning(f"Error processing EPG XML from {url}: {e}")
+                    continue
+
+        # Not found in any source
+        raise HTTPException(
+            status_code=404,
+            detail=f"No LCN found for TVG-ID '{tvg_id}' in any EPG source"
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching LCN for {tvg_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class BatchLCNRequest(BaseModel):
+    """Request body for batch LCN lookup."""
+    tvg_ids: list[str]
+
+
+@app.post("/api/epg/lcn/batch")
+async def get_epg_lcn_batch(request: BatchLCNRequest):
+    """Get LCN (Logical Channel Number) for multiple TVG-IDs from EPG XML sources.
+
+    This is more efficient than calling the single endpoint multiple times
+    because it fetches and parses each EPG XML source only once.
+
+    Returns a dict mapping tvg_id -> {lcn, source} for found entries.
+    """
+    import xml.etree.ElementTree as ET
+    import gzip
+    import io
+    import httpx
+
+    tvg_ids_to_find = set(request.tvg_ids)
+    if not tvg_ids_to_find:
+        return {"results": {}}
+
+    client = get_client()
+    try:
+        # Get all EPG sources
+        sources = await client.get_epg_sources()
+
+        # Filter to XMLTV sources that have URLs
+        xmltv_sources = [
+            s for s in sources
+            if s.get("source_type") == "xmltv" and s.get("url")
+        ]
+
+        if not xmltv_sources:
+            return {"results": {}}
+
+        results: dict[str, dict] = {}
+        MAX_SMALL_FILE = 50 * 1024 * 1024  # 50MB
+        MAX_STREAM_BYTES = 20 * 1024 * 1024  # 20MB
+
+        def parse_xml_for_lcns(content: bytes, source_name: str, tvg_ids: set[str]) -> dict[str, dict]:
+            """Parse XML content and extract LCN for all matching tvg_ids."""
+            found: dict[str, dict] = {}
+            xml_stream = io.BytesIO(content)
+            root = None
+            for event, elem in ET.iterparse(xml_stream, events=["start", "end"]):
+                if event == "start" and root is None:
+                    root = elem
+                if event == "end" and elem.tag == "channel":
+                    channel_id = elem.get("id", "")
+                    if channel_id in tvg_ids and channel_id not in found:
+                        lcn = None
+                        for child in elem:
+                            if child.tag == "lcn":
+                                lcn = child.text
+                                break
+                        if lcn:
+                            found[channel_id] = {"lcn": lcn, "source": source_name}
+                    if root is not None:
+                        root.clear()
+                if event == "end" and elem.tag == "programme":
+                    break
+            return found
+
+        logger.info(f"Batch LCN lookup for {len(tvg_ids_to_find)} TVG-IDs")
+
+        async with httpx.AsyncClient(timeout=120.0) as http_client:
+            for source in xmltv_sources:
+                url = source.get("url")
+                if not url:
+                    continue
+
+                # Stop early if all found
+                remaining = tvg_ids_to_find - set(results.keys())
+                if not remaining:
+                    break
+
+                try:
+                    # Check file size
+                    head_response = await http_client.head(url)
+                    content_length = head_response.headers.get('content-length')
+                    file_size = int(content_length) if content_length else 0
+
+                    if file_size == 0 or file_size <= MAX_SMALL_FILE:
+                        # Small file - download fully
+                        response = await http_client.get(url)
+                        response.raise_for_status()
+                        content = response.content
+                        logger.info(f"Batch LCN: Downloaded {len(content)} bytes from {url}")
+
+                        if url.endswith('.gz') or response.headers.get('content-encoding') == 'gzip':
+                            try:
+                                content = gzip.decompress(content)
+                            except gzip.BadGzipFile:
+                                pass
+
+                        found = parse_xml_for_lcns(content, source.get("name"), remaining)
+                        results.update(found)
+                        if found:
+                            logger.info(f"Batch LCN: Found {len(found)} LCNs in {source.get('name')}")
+                    else:
+                        # Large file - stream first portion
+                        logger.info(f"Batch LCN: Large file ({file_size} bytes) - streaming...")
+
+                        if url.endswith('.gz'):
+                            download_size = min(file_size, MAX_STREAM_BYTES)
+                            headers = {"Range": f"bytes=0-{download_size}"}
+                            response = await http_client.get(url, headers=headers)
+                            partial_content = response.content
+
+                            import zlib
+                            decompressor = zlib.decompressobj(zlib.MAX_WBITS | 16)
+                            try:
+                                decompressed = decompressor.decompress(partial_content)
+                                xml_partial = decompressed
+                                if b'<programme' in xml_partial:
+                                    idx = xml_partial.find(b'<programme')
+                                    xml_partial = xml_partial[:idx] + b'</tv>'
+
+                                found = parse_xml_for_lcns(xml_partial, source.get("name"), remaining)
+                                results.update(found)
+                                if found:
+                                    logger.info(f"Batch LCN: Found {len(found)} LCNs in {source.get('name')} (partial)")
+                            except Exception as e:
+                                logger.warning(f"Batch LCN: Failed to decompress partial {url}: {e}")
+                        else:
+                            headers = {"Range": f"bytes=0-{MAX_STREAM_BYTES}"}
+                            response = await http_client.get(url, headers=headers)
+                            content = response.content
+
+                            if b'<programme' in content:
+                                idx = content.find(b'<programme')
+                                content = content[:idx] + b'</tv>'
+
+                            found = parse_xml_for_lcns(content, source.get("name"), remaining)
+                            results.update(found)
+                            if found:
+                                logger.info(f"Batch LCN: Found {len(found)} LCNs in {source.get('name')} (partial)")
+
+                except httpx.HTTPError as e:
+                    logger.warning(f"Batch LCN: Failed to fetch {url}: {e}")
+                    continue
+                except ET.ParseError as e:
+                    logger.warning(f"Batch LCN: Failed to parse {url}: {e}")
+                    continue
+                except Exception as e:
+                    logger.warning(f"Batch LCN: Error processing {url}: {e}")
+                    continue
+
+        logger.info(f"Batch LCN lookup complete: {len(results)}/{len(tvg_ids_to_find)} found")
+        return {"results": results}
+
+    except Exception as e:
+        logger.error(f"Batch LCN error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # Stream Profiles
 @app.get("/api/stream-profiles")
 async def get_stream_profiles():
