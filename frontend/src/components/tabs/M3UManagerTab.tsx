@@ -6,6 +6,7 @@ import { M3UAccountModal } from '../M3UAccountModal';
 import { M3UGroupsModal } from '../M3UGroupsModal';
 import { M3UFiltersModal } from '../M3UFiltersModal';
 import { M3ULinkedAccountsModal } from '../M3ULinkedAccountsModal';
+import { M3UProfileModal } from '../M3UProfileModal';
 import './M3UManagerTab.css';
 
 interface M3UManagerTabProps {
@@ -24,6 +25,7 @@ interface M3UAccountRowProps {
   onToggleActive: (account: M3UAccount) => void;
   onManageGroups: (account: M3UAccount) => void;
   onManageFilters: (account: M3UAccount) => void;
+  onManageProfiles: (account: M3UAccount) => void;
   linkedAccountNames?: string[];  // Names of accounts linked to this one
 }
 
@@ -35,6 +37,7 @@ function M3UAccountRow({
   onToggleActive,
   onManageGroups,
   onManageFilters,
+  onManageProfiles,
   linkedAccountNames,
 }: M3UAccountRowProps) {
   const getStatusIcon = (status: M3UAccount['status']) => {
@@ -181,6 +184,13 @@ function M3UAccountRow({
         </button>
         <button
           className="action-btn"
+          onClick={() => onManageProfiles(account)}
+          title="Manage Profiles"
+        >
+          <span className="material-icons">account_circle</span>
+        </button>
+        <button
+          className="action-btn"
           onClick={() => onManageFilters(account)}
           title="Manage Filters"
         >
@@ -226,6 +236,8 @@ export function M3UManagerTab({
   const [groupsAccount, setGroupsAccount] = useState<M3UAccount | null>(null);
   const [filtersModalOpen, setFiltersModalOpen] = useState(false);
   const [filtersAccount, setFiltersAccount] = useState<M3UAccount | null>(null);
+  const [profilesModalOpen, setProfilesModalOpen] = useState(false);
+  const [profilesAccount, setProfilesAccount] = useState<M3UAccount | null>(null);
   const [linkedAccountsModalOpen, setLinkedAccountsModalOpen] = useState(false);
   const [linkedM3UAccounts, setLinkedM3UAccounts] = useState<number[][]>([]);
   const [syncingGroups, setSyncingGroups] = useState(false);
@@ -360,6 +372,15 @@ export function M3UManagerTab({
   };
 
   const handleFiltersSaved = () => {
+    loadData();
+  };
+
+  const handleManageProfiles = (account: M3UAccount) => {
+    setProfilesAccount(account);
+    setProfilesModalOpen(true);
+  };
+
+  const handleProfilesSaved = () => {
     loadData();
   };
 
@@ -568,6 +589,7 @@ export function M3UManagerTab({
               onToggleActive={handleToggleActive}
               onManageGroups={handleManageGroups}
               onManageFilters={handleManageFilters}
+              onManageProfiles={handleManageProfiles}
               linkedAccountNames={linkedAccountNamesMap.get(account.id)}
             />
           ))}
@@ -604,6 +626,15 @@ export function M3UManagerTab({
           onClose={() => setFiltersModalOpen(false)}
           onSaved={handleFiltersSaved}
           account={filtersAccount}
+        />
+      )}
+
+      {profilesAccount && (
+        <M3UProfileModal
+          isOpen={profilesModalOpen}
+          onClose={() => setProfilesModalOpen(false)}
+          onSaved={handleProfilesSaved}
+          account={profilesAccount}
         />
       )}
 

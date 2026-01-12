@@ -134,8 +134,12 @@ export interface M3UAccountProfile {
   name: string;
   max_streams: number;
   is_active: boolean;
+  is_default?: boolean;
+  search_pattern?: string;
+  replace_pattern?: string;
   expire_date: string | null;
   status: string;
+  custom_properties?: Record<string, unknown> | null;
 }
 
 // Auto-sync custom properties for channel groups
