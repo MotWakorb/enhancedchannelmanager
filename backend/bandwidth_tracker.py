@@ -67,6 +67,9 @@ class BandwidthTracker:
             logger.warning("BandwidthTracker already running")
             return
 
+        # Run one-time migration to fix UUID channel names in database
+        await self._migrate_uuid_channel_names()
+
         self._running = True
         self._task = asyncio.create_task(self._poll_loop())
         logger.info(f"BandwidthTracker started (polling every {self.poll_interval}s)")
@@ -82,6 +85,104 @@ class BandwidthTracker:
                 pass
             self._task = None
         logger.info("BandwidthTracker stopped")
+
+    async def _migrate_uuid_channel_names(self):
+        """
+        One-time migration to fix channel names that were stored as UUIDs.
+        Fetches channel data from ECM and updates records where the name looks like a UUID.
+        """
+        import re
+        from models import JournalEntry
+
+        # UUID pattern: 8-4-4-4-12 hex characters
+        uuid_pattern = re.compile(
+            r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$',
+            re.IGNORECASE
+        )
+
+        try:
+            # Fetch channel map from ECM
+            channel_map: dict[str, str] = {}
+            page = 1
+            page_size = 500
+            while True:
+                result = await self.client.get_channels(page=page, page_size=page_size)
+                channels = result.get("results", [])
+                for ch in channels:
+                    uuid = ch.get("uuid")
+                    name = ch.get("name")
+                    if uuid and name:
+                        channel_map[uuid] = name
+
+                if not result.get("next"):
+                    break
+                page += 1
+                if page > 20:
+                    break
+
+            if not channel_map:
+                logger.debug("No channels found for UUID migration")
+                return
+
+            # Store for later use
+            self._ecm_channel_map = channel_map
+            self._last_channel_map_refresh = time.time()
+
+            session = get_session()
+            try:
+                # Fix channel_watch_stats records with UUID names
+                watch_stats = session.query(ChannelWatchStats).all()
+                watch_fixed = 0
+                for record in watch_stats:
+                    # Check if channel_name looks like a UUID
+                    if uuid_pattern.match(record.channel_name):
+                        # Try to look up the real name
+                        real_name = channel_map.get(record.channel_id)
+                        if real_name:
+                            record.channel_name = real_name
+                            watch_fixed += 1
+
+                if watch_fixed > 0:
+                    session.commit()
+                    logger.info(f"Migration: Fixed {watch_fixed} channel watch stats records with UUID names")
+
+                # Fix journal entries with UUID entity_name (for watch category)
+                journal_entries = session.query(JournalEntry).filter(
+                    JournalEntry.category == "watch"
+                ).all()
+                journal_fixed = 0
+                for entry in journal_entries:
+                    # Check if entity_name looks like a UUID
+                    if uuid_pattern.match(entry.entity_name):
+                        old_name = entry.entity_name
+                        # Try to look up from after_value which has channel_id
+                        if entry.after_value:
+                            import json
+                            try:
+                                after = json.loads(entry.after_value)
+                                channel_id = after.get("channel_id")
+                                if channel_id:
+                                    real_name = channel_map.get(channel_id)
+                                    if real_name:
+                                        entry.entity_name = real_name
+                                        # Also fix description if it contains the UUID
+                                        if entry.description and old_name in entry.description:
+                                            entry.description = entry.description.replace(
+                                                old_name, real_name
+                                            )
+                                        journal_fixed += 1
+                            except json.JSONDecodeError:
+                                pass
+
+                if journal_fixed > 0:
+                    session.commit()
+                    logger.info(f"Migration: Fixed {journal_fixed} journal entries with UUID entity names")
+
+            finally:
+                session.close()
+
+        except Exception as e:
+            logger.error(f"UUID channel name migration failed: {e}")
 
     async def _poll_loop(self):
         """Main polling loop - runs until stopped."""
