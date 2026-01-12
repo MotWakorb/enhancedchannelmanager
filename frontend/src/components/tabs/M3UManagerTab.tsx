@@ -113,13 +113,13 @@ function M3UAccountRow({
             </span>
           )}
           {account.name}
-          {account.profiles && account.profiles.length > 0 && (
+          {account.profiles && account.profiles.length > 1 && (
             <span
               className="profile-indicator"
-              title={`${account.profiles.length} profile${account.profiles.length !== 1 ? 's' : ''} configured${account.profiles.filter(p => p.is_active).length > 0 ? ` (${account.profiles.filter(p => p.is_active).length} active)` : ''}`}
+              title={`${account.profiles.length - 1} additional profile${account.profiles.length - 1 !== 1 ? 's' : ''} configured${account.profiles.filter((p, i) => i > 0 && p.is_active).length > 0 ? ` (${account.profiles.filter((p, i) => i > 0 && p.is_active).length} active)` : ''}`}
             >
               <span className="material-icons">account_circle</span>
-              <span className="profile-count">{account.profiles.length}</span>
+              <span className="profile-count">{account.profiles.length - 1}</span>
             </span>
           )}
         </div>
