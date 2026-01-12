@@ -357,8 +357,7 @@ function SortableChannel({
       )}
       <span
         className={`channel-drag-handle ${!isEditMode ? 'disabled' : ''}`}
-        {...attributes}
-        {...listeners}
+        {...(isEditMode ? { ...attributes, ...listeners } : {})}
         title={isEditMode ? (multiSelectCount > 1 && isMultiSelected ? `Drag ${multiSelectCount} channels` : 'Drag to reorder') : 'Enter Edit Mode to reorder channels'}
       >
         ⋮⋮
