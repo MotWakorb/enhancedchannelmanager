@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 import type { Channel, Logo } from '../types';
+import * as api from '../services/api';
 
 export interface ChannelMetadataChanges {
   channel_number?: number;
@@ -71,6 +72,10 @@ export function EditChannelModal({
 
   const [saving, setSaving] = useState(false);
   const [showDiscardConfirm, setShowDiscardConfirm] = useState(false);
+
+  // LCN fetch state
+  const [fetchingLcn, setFetchingLcn] = useState(false);
+  const [lcnError, setLcnError] = useState<string | null>(null);
 
   // Filter logos by search term
   const filteredLogos = logos.filter((logo) =>
@@ -239,6 +244,32 @@ export function EditChannelModal({
     setTvgIdSearch('');
   };
 
+  const handleFetchLcn = async () => {
+    // Use the current tvgId or the one from selected EPG data
+    const lookupTvgId = tvgId || currentEpgData?.tvg_id;
+    if (!lookupTvgId) {
+      setLcnError('Set a TVG-ID first');
+      return;
+    }
+
+    setFetchingLcn(true);
+    setLcnError(null);
+    try {
+      const result = await api.getEPGLcnByTvgId(lookupTvgId);
+      if (result.lcn) {
+        setTvcGuideStationId(result.lcn);
+      }
+    } catch (err) {
+      if (err instanceof Error && err.message.includes('404')) {
+        setLcnError('No LCN found for this TVG-ID');
+      } else {
+        setLcnError('Failed to fetch LCN');
+      }
+    } finally {
+      setFetchingLcn(false);
+    }
+  };
+
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
       if (epgDropdownRef.current && !epgDropdownRef.current.contains(event.target as Node)) {
@@ -377,14 +408,29 @@ export function EditChannelModal({
         {/* Gracenote Station ID Section */}
         <div className="edit-channel-section">
           <label>Gracenote Station ID</label>
-          <input
-            type="text"
-            className="edit-channel-text-input"
-            placeholder="Enter Gracenote/TVC station ID..."
-            value={tvcGuideStationId}
-            onChange={(e) => setTvcGuideStationId(e.target.value)}
-          />
-          <span className="edit-channel-hint">Numeric ID for Gracenote/TVC guide data</span>
+          <div className="edit-channel-input-row">
+            <input
+              type="text"
+              className="edit-channel-text-input"
+              placeholder="Enter Gracenote/TVC station ID..."
+              value={tvcGuideStationId}
+              onChange={(e) => {
+                setTvcGuideStationId(e.target.value);
+                setLcnError(null);
+              }}
+            />
+            <button
+              className="edit-channel-get-epg-btn"
+              onClick={handleFetchLcn}
+              disabled={fetchingLcn || (!tvgId && !currentEpgData?.tvg_id)}
+              title={tvgId || currentEpgData?.tvg_id ? "Fetch LCN from EPG XML" : "Set a TVG-ID first"}
+            >
+              <span className="material-icons">{fetchingLcn ? 'hourglass_empty' : 'download'}</span>
+              {fetchingLcn ? 'Fetching...' : 'Get from EPG'}
+            </button>
+          </div>
+          {lcnError && <span className="edit-channel-error">{lcnError}</span>}
+          <span className="edit-channel-hint">Numeric ID for Gracenote/TVC guide data (from EPG &lt;lcn&gt; tag)</span>
         </div>
 
         {/* EPG Data Section */}

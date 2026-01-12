@@ -27,6 +27,7 @@ import * as api from '../services/api';
 import type { NumberSeparator } from '../services/api';
 import { HistoryToolbar } from './HistoryToolbar';
 import { BulkEPGAssignModal, type EPGAssignment } from './BulkEPGAssignModal';
+import { BulkLCNFetchModal, type LCNAssignment } from './BulkLCNFetchModal';
 import { EditChannelModal, type ChannelMetadataChanges } from './EditChannelModal';
 import { NormalizeNamesModal } from './NormalizeNamesModal';
 import { naturalCompare } from '../utils/naturalSort';
@@ -870,6 +871,9 @@ export function ChannelsPane({
   // Bulk EPG assignment modal state
   const [showBulkEPGModal, setShowBulkEPGModal] = useState(false);
 
+  // Bulk LCN fetch modal state
+  const [showBulkLCNModal, setShowBulkLCNModal] = useState(false);
+
   // Normalize names modal state
   const [showNormalizeModal, setShowNormalizeModal] = useState(false);
 
@@ -1588,6 +1592,29 @@ export function ChannelsPane({
 
     // Close modal and clear selection
     setShowBulkEPGModal(false);
+    if (onClearChannelSelection) {
+      onClearChannelSelection();
+    }
+  };
+
+  // Handle bulk LCN assignment
+  const handleBulkLCNAssign = (assignments: LCNAssignment[]) => {
+    if (!isEditMode || !onStageUpdateChannel || !onStartBatch || !onEndBatch) {
+      return;
+    }
+
+    // Use batch to group all assignments as a single undo operation
+    onStartBatch(`Assign Gracenote ID to ${assignments.length} channels`);
+    for (const assignment of assignments) {
+      const description = `Assign Gracenote ID "${assignment.tvc_guide_stationid}" to "${assignment.channelName}"`;
+      onStageUpdateChannel(assignment.channelId, {
+        tvc_guide_stationid: assignment.tvc_guide_stationid,
+      }, description);
+    }
+    onEndBatch();
+
+    // Close modal and clear selection
+    setShowBulkLCNModal(false);
     if (onClearChannelSelection) {
       onClearChannelSelection();
     }
@@ -3834,6 +3861,13 @@ export function ChannelsPane({
                 </button>
                 <button
                   className="bulk-action-btn"
+                  onClick={() => setShowBulkLCNModal(true)}
+                  title="Fetch Gracenote IDs for selected channels"
+                >
+                  <span className="material-icons">confirmation_number</span>
+                </button>
+                <button
+                  className="bulk-action-btn"
                   onClick={() => setShowNormalizeModal(true)}
                   title="Normalize channel names"
                 >
@@ -4478,6 +4512,15 @@ export function ChannelsPane({
         onClose={() => setShowBulkEPGModal(false)}
         onAssign={handleBulkEPGAssign}
         epgAutoMatchThreshold={epgAutoMatchThreshold}
+      />
+
+      {/* Bulk LCN Fetch Modal */}
+      <BulkLCNFetchModal
+        isOpen={showBulkLCNModal && selectedChannelIds.size > 0}
+        selectedChannels={channels.filter(c => selectedChannelIds.has(c.id))}
+        epgData={epgData || []}
+        onClose={() => setShowBulkLCNModal(false)}
+        onAssign={handleBulkLCNAssign}
       />
 
       {/* Normalize Names Modal */}
