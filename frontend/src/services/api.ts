@@ -313,6 +313,8 @@ export async function getHealth(): Promise<{ status: string; service: string }> 
 // Settings
 export type Theme = 'dark' | 'light' | 'high-contrast';
 
+export type LogLevel = 'DEBUG' | 'INFO' | 'WARN' | 'WARNING' | 'ERROR' | 'CRITICAL';
+
 export interface SettingsResponse {
   url: string;
   username: string;
@@ -335,6 +337,8 @@ export interface SettingsResponse {
   custom_network_suffixes: string[];  // User-defined network suffixes to strip
   stats_poll_interval: number;  // Seconds between stats polling (default 10)
   user_timezone: string;  // IANA timezone name (e.g. "America/Los_Angeles")
+  backend_log_level: string;  // Backend log level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
+  frontend_log_level: string;  // Frontend log level (DEBUG, INFO, WARN, ERROR)
 }
 
 export interface TestConnectionResult {
@@ -368,6 +372,8 @@ export async function saveSettings(settings: {
   custom_network_suffixes?: string[];  // Optional - user-defined network suffixes
   stats_poll_interval?: number;  // Optional - seconds between stats polling, defaults to 10
   user_timezone?: string;  // Optional - IANA timezone name (e.g. "America/Los_Angeles")
+  backend_log_level?: string;  // Optional - Backend log level, defaults to INFO
+  frontend_log_level?: string;  // Optional - Frontend log level, defaults to INFO
 }): Promise<{ status: string; configured: boolean }> {
   return fetchJson(`${API_BASE}/settings`, {
     method: 'POST',

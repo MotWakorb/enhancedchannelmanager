@@ -17,6 +17,8 @@ from config import (
     log_config_status,
     CONFIG_DIR,
     CONFIG_FILE,
+    get_log_level_from_env,
+    set_log_level,
 )
 from cache import get_cache
 from database import init_db
@@ -24,8 +26,10 @@ import journal
 from bandwidth_tracker import BandwidthTracker, set_tracker, get_tracker
 
 # Configure logging
+# Start with environment variable, will be updated from settings in startup
+initial_log_level = get_log_level_from_env()
 logging.basicConfig(
-    level=logging.INFO,
+    level=getattr(logging, initial_log_level),
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
@@ -51,6 +55,7 @@ async def startup_event():
     """Log configuration status on startup."""
     logger.info("=" * 60)
     logger.info("Enhanced Channel Manager starting up")
+    logger.info(f"Initial log level from environment: {initial_log_level}")
 
     # Initialize journal database
     init_db()
@@ -66,20 +71,27 @@ async def startup_event():
         except Exception as e:
             logger.error(f"Failed to list CONFIG_DIR: {e}")
 
-    # Load settings to log status
+    # Load settings to log status and apply log level from settings
     settings = get_settings()
     logger.info(f"Settings configured: {settings.is_configured()}")
     if settings.url:
         logger.info(f"Dispatcharr URL: {settings.url}")
 
+    # Apply log level from settings (overrides environment variable)
+    if settings.backend_log_level:
+        set_log_level(settings.backend_log_level)
+        logger.info(f"Applied log level from settings: {settings.backend_log_level}")
+
     # Start bandwidth tracker if configured
     if settings.is_configured():
         try:
+            logger.debug(f"Starting bandwidth tracker with poll interval {settings.stats_poll_interval}s")
             tracker = BandwidthTracker(get_client(), poll_interval=settings.stats_poll_interval)
             set_tracker(tracker)
             await tracker.start()
+            logger.info("Bandwidth tracker started successfully")
         except Exception as e:
-            logger.error(f"Failed to start bandwidth tracker: {e}")
+            logger.error(f"Failed to start bandwidth tracker: {e}", exc_info=True)
 
     logger.info("=" * 60)
 
@@ -146,6 +158,8 @@ class SettingsRequest(BaseModel):
     custom_network_suffixes: list[str] = []
     stats_poll_interval: int = 10
     user_timezone: str = ""
+    backend_log_level: str = "INFO"
+    frontend_log_level: str = "INFO"
 
 
 class SettingsResponse(BaseModel):
@@ -170,6 +184,8 @@ class SettingsResponse(BaseModel):
     custom_network_suffixes: list[str]
     stats_poll_interval: int
     user_timezone: str
+    backend_log_level: str
+    frontend_log_level: str
 
 
 class TestConnectionRequest(BaseModel):
@@ -204,6 +220,8 @@ async def get_current_settings():
         custom_network_suffixes=settings.custom_network_suffixes,
         stats_poll_interval=settings.stats_poll_interval,
         user_timezone=settings.user_timezone,
+        backend_log_level=settings.backend_log_level,
+        frontend_log_level=settings.frontend_log_level,
     )
 
 
@@ -249,10 +267,18 @@ async def update_settings(request: SettingsRequest):
         custom_network_suffixes=request.custom_network_suffixes,
         stats_poll_interval=request.stats_poll_interval,
         user_timezone=request.user_timezone,
+        backend_log_level=request.backend_log_level,
+        frontend_log_level=request.frontend_log_level,
     )
     save_settings(new_settings)
     clear_settings_cache()
     reset_client()
+
+    # Apply backend log level immediately
+    if new_settings.backend_log_level != current_settings.backend_log_level:
+        logger.info(f"Applying new backend log level: {new_settings.backend_log_level}")
+        set_log_level(new_settings.backend_log_level)
+
     return {"status": "saved", "configured": new_settings.is_configured()}
 
 

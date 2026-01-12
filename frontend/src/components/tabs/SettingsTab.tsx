@@ -3,6 +3,8 @@ import * as api from '../../services/api';
 import { NETWORK_PREFIXES, NETWORK_SUFFIXES } from '../../services/api';
 import type { Theme } from '../../services/api';
 import type { ChannelProfile } from '../../types';
+import { logger } from '../../utils/logger';
+import type { LogLevel as FrontendLogLevel } from '../../utils/logger';
 import './SettingsTab.css';
 
 interface SettingsTabProps {
@@ -45,6 +47,10 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
   // Stats settings
   const [statsPollInterval, setStatsPollInterval] = useState(10);
   const [userTimezone, setUserTimezone] = useState('');
+
+  // Log level settings
+  const [backendLogLevel, setBackendLogLevel] = useState('INFO');
+  const [frontendLogLevel, setFrontendLogLevel] = useState('INFO');
 
   // Preserve settings not managed by this tab (to avoid overwriting them on save)
   const [linkedM3UAccounts, setLinkedM3UAccounts] = useState<number[][]>([]);
@@ -98,6 +104,14 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
       setOriginalPollInterval(settings.stats_poll_interval ?? 10);
       setUserTimezone(settings.user_timezone ?? '');
       setOriginalTimezone(settings.user_timezone ?? '');
+      setBackendLogLevel(settings.backend_log_level ?? 'INFO');
+      const frontendLevel = settings.frontend_log_level ?? 'INFO';
+      setFrontendLogLevel(frontendLevel);
+      // Apply frontend log level immediately
+      const frontendLogLevel = frontendLevel === 'WARNING' ? 'WARN' : frontendLevel;
+      if (['DEBUG', 'INFO', 'WARN', 'ERROR'].includes(frontendLogLevel)) {
+        logger.setLevel(frontendLogLevel as FrontendLogLevel);
+      }
       setLinkedM3UAccounts(settings.linked_m3u_accounts ?? []);
       setNeedsRestart(false);
       setRestartResult(null);
@@ -180,8 +194,16 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
         custom_network_suffixes: customNetworkSuffixes,
         stats_poll_interval: statsPollInterval,
         user_timezone: userTimezone,
+        backend_log_level: backendLogLevel,
+        frontend_log_level: frontendLogLevel,
         linked_m3u_accounts: linkedM3UAccounts,
       });
+      // Apply frontend log level immediately
+      const frontendLevel = frontendLogLevel === 'WARNING' ? 'WARN' : frontendLogLevel;
+      if (['DEBUG', 'INFO', 'WARN', 'ERROR'].includes(frontendLevel)) {
+        logger.setLevel(frontendLevel as FrontendLogLevel);
+        logger.info(`Frontend log level changed to ${frontendLevel}`);
+      }
       setOriginalUrl(url);
       setOriginalUsername(username);
       setPassword('');
@@ -533,6 +555,54 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
             <p>
               Hide streams that don't have a group assigned (no group-title in M3U).
               These streams appear under "Ungrouped" in the Streams pane.
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <div className="settings-section">
+        <div className="settings-section-header">
+          <span className="material-icons">bug_report</span>
+          <h3>Log Levels</h3>
+        </div>
+
+        <div className="form-row">
+          <div className="form-group">
+            <label htmlFor="backendLogLevel">Backend Log Level</label>
+            <select
+              id="backendLogLevel"
+              value={backendLogLevel}
+              onChange={(e) => setBackendLogLevel(e.target.value)}
+            >
+              <option value="DEBUG">DEBUG - Show all messages including debug info</option>
+              <option value="INFO">INFO - Show informational messages and above</option>
+              <option value="WARNING">WARNING - Show warnings and errors only</option>
+              <option value="ERROR">ERROR - Show errors only</option>
+              <option value="CRITICAL">CRITICAL - Show only critical errors</option>
+            </select>
+            <p className="form-help">
+              Controls Python backend logging level. Changes apply immediately.
+              Check Docker logs to see backend messages.
+            </p>
+          </div>
+        </div>
+
+        <div className="form-row">
+          <div className="form-group">
+            <label htmlFor="frontendLogLevel">Frontend Log Level</label>
+            <select
+              id="frontendLogLevel"
+              value={frontendLogLevel}
+              onChange={(e) => setFrontendLogLevel(e.target.value)}
+            >
+              <option value="DEBUG">DEBUG - Show all messages including debug info</option>
+              <option value="INFO">INFO - Show informational messages and above</option>
+              <option value="WARN">WARN - Show warnings and errors only</option>
+              <option value="ERROR">ERROR - Show errors only</option>
+            </select>
+            <p className="form-help">
+              Controls browser console logging level. Changes apply immediately.
+              Open browser DevTools (F12) to see frontend messages.
             </p>
           </div>
         </div>
