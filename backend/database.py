@@ -32,54 +32,68 @@ def init_db() -> None:
     """Initialize the database, creating tables if they don't exist."""
     global _engine, _SessionLocal
 
-    # Ensure config directory exists
-    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    try:
+        # Ensure config directory exists
+        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        logger.debug(f"Config directory ensured: {CONFIG_DIR}")
 
-    database_url = get_database_url()
-    logger.info(f"Initializing journal database at {JOURNAL_DB_FILE}")
+        database_url = get_database_url()
+        logger.info(f"Initializing journal database at {JOURNAL_DB_FILE}")
 
-    # Create engine with SQLite-specific settings
-    _engine = create_engine(
-        database_url,
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
-        echo=False,  # Set to True for SQL debugging
-    )
+        # Create engine with SQLite-specific settings
+        _engine = create_engine(
+            database_url,
+            connect_args={"check_same_thread": False},
+            poolclass=StaticPool,
+            echo=False,  # Set to True for SQL debugging
+        )
+        logger.debug("Database engine created")
 
-    # Create session factory
-    _SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=_engine)
+        # Create session factory
+        _SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=_engine)
 
-    # Import models to register them with Base
-    from models import JournalEntry, BandwidthDaily, ChannelWatchStats  # noqa: F401
+        # Import models to register them with Base
+        from models import JournalEntry, BandwidthDaily, ChannelWatchStats  # noqa: F401
 
-    # Create all tables
-    Base.metadata.create_all(bind=_engine)
+        # Create all tables
+        Base.metadata.create_all(bind=_engine)
+        logger.debug("Database tables created/verified")
 
-    # Run migrations for existing tables (add new columns if missing)
-    _run_migrations(_engine)
+        # Run migrations for existing tables (add new columns if missing)
+        _run_migrations(_engine)
 
-    # Perform maintenance: purge old entries and vacuum
-    _perform_maintenance(_engine)
+        # Perform maintenance: purge old entries and vacuum
+        _perform_maintenance(_engine)
 
-    logger.info("Journal database initialized successfully")
+        logger.info("Journal database initialized successfully")
+    except Exception as e:
+        logger.exception(f"Failed to initialize database: {e}")
+        raise
 
 
 def _run_migrations(engine) -> None:
     """Run database migrations to add new columns to existing tables."""
     from sqlalchemy import text
 
-    with engine.connect() as conn:
-        # Check if total_watch_seconds column exists in channel_watch_stats
-        result = conn.execute(text("PRAGMA table_info(channel_watch_stats)"))
-        columns = [row[1] for row in result.fetchall()]
+    logger.debug("Checking for database migrations")
+    try:
+        with engine.connect() as conn:
+            # Check if total_watch_seconds column exists in channel_watch_stats
+            result = conn.execute(text("PRAGMA table_info(channel_watch_stats)"))
+            columns = [row[1] for row in result.fetchall()]
 
-        if "total_watch_seconds" not in columns:
-            logger.info("Adding total_watch_seconds column to channel_watch_stats")
-            conn.execute(text(
-                "ALTER TABLE channel_watch_stats ADD COLUMN total_watch_seconds INTEGER DEFAULT 0 NOT NULL"
-            ))
-            conn.commit()
-            logger.info("Migration complete: added total_watch_seconds column")
+            if "total_watch_seconds" not in columns:
+                logger.info("Adding total_watch_seconds column to channel_watch_stats")
+                conn.execute(text(
+                    "ALTER TABLE channel_watch_stats ADD COLUMN total_watch_seconds INTEGER DEFAULT 0 NOT NULL"
+                ))
+                conn.commit()
+                logger.info("Migration complete: added total_watch_seconds column")
+            else:
+                logger.debug("No migrations needed - schema is up to date")
+    except Exception as e:
+        logger.exception(f"Migration failed: {e}")
+        raise
 
 
 def _perform_maintenance(engine) -> None:
@@ -123,6 +137,7 @@ def _perform_maintenance(engine) -> None:
 def get_session():
     """Get a database session. Use as context manager or close manually."""
     if _SessionLocal is None:
+        logger.error("Attempted to get database session before initialization")
         raise RuntimeError("Database not initialized. Call init_db() first.")
     return _SessionLocal()
 
@@ -130,5 +145,6 @@ def get_session():
 def get_engine():
     """Get the database engine."""
     if _engine is None:
+        logger.error("Attempted to get database engine before initialization")
         raise RuntimeError("Database not initialized. Call init_db() first.")
     return _engine
