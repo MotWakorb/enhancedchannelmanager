@@ -326,16 +326,6 @@ export function M3UProfileModal({
                         </label>
 
                         <label>
-                          <input
-                            type="checkbox"
-                            checked={editingProfile.is_active}
-                            onChange={(e) => setEditingProfile({ ...editingProfile, is_active: e.target.checked })}
-                            disabled={saving}
-                          />
-                          Profile is active
-                        </label>
-
-                        <label>
                           Search Pattern (Regex) *
                           <input
                             type="text"
@@ -363,20 +353,33 @@ export function M3UProfileModal({
                   </div>
 
                   <div className="form-actions">
-                    <button
-                      className="btn-secondary"
-                      onClick={handleCancelEdit}
-                      disabled={saving}
-                    >
-                      Cancel
-                    </button>
-                    <button
-                      className="btn-primary"
-                      onClick={handleSaveProfile}
-                      disabled={saving}
-                    >
-                      {saving ? 'Saving...' : 'Save Profile'}
-                    </button>
+                    {!isEditingDefault && (
+                      <label className="checkbox-label">
+                        <input
+                          type="checkbox"
+                          checked={editingProfile.is_active}
+                          onChange={(e) => setEditingProfile({ ...editingProfile, is_active: e.target.checked })}
+                          disabled={saving}
+                        />
+                        Profile is active
+                      </label>
+                    )}
+                    <div className="button-group">
+                      <button
+                        className="btn-secondary"
+                        onClick={handleCancelEdit}
+                        disabled={saving}
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        className="btn-primary"
+                        onClick={handleSaveProfile}
+                        disabled={saving}
+                      >
+                        {saving ? 'Saving...' : 'Save Profile'}
+                      </button>
+                    </div>
                   </div>
                 </div>
               )}
