@@ -890,12 +890,7 @@
 }
 
 .channel-drag-handle.disabled {
-  opacity: 0.3;
-  cursor: not-allowed;
-}
-
-.channel-drag-handle.disabled:active {
-  cursor: not-allowed;
+  display: none;
 }
 
 .channel-number {
