@@ -1167,13 +1167,25 @@ export function StreamsPane({
 
       <div className="streams-pane-filters">
         <div className="search-row">
-          <input
-            type="text"
-            placeholder="Search streams..."
-            value={searchTerm}
-            onChange={(e) => onSearchChange(e.target.value)}
-            className="search-input"
-          />
+          <div className="search-input-wrapper">
+            <input
+              type="text"
+              placeholder="Search streams..."
+              value={searchTerm}
+              onChange={(e) => onSearchChange(e.target.value)}
+              className="search-input"
+            />
+            {searchTerm && (
+              <button
+                type="button"
+                className="search-clear-btn"
+                onClick={() => onSearchChange('')}
+                title="Clear search"
+              >
+                <span className="material-icons">close</span>
+              </button>
+            )}
+          </div>
           <div className="expand-collapse-buttons">
             <button
               className="expand-collapse-btn"

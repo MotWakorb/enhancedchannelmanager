@@ -314,14 +314,26 @@ export function EditChannelModal({
           </div>
           {tvgIdPickerOpen && (
             <div className="tvg-id-picker">
-              <input
-                type="text"
-                className="edit-channel-text-input"
-                placeholder="Search EPG data..."
-                value={tvgIdSearch}
-                onChange={(e) => handleTvgIdSearch(e.target.value)}
-                autoFocus
-              />
+              <div className="search-input-wrapper">
+                <input
+                  type="text"
+                  className="edit-channel-text-input"
+                  placeholder="Search EPG data..."
+                  value={tvgIdSearch}
+                  onChange={(e) => handleTvgIdSearch(e.target.value)}
+                  autoFocus
+                />
+                {tvgIdSearch && (
+                  <button
+                    type="button"
+                    className="search-clear-btn"
+                    onClick={() => handleTvgIdSearch('')}
+                    title="Clear search"
+                  >
+                    <span className="material-icons">close</span>
+                  </button>
+                )}
+              </div>
               <div className="tvg-id-picker-dropdown">
                 {epgDataLoading ? (
                   <div className="epg-dropdown-loading">Loading...</div>
@@ -402,14 +414,26 @@ export function EditChannelModal({
             </div>
           )}
           <div className="epg-search-container" ref={epgDropdownRef}>
-            <input
-              type="text"
-              className="edit-channel-text-input"
-              placeholder="Search EPG data..."
-              value={epgSearch}
-              onChange={(e) => handleEpgSearch(e.target.value)}
-              onFocus={() => setEpgDropdownOpen(true)}
-            />
+            <div className="search-input-wrapper">
+              <input
+                type="text"
+                className="edit-channel-text-input"
+                placeholder="Search EPG data..."
+                value={epgSearch}
+                onChange={(e) => handleEpgSearch(e.target.value)}
+                onFocus={() => setEpgDropdownOpen(true)}
+              />
+              {epgSearch && (
+                <button
+                  type="button"
+                  className="search-clear-btn"
+                  onClick={() => handleEpgSearch('')}
+                  title="Clear search"
+                >
+                  <span className="material-icons">close</span>
+                </button>
+              )}
+            </div>
             {epgDropdownOpen && (
               <div className="epg-dropdown">
                 {epgDataLoading ? (
@@ -523,13 +547,25 @@ export function EditChannelModal({
           )}
 
           {/* Logo search */}
-          <input
-            type="text"
-            className="logo-search-input"
-            placeholder="Search logos..."
-            value={logoSearch}
-            onChange={(e) => setLogoSearch(e.target.value)}
-          />
+          <div className="search-input-wrapper">
+            <input
+              type="text"
+              className="logo-search-input"
+              placeholder="Search logos..."
+              value={logoSearch}
+              onChange={(e) => setLogoSearch(e.target.value)}
+            />
+            {logoSearch && (
+              <button
+                type="button"
+                className="search-clear-btn"
+                onClick={() => setLogoSearch('')}
+                title="Clear search"
+              >
+                <span className="material-icons">close</span>
+              </button>
+            )}
+          </div>
 
           {/* Logo grid */}
           <div className="logo-selection-grid">
