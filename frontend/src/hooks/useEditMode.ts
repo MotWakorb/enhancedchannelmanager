@@ -686,6 +686,7 @@ export function useEditMode({
       channelNumberChanges: 0,
       channelNameChanges: 0,
       epgChanges: 0,
+      gracenoteIdChanges: 0,
       newChannels: 0,
       deletedChannels: 0,
       newGroups: 0,
@@ -723,6 +724,9 @@ export function useEditMode({
           }
           if (op.apiCall.data.tvg_id !== undefined || op.apiCall.data.epg_data_id !== undefined) {
             summary.epgChanges++;
+          }
+          if (op.apiCall.data.tvc_guide_stationid !== undefined) {
+            summary.gracenoteIdChanges++;
           }
           break;
         case 'bulkAssignChannelNumbers':
