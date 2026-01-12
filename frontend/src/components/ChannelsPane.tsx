@@ -32,6 +32,7 @@ import { EditChannelModal, type ChannelMetadataChanges } from './EditChannelModa
 import { NormalizeNamesModal } from './NormalizeNamesModal';
 import { naturalCompare } from '../utils/naturalSort';
 import { openInVLC } from '../utils/vlc';
+import { copyToClipboard } from '../utils/clipboard';
 import './ChannelsPane.css';
 
 interface ChannelsPaneProps {
@@ -899,6 +900,10 @@ export function ChannelsPane({
   const [showEditChannelModal, setShowEditChannelModal] = useState(false);
   const [channelToEdit, setChannelToEdit] = useState<Channel | null>(null);
 
+  // Copy to clipboard feedback state
+  const [copySuccess, setCopySuccess] = useState<string | null>(null);
+  const [copyError, setCopyError] = useState<string | null>(null);
+
   // Stream group drop state (for bulk channel creation)
   const [streamGroupDragOver, setStreamGroupDragOver] = useState(false);
 
@@ -1328,6 +1333,40 @@ export function ChannelsPane({
       y: e.clientY,
       channelIds: selectedInGroup,
     });
+  };
+
+  // Handle copying channel URL to clipboard
+  const handleCopyChannelUrl = async (url: string, channelName: string) => {
+    const success = await copyToClipboard(url, `channel URL for "${channelName}"`);
+
+    if (success) {
+      setCopySuccess(`Copied channel URL for "${channelName}"`);
+      setCopyError(null);
+      // Clear success message after 3 seconds
+      setTimeout(() => setCopySuccess(null), 3000);
+    } else {
+      setCopyError('Failed to copy to clipboard. Ensure HTTPS is used and clipboard permissions are granted.');
+      setCopySuccess(null);
+      // Clear error message after 5 seconds
+      setTimeout(() => setCopyError(null), 5000);
+    }
+  };
+
+  // Handle copying stream URL to clipboard
+  const handleCopyStreamUrl = async (url: string, streamName: string) => {
+    const success = await copyToClipboard(url, `stream URL for "${streamName}"`);
+
+    if (success) {
+      setCopySuccess(`Copied stream URL for "${streamName}"`);
+      setCopyError(null);
+      // Clear success message after 3 seconds
+      setTimeout(() => setCopySuccess(null), 3000);
+    } else {
+      setCopyError('Failed to copy to clipboard. Ensure HTTPS is used and clipboard permissions are granted.');
+      setCopySuccess(null);
+      // Clear error message after 5 seconds
+      setTimeout(() => setCopyError(null), 5000);
+    }
   };
 
   // Handle removing a stream from the selected channel
@@ -3870,7 +3909,7 @@ export function ChannelsPane({
                       onStreamDrop={(e) => handleStreamDrop(e, channel.id)}
                       onDelete={() => handleDeleteChannelClick(channel)}
                       onEditChannel={() => handleEditChannel(channel)}
-                      onCopyChannelUrl={dispatcharrUrl && channel.uuid ? () => navigator.clipboard.writeText(`${dispatcharrUrl}/proxy/ts/stream/${channel.uuid}`) : undefined}
+                      onCopyChannelUrl={dispatcharrUrl && channel.uuid ? () => handleCopyChannelUrl(`${dispatcharrUrl}/proxy/ts/stream/${channel.uuid}`, channel.name) : undefined}
                       onContextMenu={(e) => handleContextMenu(channel, e)}
                       channelUrl={dispatcharrUrl && channel.uuid ? `${dispatcharrUrl}/proxy/ts/stream/${channel.uuid}` : undefined}
                       showStreamUrls={showStreamUrls}
@@ -3902,7 +3941,7 @@ export function ChannelsPane({
                                       providerName={providers.find((p) => p.id === stream.m3u_account)?.name ?? null}
                                       isEditMode={isEditMode}
                                       onRemove={handleRemoveStream}
-                                      onCopyUrl={stream.url ? () => navigator.clipboard.writeText(stream.url!) : undefined}
+                                      onCopyUrl={stream.url ? () => handleCopyStreamUrl(stream.url!, stream.name) : undefined}
                                       showStreamUrls={showStreamUrls}
                                     />
                                   </div>
@@ -3940,6 +3979,20 @@ export function ChannelsPane({
 
   return (
     <div className="channels-pane">
+      {/* Copy feedback notifications */}
+      {copySuccess && (
+        <div className="copy-feedback copy-success">
+          <span className="material-icons">check_circle</span>
+          {copySuccess}
+        </div>
+      )}
+      {copyError && (
+        <div className="copy-feedback copy-error">
+          <span className="material-icons">error</span>
+          {copyError}
+        </div>
+      )}
+
       <div className={`pane-header ${isEditMode ? 'edit-mode' : ''}`}>
         <div className="pane-header-title">
           <h2>Channels</h2>
