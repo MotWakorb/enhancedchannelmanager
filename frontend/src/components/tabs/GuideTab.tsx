@@ -2,7 +2,6 @@ import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import type { Channel, Logo, EPGProgram, EPGData, EPGSource, StreamProfile, ChannelProfile, ChannelGroup } from '../../types';
 import * as api from '../../services/api';
 import { EditChannelModal, type ChannelMetadataChanges } from '../EditChannelModal';
-import { naturalCompare } from '../../utils/naturalSort';
 import './GuideTab.css';
 
 // Constants for grid layout
@@ -116,19 +115,26 @@ export function GuideTab({
     return channelProfiles.find(p => p.id === selectedProfileId) ?? null;
   }, [selectedProfileId, channelProfiles]);
 
-  // Get sorted list of groups that have channels, sorted naturally by name
+  // Get sorted list of groups that have channels, sorted by first channel number in each group
   const sortedGroups = useMemo(() => {
-    // Get unique group IDs that have channels with channel numbers
-    const groupIds = new Set<number>();
+    // Build a map of group ID to lowest channel number in that group
+    const groupFirstChannel = new Map<number, number>();
     channels.forEach(ch => {
       if (ch.channel_number !== null && ch.channel_group_id !== null) {
-        groupIds.add(ch.channel_group_id);
+        const existing = groupFirstChannel.get(ch.channel_group_id);
+        if (existing === undefined || ch.channel_number < existing) {
+          groupFirstChannel.set(ch.channel_group_id, ch.channel_number);
+        }
       }
     });
-    // Get the group objects and sort by name
+    // Get the group objects and sort by first channel number
     return channelGroups
-      .filter(g => groupIds.has(g.id))
-      .sort((a, b) => naturalCompare(a.name, b.name));
+      .filter(g => groupFirstChannel.has(g.id))
+      .sort((a, b) => {
+        const aFirst = groupFirstChannel.get(a.id) ?? Infinity;
+        const bFirst = groupFirstChannel.get(b.id) ?? Infinity;
+        return aFirst - bFirst;
+      });
   }, [channels, channelGroups]);
 
   // Sort channels by channel number, optionally filtered by profile and group
