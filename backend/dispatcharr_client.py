@@ -402,6 +402,49 @@ class DispatcharrClient:
         response.raise_for_status()
 
     # -------------------------------------------------------------------------
+    # M3U Profiles
+    # -------------------------------------------------------------------------
+
+    async def get_m3u_profiles(self, account_id: int) -> list:
+        """Get all profiles for an M3U account."""
+        response = await self._request("GET", f"/api/m3u/accounts/{account_id}/profiles/")
+        response.raise_for_status()
+        return response.json()
+
+    async def create_m3u_profile(self, account_id: int, data: dict) -> dict:
+        """Create a new profile for an M3U account."""
+        response = await self._request(
+            "POST", f"/api/m3u/accounts/{account_id}/profiles/", json=data
+        )
+        response.raise_for_status()
+        return response.json()
+
+    async def get_m3u_profile(self, account_id: int, profile_id: int) -> dict:
+        """Get a specific profile for an M3U account."""
+        response = await self._request(
+            "GET", f"/api/m3u/accounts/{account_id}/profiles/{profile_id}/"
+        )
+        response.raise_for_status()
+        return response.json()
+
+    async def update_m3u_profile(
+        self, account_id: int, profile_id: int, data: dict
+    ) -> dict:
+        """Update a profile for an M3U account."""
+        response = await self._request(
+            "PATCH", f"/api/m3u/accounts/{account_id}/profiles/{profile_id}/", json=data
+        )
+        response.raise_for_status()
+        return response.json()
+
+    async def delete_m3u_profile(self, account_id: int, profile_id: int) -> None:
+        """Delete a profile from an M3U account."""
+        response = await self._request(
+            "DELETE", f"/api/m3u/accounts/{account_id}/profiles/{profile_id}/"
+        )
+        response.raise_for_status()
+
+    # -------------------------------------------------------------------------
     # M3U Group Settings
     # -------------------------------------------------------------------------
 
