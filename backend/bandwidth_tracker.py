@@ -58,6 +58,7 @@ class BandwidthTracker:
         self._last_active_channels: set[str] = set()  # Track which channels were active last poll (UUIDs)
         self._channel_names: dict[str, str] = {}  # Cache channel names for stop events
         self._ecm_channel_map: dict[str, str] = {}  # UUID -> name mapping from ECM channels
+        self._ecm_channel_number_map: dict[int, str] = {}  # channel_number -> name mapping from ECM
         self._channel_map_refresh_interval = 300  # Refresh channel map every 5 minutes
         self._last_channel_map_refresh = 0.0
 
@@ -67,8 +68,8 @@ class BandwidthTracker:
             logger.warning("BandwidthTracker already running")
             return
 
-        # Run one-time migration to fix UUID channel names in database
-        await self._migrate_uuid_channel_names()
+        # Initialize channel maps on startup
+        await self._initialize_channel_maps()
 
         self._running = True
         self._task = asyncio.create_task(self._poll_loop())
@@ -86,23 +87,15 @@ class BandwidthTracker:
             self._task = None
         logger.info("BandwidthTracker stopped")
 
-    async def _migrate_uuid_channel_names(self):
+    async def _initialize_channel_maps(self):
         """
-        One-time migration to fix channel names that were stored as UUIDs.
-        Fetches channel data from ECM and updates records where the name looks like a UUID.
+        Initialize the ECM channel maps on startup.
+        This fetches all channels from ECM and builds maps for UUID->name and channel_number->name lookups.
         """
-        import re
-        from models import JournalEntry
-
-        # UUID pattern: 8-4-4-4-12 hex characters
-        uuid_pattern = re.compile(
-            r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$',
-            re.IGNORECASE
-        )
-
         try:
-            # Fetch channel map from ECM
-            channel_map: dict[str, str] = {}
+            # Fetch all channels from ECM (paginated)
+            uuid_map: dict[str, str] = {}
+            number_map: dict[int, str] = {}
             page = 1
             page_size = 500
             while True:
@@ -111,8 +104,11 @@ class BandwidthTracker:
                 for ch in channels:
                     uuid = ch.get("uuid")
                     name = ch.get("name")
+                    channel_number = ch.get("channel_number")
                     if uuid and name:
-                        channel_map[uuid] = name
+                        uuid_map[uuid] = name
+                    if channel_number is not None and name:
+                        number_map[int(channel_number)] = name
 
                 if not result.get("next"):
                     break
@@ -120,69 +116,14 @@ class BandwidthTracker:
                 if page > 20:
                     break
 
-            if not channel_map:
-                logger.debug("No channels found for UUID migration")
-                return
-
-            # Store for later use
-            self._ecm_channel_map = channel_map
+            self._ecm_channel_map = uuid_map
+            self._ecm_channel_number_map = number_map
             self._last_channel_map_refresh = time.time()
 
-            session = get_session()
-            try:
-                # Fix channel_watch_stats records with UUID names
-                watch_stats = session.query(ChannelWatchStats).all()
-                watch_fixed = 0
-                for record in watch_stats:
-                    # Check if channel_name looks like a UUID
-                    if uuid_pattern.match(record.channel_name):
-                        # Try to look up the real name
-                        real_name = channel_map.get(record.channel_id)
-                        if real_name:
-                            record.channel_name = real_name
-                            watch_fixed += 1
-
-                if watch_fixed > 0:
-                    session.commit()
-                    logger.info(f"Migration: Fixed {watch_fixed} channel watch stats records with UUID names")
-
-                # Fix journal entries with UUID entity_name (for watch category)
-                journal_entries = session.query(JournalEntry).filter(
-                    JournalEntry.category == "watch"
-                ).all()
-                journal_fixed = 0
-                for entry in journal_entries:
-                    # Check if entity_name looks like a UUID
-                    if uuid_pattern.match(entry.entity_name):
-                        old_name = entry.entity_name
-                        # Try to look up from after_value which has channel_id
-                        if entry.after_value:
-                            import json
-                            try:
-                                after = json.loads(entry.after_value)
-                                channel_id = after.get("channel_id")
-                                if channel_id:
-                                    real_name = channel_map.get(channel_id)
-                                    if real_name:
-                                        entry.entity_name = real_name
-                                        # Also fix description if it contains the UUID
-                                        if entry.description and old_name in entry.description:
-                                            entry.description = entry.description.replace(
-                                                old_name, real_name
-                                            )
-                                        journal_fixed += 1
-                            except json.JSONDecodeError:
-                                pass
-
-                if journal_fixed > 0:
-                    session.commit()
-                    logger.info(f"Migration: Fixed {journal_fixed} journal entries with UUID entity names")
-
-            finally:
-                session.close()
+            logger.info(f"Loaded channel maps: {len(uuid_map)} by UUID, {len(number_map)} by channel number")
 
         except Exception as e:
-            logger.error(f"UUID channel name migration failed: {e}")
+            logger.error(f"Failed to initialize channel maps: {e}")
 
     async def _poll_loop(self):
         """Main polling loop - runs until stopped."""
@@ -203,14 +144,15 @@ class BandwidthTracker:
                 break
 
     async def _maybe_refresh_channel_map(self):
-        """Refresh the ECM channel UUID->name map if needed."""
+        """Refresh the ECM channel maps (UUID->name and channel_number->name)."""
         now = time.time()
         if now - self._last_channel_map_refresh < self._channel_map_refresh_interval:
             return
 
         try:
             # Fetch all channels from ECM (paginated)
-            new_map: dict[str, str] = {}
+            uuid_map: dict[str, str] = {}
+            number_map: dict[int, str] = {}
             page = 1
             page_size = 500
             while True:
@@ -219,8 +161,12 @@ class BandwidthTracker:
                 for ch in channels:
                     uuid = ch.get("uuid")
                     name = ch.get("name")
+                    channel_number = ch.get("channel_number")
                     if uuid and name:
-                        new_map[uuid] = name
+                        uuid_map[uuid] = name
+                    if channel_number is not None and name:
+                        # channel_number can be float or int, convert to int for lookup
+                        number_map[int(channel_number)] = name
 
                 # Check if there are more pages
                 if not result.get("next"):
@@ -230,9 +176,10 @@ class BandwidthTracker:
                 if page > 20:
                     break
 
-            self._ecm_channel_map = new_map
+            self._ecm_channel_map = uuid_map
+            self._ecm_channel_number_map = number_map
             self._last_channel_map_refresh = now
-            logger.debug(f"Refreshed channel map with {len(new_map)} channels")
+            logger.debug(f"Refreshed channel maps: {len(uuid_map)} by UUID, {len(number_map)} by number")
         except Exception as e:
             logger.debug(f"Failed to refresh channel map: {e}")
 
@@ -258,13 +205,22 @@ class BandwidthTracker:
 
         for channel in channels:
             channel_id = str(channel.get("channel_id", ""))
-            # Get channel name - prefer ECM lookup by UUID, fall back to Dispatcharr's response
-            channel_name = (
-                self._ecm_channel_map.get(channel_id)
-                or channel.get("channel_name")
-                or channel.get("name")
-                or f"Channel {channel_id[:8]}..."
-            )
+            channel_number = channel.get("channel_number")
+            # Get channel name - prefer ECM lookup by channel_number or UUID, fall back to Dispatcharr's response
+            channel_name = None
+            # Try channel_number lookup first (most reliable)
+            if channel_number is not None:
+                channel_name = self._ecm_channel_number_map.get(int(channel_number))
+            # Fall back to UUID lookup
+            if not channel_name:
+                channel_name = self._ecm_channel_map.get(channel_id)
+            # Fall back to Dispatcharr's response
+            if not channel_name:
+                channel_name = channel.get("channel_name") or channel.get("name")
+            # Last resort: use partial UUID
+            if not channel_name:
+                channel_name = f"Channel {channel_id[:8]}..."
+
             bytes_now = channel.get("total_bytes", 0) or 0
             client_count = channel.get("client_count", 0) or 0
 
