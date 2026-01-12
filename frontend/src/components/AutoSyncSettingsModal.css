@@ -457,6 +457,27 @@
   color: var(--text-muted);
 }
 
+.dropdown-search .clear-search {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  padding: 0.125rem;
+  cursor: pointer;
+  color: var(--text-secondary);
+  border-radius: 3px;
+}
+
+.dropdown-search .clear-search:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.dropdown-search .clear-search .material-icons {
+  font-size: 1rem;
+}
+
 .logo-options {
   display: flex;
   flex-direction: column;

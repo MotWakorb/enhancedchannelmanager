@@ -5019,13 +5019,25 @@ export function ChannelsPane({
 
       <div className="pane-filters">
         <div className="search-row">
-          <input
-            type="text"
-            placeholder="Search channels..."
-            value={searchTerm}
-            onChange={(e) => onSearchChange(e.target.value)}
-            className="search-input"
-          />
+          <div className="search-input-wrapper">
+            <input
+              type="text"
+              placeholder="Search channels..."
+              value={searchTerm}
+              onChange={(e) => onSearchChange(e.target.value)}
+              className="search-input"
+            />
+            {searchTerm && (
+              <button
+                type="button"
+                className="search-clear-btn"
+                onClick={() => onSearchChange('')}
+                title="Clear search"
+              >
+                <span className="material-icons">close</span>
+              </button>
+            )}
+          </div>
           {/* Expand/Collapse All Buttons */}
           <div className="expand-collapse-buttons">
             <button
@@ -5105,8 +5117,9 @@ export function ChannelsPane({
                   <button
                     className="group-filter-search-clear"
                     onClick={() => setGroupFilterSearch('')}
+                    title="Clear search"
                   >
-                    ✕
+                    <span className="material-icons">close</span>
                   </button>
                 )}
               </div>

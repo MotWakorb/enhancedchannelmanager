@@ -152,3 +152,44 @@ html, body, #root {
   height: 100%;
   width: 100%;
 }
+
+/* Search input with clear button */
+.search-input-wrapper {
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex: 1;
+  min-width: 0;
+}
+
+.search-input-wrapper input {
+  width: 100%;
+  padding-right: 2rem;
+}
+
+.search-clear-btn {
+  position: absolute;
+  right: 0.25rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.5rem;
+  height: 1.5rem;
+  padding: 0;
+  background: transparent;
+  border: none;
+  border-radius: 50%;
+  color: var(--text-secondary);
+  cursor: pointer;
+  opacity: 0.6;
+  transition: opacity 0.15s, background-color 0.15s;
+}
+
+.search-clear-btn:hover {
+  opacity: 1;
+  background-color: var(--bg-hover);
+}
+
+.search-clear-btn .material-icons {
+  font-size: 1rem;
+}

@@ -336,6 +336,16 @@ export function AutoSyncSettingsModal({
                         onChange={(e) => setGroupSearch(e.target.value)}
                         autoFocus
                       />
+                      {groupSearch && (
+                        <button
+                          type="button"
+                          className="clear-search"
+                          onClick={() => setGroupSearch('')}
+                          title="Clear search"
+                        >
+                          <span className="material-icons">close</span>
+                        </button>
+                      )}
                     </div>
                     {/* Add New Group Input */}
                     {showNewGroupInput ? (
@@ -581,6 +591,16 @@ export function AutoSyncSettingsModal({
                         onChange={(e) => setLogoSearch(e.target.value)}
                         autoFocus
                       />
+                      {logoSearch && (
+                        <button
+                          type="button"
+                          className="clear-search"
+                          onClick={() => setLogoSearch('')}
+                          title="Clear search"
+                        >
+                          <span className="material-icons">close</span>
+                        </button>
+                      )}
                     </div>
                     {/* URL Input Section */}
                     <div className="logo-url-input">
