@@ -361,11 +361,24 @@
   border-radius: 6px;
   color: var(--success);
   font-size: 0.875rem;
+  font-weight: 500;
   margin-bottom: 1rem;
+  animation: slideInDown 0.3s ease-out;
 }
 
 .save-success .material-icons {
   font-size: 18px;
+}
+
+@keyframes slideInDown {
+  from {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 /* Restart notice */
