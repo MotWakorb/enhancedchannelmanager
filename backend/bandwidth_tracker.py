@@ -4,6 +4,7 @@ Polls Dispatcharr stats periodically and accumulates bandwidth data.
 """
 import asyncio
 import logging
+import time
 from datetime import datetime, date, timedelta, timezone
 from typing import Optional
 from zoneinfo import ZoneInfo
@@ -56,6 +57,9 @@ class BandwidthTracker:
         self._last_bytes: dict[str, int] = {}  # Track per-channel bytes to compute deltas
         self._last_active_channels: set[str] = set()  # Track which channels were active last poll (UUIDs)
         self._channel_names: dict[str, str] = {}  # Cache channel names for stop events
+        self._ecm_channel_map: dict[str, str] = {}  # UUID -> name mapping from ECM channels
+        self._channel_map_refresh_interval = 300  # Refresh channel map every 5 minutes
+        self._last_channel_map_refresh = 0.0
 
     async def start(self):
         """Start the background polling task."""
@@ -83,6 +87,8 @@ class BandwidthTracker:
         """Main polling loop - runs until stopped."""
         while self._running:
             try:
+                # Refresh channel name map periodically
+                await self._maybe_refresh_channel_map()
                 await self._collect_stats()
             except asyncio.CancelledError:
                 break
@@ -94,6 +100,40 @@ class BandwidthTracker:
                 await asyncio.sleep(self.poll_interval)
             except asyncio.CancelledError:
                 break
+
+    async def _maybe_refresh_channel_map(self):
+        """Refresh the ECM channel UUID->name map if needed."""
+        now = time.time()
+        if now - self._last_channel_map_refresh < self._channel_map_refresh_interval:
+            return
+
+        try:
+            # Fetch all channels from ECM (paginated)
+            new_map: dict[str, str] = {}
+            page = 1
+            page_size = 500
+            while True:
+                result = await self.client.get_channels(page=page, page_size=page_size)
+                channels = result.get("results", [])
+                for ch in channels:
+                    uuid = ch.get("uuid")
+                    name = ch.get("name")
+                    if uuid and name:
+                        new_map[uuid] = name
+
+                # Check if there are more pages
+                if not result.get("next"):
+                    break
+                page += 1
+                # Safety limit
+                if page > 20:
+                    break
+
+            self._ecm_channel_map = new_map
+            self._last_channel_map_refresh = now
+            logger.debug(f"Refreshed channel map with {len(new_map)} channels")
+        except Exception as e:
+            logger.debug(f"Failed to refresh channel map: {e}")
 
     async def _collect_stats(self):
         """Fetch stats from Dispatcharr and update daily totals."""
@@ -117,8 +157,13 @@ class BandwidthTracker:
 
         for channel in channels:
             channel_id = str(channel.get("channel_id", ""))
-            # Get channel name - Dispatcharr provides this
-            channel_name = channel.get("channel_name") or channel.get("name") or f"Channel {channel_id[:8]}..."
+            # Get channel name - prefer ECM lookup by UUID, fall back to Dispatcharr's response
+            channel_name = (
+                self._ecm_channel_map.get(channel_id)
+                or channel.get("channel_name")
+                or channel.get("name")
+                or f"Channel {channel_id[:8]}..."
+            )
             bytes_now = channel.get("total_bytes", 0) or 0
             client_count = channel.get("client_count", 0) or 0
 
@@ -298,8 +343,11 @@ class BandwidthTracker:
         session = get_session()
         try:
             for channel_id in channel_ids:
-                # Get channel name from cache or database
-                channel_name = self._channel_names.get(channel_id)
+                # Get channel name - prefer ECM map, then cache, then database
+                channel_name = (
+                    self._ecm_channel_map.get(channel_id)
+                    or self._channel_names.get(channel_id)
+                )
                 if not channel_name:
                     record = session.query(ChannelWatchStats).filter(
                         ChannelWatchStats.channel_id == channel_id
