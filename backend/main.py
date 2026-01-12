@@ -2181,7 +2181,7 @@ async def get_channel_stats_detail(channel_id: int):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/stats/events")
+@app.get("/api/stats/activity")
 async def get_system_events(
     limit: int = 100,
     offset: int = 0,
