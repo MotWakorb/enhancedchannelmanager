@@ -1345,7 +1345,7 @@ export function ChannelsPane({
       // Clear success message after 3 seconds
       setTimeout(() => setCopySuccess(null), 3000);
     } else {
-      setCopyError('Failed to copy to clipboard. Ensure HTTPS is used and clipboard permissions are granted.');
+      setCopyError('Failed to copy to clipboard. Please check browser permissions and try again.');
       setCopySuccess(null);
       // Clear error message after 5 seconds
       setTimeout(() => setCopyError(null), 5000);
@@ -1362,7 +1362,7 @@ export function ChannelsPane({
       // Clear success message after 3 seconds
       setTimeout(() => setCopySuccess(null), 3000);
     } else {
-      setCopyError('Failed to copy to clipboard. Ensure HTTPS is used and clipboard permissions are granted.');
+      setCopyError('Failed to copy to clipboard. Please check browser permissions and try again.');
       setCopySuccess(null);
       // Clear error message after 5 seconds
       setTimeout(() => setCopyError(null), 5000);
