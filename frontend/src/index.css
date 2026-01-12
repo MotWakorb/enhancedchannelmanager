@@ -13,7 +13,7 @@
   --bg-secondary: #252530;
   --bg-tertiary: #2a2a35;
   --bg-hover: #3a3a45;
-  --bg-selected: rgba(139, 92, 246, 0.2);
+  --bg-selected: rgba(255, 255, 255, 0.15);
 
   --text-primary: rgba(255, 255, 255, 0.95);
   --text-secondary: #a8a8b8;
@@ -21,11 +21,11 @@
 
   --border-primary: #3a3a45;
   --border-secondary: #4a4a55;
-  --border-accent: rgba(139, 92, 246, 0.5);
+  --border-accent: rgba(255, 255, 255, 0.3);
 
-  --accent-primary: #8b5cf6;
-  --accent-secondary: #a78bfa;
-  --accent-hover: rgba(139, 92, 246, 0.25);
+  --accent-primary: #ffffff;
+  --accent-secondary: #e0e0e8;
+  --accent-hover: rgba(255, 255, 255, 0.2);
 
   --success: #10b981;
   --success-bg: rgba(16, 185, 129, 0.2);
@@ -34,18 +34,18 @@
   --warning: #f59e0b;
 
   /* Interactive elements */
-  --drag-handle-color: #8b5cf6;
-  --drag-handle-hover: #a78bfa;
+  --drag-handle-color: #ffffff;
+  --drag-handle-hover: #e0e0e8;
 
   --input-bg: #2a2a35;
   --input-border: #4a4a55;
-  --input-focus-border: #8b5cf6;
+  --input-focus-border: #ffffff;
 
   --button-bg: #3a3a45;
   --button-hover-bg: #4a4a55;
-  --button-text: #e0e0e8;
-  --button-primary-bg: var(--accent-primary);
-  --button-primary-text: white;
+  --button-text: #ffffff;
+  --button-primary-bg: #ffffff;
+  --button-primary-text: #1e1e23;
 
   --scrollbar-track: #1e1e23;
   --scrollbar-thumb: #4a4a55;
