@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import type { ChannelStatsResponse, SystemEvent, BandwidthSummary, M3UAccount, ChannelWatchStats, TopWatchedSortBy } from '../../types';
 import * as api from '../../services/api';
+import { logger } from '../../utils/logger';
 import {
   LineChart,
   Line,
@@ -306,6 +307,9 @@ export function StatsTab() {
 
   // Load all channels for name lookup (paginated to get all)
   const loadAllChannels = useCallback(async () => {
+    logger.debug('Stats Tab: Loading all channels for name lookup');
+    const startTime = Date.now();
+
     try {
       const map = new Map<string, { name: string; number: number | null }>();
       let page = 1;
@@ -325,24 +329,35 @@ export function StatsTab() {
         if (page > 20) break;
       }
 
+      const elapsed = Date.now() - startTime;
       channelNameMap.current = map;
+      logger.debug(`Stats Tab: Loaded ${map.size} channels for lookup in ${elapsed}ms`);
       console.log(`Loaded ${map.size} channels for lookup`);
     } catch (err) {
+      const elapsed = Date.now() - startTime;
+      logger.error(`Stats Tab: Failed to load channels for name lookup after ${elapsed}ms`, err);
       console.error('Failed to load channels for name lookup:', err);
     }
   }, []);
 
   // Load stream profiles for lookup
   const loadStreamProfiles = useCallback(async () => {
+    logger.debug('Stats Tab: Loading stream profiles for lookup');
+    const startTime = Date.now();
+
     try {
       const profiles = await api.getStreamProfiles();
       const map = new Map<string, string>();
       for (const profile of profiles) {
         map.set(String(profile.id), profile.name);
       }
+      const elapsed = Date.now() - startTime;
       streamProfileMap.current = map;
+      logger.debug(`Stats Tab: Loaded ${map.size} stream profiles for lookup in ${elapsed}ms`);
       console.log(`Loaded ${map.size} stream profiles for lookup`);
     } catch (err) {
+      const elapsed = Date.now() - startTime;
+      logger.error(`Stats Tab: Failed to load stream profiles after ${elapsed}ms`, err);
       console.error('Failed to load stream profiles:', err);
     }
   }, []);
@@ -353,12 +368,49 @@ export function StatsTab() {
     setRefreshing(true);
     setError(null);
 
+    logger.debug('Stats Tab: Starting stats refresh');
+    const startTime = Date.now();
+
     try {
+      logger.debug('Stats Tab: Fetching channel stats, events, bandwidth, and top watched channels');
+
       const [statsResult, eventsResult, bandwidthResult, topWatchedResult] = await Promise.all([
-        api.getChannelStats(),
-        api.getSystemEvents({ limit: 50 }),
-        api.getBandwidthStats().catch(() => null), // Don't fail if bandwidth stats unavailable
-        api.getTopWatchedChannels(10, topWatchedSortBy).catch(() => []), // Don't fail if top watched unavailable
+        api.getChannelStats()
+          .then(result => {
+            logger.debug(`Stats Tab: Channel stats fetched successfully (${result?.channels?.length || 0} channels)`);
+            return result;
+          })
+          .catch(err => {
+            logger.error('Stats Tab: Failed to fetch channel stats', err);
+            throw new Error(`Channel stats: ${err.message}`);
+          }),
+        api.getSystemEvents({ limit: 50 })
+          .then(result => {
+            logger.debug(`Stats Tab: System events fetched successfully (${result?.results?.length || 0} events)`);
+            return result;
+          })
+          .catch(err => {
+            logger.error('Stats Tab: Failed to fetch system events', err);
+            throw new Error(`System events: ${err.message}`);
+          }),
+        api.getBandwidthStats()
+          .then(result => {
+            logger.debug('Stats Tab: Bandwidth stats fetched successfully');
+            return result;
+          })
+          .catch(err => {
+            logger.warn('Stats Tab: Bandwidth stats unavailable', err);
+            return null;
+          }),
+        api.getTopWatchedChannels(10, topWatchedSortBy)
+          .then(result => {
+            logger.debug(`Stats Tab: Top watched channels fetched successfully (${result?.length || 0} channels)`);
+            return result;
+          })
+          .catch(err => {
+            logger.warn('Stats Tab: Top watched channels unavailable', err);
+            return [];
+          }),
       ]);
 
       // Accumulate historical data for charts
@@ -410,6 +462,9 @@ export function StatsTab() {
         }
       }
 
+      const elapsed = Date.now() - startTime;
+      logger.debug(`Stats Tab: Data fetched successfully in ${elapsed}ms`);
+
       setChannelStats(statsResult);
       setEvents(eventsResult.results || []);
       if (bandwidthResult) {
@@ -418,8 +473,14 @@ export function StatsTab() {
       setTopWatchedChannels(topWatchedResult || []);
       lastRefreshRef.current = new Date();
     } catch (err) {
+      const elapsed = Date.now() - startTime;
+      logger.error(`Stats Tab: Failed to fetch stats after ${elapsed}ms`, err);
+
+      // Create a more descriptive error message
+      const errorMessage = err instanceof Error ? err.message : 'Failed to fetch stats';
+      setError(errorMessage);
+
       console.error('Failed to fetch stats:', err);
-      setError(err instanceof Error ? err.message : 'Failed to fetch stats');
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -428,10 +489,17 @@ export function StatsTab() {
 
   // Load M3U accounts for display
   const loadM3UAccounts = useCallback(async () => {
+    logger.debug('Stats Tab: Loading M3U accounts');
+    const startTime = Date.now();
+
     try {
       const accounts = await api.getM3UAccounts();
+      const elapsed = Date.now() - startTime;
+      logger.debug(`Stats Tab: Loaded ${accounts.length} M3U accounts in ${elapsed}ms`);
       setM3uAccounts(accounts);
     } catch (err) {
+      const elapsed = Date.now() - startTime;
+      logger.error(`Stats Tab: Failed to load M3U accounts after ${elapsed}ms`, err);
       console.error('Failed to load M3U accounts:', err);
     }
   }, []);
@@ -439,16 +507,31 @@ export function StatsTab() {
   // Initial load - fetch lookups first, then stats
   useEffect(() => {
     const loadLookups = async () => {
+      logger.info('Stats Tab: Starting initial data load');
+      const startTime = Date.now();
       setLoading(true);
-      // Load channels, stream profiles, and M3U accounts in parallel
-      await Promise.all([
-        loadAllChannels(),
-        loadStreamProfiles(),
-        loadM3UAccounts(),
-      ]);
-      // Now load stats
-      await fetchData(false);
-      setLoading(false);
+
+      try {
+        // Load channels, stream profiles, and M3U accounts in parallel
+        logger.debug('Stats Tab: Loading lookup data (channels, profiles, M3U accounts)');
+        await Promise.all([
+          loadAllChannels(),
+          loadStreamProfiles(),
+          loadM3UAccounts(),
+        ]);
+
+        // Now load stats
+        logger.debug('Stats Tab: Lookup data loaded, fetching initial stats');
+        await fetchData(false);
+
+        const elapsed = Date.now() - startTime;
+        logger.info(`Stats Tab: Initial data load completed in ${elapsed}ms`);
+      } catch (err) {
+        const elapsed = Date.now() - startTime;
+        logger.error(`Stats Tab: Initial data load failed after ${elapsed}ms`, err);
+      } finally {
+        setLoading(false);
+      }
     };
     loadLookups();
   }, [loadAllChannels, loadStreamProfiles, loadM3UAccounts, fetchData]);
@@ -461,9 +544,13 @@ export function StatsTab() {
     }
 
     if (refreshInterval > 0) {
+      logger.debug(`Stats Tab: Auto-refresh enabled (${refreshInterval}s interval)`);
       refreshTimerRef.current = window.setInterval(() => {
+        logger.debug(`Stats Tab: Auto-refresh triggered (${refreshInterval}s interval)`);
         fetchData(false);
       }, refreshInterval * 1000);
+    } else {
+      logger.debug('Stats Tab: Auto-refresh disabled (manual mode)');
     }
 
     return () => {
@@ -477,10 +564,13 @@ export function StatsTab() {
   const handleStopChannel = async (channelId: string | number) => {
     if (!confirm('Are you sure you want to stop this channel?')) return;
 
+    logger.info(`Stats Tab: Attempting to stop channel ${channelId}`);
     try {
       await api.stopChannel(channelId);
+      logger.info(`Stats Tab: Successfully stopped channel ${channelId}`);
       fetchData(false);
     } catch (err) {
+      logger.error(`Stats Tab: Failed to stop channel ${channelId}`, err);
       console.error('Failed to stop channel:', err);
       alert('Failed to stop channel');
     }
