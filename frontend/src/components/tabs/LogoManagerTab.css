@@ -106,6 +106,27 @@
   color: var(--text-muted);
 }
 
+.search-box .clear-search {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  padding: 0.125rem;
+  cursor: pointer;
+  color: var(--text-secondary);
+  border-radius: 3px;
+}
+
+.search-box .clear-search:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.search-box .clear-search .material-icons {
+  font-size: 1rem;
+}
+
 /* View Toggle */
 .view-toggle {
   display: flex;

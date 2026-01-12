@@ -132,6 +132,16 @@ export function LogoManagerTab() {
               value={searchInput}
               onChange={(e) => setSearchInput(e.target.value)}
             />
+            {searchInput && (
+              <button
+                type="button"
+                className="clear-search"
+                onClick={() => setSearchInput('')}
+                title="Clear search"
+              >
+                <span className="material-icons">close</span>
+              </button>
+            )}
           </div>
 
           {/* View Toggle */}
