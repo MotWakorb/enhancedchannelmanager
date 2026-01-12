@@ -341,6 +341,8 @@ class BandwidthTracker:
             dict with today, this_week, this_month, this_year, all_time bytes,
             and daily_history for last 7 days
         """
+        from sqlalchemy import func
+
         today = get_current_date()
         week_ago = today - timedelta(days=7)
         month_start = today.replace(day=1)
@@ -348,32 +350,36 @@ class BandwidthTracker:
 
         session = get_session()
         try:
-            # Get all records for calculations
-            all_records = session.query(BandwidthDaily).all()
+            # Use SQL aggregation for efficient calculations
+            # Today's bytes
+            today_result = session.query(
+                func.coalesce(func.sum(BandwidthDaily.bytes_transferred), 0)
+            ).filter(BandwidthDaily.date == today).scalar()
+            today_bytes = today_result or 0
 
-            # Calculate totals for each period
-            today_bytes = 0
-            week_bytes = 0
-            month_bytes = 0
-            year_bytes = 0
-            all_time_bytes = 0
-            daily_history = []
+            # This week's bytes
+            week_result = session.query(
+                func.coalesce(func.sum(BandwidthDaily.bytes_transferred), 0)
+            ).filter(BandwidthDaily.date >= week_ago).scalar()
+            week_bytes = week_result or 0
 
-            for record in all_records:
-                bytes_val = record.bytes_transferred or 0
-                all_time_bytes += bytes_val
+            # This month's bytes
+            month_result = session.query(
+                func.coalesce(func.sum(BandwidthDaily.bytes_transferred), 0)
+            ).filter(BandwidthDaily.date >= month_start).scalar()
+            month_bytes = month_result or 0
 
-                if record.date == today:
-                    today_bytes = bytes_val
+            # This year's bytes
+            year_result = session.query(
+                func.coalesce(func.sum(BandwidthDaily.bytes_transferred), 0)
+            ).filter(BandwidthDaily.date >= year_start).scalar()
+            year_bytes = year_result or 0
 
-                if record.date >= week_ago:
-                    week_bytes += bytes_val
-
-                if record.date >= month_start:
-                    month_bytes += bytes_val
-
-                if record.date >= year_start:
-                    year_bytes += bytes_val
+            # All time bytes
+            all_time_result = session.query(
+                func.coalesce(func.sum(BandwidthDaily.bytes_transferred), 0)
+            ).scalar()
+            all_time_bytes = all_time_result or 0
 
             # Get last 7 days for chart
             week_records = session.query(BandwidthDaily).filter(

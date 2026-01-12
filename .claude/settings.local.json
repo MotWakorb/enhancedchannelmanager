@@ -26,7 +26,8 @@
       "Bash(python3:*)",
       "Bash(docker exec:*)",
       "Bash(grep:*)",
-      "Bash(docker logs:*)"
+      "Bash(docker logs:*)",
+      "Bash(sqlite3:*)"
     ],
     "deny": [],
     "ask": []

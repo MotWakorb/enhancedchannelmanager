@@ -58,6 +58,9 @@ def init_db() -> None:
     # Run migrations for existing tables (add new columns if missing)
     _run_migrations(_engine)
 
+    # Perform maintenance: purge old entries and vacuum
+    _perform_maintenance(_engine)
+
     logger.info("Journal database initialized successfully")
 
 
@@ -77,6 +80,44 @@ def _run_migrations(engine) -> None:
             ))
             conn.commit()
             logger.info("Migration complete: added total_watch_seconds column")
+
+
+def _perform_maintenance(engine) -> None:
+    """Perform database maintenance on startup: purge old entries and vacuum."""
+    from sqlalchemy import text
+    from datetime import datetime, timedelta
+
+    PURGE_DAYS = 30  # Keep 30 days of journal entries
+
+    with engine.connect() as conn:
+        try:
+            # Purge old journal entries
+            cutoff_date = datetime.utcnow() - timedelta(days=PURGE_DAYS)
+            result = conn.execute(
+                text("DELETE FROM journal_entries WHERE timestamp < :cutoff"),
+                {"cutoff": cutoff_date}
+            )
+            deleted_count = result.rowcount
+            if deleted_count > 0:
+                logger.info(f"Purged {deleted_count} journal entries older than {PURGE_DAYS} days")
+
+            # Purge old bandwidth records (keep 1 year)
+            bandwidth_cutoff = datetime.utcnow() - timedelta(days=365)
+            result = conn.execute(
+                text("DELETE FROM bandwidth_daily WHERE date < :cutoff"),
+                {"cutoff": bandwidth_cutoff.date()}
+            )
+            if result.rowcount > 0:
+                logger.info(f"Purged {result.rowcount} bandwidth records older than 1 year")
+
+            conn.commit()
+
+            # Run VACUUM to reclaim disk space (must be outside transaction)
+            conn.execute(text("VACUUM"))
+            logger.info("Database vacuum completed")
+
+        except Exception as e:
+            logger.error(f"Database maintenance failed: {e}")
 
 
 def get_session():
