@@ -208,15 +208,19 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
       setOriginalUsername(username);
       setPassword('');
       setSaveSuccess(true);
+      logger.info('Settings saved successfully');
       // Check if poll interval or timezone changed and needs restart
       if (statsPollInterval !== originalPollInterval || userTimezone !== originalTimezone) {
         setNeedsRestart(true);
+        logger.info('Stats polling or timezone changed - backend restart recommended');
       }
       onSaved();
-      // Clear success message after 3 seconds
-      setTimeout(() => setSaveSuccess(false), 3000);
+      // Clear success message after 8 seconds
+      setTimeout(() => setSaveSuccess(false), 8000);
     } catch (err) {
-      setError('Failed to save settings');
+      const errorMessage = err instanceof Error ? err.message : 'Failed to save settings';
+      logger.error('Failed to save settings', err);
+      setError(errorMessage);
     } finally {
       setLoading(false);
     }
