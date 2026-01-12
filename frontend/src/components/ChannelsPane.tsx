@@ -1080,13 +1080,6 @@ export function ChannelsPane({
     }
   }, [contextMenu]);
 
-  // Initialize group order when channel groups change
-  useEffect(() => {
-    if (groupOrder.length === 0 && channelGroups.length > 0) {
-      setGroupOrder(channelGroups.map(g => g.id));
-    }
-  }, [channelGroups, groupOrder.length]);
-
   // Filter channel groups based on search text (for create modal dropdown)
   const searchFilteredChannelGroups = channelGroups.filter((group) =>
     group.name.toLowerCase().includes(groupSearchText.toLowerCase())
@@ -2735,13 +2728,19 @@ export function ChannelsPane({
       const activeGroupNumId = parseInt(activeGroupId, 10);
       const overGroupNumId = parseInt(overGroupId, 10);
 
+      // If groupOrder is empty, initialize it with current sorted group order
+      let currentOrder = groupOrder;
+      if (currentOrder.length === 0) {
+        currentOrder = sortedChannelGroups.map(g => g.id);
+      }
+
       // Find indices in current order
-      const oldIndex = groupOrder.indexOf(activeGroupNumId);
-      const newIndex = groupOrder.indexOf(overGroupNumId);
+      const oldIndex = currentOrder.indexOf(activeGroupNumId);
+      const newIndex = currentOrder.indexOf(overGroupNumId);
 
       if (oldIndex !== -1 && newIndex !== -1) {
         // Reorder the groups
-        const newOrder = arrayMove(groupOrder, oldIndex, newIndex);
+        const newOrder = arrayMove(currentOrder, oldIndex, newIndex);
         setGroupOrder(newOrder);
       }
       return;
