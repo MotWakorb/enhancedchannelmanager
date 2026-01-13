@@ -63,7 +63,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
   const [saveSuccess, setSaveSuccess] = useState(false);
 
   // Maintenance state
-  const [orphanedGroups, setOrphanedGroups] = useState<{ id: number; name: string }[]>([]);
+  const [orphanedGroups, setOrphanedGroups] = useState<{ id: number; name: string; reason?: string }[]>([]);
   const [loadingOrphaned, setLoadingOrphaned] = useState(false);
   const [cleaningOrphaned, setCleaningOrphaned] = useState(false);
   const [cleanupResult, setCleanupResult] = useState<string | null>(null);
@@ -1122,7 +1122,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
       <div className="settings-section">
         <div className="settings-section-header">
           <h3>Orphaned Channel Groups</h3>
-          <p>Channel groups that are not associated with any M3U account. These are typically leftover from deleted M3U accounts.</p>
+          <p>Channel groups with no channels or channels that have no streams. These are safe to delete.</p>
         </div>
 
         <div className="settings-group">
@@ -1140,7 +1140,10 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
               <p><strong>Found {orphanedGroups.length} orphaned group(s):</strong></p>
               <ul style={{ marginLeft: '1.5rem', marginTop: '0.5rem' }}>
                 {orphanedGroups.map(group => (
-                  <li key={group.id}>{group.name} (ID: {group.id})</li>
+                  <li key={group.id}>
+                    <strong>{group.name}</strong> (ID: {group.id})
+                    {group.reason && <span style={{ color: '#888', marginLeft: '0.5rem' }}>- {group.reason}</span>}
+                  </li>
                 ))}
               </ul>
               <button

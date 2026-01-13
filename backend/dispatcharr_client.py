@@ -292,10 +292,14 @@ class DispatcharrClient:
         When multiple accounts have settings for the same group, prefer the one with auto_channel_sync enabled.
         """
         accounts = await self.get_m3u_accounts()
+        logger.info(f"get_all_m3u_group_settings: Processing {len(accounts)} M3U accounts")
         all_settings = {}
+        total_groups_found = 0
         for account in accounts:
             # channel_groups is embedded in the account response
             channel_groups = account.get("channel_groups", [])
+            total_groups_found += len(channel_groups)
+            logger.info(f"  Account {account.get('id')}: {account.get('name')} has {len(channel_groups)} channel_groups")
             for setting in channel_groups:
                 channel_group_id = setting.get("channel_group")
                 if channel_group_id:
@@ -311,6 +315,8 @@ class DispatcharrClient:
                         all_settings[channel_group_id] = new_setting
                     elif new_setting.get("auto_channel_sync") and not existing.get("auto_channel_sync"):
                         all_settings[channel_group_id] = new_setting
+        logger.info(f"  Total channel_groups entries across all accounts: {total_groups_found}")
+        logger.info(f"  Unique channel group IDs extracted: {len(all_settings)}")
         return all_settings
 
     async def get_m3u_account(self, account_id: int) -> dict:
