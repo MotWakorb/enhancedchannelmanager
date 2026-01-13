@@ -161,6 +161,23 @@ export async function deleteChannelGroup(id: number): Promise<void> {
   await fetch(`${API_BASE}/channel-groups/${id}`, { method: 'DELETE' });
 }
 
+export async function getOrphanedChannelGroups(): Promise<{
+  orphaned_groups: { id: number; name: string }[];
+  total_groups: number;
+  m3u_associated_groups: number;
+}> {
+  return fetchJson(`${API_BASE}/channel-groups/orphaned`);
+}
+
+export async function deleteOrphanedChannelGroups(): Promise<{
+  status: string;
+  message: string;
+  deleted_groups: { id: number; name: string }[];
+  failed_groups: { id: number; name: string; error: string }[];
+}> {
+  return fetchJson(`${API_BASE}/channel-groups/orphaned`, { method: 'DELETE' });
+}
+
 export async function getHiddenChannelGroups(): Promise<{ id: number; name: string; hidden_at: string }[]> {
   return fetchJson(`${API_BASE}/channel-groups/hidden`);
 }

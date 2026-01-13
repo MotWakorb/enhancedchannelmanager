@@ -13,7 +13,7 @@ interface SettingsTabProps {
   channelProfiles?: ChannelProfile[];
 }
 
-type SettingsPage = 'general' | 'channel-defaults' | 'appearance';
+type SettingsPage = 'general' | 'channel-defaults' | 'appearance' | 'maintenance';
 
 export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: SettingsTabProps) {
   const [activePage, setActivePage] = useState<SettingsPage>('general');
@@ -61,6 +61,12 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
   const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [saveSuccess, setSaveSuccess] = useState(false);
+
+  // Maintenance state
+  const [orphanedGroups, setOrphanedGroups] = useState<{ id: number; name: string }[]>([]);
+  const [loadingOrphaned, setLoadingOrphaned] = useState(false);
+  const [cleaningOrphaned, setCleaningOrphaned] = useState(false);
+  const [cleanupResult, setCleanupResult] = useState<string | null>(null);
 
   // Track original URL/username to detect if auth settings changed
   const [originalUrl, setOriginalUrl] = useState('');
@@ -243,6 +249,51 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
       setRestartResult({ success: false, message: 'Failed to restart services' });
     } finally {
       setRestarting(false);
+    }
+  };
+
+  const handleLoadOrphanedGroups = async () => {
+    setLoadingOrphaned(true);
+    setCleanupResult(null);
+    try {
+      const result = await api.getOrphanedChannelGroups();
+      setOrphanedGroups(result.orphaned_groups);
+      if (result.orphaned_groups.length === 0) {
+        setCleanupResult('No orphaned groups found. Your database is clean!');
+      }
+    } catch (err) {
+      setCleanupResult(`Failed to load orphaned groups: ${err}`);
+    } finally {
+      setLoadingOrphaned(false);
+    }
+  };
+
+  const handleCleanupOrphanedGroups = async () => {
+    if (!confirm(`Are you sure you want to delete ${orphanedGroups.length} orphaned group(s)? This action cannot be undone.`)) {
+      return;
+    }
+
+    setCleaningOrphaned(true);
+    setCleanupResult(null);
+    try {
+      const result = await api.deleteOrphanedChannelGroups();
+      setCleanupResult(result.message);
+
+      if (result.deleted_groups.length > 0) {
+        // Reload to refresh the list
+        await handleLoadOrphanedGroups();
+        // Notify parent to refresh data
+        onSaved();
+      }
+
+      if (result.failed_groups.length > 0) {
+        const failedNames = result.failed_groups.map(g => g.name).join(', ');
+        setCleanupResult(`${result.message}. Failed to delete: ${failedNames}`);
+      }
+    } catch (err) {
+      setCleanupResult(`Failed to cleanup orphaned groups: ${err}`);
+    } finally {
+      setCleaningOrphaned(false);
     }
   };
 
@@ -1061,6 +1112,60 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
     </div>
   );
 
+  const renderMaintenancePage = () => (
+    <div className="settings-page">
+      <div className="settings-page-header">
+        <h2>Maintenance</h2>
+        <p>Database cleanup and maintenance tools.</p>
+      </div>
+
+      <div className="settings-section">
+        <div className="settings-section-header">
+          <h3>Orphaned Channel Groups</h3>
+          <p>Channel groups that are not associated with any M3U account. These are typically leftover from deleted M3U accounts.</p>
+        </div>
+
+        <div className="settings-group">
+          <button
+            className="btn-secondary"
+            onClick={handleLoadOrphanedGroups}
+            disabled={loadingOrphaned || cleaningOrphaned}
+          >
+            <span className="material-icons">search</span>
+            {loadingOrphaned ? 'Scanning...' : 'Scan for Orphaned Groups'}
+          </button>
+
+          {orphanedGroups.length > 0 && (
+            <div style={{ marginTop: '1rem' }}>
+              <p><strong>Found {orphanedGroups.length} orphaned group(s):</strong></p>
+              <ul style={{ marginLeft: '1.5rem', marginTop: '0.5rem' }}>
+                {orphanedGroups.map(group => (
+                  <li key={group.id}>{group.name} (ID: {group.id})</li>
+                ))}
+              </ul>
+              <button
+                className="btn-danger"
+                onClick={handleCleanupOrphanedGroups}
+                disabled={cleaningOrphaned || loadingOrphaned}
+                style={{ marginTop: '1rem' }}
+              >
+                <span className="material-icons">delete_forever</span>
+                {cleaningOrphaned ? 'Cleaning...' : `Delete ${orphanedGroups.length} Orphaned Group(s)`}
+              </button>
+            </div>
+          )}
+
+          {cleanupResult && (
+            <div className={cleanupResult.includes('Failed') ? 'error-message' : 'success-message'} style={{ marginTop: '1rem' }}>
+              <span className="material-icons">{cleanupResult.includes('Failed') ? 'error' : 'check_circle'}</span>
+              {cleanupResult}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+
   return (
     <div className="settings-tab">
       <nav className="settings-sidebar">
@@ -1086,6 +1191,13 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
             <span className="material-icons">palette</span>
             Appearance
           </li>
+          <li
+            className={`settings-nav-item ${activePage === 'maintenance' ? 'active' : ''}`}
+            onClick={() => setActivePage('maintenance')}
+          >
+            <span className="material-icons">build</span>
+            Maintenance
+          </li>
         </ul>
       </nav>
 
@@ -1093,6 +1205,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
         {activePage === 'general' && renderGeneralPage()}
         {activePage === 'channel-defaults' && renderChannelDefaultsPage()}
         {activePage === 'appearance' && renderAppearancePage()}
+        {activePage === 'maintenance' && renderMaintenancePage()}
       </div>
     </div>
   );
