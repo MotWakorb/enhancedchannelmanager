@@ -486,45 +486,41 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
           <h3>Logging</h3>
         </div>
 
-        <div className="form-row">
-          <div className="form-group">
-            <label htmlFor="backendLogLevel">Backend Log Level</label>
-            <select
-              id="backendLogLevel"
-              value={backendLogLevel}
-              onChange={(e) => setBackendLogLevel(e.target.value)}
-            >
-              <option value="DEBUG">DEBUG - Show all messages including debug info</option>
-              <option value="INFO">INFO - Show informational messages and above</option>
-              <option value="WARNING">WARNING - Show warnings and errors only</option>
-              <option value="ERROR">ERROR - Show errors only</option>
-              <option value="CRITICAL">CRITICAL - Show only critical errors</option>
-            </select>
-            <p className="form-help">
-              Controls Python backend logging level. Changes apply immediately.
-              Check Docker logs to see backend messages.
-            </p>
-          </div>
+        <div className="form-group">
+          <label htmlFor="backendLogLevel">Backend Log Level</label>
+          <select
+            id="backendLogLevel"
+            value={backendLogLevel}
+            onChange={(e) => setBackendLogLevel(e.target.value)}
+          >
+            <option value="DEBUG">DEBUG - Show all messages including debug info</option>
+            <option value="INFO">INFO - Show informational messages and above</option>
+            <option value="WARNING">WARNING - Show warnings and errors only</option>
+            <option value="ERROR">ERROR - Show errors only</option>
+            <option value="CRITICAL">CRITICAL - Show only critical errors</option>
+          </select>
+          <p className="form-hint">
+            Controls Python backend logging level. Changes apply immediately.
+            Check Docker logs to see backend messages.
+          </p>
         </div>
 
-        <div className="form-row">
-          <div className="form-group">
-            <label htmlFor="frontendLogLevel">Frontend Log Level</label>
-            <select
-              id="frontendLogLevel"
-              value={frontendLogLevel}
-              onChange={(e) => setFrontendLogLevel(e.target.value)}
-            >
-              <option value="DEBUG">DEBUG - Show all messages including debug info</option>
-              <option value="INFO">INFO - Show informational messages and above</option>
-              <option value="WARN">WARN - Show warnings and errors only</option>
-              <option value="ERROR">ERROR - Show errors only</option>
-            </select>
-            <p className="form-help">
-              Controls browser console logging level. Changes apply immediately.
-              Open browser DevTools (F12) to see frontend messages.
-            </p>
-          </div>
+        <div className="form-group">
+          <label htmlFor="frontendLogLevel">Frontend Log Level</label>
+          <select
+            id="frontendLogLevel"
+            value={frontendLogLevel}
+            onChange={(e) => setFrontendLogLevel(e.target.value)}
+          >
+            <option value="DEBUG">DEBUG - Show all messages including debug info</option>
+            <option value="INFO">INFO - Show informational messages and above</option>
+            <option value="WARN">WARN - Show warnings and errors only</option>
+            <option value="ERROR">ERROR - Show errors only</option>
+          </select>
+          <p className="form-hint">
+            Controls browser console logging level. Changes apply immediately.
+            Open browser DevTools (F12) to see frontend messages.
+          </p>
         </div>
       </div>
 
@@ -1124,9 +1120,12 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
 
       <div className="settings-section">
         <div className="settings-section-header">
+          <span className="material-icons">folder_delete</span>
           <h3>Orphaned Channel Groups</h3>
-          <p>Channel groups that are not associated with any M3U account and have no content (no streams or channels). These are typically leftover from deleted M3U accounts and are safe to delete.</p>
         </div>
+        <p className="form-hint" style={{ marginBottom: '1rem' }}>
+          Channel groups that are not associated with any M3U account and have no content (no streams or channels). These are typically leftover from deleted M3U accounts and are safe to delete.
+        </p>
 
         <div className="settings-group">
           <button
