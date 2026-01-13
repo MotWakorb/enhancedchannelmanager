@@ -11,6 +11,7 @@ import * as api from './services/api';
 import type { Channel, ChannelGroup, ChannelProfile, Stream, M3UAccount, M3UGroupSetting, Logo, ChangeInfo, EPGData, StreamProfile, EPGSource, ChannelListFilterSettings, CommitProgress } from './types';
 import packageJson from '../package.json';
 import { logger } from './utils/logger';
+import ECMLogo from './assets/ECMLogo.png';
 import './App.css';
 
 // Lazy load non-primary tabs
@@ -1443,7 +1444,10 @@ function App() {
   return (
     <div className="app">
       <header className={`header ${isEditMode ? 'edit-mode-active' : ''}`}>
-        <h1>Enhanced Channel Manager</h1>
+        <h1>
+          <img src={ECMLogo} alt="ECM Logo" className="header-logo" />
+          Enhanced Channel Manager
+        </h1>
         <div className="header-actions">
           {/* Edit Mode Controls - only show on Channel Manager tab */}
           {activeTab === 'channel-manager' && (
