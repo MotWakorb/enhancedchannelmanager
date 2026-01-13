@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, memo } from 'react';
 import {
   DndContext,
   DragOverlay,
@@ -176,7 +176,7 @@ interface SortableStreamItemProps {
   showStreamUrls?: boolean;
 }
 
-function SortableStreamItem({ stream, providerName, isEditMode, onRemove, onCopyUrl, showStreamUrls = true }: SortableStreamItemProps) {
+const SortableStreamItem = memo(function SortableStreamItem({ stream, providerName, isEditMode, onRemove, onCopyUrl, showStreamUrls = true }: SortableStreamItemProps) {
   const {
     attributes,
     listeners,
@@ -258,9 +258,9 @@ function SortableStreamItem({ stream, providerName, isEditMode, onRemove, onCopy
       )}
     </div>
   );
-}
+});
 
-function SortableChannel({
+const SortableChannel = memo(function SortableChannel({
   channel,
   isSelected,
   isMultiSelected,
@@ -491,14 +491,14 @@ function SortableChannel({
       )}
     </div>
   );
-}
+});
 
 // Sortable Group Header wrapper for drag-and-drop group reordering
 interface SortableGroupHeaderProps extends Omit<DroppableGroupHeaderProps, 'groupId'> {
   groupId: number | 'ungrouped';
 }
 
-function SortableGroupHeader(props: SortableGroupHeaderProps) {
+const SortableGroupHeader = memo(function SortableGroupHeader(props: SortableGroupHeaderProps) {
   const { groupId, isEditMode } = props;
 
   // Don't make ungrouped sortable
@@ -530,7 +530,7 @@ function SortableGroupHeader(props: SortableGroupHeaderProps) {
       />
     </div>
   );
-}
+});
 
 // Droppable Group Header component for cross-group channel dragging
 interface DroppableGroupHeaderProps {
@@ -553,7 +553,7 @@ interface DroppableGroupHeaderProps {
   dragHandleProps?: any;
 }
 
-function DroppableGroupHeader({
+const DroppableGroupHeader = memo(function DroppableGroupHeader({
   groupId,
   groupName,
   channelCount,
@@ -715,7 +715,7 @@ function DroppableGroupHeader({
       )}
     </div>
   );
-}
+});
 
 // Droppable zone at the end of a group (for dropping below the last channel)
 interface DroppableGroupEndProps {
@@ -724,7 +724,7 @@ interface DroppableGroupEndProps {
   showDropIndicator: boolean;
 }
 
-function DroppableGroupEnd({
+const DroppableGroupEnd = memo(function DroppableGroupEnd({
   groupId,
   isEditMode,
   showDropIndicator,
@@ -747,7 +747,7 @@ function DroppableGroupEnd({
       )}
     </div>
   );
-}
+});
 
 export function ChannelsPane({
   channelGroups,
