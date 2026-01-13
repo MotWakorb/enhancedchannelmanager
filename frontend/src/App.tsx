@@ -503,6 +503,25 @@ function App() {
     }
   }, [channelListFilters.showAutoChannelGroups, providerGroupSettings, channels]);
 
+  // Clean up channelGroupFilter when groups are deleted
+  useEffect(() => {
+    const existingGroupIds = new Set(channelGroups.map(g => g.id));
+
+    setChannelGroupFilter(prev => {
+      if (prev.length === 0) return prev;
+
+      const hasDeletedGroups = prev.some(id => !existingGroupIds.has(id));
+
+      // If some group IDs no longer exist, remove them from the filter
+      if (hasDeletedGroups) {
+        const validGroupIds = prev.filter(id => existingGroupIds.has(id));
+        return validGroupIds;
+      }
+
+      return prev;
+    });
+  }, [channelGroups]);
+
   const handleSettingsSaved = async () => {
     setError(null);
     // Reload settings to get updated values
