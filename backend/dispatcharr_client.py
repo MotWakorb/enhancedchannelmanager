@@ -279,7 +279,11 @@ class DispatcharrClient:
         """Get all M3U accounts/providers."""
         response = await self._request("GET", "/api/m3u/accounts/")
         response.raise_for_status()
-        return response.json()
+        accounts = response.json()
+        logger.debug(f"Dispatcharr returned {len(accounts)} M3U accounts")
+        for account in accounts:
+            logger.debug(f"  M3U Account: id={account.get('id')}, name={account.get('name')}, server_url={account.get('server_url')}")
+        return accounts
 
     async def get_all_m3u_group_settings(self) -> dict:
         """Get group settings for all M3U accounts, returns dict mapping channel_group_id to settings.
