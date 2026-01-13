@@ -703,6 +703,44 @@
   outline-offset: -2px;
 }
 
+/* Stream group drop zone (between groups) */
+.stream-group-drop-zone {
+  height: 40px;
+  margin: 0.5rem 0;
+  border: 2px dashed transparent;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s ease;
+  opacity: 0.5;
+}
+
+.stream-group-drop-zone.active {
+  opacity: 1;
+  border-color: #22d3ee;
+  background-color: rgba(34, 211, 238, 0.1);
+  height: 60px;
+}
+
+.stream-group-drop-zone .drop-zone-indicator {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: #22d3ee;
+  font-size: 0.9rem;
+  font-weight: 500;
+  pointer-events: none;
+}
+
+.stream-group-drop-zone.active .drop-zone-indicator {
+  font-size: 1rem;
+}
+
+.stream-group-drop-zone .material-icons {
+  font-size: 1.2rem;
+}
+
 .loading {
   padding: 2rem;
   text-align: center;

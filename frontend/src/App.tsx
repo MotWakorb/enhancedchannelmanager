@@ -1331,9 +1331,14 @@ function App() {
 
   // Handle stream group drop on channels pane (triggers bulk create modal in streams pane)
   // Supports multiple groups being dropped at once
-  const handleStreamGroupDrop = useCallback((groupNames: string[], _streamIds: number[]) => {
+  // Now includes optional target group and suggested starting number for positional drops
+  const handleStreamGroupDrop = useCallback((groupNames: string[], _streamIds: number[], _targetGroupId?: number, suggestedStartingNumber?: number) => {
     // Set the dropped group names - StreamsPane will react to this and open the modal
     setDroppedStreamGroupNames(groupNames);
+    // If a suggested starting number was provided, use it
+    if (suggestedStartingNumber !== undefined) {
+      setDroppedStreamStartingNumber(suggestedStartingNumber);
+    }
   }, []);
 
   // Handle bulk streams drop on channels pane (triggers bulk create modal for specific streams)
