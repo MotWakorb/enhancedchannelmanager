@@ -910,6 +910,9 @@ async def get_orphaned_channel_groups():
         # Get all channel groups from Dispatcharr
         all_groups = await client.get_channel_groups()
 
+        # Get M3U group settings to see which M3U accounts groups were associated with
+        m3u_group_settings = await client.get_all_m3u_group_settings()
+
         # Get all streams (paginated) to check which groups have streams
         streams = []
         page = 1
@@ -960,7 +963,8 @@ async def get_orphaned_channel_groups():
         if channels:
             logger.info(f"Sample channel: {channels[0]}")
 
-        # Find orphaned groups (no streams AND no channels)
+        # Find orphaned groups
+        # A group is orphaned if it has no streams AND no channels AND is NOT in any M3U account
         orphaned_groups = []
         for group in all_groups:
             group_id = group["id"]
@@ -969,12 +973,18 @@ async def get_orphaned_channel_groups():
             stream_count = group_stream_count.get(group_id, 0)
             channel_count = group_channel_count.get(group_id, 0)
 
-            if stream_count == 0 and channel_count == 0:
-                # Group has neither streams nor channels - it's orphaned
+            # Check if this group is associated with any M3U account
+            m3u_info = m3u_group_settings.get(group_id)
+
+            # Only consider it orphaned if:
+            # 1. It has no streams AND no channels
+            # 2. AND it's not in any M3U account (truly orphaned from deleted M3U)
+            if stream_count == 0 and channel_count == 0 and m3u_info is None:
+                # Group is truly orphaned - not in any M3U and has no content
                 orphaned_groups.append({
                     "id": group_id,
                     "name": group_name,
-                    "reason": "No streams or channels",
+                    "reason": "No streams, channels, or M3U association",
                 })
 
         # Sort by name for consistent display
@@ -1002,6 +1012,9 @@ async def delete_orphaned_channel_groups():
     try:
         # Use the same logic as GET to find orphaned groups
         all_groups = await client.get_channel_groups()
+
+        # Get M3U group settings to see which groups are still in M3U accounts
+        m3u_group_settings = await client.get_all_m3u_group_settings()
 
         # Get all streams (paginated)
         streams = []
@@ -1043,7 +1056,8 @@ async def delete_orphaned_channel_groups():
             if group_id:
                 group_channel_count[group_id] = group_channel_count.get(group_id, 0) + 1
 
-        # Find orphaned groups (no streams AND no channels)
+        # Find orphaned groups
+        # A group is orphaned if it has no streams AND no channels AND is NOT in any M3U account
         orphaned_groups = []
         for group in all_groups:
             group_id = group["id"]
@@ -1052,12 +1066,18 @@ async def delete_orphaned_channel_groups():
             stream_count = group_stream_count.get(group_id, 0)
             channel_count = group_channel_count.get(group_id, 0)
 
-            if stream_count == 0 and channel_count == 0:
-                # Group has neither streams nor channels - it's orphaned
+            # Check if this group is associated with any M3U account
+            m3u_info = m3u_group_settings.get(group_id)
+
+            # Only consider it orphaned if:
+            # 1. It has no streams AND no channels
+            # 2. AND it's not in any M3U account (truly orphaned from deleted M3U)
+            if stream_count == 0 and channel_count == 0 and m3u_info is None:
+                # Group is truly orphaned - not in any M3U and has no content
                 orphaned_groups.append({
                     "id": group_id,
                     "name": group_name,
-                    "reason": "No streams or channels",
+                    "reason": "No streams, channels, or M3U association",
                 })
 
         if not orphaned_groups:
