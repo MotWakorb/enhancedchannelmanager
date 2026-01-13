@@ -35,6 +35,7 @@ import { openInVLC } from '../utils/vlc';
 import { useCopyFeedback } from '../hooks/useCopyFeedback';
 import { useDropdown } from '../hooks/useDropdown';
 import { useContextMenu } from '../hooks/useContextMenu';
+import { useModal } from '../hooks/useModal';
 import './ChannelsPane.css';
 
 interface ChannelsPaneProps {
@@ -862,11 +863,9 @@ export function ChannelsPane({
     dropdownRef: filterSettingsRef,
   } = useDropdown();
 
-  // Create channel modal state
-  const [showCreateModal, setShowCreateModal] = useState(false);
-
-  // Channel profiles modal state
-  const [showProfilesModal, setShowProfilesModal] = useState(false);
+  // Modal management with useModal hook
+  const createModal = useModal();
+  const profilesModal = useModal();
   const [newChannelName, setNewChannelName] = useState('');
   const [newChannelNumber, setNewChannelNumber] = useState('');
   const [newChannelGroup, setNewChannelGroup] = useState<number | ''>('');
@@ -884,7 +883,7 @@ export function ChannelsPane({
   const [groupSearchText, setGroupSearchText] = useState('');
   const [showGroupDropdown, setShowGroupDropdown] = useState(false);
   const [creating, setCreating] = useState(false);
-  const [showConflictDialog, setShowConflictDialog] = useState(false);
+  const conflictDialog = useModal();
   const [conflictingChannelNumber, setConflictingChannelNumber] = useState<number | null>(null);
   const groupInputRef = useRef<HTMLInputElement>(null);
   const groupDropdownListRef = useRef<HTMLDivElement>(null);
@@ -902,14 +901,14 @@ export function ChannelsPane({
   const [streamsLoading, setStreamsLoading] = useState(false);
 
   // Delete channel state
-  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const deleteConfirmModal = useModal();
   const [channelToDelete, setChannelToDelete] = useState<Channel | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [renumberAfterDelete, setRenumberAfterDelete] = useState(true);
   const [subsequentChannels, setSubsequentChannels] = useState<Channel[]>([]);
 
   // Edit channel modal state
-  const [showEditChannelModal, setShowEditChannelModal] = useState(false);
+  const editChannelModal = useModal();
   const [channelToEdit, setChannelToEdit] = useState<Channel | null>(null);
 
   // Copy to clipboard feedback state
@@ -921,29 +920,29 @@ export function ChannelsPane({
   const [streamGroupDropTarget, setStreamGroupDropTarget] = useState<{ afterGroupId: number | 'ungrouped' | null } | null>(null);
 
   // Create channel group modal state
-  const [showCreateGroupModal, setShowCreateGroupModal] = useState(false);
+  const createGroupModal = useModal();
   const [newGroupName, setNewGroupName] = useState('');
   const [creatingGroup, setCreatingGroup] = useState(false);
 
   // Delete group state
-  const [showDeleteGroupConfirm, setShowDeleteGroupConfirm] = useState(false);
+  const deleteGroupConfirmModal = useModal();
   const [groupToDelete, setGroupToDelete] = useState<ChannelGroup | null>(null);
   const [deletingGroup, setDeletingGroup] = useState(false);
   const [deleteGroupChannels, setDeleteGroupChannels] = useState(false);
 
   // Bulk delete channels state
-  const [showBulkDeleteConfirm, setShowBulkDeleteConfirm] = useState(false);
+  const bulkDeleteConfirmModal = useModal();
   const [bulkDeleting, setBulkDeleting] = useState(false);
   const [deleteEmptyGroups, setDeleteEmptyGroups] = useState(true); // Default to true since user is deleting all channels in group
 
   // Bulk EPG assignment modal state
-  const [showBulkEPGModal, setShowBulkEPGModal] = useState(false);
+  const bulkEPGModal = useModal();
 
   // Bulk LCN fetch modal state
-  const [showBulkLCNModal, setShowBulkLCNModal] = useState(false);
+  const bulkLCNModal = useModal();
 
   // Normalize names modal state
-  const [showNormalizeModal, setShowNormalizeModal] = useState(false);
+  const normalizeModal = useModal();
 
   // Context menu management
   const {
@@ -953,7 +952,7 @@ export function ChannelsPane({
   } = useContextMenu<{ channelIds: number[] }>();
 
   // Cross-group move modal state
-  const [showCrossGroupMoveModal, setShowCrossGroupMoveModal] = useState(false);
+  const crossGroupMoveModal = useModal();
   const [crossGroupMoveData, setCrossGroupMoveData] = useState<{
     channels: Channel[];  // Changed from single channel to array
     targetGroupId: number | null;
@@ -974,7 +973,7 @@ export function ChannelsPane({
   const [selectedNumberingOption, setSelectedNumberingOption] = useState<'keep' | 'suggested' | 'custom'>('suggested');
 
   // Sort and Renumber modal state
-  const [showSortRenumberModal, setShowSortRenumberModal] = useState(false);
+  const sortRenumberModal = useModal();
   const [sortRenumberData, setSortRenumberData] = useState<{
     groupId: number | 'ungrouped';
     groupName: string;
@@ -986,12 +985,12 @@ export function ChannelsPane({
   const [sortIgnoreCountry, setSortIgnoreCountry] = useState<boolean>(false);
 
   // Mass Renumber modal state
-  const [showMassRenumberModal, setShowMassRenumberModal] = useState(false);
+  const massRenumberModal = useModal();
   const [massRenumberStartingNumber, setMassRenumberStartingNumber] = useState<string>('');
   const [massRenumberChannels, setMassRenumberChannels] = useState<Channel[]>([]);
 
   // Hidden groups state
-  const [showHiddenGroupsModal, setShowHiddenGroupsModal] = useState(false);
+  const hiddenGroupsModal = useModal();
   const [hiddenGroups, setHiddenGroups] = useState<{ id: number; name: string; hidden_at: string }[]>([]);
 
   // Drag overlay state
@@ -1046,7 +1045,7 @@ export function ChannelsPane({
   useEffect(() => {
     if (externalChannelToEdit) {
       setChannelToEdit(externalChannelToEdit);
-      setShowEditChannelModal(true);
+      editChannelModal.open();
       onExternalChannelEditHandled?.();
     }
   }, [externalChannelToEdit, onExternalChannelEditHandled]);
@@ -1278,14 +1277,14 @@ export function ChannelsPane({
       sourceGroupHasGaps,
       sourceGroupMinChannel,
     });
-    setShowCrossGroupMoveModal(true);
+    crossGroupMoveModal.open();
     hideContextMenu();
   };
 
   const handleCreateGroupAndMove = () => {
     if (!contextMenu) return;
     hideContextMenu();
-    setShowCreateGroupModal(true);
+    createGroupModal.open();
     setNewGroupName('');
   };
 
@@ -1371,13 +1370,13 @@ export function ChannelsPane({
       setRenumberAfterDelete(false);
     }
 
-    setShowDeleteConfirm(true);
+    deleteConfirmModal.open();
   };
 
   // Handle opening edit channel modal
   const handleEditChannel = (channel: Channel) => {
     setChannelToEdit(channel);
-    setShowEditChannelModal(true);
+    editChannelModal.open();
   };
 
   // Helper to get logo URL for a channel
@@ -1446,7 +1445,7 @@ export function ChannelsPane({
       if (selectedChannelId === channelToDelete.id) {
         onChannelSelect(null);
       }
-      setShowDeleteConfirm(false);
+      deleteConfirmModal.close();
       setChannelToDelete(null);
       setSubsequentChannels([]);
     } catch (err) {
@@ -1458,7 +1457,7 @@ export function ChannelsPane({
 
   // Handle canceling channel deletion
   const handleCancelDelete = () => {
-    setShowDeleteConfirm(false);
+    deleteConfirmModal.close();
     setChannelToDelete(null);
     setSubsequentChannels([]);
     setRenumberAfterDelete(true);
@@ -1467,7 +1466,7 @@ export function ChannelsPane({
   // Handle initiating group deletion
   const handleDeleteGroupClick = (group: ChannelGroup) => {
     setGroupToDelete(group);
-    setShowDeleteGroupConfirm(true);
+    deleteGroupConfirmModal.open();
   };
 
   // Handle confirming group deletion
@@ -1512,7 +1511,7 @@ export function ChannelsPane({
         }
       }
 
-      setShowDeleteGroupConfirm(false);
+      deleteGroupConfirmModal.close();
       setGroupToDelete(null);
       setDeleteGroupChannels(false);
     } catch (err) {
@@ -1524,7 +1523,7 @@ export function ChannelsPane({
 
   // Handle canceling group deletion
   const handleCancelDeleteGroup = () => {
-    setShowDeleteGroupConfirm(false);
+    deleteGroupConfirmModal.close();
     setGroupToDelete(null);
     setDeleteGroupChannels(false);
   };
@@ -1532,7 +1531,7 @@ export function ChannelsPane({
   // Handle bulk delete channels
   const handleBulkDeleteClick = () => {
     if (selectedChannelIds.size === 0) return;
-    setShowBulkDeleteConfirm(true);
+    bulkDeleteConfirmModal.open();
   };
 
   const handleConfirmBulkDelete = async () => {
@@ -1600,7 +1599,7 @@ export function ChannelsPane({
         onChannelSelect(null);
       }
 
-      setShowBulkDeleteConfirm(false);
+      bulkDeleteConfirmModal.close();
     } catch (err) {
       console.error('Failed to bulk delete channels:', err);
     } finally {
@@ -1609,7 +1608,7 @@ export function ChannelsPane({
   };
 
   const handleCancelBulkDelete = () => {
-    setShowBulkDeleteConfirm(false);
+    bulkDeleteConfirmModal.close();
   };
 
   // Handle bulk EPG assignment
@@ -1630,7 +1629,7 @@ export function ChannelsPane({
     onEndBatch();
 
     // Close modal and clear selection
-    setShowBulkEPGModal(false);
+    bulkEPGModal.close();
     if (onClearChannelSelection) {
       onClearChannelSelection();
     }
@@ -1653,7 +1652,7 @@ export function ChannelsPane({
     onEndBatch();
 
     // Close modal and clear selection
-    setShowBulkLCNModal(false);
+    bulkLCNModal.close();
     if (onClearChannelSelection) {
       onClearChannelSelection();
     }
@@ -1675,7 +1674,7 @@ export function ChannelsPane({
       onEndBatch();
     }
 
-    setShowNormalizeModal(false);
+    normalizeModal.close();
     if (onClearChannelSelection) {
       onClearChannelSelection();
     }
@@ -1717,7 +1716,7 @@ export function ChannelsPane({
 
   // Close the create group modal and reset form state
   const handleCloseCreateGroupModal = () => {
-    setShowCreateGroupModal(false);
+    createGroupModal.close();
     setNewGroupName('');
   };
 
@@ -1770,7 +1769,7 @@ export function ChannelsPane({
             sourceGroupHasGaps: false,
             sourceGroupMinChannel: null,
           });
-          setShowCrossGroupMoveModal(true);
+          crossGroupMoveModal.open();
         }
       }
 
@@ -1784,8 +1783,8 @@ export function ChannelsPane({
 
   // Close the create modal and reset form state
   const handleCloseCreateModal = () => {
-    setShowCreateModal(false);
-    setShowConflictDialog(false);
+    createModal.close();
+    conflictDialog.close();
     setConflictingChannelNumber(null);
     setNewChannelName('');
     setNewChannelNumber('');
@@ -1825,7 +1824,7 @@ export function ChannelsPane({
 
   // Open hidden groups modal and load the list
   const handleShowHiddenGroups = () => {
-    setShowHiddenGroupsModal(true);
+    hiddenGroupsModal.open();
     loadHiddenGroups();
   };
 
@@ -1974,7 +1973,7 @@ export function ChannelsPane({
     setNewChannelNamingExpanded(false);
 
     // Open the create modal
-    setShowCreateModal(true);
+    createModal.open();
   };
 
   // Handle stream dropped between channels - creates new channel at specific position
@@ -2053,7 +2052,7 @@ export function ChannelsPane({
     setNewChannelNamingExpanded(false);
 
     // Open the create modal
-    setShowCreateModal(true);
+    createModal.open();
   };
 
   // Handle creating a new channel - checks for conflicts first
@@ -2066,7 +2065,7 @@ export function ChannelsPane({
     // Check if this channel number already exists
     if (channelNumberExists(channelNum)) {
       setConflictingChannelNumber(channelNum);
-      setShowConflictDialog(true);
+      conflictDialog.open();
       return;
     }
 
@@ -2143,7 +2142,7 @@ export function ChannelsPane({
     if (conflictingChannelNumber === null) return;
 
     setCreating(true);
-    setShowConflictDialog(false);
+    conflictDialog.close();
 
     try {
       // Get channels that need to be shifted (>= the conflicting number)
@@ -2195,7 +2194,7 @@ export function ChannelsPane({
 
   // Handle conflict resolution: add to end of group
   const handleConflictAddToEnd = async () => {
-    setShowConflictDialog(false);
+    conflictDialog.close();
     const endNumber = getNextChannelNumberForGroup(newChannelGroup);
     await createChannelWithNumber(endNumber);
   };
@@ -2963,7 +2962,7 @@ export function ChannelsPane({
       setRenumberSourceGroup(false);  // Reset the checkbox when showing modal
       setSelectedNumberingOption('suggested');  // Default to suggested option
       setCustomStartingNumber('');  // Clear custom number input
-      setShowCrossGroupMoveModal(true);
+      crossGroupMoveModal.open();
 
       return;
     }
@@ -3429,12 +3428,12 @@ export function ChannelsPane({
     }
 
     // Close modal
-    setShowCrossGroupMoveModal(false);
+    crossGroupMoveModal.close();
     setCrossGroupMoveData(null);
   };
 
   const handleCrossGroupMoveCancel = () => {
-    setShowCrossGroupMoveModal(false);
+    crossGroupMoveModal.close();
     setCrossGroupMoveData(null);
     setCustomStartingNumber('');
   };
@@ -3543,11 +3542,11 @@ export function ChannelsPane({
       currentMinNumber: minNumber,
     });
     setSortRenumberStartingNumber(minNumber !== null ? String(minNumber) : '1');
-    setShowSortRenumberModal(true);
+    sortRenumberModal.open();
   };
 
   const handleSortRenumberCancel = () => {
-    setShowSortRenumberModal(false);
+    sortRenumberModal.close();
     setSortRenumberData(null);
     setSortRenumberStartingNumber('');
     setSortStripNumbers(true);
@@ -3607,7 +3606,7 @@ export function ChannelsPane({
     }
 
     // Close modal
-    setShowSortRenumberModal(false);
+    sortRenumberModal.close();
     setSortRenumberData(null);
     setSortRenumberStartingNumber('');
     setSortStripNumbers(true);
@@ -3631,12 +3630,12 @@ export function ChannelsPane({
 
     setMassRenumberChannels(channelsToRenumber);
     setMassRenumberStartingNumber(String(minNumber));
-    setShowMassRenumberModal(true);
+    massRenumberModal.open();
   };
 
   // Calculate conflicts for mass renumber
   const getMassRenumberConflicts = useMemo(() => {
-    if (!showMassRenumberModal || massRenumberChannels.length === 0) {
+    if (!massRenumberModal.isOpen || massRenumberChannels.length === 0) {
       return { hasConflicts: false, conflicts: [] as Channel[], shiftRequired: 0 };
     }
 
@@ -3660,7 +3659,7 @@ export function ChannelsPane({
     const shiftRequired = conflicts.length > 0 ? endNum - (conflicts[0].channel_number ?? 0) + 1 : 0;
 
     return { hasConflicts: conflicts.length > 0, conflicts, shiftRequired };
-  }, [showMassRenumberModal, massRenumberChannels, massRenumberStartingNumber, localChannels]);
+  }, [massRenumberModal.isOpen, massRenumberChannels, massRenumberStartingNumber, localChannels]);
 
   const handleMassRenumberConfirm = (shiftConflicts: boolean) => {
     if (!onStageUpdateChannel || massRenumberChannels.length === 0) return;
@@ -3729,7 +3728,7 @@ export function ChannelsPane({
     }
 
     // Close modal and clear selection
-    setShowMassRenumberModal(false);
+    massRenumberModal.close();
     setMassRenumberChannels([]);
     setMassRenumberStartingNumber('');
     if (onClearChannelSelection) {
@@ -3738,7 +3737,7 @@ export function ChannelsPane({
   };
 
   const handleMassRenumberCancel = () => {
-    setShowMassRenumberModal(false);
+    massRenumberModal.close();
     setMassRenumberChannels([]);
     setMassRenumberStartingNumber('');
   };
@@ -4060,21 +4059,21 @@ export function ChannelsPane({
               <div className="selection-actions">
                 <button
                   className="bulk-action-btn"
-                  onClick={() => setShowBulkEPGModal(true)}
+                  onClick={() => bulkEPGModal.open()}
                   title="Assign EPG to selected channels"
                 >
                   <span className="material-icons">live_tv</span>
                 </button>
                 <button
                   className="bulk-action-btn"
-                  onClick={() => setShowBulkLCNModal(true)}
+                  onClick={() => bulkLCNModal.open()}
                   title="Fetch Gracenote IDs for selected channels"
                 >
                   <span className="material-icons">confirmation_number</span>
                 </button>
                 <button
                   className="bulk-action-btn"
-                  onClick={() => setShowNormalizeModal(true)}
+                  onClick={() => normalizeModal.open()}
                   title="Normalize channel names"
                 >
                   <span className="material-icons">text_format</span>
@@ -4147,7 +4146,7 @@ export function ChannelsPane({
                   setNewChannelNumberSeparator((channelDefaults?.channelNumberSeparator as NumberSeparator) || '-');
                   setNewChannelStripCountry(channelDefaults?.removeCountryPrefix ?? false);
                   setNewChannelNamingExpanded(false);
-                  setShowCreateModal(true);
+                  createModal.open();
                 }}
                 title="Create new channel"
               >
@@ -4156,7 +4155,7 @@ export function ChannelsPane({
               </button>
               <button
                 className="create-group-btn"
-                onClick={() => setShowCreateGroupModal(true)}
+                onClick={() => createGroupModal.open()}
                 title="Create new channel group"
               >
                 <span className="material-icons create-channel-icon">create_new_folder</span>
@@ -4174,7 +4173,7 @@ export function ChannelsPane({
           )}
           <button
             className="profiles-btn"
-            onClick={() => setShowProfilesModal(true)}
+            onClick={() => profilesModal.open()}
             title="Manage channel profiles"
           >
             <span className="material-icons">group</span>
@@ -4184,7 +4183,7 @@ export function ChannelsPane({
       </div>
 
       {/* Create Channel Modal */}
-      {showCreateModal && (
+      {createModal.isOpen && (
         <div className="modal-overlay">
           <div className="modal-content" onClick={(e) => e.stopPropagation()}>
             <h3>Create New Channel</h3>
@@ -4421,7 +4420,7 @@ export function ChannelsPane({
       )}
 
       {/* Create Channel Group Modal */}
-      {showCreateGroupModal && (
+      {createGroupModal.isOpen && (
         <div className="modal-overlay">
           <div className="modal-content" onClick={(e) => e.stopPropagation()}>
             <h3>Create New Channel Group</h3>
@@ -4463,7 +4462,7 @@ export function ChannelsPane({
       )}
 
       {/* Hidden Groups Modal */}
-      {showHiddenGroupsModal && (
+      {hiddenGroupsModal.isOpen && (
         <div className="modal-overlay">
           <div className="modal-content" onClick={(e) => e.stopPropagation()}>
             <h3>Hidden Channel Groups</h3>
@@ -4506,7 +4505,7 @@ export function ChannelsPane({
             <div className="modal-actions">
               <button
                 className="modal-btn cancel"
-                onClick={() => setShowHiddenGroupsModal(false)}
+                onClick={() => hiddenGroupsModal.close()}
               >
                 Close
               </button>
@@ -4516,7 +4515,7 @@ export function ChannelsPane({
       )}
 
       {/* Channel Number Conflict Dialog */}
-      {showConflictDialog && conflictingChannelNumber !== null && (
+      {conflictDialog.isOpen && conflictingChannelNumber !== null && (
         <div className="modal-overlay">
           <div className="modal-content conflict-dialog" onClick={(e) => e.stopPropagation()}>
             <h3>Channel Number Conflict</h3>
@@ -4553,7 +4552,7 @@ export function ChannelsPane({
             <div className="modal-actions">
               <button
                 className="modal-btn cancel"
-                onClick={() => setShowConflictDialog(false)}
+                onClick={() => conflictDialog.close()}
                 disabled={creating}
               >
                 Cancel
@@ -4564,7 +4563,7 @@ export function ChannelsPane({
       )}
 
       {/* Delete Channel Confirmation Dialog */}
-      {showDeleteConfirm && channelToDelete && (
+      {deleteConfirmModal.isOpen && channelToDelete && (
         <div className="modal-overlay">
           <div className="modal-content delete-dialog" onClick={(e) => e.stopPropagation()}>
             <h3>Delete Channel</h3>
@@ -4641,7 +4640,7 @@ export function ChannelsPane({
       )}
 
       {/* Delete Group Confirmation Dialog */}
-      {showDeleteGroupConfirm && groupToDelete && (
+      {deleteGroupConfirmModal.isOpen && groupToDelete && (
           <div className="modal-overlay">
             <div className="modal-content delete-dialog" onClick={(e) => e.stopPropagation()}>
               <h3>Delete Group</h3>
@@ -4696,7 +4695,7 @@ export function ChannelsPane({
       )}
 
       {/* Bulk Delete Channels Confirmation Dialog */}
-      {showBulkDeleteConfirm && selectedChannelIds.size > 0 && (() => {
+      {bulkDeleteConfirmModal.isOpen && selectedChannelIds.size > 0 && (() => {
         // Compute which groups would be emptied by this bulk delete
         // Use the channels prop (which is displayChannels from edit mode hook, containing all channels)
         // NOT localChannels which may have stale data
@@ -4771,36 +4770,36 @@ export function ChannelsPane({
 
       {/* Bulk EPG Assignment Modal */}
       <BulkEPGAssignModal
-        isOpen={showBulkEPGModal && selectedChannelIds.size > 0}
+        isOpen={bulkEPGModal.isOpen && selectedChannelIds.size > 0}
         selectedChannels={channels.filter(c => selectedChannelIds.has(c.id))}
         streams={allStreams}
         epgData={epgData || []}
         epgSources={epgSources || []}
-        onClose={() => setShowBulkEPGModal(false)}
+        onClose={() => bulkEPGModal.close()}
         onAssign={handleBulkEPGAssign}
         epgAutoMatchThreshold={epgAutoMatchThreshold}
       />
 
       {/* Bulk LCN Fetch Modal */}
       <BulkLCNFetchModal
-        isOpen={showBulkLCNModal && selectedChannelIds.size > 0}
+        isOpen={bulkLCNModal.isOpen && selectedChannelIds.size > 0}
         selectedChannels={channels.filter(c => selectedChannelIds.has(c.id))}
         epgData={epgData || []}
-        onClose={() => setShowBulkLCNModal(false)}
+        onClose={() => bulkLCNModal.close()}
         onAssign={handleBulkLCNAssign}
       />
 
       {/* Normalize Names Modal */}
-      {showNormalizeModal && selectedChannelIds.size > 0 && (
+      {normalizeModal.isOpen && selectedChannelIds.size > 0 && (
         <NormalizeNamesModal
           channels={channels.filter(c => selectedChannelIds.has(c.id))}
           onConfirm={handleNormalizeNames}
-          onCancel={() => setShowNormalizeModal(false)}
+          onCancel={() => normalizeModal.close()}
         />
       )}
 
       {/* Edit Channel Modal */}
-      {showEditChannelModal && channelToEdit && (
+      {editChannelModal.isOpen && channelToEdit && (
         <EditChannelModal
           channel={channelToEdit}
           logos={logos}
@@ -4809,12 +4808,12 @@ export function ChannelsPane({
           streamProfiles={streamProfiles}
           epgDataLoading={epgDataLoading}
           onClose={() => {
-            setShowEditChannelModal(false);
+            editChannelModal.close();
             setChannelToEdit(null);
           }}
           onSave={async (changes: ChannelMetadataChanges) => {
             if (Object.keys(changes).length === 0) {
-              setShowEditChannelModal(false);
+              editChannelModal.close();
               setChannelToEdit(null);
               return;
             }
@@ -4861,7 +4860,7 @@ export function ChannelsPane({
                 console.error('Failed to update channel:', err);
               }
             }
-            setShowEditChannelModal(false);
+            editChannelModal.close();
             setChannelToEdit(null);
           }}
           onLogoCreate={async (url: string) => {
@@ -4899,7 +4898,7 @@ export function ChannelsPane({
       )}
 
       {/* Cross-Group Move Modal */}
-      {showCrossGroupMoveModal && crossGroupMoveData && (
+      {crossGroupMoveModal.isOpen && crossGroupMoveData && (
         <div className="modal-overlay">
           <div className="modal-content cross-group-move-dialog" onClick={(e) => e.stopPropagation()}>
             <h3>Move {crossGroupMoveData.channels.length > 1 ? `${crossGroupMoveData.channels.length} Channels` : 'Channel'} to Group</h3>
@@ -5100,7 +5099,7 @@ export function ChannelsPane({
       )}
 
       {/* Sort & Renumber Modal */}
-      {showSortRenumberModal && sortRenumberData && (
+      {sortRenumberModal.isOpen && sortRenumberData && (
         <div className="modal-overlay">
           <div className="modal-content sort-renumber-dialog" onClick={(e) => e.stopPropagation()}>
             <h3>Sort & Renumber Channels</h3>
@@ -5205,7 +5204,7 @@ export function ChannelsPane({
       )}
 
       {/* Mass Renumber Modal */}
-      {showMassRenumberModal && massRenumberChannels.length > 0 && (
+      {massRenumberModal.isOpen && massRenumberChannels.length > 0 && (
         <div className="modal-overlay">
           <div className="modal-content mass-renumber-dialog" onClick={(e) => e.stopPropagation()}>
             <h3>Renumber Channels</h3>
@@ -5316,8 +5315,8 @@ export function ChannelsPane({
 
       {/* Channel Profiles Modal */}
       <ChannelProfilesListModal
-        isOpen={showProfilesModal}
-        onClose={() => setShowProfilesModal(false)}
+        isOpen={profilesModal.isOpen}
+        onClose={() => profilesModal.close()}
         onSaved={() => {
           if (onChannelProfilesChange) {
             onChannelProfilesChange();
