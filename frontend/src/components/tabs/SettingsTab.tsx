@@ -1122,7 +1122,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
       <div className="settings-section">
         <div className="settings-section-header">
           <h3>Orphaned Channel Groups</h3>
-          <p>Channel groups with no channels or channels that have no streams. These are safe to delete.</p>
+          <p>Channel groups that are not associated with any M3U account and have no content (no streams or channels). These are typically leftover from deleted M3U accounts and are safe to delete.</p>
         </div>
 
         <div className="settings-group">
