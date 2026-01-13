@@ -489,17 +489,29 @@ export function M3UManagerTab({
   // Filter and sort accounts: hide "custom" account, optionally filter by server group,
   // then sort with Standard M3U first, XtreamCodes second, natural sort within each type
   const filteredAccounts = useMemo(() => {
-    return accounts
-      .filter(a => a.name.toLowerCase() !== 'custom')
-      .filter(a => filterServerGroup === null || a.server_group === filterServerGroup)
-      .sort((a, b) => {
-        // First sort by type: STD (Standard M3U) before XC (XtreamCodes)
-        if (a.account_type !== b.account_type) {
-          return a.account_type === 'STD' ? -1 : 1;
-        }
-        // Then natural sort by name within each type
-        return naturalCompare(a.name, b.name);
+    const withoutCustom = accounts.filter(a => a.name.toLowerCase() !== 'custom');
+    const afterServerGroupFilter = withoutCustom.filter(a => filterServerGroup === null || a.server_group === filterServerGroup);
+
+    // Debug logging to diagnose missing accounts
+    console.log(`[M3UManager] Total accounts from API: ${accounts.length}`);
+    console.log(`[M3UManager] After removing 'custom': ${withoutCustom.length}`);
+    console.log(`[M3UManager] Server group filter: ${filterServerGroup === null ? 'None (showing all)' : `ID ${filterServerGroup}`}`);
+    console.log(`[M3UManager] After server group filter: ${afterServerGroupFilter.length}`);
+    if (filterServerGroup !== null && withoutCustom.length !== afterServerGroupFilter.length) {
+      console.log(`[M3UManager] Accounts hidden by server group filter:`);
+      withoutCustom.filter(a => a.server_group !== filterServerGroup).forEach(a => {
+        console.log(`  - ${a.name} (server_group: ${a.server_group})`);
       });
+    }
+
+    return afterServerGroupFilter.sort((a, b) => {
+      // First sort by type: STD (Standard M3U) before XC (XtreamCodes)
+      if (a.account_type !== b.account_type) {
+        return a.account_type === 'STD' ? -1 : 1;
+      }
+      // Then natural sort by name within each type
+      return naturalCompare(a.name, b.name);
+    });
   }, [accounts, filterServerGroup]);
 
   if (loading) {
