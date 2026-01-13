@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import type { ChannelStatsResponse, SystemEvent, BandwidthSummary, M3UAccount, ChannelWatchStats, TopWatchedSortBy } from '../../types';
 import * as api from '../../services/api';
 import { logger } from '../../utils/logger';
@@ -668,6 +668,12 @@ export function StatsTab() {
     );
   }
 
+  // Memoize bandwidth chart data preparation to avoid recalculating on every render
+  const bandwidthChartData = useMemo(() => {
+    if (!bandwidthStats?.daily_history) return [];
+    return prepareBandwidthChartData(bandwidthStats.daily_history);
+  }, [bandwidthStats?.daily_history]);
+
   return (
     <div className="stats-tab">
       {/* Header */}
@@ -1177,7 +1183,8 @@ export function StatsTab() {
               </div>
             </div>
             {(() => {
-              const chartData = prepareBandwidthChartData(bandwidthStats.daily_history || []);
+              // Use memoized bandwidth chart data
+              const chartData = bandwidthChartData;
               // Find max for scaling - ensure we have a reasonable minimum
               const maxBytes = Math.max(...chartData.map(d => d.bytes), 1024);
 

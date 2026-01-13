@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo, memo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, memo, useCallback } from 'react';
 import {
   DndContext,
   DragOverlay,
@@ -2273,7 +2273,8 @@ export function ChannelsPane({
 
   // Helper function to compute auto-rename for a channel number change
   // Returns the new name if auto-rename should apply, undefined otherwise
-  const computeAutoRename = (
+  // Memoized with useCallback to avoid recreating regex functions on every render
+  const computeAutoRename = useCallback((
     channelName: string,
     _oldNumber: number | null,
     newNumber: number | null
@@ -2328,11 +2329,12 @@ export function ChannelsPane({
     }
 
     return undefined;
-  };
+  }, [autoRenameChannelNumber]);
 
   // Helper function to strip leading/trailing/middle channel numbers from a name for sorting purposes
   // Matches same patterns as computeAutoRename: "123 | Name", "123-Name", "US | 5034 - Name", "Name | 123"
-  const getNameForSorting = (channelName: string): string => {
+  // Memoized with useCallback - no dependencies as it's a pure function
+  const getNameForSorting = useCallback((channelName: string): string => {
     // Try stripping mid-position number first: "US | 5034 - Name" -> "US - Name"
     const midMatch = channelName.match(/^([A-Za-z].+?\s*\|\s*)\d+(?:\.\d+)?\s*([-:]\s*.+)$/);
     if (midMatch) {
@@ -2353,12 +2355,12 @@ export function ChannelsPane({
 
     // No number prefix/suffix found, return as-is
     return channelName;
-  };
+  }, []);
 
   // Helper function to strip country prefix from channel name for sorting
   // Common patterns: "US | Name", "UK: Name", "CA - Name", "AU Name"
   // Country codes are typically 2-3 uppercase letters at the start
-  const stripCountryPrefix = (channelName: string): string => {
+  const stripCountryPrefix = useCallback((channelName: string): string => {
     // Match country code (2-3 uppercase letters) followed by separator and the rest
     // Supports: "US | Name", "UK: Name", "CA - Name", "USA | Name", etc.
     const match = channelName.match(/^[A-Z]{2,3}\s*[|:\-]\s*(.+)$/);
@@ -2371,7 +2373,7 @@ export function ChannelsPane({
       return noSepMatch[1].trim();
     }
     return channelName;
-  };
+  }, []);
 
   // Handle editing channel number
   const handleStartEditNumber = (e: React.MouseEvent, channel: Channel) => {
