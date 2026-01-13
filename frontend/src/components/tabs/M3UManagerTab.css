@@ -193,10 +193,20 @@
 
 /* M3U Accounts List */
 .m3u-accounts-list {
+  display: flex;
+  flex-direction: column;
   background-color: var(--bg-primary);
   border-radius: 8px;
   border: 1px solid var(--border-primary);
   overflow: hidden;
+  flex: 1;
+  min-height: 0;
+}
+
+.m3u-accounts-list-body {
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
 }
 
 .list-header {
