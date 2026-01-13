@@ -902,17 +902,26 @@ async def get_hidden_channel_groups():
 async def get_orphaned_channel_groups():
     """Find channel groups that are truly orphaned.
 
-    A group is considered orphaned if:
-    1. It has no channels in it, OR
-    2. All channels in the group have no streams
-
-    This helps identify groups that are leftover from deleted content and can be safely removed.
+    A group is considered orphaned if it has no streams AND no channels.
+    M3U groups contain streams, manual groups contain channels.
     """
     client = get_client()
     try:
         # Get all channel groups from Dispatcharr
         all_groups = await client.get_channel_groups()
-        group_name_map = {g["id"]: g["name"] for g in all_groups}
+
+        # Get all streams (paginated) to check which groups have streams
+        streams = []
+        page = 1
+        while True:
+            result = await client.get_streams(page=page, page_size=500)
+            page_streams = result.get("results", [])
+            streams.extend(page_streams)
+
+            # Check if there are more pages
+            if len(page_streams) < 500:
+                break
+            page += 1
 
         # Get all channels (paginated) to check which groups have channels
         channels = []
@@ -927,43 +936,36 @@ async def get_orphaned_channel_groups():
                 break
             page += 1
 
-        # Build map of group_id -> list of channel IDs
-        group_channels = {}
+        # Build map of group_name -> stream count
+        group_stream_count = {}
+        for stream in streams:
+            group_name = stream.get("channel_group")
+            if group_name:
+                group_stream_count[group_name] = group_stream_count.get(group_name, 0) + 1
+
+        # Build map of group_id -> channel count
+        group_channel_count = {}
         for channel in channels:
             group_id = channel.get("channel_group_id")
             if group_id:
-                if group_id not in group_channels:
-                    group_channels[group_id] = []
-                group_channels[group_id].append(channel["id"])
+                group_channel_count[group_id] = group_channel_count.get(group_id, 0) + 1
 
-        # Find orphaned groups
+        # Find orphaned groups (no streams AND no channels)
         orphaned_groups = []
         for group in all_groups:
             group_id = group["id"]
-            channel_ids = group_channels.get(group_id, [])
+            group_name = group["name"]
 
-            if not channel_ids:
-                # Group has no channels - it's orphaned
+            stream_count = group_stream_count.get(group_name, 0)
+            channel_count = group_channel_count.get(group_id, 0)
+
+            if stream_count == 0 and channel_count == 0:
+                # Group has neither streams nor channels - it's orphaned
                 orphaned_groups.append({
                     "id": group_id,
-                    "name": group["name"],
-                    "reason": "No channels",
+                    "name": group_name,
+                    "reason": "No streams or channels",
                 })
-            else:
-                # Check if all channels in this group have no streams
-                channels_with_streams = 0
-                for channel_id in channel_ids:
-                    channel = next((c for c in channels if c["id"] == channel_id), None)
-                    if channel and channel.get("streams"):
-                        channels_with_streams += 1
-
-                if channels_with_streams == 0:
-                    # All channels have no streams - group is orphaned
-                    orphaned_groups.append({
-                        "id": group_id,
-                        "name": group["name"],
-                        "reason": f"{len(channel_ids)} channel(s) with no streams",
-                    })
 
         # Sort by name for consistent display
         orphaned_groups.sort(key=lambda g: g["name"].lower())
@@ -972,7 +974,7 @@ async def get_orphaned_channel_groups():
         return {
             "orphaned_groups": orphaned_groups,
             "total_groups": len(all_groups),
-            "groups_with_channels": len(group_channels),
+            "groups_with_content": len(set(list(group_stream_count.keys()) + list(str(gid) for gid in group_channel_count.keys()))),
         }
     except Exception as e:
         logger.error(f"Failed to find orphaned channel groups: {e}")
@@ -983,14 +985,26 @@ async def get_orphaned_channel_groups():
 async def delete_orphaned_channel_groups():
     """Delete channel groups that are truly orphaned.
 
-    A group is deleted if:
-    1. It has no channels in it, OR
-    2. All channels in the group have no streams
+    A group is deleted if it has no streams AND no channels.
+    M3U groups contain streams, manual groups contain channels.
     """
     client = get_client()
     try:
         # Use the same logic as GET to find orphaned groups
         all_groups = await client.get_channel_groups()
+
+        # Get all streams (paginated)
+        streams = []
+        page = 1
+        while True:
+            result = await client.get_streams(page=page, page_size=500)
+            page_streams = result.get("results", [])
+            streams.extend(page_streams)
+
+            # Check if there are more pages
+            if len(page_streams) < 500:
+                break
+            page += 1
 
         # Get all channels (paginated)
         channels = []
@@ -1005,40 +1019,36 @@ async def delete_orphaned_channel_groups():
                 break
             page += 1
 
-        # Build map of group_id -> list of channel IDs
-        group_channels = {}
+        # Build map of group_name -> stream count
+        group_stream_count = {}
+        for stream in streams:
+            group_name = stream.get("channel_group")
+            if group_name:
+                group_stream_count[group_name] = group_stream_count.get(group_name, 0) + 1
+
+        # Build map of group_id -> channel count
+        group_channel_count = {}
         for channel in channels:
             group_id = channel.get("channel_group_id")
             if group_id:
-                if group_id not in group_channels:
-                    group_channels[group_id] = []
-                group_channels[group_id].append(channel["id"])
+                group_channel_count[group_id] = group_channel_count.get(group_id, 0) + 1
 
-        # Find orphaned groups
+        # Find orphaned groups (no streams AND no channels)
         orphaned_groups = []
         for group in all_groups:
             group_id = group["id"]
-            channel_ids = group_channels.get(group_id, [])
+            group_name = group["name"]
 
-            if not channel_ids:
+            stream_count = group_stream_count.get(group_name, 0)
+            channel_count = group_channel_count.get(group_id, 0)
+
+            if stream_count == 0 and channel_count == 0:
+                # Group has neither streams nor channels - it's orphaned
                 orphaned_groups.append({
                     "id": group_id,
-                    "name": group["name"],
-                    "reason": "No channels",
+                    "name": group_name,
+                    "reason": "No streams or channels",
                 })
-            else:
-                channels_with_streams = 0
-                for channel_id in channel_ids:
-                    channel = next((c for c in channels if c["id"] == channel_id), None)
-                    if channel and channel.get("streams"):
-                        channels_with_streams += 1
-
-                if channels_with_streams == 0:
-                    orphaned_groups.append({
-                        "id": group_id,
-                        "name": group["name"],
-                        "reason": f"{len(channel_ids)} channel(s) with no streams",
-                    })
 
         if not orphaned_groups:
             return {
