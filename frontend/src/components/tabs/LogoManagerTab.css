@@ -158,8 +158,8 @@
 }
 
 .view-toggle button.active {
-  background-color: var(--accent-primary);
-  color: white;
+  background-color: var(--button-primary-bg);
+  color: var(--button-primary-text);
 }
 
 .view-toggle button .material-icons {
