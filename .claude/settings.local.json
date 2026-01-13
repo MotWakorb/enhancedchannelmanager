@@ -31,7 +31,8 @@
       "Bash(docker ps:*)",
       "Bash(docker compose build:*)",
       "Bash(bd --no-db list:*)",
-      "Bash(bd --no-db create enhancedchannelmanager \"Add comprehensive logging system with configurable log levels\")"
+      "Bash(bd --no-db create enhancedchannelmanager \"Add comprehensive logging system with configurable log levels\")",
+      "Bash(sips:*)"
     ],
     "deny": [],
     "ask": []
