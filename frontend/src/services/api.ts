@@ -208,7 +208,12 @@ export async function getCacheStats(): Promise<{ entry_count: number; entries: A
 
 // M3U Accounts (Providers)
 export async function getM3UAccounts(): Promise<M3UAccount[]> {
-  return fetchJson(`${API_BASE}/providers`);
+  const accounts = await fetchJson<M3UAccount[]>(`${API_BASE}/providers`);
+  logger.debug(`Received ${accounts.length} M3U accounts from API`);
+  accounts.forEach((account, index) => {
+    logger.debug(`  M3U Account ${index + 1}: id=${account.id}, name=${account.name}`);
+  });
+  return accounts;
 }
 
 export async function getProviderGroupSettings(): Promise<Record<number, M3UGroupSetting>> {
