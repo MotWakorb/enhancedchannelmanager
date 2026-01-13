@@ -898,6 +898,123 @@ async def get_hidden_channel_groups():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/api/channel-groups/orphaned")
+async def get_orphaned_channel_groups():
+    """Find channel groups that are not associated with any M3U account.
+
+    Returns groups that exist in Dispatcharr but don't appear in any M3U account's
+    channel_groups list. These are likely leftover from deleted M3U accounts.
+    """
+    client = get_client()
+    try:
+        # Get all channel groups from Dispatcharr
+        all_groups = await client.get_channel_groups()
+        all_group_ids = {g["id"] for g in all_groups}
+        group_name_map = {g["id"]: g["name"] for g in all_groups}
+
+        # Get all M3U accounts and collect their channel group IDs
+        accounts = await client.get_m3u_accounts()
+        m3u_group_ids = set()
+        for account in accounts:
+            for group_setting in account.get("channel_groups", []):
+                group_id = group_setting.get("channel_group")
+                if group_id:
+                    m3u_group_ids.add(group_id)
+
+        # Orphaned groups = all groups - groups used by M3Us
+        orphaned_ids = all_group_ids - m3u_group_ids
+
+        # Build response with group details
+        orphaned_groups = []
+        for group_id in orphaned_ids:
+            orphaned_groups.append({
+                "id": group_id,
+                "name": group_name_map.get(group_id, f"Unknown Group {group_id}"),
+            })
+
+        # Sort by name for consistent display
+        orphaned_groups.sort(key=lambda g: g["name"].lower())
+
+        logger.info(f"Found {len(orphaned_groups)} orphaned channel groups out of {len(all_group_ids)} total")
+        return {
+            "orphaned_groups": orphaned_groups,
+            "total_groups": len(all_group_ids),
+            "m3u_associated_groups": len(m3u_group_ids),
+        }
+    except Exception as e:
+        logger.error(f"Failed to find orphaned channel groups: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/api/channel-groups/orphaned")
+async def delete_orphaned_channel_groups():
+    """Delete all channel groups that are not associated with any M3U account.
+
+    This cleans up leftover groups from deleted M3U accounts.
+    """
+    client = get_client()
+    try:
+        # First, find orphaned groups using the same logic
+        all_groups = await client.get_channel_groups()
+        all_group_ids = {g["id"] for g in all_groups}
+        group_name_map = {g["id"]: g["name"] for g in all_groups}
+
+        accounts = await client.get_m3u_accounts()
+        m3u_group_ids = set()
+        for account in accounts:
+            for group_setting in account.get("channel_groups", []):
+                group_id = group_setting.get("channel_group")
+                if group_id:
+                    m3u_group_ids.add(group_id)
+
+        orphaned_ids = all_group_ids - m3u_group_ids
+
+        if not orphaned_ids:
+            return {
+                "status": "ok",
+                "message": "No orphaned channel groups found",
+                "deleted_groups": [],
+                "failed_groups": [],
+            }
+
+        # Delete each orphaned group
+        deleted_groups = []
+        failed_groups = []
+        for group_id in orphaned_ids:
+            group_name = group_name_map.get(group_id, f"Unknown Group {group_id}")
+            try:
+                await client.delete_channel_group(group_id)
+                deleted_groups.append({"id": group_id, "name": group_name})
+                logger.info(f"Deleted orphaned channel group: {group_id} ({group_name})")
+            except Exception as group_err:
+                failed_groups.append({"id": group_id, "name": group_name, "error": str(group_err)})
+                logger.warning(f"Failed to delete orphaned channel group {group_id} ({group_name}): {group_err}")
+
+        # Log to journal
+        if deleted_groups:
+            journal.log_entry(
+                category="channel",
+                action_type="cleanup",
+                entity_id=None,
+                entity_name="Orphaned Groups Cleanup",
+                description=f"Deleted {len(deleted_groups)} orphaned channel groups",
+                after_value={
+                    "deleted_groups": deleted_groups,
+                    "failed_groups": failed_groups,
+                },
+            )
+
+        return {
+            "status": "ok",
+            "message": f"Deleted {len(deleted_groups)} orphaned channel groups",
+            "deleted_groups": deleted_groups,
+            "failed_groups": failed_groups,
+        }
+    except Exception as e:
+        logger.error(f"Failed to delete orphaned channel groups: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # Streams
 @app.get("/api/streams")
 async def get_streams(
@@ -1678,15 +1795,44 @@ async def patch_m3u_account(account_id: int, request: Request):
 
 
 @app.delete("/api/m3u/accounts/{account_id}")
-async def delete_m3u_account(account_id: int):
-    """Delete an M3U account."""
+async def delete_m3u_account(account_id: int, delete_groups: bool = True):
+    """Delete an M3U account and optionally its associated channel groups.
+
+    Args:
+        account_id: The M3U account ID to delete
+        delete_groups: If True (default), also delete channel groups associated with this account
+    """
     client = get_client()
     try:
-        # Get account info before deleting
+        # Get account info before deleting (includes channel_groups)
         account = await client.get_m3u_account(account_id)
         account_name = account.get("name", "Unknown")
 
+        # Extract channel group IDs associated with this M3U account
+        channel_group_ids = []
+        if delete_groups:
+            for group_setting in account.get("channel_groups", []):
+                group_id = group_setting.get("channel_group")
+                if group_id:
+                    channel_group_ids.append(group_id)
+            logger.info(f"M3U account '{account_name}' has {len(channel_group_ids)} associated channel groups")
+
+        # Delete the M3U account first
         await client.delete_m3u_account(account_id)
+
+        # Now delete associated channel groups
+        deleted_groups = []
+        failed_groups = []
+        if delete_groups and channel_group_ids:
+            for group_id in channel_group_ids:
+                try:
+                    await client.delete_channel_group(group_id)
+                    deleted_groups.append(group_id)
+                    logger.info(f"Deleted channel group {group_id} (was associated with M3U '{account_name}')")
+                except Exception as group_err:
+                    # Group might have channels or other issues - log but don't fail
+                    failed_groups.append({"id": group_id, "error": str(group_err)})
+                    logger.warning(f"Failed to delete channel group {group_id}: {group_err}")
 
         # Log to journal
         journal.log_entry(
@@ -1694,11 +1840,23 @@ async def delete_m3u_account(account_id: int):
             action_type="delete",
             entity_id=account_id,
             entity_name=account_name,
-            description=f"Deleted M3U account '{account_name}'",
-            before_value={"name": account_name},
+            description=f"Deleted M3U account '{account_name}'" +
+                       (f" and {len(deleted_groups)} channel groups" if deleted_groups else ""),
+            before_value={
+                "name": account_name,
+                "channel_groups": channel_group_ids,
+            },
+            after_value={
+                "deleted_groups": deleted_groups,
+                "failed_groups": failed_groups,
+            } if channel_group_ids else None,
         )
 
-        return {"status": "deleted"}
+        return {
+            "status": "deleted",
+            "deleted_groups": deleted_groups,
+            "failed_groups": failed_groups,
+        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
