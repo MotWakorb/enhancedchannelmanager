@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import type { Stream, M3UAccount, ChannelGroup, ChannelProfile } from '../types';
-import { useSelection } from '../hooks';
+import { useSelection, useExpandCollapse } from '../hooks';
 import { normalizeStreamName, detectRegionalVariants, filterStreamsByTimezone, detectCountryPrefixes, getUniqueCountryPrefixes, detectNetworkPrefixes, detectNetworkSuffixes, type TimezonePreference, type NormalizeOptions, type NumberSeparator, type PrefixOrder } from '../services/api';
 import { naturalCompare } from '../utils/naturalSort';
 import { openInVLC } from '../utils/vlc';
@@ -129,7 +129,14 @@ export function StreamsPane({
   onRefreshStreams,
   mappedStreamIds,
 }: StreamsPaneProps) {
-  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
+  // Expand/collapse groups with useExpandCollapse hook
+  const {
+    expandedIds: expandedGroups,
+    isExpanded: isGroupExpanded,
+    toggleExpand: toggleGroup,
+    expandAll: expandAllGroupsInternal,
+    collapseAll: collapseAllGroups,
+  } = useExpandCollapse<string>();
 
   // Hide mapped streams toggle state
   const [hideMappedStreams, setHideMappedStreams] = useState(false);
@@ -289,32 +296,14 @@ export function StreamsPane({
     return sortedStreamGroups.map(([name, groupStreams]) => ({
       name,
       streams: groupStreams,
-      expanded: expandedGroups.has(name),
+      expanded: isGroupExpanded(name),
     }));
-  }, [sortedStreamGroups, expandedGroups]);
+  }, [sortedStreamGroups, isGroupExpanded]);
 
-
-  const toggleGroup = useCallback((groupName: string) => {
-    setExpandedGroups((prev) => {
-      const next = new Set(prev);
-      if (next.has(groupName)) {
-        next.delete(groupName);
-      } else {
-        next.add(groupName);
-      }
-      return next;
-    });
-  }, []);
-
-  // Expand all groups
+  // Expand all groups (wrapper to pass group names)
   const expandAllGroups = useCallback(() => {
-    setExpandedGroups(new Set(groupedStreams.map(g => g.name)));
-  }, [groupedStreams]);
-
-  // Collapse all groups
-  const collapseAllGroups = useCallback(() => {
-    setExpandedGroups(new Set());
-  }, []);
+    expandAllGroupsInternal(groupedStreams.map(g => g.name));
+  }, [groupedStreams, expandAllGroupsInternal]);
 
   // Check if all groups are expanded or collapsed
   const allExpanded = groupedStreams.length > 0 && expandedGroups.size === groupedStreams.length;

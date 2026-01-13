@@ -3,3 +3,5 @@ export { useChangeHistory } from './useChangeHistory';
 export type { UseChangeHistoryOptions, UseChangeHistoryReturn } from './useChangeHistory';
 export { useEditMode } from './useEditMode';
 export type { UseEditModeOptions } from './useEditMode';
+export { useExpandCollapse } from './useExpandCollapse';
+export type { UseExpandCollapseReturn } from './useExpandCollapse';
