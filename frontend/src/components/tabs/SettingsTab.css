@@ -843,6 +843,7 @@
 
 .threshold-label-row label {
   margin-bottom: 0;
+  white-space: nowrap;
 }
 
 .threshold-input-group {
