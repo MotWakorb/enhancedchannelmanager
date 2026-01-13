@@ -1089,9 +1089,11 @@ export function ChannelsPane({
   }, [contextMenu]);
 
   // Filter channel groups based on search text (for create modal dropdown)
-  const searchFilteredChannelGroups = channelGroups.filter((group) =>
-    group.name.toLowerCase().includes(groupSearchText.toLowerCase())
-  );
+  const searchFilteredChannelGroups = useMemo(() => {
+    return channelGroups.filter((group) =>
+      group.name.toLowerCase().includes(groupSearchText.toLowerCase())
+    );
+  }, [channelGroups, groupSearchText]);
 
   // Load streams when a channel is selected
   useEffect(() => {
@@ -2600,63 +2602,75 @@ export function ChannelsPane({
     }
   }
 
-  const visibleChannels = localChannels.filter((ch) => {
-    // First, apply search filter if there's a search term
-    if (searchTerm) {
-      const searchLower = searchTerm.toLowerCase();
-      const nameMatch = ch.name?.toLowerCase().includes(searchLower);
-      const numberMatch = ch.channel_number?.toString().includes(searchTerm);
-      if (!nameMatch && !numberMatch) return false;
-    }
-
-    if (!ch.auto_created) return true; // Always show manual channels
-    // For auto-created channels, check if their group is related to auto_channel_sync
-    const groupId = ch.channel_group_id;
-    if (groupId && autoSyncRelatedGroups.has(groupId)) {
-      // Show auto-created channel if showAutoChannelGroups filter is on
-      return channelListFilters?.showAutoChannelGroups !== false;
-    }
-    return false; // Hide auto-created channels from non-auto-sync groups
-  });
-  const channelsByGroup = visibleChannels.reduce<Record<number | 'ungrouped', Channel[]>>(
-    (acc, channel) => {
-      const key = channel.channel_group_id ?? 'ungrouped';
-      if (!acc[key]) acc[key] = [];
-      acc[key].push(channel);
-      return acc;
-    },
-    { ungrouped: [] }
-  );
-
-  // Sort channels within each group by channel_number
-  Object.values(channelsByGroup).forEach((group) => {
-    group.sort((a, b) => (a.channel_number ?? 9999) - (b.channel_number ?? 9999));
-  });
-
-  // Sort channel groups by their lowest channel number (only groups with channels)
-  const sortedChannelGroups = [...channelGroups]
-    .filter((g) => channelsByGroup[g.id]?.length > 0)
-    .sort((a, b) => {
-      // If custom order exists, use it
-      if (groupOrder.length > 0) {
-        const aIndex = groupOrder.indexOf(a.id);
-        const bIndex = groupOrder.indexOf(b.id);
-        // If both in order array, use order
-        if (aIndex !== -1 && bIndex !== -1) {
-          return aIndex - bIndex;
-        }
-        // If only one is in order, prioritize the one in order
-        if (aIndex !== -1) return -1;
-        if (bIndex !== -1) return 1;
+  // Memoize expensive channel filtering and grouping operations
+  const channelsByGroup = useMemo(() => {
+    // Filter channels based on search term and auto-created filter
+    const visibleChannels = localChannels.filter((ch) => {
+      // First, apply search filter if there's a search term
+      if (searchTerm) {
+        const searchLower = searchTerm.toLowerCase();
+        const nameMatch = ch.name?.toLowerCase().includes(searchLower);
+        const numberMatch = ch.channel_number?.toString().includes(searchTerm);
+        if (!nameMatch && !numberMatch) return false;
       }
-      // Default: sort by lowest channel number
-      const aMin = channelsByGroup[a.id]?.[0]?.channel_number ?? 9999;
-      const bMin = channelsByGroup[b.id]?.[0]?.channel_number ?? 9999;
-      return aMin - bMin;
+
+      if (!ch.auto_created) return true; // Always show manual channels
+      // For auto-created channels, check if their group is related to auto_channel_sync
+      const groupId = ch.channel_group_id;
+      if (groupId && autoSyncRelatedGroups.has(groupId)) {
+        // Show auto-created channel if showAutoChannelGroups filter is on
+        return channelListFilters?.showAutoChannelGroups !== false;
+      }
+      return false; // Hide auto-created channels from non-auto-sync groups
     });
 
+    // Group channels by channel_group_id
+    const grouped = visibleChannels.reduce<Record<number | 'ungrouped', Channel[]>>(
+      (acc, channel) => {
+        const key = channel.channel_group_id ?? 'ungrouped';
+        if (!acc[key]) acc[key] = [];
+        acc[key].push(channel);
+        return acc;
+      },
+      { ungrouped: [] }
+    );
+
+    // Sort channels within each group by channel_number
+    Object.values(grouped).forEach((group) => {
+      group.sort((a, b) => (a.channel_number ?? 9999) - (b.channel_number ?? 9999));
+    });
+
+    return grouped;
+  }, [localChannels, searchTerm, channelListFilters, autoSyncRelatedGroups]);
+
+  // Sort channel groups by their lowest channel number (only groups with channels)
+  const sortedChannelGroups = useMemo(() => {
+    return [...channelGroups]
+      .filter((g) => channelsByGroup[g.id]?.length > 0)
+      .sort((a, b) => {
+        // If custom order exists, use it
+        if (groupOrder.length > 0) {
+          const aIndex = groupOrder.indexOf(a.id);
+          const bIndex = groupOrder.indexOf(b.id);
+          // If both in order array, use order
+          if (aIndex !== -1 && bIndex !== -1) {
+            return aIndex - bIndex;
+          }
+          // If only one is in order, prioritize the one in order
+          if (aIndex !== -1) return -1;
+          if (bIndex !== -1) return 1;
+        }
+        // Default: sort by lowest channel number
+        const aMin = channelsByGroup[a.id]?.[0]?.channel_number ?? 9999;
+        const bMin = channelsByGroup[b.id]?.[0]?.channel_number ?? 9999;
+        return aMin - bMin;
+      });
+  }, [channelGroups, channelsByGroup, groupOrder]);
+
   // All groups sorted alphabetically with natural sort (for filter dropdown - includes empty groups)
-  const allGroupsSorted = [...channelGroups].sort((a, b) => naturalCompare(a.name, b.name));
+  const allGroupsSorted = useMemo(() => {
+    return [...channelGroups].sort((a, b) => naturalCompare(a.name, b.name));
+  }, [channelGroups]);
 
   // Helper function to determine if a group should be visible based on filter settings
   const shouldShowGroup = (groupId: number): boolean => {
@@ -2702,7 +2716,9 @@ export function ChannelsPane({
   };
 
   // Filter sorted channel groups based on filter settings
-  const filteredChannelGroups = sortedChannelGroups.filter((g) => shouldShowGroup(g.id));
+  const filteredChannelGroups = useMemo(() => {
+    return sortedChannelGroups.filter((g) => shouldShowGroup(g.id));
+  }, [sortedChannelGroups, channelListFilters, channelsByGroup, newlyCreatedGroupIds, autoSyncRelatedGroups, providerSettingsMap]);
 
   const handleDragStart = (event: DragStartEvent) => {
     const activeId = event.active.id;
