@@ -4,6 +4,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from typing import Optional
+import httpx
 import os
 import re
 import logging
@@ -1450,6 +1451,11 @@ async def get_epg_grid(start: Optional[str] = None, end: Optional[str] = None):
     client = get_client()
     try:
         return await client.get_epg_grid(start=start, end=end)
+    except httpx.ReadTimeout:
+        raise HTTPException(
+            status_code=504,
+            detail="EPG data request timed out. This usually happens with very large EPG datasets. Try again or contact your Dispatcharr administrator to optimize EPG data size."
+        )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
