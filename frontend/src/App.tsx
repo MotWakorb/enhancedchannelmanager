@@ -11,6 +11,8 @@ import * as api from './services/api';
 import type { Channel, ChannelGroup, ChannelProfile, Stream, M3UAccount, M3UGroupSetting, Logo, ChangeInfo, EPGData, StreamProfile, EPGSource, ChannelListFilterSettings, CommitProgress } from './types';
 import packageJson from '../package.json';
 import { logger } from './utils/logger';
+import { registerVLCModalCallback, downloadM3U } from './utils/vlc';
+import { VLCProtocolHelperModal } from './components/VLCProtocolHelperModal';
 import ECMLogo from './assets/ECMLogo.png';
 import './App.css';
 
@@ -74,6 +76,11 @@ function App() {
   const [showStreamUrls, setShowStreamUrls] = useState(true);
   const [hideUngroupedStreams, setHideUngroupedStreams] = useState(true);
   const [epgAutoMatchThreshold, setEpgAutoMatchThreshold] = useState(80);
+  // @ts-ignore - vlcOpenBehavior is used via window.__vlcSettings in useEffect
+  const [vlcOpenBehavior, setVlcOpenBehavior] = useState<'protocol_only' | 'm3u_fallback' | 'm3u_only'>('m3u_fallback');
+  const [showVLCHelperModal, setShowVLCHelperModal] = useState(false);
+  const [vlcModalStreamUrl, setVlcModalStreamUrl] = useState('');
+  const [vlcModalStreamName, setVlcModalStreamName] = useState('');
   const [channelDefaults, setChannelDefaults] = useState({
     includeChannelNumberInName: false,
     channelNumberSeparator: '-',
@@ -353,6 +360,10 @@ function App() {
         setShowStreamUrls(settings.show_stream_urls);
         setHideUngroupedStreams(settings.hide_ungrouped_streams);
         setEpgAutoMatchThreshold(settings.epg_auto_match_threshold ?? 80);
+        const vlcBehavior = (settings.vlc_open_behavior as 'protocol_only' | 'm3u_fallback' | 'm3u_only') || 'm3u_fallback';
+        setVlcOpenBehavior(vlcBehavior);
+        // Store VLC settings globally for vlc utility to access
+        (window as any).__vlcSettings = { behavior: vlcBehavior };
         setChannelDefaults({
           includeChannelNumberInName: settings.include_channel_number_in_name,
           channelNumberSeparator: settings.channel_number_separator,
@@ -420,6 +431,16 @@ function App() {
       }
     };
     init();
+  }, []);
+
+  // Register VLC modal callback
+  useEffect(() => {
+    const unregister = registerVLCModalCallback((url, name) => {
+      setVlcModalStreamUrl(url);
+      setVlcModalStreamName(name || '');
+      setShowVLCHelperModal(true);
+    });
+    return unregister;
   }, []);
 
   // Auto-select channel groups that have channels when data first loads
@@ -1745,6 +1766,13 @@ function App() {
           <span className="version">v{packageJson.version}</span>
         </div>
       </footer>
+
+      <VLCProtocolHelperModal
+        isOpen={showVLCHelperModal}
+        onClose={() => setShowVLCHelperModal(false)}
+        onDownloadM3U={() => downloadM3U(vlcModalStreamUrl, vlcModalStreamName)}
+        streamName={vlcModalStreamName || 'Stream'}
+      />
     </div>
   );
 }

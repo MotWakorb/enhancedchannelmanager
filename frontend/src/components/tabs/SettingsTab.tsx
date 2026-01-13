@@ -44,6 +44,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
   const [hideAutoSyncGroups, setHideAutoSyncGroups] = useState(false);
   const [hideUngroupedStreams, setHideUngroupedStreams] = useState(true);
   const [theme, setTheme] = useState<Theme>('dark');
+  const [vlcOpenBehavior, setVlcOpenBehavior] = useState('m3u_fallback');
 
   // Stats settings
   const [statsPollInterval, setStatsPollInterval] = useState(10);
@@ -104,6 +105,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
       setHideAutoSyncGroups(settings.hide_auto_sync_groups);
       setHideUngroupedStreams(settings.hide_ungrouped_streams);
       setTheme(settings.theme || 'dark');
+      setVlcOpenBehavior(settings.vlc_open_behavior || 'm3u_fallback');
       setDefaultChannelProfileIds(settings.default_channel_profile_ids);
       setEpgAutoMatchThreshold(settings.epg_auto_match_threshold ?? 80);
       setCustomNetworkPrefixes(settings.custom_network_prefixes ?? []);
@@ -204,6 +206,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
         user_timezone: userTimezone,
         backend_log_level: backendLogLevel,
         frontend_log_level: frontendLogLevel,
+        vlc_open_behavior: vlcOpenBehavior,
         linked_m3u_accounts: linkedM3UAccounts,
       });
       // Apply frontend log level immediately
@@ -212,6 +215,8 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
         logger.setLevel(frontendLevel as FrontendLogLevel);
         logger.info(`Frontend log level changed to ${frontendLevel}`);
       }
+      // Update global VLC settings for vlc utility to access
+      (window as any).__vlcSettings = { behavior: vlcOpenBehavior };
       setOriginalUrl(url);
       setOriginalUsername(username);
       setPassword('');
@@ -654,6 +659,31 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
               These streams appear under "Ungrouped" in the Streams pane.
             </p>
           </div>
+        </div>
+      </div>
+
+      <div className="settings-section">
+        <div className="settings-section-header">
+          <span className="material-icons">play_circle</span>
+          <h3>VLC Integration</h3>
+        </div>
+
+        <div className="form-group">
+          <label htmlFor="vlcOpenBehavior">Open in VLC Behavior</label>
+          <select
+            id="vlcOpenBehavior"
+            value={vlcOpenBehavior}
+            onChange={(e) => setVlcOpenBehavior(e.target.value)}
+          >
+            <option value="protocol_only">Try VLC Protocol (show helper if it fails)</option>
+            <option value="m3u_fallback">Try VLC Protocol, then fallback to M3U download</option>
+            <option value="m3u_only">Always download M3U file</option>
+          </select>
+          <p className="form-hint">
+            Controls what happens when you click "Open in VLC". The vlc:// protocol requires
+            browser extensions on some platforms. If "protocol_only" fails, a helper modal
+            will guide you to install the necessary extension.
+          </p>
         </div>
       </div>
 

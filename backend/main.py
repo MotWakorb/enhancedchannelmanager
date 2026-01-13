@@ -164,6 +164,7 @@ class SettingsRequest(BaseModel):
     user_timezone: str = ""
     backend_log_level: str = "INFO"
     frontend_log_level: str = "INFO"
+    vlc_open_behavior: str = "m3u_fallback"
 
 
 class SettingsResponse(BaseModel):
@@ -190,6 +191,7 @@ class SettingsResponse(BaseModel):
     user_timezone: str
     backend_log_level: str
     frontend_log_level: str
+    vlc_open_behavior: str
 
 
 class TestConnectionRequest(BaseModel):
@@ -228,6 +230,7 @@ async def get_current_settings():
         user_timezone=settings.user_timezone,
         backend_log_level=settings.backend_log_level,
         frontend_log_level=settings.frontend_log_level,
+        vlc_open_behavior=settings.vlc_open_behavior,
     )
 
 
@@ -277,6 +280,7 @@ async def update_settings(request: SettingsRequest):
         user_timezone=request.user_timezone,
         backend_log_level=request.backend_log_level,
         frontend_log_level=request.frontend_log_level,
+        vlc_open_behavior=request.vlc_open_behavior,
     )
     save_settings(new_settings)
     clear_settings_cache()
