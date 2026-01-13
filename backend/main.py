@@ -913,13 +913,9 @@ async def get_orphaned_channel_groups():
         group_name_map = {g["id"]: g["name"] for g in all_groups}
 
         # Get all M3U accounts and collect their channel group IDs
-        accounts = await client.get_m3u_accounts()
-        m3u_group_ids = set()
-        for account in accounts:
-            for group_setting in account.get("channel_groups", []):
-                group_id = group_setting.get("channel_group")
-                if group_id:
-                    m3u_group_ids.add(group_id)
+        # Use get_all_m3u_group_settings which reliably extracts channel_groups from accounts
+        group_settings = await client.get_all_m3u_group_settings()
+        m3u_group_ids = set(group_settings.keys())
 
         # Orphaned groups = all groups - groups used by M3Us
         orphaned_ids = all_group_ids - m3u_group_ids
@@ -959,13 +955,9 @@ async def delete_orphaned_channel_groups():
         all_group_ids = {g["id"] for g in all_groups}
         group_name_map = {g["id"]: g["name"] for g in all_groups}
 
-        accounts = await client.get_m3u_accounts()
-        m3u_group_ids = set()
-        for account in accounts:
-            for group_setting in account.get("channel_groups", []):
-                group_id = group_setting.get("channel_group")
-                if group_id:
-                    m3u_group_ids.add(group_id)
+        # Use get_all_m3u_group_settings which reliably extracts channel_groups from accounts
+        group_settings = await client.get_all_m3u_group_settings()
+        m3u_group_ids = set(group_settings.keys())
 
         orphaned_ids = all_group_ids - m3u_group_ids
 
