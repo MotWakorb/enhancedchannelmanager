@@ -57,6 +57,11 @@ class DispatcharrSettings(BaseModel):
     backend_log_level: str = "INFO"
     # Frontend log level: DEBUG, INFO, WARN, ERROR
     frontend_log_level: str = "INFO"
+    # VLC open behavior: "protocol_only", "m3u_fallback", or "m3u_only"
+    # protocol_only: Try vlc:// protocol, show helper modal if it fails
+    # m3u_fallback: Try vlc:// protocol, download M3U if it fails (current default)
+    # m3u_only: Always download M3U file without trying protocol
+    vlc_open_behavior: str = "m3u_fallback"
 
     def is_configured(self) -> bool:
         return bool(self.url and self.username and self.password)

@@ -423,6 +423,7 @@ export interface SettingsResponse {
   user_timezone: string;  // IANA timezone name (e.g. "America/Los_Angeles")
   backend_log_level: string;  // Backend log level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
   frontend_log_level: string;  // Frontend log level (DEBUG, INFO, WARN, ERROR)
+  vlc_open_behavior: string;  // VLC open behavior: "protocol_only", "m3u_fallback", "m3u_only"
 }
 
 export interface TestConnectionResult {
@@ -458,6 +459,7 @@ export async function saveSettings(settings: {
   user_timezone?: string;  // Optional - IANA timezone name (e.g. "America/Los_Angeles")
   backend_log_level?: string;  // Optional - Backend log level, defaults to INFO
   frontend_log_level?: string;  // Optional - Frontend log level, defaults to INFO
+  vlc_open_behavior?: string;  // Optional - VLC open behavior: "protocol_only", "m3u_fallback", "m3u_only"
 }): Promise<{ status: string; configured: boolean }> {
   return fetchJson(`${API_BASE}/settings`, {
     method: 'POST',
