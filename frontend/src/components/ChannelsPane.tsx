@@ -5605,7 +5605,7 @@ export function ChannelsPane({
             onDragOver={handleDragOver}
             onDragEnd={handleDragEnd}
           >
-            {/* Drop zone before first group (only when stream group is being dragged) */}
+            {/* Drop zone before first group */}
             {streamGroupDragOver && isEditMode && (
               <div
                 className={`stream-group-drop-zone ${streamGroupDropTarget?.afterGroupId === null ? 'active' : ''}`}
