@@ -143,9 +143,9 @@ export function StreamsPane({
     return streams.filter(stream => !mappedStreamIds.has(stream.id));
   }, [streams, hideMappedStreams, mappedStreamIds]);
 
-  // Compute streams in display order (grouped and sorted alphabetically)
-  // This must be computed before useSelection so shift-click works correctly
-  const displayOrderStreams = useMemo((): Stream[] => {
+  // Shared memoized grouping logic to avoid duplication
+  // Groups and sorts streams, then returns sorted entries
+  const sortedStreamGroups = useMemo((): [string, Stream[]][] => {
     const groups = new Map<string, Stream[]>();
 
     // Group streams by channel_group_name
@@ -162,23 +162,26 @@ export function StreamsPane({
       groupStreams.sort((a, b) => naturalCompare(a.name, b.name));
     });
 
-    // Sort groups alphabetically with natural sort (Ungrouped at end) and flatten
+    // Convert to sorted array of [name, streams] tuples
     // Filter out Ungrouped if hideUngroupedStreams is true
-    const sortedGroupNames = Array.from(groups.keys())
-      .filter((name) => !hideUngroupedStreams || name !== 'Ungrouped')
-      .sort((a, b) => {
+    return Array.from(groups.entries())
+      .filter(([name]) => !hideUngroupedStreams || name !== 'Ungrouped')
+      .sort(([a], [b]) => {
         if (a === 'Ungrouped') return 1;
         if (b === 'Ungrouped') return -1;
         return naturalCompare(a, b);
       });
+  }, [filteredStreams, hideUngroupedStreams]);
 
-    // Flatten to single array in display order
+  // Compute streams in display order (flattened array for selection)
+  // This must be computed before useSelection so shift-click works correctly
+  const displayOrderStreams = useMemo((): Stream[] => {
     const result: Stream[] = [];
-    for (const groupName of sortedGroupNames) {
-      result.push(...groups.get(groupName)!);
+    for (const [, groupStreams] of sortedStreamGroups) {
+      result.push(...groupStreams);
     }
     return result;
-  }, [filteredStreams, hideUngroupedStreams]);
+  }, [sortedStreamGroups]);
 
   // Use display order for selection so shift-click works correctly
   const {
@@ -277,40 +280,14 @@ export function StreamsPane({
   const useMultiSelectGroups = !!onSelectedStreamGroupsChange;
 
   // Group and sort streams
+  // Convert sorted stream groups to StreamGroup objects with expanded state
   const groupedStreams = useMemo((): StreamGroup[] => {
-    const groups = new Map<string, Stream[]>();
-
-    // Group streams by channel_group_name (use filteredStreams to respect hide mapped toggle)
-    filteredStreams.forEach((stream) => {
-      const groupName = stream.channel_group_name || 'Ungrouped';
-      if (!groups.has(groupName)) {
-        groups.set(groupName, []);
-      }
-      groups.get(groupName)!.push(stream);
-    });
-
-    // Sort streams within each group alphabetically with natural sort
-    groups.forEach((groupStreams) => {
-      groupStreams.sort((a, b) => naturalCompare(a.name, b.name));
-    });
-
-    // Convert to array and sort groups alphabetically with natural sort (Ungrouped at end)
-    const sortedGroups = Array.from(groups.entries())
-      // Filter out Ungrouped if hideUngroupedStreams is true
-      .filter(([name]) => !hideUngroupedStreams || name !== 'Ungrouped')
-      .sort(([a], [b]) => {
-        if (a === 'Ungrouped') return 1;
-        if (b === 'Ungrouped') return -1;
-        return naturalCompare(a, b);
-      })
-      .map(([name, groupStreams]) => ({
-        name,
-        streams: groupStreams,
-        expanded: expandedGroups.has(name),
-      }));
-
-    return sortedGroups;
-  }, [filteredStreams, expandedGroups, hideUngroupedStreams]);
+    return sortedStreamGroups.map(([name, groupStreams]) => ({
+      name,
+      streams: groupStreams,
+      expanded: expandedGroups.has(name),
+    }));
+  }, [sortedStreamGroups, expandedGroups]);
 
 
   const toggleGroup = useCallback((groupName: string) => {
