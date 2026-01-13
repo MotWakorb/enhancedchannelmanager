@@ -33,6 +33,7 @@ import { NormalizeNamesModal } from './NormalizeNamesModal';
 import { naturalCompare } from '../utils/naturalSort';
 import { openInVLC } from '../utils/vlc';
 import { useCopyFeedback } from '../hooks/useCopyFeedback';
+import { useDropdown } from '../hooks/useDropdown';
 import './ChannelsPane.css';
 
 interface ChannelsPaneProps {
@@ -844,12 +845,21 @@ export function ChannelsPane({
   const [groupOrder, setGroupOrder] = useState<number[]>([]); // Custom order for groups
   const [dragOverChannelId, setDragOverChannelId] = useState<number | null>(null);
   const [localChannels, setLocalChannels] = useState<Channel[]>(channels);
-  const [groupDropdownOpen, setGroupDropdownOpen] = useState(false);
   const [groupFilterSearch, setGroupFilterSearch] = useState('');
-  const [filterSettingsOpen, setFilterSettingsOpen] = useState(false);
-  const dropdownRef = useRef<HTMLDivElement>(null);
   const groupFilterSearchRef = useRef<HTMLInputElement>(null);
-  const filterSettingsRef = useRef<HTMLDivElement>(null);
+
+  // Dropdown management with useDropdown hook
+  const {
+    isOpen: groupDropdownOpen,
+    setIsOpen: setGroupDropdownOpen,
+    dropdownRef,
+  } = useDropdown();
+
+  const {
+    isOpen: filterSettingsOpen,
+    setIsOpen: setFilterSettingsOpen,
+    dropdownRef: filterSettingsRef,
+  } = useDropdown();
 
   // Create channel modal state
   const [showCreateModal, setShowCreateModal] = useState(false);
@@ -1025,20 +1035,12 @@ export function ChannelsPane({
     // When actively dragging, don't sync to preserve drag state
   }, [channels, isEditMode, activeDragId]);
 
-  // Close dropdowns when clicking outside
+  // Clear group filter search when dropdown closes
   useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
-        setGroupDropdownOpen(false);
-        setGroupFilterSearch('');
-      }
-      if (filterSettingsRef.current && !filterSettingsRef.current.contains(event.target as Node)) {
-        setFilterSettingsOpen(false);
-      }
-    };
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, []);
+    if (!groupDropdownOpen) {
+      setGroupFilterSearch('');
+    }
+  }, [groupDropdownOpen]);
 
   // Handle external trigger to open edit modal from Guide tab
   useEffect(() => {
