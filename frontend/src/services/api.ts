@@ -169,13 +169,19 @@ export async function getOrphanedChannelGroups(): Promise<{
   return fetchJson(`${API_BASE}/channel-groups/orphaned`);
 }
 
-export async function deleteOrphanedChannelGroups(): Promise<{
+export async function deleteOrphanedChannelGroups(groupIds?: number[]): Promise<{
   status: string;
   message: string;
   deleted_groups: { id: number; name: string }[];
   failed_groups: { id: number; name: string; error: string }[];
 }> {
-  return fetchJson(`${API_BASE}/channel-groups/orphaned`, { method: 'DELETE' });
+  return fetchJson(`${API_BASE}/channel-groups/orphaned`, {
+    method: 'DELETE',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: groupIds ? JSON.stringify({ group_ids: groupIds }) : undefined,
+  });
 }
 
 export async function getHiddenChannelGroups(): Promise<{ id: number; name: string; hidden_at: string }[]> {
