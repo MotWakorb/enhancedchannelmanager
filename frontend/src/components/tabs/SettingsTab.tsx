@@ -5,6 +5,7 @@ import type { Theme } from '../../services/api';
 import type { ChannelProfile } from '../../types';
 import { logger } from '../../utils/logger';
 import type { LogLevel as FrontendLogLevel } from '../../utils/logger';
+import { DeleteOrphanedGroupsModal } from '../DeleteOrphanedGroupsModal';
 import './SettingsTab.css';
 
 interface SettingsTabProps {
@@ -67,6 +68,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
   const [loadingOrphaned, setLoadingOrphaned] = useState(false);
   const [cleaningOrphaned, setCleaningOrphaned] = useState(false);
   const [cleanupResult, setCleanupResult] = useState<string | null>(null);
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
 
   // Track original URL/username to detect if auth settings changed
   const [originalUrl, setOriginalUrl] = useState('');
@@ -269,14 +271,15 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
   };
 
   const handleCleanupOrphanedGroups = async () => {
-    if (!confirm(`Are you sure you want to delete ${orphanedGroups.length} orphaned group(s)? This action cannot be undone.`)) {
-      return;
-    }
+    // Show the confirmation modal
+    setShowDeleteModal(true);
+  };
 
+  const handleConfirmDelete = async (selectedGroupIds: number[]) => {
     setCleaningOrphaned(true);
     setCleanupResult(null);
     try {
-      const result = await api.deleteOrphanedChannelGroups();
+      const result = await api.deleteOrphanedChannelGroups(selectedGroupIds);
       setCleanupResult(result.message);
 
       if (result.deleted_groups.length > 0) {
@@ -1210,6 +1213,13 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
         {activePage === 'appearance' && renderAppearancePage()}
         {activePage === 'maintenance' && renderMaintenancePage()}
       </div>
+
+      <DeleteOrphanedGroupsModal
+        isOpen={showDeleteModal}
+        onClose={() => setShowDeleteModal(false)}
+        onConfirm={handleConfirmDelete}
+        groups={orphanedGroups}
+      />
     </div>
   );
 }

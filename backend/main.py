@@ -129,6 +129,10 @@ class CreateChannelGroupRequest(BaseModel):
     name: str
 
 
+class DeleteOrphanedGroupsRequest(BaseModel):
+    group_ids: list[int] | None = None  # Optional list of group IDs to delete
+
+
 # Health check
 @app.get("/api/health")
 async def health_check():
@@ -953,18 +957,26 @@ async def get_orphaned_channel_groups():
             if group_id:
                 group_channel_count[group_id] = group_channel_count.get(group_id, 0) + 1
 
-        # Debug logging
+        # Build a set of group IDs that are targets of group_override from auto_channel_sync M3U groups
+        # These groups may be empty now but will be populated by Auto Channel Sync
+        group_override_targets = set()
+        for group_id, m3u_info in m3u_group_settings.items():
+            if m3u_info.get("auto_channel_sync"):
+                custom_props = m3u_info.get("custom_properties", {})
+                if custom_props and isinstance(custom_props, dict):
+                    group_override = custom_props.get("group_override")
+                    if group_override:
+                        group_override_targets.add(group_override)
+
         logger.info(f"Total streams fetched: {len(streams)}")
         logger.info(f"Total channels fetched: {len(channels)}")
         logger.info(f"Groups with streams: {len(group_stream_count)}")
         logger.info(f"Groups with channels: {len(group_channel_count)}")
-        if streams:
-            logger.info(f"Sample stream: {streams[0]}")
-        if channels:
-            logger.info(f"Sample channel: {channels[0]}")
+        logger.info(f"Groups that are group_override targets: {len(group_override_targets)}")
 
         # Find orphaned groups
         # A group is orphaned if it has no streams AND no channels AND is NOT in any M3U account
+        # AND is NOT a target of group_override from an auto_channel_sync M3U group
         orphaned_groups = []
         for group in all_groups:
             group_id = group["id"]
@@ -976,10 +988,14 @@ async def get_orphaned_channel_groups():
             # Check if this group is associated with any M3U account
             m3u_info = m3u_group_settings.get(group_id)
 
+            # Check if this group is a target of group_override (will be populated by Auto Channel Sync)
+            is_override_target = group_id in group_override_targets
+
             # Only consider it orphaned if:
             # 1. It has no streams AND no channels
             # 2. AND it's not in any M3U account (truly orphaned from deleted M3U)
-            if stream_count == 0 and channel_count == 0 and m3u_info is None:
+            # 3. AND it's not a target of group_override from an auto_channel_sync M3U group
+            if stream_count == 0 and channel_count == 0 and m3u_info is None and not is_override_target:
                 # Group is truly orphaned - not in any M3U and has no content
                 orphaned_groups.append({
                     "id": group_id,
@@ -1002,13 +1018,17 @@ async def get_orphaned_channel_groups():
 
 
 @app.delete("/api/channel-groups/orphaned")
-async def delete_orphaned_channel_groups():
+async def delete_orphaned_channel_groups(request: DeleteOrphanedGroupsRequest = None):
     """Delete channel groups that are truly orphaned.
 
     A group is deleted if it has no streams AND no channels.
     M3U groups contain streams, manual groups contain channels.
+
+    Args:
+        request: Optional request body with group_ids list. If None or empty, all orphaned groups are deleted.
     """
     client = get_client()
+    group_ids = request.group_ids if request else None
     try:
         # Use the same logic as GET to find orphaned groups
         all_groups = await client.get_channel_groups()
@@ -1056,8 +1076,20 @@ async def delete_orphaned_channel_groups():
             if group_id:
                 group_channel_count[group_id] = group_channel_count.get(group_id, 0) + 1
 
+        # Build a set of group IDs that are targets of group_override from auto_channel_sync M3U groups
+        # These groups may be empty now but will be populated by Auto Channel Sync
+        group_override_targets = set()
+        for group_id, m3u_info in m3u_group_settings.items():
+            if m3u_info.get("auto_channel_sync"):
+                custom_props = m3u_info.get("custom_properties", {})
+                if custom_props and isinstance(custom_props, dict):
+                    group_override = custom_props.get("group_override")
+                    if group_override:
+                        group_override_targets.add(group_override)
+
         # Find orphaned groups
         # A group is orphaned if it has no streams AND no channels AND is NOT in any M3U account
+        # AND is NOT a target of group_override from an auto_channel_sync M3U group
         orphaned_groups = []
         for group in all_groups:
             group_id = group["id"]
@@ -1069,10 +1101,14 @@ async def delete_orphaned_channel_groups():
             # Check if this group is associated with any M3U account
             m3u_info = m3u_group_settings.get(group_id)
 
+            # Check if this group is a target of group_override (will be populated by Auto Channel Sync)
+            is_override_target = group_id in group_override_targets
+
             # Only consider it orphaned if:
             # 1. It has no streams AND no channels
             # 2. AND it's not in any M3U account (truly orphaned from deleted M3U)
-            if stream_count == 0 and channel_count == 0 and m3u_info is None:
+            # 3. AND it's not a target of group_override from an auto_channel_sync M3U group
+            if stream_count == 0 and channel_count == 0 and m3u_info is None and not is_override_target:
                 # Group is truly orphaned - not in any M3U and has no content
                 orphaned_groups.append({
                     "id": group_id,
@@ -1088,10 +1124,22 @@ async def delete_orphaned_channel_groups():
                 "failed_groups": [],
             }
 
+        # Filter to only the specified group IDs if provided
+        groups_to_delete = orphaned_groups
+        if group_ids is not None:
+            groups_to_delete = [g for g in orphaned_groups if g["id"] in group_ids]
+            if not groups_to_delete:
+                return {
+                    "status": "ok",
+                    "message": "No matching orphaned groups to delete",
+                    "deleted_groups": [],
+                    "failed_groups": [],
+                }
+
         # Delete each orphaned group
         deleted_groups = []
         failed_groups = []
-        for orphan in orphaned_groups:
+        for orphan in groups_to_delete:
             group_id = orphan["id"]
             group_name = orphan["name"]
             try:
