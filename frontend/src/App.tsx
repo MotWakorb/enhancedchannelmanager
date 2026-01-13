@@ -647,7 +647,7 @@ function App() {
     setNewlyCreatedGroupIds((prev) => new Set([...prev, groupId]));
   }, []);
 
-  const loadChannels = async () => {
+  const loadChannels = async (signal?: AbortSignal) => {
     setChannelsLoading(true);
     try {
       // Fetch all pages of channels
@@ -660,6 +660,7 @@ function App() {
           page,
           pageSize: 500,
           search: channelSearch || undefined,
+          signal,
         });
         allChannels.push(...response.results);
         hasMore = response.next !== null;
@@ -668,7 +669,10 @@ function App() {
 
       setChannels(allChannels);
     } catch (err) {
-      logger.error('Failed to load channels:', err);
+      // Don't log errors for aborted requests
+      if (err instanceof Error && err.name !== 'AbortError') {
+        logger.error('Failed to load channels:', err);
+      }
     } finally {
       setChannelsLoading(false);
     }
@@ -751,7 +755,7 @@ function App() {
     }
   };
 
-  const loadStreams = async (bypassCache: boolean = false) => {
+  const loadStreams = async (bypassCache: boolean = false, signal?: AbortSignal) => {
     setStreamsLoading(true);
     try {
       // Fetch all pages of streams (like channels)
@@ -767,6 +771,7 @@ function App() {
           m3uAccount: streamProviderFilter ?? undefined,
           channelGroup: streamGroupFilter ?? undefined,
           bypassCache,
+          signal,
         });
         allStreams.push(...response.results);
         hasMore = response.next !== null;
@@ -775,7 +780,10 @@ function App() {
 
       setStreams(allStreams);
     } catch (err) {
-      logger.error('Failed to load streams:', err);
+      // Don't log errors for aborted requests
+      if (err instanceof Error && err.name !== 'AbortError') {
+        logger.error('Failed to load streams:', err);
+      }
     } finally {
       setStreamsLoading(false);
     }
@@ -788,18 +796,26 @@ function App() {
 
   // Reload channels when search changes
   useEffect(() => {
+    const abortController = new AbortController();
     const timer = setTimeout(() => {
-      loadChannels();
-    }, 300); // Debounce
-    return () => clearTimeout(timer);
+      loadChannels(abortController.signal);
+    }, 500); // Debounce: 500ms for less frequent API requests
+    return () => {
+      clearTimeout(timer);
+      abortController.abort(); // Cancel in-flight request when search changes
+    };
   }, [channelSearch]);
 
   // Reload streams when filters change
   useEffect(() => {
+    const abortController = new AbortController();
     const timer = setTimeout(() => {
-      loadStreams();
-    }, 300); // Debounce
-    return () => clearTimeout(timer);
+      loadStreams(false, abortController.signal);
+    }, 500); // Debounce: 500ms for less frequent API requests
+    return () => {
+      clearTimeout(timer);
+      abortController.abort(); // Cancel in-flight request when filters change
+    };
   }, [streamSearch, streamProviderFilter, streamGroupFilter]);
 
   // Initialize baseline when channels first load
