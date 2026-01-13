@@ -5,6 +5,7 @@ import { normalizeStreamName, detectRegionalVariants, filterStreamsByTimezone, d
 import { naturalCompare } from '../utils/naturalSort';
 import { openInVLC } from '../utils/vlc';
 import { useCopyFeedback } from '../hooks/useCopyFeedback';
+import { useDropdown } from '../hooks/useDropdown';
 import './StreamsPane.css';
 
 interface StreamGroup {
@@ -226,9 +227,14 @@ export function StreamsPane({
   const [bulkCreateStripSuffix, setBulkCreateStripSuffix] = useState(false);
   const [bulkCreateSelectedProfiles, setBulkCreateSelectedProfiles] = useState<Set<number>>(new Set());
   const [bulkCreateGroupSearch, setBulkCreateGroupSearch] = useState('');
-  const [bulkCreateGroupDropdownOpen, setBulkCreateGroupDropdownOpen] = useState(false);
-  const bulkCreateGroupDropdownRef = useRef<HTMLDivElement>(null);
   const [profilesExpanded, setProfilesExpanded] = useState(false);
+
+  // Bulk create group dropdown management
+  const {
+    isOpen: bulkCreateGroupDropdownOpen,
+    setIsOpen: setBulkCreateGroupDropdownOpen,
+    dropdownRef: bulkCreateGroupDropdownRef,
+  } = useDropdown();
   const [namingOptionsExpanded, setNamingOptionsExpanded] = useState(false);
   const [channelGroupExpanded, setChannelGroupExpanded] = useState(false);
   const [timezoneExpanded, setTimezoneExpanded] = useState(false);
@@ -242,30 +248,28 @@ export function StreamsPane({
   } | null>(null);
 
   // Dropdown state
-  const [providerDropdownOpen, setProviderDropdownOpen] = useState(false);
-  const [groupDropdownOpen, setGroupDropdownOpen] = useState(false);
   const [groupSearchFilter, setGroupSearchFilter] = useState('');
-  const providerDropdownRef = useRef<HTMLDivElement>(null);
-  const groupDropdownRef = useRef<HTMLDivElement>(null);
   const groupSearchInputRef = useRef<HTMLInputElement>(null);
 
-  // Close dropdowns when clicking outside
+  // Provider and group dropdown management
+  const {
+    isOpen: providerDropdownOpen,
+    setIsOpen: setProviderDropdownOpen,
+    dropdownRef: providerDropdownRef,
+  } = useDropdown();
+
+  const {
+    isOpen: groupDropdownOpen,
+    setIsOpen: setGroupDropdownOpen,
+    dropdownRef: groupDropdownRef,
+  } = useDropdown();
+
+  // Clear group search filter when group dropdown closes
   useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-      if (providerDropdownRef.current && !providerDropdownRef.current.contains(event.target as Node)) {
-        setProviderDropdownOpen(false);
-      }
-      if (groupDropdownRef.current && !groupDropdownRef.current.contains(event.target as Node)) {
-        setGroupDropdownOpen(false);
-        setGroupSearchFilter('');
-      }
-      if (bulkCreateGroupDropdownRef.current && !bulkCreateGroupDropdownRef.current.contains(event.target as Node)) {
-        setBulkCreateGroupDropdownOpen(false);
-      }
-    };
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, []);
+    if (!groupDropdownOpen) {
+      setGroupSearchFilter('');
+    }
+  }, [groupDropdownOpen]);
 
   // Focus search input when group dropdown opens
   useEffect(() => {
