@@ -740,8 +740,8 @@
 }
 
 .top-watched-toggle .toggle-btn.active {
-  background: var(--accent-primary);
-  color: white;
+  background: var(--color-primary);
+  color: var(--color-primary-text);
 }
 
 .top-watched-list {
