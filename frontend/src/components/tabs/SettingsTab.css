@@ -251,15 +251,21 @@
   flex: 1;
 }
 
+.test-connection-row {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 0.5rem;
+}
+
 .btn-test {
   display: inline-flex;
   align-items: center;
   gap: 0.5rem;
   padding: 0.625rem 1rem;
-  border: 1px solid var(--border-secondary);
+  border: none;
   border-radius: 6px;
-  background-color: var(--input-bg);
-  color: var(--button-text);
+  background-color: var(--button-primary-bg);
+  color: var(--button-primary-text);
   font-size: 0.875rem;
   font-weight: 500;
   cursor: pointer;
