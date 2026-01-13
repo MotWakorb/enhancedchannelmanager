@@ -203,7 +203,6 @@
 
 .list-header span[title] {
   cursor: help;
-  border-bottom: 1px dotted #666;
 }
 
 .list-header span,

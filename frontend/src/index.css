@@ -17,7 +17,7 @@
 
   --text-primary: rgba(255, 255, 255, 0.95);
   --text-secondary: #a8a8b8;
-  --text-muted: #6b6b7b;
+  --text-muted: #9090a0;
 
   --border-primary: #3a3a45;
   --border-secondary: #4a4a55;
@@ -44,8 +44,8 @@
   --button-bg: #3a3a45;
   --button-hover-bg: #4a4a55;
   --button-text: #ffffff;
-  --button-primary-bg: #ffffff;
-  --button-primary-text: #1e1e23;
+  --button-primary-bg: #4a4a55;
+  --button-primary-text: #ffffff;
 
   --scrollbar-track: #1e1e23;
   --scrollbar-thumb: #4a4a55;
