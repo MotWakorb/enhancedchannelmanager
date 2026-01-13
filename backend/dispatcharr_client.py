@@ -78,11 +78,18 @@ class DispatcharrClient:
         headers = kwargs.pop("headers", {})
         headers["Authorization"] = f"Bearer {self.access_token}"
 
+        # Use extended timeout for EPG programs endpoint (large datasets)
+        request_timeout = kwargs.pop("timeout", None)
+        if request_timeout is None and path == "/api/epg/programs/":
+            request_timeout = 120.0  # 2 minutes for EPG data
+            logger.debug(f"Using extended timeout ({request_timeout}s) for EPG programs request")
+
         try:
             response = await self._client.request(
                 method,
                 f"{self.base_url}{path}",
                 headers=headers,
+                timeout=request_timeout,
                 **kwargs,
             )
 
@@ -95,6 +102,7 @@ class DispatcharrClient:
                     method,
                     f"{self.base_url}{path}",
                     headers=headers,
+                    timeout=request_timeout,
                     **kwargs,
                 )
 
