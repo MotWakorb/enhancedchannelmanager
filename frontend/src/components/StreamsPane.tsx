@@ -6,6 +6,7 @@ import { naturalCompare } from '../utils/naturalSort';
 import { openInVLC } from '../utils/vlc';
 import { useCopyFeedback } from '../hooks/useCopyFeedback';
 import { useDropdown } from '../hooks/useDropdown';
+import { useContextMenu } from '../hooks/useContextMenu';
 import './StreamsPane.css';
 
 interface StreamGroup {
@@ -239,13 +240,12 @@ export function StreamsPane({
   const [channelGroupExpanded, setChannelGroupExpanded] = useState(false);
   const [timezoneExpanded, setTimezoneExpanded] = useState(false);
 
-  // Context menu state
-  const [contextMenu, setContextMenu] = useState<{
-    visible: boolean;
-    x: number;
-    y: number;
-    streamIds: number[];
-  } | null>(null);
+  // Context menu management
+  const {
+    contextMenu,
+    showContextMenu,
+    hideContextMenu,
+  } = useContextMenu<{ streamIds: number[] }>();
 
   // Dropdown state
   const [groupSearchFilter, setGroupSearchFilter] = useState('');
@@ -346,7 +346,7 @@ export function StreamsPane({
       // Escape to clear selection or close context menu
       if (e.key === 'Escape') {
         if (contextMenu) {
-          setContextMenu(null);
+          hideContextMenu();
         } else {
           clearSelection();
         }
@@ -357,20 +357,6 @@ export function StreamsPane({
     return () => document.removeEventListener('keydown', handleKeyDown);
   }, [selectAll, clearSelection, contextMenu]);
 
-  // Close context menu when clicking outside
-  useEffect(() => {
-    if (!contextMenu) return;
-
-    const handleClickOutside = (e: MouseEvent) => {
-      const target = e.target as HTMLElement;
-      if (!target.closest('.streams-context-menu') && !target.closest('.streams-context-submenu')) {
-        setContextMenu(null);
-      }
-    };
-
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, [contextMenu]);
 
   const handleDragStart = useCallback(
     (e: React.DragEvent, stream: Stream) => {
@@ -579,7 +565,7 @@ export function StreamsPane({
   }, []);
 
   // Context menu handlers
-  const closeContextMenu = useCallback(() => setContextMenu(null), []);
+  const closeContextMenu = useCallback(() => hideContextMenu(), [hideContextMenu]);
 
   const handleContextMenu = useCallback((stream: Stream, e: React.MouseEvent) => {
     e.preventDefault();
@@ -596,25 +582,20 @@ export function StreamsPane({
       streamIds = Array.from(selectedIds);
     }
 
-    setContextMenu({
-      visible: true,
-      x: e.clientX,
-      y: e.clientY,
-      streamIds,
-    });
+    showContextMenu(e.clientX, e.clientY, { streamIds });
   }, [isEditMode, isSelected, clearSelection, toggleSelect, selectedIds]);
 
   // Handler for "Create channel(s) in existing group" from context menu
   const handleCreateInGroup = useCallback((groupId: number) => {
     if (!contextMenu) return;
-    openBulkCreateModalForStreamIds(contextMenu.streamIds, groupId);
+    openBulkCreateModalForStreamIds(contextMenu.metadata.streamIds, groupId);
     closeContextMenu();
   }, [contextMenu, openBulkCreateModalForStreamIds, closeContextMenu]);
 
   // Handler for "Create channel(s) in new group" from context menu
   const handleCreateInNewGroup = useCallback(() => {
     if (!contextMenu) return;
-    const streamsList = streams.filter(s => contextMenu.streamIds.includes(s.id));
+    const streamsList = streams.filter(s => contextMenu.metadata.streamIds.includes(s.id));
     setBulkCreateGroup(null);
     setBulkCreateGroups([]);
     setBulkCreateStreams(streamsList);
@@ -651,12 +632,7 @@ export function StreamsPane({
     // Get all stream IDs in this group
     const streamIds = group.streams.map(s => s.id);
 
-    setContextMenu({
-      visible: true,
-      x: e.clientX,
-      y: e.clientY,
-      streamIds,
-    });
+    showContextMenu(e.clientX, e.clientY, { streamIds });
   }, [isEditMode]);
 
   // Toggle group selection (select/deselect all streams in group)

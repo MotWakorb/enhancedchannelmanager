@@ -34,6 +34,7 @@ import { naturalCompare } from '../utils/naturalSort';
 import { openInVLC } from '../utils/vlc';
 import { useCopyFeedback } from '../hooks/useCopyFeedback';
 import { useDropdown } from '../hooks/useDropdown';
+import { useContextMenu } from '../hooks/useContextMenu';
 import './ChannelsPane.css';
 
 interface ChannelsPaneProps {
@@ -944,13 +945,12 @@ export function ChannelsPane({
   // Normalize names modal state
   const [showNormalizeModal, setShowNormalizeModal] = useState(false);
 
-  // Context menu state
-  const [contextMenu, setContextMenu] = useState<{
-    visible: boolean;
-    x: number;
-    y: number;
-    channelIds: number[];
-  } | null>(null);
+  // Context menu management
+  const {
+    contextMenu,
+    showContextMenu,
+    hideContextMenu,
+  } = useContextMenu<{ channelIds: number[] }>();
 
   // Cross-group move modal state
   const [showCrossGroupMoveModal, setShowCrossGroupMoveModal] = useState(false);
@@ -1067,27 +1067,6 @@ export function ChannelsPane({
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  // Close context menu when clicking outside or pressing escape
-  useEffect(() => {
-    const handleClickOutside = () => {
-      if (contextMenu) {
-        setContextMenu(null);
-      }
-    };
-    const handleEscape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape' && contextMenu) {
-        setContextMenu(null);
-      }
-    };
-    if (contextMenu) {
-      document.addEventListener('mousedown', handleClickOutside);
-      document.addEventListener('keydown', handleEscape);
-      return () => {
-        document.removeEventListener('mousedown', handleClickOutside);
-        document.removeEventListener('keydown', handleEscape);
-      };
-    }
-  }, [contextMenu]);
 
   // Filter channel groups based on search text (for create modal dropdown)
   const searchFilteredChannelGroups = useMemo(() => {
@@ -1212,20 +1191,10 @@ export function ChannelsPane({
       if (onToggleChannelSelection) {
         onToggleChannelSelection(channel.id, false);
       }
-      setContextMenu({
-        visible: true,
-        x: e.clientX,
-        y: e.clientY,
-        channelIds: [channel.id],
-      });
+      showContextMenu(e.clientX, e.clientY, { channelIds: [channel.id] });
     } else {
       // Use all selected channels
-      setContextMenu({
-        visible: true,
-        x: e.clientX,
-        y: e.clientY,
-        channelIds: Array.from(selectedChannelIds),
-      });
+      showContextMenu(e.clientX, e.clientY, { channelIds: Array.from(selectedChannelIds) });
     }
   };
 
@@ -1233,7 +1202,7 @@ export function ChannelsPane({
     if (!contextMenu) return;
 
     const channelsToMove = localChannels
-      .filter(ch => contextMenu.channelIds.includes(ch.id))
+      .filter(ch => contextMenu.metadata.channelIds.includes(ch.id))
       .sort((a, b) => naturalCompare(a.name, b.name));
     if (channelsToMove.length === 0) return;
 
@@ -1310,12 +1279,12 @@ export function ChannelsPane({
       sourceGroupMinChannel,
     });
     setShowCrossGroupMoveModal(true);
-    setContextMenu(null);
+    hideContextMenu();
   };
 
   const handleCreateGroupAndMove = () => {
     if (!contextMenu) return;
-    setContextMenu(null);
+    hideContextMenu();
     setShowCreateGroupModal(true);
     setNewGroupName('');
   };
@@ -1333,12 +1302,7 @@ export function ChannelsPane({
 
     if (selectedInGroup.length === 0) return;
 
-    setContextMenu({
-      visible: true,
-      x: e.clientX,
-      y: e.clientY,
-      channelIds: selectedInGroup,
-    });
+    showContextMenu(e.clientX, e.clientY, { channelIds: selectedInGroup });
   };
 
   // Handle copying channel URL to clipboard
