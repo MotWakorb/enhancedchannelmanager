@@ -26,6 +26,7 @@ import type {
   SystemEventsResponse,
 } from '../types';
 import { logger } from '../utils/logger';
+import { QUALITY_SUFFIXES } from '../constants/streamNormalization';
 
 const API_BASE = '/api';
 
@@ -725,14 +726,6 @@ export async function getOrCreateLogo(name: string, url: string, logoCache: Map<
     throw error;
   }
 }
-
-// Quality suffixes to strip when normalizing stream names for matching
-// These are common quality/resolution indicators that don't change the channel identity
-const QUALITY_SUFFIXES = [
-  'FHD', 'UHD', '4K', 'HD', 'SD',
-  '1080P', '1080I', '720P', '480P', '2160P',
-  'HEVC', 'H264', 'H265',
-];
 
 // Network/channel prefixes that should be stripped when followed by content names
 // These are networks that often prefix their content with their branding

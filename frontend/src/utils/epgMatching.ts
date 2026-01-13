@@ -7,26 +7,7 @@
 
 import type { Channel, Stream, EPGData, EPGSource } from '../types';
 import { getCountryPrefix, stripCountryPrefix } from '../services/api';
-
-// Quality suffixes to strip when normalizing names
-const QUALITY_SUFFIXES = [
-  'FHD', 'UHD', '4K', 'HD', 'SD',
-  '1080P', '1080I', '720P', '480P', '2160P',
-  'HEVC', 'H264', 'H265',
-];
-
-// Timezone/regional suffixes to strip
-const TIMEZONE_SUFFIXES = ['EAST', 'WEST', 'ET', 'PT', 'CT', 'MT'];
-
-// League/network prefixes that appear before team names
-// These should be stripped from channel names and matched as EPG suffixes
-// e.g., "NFL: Arizona Cardinals" -> "arizonacardinals" which matches "arizonacardinals.nfl"
-const LEAGUE_PREFIXES = [
-  'NFL', 'NBA', 'MLB', 'NHL', 'MLS', 'WNBA', 'NCAA', 'CFB', 'CBB',
-  'EPL', 'PREMIER LEAGUE', 'LA LIGA', 'LALIGA', 'BUNDESLIGA', 'SERIE A', 'LIGUE 1',
-  'UEFA', 'FIFA', 'F1', 'NASCAR', 'PGA', 'ATP', 'WTA',
-  'WWE', 'UFC', 'AEW', 'BOXING',
-];
+import { QUALITY_SUFFIXES, TIMEZONE_SUFFIXES, LEAGUE_PREFIXES } from '../constants/streamNormalization';
 
 // Broadcast call sign patterns for US/Canada local TV stations
 // US call signs: K or W followed by 2-4 letters, optionally with -DT, -TV, -HD suffix
