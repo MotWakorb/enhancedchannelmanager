@@ -936,12 +936,12 @@ async def get_orphaned_channel_groups():
                 break
             page += 1
 
-        # Build map of group_name -> stream count
+        # Build map of group_id -> stream count (streams use group ID, not name)
         group_stream_count = {}
         for stream in streams:
-            group_name = stream.get("channel_group")
-            if group_name:
-                group_stream_count[group_name] = group_stream_count.get(group_name, 0) + 1
+            group_id = stream.get("channel_group")
+            if group_id:
+                group_stream_count[group_id] = group_stream_count.get(group_id, 0) + 1
 
         # Build map of group_id -> channel count
         group_channel_count = {}
@@ -950,13 +950,23 @@ async def get_orphaned_channel_groups():
             if group_id:
                 group_channel_count[group_id] = group_channel_count.get(group_id, 0) + 1
 
+        # Debug logging
+        logger.info(f"Total streams fetched: {len(streams)}")
+        logger.info(f"Total channels fetched: {len(channels)}")
+        logger.info(f"Groups with streams: {len(group_stream_count)}")
+        logger.info(f"Groups with channels: {len(group_channel_count)}")
+        if streams:
+            logger.info(f"Sample stream: {streams[0]}")
+        if channels:
+            logger.info(f"Sample channel: {channels[0]}")
+
         # Find orphaned groups (no streams AND no channels)
         orphaned_groups = []
         for group in all_groups:
             group_id = group["id"]
             group_name = group["name"]
 
-            stream_count = group_stream_count.get(group_name, 0)
+            stream_count = group_stream_count.get(group_id, 0)
             channel_count = group_channel_count.get(group_id, 0)
 
             if stream_count == 0 and channel_count == 0:
@@ -1019,12 +1029,12 @@ async def delete_orphaned_channel_groups():
                 break
             page += 1
 
-        # Build map of group_name -> stream count
+        # Build map of group_id -> stream count (streams use group ID, not name)
         group_stream_count = {}
         for stream in streams:
-            group_name = stream.get("channel_group")
-            if group_name:
-                group_stream_count[group_name] = group_stream_count.get(group_name, 0) + 1
+            group_id = stream.get("channel_group")
+            if group_id:
+                group_stream_count[group_id] = group_stream_count.get(group_id, 0) + 1
 
         # Build map of group_id -> channel count
         group_channel_count = {}
@@ -1039,7 +1049,7 @@ async def delete_orphaned_channel_groups():
             group_id = group["id"]
             group_name = group["name"]
 
-            stream_count = group_stream_count.get(group_name, 0)
+            stream_count = group_stream_count.get(group_id, 0)
             channel_count = group_channel_count.get(group_id, 0)
 
             if stream_count == 0 and channel_count == 0:
