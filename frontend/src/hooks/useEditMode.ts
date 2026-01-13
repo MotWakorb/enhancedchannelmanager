@@ -78,7 +78,7 @@ function computeModifiedChannelIds(
  * Operations that cannot be consolidated:
  * - createChannel, deleteChannel, createGroup, deleteChannelGroup (order matters)
  */
-function consolidateOperations(operations: StagedOperation[]): StagedOperation[] {
+function consolidateOperations(operations: StagedOperation[], workingCopy: Channel[]): StagedOperation[] {
   // Track final channel number for each channel (from bulkAssign operations)
   const channelFinalNumbers = new Map<number, number>();
 
@@ -168,10 +168,14 @@ function consolidateOperations(operations: StagedOperation[]): StagedOperation[]
 
   // Add consolidated updateChannel operations
   for (const [channelId, { data, lastOp }] of channelFinalUpdates) {
+    // Look up channel name for better progress messages
+    const channel = workingCopy.find((ch) => ch.id === channelId);
+    const channelName = channel?.name || `Channel ${channelId}`;
+
     consolidated.push({
       ...lastOp,
       id: generateId(), // New ID for consolidated operation
-      description: `Update channel ${channelId}`,
+      description: `Update "${channelName}"`,
       apiCall: { type: 'updateChannel', channelId, data },
     });
   }
@@ -1010,7 +1014,7 @@ export function useEditMode({
 
     // Consolidate operations to minimize API calls
     // This deduplicates updates, merges channel number assignments, and cancels out add/remove pairs
-    const consolidatedOps = consolidateOperations(state.stagedOperations);
+    const consolidatedOps = consolidateOperations(state.stagedOperations, state.workingCopy);
     const originalCount = state.stagedOperations.length;
     const consolidatedCount = consolidatedOps.length;
     if (consolidatedCount < originalCount) {
