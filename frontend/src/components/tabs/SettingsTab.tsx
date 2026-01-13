@@ -13,7 +13,7 @@ interface SettingsTabProps {
   channelProfiles?: ChannelProfile[];
 }
 
-type SettingsPage = 'general' | 'channel-defaults' | 'appearance' | 'about';
+type SettingsPage = 'general' | 'channel-defaults' | 'appearance';
 
 export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: SettingsTabProps) {
   const [activePage, setActivePage] = useState<SettingsPage>('general');
@@ -311,10 +311,12 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
           </div>
         </div>
 
-        <button className="btn-test" onClick={handleTest} disabled={testing || loading}>
-          <span className="material-icons">wifi_tethering</span>
-          {testing ? 'Testing...' : 'Test Connection'}
-        </button>
+        <div className="test-connection-row">
+          <button className="btn-test" onClick={handleTest} disabled={testing || loading}>
+            <span className="material-icons">wifi_tethering</span>
+            {testing ? 'Testing...' : 'Test Connection'}
+          </button>
+        </div>
       </div>
 
       <div className="settings-section">
@@ -427,7 +429,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
       <div className="settings-section">
         <div className="settings-section-header">
           <span className="material-icons">bug_report</span>
-          <h3>Log Levels</h3>
+          <h3>Logging</h3>
         </div>
 
         <div className="form-row">
@@ -1083,10 +1085,6 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
           >
             <span className="material-icons">palette</span>
             Appearance
-          </li>
-          <li className="settings-nav-item disabled">
-            <span className="material-icons">info</span>
-            About
           </li>
         </ul>
       </nav>
