@@ -30,6 +30,21 @@ import { QUALITY_SUFFIXES } from '../constants/streamNormalization';
 
 const API_BASE = '/api';
 
+/**
+ * Build a query string from an object of parameters.
+ * Filters out undefined/null values and converts to string.
+ */
+function buildQuery(params: Record<string, string | number | boolean | undefined | null>): string {
+  const searchParams = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== undefined && value !== null && value !== '') {
+      searchParams.set(key, String(value));
+    }
+  }
+  const query = searchParams.toString();
+  return query ? `?${query}` : '';
+}
+
 async function fetchJson<T>(url: string, options?: RequestInit): Promise<T> {
   const method = options?.method || 'GET';
   logger.debug(`API request: ${method} ${url}`);
@@ -65,16 +80,13 @@ export async function getChannels(params?: {
   channelGroup?: number;
   signal?: AbortSignal;
 }): Promise<PaginatedResponse<Channel>> {
-  const searchParams = new URLSearchParams();
-  if (params?.page) searchParams.set('page', String(params.page));
-  if (params?.pageSize) searchParams.set('page_size', String(params.pageSize));
-  if (params?.search) searchParams.set('search', params.search);
-  if (params?.channelGroup) searchParams.set('channel_group', String(params.channelGroup));
-
-  const query = searchParams.toString();
-  return fetchJson(`${API_BASE}/channels${query ? `?${query}` : ''}`, {
-    signal: params?.signal,
+  const query = buildQuery({
+    page: params?.page,
+    page_size: params?.pageSize,
+    search: params?.search,
+    channel_group: params?.channelGroup,
   });
+  return fetchJson(`${API_BASE}/channels${query}`, { signal: params?.signal });
 }
 
 export async function getChannel(id: number): Promise<Channel> {
@@ -208,18 +220,15 @@ export async function getStreams(params?: {
   bypassCache?: boolean;
   signal?: AbortSignal;
 }): Promise<PaginatedResponse<Stream>> {
-  const searchParams = new URLSearchParams();
-  if (params?.page) searchParams.set('page', String(params.page));
-  if (params?.pageSize) searchParams.set('page_size', String(params.pageSize));
-  if (params?.search) searchParams.set('search', params.search);
-  if (params?.channelGroup) searchParams.set('channel_group_name', params.channelGroup);
-  if (params?.m3uAccount) searchParams.set('m3u_account', String(params.m3uAccount));
-  if (params?.bypassCache) searchParams.set('bypass_cache', 'true');
-
-  const query = searchParams.toString();
-  return fetchJson(`${API_BASE}/streams${query ? `?${query}` : ''}`, {
-    signal: params?.signal,
+  const query = buildQuery({
+    page: params?.page,
+    page_size: params?.pageSize,
+    search: params?.search,
+    channel_group_name: params?.channelGroup,
+    m3u_account: params?.m3uAccount,
+    bypass_cache: params?.bypassCache,
   });
+  return fetchJson(`${API_BASE}/streams${query}`, { signal: params?.signal });
 }
 
 export async function getStreamGroups(bypassCache?: boolean): Promise<string[]> {
@@ -497,13 +506,12 @@ export async function getLogos(params?: {
   pageSize?: number;
   search?: string;
 }): Promise<PaginatedResponse<Logo>> {
-  const searchParams = new URLSearchParams();
-  if (params?.page) searchParams.set('page', String(params.page));
-  if (params?.pageSize) searchParams.set('page_size', String(params.pageSize));
-  if (params?.search) searchParams.set('search', params.search);
-
-  const query = searchParams.toString();
-  return fetchJson(`${API_BASE}/channels/logos${query ? `?${query}` : ''}`);
+  const query = buildQuery({
+    page: params?.page,
+    page_size: params?.pageSize,
+    search: params?.search,
+  });
+  return fetchJson(`${API_BASE}/channels/logos${query}`);
 }
 
 export async function getLogo(id: number): Promise<Logo> {
@@ -602,12 +610,11 @@ export async function getEPGData(params?: {
   search?: string;
   epgSource?: number;
 }): Promise<EPGData[]> {
-  const searchParams = new URLSearchParams();
-  if (params?.search) searchParams.set('search', params.search);
-  if (params?.epgSource) searchParams.set('epg_source', String(params.epgSource));
-
-  const query = searchParams.toString();
-  return fetchJson(`${API_BASE}/epg/data${query ? `?${query}` : ''}`);
+  const query = buildQuery({
+    search: params?.search,
+    epg_source: params?.epgSource,
+  });
+  return fetchJson(`${API_BASE}/epg/data${query}`);
 }
 
 export async function getEPGDataById(id: number): Promise<EPGData> {
@@ -1478,18 +1485,17 @@ export async function bulkCreateChannelsFromStreams(
 
 // Journal API
 export async function getJournalEntries(params?: JournalQueryParams): Promise<JournalResponse> {
-  const searchParams = new URLSearchParams();
-  if (params?.page) searchParams.set('page', String(params.page));
-  if (params?.page_size) searchParams.set('page_size', String(params.page_size));
-  if (params?.category) searchParams.set('category', params.category);
-  if (params?.action_type) searchParams.set('action_type', params.action_type);
-  if (params?.date_from) searchParams.set('date_from', params.date_from);
-  if (params?.date_to) searchParams.set('date_to', params.date_to);
-  if (params?.search) searchParams.set('search', params.search);
-  if (params?.user_initiated !== undefined) searchParams.set('user_initiated', String(params.user_initiated));
-
-  const query = searchParams.toString();
-  return fetchJson(`${API_BASE}/journal${query ? `?${query}` : ''}`);
+  const query = buildQuery({
+    page: params?.page,
+    page_size: params?.page_size,
+    category: params?.category,
+    action_type: params?.action_type,
+    date_from: params?.date_from,
+    date_to: params?.date_to,
+    search: params?.search,
+    user_initiated: params?.user_initiated,
+  });
+  return fetchJson(`${API_BASE}/journal${query}`);
 }
 
 export async function getJournalStats(): Promise<JournalStats> {
@@ -1530,13 +1536,12 @@ export async function getSystemEvents(params?: {
   offset?: number;
   eventType?: string;
 }): Promise<SystemEventsResponse> {
-  const searchParams = new URLSearchParams();
-  if (params?.limit) searchParams.append('limit', params.limit.toString());
-  if (params?.offset) searchParams.append('offset', params.offset.toString());
-  if (params?.eventType) searchParams.append('event_type', params.eventType);
-
-  const query = searchParams.toString();
-  return fetchJson(`${API_BASE}/stats/activity${query ? `?${query}` : ''}`);
+  const query = buildQuery({
+    limit: params?.limit,
+    offset: params?.offset,
+    event_type: params?.eventType,
+  });
+  return fetchJson(`${API_BASE}/stats/activity${query}`);
 }
 
 /**
