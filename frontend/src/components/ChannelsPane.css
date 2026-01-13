@@ -27,15 +27,15 @@
 }
 
 .copy-feedback.copy-success {
-  background-color: rgba(34, 197, 94, 0.15);
-  border: 1px solid rgba(34, 197, 94, 0.3);
-  color: var(--success);
+  background-color: rgba(34, 197, 94, 0.95);
+  border: 1px solid rgba(34, 197, 94, 1);
+  color: white;
 }
 
 .copy-feedback.copy-error {
-  background-color: rgba(239, 68, 68, 0.15);
-  border: 1px solid rgba(239, 68, 68, 0.3);
-  color: var(--danger);
+  background-color: rgba(239, 68, 68, 0.95);
+  border: 1px solid rgba(239, 68, 68, 1);
+  color: white;
 }
 
 .copy-feedback .material-icons {
