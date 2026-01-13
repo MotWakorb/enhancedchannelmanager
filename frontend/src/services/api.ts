@@ -62,6 +62,7 @@ export async function getChannels(params?: {
   pageSize?: number;
   search?: string;
   channelGroup?: number;
+  signal?: AbortSignal;
 }): Promise<PaginatedResponse<Channel>> {
   const searchParams = new URLSearchParams();
   if (params?.page) searchParams.set('page', String(params.page));
@@ -70,7 +71,9 @@ export async function getChannels(params?: {
   if (params?.channelGroup) searchParams.set('channel_group', String(params.channelGroup));
 
   const query = searchParams.toString();
-  return fetchJson(`${API_BASE}/channels${query ? `?${query}` : ''}`);
+  return fetchJson(`${API_BASE}/channels${query ? `?${query}` : ''}`, {
+    signal: params?.signal,
+  });
 }
 
 export async function getChannel(id: number): Promise<Channel> {
@@ -202,6 +205,7 @@ export async function getStreams(params?: {
   channelGroup?: string;
   m3uAccount?: number;
   bypassCache?: boolean;
+  signal?: AbortSignal;
 }): Promise<PaginatedResponse<Stream>> {
   const searchParams = new URLSearchParams();
   if (params?.page) searchParams.set('page', String(params.page));
@@ -212,7 +216,9 @@ export async function getStreams(params?: {
   if (params?.bypassCache) searchParams.set('bypass_cache', 'true');
 
   const query = searchParams.toString();
-  return fetchJson(`${API_BASE}/streams${query ? `?${query}` : ''}`);
+  return fetchJson(`${API_BASE}/streams${query ? `?${query}` : ''}`, {
+    signal: params?.signal,
+  });
 }
 
 export async function getStreamGroups(bypassCache?: boolean): Promise<string[]> {
