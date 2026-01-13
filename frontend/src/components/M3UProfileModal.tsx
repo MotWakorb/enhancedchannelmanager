@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import type { M3UAccount, M3UAccountProfile } from '../types';
 import type { M3UProfileCreateRequest } from '../services/api';
 import * as api from '../services/api';
+import { useAsyncOperation } from '../hooks/useAsyncOperation';
 import './M3UProfileModal.css';
 
 interface M3UProfileModalProps {
@@ -36,24 +37,21 @@ export function M3UProfileModal({
   account,
 }: M3UProfileModalProps) {
   const [profiles, setProfiles] = useState<M3UAccountProfile[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const [editingProfile, setEditingProfile] = useState<EditingProfile | null>(null);
   const [isAddingNew, setIsAddingNew] = useState(false);
 
+  // Separate async operations for loading vs saving
+  const { loading, error, execute: executeLoad, setError } = useAsyncOperation<M3UAccountProfile[]>();
+  const { loading: saving, execute: executeSave } = useAsyncOperation();
+
   const loadProfiles = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const data = await api.getM3UProfiles(account.id);
+    const data = await executeLoad(async () => {
+      return await api.getM3UProfiles(account.id);
+    });
+    if (data) {
       setProfiles(data);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load profiles');
-    } finally {
-      setLoading(false);
     }
-  }, [account.id]);
+  }, [account.id, executeLoad]);
 
   // Load profiles when modal opens
   useEffect(() => {
@@ -107,10 +105,7 @@ export function M3UProfileModal({
       }
     }
 
-    setSaving(true);
-    setError(null);
-
-    try {
+    await executeSave(async () => {
       const profileData: M3UProfileCreateRequest = {
         name: editingProfile.name.trim(),
         max_streams: editingProfile.max_streams,
@@ -133,11 +128,7 @@ export function M3UProfileModal({
       setEditingProfile(null);
       setIsAddingNew(false);
       onSaved();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to save profile');
-    } finally {
-      setSaving(false);
-    }
+    });
   };
 
   const handleDelete = async (profile: M3UAccountProfile) => {
@@ -150,25 +141,19 @@ export function M3UProfileModal({
       return;
     }
 
-    setError(null);
-    try {
+    await executeSave(async () => {
       await api.deleteM3UProfile(account.id, profile.id);
       await loadProfiles();
       onSaved();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to delete profile');
-    }
+    });
   };
 
   const handleToggleActive = async (profile: M3UAccountProfile) => {
-    setError(null);
-    try {
+    await executeSave(async () => {
       await api.updateM3UProfile(account.id, profile.id, { is_active: !profile.is_active });
       await loadProfiles();
       onSaved();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to toggle profile status');
-    }
+    });
   };
 
   if (!isOpen) return null;

@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import type { M3UAccount, M3UAccountType, ServerGroup } from '../types';
 import * as api from '../services/api';
+import { useAsyncOperation } from '../hooks/useAsyncOperation';
 import './M3UAccountModal.css';
 
 // UI-only account type that includes HDHR (which gets converted to STD for API)
@@ -64,8 +65,7 @@ export function M3UAccountModal({
   const [isActive, setIsActive] = useState(true);
 
   // UI state
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const { loading, error, execute, setError, clearError } = useAsyncOperation();
 
   // Reset form when modal opens/closes or account changes
   useEffect(() => {
@@ -115,9 +115,9 @@ export function M3UAccountModal({
         setAutoEnableSeries(false);
         setIsActive(true);
       }
-      setError(null);
+      clearError();
     }
-  }, [isOpen, account]);
+  }, [isOpen, account, clearError]);
 
   const handleSave = async () => {
     // Validation
@@ -148,10 +148,7 @@ export function M3UAccountModal({
       }
     }
 
-    setLoading(true);
-    setError(null);
-
-    try {
+    await execute(async () => {
       // Convert HDHR to STD with constructed URL
       const apiAccountType: M3UAccountType = accountType === 'HDHR' ? 'STD' : accountType;
       const apiServerUrl = accountType === 'HDHR'
@@ -193,11 +190,7 @@ export function M3UAccountModal({
 
       onSaved();
       onClose();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to save account');
-    } finally {
-      setLoading(false);
-    }
+    });
   };
 
   if (!isOpen) return null;
