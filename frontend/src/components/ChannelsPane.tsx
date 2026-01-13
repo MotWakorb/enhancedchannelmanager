@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import {
   DndContext,
   DragOverlay,
@@ -113,7 +113,8 @@ interface ChannelsPaneProps {
   // Dispatcharr URL for constructing channel stream URLs
   dispatcharrUrl?: string;
   // Stream group drop callback (for bulk channel creation) - supports multiple groups
-  onStreamGroupDrop?: (groupNames: string[], streamIds: number[]) => void;
+  // Now includes optional target group ID and suggested starting number for positional drops
+  onStreamGroupDrop?: (groupNames: string[], streamIds: number[], targetGroupId?: number, suggestedStartingNumber?: number) => void;
   // Bulk streams drop callback (for opening bulk create modal when dropping multiple streams)
   // Includes target group ID and starting channel number for pre-filling the modal
   onBulkStreamsDrop?: (streamIds: number[], groupId: number | null, startingNumber: number) => void;
@@ -906,6 +907,8 @@ export function ChannelsPane({
 
   // Stream group drop state (for bulk channel creation)
   const [streamGroupDragOver, setStreamGroupDragOver] = useState(false);
+  // Track which group drop zone is being hovered (for positional drops)
+  const [streamGroupDropTarget, setStreamGroupDropTarget] = useState<{ afterGroupId: number | 'ungrouped' | null } | null>(null);
 
   // Create channel group modal state
   const [showCreateGroupModal, setShowCreateGroupModal] = useState(false);
@@ -1901,6 +1904,51 @@ export function ChannelsPane({
     return maxNumber + 1;
   };
 
+  // Get the suggested starting number based on the group that would precede the drop location
+  // This is used for smart channel number inference when dropping stream groups between/after channel groups
+  const getSuggestedStartingNumberAfterGroup = (precedingGroupId: number | 'ungrouped' | null): number => {
+    const sourceChannels = isEditMode ? localChannels : channels;
+
+    if (precedingGroupId === null) {
+      // Dropped at the very beginning - suggest starting at 1
+      return 1;
+    }
+
+    // Get all channels from the preceding group
+    const precedingGroupChannels = precedingGroupId === 'ungrouped'
+      ? sourceChannels.filter((ch) => ch.channel_group_id === null)
+      : sourceChannels.filter((ch) => ch.channel_group_id === precedingGroupId);
+
+    if (precedingGroupChannels.length === 0) {
+      // Empty preceding group - find the highest number before this point
+      // Get all groups in order and find the preceding group's position
+      const groupIndex = filteredChannelGroups.findIndex(g =>
+        precedingGroupId === 'ungrouped' ? false : g.id === precedingGroupId
+      );
+
+      if (groupIndex <= 0) {
+        return 1;
+      }
+
+      // Look at all channels in groups before this one
+      const precedingGroupIds = filteredChannelGroups.slice(0, groupIndex).map(g => g.id);
+      const channelsBeforeThisGroup = sourceChannels.filter(ch =>
+        ch.channel_group_id !== null && precedingGroupIds.includes(ch.channel_group_id)
+      );
+
+      if (channelsBeforeThisGroup.length === 0) {
+        return 1;
+      }
+
+      const maxBeforeNumber = Math.max(...channelsBeforeThisGroup.map((ch) => ch.channel_number ?? 0));
+      return maxBeforeNumber + 1;
+    }
+
+    // Find the max channel number in the preceding group and suggest next number
+    const maxNumber = Math.max(...precedingGroupChannels.map((ch) => ch.channel_number ?? 0));
+    return maxNumber + 1;
+  };
+
   // Check if a channel number already exists
   // Use localChannels in edit mode since it may have been modified
   const channelNumberExists = (num: number): boolean => {
@@ -2486,6 +2534,21 @@ export function ChannelsPane({
   const handlePaneDrop = (e: React.DragEvent) => {
     setStreamGroupDragOver(false);
 
+    // Determine drop target and suggested number
+    let targetGroupId: number | undefined;
+    let suggestedStartingNumber: number | undefined;
+
+    if (streamGroupDropTarget) {
+      // Calculate based on the drop zone that was hovered
+      const precedingGroupId = streamGroupDropTarget.afterGroupId;
+      suggestedStartingNumber = getSuggestedStartingNumberAfterGroup(precedingGroupId);
+      // For now, we don't set a target group ID (user will choose in modal)
+      // But we could default to creating in a new group or the next group
+    }
+
+    // Clear drop target state
+    setStreamGroupDropTarget(null);
+
     // Check for stream group drop (supports multiple groups)
     const isStreamGroupDrag = e.dataTransfer.getData('streamGroupDrag');
     if (isStreamGroupDrag === 'true' && isEditMode && onStreamGroupDrop) {
@@ -2497,7 +2560,7 @@ export function ChannelsPane({
         try {
           const groupNames = JSON.parse(groupNamesJson) as string[];
           const streamIds = JSON.parse(streamIdsJson) as number[];
-          onStreamGroupDrop(groupNames, streamIds);
+          onStreamGroupDrop(groupNames, streamIds, targetGroupId, suggestedStartingNumber);
         } catch {
           console.error('Failed to parse stream group drop data');
         }
@@ -2507,7 +2570,7 @@ export function ChannelsPane({
         if (groupName && streamIdsJson) {
           try {
             const streamIds = JSON.parse(streamIdsJson) as number[];
-            onStreamGroupDrop([groupName], streamIds);
+            onStreamGroupDrop([groupName], streamIds, targetGroupId, suggestedStartingNumber);
           } catch {
             console.error('Failed to parse stream IDs from stream group drop');
           }
@@ -5542,6 +5605,27 @@ export function ChannelsPane({
             onDragOver={handleDragOver}
             onDragEnd={handleDragEnd}
           >
+            {/* Drop zone before first group (only when stream group is being dragged) */}
+            {streamGroupDragOver && isEditMode && (
+              <div
+                className={`stream-group-drop-zone ${streamGroupDropTarget?.afterGroupId === null ? 'active' : ''}`}
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  setStreamGroupDropTarget({ afterGroupId: null });
+                }}
+                onDragLeave={(e) => {
+                  if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+                    setStreamGroupDropTarget(null);
+                  }
+                }}
+              >
+                <div className="drop-zone-indicator">
+                  <span className="material-icons">add</span>
+                  <span>Drop here to insert at beginning</span>
+                </div>
+              </div>
+            )}
             {/* Always render Uncategorized at the top (even when empty) */}
             {renderGroup(
               'ungrouped',
@@ -5549,15 +5633,59 @@ export function ChannelsPane({
               channelsByGroup.ungrouped || [],
               (channelsByGroup.ungrouped?.length ?? 0) === 0
             )}
+            {/* Drop zone after Uncategorized */}
+            {streamGroupDragOver && isEditMode && (
+              <div
+                className={`stream-group-drop-zone ${streamGroupDropTarget?.afterGroupId === 'ungrouped' ? 'active' : ''}`}
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  setStreamGroupDropTarget({ afterGroupId: 'ungrouped' });
+                }}
+                onDragLeave={(e) => {
+                  if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+                    setStreamGroupDropTarget(null);
+                  }
+                }}
+              >
+                <div className="drop-zone-indicator">
+                  <span className="material-icons">add</span>
+                  <span>Drop here to insert after Uncategorized</span>
+                </div>
+              </div>
+            )}
             {/* Wrap groups in SortableContext for drag-and-drop reordering */}
             <SortableContext
               items={filteredChannelGroups.map((g) => `group-${g.id}`)}
               strategy={verticalListSortingStrategy}
             >
-              {/* Render filtered groups with channels */}
-              {filteredChannelGroups.map((group) =>
-                renderGroup(group.id, group.name, channelsByGroup[group.id] || [])
-              )}
+              {/* Render filtered groups with channels, with drop zones between them */}
+              {filteredChannelGroups.map((group) => (
+                <React.Fragment key={group.id}>
+                  {renderGroup(group.id, group.name, channelsByGroup[group.id] || [])}
+                  {/* Drop zone after each group */}
+                  {streamGroupDragOver && isEditMode && (
+                    <div
+                      className={`stream-group-drop-zone ${streamGroupDropTarget?.afterGroupId === group.id ? 'active' : ''}`}
+                      onDragOver={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        setStreamGroupDropTarget({ afterGroupId: group.id });
+                      }}
+                      onDragLeave={(e) => {
+                        if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+                          setStreamGroupDropTarget(null);
+                        }
+                      }}
+                    >
+                      <div className="drop-zone-indicator">
+                        <span className="material-icons">add</span>
+                        <span>Drop here to insert after {group.name}</span>
+                      </div>
+                    </div>
+                  )}
+                </React.Fragment>
+              ))}
             </SortableContext>
             {/* Render selected empty groups that pass the filter */}
             {selectedGroups
