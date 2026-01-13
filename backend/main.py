@@ -914,8 +914,18 @@ async def get_orphaned_channel_groups():
         all_groups = await client.get_channel_groups()
         group_name_map = {g["id"]: g["name"] for g in all_groups}
 
-        # Get all channels to check which groups have channels
-        channels = await client.get_channels()
+        # Get all channels (paginated) to check which groups have channels
+        channels = []
+        page = 1
+        while True:
+            result = await client.get_channels(page=page, page_size=500)
+            page_channels = result.get("results", [])
+            channels.extend(page_channels)
+
+            # Check if there are more pages
+            if len(page_channels) < 500:
+                break
+            page += 1
 
         # Build map of group_id -> list of channel IDs
         group_channels = {}
@@ -981,7 +991,19 @@ async def delete_orphaned_channel_groups():
     try:
         # Use the same logic as GET to find orphaned groups
         all_groups = await client.get_channel_groups()
-        channels = await client.get_channels()
+
+        # Get all channels (paginated)
+        channels = []
+        page = 1
+        while True:
+            result = await client.get_channels(page=page, page_size=500)
+            page_channels = result.get("results", [])
+            channels.extend(page_channels)
+
+            # Check if there are more pages
+            if len(page_channels) < 500:
+                break
+            page += 1
 
         # Build map of group_id -> list of channel IDs
         group_channels = {}
