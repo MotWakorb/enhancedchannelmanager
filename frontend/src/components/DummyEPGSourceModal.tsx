@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
 import type { EPGSource, DummyEPGCustomProperties } from '../types';
 import type { CreateEPGSourceRequest } from '../services/api';
+import { useAsyncOperation } from '../hooks/useAsyncOperation';
 import './DummyEPGSourceModal.css';
 
 // Common timezones for the dropdown
@@ -94,8 +95,7 @@ export function DummyEPGSourceModal({ isOpen, source, onClose, onSave }: DummyEP
   const [sampleChannelName, setSampleChannelName] = useState('');
 
   // UI State
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const { loading: saving, error, execute, setError, clearError } = useAsyncOperation();
   const [titlePatternError, setTitlePatternError] = useState<string | null>(null);
   const [timePatternError, setTimePatternError] = useState<string | null>(null);
   const [datePatternError, setDatePatternError] = useState<string | null>(null);
@@ -173,12 +173,12 @@ export function DummyEPGSourceModal({ isOpen, source, onClose, onSave }: DummyEP
         setEpgTagsOpen(false);
       }
       setSampleChannelName('');
-      setError(null);
+      clearError();
       setTitlePatternError(null);
       setTimePatternError(null);
       setDatePatternError(null);
     }
-  }, [isOpen, source]);
+  }, [isOpen, source, clearError]);
 
   // Validate regex pattern
   const validateRegex = useCallback((pattern: string, setError: (error: string | null) => void) => {
@@ -257,7 +257,7 @@ export function DummyEPGSourceModal({ isOpen, source, onClose, onSave }: DummyEP
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setError(null);
+    clearError();
 
     // Validation
     if (!name.trim()) {
@@ -285,8 +285,7 @@ export function DummyEPGSourceModal({ isOpen, source, onClose, onSave }: DummyEP
       return;
     }
 
-    setSaving(true);
-    try {
+    await execute(async () => {
       const customProperties: DummyEPGCustomProperties = {
         name_source: nameSource,
         title_pattern: titlePattern.trim(),
@@ -321,11 +320,7 @@ export function DummyEPGSourceModal({ isOpen, source, onClose, onSave }: DummyEP
         custom_properties: customProperties,
       });
       onClose();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to save dummy EPG source');
-    } finally {
-      setSaving(false);
-    }
+    });
   };
 
   const handleClearAll = () => {
