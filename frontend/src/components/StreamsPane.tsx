@@ -4,6 +4,7 @@ import { useSelection } from '../hooks';
 import { normalizeStreamName, detectRegionalVariants, filterStreamsByTimezone, detectCountryPrefixes, getUniqueCountryPrefixes, detectNetworkPrefixes, detectNetworkSuffixes, type TimezonePreference, type NormalizeOptions, type NumberSeparator, type PrefixOrder } from '../services/api';
 import { naturalCompare } from '../utils/naturalSort';
 import { openInVLC } from '../utils/vlc';
+import { copyToClipboard } from '../utils/clipboard';
 import './StreamsPane.css';
 
 interface StreamGroup {
@@ -129,6 +130,10 @@ export function StreamsPane({
 
   // Hide mapped streams toggle state
   const [hideMappedStreams, setHideMappedStreams] = useState(false);
+
+  // Copy feedback state
+  const [copySuccess, setCopySuccess] = useState<string | null>(null);
+  const [copyError, setCopyError] = useState<string | null>(null);
 
   // Filter out mapped streams if toggle is enabled
   const filteredStreams = useMemo(() => {
@@ -1120,8 +1125,39 @@ export function StreamsPane({
     doBulkCreate,
   ]);
 
+  // Handle copying stream URL to clipboard
+  const handleCopyStreamUrl = async (url: string, streamName: string) => {
+    const success = await copyToClipboard(url, `stream URL for "${streamName}"`);
+
+    if (success) {
+      setCopySuccess(`Copied stream URL for "${streamName}"`);
+      setCopyError(null);
+      // Clear success message after 3 seconds
+      setTimeout(() => setCopySuccess(null), 3000);
+    } else {
+      setCopyError('Failed to copy to clipboard. Please check browser permissions and try again.');
+      setCopySuccess(null);
+      // Clear error message after 5 seconds
+      setTimeout(() => setCopyError(null), 5000);
+    }
+  };
+
   return (
     <div className="streams-pane">
+      {/* Copy feedback notifications */}
+      {copySuccess && (
+        <div className="copy-feedback copy-success">
+          <span className="material-icons">check_circle</span>
+          {copySuccess}
+        </div>
+      )}
+      {copyError && (
+        <div className="copy-feedback copy-error">
+          <span className="material-icons">error</span>
+          {copyError}
+        </div>
+      )}
+
       <div className="pane-header">
         <h2>
           Streams
@@ -1567,7 +1603,7 @@ export function StreamsPane({
                                 className="copy-url-btn"
                                 onClick={(e) => {
                                   e.stopPropagation();
-                                  navigator.clipboard.writeText(stream.url!);
+                                  handleCopyStreamUrl(stream.url!, stream.name);
                                 }}
                                 title="Copy stream URL"
                               >
