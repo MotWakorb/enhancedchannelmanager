@@ -7,6 +7,7 @@ import { openInVLC } from '../utils/vlc';
 import { useCopyFeedback } from '../hooks/useCopyFeedback';
 import { useDropdown } from '../hooks/useDropdown';
 import { useContextMenu } from '../hooks/useContextMenu';
+import { useKeyboardShortcuts } from '../hooks/useKeyboardShortcuts';
 import './StreamsPane.css';
 
 interface StreamGroup {
@@ -332,30 +333,13 @@ export function StreamsPane({
     }
   }, [isEditMode, clearSelection]);
 
-  // Keyboard shortcuts
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      // Ctrl/Cmd+A to select all
-      if ((e.ctrlKey || e.metaKey) && e.key === 'a') {
-        const activeElement = document.activeElement;
-        if (activeElement?.tagName !== 'INPUT' && activeElement?.tagName !== 'TEXTAREA') {
-          e.preventDefault();
-          selectAll();
-        }
-      }
-      // Escape to clear selection or close context menu
-      if (e.key === 'Escape') {
-        if (contextMenu) {
-          hideContextMenu();
-        } else {
-          clearSelection();
-        }
-      }
-    };
-
-    document.addEventListener('keydown', handleKeyDown);
-    return () => document.removeEventListener('keydown', handleKeyDown);
-  }, [selectAll, clearSelection, contextMenu]);
+  // Keyboard shortcuts management
+  useKeyboardShortcuts({
+    onSelectAll: selectAll,
+    onClearSelection: clearSelection,
+    contextMenu,
+    onCloseContextMenu: hideContextMenu,
+  });
 
 
   const handleDragStart = useCallback(
