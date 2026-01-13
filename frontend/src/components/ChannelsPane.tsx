@@ -32,7 +32,7 @@ import { EditChannelModal, type ChannelMetadataChanges } from './EditChannelModa
 import { NormalizeNamesModal } from './NormalizeNamesModal';
 import { naturalCompare } from '../utils/naturalSort';
 import { openInVLC } from '../utils/vlc';
-import { copyToClipboard } from '../utils/clipboard';
+import { useCopyFeedback } from '../hooks/useCopyFeedback';
 import './ChannelsPane.css';
 
 interface ChannelsPaneProps {
@@ -902,8 +902,7 @@ export function ChannelsPane({
   const [channelToEdit, setChannelToEdit] = useState<Channel | null>(null);
 
   // Copy to clipboard feedback state
-  const [copySuccess, setCopySuccess] = useState<string | null>(null);
-  const [copyError, setCopyError] = useState<string | null>(null);
+  const { copySuccess, copyError, handleCopy } = useCopyFeedback();
 
   // Stream group drop state (for bulk channel creation)
   const [streamGroupDragOver, setStreamGroupDragOver] = useState(false);
@@ -1342,36 +1341,12 @@ export function ChannelsPane({
 
   // Handle copying channel URL to clipboard
   const handleCopyChannelUrl = async (url: string, channelName: string) => {
-    const success = await copyToClipboard(url, `channel URL for "${channelName}"`);
-
-    if (success) {
-      setCopySuccess(`Copied channel URL for "${channelName}"`);
-      setCopyError(null);
-      // Clear success message after 3 seconds
-      setTimeout(() => setCopySuccess(null), 3000);
-    } else {
-      setCopyError('Failed to copy to clipboard. Please check browser permissions and try again.');
-      setCopySuccess(null);
-      // Clear error message after 5 seconds
-      setTimeout(() => setCopyError(null), 5000);
-    }
+    await handleCopy(url, `channel URL for "${channelName}"`);
   };
 
   // Handle copying stream URL to clipboard
   const handleCopyStreamUrl = async (url: string, streamName: string) => {
-    const success = await copyToClipboard(url, `stream URL for "${streamName}"`);
-
-    if (success) {
-      setCopySuccess(`Copied stream URL for "${streamName}"`);
-      setCopyError(null);
-      // Clear success message after 3 seconds
-      setTimeout(() => setCopySuccess(null), 3000);
-    } else {
-      setCopyError('Failed to copy to clipboard. Please check browser permissions and try again.');
-      setCopySuccess(null);
-      // Clear error message after 5 seconds
-      setTimeout(() => setCopyError(null), 5000);
-    }
+    await handleCopy(url, `stream URL for "${streamName}"`);
   };
 
   // Handle removing a stream from the selected channel

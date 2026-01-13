@@ -4,7 +4,7 @@ import { useSelection } from '../hooks';
 import { normalizeStreamName, detectRegionalVariants, filterStreamsByTimezone, detectCountryPrefixes, getUniqueCountryPrefixes, detectNetworkPrefixes, detectNetworkSuffixes, type TimezonePreference, type NormalizeOptions, type NumberSeparator, type PrefixOrder } from '../services/api';
 import { naturalCompare } from '../utils/naturalSort';
 import { openInVLC } from '../utils/vlc';
-import { copyToClipboard } from '../utils/clipboard';
+import { useCopyFeedback } from '../hooks/useCopyFeedback';
 import './StreamsPane.css';
 
 interface StreamGroup {
@@ -132,8 +132,7 @@ export function StreamsPane({
   const [hideMappedStreams, setHideMappedStreams] = useState(false);
 
   // Copy feedback state
-  const [copySuccess, setCopySuccess] = useState<string | null>(null);
-  const [copyError, setCopyError] = useState<string | null>(null);
+  const { copySuccess, copyError, handleCopy } = useCopyFeedback();
 
   // Filter out mapped streams if toggle is enabled
   const filteredStreams = useMemo(() => {
@@ -1104,19 +1103,7 @@ export function StreamsPane({
 
   // Handle copying stream URL to clipboard
   const handleCopyStreamUrl = async (url: string, streamName: string) => {
-    const success = await copyToClipboard(url, `stream URL for "${streamName}"`);
-
-    if (success) {
-      setCopySuccess(`Copied stream URL for "${streamName}"`);
-      setCopyError(null);
-      // Clear success message after 3 seconds
-      setTimeout(() => setCopySuccess(null), 3000);
-    } else {
-      setCopyError('Failed to copy to clipboard. Please check browser permissions and try again.');
-      setCopySuccess(null);
-      // Clear error message after 5 seconds
-      setTimeout(() => setCopyError(null), 5000);
-    }
+    await handleCopy(url, `stream URL for "${streamName}"`);
   };
 
   return (
