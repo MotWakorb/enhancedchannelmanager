@@ -63,6 +63,13 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
   const [probingAll, setProbingAll] = useState(false);
   const [probeAllResult, setProbeAllResult] = useState<{ success: boolean; message: string } | null>(null);
   const [totalStreamCount, setTotalStreamCount] = useState(100); // Default to 100, will be updated on load
+  const [probeProgress, setProbeProgress] = useState<{
+    in_progress: boolean;
+    total: number;
+    current: number;
+    status: string;
+    percentage: number;
+  } | null>(null);
 
   // Preserve settings not managed by this tab (to avoid overwriting them on save)
   const [linkedM3UAccounts, setLinkedM3UAccounts] = useState<number[][]>([]);
@@ -96,6 +103,42 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
     loadSettings();
     loadStreamCount();
   }, []);
+
+  // Poll for probe all streams progress
+  useEffect(() => {
+    if (!probingAll) {
+      return;
+    }
+
+    const pollProgress = async () => {
+      try {
+        const progress = await api.getProbeProgress();
+        setProbeProgress(progress);
+
+        // Stop polling when probe is complete
+        if (!progress.in_progress) {
+          setProbingAll(false);
+          if (progress.status === 'completed') {
+            setProbeAllResult({ success: true, message: `Probe completed! ${progress.total} streams probed.` });
+          } else if (progress.status === 'failed') {
+            setProbeAllResult({ success: false, message: 'Probe failed' });
+          } else if (progress.status === 'cancelled') {
+            setProbeAllResult({ success: false, message: 'Probe was cancelled' });
+          }
+          // Clear result after 8 seconds
+          setTimeout(() => setProbeAllResult(null), 8000);
+        }
+      } catch (err) {
+        console.error('Failed to fetch probe progress:', err);
+      }
+    };
+
+    // Poll immediately and then every second
+    pollProgress();
+    const interval = setInterval(pollProgress, 1000);
+
+    return () => clearInterval(interval);
+  }, [probingAll]);
 
   const loadStreamCount = async () => {
     try {
@@ -298,15 +341,14 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
   const handleProbeAllStreams = async () => {
     setProbingAll(true);
     setProbeAllResult(null);
+    setProbeProgress(null);
     try {
       const result = await api.probeAllStreams();
       setProbeAllResult({ success: true, message: result.message || 'Background probe started' });
-      // Clear result after 8 seconds
-      setTimeout(() => setProbeAllResult(null), 8000);
+      // Start polling for progress
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'Failed to start probe';
       setProbeAllResult({ success: false, message: errorMessage });
-    } finally {
       setProbingAll(false);
     }
   };
@@ -1293,7 +1335,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
             <span className={`material-icons ${probingAll ? 'spinning' : ''}`}>
               {probingAll ? 'sync' : 'play_arrow'}
             </span>
-            {probingAll ? 'Starting...' : 'Probe All Streams Now'}
+            {probingAll ? (probeProgress && probeProgress.status === 'probing' ? 'Probing...' : 'Starting...') : 'Probe All Streams Now'}
           </button>
           <span className="form-hint" style={{ marginLeft: '1rem' }}>
             Start a background probe of all streams immediately
@@ -1303,6 +1345,35 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
             <div className={probeAllResult.success ? 'success-message' : 'error-message'} style={{ marginTop: '1rem' }}>
               <span className="material-icons">{probeAllResult.success ? 'check_circle' : 'error'}</span>
               {probeAllResult.message}
+            </div>
+          )}
+
+          {probeProgress && probeProgress.in_progress && (
+            <div style={{ marginTop: '1rem', padding: '1rem', backgroundColor: '#f5f5f5', borderRadius: '4px' }}>
+              <div style={{ marginBottom: '0.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span style={{ fontWeight: '500' }}>
+                  {probeProgress.status === 'fetching' && 'Fetching streams...'}
+                  {probeProgress.status === 'probing' && `Probing streams: ${probeProgress.current} / ${probeProgress.total}`}
+                  {probeProgress.status === 'completed' && 'Completed!'}
+                  {probeProgress.status === 'failed' && 'Failed'}
+                  {probeProgress.status === 'cancelled' && 'Cancelled'}
+                </span>
+                <span style={{ fontWeight: '600', color: '#666' }}>{probeProgress.percentage}%</span>
+              </div>
+              <div style={{
+                width: '100%',
+                height: '8px',
+                backgroundColor: '#ddd',
+                borderRadius: '4px',
+                overflow: 'hidden'
+              }}>
+                <div style={{
+                  width: `${probeProgress.percentage}%`,
+                  height: '100%',
+                  backgroundColor: '#4CAF50',
+                  transition: 'width 0.3s ease',
+                }}></div>
+              </div>
             </div>
           )}
         </div>
