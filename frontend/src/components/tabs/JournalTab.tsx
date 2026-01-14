@@ -197,6 +197,14 @@ export function JournalTab() {
                 <span className="material-icons">playlist_play</span>
                 {stats.by_category.m3u || 0}
               </span>
+              <span className="header-stat" title="Watch start entries">
+                <span className="material-icons">play_circle</span>
+                {stats.by_action_type.start || 0}
+              </span>
+              <span className="header-stat" title="Watch stop entries">
+                <span className="material-icons">stop_circle</span>
+                {stats.by_action_type.stop || 0}
+              </span>
               <span className="header-total" title="Total journal entries">({stats.total_entries.toLocaleString()} total)</span>
             </div>
           )}

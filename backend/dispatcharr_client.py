@@ -78,11 +78,18 @@ class DispatcharrClient:
         headers = kwargs.pop("headers", {})
         headers["Authorization"] = f"Bearer {self.access_token}"
 
+        # Use extended timeout for EPG programs endpoint (large datasets)
+        request_timeout = kwargs.pop("timeout", None)
+        if request_timeout is None and path == "/api/epg/programs/":
+            request_timeout = 120.0  # 2 minutes for EPG data
+            logger.debug(f"Using extended timeout ({request_timeout}s) for EPG programs request")
+
         try:
             response = await self._client.request(
                 method,
                 f"{self.base_url}{path}",
                 headers=headers,
+                timeout=request_timeout,
                 **kwargs,
             )
 
@@ -95,6 +102,7 @@ class DispatcharrClient:
                     method,
                     f"{self.base_url}{path}",
                     headers=headers,
+                    timeout=request_timeout,
                     **kwargs,
                 )
 
@@ -292,10 +300,14 @@ class DispatcharrClient:
         When multiple accounts have settings for the same group, prefer the one with auto_channel_sync enabled.
         """
         accounts = await self.get_m3u_accounts()
+        logger.info(f"get_all_m3u_group_settings: Processing {len(accounts)} M3U accounts")
         all_settings = {}
+        total_groups_found = 0
         for account in accounts:
             # channel_groups is embedded in the account response
             channel_groups = account.get("channel_groups", [])
+            total_groups_found += len(channel_groups)
+            logger.info(f"  Account {account.get('id')}: {account.get('name')} has {len(channel_groups)} channel_groups")
             for setting in channel_groups:
                 channel_group_id = setting.get("channel_group")
                 if channel_group_id:
@@ -311,6 +323,8 @@ class DispatcharrClient:
                         all_settings[channel_group_id] = new_setting
                     elif new_setting.get("auto_channel_sync") and not existing.get("auto_channel_sync"):
                         all_settings[channel_group_id] = new_setting
+        logger.info(f"  Total channel_groups entries across all accounts: {total_groups_found}")
+        logger.info(f"  Unique channel group IDs extracted: {len(all_settings)}")
         return all_settings
 
     async def get_m3u_account(self, account_id: int) -> dict:
@@ -665,11 +679,15 @@ class DispatcharrClient:
     async def get_epg_data(
         self,
         page: int = 1,
-        page_size: int = 100,
+        page_size: int = 500,
         search: Optional[str] = None,
         epg_source: Optional[int] = None,
-    ) -> dict:
-        """Get paginated list of EPG data entries."""
+    ) -> list:
+        """Get all EPG data entries.
+
+        Handles both old (paginated dict) and new (flat list) Dispatcharr responses.
+        For paginated responses, fetches all pages automatically.
+        """
         params = {"page": page, "page_size": page_size}
         if search:
             params["search"] = search
@@ -678,7 +696,27 @@ class DispatcharrClient:
 
         response = await self._request("GET", "/api/epg/epgdata/", params=params)
         response.raise_for_status()
-        return response.json()
+        data = response.json()
+
+        # New Dispatcharr: flat list response
+        if isinstance(data, list):
+            return data
+
+        # Old Dispatcharr: paginated dict response - fetch all pages
+        all_results = data.get("results", [])
+        while data.get("next"):
+            page += 1
+            params["page"] = page
+            response = await self._request("GET", "/api/epg/epgdata/", params=params)
+            response.raise_for_status()
+            data = response.json()
+            if isinstance(data, list):
+                # Switched to new format mid-pagination (unlikely but safe)
+                all_results.extend(data)
+                break
+            all_results.extend(data.get("results", []))
+
+        return all_results
 
     async def get_epg_data_by_id(self, data_id: int) -> dict:
         """Get a single EPG data entry by ID."""

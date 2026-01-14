@@ -27,10 +27,14 @@ export function LogoManagerTab() {
   const [deletingLogo, setDeletingLogo] = useState<Logo | null>(null);
   const [deleteLoading, setDeleteLoading] = useState(false);
 
+  // Track logos with failed image loads
+  const [failedImages, setFailedImages] = useState<Set<number>>(new Set());
+
   // Load all logos (no pagination)
   const loadLogos = useCallback(async () => {
     setLoading(true);
     setError(null);
+    setFailedImages(new Set()); // Clear failed images on reload
     try {
       // Request a large page size to get all logos
       const result = await api.getLogos({ page: 1, pageSize: 10000, search });
@@ -41,6 +45,11 @@ export function LogoManagerTab() {
       setLoading(false);
     }
   }, [search]);
+
+  // Handle image load error
+  const handleImageError = useCallback((logoId: number) => {
+    setFailedImages(prev => new Set(prev).add(logoId));
+  }, []);
 
   useEffect(() => {
     loadLogos();
@@ -211,16 +220,15 @@ export function LogoManagerTab() {
             {logos.map((logo) => (
               <div key={logo.id} className="logo-row">
                 <div className="logo-thumbnail">
-                  {logo.cache_url || logo.url ? (
+                  {failedImages.has(logo.id) ? (
+                    <span className="placeholder">
+                      <span className="material-icons">broken_image</span>
+                    </span>
+                  ) : logo.cache_url || logo.url ? (
                     <img
                       src={logo.cache_url || logo.url}
                       alt={logo.name}
-                      onError={(e) => {
-                        const target = e.target as HTMLImageElement;
-                        target.style.display = 'none';
-                        target.parentElement!.innerHTML =
-                          '<span class="placeholder"><span class="material-icons">broken_image</span></span>';
-                      }}
+                      onError={() => handleImageError(logo.id)}
                     />
                   ) : (
                     <span className="placeholder">
@@ -269,16 +277,15 @@ export function LogoManagerTab() {
             {logos.map((logo) => (
               <div key={logo.id} className="logo-card">
                 <div className="card-thumbnail">
-                  {logo.cache_url || logo.url ? (
+                  {failedImages.has(logo.id) ? (
+                    <span className="placeholder">
+                      <span className="material-icons">broken_image</span>
+                    </span>
+                  ) : logo.cache_url || logo.url ? (
                     <img
                       src={logo.cache_url || logo.url}
                       alt={logo.name}
-                      onError={(e) => {
-                        const target = e.target as HTMLImageElement;
-                        target.style.display = 'none';
-                        target.parentElement!.innerHTML =
-                          '<span class="placeholder"><span class="material-icons">broken_image</span></span>';
-                      }}
+                      onError={() => handleImageError(logo.id)}
                     />
                   ) : (
                     <span className="placeholder">

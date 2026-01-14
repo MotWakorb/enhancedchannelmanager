@@ -35,6 +35,9 @@
       "Bash(sips:*)"
     ],
     "deny": [],
-    "ask": []
+    "ask": [],
+    "additionalDirectories": [
+      "c:\\Users\\curt\\Documents\\Code\\enhancedchannelmanager"
+    ]
   }
 }

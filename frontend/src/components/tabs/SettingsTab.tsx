@@ -5,6 +5,7 @@ import type { Theme } from '../../services/api';
 import type { ChannelProfile } from '../../types';
 import { logger } from '../../utils/logger';
 import type { LogLevel as FrontendLogLevel } from '../../utils/logger';
+import { DeleteOrphanedGroupsModal } from '../DeleteOrphanedGroupsModal';
 import './SettingsTab.css';
 
 interface SettingsTabProps {
@@ -13,7 +14,7 @@ interface SettingsTabProps {
   channelProfiles?: ChannelProfile[];
 }
 
-type SettingsPage = 'general' | 'channel-defaults' | 'appearance';
+type SettingsPage = 'general' | 'channel-defaults' | 'appearance' | 'maintenance';
 
 export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: SettingsTabProps) {
   const [activePage, setActivePage] = useState<SettingsPage>('general');
@@ -43,6 +44,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
   const [hideAutoSyncGroups, setHideAutoSyncGroups] = useState(false);
   const [hideUngroupedStreams, setHideUngroupedStreams] = useState(true);
   const [theme, setTheme] = useState<Theme>('dark');
+  const [vlcOpenBehavior, setVlcOpenBehavior] = useState('m3u_fallback');
 
   // Stats settings
   const [statsPollInterval, setStatsPollInterval] = useState(10);
@@ -61,6 +63,13 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
   const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [saveSuccess, setSaveSuccess] = useState(false);
+
+  // Maintenance state
+  const [orphanedGroups, setOrphanedGroups] = useState<{ id: number; name: string; reason?: string }[]>([]);
+  const [loadingOrphaned, setLoadingOrphaned] = useState(false);
+  const [cleaningOrphaned, setCleaningOrphaned] = useState(false);
+  const [cleanupResult, setCleanupResult] = useState<string | null>(null);
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
 
   // Track original URL/username to detect if auth settings changed
   const [originalUrl, setOriginalUrl] = useState('');
@@ -96,6 +105,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
       setHideAutoSyncGroups(settings.hide_auto_sync_groups);
       setHideUngroupedStreams(settings.hide_ungrouped_streams);
       setTheme(settings.theme || 'dark');
+      setVlcOpenBehavior(settings.vlc_open_behavior || 'm3u_fallback');
       setDefaultChannelProfileIds(settings.default_channel_profile_ids);
       setEpgAutoMatchThreshold(settings.epg_auto_match_threshold ?? 80);
       setCustomNetworkPrefixes(settings.custom_network_prefixes ?? []);
@@ -196,6 +206,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
         user_timezone: userTimezone,
         backend_log_level: backendLogLevel,
         frontend_log_level: frontendLogLevel,
+        vlc_open_behavior: vlcOpenBehavior,
         linked_m3u_accounts: linkedM3UAccounts,
       });
       // Apply frontend log level immediately
@@ -204,6 +215,8 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
         logger.setLevel(frontendLevel as FrontendLogLevel);
         logger.info(`Frontend log level changed to ${frontendLevel}`);
       }
+      // Update global VLC settings for vlc utility to access
+      (window as any).__vlcSettings = { behavior: vlcOpenBehavior };
       setOriginalUrl(url);
       setOriginalUsername(username);
       setPassword('');
@@ -243,6 +256,52 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
       setRestartResult({ success: false, message: 'Failed to restart services' });
     } finally {
       setRestarting(false);
+    }
+  };
+
+  const handleLoadOrphanedGroups = async () => {
+    setLoadingOrphaned(true);
+    setCleanupResult(null);
+    try {
+      const result = await api.getOrphanedChannelGroups();
+      setOrphanedGroups(result.orphaned_groups);
+      if (result.orphaned_groups.length === 0) {
+        setCleanupResult('No orphaned groups found. Your database is clean!');
+      }
+    } catch (err) {
+      setCleanupResult(`Failed to load orphaned groups: ${err}`);
+    } finally {
+      setLoadingOrphaned(false);
+    }
+  };
+
+  const handleCleanupOrphanedGroups = async () => {
+    // Show the confirmation modal
+    setShowDeleteModal(true);
+  };
+
+  const handleConfirmDelete = async (selectedGroupIds: number[]) => {
+    setCleaningOrphaned(true);
+    setCleanupResult(null);
+    try {
+      const result = await api.deleteOrphanedChannelGroups(selectedGroupIds);
+      setCleanupResult(result.message);
+
+      if (result.deleted_groups.length > 0) {
+        // Reload to refresh the list
+        await handleLoadOrphanedGroups();
+        // Notify parent to refresh data
+        onSaved();
+      }
+
+      if (result.failed_groups.length > 0) {
+        const failedNames = result.failed_groups.map(g => g.name).join(', ');
+        setCleanupResult(`${result.message}. Failed to delete: ${failedNames}`);
+      }
+    } catch (err) {
+      setCleanupResult(`Failed to cleanup orphaned groups: ${err}`);
+    } finally {
+      setCleaningOrphaned(false);
     }
   };
 
@@ -432,45 +491,41 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
           <h3>Logging</h3>
         </div>
 
-        <div className="form-row">
-          <div className="form-group">
-            <label htmlFor="backendLogLevel">Backend Log Level</label>
-            <select
-              id="backendLogLevel"
-              value={backendLogLevel}
-              onChange={(e) => setBackendLogLevel(e.target.value)}
-            >
-              <option value="DEBUG">DEBUG - Show all messages including debug info</option>
-              <option value="INFO">INFO - Show informational messages and above</option>
-              <option value="WARNING">WARNING - Show warnings and errors only</option>
-              <option value="ERROR">ERROR - Show errors only</option>
-              <option value="CRITICAL">CRITICAL - Show only critical errors</option>
-            </select>
-            <p className="form-help">
-              Controls Python backend logging level. Changes apply immediately.
-              Check Docker logs to see backend messages.
-            </p>
-          </div>
+        <div className="form-group">
+          <label htmlFor="backendLogLevel">Backend Log Level</label>
+          <select
+            id="backendLogLevel"
+            value={backendLogLevel}
+            onChange={(e) => setBackendLogLevel(e.target.value)}
+          >
+            <option value="DEBUG">DEBUG - Show all messages including debug info</option>
+            <option value="INFO">INFO - Show informational messages and above</option>
+            <option value="WARNING">WARNING - Show warnings and errors only</option>
+            <option value="ERROR">ERROR - Show errors only</option>
+            <option value="CRITICAL">CRITICAL - Show only critical errors</option>
+          </select>
+          <p className="form-hint">
+            Controls Python backend logging level. Changes apply immediately.
+            Check Docker logs to see backend messages.
+          </p>
         </div>
 
-        <div className="form-row">
-          <div className="form-group">
-            <label htmlFor="frontendLogLevel">Frontend Log Level</label>
-            <select
-              id="frontendLogLevel"
-              value={frontendLogLevel}
-              onChange={(e) => setFrontendLogLevel(e.target.value)}
-            >
-              <option value="DEBUG">DEBUG - Show all messages including debug info</option>
-              <option value="INFO">INFO - Show informational messages and above</option>
-              <option value="WARN">WARN - Show warnings and errors only</option>
-              <option value="ERROR">ERROR - Show errors only</option>
-            </select>
-            <p className="form-help">
-              Controls browser console logging level. Changes apply immediately.
-              Open browser DevTools (F12) to see frontend messages.
-            </p>
-          </div>
+        <div className="form-group">
+          <label htmlFor="frontendLogLevel">Frontend Log Level</label>
+          <select
+            id="frontendLogLevel"
+            value={frontendLogLevel}
+            onChange={(e) => setFrontendLogLevel(e.target.value)}
+          >
+            <option value="DEBUG">DEBUG - Show all messages including debug info</option>
+            <option value="INFO">INFO - Show informational messages and above</option>
+            <option value="WARN">WARN - Show warnings and errors only</option>
+            <option value="ERROR">ERROR - Show errors only</option>
+          </select>
+          <p className="form-hint">
+            Controls browser console logging level. Changes apply immediately.
+            Open browser DevTools (F12) to see frontend messages.
+          </p>
         </div>
       </div>
 
@@ -604,6 +659,31 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
               These streams appear under "Ungrouped" in the Streams pane.
             </p>
           </div>
+        </div>
+      </div>
+
+      <div className="settings-section">
+        <div className="settings-section-header">
+          <span className="material-icons">play_circle</span>
+          <h3>VLC Integration</h3>
+        </div>
+
+        <div className="form-group">
+          <label htmlFor="vlcOpenBehavior">Open in VLC Behavior</label>
+          <select
+            id="vlcOpenBehavior"
+            value={vlcOpenBehavior}
+            onChange={(e) => setVlcOpenBehavior(e.target.value)}
+          >
+            <option value="protocol_only">Try VLC Protocol (show helper if it fails)</option>
+            <option value="m3u_fallback">Try VLC Protocol, then fallback to M3U download</option>
+            <option value="m3u_only">Always download M3U file</option>
+          </select>
+          <p className="form-hint">
+            Controls what happens when you click "Open in VLC". The vlc:// protocol requires
+            browser extensions on some platforms. If "protocol_only" fails, a helper modal
+            will guide you to install the necessary extension.
+          </p>
         </div>
       </div>
 
@@ -1061,6 +1141,66 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
     </div>
   );
 
+  const renderMaintenancePage = () => (
+    <div className="settings-page">
+      <div className="settings-page-header">
+        <h2>Maintenance</h2>
+        <p>Database cleanup and maintenance tools.</p>
+      </div>
+
+      <div className="settings-section">
+        <div className="settings-section-header">
+          <span className="material-icons">folder_delete</span>
+          <h3>Orphaned Channel Groups</h3>
+        </div>
+        <p className="form-hint" style={{ marginBottom: '1rem' }}>
+          Channel groups that are not associated with any M3U account and have no content (no streams or channels). These are typically leftover from deleted M3U accounts and are safe to delete.
+        </p>
+
+        <div className="settings-group">
+          <button
+            className="btn-secondary"
+            onClick={handleLoadOrphanedGroups}
+            disabled={loadingOrphaned || cleaningOrphaned}
+          >
+            <span className="material-icons">search</span>
+            {loadingOrphaned ? 'Scanning...' : 'Scan for Orphaned Groups'}
+          </button>
+
+          {orphanedGroups.length > 0 && (
+            <div style={{ marginTop: '1rem' }}>
+              <p><strong>Found {orphanedGroups.length} orphaned group(s):</strong></p>
+              <ul style={{ marginLeft: '1.5rem', marginTop: '0.5rem' }}>
+                {orphanedGroups.map(group => (
+                  <li key={group.id}>
+                    <strong>{group.name}</strong> (ID: {group.id})
+                    {group.reason && <span style={{ color: '#888', marginLeft: '0.5rem' }}>- {group.reason}</span>}
+                  </li>
+                ))}
+              </ul>
+              <button
+                className="btn-danger"
+                onClick={handleCleanupOrphanedGroups}
+                disabled={cleaningOrphaned || loadingOrphaned}
+                style={{ marginTop: '1rem' }}
+              >
+                <span className="material-icons">delete_forever</span>
+                {cleaningOrphaned ? 'Cleaning...' : `Delete ${orphanedGroups.length} Orphaned Group(s)`}
+              </button>
+            </div>
+          )}
+
+          {cleanupResult && (
+            <div className={cleanupResult.includes('Failed') ? 'error-message' : 'success-message'} style={{ marginTop: '1rem' }}>
+              <span className="material-icons">{cleanupResult.includes('Failed') ? 'error' : 'check_circle'}</span>
+              {cleanupResult}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+
   return (
     <div className="settings-tab">
       <nav className="settings-sidebar">
@@ -1086,6 +1226,13 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
             <span className="material-icons">palette</span>
             Appearance
           </li>
+          <li
+            className={`settings-nav-item ${activePage === 'maintenance' ? 'active' : ''}`}
+            onClick={() => setActivePage('maintenance')}
+          >
+            <span className="material-icons">build</span>
+            Maintenance
+          </li>
         </ul>
       </nav>
 
@@ -1093,7 +1240,15 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
         {activePage === 'general' && renderGeneralPage()}
         {activePage === 'channel-defaults' && renderChannelDefaultsPage()}
         {activePage === 'appearance' && renderAppearancePage()}
+        {activePage === 'maintenance' && renderMaintenancePage()}
       </div>
+
+      <DeleteOrphanedGroupsModal
+        isOpen={showDeleteModal}
+        onClose={() => setShowDeleteModal(false)}
+        onConfirm={handleConfirmDelete}
+        groups={orphanedGroups}
+      />
     </div>
   );
 }
