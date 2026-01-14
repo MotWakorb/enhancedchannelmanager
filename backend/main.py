@@ -95,28 +95,32 @@ async def startup_event():
         except Exception as e:
             logger.error(f"Failed to start bandwidth tracker: {e}", exc_info=True)
 
-        # Start stream prober if enabled
-        if settings.stream_probe_enabled:
-            try:
-                logger.debug(
-                    f"Starting stream prober (schedule: {settings.stream_probe_schedule_time}, "
-                    f"interval: {settings.stream_probe_interval_hours}h, "
-                    f"batch: {settings.stream_probe_batch_size}, timeout: {settings.stream_probe_timeout}s)"
-                )
-                prober = StreamProber(
-                    get_client(),
-                    probe_timeout=settings.stream_probe_timeout,
-                    probe_batch_size=settings.stream_probe_batch_size,
-                    probe_interval_hours=settings.stream_probe_interval_hours,
-                    probe_enabled=settings.stream_probe_enabled,
-                    schedule_time=settings.stream_probe_schedule_time,
-                    user_timezone=settings.user_timezone,
-                )
-                set_prober(prober)
-                await prober.start()
-                logger.info("Stream prober started successfully")
-            except Exception as e:
-                logger.error(f"Failed to start stream prober: {e}", exc_info=True)
+        # Always create stream prober for on-demand probing support
+        # Scheduled probing is controlled by probe_enabled flag
+        try:
+            logger.debug(
+                f"Initializing stream prober (scheduled: {settings.stream_probe_enabled}, "
+                f"schedule: {settings.stream_probe_schedule_time}, "
+                f"interval: {settings.stream_probe_interval_hours}h, "
+                f"batch: {settings.stream_probe_batch_size}, timeout: {settings.stream_probe_timeout}s)"
+            )
+            prober = StreamProber(
+                get_client(),
+                probe_timeout=settings.stream_probe_timeout,
+                probe_batch_size=settings.stream_probe_batch_size,
+                probe_interval_hours=settings.stream_probe_interval_hours,
+                probe_enabled=settings.stream_probe_enabled,
+                schedule_time=settings.stream_probe_schedule_time,
+                user_timezone=settings.user_timezone,
+            )
+            set_prober(prober)
+            await prober.start()
+            if settings.stream_probe_enabled:
+                logger.info("Stream prober started with scheduled probing enabled")
+            else:
+                logger.info("Stream prober started (scheduled probing disabled, on-demand available)")
+        except Exception as e:
+            logger.error(f"Failed to start stream prober: {e}", exc_info=True)
 
     logger.info("=" * 60)
 
