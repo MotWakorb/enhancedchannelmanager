@@ -2773,6 +2773,16 @@ async def get_probe_progress():
     return prober.get_probe_progress()
 
 
+@app.get("/api/stream-stats/probe/results")
+async def get_probe_results():
+    """Get detailed results of the last probe all streams operation."""
+    prober = get_prober()
+    if not prober:
+        raise HTTPException(status_code=503, detail="Stream prober not available")
+
+    return prober.get_probe_results()
+
+
 @app.post("/api/stream-stats/probe/{stream_id}")
 async def probe_single_stream(stream_id: int):
     """Trigger on-demand probe for a single stream."""
