@@ -2827,6 +2827,11 @@ class BulkProbeRequest(BaseModel):
     stream_ids: list[int]
 
 
+class ProbeAllRequest(BaseModel):
+    """Request for probe all streams endpoint with optional group filtering."""
+    channel_groups: list[str] = []  # Empty list means all groups
+
+
 # NOTE: /probe/bulk and /probe/all MUST be defined BEFORE /probe/{stream_id}
 # to avoid the path parameter matching "bulk" or "all" as a stream_id
 @app.post("/api/stream-stats/probe/bulk")
@@ -2871,9 +2876,12 @@ async def probe_bulk_streams(request: BulkProbeRequest):
 
 
 @app.post("/api/stream-stats/probe/all")
-async def probe_all_streams_endpoint():
-    """Trigger probe for all streams (background task)."""
-    logger.info("Probe all streams request received")
+async def probe_all_streams_endpoint(request: ProbeAllRequest = ProbeAllRequest()):
+    """Trigger probe for all streams (background task).
+
+    Optionally filter by channel groups. If channel_groups is empty, probes all groups.
+    """
+    logger.info(f"Probe all streams request received with groups filter: {request.channel_groups}")
 
     prober = get_prober()
     logger.info(f"get_prober() returned: {prober is not None}")
@@ -2884,9 +2892,9 @@ async def probe_all_streams_endpoint():
 
     import asyncio
 
-    # Start background task
-    logger.info("Starting background probe task for all streams")
-    asyncio.create_task(prober.probe_all_streams())
+    # Start background task with optional group filter
+    logger.info(f"Starting background probe task (groups: {request.channel_groups or 'all'})")
+    asyncio.create_task(prober.probe_all_streams(channel_groups_override=request.channel_groups or None))
     return {"status": "started", "message": "Background probe started"}
 
 

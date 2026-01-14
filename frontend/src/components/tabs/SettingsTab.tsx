@@ -374,7 +374,8 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
     setProbeAllResult(null);
     setProbeProgress(null);
     try {
-      const result = await api.probeAllStreams();
+      // Pass currently selected groups (even if not saved)
+      const result = await api.probeAllStreams(probeChannelGroups);
       setProbeAllResult({ success: true, message: result.message || 'Background probe started' });
       // Start polling for progress
     } catch (err) {
