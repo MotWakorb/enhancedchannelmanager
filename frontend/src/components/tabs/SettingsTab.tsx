@@ -1776,6 +1776,52 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
       </nav>
 
       <div className="settings-content">
+        {/* Global probe progress indicator - shows on all pages when probing */}
+        {probingAll && probeProgress && (
+          <div className="probe-global-progress" style={{
+            marginBottom: '1rem',
+            padding: '1rem',
+            backgroundColor: 'var(--bg-tertiary)',
+            borderRadius: '8px',
+            border: '1px solid var(--border-color)'
+          }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <span className="material-icons" style={{ color: '#3498db', animation: 'spin 1s linear infinite' }}>
+                  sync
+                </span>
+                <span style={{ fontWeight: '600' }}>Probing Streams...</span>
+              </div>
+              <span style={{ fontWeight: '700', color: '#3498db' }}>
+                {probeProgress.current} / {probeProgress.total} ({probeProgress.percentage}%)
+              </span>
+            </div>
+            {probeProgress.current_stream && (
+              <div style={{ fontSize: '13px', color: 'var(--text-secondary)', marginBottom: '0.5rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {probeProgress.current_stream}
+              </div>
+            )}
+            <div style={{
+              width: '100%',
+              height: '8px',
+              backgroundColor: '#34495e',
+              borderRadius: '4px',
+              overflow: 'hidden'
+            }}>
+              <div style={{
+                width: `${probeProgress.percentage}%`,
+                height: '100%',
+                background: 'linear-gradient(90deg, #3498db 0%, #2ecc71 100%)',
+                transition: 'width 0.3s ease',
+              }}></div>
+            </div>
+            <div style={{ display: 'flex', gap: '1rem', marginTop: '0.5rem', fontSize: '12px' }}>
+              <span style={{ color: '#2ecc71' }}>✓ {probeProgress.success_count} success</span>
+              <span style={{ color: '#e74c3c' }}>✗ {probeProgress.failed_count} failed</span>
+            </div>
+          </div>
+        )}
+
         {activePage === 'general' && renderGeneralPage()}
         {activePage === 'channel-defaults' && renderChannelDefaultsPage()}
         {activePage === 'appearance' && renderAppearancePage()}
