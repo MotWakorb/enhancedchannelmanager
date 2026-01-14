@@ -329,7 +329,7 @@ function generatePrintHtml(
     selectedGroupIds.has(ch.channel_group_id ?? -1) && ch.channel_number !== null
   ).length;
 
-  // Generate complete HTML
+  // Generate complete HTML - using same approach as Guidearr
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -338,7 +338,7 @@ function generatePrintHtml(
   <title>${escapeHtml(title)}</title>
   <style>
     @page {
-      size: landscape;
+      size: 11in 8.5in;
       margin: 0.3in 0.4in;
     }
 
@@ -352,63 +352,59 @@ function generatePrintHtml(
 
     body {
       font-family: Arial, sans-serif;
-      font-size: 7pt;
-      line-height: 1.2;
+      font-size: 6pt;
+      line-height: 1.15;
       color: #000;
       background: #fff;
+      column-count: 5;
+      column-gap: 10px;
+      column-fill: auto;
+      max-height: 7.9in;
+      overflow: visible;
     }
 
     .header {
+      column-span: all;
       text-align: center;
-      border-bottom: 2px solid #000;
-      padding-bottom: 4px;
-      margin-bottom: 8px;
+      border-bottom: 1.5px solid #000;
+      padding-bottom: 3px;
+      margin-bottom: 6px;
     }
 
     .header h1 {
-      font-size: 16pt;
+      font-size: 14pt;
       font-weight: bold;
       margin: 0 0 2px 0;
+      letter-spacing: 0.5px;
     }
 
     .header .subtitle {
-      font-size: 9pt;
+      font-size: 7pt;
       margin: 0;
       color: #333;
     }
 
-    .content {
-      column-count: 5;
-      column-gap: 12px;
-      column-fill: balance;
-    }
-
     .channel-group {
-      break-inside: avoid-column;
+      break-inside: avoid;
+      page-break-inside: avoid;
       border: 1px solid #999;
-      border-radius: 3px;
-      padding: 4px 6px;
-      margin-bottom: 6px;
-      display: inline-block;
-      width: 100%;
+      border-radius: 2px;
+      padding: 3px 4px;
+      margin-bottom: 4px;
     }
 
     .group-title {
-      font-size: 8pt;
+      font-size: 7pt;
       font-weight: bold;
-      padding: 3px 6px;
-      margin: -4px -6px 4px -6px;
-      border-radius: 2px 2px 0 0;
-    }
-
-    .channel-list {
-      /* Simple list container */
+      padding: 2px 4px;
+      margin: -3px -4px 2px -4px;
+      border-radius: 1px 1px 0 0;
     }
 
     .channel-line {
       margin: 0;
-      padding: 1px 0;
-      line-height: 1.3;
+      padding: 0.5px 0;
+      line-height: 1.2;
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
@@ -417,7 +413,7 @@ function generatePrintHtml(
     .ch-num {
       font-weight: bold;
       display: inline-block;
-      min-width: 32px;
+      min-width: 28px;
       color: #000;
     }
 
@@ -426,18 +422,20 @@ function generatePrintHtml(
     }
 
     .print-hint {
+      column-span: all;
       text-align: center;
       padding: 10px;
       background: #fff3cd;
       border: 1px solid #ffc107;
       border-radius: 4px;
-      margin-bottom: 12px;
-      font-size: 11pt;
+      margin-bottom: 10px;
+      font-size: 10pt;
     }
 
     @media screen {
       body {
         max-width: 11in;
+        max-height: none;
         margin: 0 auto;
         padding: 20px;
         background: #f5f5f5;
@@ -447,37 +445,6 @@ function generatePrintHtml(
     @media print {
       .print-hint {
         display: none;
-      }
-
-      body {
-        font-size: 6pt;
-      }
-
-      .header h1 {
-        font-size: 14pt;
-      }
-
-      .header .subtitle {
-        font-size: 8pt;
-      }
-
-      .group-title {
-        font-size: 7pt;
-      }
-
-      .channel-line {
-        font-size: 6pt;
-        padding: 0.5px 0;
-        line-height: 1.15;
-      }
-
-      .ch-num {
-        min-width: 28px;
-      }
-
-      .channel-group {
-        margin-bottom: 4px;
-        padding: 3px 5px;
       }
     }
   </style>
@@ -492,9 +459,7 @@ function generatePrintHtml(
     <div class="subtitle">${totalChannels} channels</div>
   </div>
 
-  <div class="content">
-    ${groupsHtml}
-  </div>
+  ${groupsHtml}
 
   <script>
     window.addEventListener('load', function() {
