@@ -1266,11 +1266,19 @@ export function ChannelsPane({
   const handleProbeChannel = useCallback(async (channel: Channel) => {
     // channel.streams is an array of stream IDs (numbers)
     const streamIds = channel.streams;
-    if (streamIds.length === 0) return;
+    console.log(`[ChannelsPane] handleProbeChannel called for channel ${channel.id} (${channel.name}) with ${streamIds.length} streams`);
+
+    if (streamIds.length === 0) {
+      console.log(`[ChannelsPane] No streams to probe for channel ${channel.id}`);
+      return;
+    }
 
     setProbingChannels((prev) => new Set(prev).add(channel.id));
     try {
+      console.log(`[ChannelsPane] Calling probeBulkStreams for channel ${channel.id}`);
       const result = await api.probeBulkStreams(streamIds);
+      console.log(`[ChannelsPane] probeBulkStreams succeeded for channel ${channel.id}, probed ${result.probed} streams`);
+
       // Update stats map with results
       if (result.results) {
         setStreamStatsMap((prev) => {
@@ -1282,7 +1290,7 @@ export function ChannelsPane({
         });
       }
     } catch (err) {
-      console.error('Failed to probe channel streams:', err);
+      console.error(`[ChannelsPane] Failed to probe channel ${channel.id} streams:`, err);
     } finally {
       setProbingChannels((prev) => {
         const next = new Set(prev);
@@ -1294,6 +1302,8 @@ export function ChannelsPane({
 
   // Handle probe group request - probes all streams in all channels of a group
   const handleProbeGroup = useCallback(async (groupId: number | 'ungrouped', groupChannels: Channel[]) => {
+    console.log(`[ChannelsPane] handleProbeGroup called for group ${groupId} with ${groupChannels.length} channels`);
+
     // Collect all stream IDs from all channels in the group
     // channel.streams is an array of stream IDs (numbers)
     const streamIds: number[] = [];
@@ -1302,11 +1312,20 @@ export function ChannelsPane({
         streamIds.push(streamId);
       }
     }
-    if (streamIds.length === 0) return;
+
+    console.log(`[ChannelsPane] Collected ${streamIds.length} total streams from group ${groupId}`);
+
+    if (streamIds.length === 0) {
+      console.log(`[ChannelsPane] No streams to probe for group ${groupId}`);
+      return;
+    }
 
     setProbingGroups((prev) => new Set(prev).add(groupId));
     try {
+      console.log(`[ChannelsPane] Calling probeBulkStreams for group ${groupId}`);
       const result = await api.probeBulkStreams(streamIds);
+      console.log(`[ChannelsPane] probeBulkStreams succeeded for group ${groupId}, probed ${result.probed} streams`);
+
       // Update stats map with results
       if (result.results) {
         setStreamStatsMap((prev) => {
@@ -1318,7 +1337,7 @@ export function ChannelsPane({
         });
       }
     } catch (err) {
-      console.error('Failed to probe group streams:', err);
+      console.error(`[ChannelsPane] Failed to probe group ${groupId} streams:`, err);
     } finally {
       setProbingGroups((prev) => {
         const next = new Set(prev);

@@ -1627,26 +1627,53 @@ export async function getStreamStatsSummary(): Promise<import('../types').Stream
  * Probe a single stream on-demand.
  */
 export async function probeStream(streamId: number): Promise<import('../types').StreamStats> {
-  return fetchJson(`${API_BASE}/stream-stats/probe/${streamId}`, {
-    method: 'POST',
-  });
+  console.log(`[Probe] probeStream called for stream ID: ${streamId}`);
+
+  try {
+    const result = await fetchJson(`${API_BASE}/stream-stats/probe/${streamId}`, {
+      method: 'POST',
+    }) as import('../types').StreamStats;
+    console.log(`[Probe] probeStream succeeded for stream ${streamId}:`, result);
+    return result;
+  } catch (error) {
+    console.error(`[Probe] probeStream failed for stream ${streamId}:`, error);
+    throw error;
+  }
 }
 
 /**
  * Probe multiple streams on-demand.
  */
 export async function probeBulkStreams(streamIds: number[]): Promise<import('../types').BulkProbeResult> {
-  return fetchJson(`${API_BASE}/stream-stats/probe/bulk`, {
-    method: 'POST',
-    body: JSON.stringify({ stream_ids: streamIds }),
-  });
+  console.log(`[Probe] probeBulkStreams called with ${streamIds.length} stream IDs:`, streamIds);
+
+  try {
+    const result = await fetchJson(`${API_BASE}/stream-stats/probe/bulk`, {
+      method: 'POST',
+      body: JSON.stringify({ stream_ids: streamIds }),
+    }) as import('../types').BulkProbeResult;
+    console.log(`[Probe] probeBulkStreams succeeded, probed ${result.probed} streams`);
+    return result;
+  } catch (error) {
+    console.error(`[Probe] probeBulkStreams failed:`, error);
+    throw error;
+  }
 }
 
 /**
  * Start background probe of all streams.
  */
 export async function probeAllStreams(): Promise<{ status: string; message: string }> {
-  return fetchJson(`${API_BASE}/stream-stats/probe/all`, {
-    method: 'POST',
-  });
+  console.log('[Probe] probeAllStreams called');
+
+  try {
+    const result = await fetchJson(`${API_BASE}/stream-stats/probe/all`, {
+      method: 'POST',
+    }) as { status: string; message: string };
+    console.log('[Probe] probeAllStreams request succeeded:', result);
+    return result;
+  } catch (error) {
+    console.error('[Probe] probeAllStreams failed:', error);
+    throw error;
+  }
 }

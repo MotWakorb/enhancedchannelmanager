@@ -55,19 +55,25 @@ class StreamProber:
 
     async def start(self):
         """Start the background scheduled probing task."""
+        logger.info("StreamProber.start() called")
+
         if self._running:
             logger.warning("StreamProber already running")
             return
 
         # Check ffprobe availability
-        if not check_ffprobe_available():
-            logger.error("ffprobe not found - stream probing disabled")
+        ffprobe_available = check_ffprobe_available()
+        logger.info(f"ffprobe availability check: {ffprobe_available}")
+
+        if not ffprobe_available:
+            logger.error("ffprobe not found - stream probing disabled (scheduled probing will not start)")
+            logger.warning("On-demand probing will fail without ffprobe")
             return
 
         self._running = True
         self._task = asyncio.create_task(self._scheduled_probe_loop())
         logger.info(
-            f"StreamProber started (schedule: {self.schedule_time}, interval: {self.probe_interval_hours}h, "
+            f"StreamProber started successfully (schedule: {self.schedule_time}, interval: {self.probe_interval_hours}h, "
             f"batch: {self.probe_batch_size}, timeout: {self.probe_timeout}s)"
         )
 
@@ -212,15 +218,21 @@ class StreamProber:
         Probe a single stream using ffprobe.
         Returns the probe result dict.
         """
+        logger.debug(f"probe_stream() called for stream_id={stream_id}, name={name}, url={'present' if url else 'missing'}")
+
         if not url:
+            logger.warning(f"Stream {stream_id} has no URL, marking as failed")
             return self._save_probe_result(
                 stream_id, name, None, "failed", "No URL available"
             )
 
         try:
+            logger.debug(f"Running ffprobe for stream {stream_id}")
             result = await self._run_ffprobe(url)
+            logger.info(f"Stream {stream_id} probe succeeded")
             return self._save_probe_result(stream_id, name, result, "success", None)
         except asyncio.TimeoutError:
+            logger.warning(f"Stream {stream_id} probe timed out after {self.probe_timeout}s")
             return self._save_probe_result(
                 stream_id,
                 name,
@@ -233,6 +245,7 @@ class StreamProber:
             # Truncate very long error messages
             if len(error_msg) > 500:
                 error_msg = error_msg[:500] + "..."
+            logger.error(f"Stream {stream_id} probe failed: {error_msg}")
             return self._save_probe_result(stream_id, name, None, "failed", error_msg)
 
     async def _run_ffprobe(self, url: str) -> dict:
@@ -571,6 +584,7 @@ _prober: Optional[StreamProber] = None
 
 def get_prober() -> Optional[StreamProber]:
     """Get the global prober instance."""
+    logger.debug(f"get_prober() called, returning: {_prober is not None} (instance exists: {_prober is not None})")
     return _prober
 
 
@@ -578,3 +592,4 @@ def set_prober(prober: StreamProber):
     """Set the global prober instance."""
     global _prober
     _prober = prober
+    logger.info(f"Stream prober instance set: {prober is not None}")

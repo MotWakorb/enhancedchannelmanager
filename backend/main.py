@@ -113,14 +113,25 @@ async def startup_event():
                 schedule_time=settings.stream_probe_schedule_time,
                 user_timezone=settings.user_timezone,
             )
+            logger.info(f"StreamProber instance created: {prober is not None}")
+
             set_prober(prober)
+            logger.info("set_prober() called successfully")
+
             await prober.start()
+            logger.info("prober.start() completed")
+
+            # Verify prober is accessible via get_prober()
+            test_prober = get_prober()
+            logger.info(f"Verification: get_prober() returns: {test_prober is not None}")
+
             if settings.stream_probe_enabled:
-                logger.info("Stream prober started with scheduled probing enabled")
+                logger.info("Stream prober initialized with scheduled probing enabled")
             else:
-                logger.info("Stream prober started (scheduled probing disabled, on-demand available)")
+                logger.info("Stream prober initialized (scheduled probing disabled, on-demand available)")
         except Exception as e:
-            logger.error(f"Failed to start stream prober: {e}", exc_info=True)
+            logger.error(f"Failed to initialize stream prober: {e}", exc_info=True)
+            logger.error("Stream probing will not be available!")
 
     logger.info("=" * 60)
 
@@ -2694,42 +2705,60 @@ class BulkProbeRequest(BaseModel):
 @app.post("/api/stream-stats/probe/bulk")
 async def probe_bulk_streams(request: BulkProbeRequest):
     """Trigger on-demand probe for multiple streams."""
+    logger.info(f"Bulk probe request received for {len(request.stream_ids)} streams: {request.stream_ids}")
+
     prober = get_prober()
+    logger.info(f"get_prober() returned: {prober is not None}")
+
     if not prober:
+        logger.error("Stream prober not available - returning 503")
         raise HTTPException(status_code=503, detail="Stream prober not available")
 
     try:
         import asyncio
 
+        logger.debug("Fetching all streams for bulk probe")
         all_streams = await prober._fetch_all_streams()
+        logger.info(f"Fetched {len(all_streams)} total streams")
+
         stream_map = {s["id"]: s for s in all_streams}
 
         results = []
         for stream_id in request.stream_ids:
             stream = stream_map.get(stream_id)
             if stream:
+                logger.debug(f"Probing stream {stream_id}")
                 result = await prober.probe_stream(
                     stream_id, stream.get("url"), stream.get("name")
                 )
                 results.append(result)
                 await asyncio.sleep(0.5)  # Rate limiting
+            else:
+                logger.warning(f"Stream {stream_id} not found in stream list")
 
+        logger.info(f"Bulk probe completed: {len(results)} streams probed")
         return {"probed": len(results), "results": results}
     except Exception as e:
-        logger.error(f"Bulk probe failed: {e}")
+        logger.error(f"Bulk probe failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post("/api/stream-stats/probe/all")
 async def probe_all_streams_endpoint():
     """Trigger probe for all streams (background task)."""
+    logger.info("Probe all streams request received")
+
     prober = get_prober()
+    logger.info(f"get_prober() returned: {prober is not None}")
+
     if not prober:
+        logger.error("Stream prober not available - returning 503")
         raise HTTPException(status_code=503, detail="Stream prober not available")
 
     import asyncio
 
     # Start background task
+    logger.info("Starting background probe task for all streams")
     asyncio.create_task(prober.probe_all_streams())
     return {"status": "started", "message": "Background probe started"}
 
@@ -2737,21 +2766,30 @@ async def probe_all_streams_endpoint():
 @app.post("/api/stream-stats/probe/{stream_id}")
 async def probe_single_stream(stream_id: int):
     """Trigger on-demand probe for a single stream."""
+    logger.info(f"Single stream probe request received for stream_id={stream_id}")
+
     prober = get_prober()
+    logger.info(f"get_prober() returned: {prober is not None}")
+
     if not prober:
+        logger.error("Stream prober not available - returning 503")
         raise HTTPException(status_code=503, detail="Stream prober not available")
 
     try:
         # Get all streams and find the one we want
+        logger.debug(f"Fetching all streams to find stream {stream_id}")
         all_streams = await prober._fetch_all_streams()
         stream = next((s for s in all_streams if s["id"] == stream_id), None)
 
         if not stream:
+            logger.warning(f"Stream {stream_id} not found")
             raise HTTPException(status_code=404, detail="Stream not found")
 
+        logger.info(f"Probing single stream {stream_id}")
         result = await prober.probe_stream(
             stream_id, stream.get("url"), stream.get("name")
         )
+        logger.info(f"Single stream probe completed for {stream_id}")
         return result
     except HTTPException:
         raise
