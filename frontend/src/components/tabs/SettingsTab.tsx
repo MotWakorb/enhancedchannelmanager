@@ -60,6 +60,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
   const [streamProbeBatchSize, setStreamProbeBatchSize] = useState(10);
   const [streamProbeTimeout, setStreamProbeTimeout] = useState(30);
   const [streamProbeScheduleTime, setStreamProbeScheduleTime] = useState('03:00');
+  const [bitrateSampleDuration, setBitrateSampleDuration] = useState(10);
   const [probingAll, setProbingAll] = useState(false);
   const [probeAllResult, setProbeAllResult] = useState<{ success: boolean; message: string } | null>(null);
   const [totalStreamCount, setTotalStreamCount] = useState(100); // Default to 100, will be updated on load
@@ -237,6 +238,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
       setStreamProbeTimeout(settings.stream_probe_timeout ?? 30);
       setStreamProbeScheduleTime(settings.stream_probe_schedule_time ?? '03:00');
       setProbeChannelGroups(settings.probe_channel_groups ?? []);
+      setBitrateSampleDuration(settings.bitrate_sample_duration ?? 10);
       setNeedsRestart(false);
       setRestartResult(null);
       setTestResult(null);
@@ -329,6 +331,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
         stream_probe_timeout: streamProbeTimeout,
         stream_probe_schedule_time: streamProbeScheduleTime,
         probe_channel_groups: probeChannelGroups,
+        bitrate_sample_duration: bitrateSampleDuration,
       });
       // Apply frontend log level immediately
       const frontendLevel = frontendLogLevel === 'WARNING' ? 'WARN' : frontendLogLevel;
@@ -1383,6 +1386,21 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
                 style={{ width: '120px' }}
               />
               <span className="form-hint">Time of day to start scheduled probes (your local time)</span>
+            </div>
+
+            <div className="form-group">
+              <label htmlFor="bitrateSampleDuration">Bitrate measurement duration</label>
+              <select
+                id="bitrateSampleDuration"
+                value={bitrateSampleDuration}
+                onChange={(e) => setBitrateSampleDuration(Number(e.target.value))}
+                style={{ width: '120px' }}
+              >
+                <option value={10}>10 seconds</option>
+                <option value={20}>20 seconds</option>
+                <option value={30}>30 seconds</option>
+              </select>
+              <span className="form-hint">How long to sample streams when measuring bitrate</span>
             </div>
 
             <div className="form-group">

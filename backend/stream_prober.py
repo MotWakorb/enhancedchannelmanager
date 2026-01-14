@@ -46,6 +46,7 @@ class StreamProber:
         schedule_time: str = "03:00",  # HH:MM format, 24h
         user_timezone: str = "",  # IANA timezone name
         probe_channel_groups: list[str] = None,  # List of group names to probe (empty/None = all groups)
+        bitrate_sample_duration: int = 10,  # Duration in seconds to sample stream for bitrate (10, 20, or 30)
     ):
         self.client = client
         self.probe_timeout = probe_timeout
@@ -55,6 +56,7 @@ class StreamProber:
         self.schedule_time = schedule_time
         self.user_timezone = user_timezone
         self.probe_channel_groups = probe_channel_groups or []
+        self.bitrate_sample_duration = bitrate_sample_duration
         self._task: Optional[asyncio.Task] = None
         self._running = False
         self._probing_in_progress = False
@@ -318,7 +320,7 @@ class StreamProber:
         Returns bitrate in bits per second, or None if measurement fails.
         """
         try:
-            logger.debug(f"Starting bitrate measurement for {BITRATE_SAMPLE_DURATION}s...")
+            logger.debug(f"Starting bitrate measurement for {self.bitrate_sample_duration}s...")
 
             bytes_downloaded = 0
             start_time = time.time()
@@ -326,7 +328,7 @@ class StreamProber:
             # Stream download with timeout (all four parameters required by httpx.Timeout)
             timeout = httpx.Timeout(
                 connect=10.0,
-                read=BITRATE_SAMPLE_DURATION + 5.0,
+                read=self.bitrate_sample_duration + 5.0,
                 write=10.0,
                 pool=10.0
             )
@@ -341,7 +343,7 @@ class StreamProber:
                         elapsed = time.time() - start_time
 
                         # Stop after sample duration
-                        if elapsed >= BITRATE_SAMPLE_DURATION:
+                        if elapsed >= self.bitrate_sample_duration:
                             break
 
             elapsed = time.time() - start_time
