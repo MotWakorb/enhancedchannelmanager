@@ -1449,7 +1449,7 @@ class DispatcharrAPITester:
                 "No EPG source available",
             ))
 
-        # Test: List EPG Data (paginated)
+        # Test: List EPG Data (may be paginated dict or list)
         try:
             response, elapsed = await self._timed_request(
                 "GET",
@@ -1458,12 +1458,17 @@ class DispatcharrAPITester:
             )
             if response.status_code == 200:
                 data = response.json()
+                # Handle both list and paginated dict responses
+                if isinstance(data, list):
+                    count = len(data)
+                else:
+                    count = data.get('count', len(data.get('results', [])))
                 suite.results.append(self._result(
                     "List EPG Data",
                     "/api/epg/epgdata/",
                     "GET",
                     TestStatus.PASSED,
-                    f"Found {data.get('count', len(data.get('results', [])))} EPG entries",
+                    f"Found {count} EPG entries",
                     elapsed,
                     response.status_code,
                 ))
