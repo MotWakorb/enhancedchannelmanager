@@ -20,7 +20,7 @@ import {
   verticalListSortingStrategy,
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import type { Channel, ChannelGroup, ChannelProfile, Stream, M3UAccount, M3UGroupSetting, Logo, ChangeInfo, ChangeRecord, SavePoint, EPGData, EPGSource, StreamProfile, ChannelListFilterSettings } from '../types';
+import type { Channel, ChannelGroup, ChannelProfile, Stream, StreamStats, M3UAccount, M3UGroupSetting, Logo, ChangeInfo, ChangeRecord, SavePoint, EPGData, EPGSource, StreamProfile, ChannelListFilterSettings } from '../types';
 import { ChannelProfilesListModal } from './ChannelProfilesListModal';
 import type { ChannelDefaults } from './StreamsPane';
 import * as api from '../services/api';
@@ -168,6 +168,8 @@ interface SortableChannelProps {
   onContextMenu?: (e: React.MouseEvent) => void;
   channelUrl?: string;
   showStreamUrls?: boolean;
+  onProbeChannel?: () => void;
+  isProbing?: boolean;
 }
 
 interface SortableStreamItemProps {
@@ -177,9 +179,10 @@ interface SortableStreamItemProps {
   onRemove: (streamId: number) => void;
   onCopyUrl?: () => void;
   showStreamUrls?: boolean;
+  streamStats?: StreamStats | null;
 }
 
-const SortableStreamItem = memo(function SortableStreamItem({ stream, providerName, isEditMode, onRemove, onCopyUrl, showStreamUrls = true }: SortableStreamItemProps) {
+const SortableStreamItem = memo(function SortableStreamItem({ stream, providerName, isEditMode, onRemove, onCopyUrl, showStreamUrls = true, streamStats }: SortableStreamItemProps) {
   const {
     attributes,
     listeners,
@@ -193,6 +196,31 @@ const SortableStreamItem = memo(function SortableStreamItem({ stream, providerNa
     transform: CSS.Transform.toString(transform),
     transition,
     opacity: isDragging ? 0.5 : 1,
+  };
+
+  // Format audio channels for display
+  const formatAudioChannels = (channels: number | null) => {
+    if (!channels) return null;
+    if (channels === 2) return 'Stereo';
+    if (channels === 6) return '5.1';
+    if (channels === 8) return '7.1';
+    return `${channels}ch`;
+  };
+
+  // Format resolution for compact display
+  const formatResolution = (resolution: string | null) => {
+    if (!resolution) return null;
+    // Convert "1920x1080" to "1080p", "1280x720" to "720p", etc.
+    const match = resolution.match(/(\d+)x(\d+)/);
+    if (match) {
+      const height = parseInt(match[2], 10);
+      if (height >= 2160) return '4K';
+      if (height >= 1080) return '1080p';
+      if (height >= 720) return '720p';
+      if (height >= 480) return '480p';
+      return `${height}p`;
+    }
+    return resolution;
   };
 
   return (
@@ -216,6 +244,40 @@ const SortableStreamItem = memo(function SortableStreamItem({ stream, providerNa
       )}
       <div className="inline-stream-info">
         <span className="inline-stream-name">{stream.name}</span>
+        {/* Stream metadata tags */}
+        {streamStats && streamStats.probe_status === 'success' && (
+          <span className="stream-metadata">
+            {streamStats.resolution && (
+              <span className="meta-tag resolution" title={streamStats.resolution}>
+                {formatResolution(streamStats.resolution)}
+              </span>
+            )}
+            {streamStats.fps && (
+              <span className="meta-tag fps" title={`${streamStats.fps} fps`}>
+                {parseFloat(streamStats.fps).toFixed(0)}fps
+              </span>
+            )}
+            {streamStats.video_codec && (
+              <span className="meta-tag codec" title={`Video: ${streamStats.video_codec}`}>
+                {streamStats.video_codec}
+              </span>
+            )}
+            {streamStats.audio_channels && (
+              <span className="meta-tag audio" title={`Audio: ${streamStats.audio_codec || 'unknown'} ${streamStats.audio_channels}ch`}>
+                {formatAudioChannels(streamStats.audio_channels)}
+              </span>
+            )}
+          </span>
+        )}
+        {/* Probe status indicator for failed/timeout */}
+        {streamStats && (streamStats.probe_status === 'failed' || streamStats.probe_status === 'timeout') && (
+          <span
+            className={`meta-tag probe-${streamStats.probe_status}`}
+            title={streamStats.error_message || `Probe ${streamStats.probe_status}`}
+          >
+            <span className="material-icons">error_outline</span>
+          </span>
+        )}
         {showStreamUrls && stream.url && (
           <span className="inline-stream-url" title={stream.url}>
             {stream.url}
@@ -297,6 +359,8 @@ const SortableChannel = memo(function SortableChannel({
   onContextMenu,
   channelUrl,
   showStreamUrls = true,
+  onProbeChannel,
+  isProbing = false,
 }: SortableChannelProps) {
   const {
     attributes,
@@ -444,6 +508,22 @@ const SortableChannel = memo(function SortableChannel({
         {channel.streams.length === 0 && <span className="material-icons warning-icon">warning</span>}
         {channel.streams.length} stream{channel.streams.length !== 1 ? 's' : ''}
       </span>
+      {/* Probe channel button - probes all streams in this channel */}
+      {onProbeChannel && channel.streams && channel.streams.length > 0 && (
+        <button
+          className={`probe-channel-btn ${isProbing ? 'probing' : ''}`}
+          onClick={(e) => {
+            e.stopPropagation();
+            onProbeChannel();
+          }}
+          disabled={isProbing}
+          title={isProbing ? 'Probing streams...' : 'Probe all streams in this channel'}
+        >
+          <span className={`material-icons ${isProbing ? 'spinning' : ''}`}>
+            {isProbing ? 'sync' : 'speed'}
+          </span>
+        </button>
+      )}
       {channelUrl && (
         <button
           className="vlc-btn channel-vlc-btn"
@@ -554,6 +634,8 @@ interface DroppableGroupHeaderProps {
   onStreamDropOnGroup?: (groupId: number | 'ungrouped', streamIds: number[]) => void;
   onContextMenu?: (e: React.MouseEvent) => void;
   dragHandleProps?: any;
+  onProbeGroup?: () => void;
+  isProbing?: boolean;
 }
 
 const DroppableGroupHeader = memo(function DroppableGroupHeader({
@@ -574,6 +656,8 @@ const DroppableGroupHeader = memo(function DroppableGroupHeader({
   onStreamDropOnGroup,
   onContextMenu,
   dragHandleProps,
+  onProbeGroup,
+  isProbing = false,
 }: DroppableGroupHeaderProps) {
   const droppableId = `group-${groupId}`;
   const { isOver, setNodeRef } = useDroppable({
@@ -698,6 +782,21 @@ const DroppableGroupHeader = memo(function DroppableGroupHeader({
         </span>
       )}
       {isEmpty && <span className="group-empty-badge">Empty</span>}
+      {onProbeGroup && !isEmpty && (
+        <button
+          className={`probe-group-btn ${isProbing ? 'probing' : ''}`}
+          onClick={(e) => {
+            e.stopPropagation();
+            onProbeGroup();
+          }}
+          disabled={isProbing}
+          title={isProbing ? 'Probing streams...' : 'Probe all streams in this group'}
+        >
+          <span className={`material-icons ${isProbing ? 'spinning' : ''}`}>
+            {isProbing ? 'sync' : 'speed'}
+          </span>
+        </button>
+      )}
       {isEditMode && !isEmpty && onSortAndRenumber && (
         <button
           className="group-sort-btn"
@@ -899,6 +998,11 @@ export function ChannelsPane({
   // Inline stream display state
   const [channelStreams, setChannelStreams] = useState<Stream[]>([]);
   const [streamsLoading, setStreamsLoading] = useState(false);
+
+  // Stream stats state for displaying probe metadata
+  const [streamStatsMap, setStreamStatsMap] = useState<Map<number, StreamStats>>(new Map());
+  const [probingChannels, setProbingChannels] = useState<Set<number>>(new Set());
+  const [probingGroups, setProbingGroups] = useState<Set<number | 'ungrouped'>>(new Set());
 
   // Delete channel state
   const deleteConfirmModal = useModal();
@@ -1114,6 +1218,95 @@ export function ChannelsPane({
     };
     loadStreams();
   }, [selectedChannelId, channels, isEditMode, allStreams]);
+
+  // Fetch stream stats when channelStreams changes
+  useEffect(() => {
+    const fetchStreamStats = async () => {
+      if (channelStreams.length === 0) return;
+
+      const streamIds = channelStreams.map((s) => s.id);
+      try {
+        const stats = await api.getStreamStatsByIds(streamIds);
+        setStreamStatsMap((prev) => {
+          const next = new Map(prev);
+          for (const [idStr, stat] of Object.entries(stats)) {
+            next.set(parseInt(idStr, 10), stat);
+          }
+          return next;
+        });
+      } catch (err) {
+        // Stats not available is OK - they may not have been probed yet
+        console.debug('Failed to fetch stream stats:', err);
+      }
+    };
+    fetchStreamStats();
+  }, [channelStreams]);
+
+  // Handle probe channel request - probes all streams in a channel
+  const handleProbeChannel = useCallback(async (channel: Channel) => {
+    // channel.streams is an array of stream IDs (numbers)
+    const streamIds = channel.streams;
+    if (streamIds.length === 0) return;
+
+    setProbingChannels((prev) => new Set(prev).add(channel.id));
+    try {
+      const result = await api.probeBulkStreams(streamIds);
+      // Update stats map with results
+      if (result.results) {
+        setStreamStatsMap((prev) => {
+          const next = new Map(prev);
+          for (const stats of result.results) {
+            next.set(stats.stream_id, stats);
+          }
+          return next;
+        });
+      }
+    } catch (err) {
+      console.error('Failed to probe channel streams:', err);
+    } finally {
+      setProbingChannels((prev) => {
+        const next = new Set(prev);
+        next.delete(channel.id);
+        return next;
+      });
+    }
+  }, []);
+
+  // Handle probe group request - probes all streams in all channels of a group
+  const handleProbeGroup = useCallback(async (groupId: number | 'ungrouped', groupChannels: Channel[]) => {
+    // Collect all stream IDs from all channels in the group
+    // channel.streams is an array of stream IDs (numbers)
+    const streamIds: number[] = [];
+    for (const channel of groupChannels) {
+      for (const streamId of channel.streams) {
+        streamIds.push(streamId);
+      }
+    }
+    if (streamIds.length === 0) return;
+
+    setProbingGroups((prev) => new Set(prev).add(groupId));
+    try {
+      const result = await api.probeBulkStreams(streamIds);
+      // Update stats map with results
+      if (result.results) {
+        setStreamStatsMap((prev) => {
+          const next = new Map(prev);
+          for (const stats of result.results) {
+            next.set(stats.stream_id, stats);
+          }
+          return next;
+        });
+      }
+    } catch (err) {
+      console.error('Failed to probe group streams:', err);
+    } finally {
+      setProbingGroups((prev) => {
+        const next = new Set(prev);
+        next.delete(groupId);
+        return next;
+      });
+    }
+  }, []);
 
   // Handle channel row click - in edit mode handles multi-select, outside edit mode expands
   const handleChannelClick = (channel: Channel, e: React.MouseEvent, groupChannelIds: number[]) => {
@@ -3799,6 +3992,8 @@ export function ChannelsPane({
           onSelectAll={handleSelectAllInGroup}
           onStreamDropOnGroup={handleStreamDropOnGroup}
           onContextMenu={(e) => handleGroupContextMenu(groupChannels.map(ch => ch.id), e)}
+          onProbeGroup={() => handleProbeGroup(groupId, groupChannels)}
+          isProbing={probingGroups.has(groupId)}
         />
         {isExpanded && isEmpty && (
           <div className="group-channels empty-group-placeholder">
@@ -3934,6 +4129,8 @@ export function ChannelsPane({
                       onContextMenu={(e) => handleContextMenu(channel, e)}
                       channelUrl={dispatcharrUrl && channel.uuid ? `${dispatcharrUrl}/proxy/ts/stream/${channel.uuid}` : undefined}
                       showStreamUrls={showStreamUrls}
+                      onProbeChannel={() => handleProbeChannel(channel)}
+                      isProbing={probingChannels.has(channel.id)}
                     />
                     {selectedChannelId === channel.id && (
                       <div className="inline-streams">
@@ -3964,6 +4161,7 @@ export function ChannelsPane({
                                       onRemove={handleRemoveStream}
                                       onCopyUrl={stream.url ? () => handleCopyStreamUrl(stream.url!, stream.name) : undefined}
                                       showStreamUrls={showStreamUrls}
+                                      streamStats={streamStatsMap.get(stream.id) ?? null}
                                     />
                                   </div>
                                 ))}

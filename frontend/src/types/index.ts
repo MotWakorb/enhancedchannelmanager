@@ -125,6 +125,36 @@ export interface Stream {
   is_custom: boolean;
 }
 
+// Stream probe statistics - metadata gathered via ffprobe
+export interface StreamStats {
+  stream_id: number;
+  stream_name: string | null;
+  resolution: string | null;       // e.g., "1920x1080"
+  fps: string | null;              // e.g., "29.97"
+  video_codec: string | null;      // e.g., "h264", "hevc"
+  audio_codec: string | null;      // e.g., "aac", "ac3"
+  audio_channels: number | null;   // e.g., 2, 6
+  stream_type: string | null;      // e.g., "HLS", "MPEG-TS"
+  bitrate: number | null;          // bits per second
+  probe_status: 'success' | 'failed' | 'pending' | 'timeout';
+  error_message: string | null;
+  last_probed: string | null;      // ISO timestamp
+  created_at: string;
+}
+
+export interface StreamStatsSummary {
+  total: number;
+  success: number;
+  failed: number;
+  timeout: number;
+  pending: number;
+}
+
+export interface BulkProbeResult {
+  probed: number;
+  results: StreamStats[];
+}
+
 // M3U Account types
 export type M3UAccountType = 'STD' | 'XC';
 export type M3UAccountStatus = 'idle' | 'fetching' | 'parsing' | 'error' | 'success' | 'pending_setup' | 'disabled';
