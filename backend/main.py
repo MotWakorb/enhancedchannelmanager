@@ -1154,7 +1154,10 @@ async def get_channel_groups_with_streams():
                     # Record this group as having a channel with streams
                     channel_group_id = channel.get("channel_group")
 
-                    # Collect samples for debugging
+                    # Collect samples for debugging - dump first channel completely
+                    if len(sample_channel_groups) == 0:
+                        logger.info(f"First channel with streams (FULL DATA): {channel}")
+
                     if len(sample_channel_groups) < 5:
                         sample_channel_groups.append({
                             "channel_id": channel.get("id"),
