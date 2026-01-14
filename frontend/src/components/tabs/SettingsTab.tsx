@@ -68,6 +68,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
     total: number;
     current: number;
     status: string;
+    current_stream: string;
     percentage: number;
   } | null>(null);
 
@@ -1349,28 +1350,52 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
           )}
 
           {probeProgress && probeProgress.in_progress && (
-            <div style={{ marginTop: '1rem', padding: '1rem', backgroundColor: '#f5f5f5', borderRadius: '4px' }}>
+            <div style={{
+              marginTop: '1rem',
+              padding: '1rem',
+              backgroundColor: '#2c3e50',
+              color: '#ecf0f1',
+              borderRadius: '8px',
+              border: '2px solid #34495e'
+            }}>
               <div style={{ marginBottom: '0.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <span style={{ fontWeight: '500' }}>
-                  {probeProgress.status === 'fetching' && 'Fetching streams...'}
-                  {probeProgress.status === 'probing' && `Probing streams: ${probeProgress.current} / ${probeProgress.total}`}
-                  {probeProgress.status === 'completed' && 'Completed!'}
-                  {probeProgress.status === 'failed' && 'Failed'}
-                  {probeProgress.status === 'cancelled' && 'Cancelled'}
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontWeight: '600', fontSize: '14px', marginBottom: '4px' }}>
+                    {probeProgress.status === 'fetching' && 'Fetching channel streams...'}
+                    {probeProgress.status === 'probing' && `Probing: ${probeProgress.current} / ${probeProgress.total}`}
+                    {probeProgress.status === 'completed' && 'Completed!'}
+                    {probeProgress.status === 'failed' && 'Failed'}
+                    {probeProgress.status === 'cancelled' && 'Cancelled'}
+                  </div>
+                  {probeProgress.status === 'probing' && probeProgress.current_stream && (
+                    <div style={{
+                      fontSize: '12px',
+                      color: '#bdc3c7',
+                      whiteSpace: 'nowrap',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      maxWidth: '500px'
+                    }}>
+                      Currently testing: {probeProgress.current_stream}
+                    </div>
+                  )}
+                </div>
+                <span style={{ fontWeight: '700', fontSize: '16px', color: '#3498db', marginLeft: '1rem' }}>
+                  {probeProgress.percentage}%
                 </span>
-                <span style={{ fontWeight: '600', color: '#666' }}>{probeProgress.percentage}%</span>
               </div>
               <div style={{
                 width: '100%',
-                height: '8px',
-                backgroundColor: '#ddd',
-                borderRadius: '4px',
-                overflow: 'hidden'
+                height: '12px',
+                backgroundColor: '#34495e',
+                borderRadius: '6px',
+                overflow: 'hidden',
+                marginTop: '0.5rem'
               }}>
                 <div style={{
                   width: `${probeProgress.percentage}%`,
                   height: '100%',
-                  backgroundColor: '#4CAF50',
+                  background: 'linear-gradient(90deg, #3498db 0%, #2ecc71 100%)',
                   transition: 'width 0.3s ease',
                 }}></div>
               </div>
