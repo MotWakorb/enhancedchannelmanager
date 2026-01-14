@@ -682,8 +682,12 @@ class DispatcharrClient:
         page_size: int = 100,
         search: Optional[str] = None,
         epg_source: Optional[int] = None,
-    ) -> dict:
-        """Get paginated list of EPG data entries."""
+    ) -> list:
+        """Get list of EPG data entries.
+
+        Note: Dispatcharr changed from paginated dict to flat list response.
+        Pagination params are kept for backwards compatibility but may be ignored.
+        """
         params = {"page": page, "page_size": page_size}
         if search:
             params["search"] = search
@@ -692,7 +696,11 @@ class DispatcharrClient:
 
         response = await self._request("GET", "/api/epg/epgdata/", params=params)
         response.raise_for_status()
-        return response.json()
+        data = response.json()
+        # Handle both list and paginated dict responses for compatibility
+        if isinstance(data, list):
+            return data
+        return data.get("results", [])
 
     async def get_epg_data_by_id(self, data_id: int) -> dict:
         """Get a single EPG data entry by ID."""
