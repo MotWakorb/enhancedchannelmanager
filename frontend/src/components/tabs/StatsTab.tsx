@@ -826,6 +826,11 @@ export function StatsTab() {
                         {streamProfileName}
                       </span>
                     )}
+                    {channel.audio_codec && (
+                      <span className="audio-codec-badge" title={`Audio Codec: ${channel.audio_codec.toUpperCase()}`}>
+                        {channel.audio_codec.toUpperCase()}
+                      </span>
+                    )}
                     <span className={`channel-state ${channel.state?.toLowerCase() || ''}`}>
                       <span className="material-icons">
                         {channel.state === 'buffering' ? 'hourglass_empty' : 'play_arrow'}
