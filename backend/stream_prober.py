@@ -323,8 +323,13 @@ class StreamProber:
             bytes_downloaded = 0
             start_time = time.time()
 
-            # Stream download with timeout
-            timeout = httpx.Timeout(connect=10.0, read=BITRATE_SAMPLE_DURATION + 5.0)
+            # Stream download with timeout (all four parameters required by httpx.Timeout)
+            timeout = httpx.Timeout(
+                connect=10.0,
+                read=BITRATE_SAMPLE_DURATION + 5.0,
+                write=10.0,
+                pool=10.0
+            )
 
             async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
                 async with client.stream("GET", url) as response:
