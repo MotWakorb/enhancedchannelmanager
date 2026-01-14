@@ -1125,21 +1125,35 @@ async def get_channel_groups_with_streams():
     """
     client = get_client()
     try:
-        # Get all channel groups
+        # Get all channel groups first
         all_groups = await client.get_channel_groups()
+        logger.info(f"Found {len(all_groups)} total channel groups")
 
-        # Get all channels (paginated) to check which have streams
-        channels_with_streams = set()
+        # Build a map of group_id -> group info for easy lookup
+        group_map = {g["id"]: g for g in all_groups}
+
+        # Track which groups have channels with streams
+        groups_with_streams_ids = set()
+
+        # Fetch all channels and check which groups have channels with streams
         page = 1
+        total_channels = 0
+        channels_with_streams = 0
+
         while True:
             result = await client.get_channels(page=page, page_size=500)
             page_channels = result.get("results", [])
+            total_channels += len(page_channels)
 
             for channel in page_channels:
                 # Check if channel has any streams
                 stream_ids = channel.get("streams", [])
                 if stream_ids:  # Has at least one stream
-                    channels_with_streams.add(channel["id"])
+                    channels_with_streams += 1
+                    # Record this group as having a channel with streams
+                    channel_group_id = channel.get("channel_group")
+                    if channel_group_id:
+                        groups_with_streams_ids.add(channel_group_id)
 
             if not result.get("next"):
                 break
@@ -1147,46 +1161,23 @@ async def get_channel_groups_with_streams():
             if page > 50:  # Safety limit
                 break
 
-        logger.info(f"Found {len(channels_with_streams)} channels with streams")
+        logger.info(f"Scanned {total_channels} channels, found {channels_with_streams} with streams")
+        logger.info(f"Found {len(groups_with_streams_ids)} groups with channels containing streams")
 
-        # Now check which groups have these channels
+        # Build the result list
         groups_with_streams = []
-        for group in all_groups:
-            group_id = group["id"]
-            group_name = group["name"]
-
-            # Get all channels in this group (paginated)
-            try:
-                has_streams = False
-                group_page = 1
-                while True:
-                    group_channels_result = await client.get_channels(page=group_page, page_size=500, channel_group_id=group_id)
-                    group_channels = group_channels_result.get("results", [])
-
-                    # Check if any of these channels have streams
-                    if any(ch["id"] in channels_with_streams for ch in group_channels):
-                        has_streams = True
-                        break  # Found at least one channel with streams, no need to continue
-
-                    if not group_channels_result.get("next"):
-                        break
-                    group_page += 1
-                    if group_page > 50:  # Safety limit
-                        break
-
-                if has_streams:
-                    groups_with_streams.append({
-                        "id": group_id,
-                        "name": group_name
-                    })
-            except Exception as e:
-                logger.warning(f"Failed to check group {group_id} ({group_name}): {e}")
-                continue
+        for group_id in groups_with_streams_ids:
+            if group_id in group_map:
+                group = group_map[group_id]
+                groups_with_streams.append({
+                    "id": group["id"],
+                    "name": group["name"]
+                })
 
         # Sort by name for consistent display
         groups_with_streams.sort(key=lambda g: g["name"].lower())
 
-        logger.info(f"Found {len(groups_with_streams)} groups with streams out of {len(all_groups)} total")
+        logger.info(f"Returning {len(groups_with_streams)} groups with streams")
         return {
             "groups": groups_with_streams,
             "total_groups": len(all_groups)
