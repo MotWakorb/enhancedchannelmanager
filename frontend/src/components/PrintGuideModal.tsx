@@ -370,17 +370,28 @@ function generatePrintHtml(
       print-color-adjust: exact !important;
     }
 
+    html, body {
+      height: 100%;
+    }
+
     body {
       font-family: Arial, sans-serif;
+      background: #e0e0e0;
+      padding: 20px;
+    }
+
+    .page {
+      width: 10.2in;
+      height: 7.9in;
+      margin: 0 auto 20px auto;
+      padding: 0.3in 0.4in;
+      background: #fff;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.2);
       font-size: 6pt;
       line-height: 1.15;
       color: #000;
-      background: #fff;
-      column-count: 5;
-      column-gap: 10px;
-      column-fill: auto;
-      max-height: 7.9in;
-      overflow: visible;
+      overflow: hidden;
+      position: relative;
     }
 
     .header {
@@ -441,28 +452,61 @@ function generatePrintHtml(
       font-style: italic;
     }
 
+    .content {
+      column-count: 5;
+      column-gap: 10px;
+      column-fill: auto;
+      height: calc(100% - 45px);
+      overflow: hidden;
+    }
+
     .print-hint {
-      column-span: all;
       text-align: center;
       padding: 10px;
       background: #fff3cd;
       border: 1px solid #ffc107;
       border-radius: 4px;
-      margin-bottom: 10px;
+      margin-bottom: 20px;
       font-size: 10pt;
     }
 
-    @media screen {
-      body {
-        max-width: 11in;
-        height: 7.9in;
-        margin: 0 auto;
-        padding: 20px;
-        background: #f5f5f5;
-      }
+    .page-footer {
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      height: 15px;
+      text-align: right;
+      padding-right: 0.1in;
+      font-size: 7pt;
+      color: #666;
     }
 
     @media print {
+      body {
+        background: #fff;
+        padding: 0;
+      }
+
+      .page {
+        width: auto;
+        height: 7.9in;
+        margin: 0;
+        padding: 0.3in 0.4in;
+        box-shadow: none;
+        page-break-after: always;
+        position: relative;
+        overflow: hidden;
+      }
+
+      .page:last-child {
+        page-break-after: auto;
+      }
+
+      .content {
+        height: calc(100% - 45px);
+      }
+
       .print-hint {
         display: none;
       }
@@ -474,19 +518,156 @@ function generatePrintHtml(
     Print dialog will open automatically. If it doesn't, press Ctrl+P (Cmd+P on Mac).
   </div>
 
-  <div class="header">
-    <h1>${escapeHtml(title)}</h1>
-    <div class="subtitle">${totalChannels} channels</div>
+  <div id="pages-container">
+    <div class="page" id="page-1">
+      <div class="header">
+        <h1>${escapeHtml(title)}</h1>
+        <div class="subtitle">${totalChannels} channels</div>
+      </div>
+      <div class="content">
+        ${groupsHtml}
+      </div>
+    </div>
   </div>
-
-  ${groupsHtml}
 
   <script>
     window.addEventListener('load', function() {
       setTimeout(function() {
-        window.print();
-      }, 500);
+        handlePagination();
+        setTimeout(function() {
+          window.print();
+        }, 300);
+      }, 200);
     });
+
+    function handlePagination() {
+      const container = document.getElementById('pages-container');
+      const firstPage = document.getElementById('page-1');
+      const content = firstPage.querySelector('.content');
+      const groups = Array.from(content.querySelectorAll('.channel-group'));
+
+      if (groups.length === 0) {
+        addPageNumber(firstPage, 1);
+        return;
+      }
+
+      // Temporarily allow overflow to measure true content extent
+      content.style.overflow = 'visible';
+
+      // Get the content area width (what 5 columns should fit in)
+      const contentWidth = content.clientWidth;
+
+      // Find which groups overflow past the content boundary
+      let overflowStartIdx = -1;
+      for (let i = 0; i < groups.length; i++) {
+        const rect = groups[i].getBoundingClientRect();
+        const contentRect = content.getBoundingClientRect();
+        // Check if group starts beyond the right edge of where content should end
+        if (rect.left > contentRect.left + contentWidth - 5) {
+          overflowStartIdx = i;
+          break;
+        }
+      }
+
+      // Restore overflow hidden
+      content.style.overflow = 'hidden';
+
+      // No overflow - single page
+      if (overflowStartIdx === -1) {
+        addPageNumber(firstPage, 1);
+        return;
+      }
+
+      // Move overflow groups to new page(s)
+      const overflowGroups = groups.slice(overflowStartIdx);
+
+      const newPage = document.createElement('div');
+      newPage.className = 'page';
+      newPage.id = 'page-2';
+      newPage.innerHTML = '<div class="header" style="border-bottom: 1px solid #999;"><h1 style="font-size: 10pt;">${escapeHtml(title)} (continued)</h1></div><div class="content"></div>';
+      container.appendChild(newPage);
+
+      const newContent = newPage.querySelector('.content');
+      overflowGroups.forEach(function(g) {
+        newContent.appendChild(g);
+      });
+
+      addPageNumber(firstPage, 1);
+      addPageNumber(newPage, 2);
+
+      // Recursively handle overflow on new page
+      setTimeout(function() {
+        handlePageOverflow(newPage, container, 2);
+      }, 100);
+    }
+
+    function handlePageOverflow(page, container, currentTotal) {
+      const content = page.querySelector('.content');
+      const groups = Array.from(content.querySelectorAll('.channel-group'));
+
+      if (groups.length === 0) {
+        updatePageNumbers(container);
+        return;
+      }
+
+      content.style.overflow = 'visible';
+      const contentWidth = content.clientWidth;
+
+      let overflowStartIdx = -1;
+      for (let i = 0; i < groups.length; i++) {
+        const rect = groups[i].getBoundingClientRect();
+        const contentRect = content.getBoundingClientRect();
+        if (rect.left > contentRect.left + contentWidth - 5) {
+          overflowStartIdx = i;
+          break;
+        }
+      }
+
+      content.style.overflow = 'hidden';
+
+      if (overflowStartIdx === -1) {
+        updatePageNumbers(container);
+        return;
+      }
+
+      const overflowGroups = groups.slice(overflowStartIdx);
+      const newPageNum = currentTotal + 1;
+
+      const newPage = document.createElement('div');
+      newPage.className = 'page';
+      newPage.id = 'page-' + newPageNum;
+      newPage.innerHTML = '<div class="header" style="border-bottom: 1px solid #999;"><h1 style="font-size: 10pt;">${escapeHtml(title)} (continued)</h1></div><div class="content"></div>';
+      container.appendChild(newPage);
+
+      const newContent = newPage.querySelector('.content');
+      overflowGroups.forEach(function(g) {
+        newContent.appendChild(g);
+      });
+
+      addPageNumber(newPage, newPageNum);
+
+      setTimeout(function() {
+        handlePageOverflow(newPage, container, newPageNum);
+      }, 100);
+    }
+
+    function updatePageNumbers(container) {
+      const allPages = container.querySelectorAll('.page');
+      const total = allPages.length;
+      allPages.forEach(function(page, idx) {
+        const pageFooter = page.querySelector('.page-footer');
+        if (pageFooter) {
+          pageFooter.textContent = 'Page ' + (idx + 1) + ' of ' + total;
+        }
+      });
+    }
+
+    function addPageNumber(page, num) {
+      const pageFooter = document.createElement('div');
+      pageFooter.className = 'page-footer';
+      pageFooter.textContent = 'Page ' + num;
+      page.appendChild(pageFooter);
+    }
   </script>
 </body>
 </html>`;
