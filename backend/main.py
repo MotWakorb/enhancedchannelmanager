@@ -112,6 +112,7 @@ async def startup_event():
                 probe_enabled=settings.stream_probe_enabled,
                 schedule_time=settings.stream_probe_schedule_time,
                 user_timezone=settings.user_timezone,
+                probe_channel_groups=settings.probe_channel_groups,
             )
             logger.info(f"StreamProber instance created: {prober is not None}")
 
@@ -216,6 +217,7 @@ class SettingsRequest(BaseModel):
     stream_probe_batch_size: int = 10
     stream_probe_timeout: int = 30
     stream_probe_schedule_time: str = "03:00"  # HH:MM format, 24h
+    probe_channel_groups: list[str] = []  # Channel groups to probe
 
 
 class SettingsResponse(BaseModel):
@@ -249,6 +251,7 @@ class SettingsResponse(BaseModel):
     stream_probe_batch_size: int
     stream_probe_timeout: int
     stream_probe_schedule_time: str  # HH:MM format, 24h
+    probe_channel_groups: list[str]
 
 
 class TestConnectionRequest(BaseModel):
@@ -293,6 +296,7 @@ async def get_current_settings():
         stream_probe_batch_size=settings.stream_probe_batch_size,
         stream_probe_timeout=settings.stream_probe_timeout,
         stream_probe_schedule_time=settings.stream_probe_schedule_time,
+        probe_channel_groups=settings.probe_channel_groups,
     )
 
 
@@ -348,6 +352,7 @@ async def update_settings(request: SettingsRequest):
         stream_probe_batch_size=request.stream_probe_batch_size,
         stream_probe_timeout=request.stream_probe_timeout,
         stream_probe_schedule_time=request.stream_probe_schedule_time,
+        probe_channel_groups=request.probe_channel_groups,
     )
     save_settings(new_settings)
     clear_settings_cache()
@@ -400,7 +405,7 @@ async def test_connection(request: TestConnectionRequest):
 
 @app.post("/api/settings/restart-services")
 async def restart_services():
-    """Restart background services (bandwidth tracker) to apply new settings."""
+    """Restart background services (bandwidth tracker and stream prober) to apply new settings."""
     settings = get_settings()
 
     # Stop existing tracker
@@ -409,16 +414,39 @@ async def restart_services():
         await tracker.stop()
         logger.info("Stopped existing bandwidth tracker")
 
-    # Start new tracker with current settings
+    # Stop existing stream prober
+    prober = get_prober()
+    if prober:
+        await prober.stop()
+        logger.info("Stopped existing stream prober")
+
+    # Start new tracker and prober with current settings
     if settings.is_configured():
         try:
+            # Restart bandwidth tracker
             new_tracker = BandwidthTracker(get_client(), poll_interval=settings.stats_poll_interval)
             set_tracker(new_tracker)
             await new_tracker.start()
             logger.info(f"Restarted bandwidth tracker with {settings.stats_poll_interval}s poll interval, timezone: {settings.user_timezone or 'UTC'}")
+
+            # Restart stream prober
+            new_prober = StreamProber(
+                get_client(),
+                probe_timeout=settings.stream_probe_timeout,
+                probe_batch_size=settings.stream_probe_batch_size,
+                probe_interval_hours=settings.stream_probe_interval_hours,
+                probe_enabled=settings.stream_probe_enabled,
+                schedule_time=settings.stream_probe_schedule_time,
+                user_timezone=settings.user_timezone,
+                probe_channel_groups=settings.probe_channel_groups,
+            )
+            set_prober(new_prober)
+            await new_prober.start()
+            logger.info(f"Restarted stream prober with updated settings (groups: {len(settings.probe_channel_groups)} selected)")
+
             return {"success": True, "message": "Services restarted with new settings"}
         except Exception as e:
-            logger.error(f"Failed to restart bandwidth tracker: {e}")
+            logger.error(f"Failed to restart services: {e}")
             return {"success": False, "message": str(e)}
     else:
         return {"success": False, "message": "Settings not configured"}
@@ -1085,6 +1113,75 @@ async def get_orphaned_channel_groups():
         }
     except Exception as e:
         logger.error(f"Failed to find orphaned channel groups: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/channel-groups/with-streams")
+async def get_channel_groups_with_streams():
+    """Get all channel groups that have channels with streams.
+
+    Returns groups that have at least one channel containing at least one stream.
+    These are the groups that can be probed.
+    """
+    client = get_client()
+    try:
+        # Get all channel groups
+        all_groups = await client.get_channel_groups()
+
+        # Get all channels (paginated) to check which have streams
+        channels_with_streams = set()
+        page = 1
+        while True:
+            result = await client.get_channels(page=page, page_size=500)
+            page_channels = result.get("results", [])
+
+            for channel in page_channels:
+                # Check if channel has any streams
+                stream_ids = channel.get("streams", [])
+                if stream_ids:  # Has at least one stream
+                    channels_with_streams.add(channel["id"])
+
+            if not result.get("next"):
+                break
+            page += 1
+            if page > 50:  # Safety limit
+                break
+
+        logger.info(f"Found {len(channels_with_streams)} channels with streams")
+
+        # Now check which groups have these channels
+        groups_with_streams = []
+        for group in all_groups:
+            group_id = group["id"]
+            group_name = group["name"]
+
+            # Get channels in this group
+            try:
+                group_channels_result = await client.get_channels(page=1, page_size=1, channel_group_id=group_id)
+                group_channels = group_channels_result.get("results", [])
+
+                # Check if any of these channels have streams
+                has_streams = any(ch["id"] in channels_with_streams for ch in group_channels)
+
+                if has_streams:
+                    groups_with_streams.append({
+                        "id": group_id,
+                        "name": group_name
+                    })
+            except Exception as e:
+                logger.warning(f"Failed to check group {group_id} ({group_name}): {e}")
+                continue
+
+        # Sort by name for consistent display
+        groups_with_streams.sort(key=lambda g: g["name"].lower())
+
+        logger.info(f"Found {len(groups_with_streams)} groups with streams out of {len(all_groups)} total")
+        return {
+            "groups": groups_with_streams,
+            "total_groups": len(all_groups)
+        }
+    except Exception as e:
+        logger.error(f"Failed to get channel groups with streams: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

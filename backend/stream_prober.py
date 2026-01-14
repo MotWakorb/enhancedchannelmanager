@@ -41,6 +41,7 @@ class StreamProber:
         probe_enabled: bool = True,
         schedule_time: str = "03:00",  # HH:MM format, 24h
         user_timezone: str = "",  # IANA timezone name
+        probe_channel_groups: list[str] = None,  # List of group names to probe (empty/None = all groups)
     ):
         self.client = client
         self.probe_timeout = probe_timeout
@@ -49,6 +50,7 @@ class StreamProber:
         self.probe_enabled = probe_enabled
         self.schedule_time = schedule_time
         self.user_timezone = user_timezone
+        self.probe_channel_groups = probe_channel_groups or []
         self._task: Optional[asyncio.Task] = None
         self._running = False
         self._probing_in_progress = False
@@ -442,16 +444,37 @@ class StreamProber:
     async def _fetch_channel_stream_ids(self) -> tuple[set, dict]:
         """
         Fetch all unique stream IDs from channels (paginated).
+        Only fetches from selected groups if probe_channel_groups is set.
         Returns: (set of stream IDs, dict mapping stream_id -> list of channel names)
         """
         channel_stream_ids = set()
         stream_to_channels = {}  # stream_id -> list of channel names
+
+        # If specific groups are selected, fetch all groups first to filter
+        selected_group_ids = set()
+        if self.probe_channel_groups:
+            try:
+                all_groups = await self.client.get_channel_groups()
+                for group in all_groups:
+                    if group.get("name") in self.probe_channel_groups:
+                        selected_group_ids.add(group["id"])
+                logger.info(f"Filtering to {len(selected_group_ids)} selected groups: {self.probe_channel_groups}")
+            except Exception as e:
+                logger.error(f"Failed to fetch channel groups for filtering: {e}")
+                # Continue without filtering if we can't fetch groups
+
         page = 1
         while True:
             try:
                 result = await self.client.get_channels(page=page, page_size=500)
                 channels = result.get("results", [])
                 for channel in channels:
+                    # If groups are selected, filter by channel_group
+                    if selected_group_ids:
+                        channel_group_id = channel.get("channel_group")
+                        if channel_group_id not in selected_group_ids:
+                            continue  # Skip channels not in selected groups
+
                     channel_name = channel.get("name", f"Channel {channel.get('id', 'Unknown')}")
                     # Each channel has a "streams" field which is a list of stream IDs
                     stream_ids = channel.get("streams", [])

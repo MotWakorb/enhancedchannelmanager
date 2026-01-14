@@ -81,6 +81,8 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
     success_count: number;
     failed_count: number;
   } | null>(null);
+  const [availableChannelGroups, setAvailableChannelGroups] = useState<Array<{ id: number; name: string }>>([]);
+  const [probeChannelGroups, setProbeChannelGroups] = useState<string[]>([]);
 
   // Preserve settings not managed by this tab (to avoid overwriting them on save)
   const [linkedM3UAccounts, setLinkedM3UAccounts] = useState<number[][]>([]);
@@ -113,6 +115,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
   useEffect(() => {
     loadSettings();
     loadStreamCount();
+    loadAvailableChannelGroups();
   }, []);
 
   // Poll for probe all streams progress
@@ -170,6 +173,15 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
     }
   };
 
+  const loadAvailableChannelGroups = async () => {
+    try {
+      const result = await api.getChannelGroupsWithStreams();
+      setAvailableChannelGroups(result.groups);
+    } catch (err) {
+      logger.warn('Failed to load available channel groups', err);
+    }
+  };
+
   const loadSettings = async () => {
     try {
       const settings = await api.getSettings();
@@ -213,6 +225,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
       setStreamProbeBatchSize(settings.stream_probe_batch_size ?? 10);
       setStreamProbeTimeout(settings.stream_probe_timeout ?? 30);
       setStreamProbeScheduleTime(settings.stream_probe_schedule_time ?? '03:00');
+      setProbeChannelGroups(settings.probe_channel_groups ?? []);
       setNeedsRestart(false);
       setRestartResult(null);
       setTestResult(null);
@@ -304,6 +317,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
         stream_probe_batch_size: streamProbeBatchSize,
         stream_probe_timeout: streamProbeTimeout,
         stream_probe_schedule_time: streamProbeScheduleTime,
+        probe_channel_groups: probeChannelGroups,
       });
       // Apply frontend log level immediately
       const frontendLevel = frontendLogLevel === 'WARNING' ? 'WARN' : frontendLogLevel;
@@ -1357,6 +1371,37 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
                 style={{ width: '120px' }}
               />
               <span className="form-hint">Time of day to start scheduled probes (your local time)</span>
+            </div>
+
+            <div className="form-group">
+              <label>Channel groups to probe</label>
+              <p className="form-hint" style={{ marginTop: 0, marginBottom: '0.75rem' }}>
+                Select which channel groups to probe. Only groups with channels containing streams are shown.
+                Leave all unchecked to probe all groups with streams.
+                {availableChannelGroups.length === 0 && (
+                  <span className="form-hint-warning"> No groups with streams available.</span>
+                )}
+              </p>
+              {availableChannelGroups.length > 0 && (
+                <div className="profile-checkbox-list">
+                  {availableChannelGroups.map((group) => (
+                    <label key={group.id} className="profile-checkbox">
+                      <input
+                        type="checkbox"
+                        checked={probeChannelGroups.includes(group.name)}
+                        onChange={(e) => {
+                          if (e.target.checked) {
+                            setProbeChannelGroups([...probeChannelGroups, group.name]);
+                          } else {
+                            setProbeChannelGroups(probeChannelGroups.filter(name => name !== group.name));
+                          }
+                        }}
+                      />
+                      <span className="profile-checkbox-label">{group.name}</span>
+                    </label>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
         )}

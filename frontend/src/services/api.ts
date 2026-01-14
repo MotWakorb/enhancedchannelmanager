@@ -210,6 +210,13 @@ export async function restoreChannelGroup(id: number): Promise<void> {
   });
 }
 
+export async function getChannelGroupsWithStreams(): Promise<{
+  groups: Array<{ id: number; name: string }>;
+  total_groups: number;
+}> {
+  return fetchJson(`${API_BASE}/channel-groups/with-streams`);
+}
+
 // Streams
 export async function getStreams(params?: {
   page?: number;
@@ -446,6 +453,7 @@ export interface SettingsResponse {
   stream_probe_batch_size: number;  // Streams to probe per scheduled cycle
   stream_probe_timeout: number;  // Timeout in seconds for each probe
   stream_probe_schedule_time: string;  // Time of day to run probes (HH:MM, 24h format)
+  probe_channel_groups: string[];  // Channel group names to probe (empty = all groups)
 }
 
 export interface TestConnectionResult {
@@ -488,6 +496,7 @@ export async function saveSettings(settings: {
   stream_probe_batch_size?: number;  // Optional - streams per scheduled cycle, defaults to 10
   stream_probe_timeout?: number;  // Optional - timeout in seconds, defaults to 30
   stream_probe_schedule_time?: string;  // Optional - time of day for probes (HH:MM), defaults to "03:00"
+  probe_channel_groups?: string[];  // Optional - channel group names to probe, empty = all groups
 }): Promise<{ status: string; configured: boolean }> {
   return fetchJson(`${API_BASE}/settings`, {
     method: 'POST',
