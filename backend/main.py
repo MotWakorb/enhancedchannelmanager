@@ -1139,6 +1139,7 @@ async def get_channel_groups_with_streams():
         page = 1
         total_channels = 0
         channels_with_streams = 0
+        sample_channel_groups = []  # Track first 5 for debugging
 
         while True:
             result = await client.get_channels(page=page, page_size=500)
@@ -1152,7 +1153,19 @@ async def get_channel_groups_with_streams():
                     channels_with_streams += 1
                     # Record this group as having a channel with streams
                     channel_group_id = channel.get("channel_group")
-                    if channel_group_id:
+
+                    # Collect samples for debugging
+                    if len(sample_channel_groups) < 5:
+                        sample_channel_groups.append({
+                            "channel_id": channel.get("id"),
+                            "channel_name": channel.get("name"),
+                            "channel_group_id": channel_group_id,
+                            "channel_group_type": type(channel_group_id).__name__,
+                            "stream_count": len(stream_ids)
+                        })
+
+                    # IMPORTANT: Check for not None instead of truthy to handle group ID 0
+                    if channel_group_id is not None:
                         groups_with_streams_ids.add(channel_group_id)
 
             if not result.get("next"):
@@ -1161,11 +1174,18 @@ async def get_channel_groups_with_streams():
             if page > 50:  # Safety limit
                 break
 
+        # Log samples for debugging
+        if sample_channel_groups:
+            logger.info(f"Sample channels with streams (first 5): {sample_channel_groups}")
+
         logger.info(f"Scanned {total_channels} channels, found {channels_with_streams} with streams")
         logger.info(f"Found {len(groups_with_streams_ids)} groups with channels containing streams")
+        logger.info(f"Group IDs found: {sorted(list(groups_with_streams_ids))}")
+        logger.info(f"Group IDs in group_map: {sorted(list(group_map.keys()))}")
 
         # Build the result list
         groups_with_streams = []
+        not_in_map = []
         for group_id in groups_with_streams_ids:
             if group_id in group_map:
                 group = group_map[group_id]
@@ -1173,6 +1193,11 @@ async def get_channel_groups_with_streams():
                     "id": group["id"],
                     "name": group["name"]
                 })
+            else:
+                not_in_map.append(group_id)
+
+        if not_in_map:
+            logger.warning(f"Found {len(not_in_map)} group IDs in channels but not in group_map: {not_in_map}")
 
         # Sort by name for consistent display
         groups_with_streams.sort(key=lambda g: g["name"].lower())
