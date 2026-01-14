@@ -1672,12 +1672,14 @@ export async function probeBulkStreams(streamIds: number[]): Promise<import('../
 /**
  * Start background probe of all streams.
  */
-export async function probeAllStreams(): Promise<{ status: string; message: string }> {
-  console.log('[Probe] probeAllStreams called');
+export async function probeAllStreams(channelGroups?: string[]): Promise<{ status: string; message: string }> {
+  console.log('[Probe] probeAllStreams called with groups:', channelGroups);
 
   try {
     const result = await fetchJson(`${API_BASE}/stream-stats/probe/all`, {
       method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ channel_groups: channelGroups || [] }),
     }) as { status: string; message: string };
     console.log('[Probe] probeAllStreams request succeeded:', result);
     return result;
