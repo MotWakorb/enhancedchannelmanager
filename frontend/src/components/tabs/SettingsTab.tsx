@@ -120,6 +120,15 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
     loadAvailableChannelGroups();
   }, []);
 
+  // Auto-populate probe channel groups with all groups if empty (default to all checked)
+  useEffect(() => {
+    if (availableChannelGroups.length > 0 && probeChannelGroups.length === 0) {
+      // If no groups are selected, default to all groups
+      const allGroupNames = availableChannelGroups.map(g => g.name);
+      setProbeChannelGroups(allGroupNames);
+    }
+  }, [availableChannelGroups, probeChannelGroups.length]);
+
   // Poll for probe all streams progress
   useEffect(() => {
     if (!probingAll) {
@@ -1389,14 +1398,14 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
                 style={{ marginTop: '0.5rem' }}
               >
                 <span className="material-icons">filter_list</span>
-                {probeChannelGroups.length === 0
-                  ? 'All groups'
-                  : `${probeChannelGroups.length} group${probeChannelGroups.length !== 1 ? 's' : ''} selected`}
+                {probeChannelGroups.length === availableChannelGroups.length
+                  ? `All ${availableChannelGroups.length} group${availableChannelGroups.length !== 1 ? 's' : ''}`
+                  : `${probeChannelGroups.length} of ${availableChannelGroups.length} group${availableChannelGroups.length !== 1 ? 's' : ''}`}
               </button>
               <span className="form-hint" style={{ display: 'block', marginTop: '0.5rem' }}>
                 {availableChannelGroups.length === 0
                   ? 'No groups with streams available.'
-                  : 'Click to select which groups to probe. Leave all unchecked to probe all groups.'}
+                  : 'Select which groups to probe. All groups are selected by default.'}
               </span>
             </div>
           </div>
@@ -1681,9 +1690,31 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
             </div>
 
             <div className="modal-body" style={{ maxHeight: '400px', overflowY: 'auto' }}>
-              <p className="form-hint" style={{ marginTop: 0, marginBottom: '1rem' }}>
-                Select which channel groups to probe. Leave all unchecked to probe all groups with streams.
-              </p>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+                <p className="form-hint" style={{ margin: 0 }}>
+                  Select which channel groups to probe. Uncheck groups to exclude them from probing.
+                </p>
+                {availableChannelGroups.length > 0 && (
+                  <div style={{ display: 'flex', gap: '0.5rem' }}>
+                    <button
+                      type="button"
+                      className="btn-secondary"
+                      style={{ padding: '0.3rem 0.6rem', fontSize: '0.85rem' }}
+                      onClick={() => setTempProbeChannelGroups(availableChannelGroups.map(g => g.name))}
+                    >
+                      Select All
+                    </button>
+                    <button
+                      type="button"
+                      className="btn-secondary"
+                      style={{ padding: '0.3rem 0.6rem', fontSize: '0.85rem' }}
+                      onClick={() => setTempProbeChannelGroups([])}
+                    >
+                      Deselect All
+                    </button>
+                  </div>
+                )}
+              </div>
 
               {availableChannelGroups.length === 0 ? (
                 <div style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>
