@@ -273,11 +273,14 @@ export function GuideTab({
     }
   }, [groupFilterMode, channels, selectedProfile]);
 
-  // Update current time every minute for now-playing highlights
+  // Update current time every 5 minutes for now-playing highlights (pauses when tab hidden)
   useEffect(() => {
     const interval = setInterval(() => {
-      setCurrentTime(new Date());
-    }, 60000); // Update every minute
+      // Only update if tab is visible to avoid CPU waste
+      if (document.visibilityState === 'visible') {
+        setCurrentTime(new Date());
+      }
+    }, 300000); // Update every 5 minutes (was 1 minute)
     return () => clearInterval(interval);
   }, []);
 

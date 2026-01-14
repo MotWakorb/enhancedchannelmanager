@@ -11,6 +11,8 @@ import * as api from './services/api';
 import type { Channel, ChannelGroup, ChannelProfile, Stream, M3UAccount, M3UGroupSetting, Logo, ChangeInfo, EPGData, StreamProfile, EPGSource, ChannelListFilterSettings, CommitProgress } from './types';
 import packageJson from '../package.json';
 import { logger } from './utils/logger';
+import { registerVLCModalCallback, downloadM3U } from './utils/vlc';
+import { VLCProtocolHelperModal } from './components/VLCProtocolHelperModal';
 import ECMLogo from './assets/ECMLogo.png';
 import './App.css';
 
@@ -74,6 +76,11 @@ function App() {
   const [showStreamUrls, setShowStreamUrls] = useState(true);
   const [hideUngroupedStreams, setHideUngroupedStreams] = useState(true);
   const [epgAutoMatchThreshold, setEpgAutoMatchThreshold] = useState(80);
+  // @ts-ignore - vlcOpenBehavior is used via window.__vlcSettings in useEffect
+  const [vlcOpenBehavior, setVlcOpenBehavior] = useState<'protocol_only' | 'm3u_fallback' | 'm3u_only'>('m3u_fallback');
+  const [showVLCHelperModal, setShowVLCHelperModal] = useState(false);
+  const [vlcModalStreamUrl, setVlcModalStreamUrl] = useState('');
+  const [vlcModalStreamName, setVlcModalStreamName] = useState('');
   const [channelDefaults, setChannelDefaults] = useState({
     includeChannelNumberInName: false,
     channelNumberSeparator: '-',
@@ -353,6 +360,10 @@ function App() {
         setShowStreamUrls(settings.show_stream_urls);
         setHideUngroupedStreams(settings.hide_ungrouped_streams);
         setEpgAutoMatchThreshold(settings.epg_auto_match_threshold ?? 80);
+        const vlcBehavior = (settings.vlc_open_behavior as 'protocol_only' | 'm3u_fallback' | 'm3u_only') || 'm3u_fallback';
+        setVlcOpenBehavior(vlcBehavior);
+        // Store VLC settings globally for vlc utility to access
+        (window as any).__vlcSettings = { behavior: vlcBehavior };
         setChannelDefaults({
           includeChannelNumberInName: settings.include_channel_number_in_name,
           channelNumberSeparator: settings.channel_number_separator,
@@ -420,6 +431,16 @@ function App() {
       }
     };
     init();
+  }, []);
+
+  // Register VLC modal callback
+  useEffect(() => {
+    const unregister = registerVLCModalCallback((url, name) => {
+      setVlcModalStreamUrl(url);
+      setVlcModalStreamName(name || '');
+      setShowVLCHelperModal(true);
+    });
+    return unregister;
   }, []);
 
   // Auto-select channel groups that have channels when data first loads
@@ -502,6 +523,25 @@ function App() {
       setChannelGroupFilter(prev => prev.filter(id => !autoSyncRelatedGroups.has(id)));
     }
   }, [channelListFilters.showAutoChannelGroups, providerGroupSettings, channels]);
+
+  // Clean up channelGroupFilter when groups are deleted
+  useEffect(() => {
+    const existingGroupIds = new Set(channelGroups.map(g => g.id));
+
+    setChannelGroupFilter(prev => {
+      if (prev.length === 0) return prev;
+
+      const hasDeletedGroups = prev.some(id => !existingGroupIds.has(id));
+
+      // If some group IDs no longer exist, remove them from the filter
+      if (hasDeletedGroups) {
+        const validGroupIds = prev.filter(id => existingGroupIds.has(id));
+        return validGroupIds;
+      }
+
+      return prev;
+    });
+  }, [channelGroups]);
 
   const handleSettingsSaved = async () => {
     setError(null);
@@ -607,7 +647,7 @@ function App() {
     setNewlyCreatedGroupIds((prev) => new Set([...prev, groupId]));
   }, []);
 
-  const loadChannels = async () => {
+  const loadChannels = async (signal?: AbortSignal) => {
     setChannelsLoading(true);
     try {
       // Fetch all pages of channels
@@ -620,6 +660,7 @@ function App() {
           page,
           pageSize: 500,
           search: channelSearch || undefined,
+          signal,
         });
         allChannels.push(...response.results);
         hasMore = response.next !== null;
@@ -628,7 +669,10 @@ function App() {
 
       setChannels(allChannels);
     } catch (err) {
-      logger.error('Failed to load channels:', err);
+      // Don't log errors for aborted requests
+      if (err instanceof Error && err.name !== 'AbortError') {
+        logger.error('Failed to load channels:', err);
+      }
     } finally {
       setChannelsLoading(false);
     }
@@ -711,7 +755,7 @@ function App() {
     }
   };
 
-  const loadStreams = async (bypassCache: boolean = false) => {
+  const loadStreams = async (bypassCache: boolean = false, signal?: AbortSignal) => {
     setStreamsLoading(true);
     try {
       // Fetch all pages of streams (like channels)
@@ -727,6 +771,7 @@ function App() {
           m3uAccount: streamProviderFilter ?? undefined,
           channelGroup: streamGroupFilter ?? undefined,
           bypassCache,
+          signal,
         });
         allStreams.push(...response.results);
         hasMore = response.next !== null;
@@ -735,7 +780,10 @@ function App() {
 
       setStreams(allStreams);
     } catch (err) {
-      logger.error('Failed to load streams:', err);
+      // Don't log errors for aborted requests
+      if (err instanceof Error && err.name !== 'AbortError') {
+        logger.error('Failed to load streams:', err);
+      }
     } finally {
       setStreamsLoading(false);
     }
@@ -748,18 +796,26 @@ function App() {
 
   // Reload channels when search changes
   useEffect(() => {
+    const abortController = new AbortController();
     const timer = setTimeout(() => {
-      loadChannels();
-    }, 300); // Debounce
-    return () => clearTimeout(timer);
+      loadChannels(abortController.signal);
+    }, 500); // Debounce: 500ms for less frequent API requests
+    return () => {
+      clearTimeout(timer);
+      abortController.abort(); // Cancel in-flight request when search changes
+    };
   }, [channelSearch]);
 
   // Reload streams when filters change
   useEffect(() => {
+    const abortController = new AbortController();
     const timer = setTimeout(() => {
-      loadStreams();
-    }, 300); // Debounce
-    return () => clearTimeout(timer);
+      loadStreams(false, abortController.signal);
+    }, 500); // Debounce: 500ms for less frequent API requests
+    return () => {
+      clearTimeout(timer);
+      abortController.abort(); // Cancel in-flight request when filters change
+    };
   }, [streamSearch, streamProviderFilter, streamGroupFilter]);
 
   // Initialize baseline when channels first load
@@ -1312,9 +1368,14 @@ function App() {
 
   // Handle stream group drop on channels pane (triggers bulk create modal in streams pane)
   // Supports multiple groups being dropped at once
-  const handleStreamGroupDrop = useCallback((groupNames: string[], _streamIds: number[]) => {
+  // Now includes optional target group and suggested starting number for positional drops
+  const handleStreamGroupDrop = useCallback((groupNames: string[], _streamIds: number[], _targetGroupId?: number, suggestedStartingNumber?: number) => {
     // Set the dropped group names - StreamsPane will react to this and open the modal
     setDroppedStreamGroupNames(groupNames);
+    // If a suggested starting number was provided, use it
+    if (suggestedStartingNumber !== undefined) {
+      setDroppedStreamStartingNumber(suggestedStartingNumber);
+    }
   }, []);
 
   // Handle bulk streams drop on channels pane (triggers bulk create modal for specific streams)
@@ -1721,6 +1782,13 @@ function App() {
           <span className="version">v{packageJson.version}</span>
         </div>
       </footer>
+
+      <VLCProtocolHelperModal
+        isOpen={showVLCHelperModal}
+        onClose={() => setShowVLCHelperModal(false)}
+        onDownloadM3U={() => downloadM3U(vlcModalStreamUrl, vlcModalStreamName)}
+        streamName={vlcModalStreamName || 'Stream'}
+      />
     </div>
   );
 }

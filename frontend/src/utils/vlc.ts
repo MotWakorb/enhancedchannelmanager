@@ -1,16 +1,50 @@
 /**
  * Utility for opening streams in VLC media player.
- * Tries vlc:// protocol first, falls back to downloading an .m3u file.
+ * Behavior depends on user settings: protocol_only, m3u_fallback, or m3u_only.
  */
+
+export type VLCOpenBehavior = 'protocol_only' | 'm3u_fallback' | 'm3u_only';
+
+// Store modal trigger callbacks
+type ModalCallback = (url: string, name?: string) => void;
+let modalCallbacks: ModalCallback[] = [];
+
+/**
+ * Register a callback to show the VLC protocol helper modal.
+ * Components should register their modal trigger when mounted.
+ */
+export function registerVLCModalCallback(callback: ModalCallback): () => void {
+  modalCallbacks.push(callback);
+  // Return unregister function
+  return () => {
+    modalCallbacks = modalCallbacks.filter(cb => cb !== callback);
+  };
+}
+
+/**
+ * Gets VLC open behavior from settings (stored in global state or defaults to m3u_fallback).
+ */
+function getVLCBehavior(): VLCOpenBehavior {
+  // Get from window global if App.tsx has set it
+  const globalSettings = (window as any).__vlcSettings;
+  return globalSettings?.behavior || 'm3u_fallback';
+}
 
 /**
  * Attempts to open a stream URL in VLC.
- * First tries the vlc:// protocol handler, then falls back to downloading an .m3u file.
+ * Behavior depends on user settings loaded from global state.
  *
  * @param url - The stream URL to open
  * @param name - Optional name for the stream (used in m3u fallback)
  */
 export function openInVLC(url: string, name?: string): void {
+  const behavior = getVLCBehavior();
+
+  // If m3u_only, skip protocol and download M3U directly
+  if (behavior === 'm3u_only') {
+    downloadM3U(url, name);
+    return;
+  }
   // Try vlc:// protocol first
   const vlcUrl = `vlc://${url}`;
 
@@ -41,8 +75,16 @@ export function openInVLC(url: string, name?: string): void {
     document.body.removeChild(iframe);
 
     if (!protocolWorked) {
-      // Fall back to downloading an m3u file
-      downloadM3U(url, name);
+      // Protocol failed - handle based on behavior mode
+      if (behavior === 'protocol_only') {
+        // Show helper modal via registered callbacks
+        if (modalCallbacks.length > 0) {
+          modalCallbacks[0](url, name);
+        }
+      } else {
+        // m3u_fallback: download M3U file
+        downloadM3U(url, name);
+      }
     }
   }, 500);
 }

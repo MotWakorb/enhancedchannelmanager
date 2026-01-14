@@ -1,9 +1,13 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import type { Stream, M3UAccount, ChannelGroup, ChannelProfile } from '../types';
-import { useSelection } from '../hooks';
+import { useSelection, useExpandCollapse } from '../hooks';
 import { normalizeStreamName, detectRegionalVariants, filterStreamsByTimezone, detectCountryPrefixes, getUniqueCountryPrefixes, detectNetworkPrefixes, detectNetworkSuffixes, type TimezonePreference, type NormalizeOptions, type NumberSeparator, type PrefixOrder } from '../services/api';
 import { naturalCompare } from '../utils/naturalSort';
 import { openInVLC } from '../utils/vlc';
+import { useCopyFeedback } from '../hooks/useCopyFeedback';
+import { useDropdown } from '../hooks/useDropdown';
+import { useContextMenu } from '../hooks/useContextMenu';
+import { useKeyboardShortcuts } from '../hooks/useKeyboardShortcuts';
 import './StreamsPane.css';
 
 interface StreamGroup {
@@ -125,10 +129,20 @@ export function StreamsPane({
   onRefreshStreams,
   mappedStreamIds,
 }: StreamsPaneProps) {
-  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
+  // Expand/collapse groups with useExpandCollapse hook
+  const {
+    expandedIds: expandedGroups,
+    isExpanded: isGroupExpanded,
+    toggleExpand: toggleGroup,
+    expandAll: expandAllGroupsInternal,
+    collapseAll: collapseAllGroups,
+  } = useExpandCollapse<string>();
 
   // Hide mapped streams toggle state
   const [hideMappedStreams, setHideMappedStreams] = useState(false);
+
+  // Copy feedback state
+  const { copySuccess, copyError, handleCopy } = useCopyFeedback();
 
   // Filter out mapped streams if toggle is enabled
   const filteredStreams = useMemo(() => {
@@ -138,9 +152,9 @@ export function StreamsPane({
     return streams.filter(stream => !mappedStreamIds.has(stream.id));
   }, [streams, hideMappedStreams, mappedStreamIds]);
 
-  // Compute streams in display order (grouped and sorted alphabetically)
-  // This must be computed before useSelection so shift-click works correctly
-  const displayOrderStreams = useMemo((): Stream[] => {
+  // Shared memoized grouping logic to avoid duplication
+  // Groups and sorts streams, then returns sorted entries
+  const sortedStreamGroups = useMemo((): [string, Stream[]][] => {
     const groups = new Map<string, Stream[]>();
 
     // Group streams by channel_group_name
@@ -157,23 +171,26 @@ export function StreamsPane({
       groupStreams.sort((a, b) => naturalCompare(a.name, b.name));
     });
 
-    // Sort groups alphabetically with natural sort (Ungrouped at end) and flatten
+    // Convert to sorted array of [name, streams] tuples
     // Filter out Ungrouped if hideUngroupedStreams is true
-    const sortedGroupNames = Array.from(groups.keys())
-      .filter((name) => !hideUngroupedStreams || name !== 'Ungrouped')
-      .sort((a, b) => {
+    return Array.from(groups.entries())
+      .filter(([name]) => !hideUngroupedStreams || name !== 'Ungrouped')
+      .sort(([a], [b]) => {
         if (a === 'Ungrouped') return 1;
         if (b === 'Ungrouped') return -1;
         return naturalCompare(a, b);
       });
+  }, [filteredStreams, hideUngroupedStreams]);
 
-    // Flatten to single array in display order
+  // Compute streams in display order (flattened array for selection)
+  // This must be computed before useSelection so shift-click works correctly
+  const displayOrderStreams = useMemo((): Stream[] => {
     const result: Stream[] = [];
-    for (const groupName of sortedGroupNames) {
-      result.push(...groups.get(groupName)!);
+    for (const [, groupStreams] of sortedStreamGroups) {
+      result.push(...groupStreams);
     }
     return result;
-  }, [filteredStreams, hideUngroupedStreams]);
+  }, [sortedStreamGroups]);
 
   // Use display order for selection so shift-click works correctly
   const {
@@ -219,46 +236,48 @@ export function StreamsPane({
   const [bulkCreateStripSuffix, setBulkCreateStripSuffix] = useState(false);
   const [bulkCreateSelectedProfiles, setBulkCreateSelectedProfiles] = useState<Set<number>>(new Set());
   const [bulkCreateGroupSearch, setBulkCreateGroupSearch] = useState('');
-  const [bulkCreateGroupDropdownOpen, setBulkCreateGroupDropdownOpen] = useState(false);
-  const bulkCreateGroupDropdownRef = useRef<HTMLDivElement>(null);
   const [profilesExpanded, setProfilesExpanded] = useState(false);
+
+  // Bulk create group dropdown management
+  const {
+    isOpen: bulkCreateGroupDropdownOpen,
+    setIsOpen: setBulkCreateGroupDropdownOpen,
+    dropdownRef: bulkCreateGroupDropdownRef,
+  } = useDropdown();
   const [namingOptionsExpanded, setNamingOptionsExpanded] = useState(false);
   const [channelGroupExpanded, setChannelGroupExpanded] = useState(false);
   const [timezoneExpanded, setTimezoneExpanded] = useState(false);
 
-  // Context menu state
-  const [contextMenu, setContextMenu] = useState<{
-    visible: boolean;
-    x: number;
-    y: number;
-    streamIds: number[];
-  } | null>(null);
+  // Context menu management
+  const {
+    contextMenu,
+    showContextMenu,
+    hideContextMenu,
+  } = useContextMenu<{ streamIds: number[] }>();
 
   // Dropdown state
-  const [providerDropdownOpen, setProviderDropdownOpen] = useState(false);
-  const [groupDropdownOpen, setGroupDropdownOpen] = useState(false);
   const [groupSearchFilter, setGroupSearchFilter] = useState('');
-  const providerDropdownRef = useRef<HTMLDivElement>(null);
-  const groupDropdownRef = useRef<HTMLDivElement>(null);
   const groupSearchInputRef = useRef<HTMLInputElement>(null);
 
-  // Close dropdowns when clicking outside
+  // Provider and group dropdown management
+  const {
+    isOpen: providerDropdownOpen,
+    setIsOpen: setProviderDropdownOpen,
+    dropdownRef: providerDropdownRef,
+  } = useDropdown();
+
+  const {
+    isOpen: groupDropdownOpen,
+    setIsOpen: setGroupDropdownOpen,
+    dropdownRef: groupDropdownRef,
+  } = useDropdown();
+
+  // Clear group search filter when group dropdown closes
   useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-      if (providerDropdownRef.current && !providerDropdownRef.current.contains(event.target as Node)) {
-        setProviderDropdownOpen(false);
-      }
-      if (groupDropdownRef.current && !groupDropdownRef.current.contains(event.target as Node)) {
-        setGroupDropdownOpen(false);
-        setGroupSearchFilter('');
-      }
-      if (bulkCreateGroupDropdownRef.current && !bulkCreateGroupDropdownRef.current.contains(event.target as Node)) {
-        setBulkCreateGroupDropdownOpen(false);
-      }
-    };
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, []);
+    if (!groupDropdownOpen) {
+      setGroupSearchFilter('');
+    }
+  }, [groupDropdownOpen]);
 
   // Focus search input when group dropdown opens
   useEffect(() => {
@@ -272,63 +291,19 @@ export function StreamsPane({
   const useMultiSelectGroups = !!onSelectedStreamGroupsChange;
 
   // Group and sort streams
+  // Convert sorted stream groups to StreamGroup objects with expanded state
   const groupedStreams = useMemo((): StreamGroup[] => {
-    const groups = new Map<string, Stream[]>();
+    return sortedStreamGroups.map(([name, groupStreams]) => ({
+      name,
+      streams: groupStreams,
+      expanded: isGroupExpanded(name),
+    }));
+  }, [sortedStreamGroups, isGroupExpanded]);
 
-    // Group streams by channel_group_name (use filteredStreams to respect hide mapped toggle)
-    filteredStreams.forEach((stream) => {
-      const groupName = stream.channel_group_name || 'Ungrouped';
-      if (!groups.has(groupName)) {
-        groups.set(groupName, []);
-      }
-      groups.get(groupName)!.push(stream);
-    });
-
-    // Sort streams within each group alphabetically with natural sort
-    groups.forEach((groupStreams) => {
-      groupStreams.sort((a, b) => naturalCompare(a.name, b.name));
-    });
-
-    // Convert to array and sort groups alphabetically with natural sort (Ungrouped at end)
-    const sortedGroups = Array.from(groups.entries())
-      // Filter out Ungrouped if hideUngroupedStreams is true
-      .filter(([name]) => !hideUngroupedStreams || name !== 'Ungrouped')
-      .sort(([a], [b]) => {
-        if (a === 'Ungrouped') return 1;
-        if (b === 'Ungrouped') return -1;
-        return naturalCompare(a, b);
-      })
-      .map(([name, groupStreams]) => ({
-        name,
-        streams: groupStreams,
-        expanded: expandedGroups.has(name),
-      }));
-
-    return sortedGroups;
-  }, [filteredStreams, expandedGroups, hideUngroupedStreams]);
-
-
-  const toggleGroup = useCallback((groupName: string) => {
-    setExpandedGroups((prev) => {
-      const next = new Set(prev);
-      if (next.has(groupName)) {
-        next.delete(groupName);
-      } else {
-        next.add(groupName);
-      }
-      return next;
-    });
-  }, []);
-
-  // Expand all groups
+  // Expand all groups (wrapper to pass group names)
   const expandAllGroups = useCallback(() => {
-    setExpandedGroups(new Set(groupedStreams.map(g => g.name)));
-  }, [groupedStreams]);
-
-  // Collapse all groups
-  const collapseAllGroups = useCallback(() => {
-    setExpandedGroups(new Set());
-  }, []);
+    expandAllGroupsInternal(groupedStreams.map(g => g.name));
+  }, [groupedStreams, expandAllGroupsInternal]);
 
   // Check if all groups are expanded or collapsed
   const allExpanded = groupedStreams.length > 0 && expandedGroups.size === groupedStreams.length;
@@ -347,45 +322,14 @@ export function StreamsPane({
     }
   }, [isEditMode, clearSelection]);
 
-  // Keyboard shortcuts
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      // Ctrl/Cmd+A to select all
-      if ((e.ctrlKey || e.metaKey) && e.key === 'a') {
-        const activeElement = document.activeElement;
-        if (activeElement?.tagName !== 'INPUT' && activeElement?.tagName !== 'TEXTAREA') {
-          e.preventDefault();
-          selectAll();
-        }
-      }
-      // Escape to clear selection or close context menu
-      if (e.key === 'Escape') {
-        if (contextMenu) {
-          setContextMenu(null);
-        } else {
-          clearSelection();
-        }
-      }
-    };
+  // Keyboard shortcuts management
+  useKeyboardShortcuts({
+    onSelectAll: selectAll,
+    onClearSelection: clearSelection,
+    contextMenu,
+    onCloseContextMenu: hideContextMenu,
+  });
 
-    document.addEventListener('keydown', handleKeyDown);
-    return () => document.removeEventListener('keydown', handleKeyDown);
-  }, [selectAll, clearSelection, contextMenu]);
-
-  // Close context menu when clicking outside
-  useEffect(() => {
-    if (!contextMenu) return;
-
-    const handleClickOutside = (e: MouseEvent) => {
-      const target = e.target as HTMLElement;
-      if (!target.closest('.streams-context-menu') && !target.closest('.streams-context-submenu')) {
-        setContextMenu(null);
-      }
-    };
-
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, [contextMenu]);
 
   const handleDragStart = useCallback(
     (e: React.DragEvent, stream: Stream) => {
@@ -594,7 +538,7 @@ export function StreamsPane({
   }, []);
 
   // Context menu handlers
-  const closeContextMenu = useCallback(() => setContextMenu(null), []);
+  const closeContextMenu = useCallback(() => hideContextMenu(), [hideContextMenu]);
 
   const handleContextMenu = useCallback((stream: Stream, e: React.MouseEvent) => {
     e.preventDefault();
@@ -611,25 +555,20 @@ export function StreamsPane({
       streamIds = Array.from(selectedIds);
     }
 
-    setContextMenu({
-      visible: true,
-      x: e.clientX,
-      y: e.clientY,
-      streamIds,
-    });
+    showContextMenu(e.clientX, e.clientY, { streamIds });
   }, [isEditMode, isSelected, clearSelection, toggleSelect, selectedIds]);
 
   // Handler for "Create channel(s) in existing group" from context menu
   const handleCreateInGroup = useCallback((groupId: number) => {
     if (!contextMenu) return;
-    openBulkCreateModalForStreamIds(contextMenu.streamIds, groupId);
+    openBulkCreateModalForStreamIds(contextMenu.metadata.streamIds, groupId);
     closeContextMenu();
   }, [contextMenu, openBulkCreateModalForStreamIds, closeContextMenu]);
 
   // Handler for "Create channel(s) in new group" from context menu
   const handleCreateInNewGroup = useCallback(() => {
     if (!contextMenu) return;
-    const streamsList = streams.filter(s => contextMenu.streamIds.includes(s.id));
+    const streamsList = streams.filter(s => contextMenu.metadata.streamIds.includes(s.id));
     setBulkCreateGroup(null);
     setBulkCreateGroups([]);
     setBulkCreateStreams(streamsList);
@@ -666,12 +605,7 @@ export function StreamsPane({
     // Get all stream IDs in this group
     const streamIds = group.streams.map(s => s.id);
 
-    setContextMenu({
-      visible: true,
-      x: e.clientX,
-      y: e.clientY,
-      streamIds,
-    });
+    showContextMenu(e.clientX, e.clientY, { streamIds });
   }, [isEditMode]);
 
   // Toggle group selection (select/deselect all streams in group)
@@ -1120,8 +1054,27 @@ export function StreamsPane({
     doBulkCreate,
   ]);
 
+  // Handle copying stream URL to clipboard
+  const handleCopyStreamUrl = async (url: string, streamName: string) => {
+    await handleCopy(url, `stream URL for "${streamName}"`);
+  };
+
   return (
     <div className="streams-pane">
+      {/* Copy feedback notifications */}
+      {copySuccess && (
+        <div className="copy-feedback copy-success">
+          <span className="material-icons">check_circle</span>
+          {copySuccess}
+        </div>
+      )}
+      {copyError && (
+        <div className="copy-feedback copy-error">
+          <span className="material-icons">error</span>
+          {copyError}
+        </div>
+      )}
+
       <div className="pane-header">
         <h2>
           Streams
@@ -1567,7 +1520,7 @@ export function StreamsPane({
                                 className="copy-url-btn"
                                 onClick={(e) => {
                                   e.stopPropagation();
-                                  navigator.clipboard.writeText(stream.url!);
+                                  handleCopyStreamUrl(stream.url!, stream.name);
                                 }}
                                 title="Copy stream URL"
                               >

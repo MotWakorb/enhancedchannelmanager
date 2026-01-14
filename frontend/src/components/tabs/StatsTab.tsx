@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import type { ChannelStatsResponse, SystemEvent, BandwidthSummary, M3UAccount, ChannelWatchStats, TopWatchedSortBy } from '../../types';
 import * as api from '../../services/api';
 import { logger } from '../../utils/logger';
@@ -31,10 +31,10 @@ const MAX_HISTORY_POINTS = 60;
 // Refresh interval options (in seconds)
 const REFRESH_OPTIONS = [
   { value: 0, label: 'Manual' },
-  { value: 2, label: '2s' },
-  { value: 5, label: '5s' },
   { value: 10, label: '10s' },
   { value: 30, label: '30s' },
+  { value: 60, label: '1m' },
+  { value: 300, label: '5m' },
 ];
 
 // Format duration from seconds or duration string to HH:MM:SS
@@ -285,7 +285,7 @@ export function StatsTab() {
   const [refreshing, setRefreshing] = useState(false);
 
   // Auto-refresh state
-  const [refreshInterval, setRefreshInterval] = useState(5); // Default 5 seconds
+  const [refreshInterval, setRefreshInterval] = useState(30); // Default 30 seconds (was 5s - too aggressive)
   const refreshTimerRef = useRef<number | null>(null);
   const lastRefreshRef = useRef<Date>(new Date());
 
@@ -536,7 +536,7 @@ export function StatsTab() {
     loadLookups();
   }, [loadAllChannels, loadStreamProfiles, loadM3UAccounts, fetchData]);
 
-  // Auto-refresh timer
+  // Auto-refresh timer (pauses when tab/window is not visible)
   useEffect(() => {
     if (refreshTimerRef.current) {
       clearInterval(refreshTimerRef.current);
@@ -546,8 +546,13 @@ export function StatsTab() {
     if (refreshInterval > 0) {
       logger.debug(`Stats Tab: Auto-refresh enabled (${refreshInterval}s interval)`);
       refreshTimerRef.current = window.setInterval(() => {
-        logger.debug(`Stats Tab: Auto-refresh triggered (${refreshInterval}s interval)`);
-        fetchData(false);
+        // Only refresh if tab is visible to avoid CPU waste
+        if (document.visibilityState === 'visible') {
+          logger.debug(`Stats Tab: Auto-refresh triggered (${refreshInterval}s interval)`);
+          fetchData(false);
+        } else {
+          logger.debug(`Stats Tab: Auto-refresh skipped (tab not visible)`);
+        }
       }, refreshInterval * 1000);
     } else {
       logger.debug('Stats Tab: Auto-refresh disabled (manual mode)');
@@ -558,6 +563,23 @@ export function StatsTab() {
         clearInterval(refreshTimerRef.current);
       }
     };
+  }, [refreshInterval, fetchData]);
+
+  // Refresh when tab becomes visible again (if user was away)
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible' && refreshInterval > 0) {
+        const secondsSinceLastRefresh = (Date.now() - lastRefreshRef.current.getTime()) / 1000;
+        // If it's been longer than the refresh interval, fetch immediately
+        if (secondsSinceLastRefresh >= refreshInterval) {
+          logger.debug('Stats Tab: Tab became visible, refreshing stale data');
+          fetchData(false);
+        }
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
   }, [refreshInterval, fetchData]);
 
   // Handle stop channel
@@ -645,6 +667,12 @@ export function StatsTab() {
       </div>
     );
   }
+
+  // Memoize bandwidth chart data preparation to avoid recalculating on every render
+  const bandwidthChartData = useMemo(() => {
+    if (!bandwidthStats?.daily_history) return [];
+    return prepareBandwidthChartData(bandwidthStats.daily_history);
+  }, [bandwidthStats?.daily_history]);
 
   return (
     <div className="stats-tab">
@@ -1155,7 +1183,8 @@ export function StatsTab() {
               </div>
             </div>
             {(() => {
-              const chartData = prepareBandwidthChartData(bandwidthStats.daily_history || []);
+              // Use memoized bandwidth chart data
+              const chartData = bandwidthChartData;
               // Find max for scaling - ensure we have a reasonable minimum
               const maxBytes = Math.max(...chartData.map(d => d.bytes), 1024);
 

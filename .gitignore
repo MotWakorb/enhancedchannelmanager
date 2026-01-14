@@ -25,6 +25,9 @@ frontend/dist/
 .DS_Store
 Thumbs.db
 
+# Claude Code temp files
+tmpclaude-*-cwd
+
 # Build
 backend/static/
 *.egg-info/

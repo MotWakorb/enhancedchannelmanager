@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, memo, useCallback } from 'react';
 import {
   DndContext,
   DragOverlay,
@@ -32,7 +32,10 @@ import { EditChannelModal, type ChannelMetadataChanges } from './EditChannelModa
 import { NormalizeNamesModal } from './NormalizeNamesModal';
 import { naturalCompare } from '../utils/naturalSort';
 import { openInVLC } from '../utils/vlc';
-import { copyToClipboard } from '../utils/clipboard';
+import { useCopyFeedback } from '../hooks/useCopyFeedback';
+import { useDropdown } from '../hooks/useDropdown';
+import { useContextMenu } from '../hooks/useContextMenu';
+import { useModal } from '../hooks/useModal';
 import './ChannelsPane.css';
 
 interface ChannelsPaneProps {
@@ -113,7 +116,8 @@ interface ChannelsPaneProps {
   // Dispatcharr URL for constructing channel stream URLs
   dispatcharrUrl?: string;
   // Stream group drop callback (for bulk channel creation) - supports multiple groups
-  onStreamGroupDrop?: (groupNames: string[], streamIds: number[]) => void;
+  // Now includes optional target group ID and suggested starting number for positional drops
+  onStreamGroupDrop?: (groupNames: string[], streamIds: number[], targetGroupId?: number, suggestedStartingNumber?: number) => void;
   // Bulk streams drop callback (for opening bulk create modal when dropping multiple streams)
   // Includes target group ID and starting channel number for pre-filling the modal
   onBulkStreamsDrop?: (streamIds: number[], groupId: number | null, startingNumber: number) => void;
@@ -175,7 +179,7 @@ interface SortableStreamItemProps {
   showStreamUrls?: boolean;
 }
 
-function SortableStreamItem({ stream, providerName, isEditMode, onRemove, onCopyUrl, showStreamUrls = true }: SortableStreamItemProps) {
+const SortableStreamItem = memo(function SortableStreamItem({ stream, providerName, isEditMode, onRemove, onCopyUrl, showStreamUrls = true }: SortableStreamItemProps) {
   const {
     attributes,
     listeners,
@@ -257,9 +261,9 @@ function SortableStreamItem({ stream, providerName, isEditMode, onRemove, onCopy
       )}
     </div>
   );
-}
+});
 
-function SortableChannel({
+const SortableChannel = memo(function SortableChannel({
   channel,
   isSelected,
   isMultiSelected,
@@ -490,14 +494,14 @@ function SortableChannel({
       )}
     </div>
   );
-}
+});
 
 // Sortable Group Header wrapper for drag-and-drop group reordering
 interface SortableGroupHeaderProps extends Omit<DroppableGroupHeaderProps, 'groupId'> {
   groupId: number | 'ungrouped';
 }
 
-function SortableGroupHeader(props: SortableGroupHeaderProps) {
+const SortableGroupHeader = memo(function SortableGroupHeader(props: SortableGroupHeaderProps) {
   const { groupId, isEditMode } = props;
 
   // Don't make ungrouped sortable
@@ -529,7 +533,7 @@ function SortableGroupHeader(props: SortableGroupHeaderProps) {
       />
     </div>
   );
-}
+});
 
 // Droppable Group Header component for cross-group channel dragging
 interface DroppableGroupHeaderProps {
@@ -552,7 +556,7 @@ interface DroppableGroupHeaderProps {
   dragHandleProps?: any;
 }
 
-function DroppableGroupHeader({
+const DroppableGroupHeader = memo(function DroppableGroupHeader({
   groupId,
   groupName,
   channelCount,
@@ -714,7 +718,7 @@ function DroppableGroupHeader({
       )}
     </div>
   );
-}
+});
 
 // Droppable zone at the end of a group (for dropping below the last channel)
 interface DroppableGroupEndProps {
@@ -723,7 +727,7 @@ interface DroppableGroupEndProps {
   showDropIndicator: boolean;
 }
 
-function DroppableGroupEnd({
+const DroppableGroupEnd = memo(function DroppableGroupEnd({
   groupId,
   isEditMode,
   showDropIndicator,
@@ -746,7 +750,7 @@ function DroppableGroupEnd({
       )}
     </div>
   );
-}
+});
 
 export function ChannelsPane({
   channelGroups,
@@ -843,18 +847,25 @@ export function ChannelsPane({
   const [groupOrder, setGroupOrder] = useState<number[]>([]); // Custom order for groups
   const [dragOverChannelId, setDragOverChannelId] = useState<number | null>(null);
   const [localChannels, setLocalChannels] = useState<Channel[]>(channels);
-  const [groupDropdownOpen, setGroupDropdownOpen] = useState(false);
   const [groupFilterSearch, setGroupFilterSearch] = useState('');
-  const [filterSettingsOpen, setFilterSettingsOpen] = useState(false);
-  const dropdownRef = useRef<HTMLDivElement>(null);
   const groupFilterSearchRef = useRef<HTMLInputElement>(null);
-  const filterSettingsRef = useRef<HTMLDivElement>(null);
 
-  // Create channel modal state
-  const [showCreateModal, setShowCreateModal] = useState(false);
+  // Dropdown management with useDropdown hook
+  const {
+    isOpen: groupDropdownOpen,
+    setIsOpen: setGroupDropdownOpen,
+    dropdownRef,
+  } = useDropdown();
 
-  // Channel profiles modal state
-  const [showProfilesModal, setShowProfilesModal] = useState(false);
+  const {
+    isOpen: filterSettingsOpen,
+    setIsOpen: setFilterSettingsOpen,
+    dropdownRef: filterSettingsRef,
+  } = useDropdown();
+
+  // Modal management with useModal hook
+  const createModal = useModal();
+  const profilesModal = useModal();
   const [newChannelName, setNewChannelName] = useState('');
   const [newChannelNumber, setNewChannelNumber] = useState('');
   const [newChannelGroup, setNewChannelGroup] = useState<number | ''>('');
@@ -872,7 +883,7 @@ export function ChannelsPane({
   const [groupSearchText, setGroupSearchText] = useState('');
   const [showGroupDropdown, setShowGroupDropdown] = useState(false);
   const [creating, setCreating] = useState(false);
-  const [showConflictDialog, setShowConflictDialog] = useState(false);
+  const conflictDialog = useModal();
   const [conflictingChannelNumber, setConflictingChannelNumber] = useState<number | null>(null);
   const groupInputRef = useRef<HTMLInputElement>(null);
   const groupDropdownListRef = useRef<HTMLDivElement>(null);
@@ -890,58 +901,58 @@ export function ChannelsPane({
   const [streamsLoading, setStreamsLoading] = useState(false);
 
   // Delete channel state
-  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const deleteConfirmModal = useModal();
   const [channelToDelete, setChannelToDelete] = useState<Channel | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [renumberAfterDelete, setRenumberAfterDelete] = useState(true);
   const [subsequentChannels, setSubsequentChannels] = useState<Channel[]>([]);
 
   // Edit channel modal state
-  const [showEditChannelModal, setShowEditChannelModal] = useState(false);
+  const editChannelModal = useModal();
   const [channelToEdit, setChannelToEdit] = useState<Channel | null>(null);
 
   // Copy to clipboard feedback state
-  const [copySuccess, setCopySuccess] = useState<string | null>(null);
-  const [copyError, setCopyError] = useState<string | null>(null);
+  const { copySuccess, copyError, handleCopy } = useCopyFeedback();
 
   // Stream group drop state (for bulk channel creation)
   const [streamGroupDragOver, setStreamGroupDragOver] = useState(false);
+  // Track which group drop zone is being hovered (for positional drops)
+  const [streamGroupDropTarget, setStreamGroupDropTarget] = useState<{ afterGroupId: number | 'ungrouped' | null } | null>(null);
 
   // Create channel group modal state
-  const [showCreateGroupModal, setShowCreateGroupModal] = useState(false);
+  const createGroupModal = useModal();
   const [newGroupName, setNewGroupName] = useState('');
   const [creatingGroup, setCreatingGroup] = useState(false);
 
   // Delete group state
-  const [showDeleteGroupConfirm, setShowDeleteGroupConfirm] = useState(false);
+  const deleteGroupConfirmModal = useModal();
   const [groupToDelete, setGroupToDelete] = useState<ChannelGroup | null>(null);
   const [deletingGroup, setDeletingGroup] = useState(false);
   const [deleteGroupChannels, setDeleteGroupChannels] = useState(false);
 
   // Bulk delete channels state
-  const [showBulkDeleteConfirm, setShowBulkDeleteConfirm] = useState(false);
+  const bulkDeleteConfirmModal = useModal();
   const [bulkDeleting, setBulkDeleting] = useState(false);
   const [deleteEmptyGroups, setDeleteEmptyGroups] = useState(true); // Default to true since user is deleting all channels in group
 
   // Bulk EPG assignment modal state
-  const [showBulkEPGModal, setShowBulkEPGModal] = useState(false);
+  const bulkEPGModal = useModal();
 
   // Bulk LCN fetch modal state
-  const [showBulkLCNModal, setShowBulkLCNModal] = useState(false);
+  const bulkLCNModal = useModal();
 
   // Normalize names modal state
-  const [showNormalizeModal, setShowNormalizeModal] = useState(false);
+  const normalizeModal = useModal();
 
-  // Context menu state
-  const [contextMenu, setContextMenu] = useState<{
-    visible: boolean;
-    x: number;
-    y: number;
-    channelIds: number[];
-  } | null>(null);
+  // Context menu management
+  const {
+    contextMenu,
+    showContextMenu,
+    hideContextMenu,
+  } = useContextMenu<{ channelIds: number[] }>();
 
   // Cross-group move modal state
-  const [showCrossGroupMoveModal, setShowCrossGroupMoveModal] = useState(false);
+  const crossGroupMoveModal = useModal();
   const [crossGroupMoveData, setCrossGroupMoveData] = useState<{
     channels: Channel[];  // Changed from single channel to array
     targetGroupId: number | null;
@@ -962,7 +973,7 @@ export function ChannelsPane({
   const [selectedNumberingOption, setSelectedNumberingOption] = useState<'keep' | 'suggested' | 'custom'>('suggested');
 
   // Sort and Renumber modal state
-  const [showSortRenumberModal, setShowSortRenumberModal] = useState(false);
+  const sortRenumberModal = useModal();
   const [sortRenumberData, setSortRenumberData] = useState<{
     groupId: number | 'ungrouped';
     groupName: string;
@@ -974,12 +985,12 @@ export function ChannelsPane({
   const [sortIgnoreCountry, setSortIgnoreCountry] = useState<boolean>(false);
 
   // Mass Renumber modal state
-  const [showMassRenumberModal, setShowMassRenumberModal] = useState(false);
+  const massRenumberModal = useModal();
   const [massRenumberStartingNumber, setMassRenumberStartingNumber] = useState<string>('');
   const [massRenumberChannels, setMassRenumberChannels] = useState<Channel[]>([]);
 
   // Hidden groups state
-  const [showHiddenGroupsModal, setShowHiddenGroupsModal] = useState(false);
+  const hiddenGroupsModal = useModal();
   const [hiddenGroups, setHiddenGroups] = useState<{ id: number; name: string; hidden_at: string }[]>([]);
 
   // Drag overlay state
@@ -1023,26 +1034,18 @@ export function ChannelsPane({
     // When actively dragging, don't sync to preserve drag state
   }, [channels, isEditMode, activeDragId]);
 
-  // Close dropdowns when clicking outside
+  // Clear group filter search when dropdown closes
   useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
-        setGroupDropdownOpen(false);
-        setGroupFilterSearch('');
-      }
-      if (filterSettingsRef.current && !filterSettingsRef.current.contains(event.target as Node)) {
-        setFilterSettingsOpen(false);
-      }
-    };
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, []);
+    if (!groupDropdownOpen) {
+      setGroupFilterSearch('');
+    }
+  }, [groupDropdownOpen]);
 
   // Handle external trigger to open edit modal from Guide tab
   useEffect(() => {
     if (externalChannelToEdit) {
       setChannelToEdit(externalChannelToEdit);
-      setShowEditChannelModal(true);
+      editChannelModal.open();
       onExternalChannelEditHandled?.();
     }
   }, [externalChannelToEdit, onExternalChannelEditHandled]);
@@ -1063,32 +1066,13 @@ export function ChannelsPane({
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  // Close context menu when clicking outside or pressing escape
-  useEffect(() => {
-    const handleClickOutside = () => {
-      if (contextMenu) {
-        setContextMenu(null);
-      }
-    };
-    const handleEscape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape' && contextMenu) {
-        setContextMenu(null);
-      }
-    };
-    if (contextMenu) {
-      document.addEventListener('mousedown', handleClickOutside);
-      document.addEventListener('keydown', handleEscape);
-      return () => {
-        document.removeEventListener('mousedown', handleClickOutside);
-        document.removeEventListener('keydown', handleEscape);
-      };
-    }
-  }, [contextMenu]);
 
   // Filter channel groups based on search text (for create modal dropdown)
-  const searchFilteredChannelGroups = channelGroups.filter((group) =>
-    group.name.toLowerCase().includes(groupSearchText.toLowerCase())
-  );
+  const searchFilteredChannelGroups = useMemo(() => {
+    return channelGroups.filter((group) =>
+      group.name.toLowerCase().includes(groupSearchText.toLowerCase())
+    );
+  }, [channelGroups, groupSearchText]);
 
   // Load streams when a channel is selected
   useEffect(() => {
@@ -1206,20 +1190,10 @@ export function ChannelsPane({
       if (onToggleChannelSelection) {
         onToggleChannelSelection(channel.id, false);
       }
-      setContextMenu({
-        visible: true,
-        x: e.clientX,
-        y: e.clientY,
-        channelIds: [channel.id],
-      });
+      showContextMenu(e.clientX, e.clientY, { channelIds: [channel.id] });
     } else {
       // Use all selected channels
-      setContextMenu({
-        visible: true,
-        x: e.clientX,
-        y: e.clientY,
-        channelIds: Array.from(selectedChannelIds),
-      });
+      showContextMenu(e.clientX, e.clientY, { channelIds: Array.from(selectedChannelIds) });
     }
   };
 
@@ -1227,7 +1201,7 @@ export function ChannelsPane({
     if (!contextMenu) return;
 
     const channelsToMove = localChannels
-      .filter(ch => contextMenu.channelIds.includes(ch.id))
+      .filter(ch => contextMenu.metadata.channelIds.includes(ch.id))
       .sort((a, b) => naturalCompare(a.name, b.name));
     if (channelsToMove.length === 0) return;
 
@@ -1303,14 +1277,14 @@ export function ChannelsPane({
       sourceGroupHasGaps,
       sourceGroupMinChannel,
     });
-    setShowCrossGroupMoveModal(true);
-    setContextMenu(null);
+    crossGroupMoveModal.open();
+    hideContextMenu();
   };
 
   const handleCreateGroupAndMove = () => {
     if (!contextMenu) return;
-    setContextMenu(null);
-    setShowCreateGroupModal(true);
+    hideContextMenu();
+    createGroupModal.open();
     setNewGroupName('');
   };
 
@@ -1327,46 +1301,17 @@ export function ChannelsPane({
 
     if (selectedInGroup.length === 0) return;
 
-    setContextMenu({
-      visible: true,
-      x: e.clientX,
-      y: e.clientY,
-      channelIds: selectedInGroup,
-    });
+    showContextMenu(e.clientX, e.clientY, { channelIds: selectedInGroup });
   };
 
   // Handle copying channel URL to clipboard
   const handleCopyChannelUrl = async (url: string, channelName: string) => {
-    const success = await copyToClipboard(url, `channel URL for "${channelName}"`);
-
-    if (success) {
-      setCopySuccess(`Copied channel URL for "${channelName}"`);
-      setCopyError(null);
-      // Clear success message after 3 seconds
-      setTimeout(() => setCopySuccess(null), 3000);
-    } else {
-      setCopyError('Failed to copy to clipboard. Please check browser permissions and try again.');
-      setCopySuccess(null);
-      // Clear error message after 5 seconds
-      setTimeout(() => setCopyError(null), 5000);
-    }
+    await handleCopy(url, `channel URL for "${channelName}"`);
   };
 
   // Handle copying stream URL to clipboard
   const handleCopyStreamUrl = async (url: string, streamName: string) => {
-    const success = await copyToClipboard(url, `stream URL for "${streamName}"`);
-
-    if (success) {
-      setCopySuccess(`Copied stream URL for "${streamName}"`);
-      setCopyError(null);
-      // Clear success message after 3 seconds
-      setTimeout(() => setCopySuccess(null), 3000);
-    } else {
-      setCopyError('Failed to copy to clipboard. Please check browser permissions and try again.');
-      setCopySuccess(null);
-      // Clear error message after 5 seconds
-      setTimeout(() => setCopyError(null), 5000);
-    }
+    await handleCopy(url, `stream URL for "${streamName}"`);
   };
 
   // Handle removing a stream from the selected channel
@@ -1425,13 +1370,13 @@ export function ChannelsPane({
       setRenumberAfterDelete(false);
     }
 
-    setShowDeleteConfirm(true);
+    deleteConfirmModal.open();
   };
 
   // Handle opening edit channel modal
   const handleEditChannel = (channel: Channel) => {
     setChannelToEdit(channel);
-    setShowEditChannelModal(true);
+    editChannelModal.open();
   };
 
   // Helper to get logo URL for a channel
@@ -1500,7 +1445,7 @@ export function ChannelsPane({
       if (selectedChannelId === channelToDelete.id) {
         onChannelSelect(null);
       }
-      setShowDeleteConfirm(false);
+      deleteConfirmModal.close();
       setChannelToDelete(null);
       setSubsequentChannels([]);
     } catch (err) {
@@ -1512,7 +1457,7 @@ export function ChannelsPane({
 
   // Handle canceling channel deletion
   const handleCancelDelete = () => {
-    setShowDeleteConfirm(false);
+    deleteConfirmModal.close();
     setChannelToDelete(null);
     setSubsequentChannels([]);
     setRenumberAfterDelete(true);
@@ -1521,7 +1466,7 @@ export function ChannelsPane({
   // Handle initiating group deletion
   const handleDeleteGroupClick = (group: ChannelGroup) => {
     setGroupToDelete(group);
-    setShowDeleteGroupConfirm(true);
+    deleteGroupConfirmModal.open();
   };
 
   // Handle confirming group deletion
@@ -1566,7 +1511,7 @@ export function ChannelsPane({
         }
       }
 
-      setShowDeleteGroupConfirm(false);
+      deleteGroupConfirmModal.close();
       setGroupToDelete(null);
       setDeleteGroupChannels(false);
     } catch (err) {
@@ -1578,7 +1523,7 @@ export function ChannelsPane({
 
   // Handle canceling group deletion
   const handleCancelDeleteGroup = () => {
-    setShowDeleteGroupConfirm(false);
+    deleteGroupConfirmModal.close();
     setGroupToDelete(null);
     setDeleteGroupChannels(false);
   };
@@ -1586,7 +1531,7 @@ export function ChannelsPane({
   // Handle bulk delete channels
   const handleBulkDeleteClick = () => {
     if (selectedChannelIds.size === 0) return;
-    setShowBulkDeleteConfirm(true);
+    bulkDeleteConfirmModal.open();
   };
 
   const handleConfirmBulkDelete = async () => {
@@ -1654,7 +1599,7 @@ export function ChannelsPane({
         onChannelSelect(null);
       }
 
-      setShowBulkDeleteConfirm(false);
+      bulkDeleteConfirmModal.close();
     } catch (err) {
       console.error('Failed to bulk delete channels:', err);
     } finally {
@@ -1663,7 +1608,7 @@ export function ChannelsPane({
   };
 
   const handleCancelBulkDelete = () => {
-    setShowBulkDeleteConfirm(false);
+    bulkDeleteConfirmModal.close();
   };
 
   // Handle bulk EPG assignment
@@ -1684,7 +1629,7 @@ export function ChannelsPane({
     onEndBatch();
 
     // Close modal and clear selection
-    setShowBulkEPGModal(false);
+    bulkEPGModal.close();
     if (onClearChannelSelection) {
       onClearChannelSelection();
     }
@@ -1707,7 +1652,7 @@ export function ChannelsPane({
     onEndBatch();
 
     // Close modal and clear selection
-    setShowBulkLCNModal(false);
+    bulkLCNModal.close();
     if (onClearChannelSelection) {
       onClearChannelSelection();
     }
@@ -1729,7 +1674,7 @@ export function ChannelsPane({
       onEndBatch();
     }
 
-    setShowNormalizeModal(false);
+    normalizeModal.close();
     if (onClearChannelSelection) {
       onClearChannelSelection();
     }
@@ -1771,7 +1716,7 @@ export function ChannelsPane({
 
   // Close the create group modal and reset form state
   const handleCloseCreateGroupModal = () => {
-    setShowCreateGroupModal(false);
+    createGroupModal.close();
     setNewGroupName('');
   };
 
@@ -1824,7 +1769,7 @@ export function ChannelsPane({
             sourceGroupHasGaps: false,
             sourceGroupMinChannel: null,
           });
-          setShowCrossGroupMoveModal(true);
+          crossGroupMoveModal.open();
         }
       }
 
@@ -1838,8 +1783,8 @@ export function ChannelsPane({
 
   // Close the create modal and reset form state
   const handleCloseCreateModal = () => {
-    setShowCreateModal(false);
-    setShowConflictDialog(false);
+    createModal.close();
+    conflictDialog.close();
     setConflictingChannelNumber(null);
     setNewChannelName('');
     setNewChannelNumber('');
@@ -1879,7 +1824,7 @@ export function ChannelsPane({
 
   // Open hidden groups modal and load the list
   const handleShowHiddenGroups = () => {
-    setShowHiddenGroupsModal(true);
+    hiddenGroupsModal.open();
     loadHiddenGroups();
   };
 
@@ -1898,6 +1843,51 @@ export function ChannelsPane({
 
     // Find the max channel number in the group and add 1
     const maxNumber = Math.max(...groupChannels.map((ch) => ch.channel_number ?? 0));
+    return maxNumber + 1;
+  };
+
+  // Get the suggested starting number based on the group that would precede the drop location
+  // This is used for smart channel number inference when dropping stream groups between/after channel groups
+  const getSuggestedStartingNumberAfterGroup = (precedingGroupId: number | 'ungrouped' | null): number => {
+    const sourceChannels = isEditMode ? localChannels : channels;
+
+    if (precedingGroupId === null) {
+      // Dropped at the very beginning - suggest starting at 1
+      return 1;
+    }
+
+    // Get all channels from the preceding group
+    const precedingGroupChannels = precedingGroupId === 'ungrouped'
+      ? sourceChannels.filter((ch) => ch.channel_group_id === null)
+      : sourceChannels.filter((ch) => ch.channel_group_id === precedingGroupId);
+
+    if (precedingGroupChannels.length === 0) {
+      // Empty preceding group - find the highest number before this point
+      // Get all groups in order and find the preceding group's position
+      const groupIndex = filteredChannelGroups.findIndex(g =>
+        precedingGroupId === 'ungrouped' ? false : g.id === precedingGroupId
+      );
+
+      if (groupIndex <= 0) {
+        return 1;
+      }
+
+      // Look at all channels in groups before this one
+      const precedingGroupIds = filteredChannelGroups.slice(0, groupIndex).map(g => g.id);
+      const channelsBeforeThisGroup = sourceChannels.filter(ch =>
+        ch.channel_group_id !== null && precedingGroupIds.includes(ch.channel_group_id)
+      );
+
+      if (channelsBeforeThisGroup.length === 0) {
+        return 1;
+      }
+
+      const maxBeforeNumber = Math.max(...channelsBeforeThisGroup.map((ch) => ch.channel_number ?? 0));
+      return maxBeforeNumber + 1;
+    }
+
+    // Find the max channel number in the preceding group and suggest next number
+    const maxNumber = Math.max(...precedingGroupChannels.map((ch) => ch.channel_number ?? 0));
     return maxNumber + 1;
   };
 
@@ -1983,7 +1973,7 @@ export function ChannelsPane({
     setNewChannelNamingExpanded(false);
 
     // Open the create modal
-    setShowCreateModal(true);
+    createModal.open();
   };
 
   // Handle stream dropped between channels - creates new channel at specific position
@@ -2062,7 +2052,7 @@ export function ChannelsPane({
     setNewChannelNamingExpanded(false);
 
     // Open the create modal
-    setShowCreateModal(true);
+    createModal.open();
   };
 
   // Handle creating a new channel - checks for conflicts first
@@ -2075,7 +2065,7 @@ export function ChannelsPane({
     // Check if this channel number already exists
     if (channelNumberExists(channelNum)) {
       setConflictingChannelNumber(channelNum);
-      setShowConflictDialog(true);
+      conflictDialog.open();
       return;
     }
 
@@ -2152,7 +2142,7 @@ export function ChannelsPane({
     if (conflictingChannelNumber === null) return;
 
     setCreating(true);
-    setShowConflictDialog(false);
+    conflictDialog.close();
 
     try {
       // Get channels that need to be shifted (>= the conflicting number)
@@ -2204,7 +2194,7 @@ export function ChannelsPane({
 
   // Handle conflict resolution: add to end of group
   const handleConflictAddToEnd = async () => {
-    setShowConflictDialog(false);
+    conflictDialog.close();
     const endNumber = getNextChannelNumberForGroup(newChannelGroup);
     await createChannelWithNumber(endNumber);
   };
@@ -2223,7 +2213,8 @@ export function ChannelsPane({
 
   // Helper function to compute auto-rename for a channel number change
   // Returns the new name if auto-rename should apply, undefined otherwise
-  const computeAutoRename = (
+  // Memoized with useCallback to avoid recreating regex functions on every render
+  const computeAutoRename = useCallback((
     channelName: string,
     _oldNumber: number | null,
     newNumber: number | null
@@ -2278,11 +2269,12 @@ export function ChannelsPane({
     }
 
     return undefined;
-  };
+  }, [autoRenameChannelNumber]);
 
   // Helper function to strip leading/trailing/middle channel numbers from a name for sorting purposes
   // Matches same patterns as computeAutoRename: "123 | Name", "123-Name", "US | 5034 - Name", "Name | 123"
-  const getNameForSorting = (channelName: string): string => {
+  // Memoized with useCallback - no dependencies as it's a pure function
+  const getNameForSorting = useCallback((channelName: string): string => {
     // Try stripping mid-position number first: "US | 5034 - Name" -> "US - Name"
     const midMatch = channelName.match(/^([A-Za-z].+?\s*\|\s*)\d+(?:\.\d+)?\s*([-:]\s*.+)$/);
     if (midMatch) {
@@ -2303,12 +2295,12 @@ export function ChannelsPane({
 
     // No number prefix/suffix found, return as-is
     return channelName;
-  };
+  }, []);
 
   // Helper function to strip country prefix from channel name for sorting
   // Common patterns: "US | Name", "UK: Name", "CA - Name", "AU Name"
   // Country codes are typically 2-3 uppercase letters at the start
-  const stripCountryPrefix = (channelName: string): string => {
+  const stripCountryPrefix = useCallback((channelName: string): string => {
     // Match country code (2-3 uppercase letters) followed by separator and the rest
     // Supports: "US | Name", "UK: Name", "CA - Name", "USA | Name", etc.
     const match = channelName.match(/^[A-Z]{2,3}\s*[|:\-]\s*(.+)$/);
@@ -2321,7 +2313,7 @@ export function ChannelsPane({
       return noSepMatch[1].trim();
     }
     return channelName;
-  };
+  }, []);
 
   // Handle editing channel number
   const handleStartEditNumber = (e: React.MouseEvent, channel: Channel) => {
@@ -2486,6 +2478,21 @@ export function ChannelsPane({
   const handlePaneDrop = (e: React.DragEvent) => {
     setStreamGroupDragOver(false);
 
+    // Determine drop target and suggested number
+    let targetGroupId: number | undefined;
+    let suggestedStartingNumber: number | undefined;
+
+    if (streamGroupDropTarget) {
+      // Calculate based on the drop zone that was hovered
+      const precedingGroupId = streamGroupDropTarget.afterGroupId;
+      suggestedStartingNumber = getSuggestedStartingNumberAfterGroup(precedingGroupId);
+      // For now, we don't set a target group ID (user will choose in modal)
+      // But we could default to creating in a new group or the next group
+    }
+
+    // Clear drop target state
+    setStreamGroupDropTarget(null);
+
     // Check for stream group drop (supports multiple groups)
     const isStreamGroupDrag = e.dataTransfer.getData('streamGroupDrag');
     if (isStreamGroupDrag === 'true' && isEditMode && onStreamGroupDrop) {
@@ -2497,7 +2504,7 @@ export function ChannelsPane({
         try {
           const groupNames = JSON.parse(groupNamesJson) as string[];
           const streamIds = JSON.parse(streamIdsJson) as number[];
-          onStreamGroupDrop(groupNames, streamIds);
+          onStreamGroupDrop(groupNames, streamIds, targetGroupId, suggestedStartingNumber);
         } catch {
           console.error('Failed to parse stream group drop data');
         }
@@ -2507,7 +2514,7 @@ export function ChannelsPane({
         if (groupName && streamIdsJson) {
           try {
             const streamIds = JSON.parse(streamIdsJson) as number[];
-            onStreamGroupDrop([groupName], streamIds);
+            onStreamGroupDrop([groupName], streamIds, targetGroupId, suggestedStartingNumber);
           } catch {
             console.error('Failed to parse stream IDs from stream group drop');
           }
@@ -2537,63 +2544,75 @@ export function ChannelsPane({
     }
   }
 
-  const visibleChannels = localChannels.filter((ch) => {
-    // First, apply search filter if there's a search term
-    if (searchTerm) {
-      const searchLower = searchTerm.toLowerCase();
-      const nameMatch = ch.name?.toLowerCase().includes(searchLower);
-      const numberMatch = ch.channel_number?.toString().includes(searchTerm);
-      if (!nameMatch && !numberMatch) return false;
-    }
-
-    if (!ch.auto_created) return true; // Always show manual channels
-    // For auto-created channels, check if their group is related to auto_channel_sync
-    const groupId = ch.channel_group_id;
-    if (groupId && autoSyncRelatedGroups.has(groupId)) {
-      // Show auto-created channel if showAutoChannelGroups filter is on
-      return channelListFilters?.showAutoChannelGroups !== false;
-    }
-    return false; // Hide auto-created channels from non-auto-sync groups
-  });
-  const channelsByGroup = visibleChannels.reduce<Record<number | 'ungrouped', Channel[]>>(
-    (acc, channel) => {
-      const key = channel.channel_group_id ?? 'ungrouped';
-      if (!acc[key]) acc[key] = [];
-      acc[key].push(channel);
-      return acc;
-    },
-    { ungrouped: [] }
-  );
-
-  // Sort channels within each group by channel_number
-  Object.values(channelsByGroup).forEach((group) => {
-    group.sort((a, b) => (a.channel_number ?? 9999) - (b.channel_number ?? 9999));
-  });
-
-  // Sort channel groups by their lowest channel number (only groups with channels)
-  const sortedChannelGroups = [...channelGroups]
-    .filter((g) => channelsByGroup[g.id]?.length > 0)
-    .sort((a, b) => {
-      // If custom order exists, use it
-      if (groupOrder.length > 0) {
-        const aIndex = groupOrder.indexOf(a.id);
-        const bIndex = groupOrder.indexOf(b.id);
-        // If both in order array, use order
-        if (aIndex !== -1 && bIndex !== -1) {
-          return aIndex - bIndex;
-        }
-        // If only one is in order, prioritize the one in order
-        if (aIndex !== -1) return -1;
-        if (bIndex !== -1) return 1;
+  // Memoize expensive channel filtering and grouping operations
+  const channelsByGroup = useMemo(() => {
+    // Filter channels based on search term and auto-created filter
+    const visibleChannels = localChannels.filter((ch) => {
+      // First, apply search filter if there's a search term
+      if (searchTerm) {
+        const searchLower = searchTerm.toLowerCase();
+        const nameMatch = ch.name?.toLowerCase().includes(searchLower);
+        const numberMatch = ch.channel_number?.toString().includes(searchTerm);
+        if (!nameMatch && !numberMatch) return false;
       }
-      // Default: sort by lowest channel number
-      const aMin = channelsByGroup[a.id]?.[0]?.channel_number ?? 9999;
-      const bMin = channelsByGroup[b.id]?.[0]?.channel_number ?? 9999;
-      return aMin - bMin;
+
+      if (!ch.auto_created) return true; // Always show manual channels
+      // For auto-created channels, check if their group is related to auto_channel_sync
+      const groupId = ch.channel_group_id;
+      if (groupId && autoSyncRelatedGroups.has(groupId)) {
+        // Show auto-created channel if showAutoChannelGroups filter is on
+        return channelListFilters?.showAutoChannelGroups !== false;
+      }
+      return false; // Hide auto-created channels from non-auto-sync groups
     });
 
+    // Group channels by channel_group_id
+    const grouped = visibleChannels.reduce<Record<number | 'ungrouped', Channel[]>>(
+      (acc, channel) => {
+        const key = channel.channel_group_id ?? 'ungrouped';
+        if (!acc[key]) acc[key] = [];
+        acc[key].push(channel);
+        return acc;
+      },
+      { ungrouped: [] }
+    );
+
+    // Sort channels within each group by channel_number
+    Object.values(grouped).forEach((group) => {
+      group.sort((a, b) => (a.channel_number ?? 9999) - (b.channel_number ?? 9999));
+    });
+
+    return grouped;
+  }, [localChannels, searchTerm, channelListFilters, autoSyncRelatedGroups]);
+
+  // Sort channel groups by their lowest channel number (only groups with channels)
+  const sortedChannelGroups = useMemo(() => {
+    return [...channelGroups]
+      .filter((g) => channelsByGroup[g.id]?.length > 0)
+      .sort((a, b) => {
+        // If custom order exists, use it
+        if (groupOrder.length > 0) {
+          const aIndex = groupOrder.indexOf(a.id);
+          const bIndex = groupOrder.indexOf(b.id);
+          // If both in order array, use order
+          if (aIndex !== -1 && bIndex !== -1) {
+            return aIndex - bIndex;
+          }
+          // If only one is in order, prioritize the one in order
+          if (aIndex !== -1) return -1;
+          if (bIndex !== -1) return 1;
+        }
+        // Default: sort by lowest channel number
+        const aMin = channelsByGroup[a.id]?.[0]?.channel_number ?? 9999;
+        const bMin = channelsByGroup[b.id]?.[0]?.channel_number ?? 9999;
+        return aMin - bMin;
+      });
+  }, [channelGroups, channelsByGroup, groupOrder]);
+
   // All groups sorted alphabetically with natural sort (for filter dropdown - includes empty groups)
-  const allGroupsSorted = [...channelGroups].sort((a, b) => naturalCompare(a.name, b.name));
+  const allGroupsSorted = useMemo(() => {
+    return [...channelGroups].sort((a, b) => naturalCompare(a.name, b.name));
+  }, [channelGroups]);
 
   // Helper function to determine if a group should be visible based on filter settings
   const shouldShowGroup = (groupId: number): boolean => {
@@ -2639,7 +2658,9 @@ export function ChannelsPane({
   };
 
   // Filter sorted channel groups based on filter settings
-  const filteredChannelGroups = sortedChannelGroups.filter((g) => shouldShowGroup(g.id));
+  const filteredChannelGroups = useMemo(() => {
+    return sortedChannelGroups.filter((g) => shouldShowGroup(g.id));
+  }, [sortedChannelGroups, channelListFilters, channelsByGroup, newlyCreatedGroupIds, autoSyncRelatedGroups, providerSettingsMap]);
 
   const handleDragStart = (event: DragStartEvent) => {
     const activeId = event.active.id;
@@ -2941,7 +2962,7 @@ export function ChannelsPane({
       setRenumberSourceGroup(false);  // Reset the checkbox when showing modal
       setSelectedNumberingOption('suggested');  // Default to suggested option
       setCustomStartingNumber('');  // Clear custom number input
-      setShowCrossGroupMoveModal(true);
+      crossGroupMoveModal.open();
 
       return;
     }
@@ -3407,12 +3428,12 @@ export function ChannelsPane({
     }
 
     // Close modal
-    setShowCrossGroupMoveModal(false);
+    crossGroupMoveModal.close();
     setCrossGroupMoveData(null);
   };
 
   const handleCrossGroupMoveCancel = () => {
-    setShowCrossGroupMoveModal(false);
+    crossGroupMoveModal.close();
     setCrossGroupMoveData(null);
     setCustomStartingNumber('');
   };
@@ -3521,11 +3542,11 @@ export function ChannelsPane({
       currentMinNumber: minNumber,
     });
     setSortRenumberStartingNumber(minNumber !== null ? String(minNumber) : '1');
-    setShowSortRenumberModal(true);
+    sortRenumberModal.open();
   };
 
   const handleSortRenumberCancel = () => {
-    setShowSortRenumberModal(false);
+    sortRenumberModal.close();
     setSortRenumberData(null);
     setSortRenumberStartingNumber('');
     setSortStripNumbers(true);
@@ -3585,7 +3606,7 @@ export function ChannelsPane({
     }
 
     // Close modal
-    setShowSortRenumberModal(false);
+    sortRenumberModal.close();
     setSortRenumberData(null);
     setSortRenumberStartingNumber('');
     setSortStripNumbers(true);
@@ -3609,12 +3630,12 @@ export function ChannelsPane({
 
     setMassRenumberChannels(channelsToRenumber);
     setMassRenumberStartingNumber(String(minNumber));
-    setShowMassRenumberModal(true);
+    massRenumberModal.open();
   };
 
   // Calculate conflicts for mass renumber
   const getMassRenumberConflicts = useMemo(() => {
-    if (!showMassRenumberModal || massRenumberChannels.length === 0) {
+    if (!massRenumberModal.isOpen || massRenumberChannels.length === 0) {
       return { hasConflicts: false, conflicts: [] as Channel[], shiftRequired: 0 };
     }
 
@@ -3638,7 +3659,7 @@ export function ChannelsPane({
     const shiftRequired = conflicts.length > 0 ? endNum - (conflicts[0].channel_number ?? 0) + 1 : 0;
 
     return { hasConflicts: conflicts.length > 0, conflicts, shiftRequired };
-  }, [showMassRenumberModal, massRenumberChannels, massRenumberStartingNumber, localChannels]);
+  }, [massRenumberModal.isOpen, massRenumberChannels, massRenumberStartingNumber, localChannels]);
 
   const handleMassRenumberConfirm = (shiftConflicts: boolean) => {
     if (!onStageUpdateChannel || massRenumberChannels.length === 0) return;
@@ -3707,7 +3728,7 @@ export function ChannelsPane({
     }
 
     // Close modal and clear selection
-    setShowMassRenumberModal(false);
+    massRenumberModal.close();
     setMassRenumberChannels([]);
     setMassRenumberStartingNumber('');
     if (onClearChannelSelection) {
@@ -3716,7 +3737,7 @@ export function ChannelsPane({
   };
 
   const handleMassRenumberCancel = () => {
-    setShowMassRenumberModal(false);
+    massRenumberModal.close();
     setMassRenumberChannels([]);
     setMassRenumberStartingNumber('');
   };
@@ -4038,21 +4059,21 @@ export function ChannelsPane({
               <div className="selection-actions">
                 <button
                   className="bulk-action-btn"
-                  onClick={() => setShowBulkEPGModal(true)}
+                  onClick={() => bulkEPGModal.open()}
                   title="Assign EPG to selected channels"
                 >
                   <span className="material-icons">live_tv</span>
                 </button>
                 <button
                   className="bulk-action-btn"
-                  onClick={() => setShowBulkLCNModal(true)}
+                  onClick={() => bulkLCNModal.open()}
                   title="Fetch Gracenote IDs for selected channels"
                 >
                   <span className="material-icons">confirmation_number</span>
                 </button>
                 <button
                   className="bulk-action-btn"
-                  onClick={() => setShowNormalizeModal(true)}
+                  onClick={() => normalizeModal.open()}
                   title="Normalize channel names"
                 >
                   <span className="material-icons">text_format</span>
@@ -4125,7 +4146,7 @@ export function ChannelsPane({
                   setNewChannelNumberSeparator((channelDefaults?.channelNumberSeparator as NumberSeparator) || '-');
                   setNewChannelStripCountry(channelDefaults?.removeCountryPrefix ?? false);
                   setNewChannelNamingExpanded(false);
-                  setShowCreateModal(true);
+                  createModal.open();
                 }}
                 title="Create new channel"
               >
@@ -4134,7 +4155,7 @@ export function ChannelsPane({
               </button>
               <button
                 className="create-group-btn"
-                onClick={() => setShowCreateGroupModal(true)}
+                onClick={() => createGroupModal.open()}
                 title="Create new channel group"
               >
                 <span className="material-icons create-channel-icon">create_new_folder</span>
@@ -4152,7 +4173,7 @@ export function ChannelsPane({
           )}
           <button
             className="profiles-btn"
-            onClick={() => setShowProfilesModal(true)}
+            onClick={() => profilesModal.open()}
             title="Manage channel profiles"
           >
             <span className="material-icons">group</span>
@@ -4162,7 +4183,7 @@ export function ChannelsPane({
       </div>
 
       {/* Create Channel Modal */}
-      {showCreateModal && (
+      {createModal.isOpen && (
         <div className="modal-overlay">
           <div className="modal-content" onClick={(e) => e.stopPropagation()}>
             <h3>Create New Channel</h3>
@@ -4399,7 +4420,7 @@ export function ChannelsPane({
       )}
 
       {/* Create Channel Group Modal */}
-      {showCreateGroupModal && (
+      {createGroupModal.isOpen && (
         <div className="modal-overlay">
           <div className="modal-content" onClick={(e) => e.stopPropagation()}>
             <h3>Create New Channel Group</h3>
@@ -4441,7 +4462,7 @@ export function ChannelsPane({
       )}
 
       {/* Hidden Groups Modal */}
-      {showHiddenGroupsModal && (
+      {hiddenGroupsModal.isOpen && (
         <div className="modal-overlay">
           <div className="modal-content" onClick={(e) => e.stopPropagation()}>
             <h3>Hidden Channel Groups</h3>
@@ -4484,7 +4505,7 @@ export function ChannelsPane({
             <div className="modal-actions">
               <button
                 className="modal-btn cancel"
-                onClick={() => setShowHiddenGroupsModal(false)}
+                onClick={() => hiddenGroupsModal.close()}
               >
                 Close
               </button>
@@ -4494,7 +4515,7 @@ export function ChannelsPane({
       )}
 
       {/* Channel Number Conflict Dialog */}
-      {showConflictDialog && conflictingChannelNumber !== null && (
+      {conflictDialog.isOpen && conflictingChannelNumber !== null && (
         <div className="modal-overlay">
           <div className="modal-content conflict-dialog" onClick={(e) => e.stopPropagation()}>
             <h3>Channel Number Conflict</h3>
@@ -4531,7 +4552,7 @@ export function ChannelsPane({
             <div className="modal-actions">
               <button
                 className="modal-btn cancel"
-                onClick={() => setShowConflictDialog(false)}
+                onClick={() => conflictDialog.close()}
                 disabled={creating}
               >
                 Cancel
@@ -4542,7 +4563,7 @@ export function ChannelsPane({
       )}
 
       {/* Delete Channel Confirmation Dialog */}
-      {showDeleteConfirm && channelToDelete && (
+      {deleteConfirmModal.isOpen && channelToDelete && (
         <div className="modal-overlay">
           <div className="modal-content delete-dialog" onClick={(e) => e.stopPropagation()}>
             <h3>Delete Channel</h3>
@@ -4619,7 +4640,7 @@ export function ChannelsPane({
       )}
 
       {/* Delete Group Confirmation Dialog */}
-      {showDeleteGroupConfirm && groupToDelete && (
+      {deleteGroupConfirmModal.isOpen && groupToDelete && (
           <div className="modal-overlay">
             <div className="modal-content delete-dialog" onClick={(e) => e.stopPropagation()}>
               <h3>Delete Group</h3>
@@ -4674,7 +4695,7 @@ export function ChannelsPane({
       )}
 
       {/* Bulk Delete Channels Confirmation Dialog */}
-      {showBulkDeleteConfirm && selectedChannelIds.size > 0 && (() => {
+      {bulkDeleteConfirmModal.isOpen && selectedChannelIds.size > 0 && (() => {
         // Compute which groups would be emptied by this bulk delete
         // Use the channels prop (which is displayChannels from edit mode hook, containing all channels)
         // NOT localChannels which may have stale data
@@ -4749,36 +4770,36 @@ export function ChannelsPane({
 
       {/* Bulk EPG Assignment Modal */}
       <BulkEPGAssignModal
-        isOpen={showBulkEPGModal && selectedChannelIds.size > 0}
+        isOpen={bulkEPGModal.isOpen && selectedChannelIds.size > 0}
         selectedChannels={channels.filter(c => selectedChannelIds.has(c.id))}
         streams={allStreams}
         epgData={epgData || []}
         epgSources={epgSources || []}
-        onClose={() => setShowBulkEPGModal(false)}
+        onClose={() => bulkEPGModal.close()}
         onAssign={handleBulkEPGAssign}
         epgAutoMatchThreshold={epgAutoMatchThreshold}
       />
 
       {/* Bulk LCN Fetch Modal */}
       <BulkLCNFetchModal
-        isOpen={showBulkLCNModal && selectedChannelIds.size > 0}
+        isOpen={bulkLCNModal.isOpen && selectedChannelIds.size > 0}
         selectedChannels={channels.filter(c => selectedChannelIds.has(c.id))}
         epgData={epgData || []}
-        onClose={() => setShowBulkLCNModal(false)}
+        onClose={() => bulkLCNModal.close()}
         onAssign={handleBulkLCNAssign}
       />
 
       {/* Normalize Names Modal */}
-      {showNormalizeModal && selectedChannelIds.size > 0 && (
+      {normalizeModal.isOpen && selectedChannelIds.size > 0 && (
         <NormalizeNamesModal
           channels={channels.filter(c => selectedChannelIds.has(c.id))}
           onConfirm={handleNormalizeNames}
-          onCancel={() => setShowNormalizeModal(false)}
+          onCancel={() => normalizeModal.close()}
         />
       )}
 
       {/* Edit Channel Modal */}
-      {showEditChannelModal && channelToEdit && (
+      {editChannelModal.isOpen && channelToEdit && (
         <EditChannelModal
           channel={channelToEdit}
           logos={logos}
@@ -4787,12 +4808,12 @@ export function ChannelsPane({
           streamProfiles={streamProfiles}
           epgDataLoading={epgDataLoading}
           onClose={() => {
-            setShowEditChannelModal(false);
+            editChannelModal.close();
             setChannelToEdit(null);
           }}
           onSave={async (changes: ChannelMetadataChanges) => {
             if (Object.keys(changes).length === 0) {
-              setShowEditChannelModal(false);
+              editChannelModal.close();
               setChannelToEdit(null);
               return;
             }
@@ -4839,7 +4860,7 @@ export function ChannelsPane({
                 console.error('Failed to update channel:', err);
               }
             }
-            setShowEditChannelModal(false);
+            editChannelModal.close();
             setChannelToEdit(null);
           }}
           onLogoCreate={async (url: string) => {
@@ -4877,7 +4898,7 @@ export function ChannelsPane({
       )}
 
       {/* Cross-Group Move Modal */}
-      {showCrossGroupMoveModal && crossGroupMoveData && (
+      {crossGroupMoveModal.isOpen && crossGroupMoveData && (
         <div className="modal-overlay">
           <div className="modal-content cross-group-move-dialog" onClick={(e) => e.stopPropagation()}>
             <h3>Move {crossGroupMoveData.channels.length > 1 ? `${crossGroupMoveData.channels.length} Channels` : 'Channel'} to Group</h3>
@@ -5078,7 +5099,7 @@ export function ChannelsPane({
       )}
 
       {/* Sort & Renumber Modal */}
-      {showSortRenumberModal && sortRenumberData && (
+      {sortRenumberModal.isOpen && sortRenumberData && (
         <div className="modal-overlay">
           <div className="modal-content sort-renumber-dialog" onClick={(e) => e.stopPropagation()}>
             <h3>Sort & Renumber Channels</h3>
@@ -5183,7 +5204,7 @@ export function ChannelsPane({
       )}
 
       {/* Mass Renumber Modal */}
-      {showMassRenumberModal && massRenumberChannels.length > 0 && (
+      {massRenumberModal.isOpen && massRenumberChannels.length > 0 && (
         <div className="modal-overlay">
           <div className="modal-content mass-renumber-dialog" onClick={(e) => e.stopPropagation()}>
             <h3>Renumber Channels</h3>
@@ -5294,8 +5315,8 @@ export function ChannelsPane({
 
       {/* Channel Profiles Modal */}
       <ChannelProfilesListModal
-        isOpen={showProfilesModal}
-        onClose={() => setShowProfilesModal(false)}
+        isOpen={profilesModal.isOpen}
+        onClose={() => profilesModal.close()}
         onSaved={() => {
           if (onChannelProfilesChange) {
             onChannelProfilesChange();
@@ -5542,6 +5563,27 @@ export function ChannelsPane({
             onDragOver={handleDragOver}
             onDragEnd={handleDragEnd}
           >
+            {/* Drop zone before first group */}
+            {streamGroupDragOver && isEditMode && (
+              <div
+                className={`stream-group-drop-zone ${streamGroupDropTarget?.afterGroupId === null ? 'active' : ''}`}
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  setStreamGroupDropTarget({ afterGroupId: null });
+                }}
+                onDragLeave={(e) => {
+                  if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+                    setStreamGroupDropTarget(null);
+                  }
+                }}
+              >
+                <div className="drop-zone-indicator">
+                  <span className="material-icons">add</span>
+                  <span>Drop here to insert at beginning</span>
+                </div>
+              </div>
+            )}
             {/* Always render Uncategorized at the top (even when empty) */}
             {renderGroup(
               'ungrouped',
@@ -5549,15 +5591,59 @@ export function ChannelsPane({
               channelsByGroup.ungrouped || [],
               (channelsByGroup.ungrouped?.length ?? 0) === 0
             )}
+            {/* Drop zone after Uncategorized */}
+            {streamGroupDragOver && isEditMode && (
+              <div
+                className={`stream-group-drop-zone ${streamGroupDropTarget?.afterGroupId === 'ungrouped' ? 'active' : ''}`}
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  setStreamGroupDropTarget({ afterGroupId: 'ungrouped' });
+                }}
+                onDragLeave={(e) => {
+                  if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+                    setStreamGroupDropTarget(null);
+                  }
+                }}
+              >
+                <div className="drop-zone-indicator">
+                  <span className="material-icons">add</span>
+                  <span>Drop here to insert after Uncategorized</span>
+                </div>
+              </div>
+            )}
             {/* Wrap groups in SortableContext for drag-and-drop reordering */}
             <SortableContext
               items={filteredChannelGroups.map((g) => `group-${g.id}`)}
               strategy={verticalListSortingStrategy}
             >
-              {/* Render filtered groups with channels */}
-              {filteredChannelGroups.map((group) =>
-                renderGroup(group.id, group.name, channelsByGroup[group.id] || [])
-              )}
+              {/* Render filtered groups with channels, with drop zones between them */}
+              {filteredChannelGroups.map((group) => (
+                <React.Fragment key={group.id}>
+                  {renderGroup(group.id, group.name, channelsByGroup[group.id] || [])}
+                  {/* Drop zone after each group */}
+                  {streamGroupDragOver && isEditMode && (
+                    <div
+                      className={`stream-group-drop-zone ${streamGroupDropTarget?.afterGroupId === group.id ? 'active' : ''}`}
+                      onDragOver={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        setStreamGroupDropTarget({ afterGroupId: group.id });
+                      }}
+                      onDragLeave={(e) => {
+                        if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+                          setStreamGroupDropTarget(null);
+                        }
+                      }}
+                    >
+                      <div className="drop-zone-indicator">
+                        <span className="material-icons">add</span>
+                        <span>Drop here to insert after {group.name}</span>
+                      </div>
+                    </div>
+                  )}
+                </React.Fragment>
+              ))}
             </SortableContext>
             {/* Render selected empty groups that pass the filter */}
             {selectedGroups

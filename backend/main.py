@@ -4,6 +4,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from typing import Optional
+import httpx
 import os
 import re
 import logging
@@ -129,6 +130,10 @@ class CreateChannelGroupRequest(BaseModel):
     name: str
 
 
+class DeleteOrphanedGroupsRequest(BaseModel):
+    group_ids: list[int] | None = None  # Optional list of group IDs to delete
+
+
 # Health check
 @app.get("/api/health")
 async def health_check():
@@ -160,6 +165,7 @@ class SettingsRequest(BaseModel):
     user_timezone: str = ""
     backend_log_level: str = "INFO"
     frontend_log_level: str = "INFO"
+    vlc_open_behavior: str = "m3u_fallback"
 
 
 class SettingsResponse(BaseModel):
@@ -186,6 +192,7 @@ class SettingsResponse(BaseModel):
     user_timezone: str
     backend_log_level: str
     frontend_log_level: str
+    vlc_open_behavior: str
 
 
 class TestConnectionRequest(BaseModel):
@@ -224,6 +231,7 @@ async def get_current_settings():
         user_timezone=settings.user_timezone,
         backend_log_level=settings.backend_log_level,
         frontend_log_level=settings.frontend_log_level,
+        vlc_open_behavior=settings.vlc_open_behavior,
     )
 
 
@@ -273,6 +281,7 @@ async def update_settings(request: SettingsRequest):
         user_timezone=request.user_timezone,
         backend_log_level=request.backend_log_level,
         frontend_log_level=request.frontend_log_level,
+        vlc_open_behavior=request.vlc_open_behavior,
     )
     save_settings(new_settings)
     clear_settings_cache()
@@ -898,6 +907,279 @@ async def get_hidden_channel_groups():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/api/channel-groups/orphaned")
+async def get_orphaned_channel_groups():
+    """Find channel groups that are truly orphaned.
+
+    A group is considered orphaned if it has no streams AND no channels.
+    M3U groups contain streams, manual groups contain channels.
+    """
+    client = get_client()
+    try:
+        # Get all channel groups from Dispatcharr
+        all_groups = await client.get_channel_groups()
+
+        # Get M3U group settings to see which M3U accounts groups were associated with
+        m3u_group_settings = await client.get_all_m3u_group_settings()
+
+        # Get all streams (paginated) to check which groups have streams
+        streams = []
+        page = 1
+        while True:
+            result = await client.get_streams(page=page, page_size=500)
+            page_streams = result.get("results", [])
+            streams.extend(page_streams)
+
+            # Check if there are more pages
+            if len(page_streams) < 500:
+                break
+            page += 1
+
+        # Get all channels (paginated) to check which groups have channels
+        channels = []
+        page = 1
+        while True:
+            result = await client.get_channels(page=page, page_size=500)
+            page_channels = result.get("results", [])
+            channels.extend(page_channels)
+
+            # Check if there are more pages
+            if len(page_channels) < 500:
+                break
+            page += 1
+
+        # Build map of group_id -> stream count (streams use group ID, not name)
+        group_stream_count = {}
+        for stream in streams:
+            group_id = stream.get("channel_group")
+            if group_id:
+                group_stream_count[group_id] = group_stream_count.get(group_id, 0) + 1
+
+        # Build map of group_id -> channel count
+        group_channel_count = {}
+        for channel in channels:
+            group_id = channel.get("channel_group_id")
+            if group_id:
+                group_channel_count[group_id] = group_channel_count.get(group_id, 0) + 1
+
+        # Build a set of group IDs that are targets of group_override from auto_channel_sync M3U groups
+        # These groups may be empty now but will be populated by Auto Channel Sync
+        group_override_targets = set()
+        for group_id, m3u_info in m3u_group_settings.items():
+            if m3u_info.get("auto_channel_sync"):
+                custom_props = m3u_info.get("custom_properties", {})
+                if custom_props and isinstance(custom_props, dict):
+                    group_override = custom_props.get("group_override")
+                    if group_override:
+                        group_override_targets.add(group_override)
+
+        logger.info(f"Total streams fetched: {len(streams)}")
+        logger.info(f"Total channels fetched: {len(channels)}")
+        logger.info(f"Groups with streams: {len(group_stream_count)}")
+        logger.info(f"Groups with channels: {len(group_channel_count)}")
+        logger.info(f"Groups that are group_override targets: {len(group_override_targets)}")
+
+        # Find orphaned groups
+        # A group is orphaned if it has no streams AND no channels AND is NOT in any M3U account
+        # AND is NOT a target of group_override from an auto_channel_sync M3U group
+        orphaned_groups = []
+        for group in all_groups:
+            group_id = group["id"]
+            group_name = group["name"]
+
+            stream_count = group_stream_count.get(group_id, 0)
+            channel_count = group_channel_count.get(group_id, 0)
+
+            # Check if this group is associated with any M3U account
+            m3u_info = m3u_group_settings.get(group_id)
+
+            # Check if this group is a target of group_override (will be populated by Auto Channel Sync)
+            is_override_target = group_id in group_override_targets
+
+            # Only consider it orphaned if:
+            # 1. It has no streams AND no channels
+            # 2. AND it's not in any M3U account (truly orphaned from deleted M3U)
+            # 3. AND it's not a target of group_override from an auto_channel_sync M3U group
+            if stream_count == 0 and channel_count == 0 and m3u_info is None and not is_override_target:
+                # Group is truly orphaned - not in any M3U and has no content
+                orphaned_groups.append({
+                    "id": group_id,
+                    "name": group_name,
+                    "reason": "No streams, channels, or M3U association",
+                })
+
+        # Sort by name for consistent display
+        orphaned_groups.sort(key=lambda g: g["name"].lower())
+
+        logger.info(f"Found {len(orphaned_groups)} orphaned channel groups out of {len(all_groups)} total")
+        return {
+            "orphaned_groups": orphaned_groups,
+            "total_groups": len(all_groups),
+            "groups_with_content": len(set(list(group_stream_count.keys()) + list(str(gid) for gid in group_channel_count.keys()))),
+        }
+    except Exception as e:
+        logger.error(f"Failed to find orphaned channel groups: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/api/channel-groups/orphaned")
+async def delete_orphaned_channel_groups(request: DeleteOrphanedGroupsRequest = None):
+    """Delete channel groups that are truly orphaned.
+
+    A group is deleted if it has no streams AND no channels.
+    M3U groups contain streams, manual groups contain channels.
+
+    Args:
+        request: Optional request body with group_ids list. If None or empty, all orphaned groups are deleted.
+    """
+    client = get_client()
+    group_ids = request.group_ids if request else None
+    try:
+        # Use the same logic as GET to find orphaned groups
+        all_groups = await client.get_channel_groups()
+
+        # Get M3U group settings to see which groups are still in M3U accounts
+        m3u_group_settings = await client.get_all_m3u_group_settings()
+
+        # Get all streams (paginated)
+        streams = []
+        page = 1
+        while True:
+            result = await client.get_streams(page=page, page_size=500)
+            page_streams = result.get("results", [])
+            streams.extend(page_streams)
+
+            # Check if there are more pages
+            if len(page_streams) < 500:
+                break
+            page += 1
+
+        # Get all channels (paginated)
+        channels = []
+        page = 1
+        while True:
+            result = await client.get_channels(page=page, page_size=500)
+            page_channels = result.get("results", [])
+            channels.extend(page_channels)
+
+            # Check if there are more pages
+            if len(page_channels) < 500:
+                break
+            page += 1
+
+        # Build map of group_id -> stream count (streams use group ID, not name)
+        group_stream_count = {}
+        for stream in streams:
+            group_id = stream.get("channel_group")
+            if group_id:
+                group_stream_count[group_id] = group_stream_count.get(group_id, 0) + 1
+
+        # Build map of group_id -> channel count
+        group_channel_count = {}
+        for channel in channels:
+            group_id = channel.get("channel_group_id")
+            if group_id:
+                group_channel_count[group_id] = group_channel_count.get(group_id, 0) + 1
+
+        # Build a set of group IDs that are targets of group_override from auto_channel_sync M3U groups
+        # These groups may be empty now but will be populated by Auto Channel Sync
+        group_override_targets = set()
+        for group_id, m3u_info in m3u_group_settings.items():
+            if m3u_info.get("auto_channel_sync"):
+                custom_props = m3u_info.get("custom_properties", {})
+                if custom_props and isinstance(custom_props, dict):
+                    group_override = custom_props.get("group_override")
+                    if group_override:
+                        group_override_targets.add(group_override)
+
+        # Find orphaned groups
+        # A group is orphaned if it has no streams AND no channels AND is NOT in any M3U account
+        # AND is NOT a target of group_override from an auto_channel_sync M3U group
+        orphaned_groups = []
+        for group in all_groups:
+            group_id = group["id"]
+            group_name = group["name"]
+
+            stream_count = group_stream_count.get(group_id, 0)
+            channel_count = group_channel_count.get(group_id, 0)
+
+            # Check if this group is associated with any M3U account
+            m3u_info = m3u_group_settings.get(group_id)
+
+            # Check if this group is a target of group_override (will be populated by Auto Channel Sync)
+            is_override_target = group_id in group_override_targets
+
+            # Only consider it orphaned if:
+            # 1. It has no streams AND no channels
+            # 2. AND it's not in any M3U account (truly orphaned from deleted M3U)
+            # 3. AND it's not a target of group_override from an auto_channel_sync M3U group
+            if stream_count == 0 and channel_count == 0 and m3u_info is None and not is_override_target:
+                # Group is truly orphaned - not in any M3U and has no content
+                orphaned_groups.append({
+                    "id": group_id,
+                    "name": group_name,
+                    "reason": "No streams, channels, or M3U association",
+                })
+
+        if not orphaned_groups:
+            return {
+                "status": "ok",
+                "message": "No orphaned channel groups found",
+                "deleted_groups": [],
+                "failed_groups": [],
+            }
+
+        # Filter to only the specified group IDs if provided
+        groups_to_delete = orphaned_groups
+        if group_ids is not None:
+            groups_to_delete = [g for g in orphaned_groups if g["id"] in group_ids]
+            if not groups_to_delete:
+                return {
+                    "status": "ok",
+                    "message": "No matching orphaned groups to delete",
+                    "deleted_groups": [],
+                    "failed_groups": [],
+                }
+
+        # Delete each orphaned group
+        deleted_groups = []
+        failed_groups = []
+        for orphan in groups_to_delete:
+            group_id = orphan["id"]
+            group_name = orphan["name"]
+            try:
+                await client.delete_channel_group(group_id)
+                deleted_groups.append({"id": group_id, "name": group_name, "reason": orphan["reason"]})
+                logger.info(f"Deleted orphaned channel group: {group_id} ({group_name}) - {orphan['reason']}")
+            except Exception as group_err:
+                failed_groups.append({"id": group_id, "name": group_name, "error": str(group_err)})
+                logger.warning(f"Failed to delete orphaned channel group {group_id} ({group_name}): {group_err}")
+
+        # Log to journal
+        if deleted_groups:
+            journal.log_entry(
+                category="channel",
+                action_type="cleanup",
+                entity_id=None,
+                entity_name="Orphaned Groups Cleanup",
+                description=f"Deleted {len(deleted_groups)} orphaned channel groups",
+                after_value={
+                    "deleted_groups": deleted_groups,
+                    "failed_groups": failed_groups,
+                },
+            )
+
+        return {
+            "status": "ok",
+            "message": f"Deleted {len(deleted_groups)} orphaned channel groups",
+            "deleted_groups": deleted_groups,
+            "failed_groups": failed_groups,
+        }
+    except Exception as e:
+        logger.error(f"Failed to delete orphaned channel groups: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # Streams
 @app.get("/api/streams")
 async def get_streams(
@@ -1169,6 +1451,11 @@ async def get_epg_grid(start: Optional[str] = None, end: Optional[str] = None):
     client = get_client()
     try:
         return await client.get_epg_grid(start=start, end=end)
+    except httpx.ReadTimeout:
+        raise HTTPException(
+            status_code=504,
+            detail="EPG data request timed out. This usually happens with very large EPG datasets. Try again or contact your Dispatcharr administrator to optimize EPG data size."
+        )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -1678,15 +1965,44 @@ async def patch_m3u_account(account_id: int, request: Request):
 
 
 @app.delete("/api/m3u/accounts/{account_id}")
-async def delete_m3u_account(account_id: int):
-    """Delete an M3U account."""
+async def delete_m3u_account(account_id: int, delete_groups: bool = True):
+    """Delete an M3U account and optionally its associated channel groups.
+
+    Args:
+        account_id: The M3U account ID to delete
+        delete_groups: If True (default), also delete channel groups associated with this account
+    """
     client = get_client()
     try:
-        # Get account info before deleting
+        # Get account info before deleting (includes channel_groups)
         account = await client.get_m3u_account(account_id)
         account_name = account.get("name", "Unknown")
 
+        # Extract channel group IDs associated with this M3U account
+        channel_group_ids = []
+        if delete_groups:
+            for group_setting in account.get("channel_groups", []):
+                group_id = group_setting.get("channel_group")
+                if group_id:
+                    channel_group_ids.append(group_id)
+            logger.info(f"M3U account '{account_name}' has {len(channel_group_ids)} associated channel groups")
+
+        # Delete the M3U account first
         await client.delete_m3u_account(account_id)
+
+        # Now delete associated channel groups
+        deleted_groups = []
+        failed_groups = []
+        if delete_groups and channel_group_ids:
+            for group_id in channel_group_ids:
+                try:
+                    await client.delete_channel_group(group_id)
+                    deleted_groups.append(group_id)
+                    logger.info(f"Deleted channel group {group_id} (was associated with M3U '{account_name}')")
+                except Exception as group_err:
+                    # Group might have channels or other issues - log but don't fail
+                    failed_groups.append({"id": group_id, "error": str(group_err)})
+                    logger.warning(f"Failed to delete channel group {group_id}: {group_err}")
 
         # Log to journal
         journal.log_entry(
@@ -1694,11 +2010,23 @@ async def delete_m3u_account(account_id: int):
             action_type="delete",
             entity_id=account_id,
             entity_name=account_name,
-            description=f"Deleted M3U account '{account_name}'",
-            before_value={"name": account_name},
+            description=f"Deleted M3U account '{account_name}'" +
+                       (f" and {len(deleted_groups)} channel groups" if deleted_groups else ""),
+            before_value={
+                "name": account_name,
+                "channel_groups": channel_group_ids,
+            },
+            after_value={
+                "deleted_groups": deleted_groups,
+                "failed_groups": failed_groups,
+            } if channel_group_ids else None,
         )
 
-        return {"status": "deleted"}
+        return {
+            "status": "deleted",
+            "deleted_groups": deleted_groups,
+            "failed_groups": failed_groups,
+        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
