@@ -135,7 +135,8 @@ export interface StreamStats {
   audio_codec: string | null;      // e.g., "aac", "ac3"
   audio_channels: number | null;   // e.g., 2, 6
   stream_type: string | null;      // e.g., "HLS", "MPEG-TS"
-  bitrate: number | null;          // bits per second
+  bitrate: number | null;          // bits per second (overall stream)
+  video_bitrate: number | null;    // bits per second (video stream only)
   probe_status: 'success' | 'failed' | 'pending' | 'timeout';
   error_message: string | null;
   last_probed: string | null;      // ISO timestamp

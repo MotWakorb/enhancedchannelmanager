@@ -224,6 +224,17 @@ const SortableStreamItem = memo(function SortableStreamItem({ stream, providerNa
     return resolution;
   };
 
+  // Format bitrate for display
+  const formatBitrate = (bitrate: number | null) => {
+    if (!bitrate) return null;
+    const mbps = bitrate / 1000000;
+    if (mbps >= 1) {
+      return `${mbps.toFixed(1)} Mbps`;
+    }
+    const kbps = bitrate / 1000;
+    return `${kbps.toFixed(0)} kbps`;
+  };
+
   return (
     <div ref={setNodeRef} style={style} className="inline-stream-item">
       <span
@@ -256,6 +267,11 @@ const SortableStreamItem = memo(function SortableStreamItem({ stream, providerNa
             {streamStats.fps && (
               <span className="meta-tag fps" title={`${streamStats.fps} fps`}>
                 {parseFloat(streamStats.fps).toFixed(0)}fps
+              </span>
+            )}
+            {streamStats.video_bitrate && (
+              <span className="meta-tag bitrate" title={`Video bitrate: ${formatBitrate(streamStats.video_bitrate)}`}>
+                {formatBitrate(streamStats.video_bitrate)}
               </span>
             )}
             {streamStats.video_codec && (

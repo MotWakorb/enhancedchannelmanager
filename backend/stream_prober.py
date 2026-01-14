@@ -358,6 +358,14 @@ class StreamProber:
             if fps:
                 stats.fps = str(fps)
 
+            # Extract video bitrate
+            video_bit_rate = video_stream.get("bit_rate")
+            if video_bit_rate:
+                try:
+                    stats.video_bitrate = int(video_bit_rate)
+                except (ValueError, TypeError):
+                    pass
+
         # Find audio stream
         audio_stream = next(
             (s for s in streams if s.get("codec_type") == "audio"), None

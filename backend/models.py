@@ -163,7 +163,8 @@ class StreamStats(Base):
     audio_codec = Column(String(50), nullable=True)  # e.g., "aac", "ac3"
     audio_channels = Column(Integer, nullable=True)  # e.g., 2, 6
     stream_type = Column(String(20), nullable=True)  # e.g., "HLS", "MPEG-TS"
-    bitrate = Column(BigInteger, nullable=True)  # bits per second
+    bitrate = Column(BigInteger, nullable=True)  # bits per second (overall stream)
+    video_bitrate = Column(BigInteger, nullable=True)  # bits per second (video stream only)
     probe_status = Column(String(20), nullable=False, default="pending")  # success, failed, pending, timeout
     error_message = Column(Text, nullable=True)  # Error details for failed probes
     last_probed = Column(DateTime, nullable=True)  # Last probe timestamp
@@ -187,6 +188,7 @@ class StreamStats(Base):
             "audio_channels": self.audio_channels,
             "stream_type": self.stream_type,
             "bitrate": self.bitrate,
+            "video_bitrate": self.video_bitrate,
             "probe_status": self.probe_status,
             "error_message": self.error_message,
             "last_probed": self.last_probed.isoformat() + "Z" if self.last_probed else None,

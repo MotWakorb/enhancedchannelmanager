@@ -30,20 +30,17 @@ When doing work on this project, follow these steps in order:
 
 3. **Update the code** - Make the necessary changes to implement the feature or fix
 
-4. **Update the bead with work done** - Document what was changed:
+4. **Run quality gates** (if code changed) - Tests, linters, builds
+
+5. **Update the bead with work done** - Document what was changed:
    ```bash
    bd update <id> --description "Detailed description of changes made"
    ```
 
-5. **Increment the version** - Use bug fix build number format (e.g., 0.3.10001):
+6. **Increment the version** - Use bug fix build number format (e.g., 0.3.10001):
    - Edit `frontend/package.json` to update the version
    - Build to verify: `cd frontend && npm run build`
 
-6. **Rebuild the container and recompose**:
-   ```bash
-   docker compose build
-   docker compose up -d
-   ```
 
 7. **Close the bead**:
    ```bash
@@ -58,6 +55,8 @@ When doing work on this project, follow these steps in order:
    git commit -m "v0.x.xxxxx: Brief description"
    git push origin dev
    ```
+
+10. **File beads for remaining work** - Create beads for anything that needs follow-up
 
 ## Landing the Plane (Session Completion)
 
