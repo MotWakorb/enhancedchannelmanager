@@ -2,6 +2,25 @@ import { useState, useMemo, useCallback } from 'react';
 import type { Channel, ChannelGroup } from '../types';
 import './PrintGuideModal.css';
 
+// Clean channel name by removing channel number prefix
+// e.g., "2.1 | ABC News" -> "ABC News", "102 - ESPN" -> "ESPN"
+function cleanChannelName(name: string, channelNumber: number | null): string {
+  if (!name) return 'Unknown Channel';
+
+  // Remove patterns like "2.1 | ", "102 | ", "2.1 - ", "102 - ", "2.1: ", etc.
+  let cleaned = name.replace(/^\d+(\.\d+)?\s*[-|:]\s*/i, '');
+
+  // Also try removing just the channel number at the start if it matches
+  if (channelNumber !== null) {
+    const numStr = Number.isInteger(channelNumber) ? String(channelNumber) : String(channelNumber);
+    // Match the channel number followed by optional separator
+    const regex = new RegExp(`^${numStr.replace('.', '\\.')}\\s*[-|:]?\\s*`, 'i');
+    cleaned = cleaned.replace(regex, '');
+  }
+
+  return cleaned.trim() || name;
+}
+
 // Color palette for group headers
 const GROUP_COLORS = [
   { header: '#4A90E2', bg: '#E8F2FC' },  // Blue
@@ -310,7 +329,8 @@ function generatePrintHtml(
       let channelsHtml = '';
       for (const ch of groupChannels) {
         const num = ch.channel_number === null ? 'N/A' : (Number.isInteger(ch.channel_number) ? String(ch.channel_number) : String(ch.channel_number));
-        channelsHtml += `<div class="channel-line"><span class="ch-num">${num}</span> ${escapeHtml(ch.name)}</div>\n`;
+        const displayName = cleanChannelName(ch.name, ch.channel_number);
+        channelsHtml += `<div class="channel-line"><span class="ch-num">${num}</span> ${escapeHtml(displayName)}</div>\n`;
       }
 
       groupsHtml += `
