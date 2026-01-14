@@ -69,6 +69,8 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
     current: number;
     status: string;
     current_stream: string;
+    success_count: number;
+    failed_count: number;
     percentage: number;
   } | null>(null);
 
@@ -120,7 +122,10 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
         if (!progress.in_progress) {
           setProbingAll(false);
           if (progress.status === 'completed') {
-            setProbeAllResult({ success: true, message: `Probe completed! ${progress.total} streams probed.` });
+            setProbeAllResult({
+              success: true,
+              message: `Probe completed! ${progress.total} streams probed. Success: ${progress.success_count}, Failed: ${progress.failed_count}`
+            });
           } else if (progress.status === 'failed') {
             setProbeAllResult({ success: false, message: 'Probe failed' });
           } else if (progress.status === 'cancelled') {
@@ -1377,6 +1382,22 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
                       maxWidth: '500px'
                     }}>
                       Currently testing: {probeProgress.current_stream}
+                    </div>
+                  )}
+                  {probeProgress.status === 'probing' && (
+                    <div style={{
+                      fontSize: '12px',
+                      color: '#95a5a6',
+                      marginTop: '4px',
+                      display: 'flex',
+                      gap: '1rem'
+                    }}>
+                      <span style={{ color: '#2ecc71' }}>
+                        ✓ Success: {probeProgress.success_count}
+                      </span>
+                      <span style={{ color: '#e74c3c' }}>
+                        ✗ Failed: {probeProgress.failed_count}
+                      </span>
                     </div>
                   )}
                 </div>

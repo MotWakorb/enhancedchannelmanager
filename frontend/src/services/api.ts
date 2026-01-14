@@ -1687,6 +1687,8 @@ export async function getProbeProgress(): Promise<{
   current: number;
   status: string;
   current_stream: string;
+  success_count: number;
+  failed_count: number;
   percentage: number;
 }> {
   return fetchJson(`${API_BASE}/stream-stats/probe/progress`, {
@@ -1697,6 +1699,8 @@ export async function getProbeProgress(): Promise<{
     current: number;
     status: string;
     current_stream: string;
+    success_count: number;
+    failed_count: number;
     percentage: number;
   }>;
 }
