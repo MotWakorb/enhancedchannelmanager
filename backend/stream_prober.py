@@ -346,6 +346,11 @@ class StreamProber:
             (s for s in streams if s.get("codec_type") == "video"), None
         )
         if video_stream:
+            # Debug: Log available bitrate fields
+            logger.debug(f"Video stream bitrate fields - bit_rate: {video_stream.get('bit_rate')}, "
+                        f"tags.BPS: {video_stream.get('tags', {}).get('BPS')}, "
+                        f"tags.DURATION: {video_stream.get('tags', {}).get('DURATION')}, "
+                        f"format.bit_rate: {format_info.get('bit_rate')}")
             width = video_stream.get("width")
             height = video_stream.get("height")
             if width and height:
@@ -358,13 +363,21 @@ class StreamProber:
             if fps:
                 stats.fps = str(fps)
 
-            # Extract video bitrate
+            # Extract video bitrate (try multiple sources)
             video_bit_rate = video_stream.get("bit_rate")
+            if not video_bit_rate:
+                # Try tags.BPS as fallback (common in HLS/MPEG-TS)
+                video_bit_rate = video_stream.get("tags", {}).get("BPS")
+            if not video_bit_rate:
+                # Try tags.BPS-eng (variant-BPS)
+                video_bit_rate = video_stream.get("tags", {}).get("BPS-eng")
+
             if video_bit_rate:
                 try:
                     stats.video_bitrate = int(video_bit_rate)
+                    logger.debug(f"Extracted video bitrate: {stats.video_bitrate} bps")
                 except (ValueError, TypeError):
-                    pass
+                    logger.warning(f"Failed to parse video bitrate: {video_bit_rate}")
 
         # Find audio stream
         audio_stream = next(

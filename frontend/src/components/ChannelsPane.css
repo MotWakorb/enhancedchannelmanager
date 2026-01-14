@@ -1449,9 +1449,19 @@
   color: #4ade80;
 }
 
+.meta-tag.bitrate {
+  background: rgba(59, 130, 246, 0.2);
+  color: #60a5fa;
+}
+
 .meta-tag.codec {
   background: rgba(168, 85, 247, 0.2);
   color: #c084fc;
+}
+
+.meta-tag.audio-codec {
+  background: rgba(139, 92, 246, 0.2);
+  color: #a78bfa;
 }
 
 .meta-tag.audio {
