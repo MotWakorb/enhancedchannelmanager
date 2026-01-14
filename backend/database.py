@@ -89,8 +89,20 @@ def _run_migrations(engine) -> None:
                 ))
                 conn.commit()
                 logger.info("Migration complete: added total_watch_seconds column")
-            else:
-                logger.debug("No migrations needed - schema is up to date")
+
+            # Check if video_bitrate column exists in stream_stats
+            result = conn.execute(text("PRAGMA table_info(stream_stats)"))
+            columns = [row[1] for row in result.fetchall()]
+
+            if "video_bitrate" not in columns:
+                logger.info("Adding video_bitrate column to stream_stats")
+                conn.execute(text(
+                    "ALTER TABLE stream_stats ADD COLUMN video_bitrate BIGINT"
+                ))
+                conn.commit()
+                logger.info("Migration complete: added video_bitrate column")
+
+            logger.debug("All migrations complete - schema is up to date")
     except Exception as e:
         logger.exception(f"Migration failed: {e}")
         raise
