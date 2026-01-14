@@ -1575,3 +1575,66 @@ export async function getBandwidthStats(): Promise<import('../types').BandwidthS
 export async function getTopWatchedChannels(limit: number = 10, sortBy: 'views' | 'time' = 'views'): Promise<import('../types').ChannelWatchStats[]> {
   return fetchJson(`${API_BASE}/stats/top-watched?limit=${limit}&sort_by=${sortBy}`);
 }
+
+// =============================================================================
+// Stream Stats / Probing
+// =============================================================================
+
+/**
+ * Get all stream probe statistics.
+ */
+export async function getStreamStats(): Promise<import('../types').StreamStats[]> {
+  return fetchJson(`${API_BASE}/stream-stats`);
+}
+
+/**
+ * Get probe stats for a specific stream.
+ */
+export async function getStreamStatsById(streamId: number): Promise<import('../types').StreamStats> {
+  return fetchJson(`${API_BASE}/stream-stats/${streamId}`);
+}
+
+/**
+ * Get probe stats for multiple streams by their IDs.
+ */
+export async function getStreamStatsByIds(streamIds: number[]): Promise<Record<number, import('../types').StreamStats>> {
+  return fetchJson(`${API_BASE}/stream-stats/by-ids`, {
+    method: 'POST',
+    body: JSON.stringify({ stream_ids: streamIds }),
+  });
+}
+
+/**
+ * Get summary of stream probe statistics.
+ */
+export async function getStreamStatsSummary(): Promise<import('../types').StreamStatsSummary> {
+  return fetchJson(`${API_BASE}/stream-stats/summary`);
+}
+
+/**
+ * Probe a single stream on-demand.
+ */
+export async function probeStream(streamId: number): Promise<import('../types').StreamStats> {
+  return fetchJson(`${API_BASE}/stream-stats/probe/${streamId}`, {
+    method: 'POST',
+  });
+}
+
+/**
+ * Probe multiple streams on-demand.
+ */
+export async function probeBulkStreams(streamIds: number[]): Promise<import('../types').BulkProbeResult> {
+  return fetchJson(`${API_BASE}/stream-stats/probe/bulk`, {
+    method: 'POST',
+    body: JSON.stringify({ stream_ids: streamIds }),
+  });
+}
+
+/**
+ * Start background probe of all streams.
+ */
+export async function probeAllStreams(): Promise<{ status: string; message: string }> {
+  return fetchJson(`${API_BASE}/stream-stats/probe/all`, {
+    method: 'POST',
+  });
+}

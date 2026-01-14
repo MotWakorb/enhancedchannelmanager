@@ -25,6 +25,7 @@ from cache import get_cache
 from database import init_db
 import journal
 from bandwidth_tracker import BandwidthTracker, set_tracker, get_tracker
+from stream_prober import StreamProber, set_prober, get_prober
 
 # Configure logging
 # Start with environment variable, will be updated from settings in startup
@@ -94,6 +95,26 @@ async def startup_event():
         except Exception as e:
             logger.error(f"Failed to start bandwidth tracker: {e}", exc_info=True)
 
+        # Start stream prober if enabled
+        if settings.stream_probe_enabled:
+            try:
+                logger.debug(
+                    f"Starting stream prober (interval: {settings.stream_probe_interval_hours}h, "
+                    f"batch: {settings.stream_probe_batch_size}, timeout: {settings.stream_probe_timeout}s)"
+                )
+                prober = StreamProber(
+                    get_client(),
+                    probe_timeout=settings.stream_probe_timeout,
+                    probe_batch_size=settings.stream_probe_batch_size,
+                    probe_interval_hours=settings.stream_probe_interval_hours,
+                    probe_enabled=settings.stream_probe_enabled,
+                )
+                set_prober(prober)
+                await prober.start()
+                logger.info("Stream prober started successfully")
+            except Exception as e:
+                logger.error(f"Failed to start stream prober: {e}", exc_info=True)
+
     logger.info("=" * 60)
 
 
@@ -106,6 +127,11 @@ async def shutdown_event():
     tracker = get_tracker()
     if tracker:
         await tracker.stop()
+
+    # Stop stream prober
+    prober = get_prober()
+    if prober:
+        await prober.stop()
 
 
 # Request models
@@ -2573,6 +2599,135 @@ async def get_top_watched_channels(limit: int = 10, sort_by: str = "views"):
         return BandwidthTracker.get_top_watched_channels(limit=limit, sort_by=sort_by)
     except Exception as e:
         logger.error(f"Failed to get top watched channels: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# =============================================================================
+# Stream Stats / Probing Endpoints
+# =============================================================================
+
+
+@app.get("/api/stream-stats")
+async def get_all_stream_stats():
+    """Get all stream probe statistics."""
+    try:
+        return StreamProber.get_all_stats()
+    except Exception as e:
+        logger.error(f"Failed to get stream stats: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/stream-stats/summary")
+async def get_stream_stats_summary():
+    """Get summary of stream probe statistics."""
+    try:
+        return StreamProber.get_stats_summary()
+    except Exception as e:
+        logger.error(f"Failed to get stream stats summary: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/stream-stats/{stream_id}")
+async def get_stream_stats_by_id(stream_id: int):
+    """Get probe stats for a specific stream."""
+    try:
+        stats = StreamProber.get_stats_by_stream_id(stream_id)
+        if not stats:
+            raise HTTPException(status_code=404, detail="Stream stats not found")
+        return stats
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get stream stats for {stream_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class BulkStreamStatsRequest(BaseModel):
+    stream_ids: list[int]
+
+
+@app.post("/api/stream-stats/by-ids")
+async def get_stream_stats_by_ids(request: BulkStreamStatsRequest):
+    """Get probe stats for multiple streams by their IDs."""
+    try:
+        return StreamProber.get_stats_by_stream_ids(request.stream_ids)
+    except Exception as e:
+        logger.error(f"Failed to get stream stats by IDs: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class BulkProbeRequest(BaseModel):
+    stream_ids: list[int]
+
+
+# NOTE: /probe/bulk and /probe/all MUST be defined BEFORE /probe/{stream_id}
+# to avoid the path parameter matching "bulk" or "all" as a stream_id
+@app.post("/api/stream-stats/probe/bulk")
+async def probe_bulk_streams(request: BulkProbeRequest):
+    """Trigger on-demand probe for multiple streams."""
+    prober = get_prober()
+    if not prober:
+        raise HTTPException(status_code=503, detail="Stream prober not available")
+
+    try:
+        import asyncio
+
+        all_streams = await prober._fetch_all_streams()
+        stream_map = {s["id"]: s for s in all_streams}
+
+        results = []
+        for stream_id in request.stream_ids:
+            stream = stream_map.get(stream_id)
+            if stream:
+                result = await prober.probe_stream(
+                    stream_id, stream.get("url"), stream.get("name")
+                )
+                results.append(result)
+                await asyncio.sleep(0.5)  # Rate limiting
+
+        return {"probed": len(results), "results": results}
+    except Exception as e:
+        logger.error(f"Bulk probe failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/stream-stats/probe/all")
+async def probe_all_streams_endpoint():
+    """Trigger probe for all streams (background task)."""
+    prober = get_prober()
+    if not prober:
+        raise HTTPException(status_code=503, detail="Stream prober not available")
+
+    import asyncio
+
+    # Start background task
+    asyncio.create_task(prober.probe_all_streams())
+    return {"status": "started", "message": "Background probe started"}
+
+
+@app.post("/api/stream-stats/probe/{stream_id}")
+async def probe_single_stream(stream_id: int):
+    """Trigger on-demand probe for a single stream."""
+    prober = get_prober()
+    if not prober:
+        raise HTTPException(status_code=503, detail="Stream prober not available")
+
+    try:
+        # Get all streams and find the one we want
+        all_streams = await prober._fetch_all_streams()
+        stream = next((s for s in all_streams if s["id"] == stream_id), None)
+
+        if not stream:
+            raise HTTPException(status_code=404, detail="Stream not found")
+
+        result = await prober.probe_stream(
+            stream_id, stream.get("url"), stream.get("name")
+        )
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to probe stream {stream_id}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
