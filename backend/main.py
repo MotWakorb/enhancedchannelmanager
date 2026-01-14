@@ -113,6 +113,7 @@ async def startup_event():
                 schedule_time=settings.stream_probe_schedule_time,
                 user_timezone=settings.user_timezone,
                 probe_channel_groups=settings.probe_channel_groups,
+                bitrate_sample_duration=settings.bitrate_sample_duration,
             )
             logger.info(f"StreamProber instance created: {prober is not None}")
 
@@ -439,6 +440,7 @@ async def restart_services():
                 schedule_time=settings.stream_probe_schedule_time,
                 user_timezone=settings.user_timezone,
                 probe_channel_groups=settings.probe_channel_groups,
+                bitrate_sample_duration=settings.bitrate_sample_duration,
             )
             set_prober(new_prober)
             await new_prober.start()

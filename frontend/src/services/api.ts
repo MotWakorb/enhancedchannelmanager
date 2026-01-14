@@ -454,6 +454,7 @@ export interface SettingsResponse {
   stream_probe_timeout: number;  // Timeout in seconds for each probe
   stream_probe_schedule_time: string;  // Time of day to run probes (HH:MM, 24h format)
   probe_channel_groups: string[];  // Channel group names to probe (empty = all groups)
+  bitrate_sample_duration: number;  // Duration in seconds to sample stream for bitrate (10, 20, or 30)
 }
 
 export interface TestConnectionResult {
@@ -497,6 +498,7 @@ export async function saveSettings(settings: {
   stream_probe_timeout?: number;  // Optional - timeout in seconds, defaults to 30
   stream_probe_schedule_time?: string;  // Optional - time of day for probes (HH:MM), defaults to "03:00"
   probe_channel_groups?: string[];  // Optional - channel group names to probe, empty = all groups
+  bitrate_sample_duration?: number;  // Optional - duration in seconds to sample stream for bitrate (10, 20, or 30), defaults to 10
 }): Promise<{ status: string; configured: boolean }> {
   return fetchJson(`${API_BASE}/settings`, {
     method: 'POST',
