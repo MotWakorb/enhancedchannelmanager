@@ -139,6 +139,24 @@ function formatFps(fps: number | undefined): string {
   return fps.toFixed(2);
 }
 
+// Check if event type is streaming-related (not login, refresh, etc.)
+function isStreamingEvent(eventType: string): boolean {
+  const type = eventType.toLowerCase();
+  // Include: channel start/stop, client connect/disconnect, buffering, errors
+  // Exclude: login_success, login_failed, m3u_refresh, settings changes, etc.
+  return (
+    type.includes('start') ||
+    type.includes('stop') ||
+    type.includes('connect') ||
+    type.includes('disconnect') ||
+    type.includes('buffer') ||
+    type.includes('error') ||
+    type.includes('channel') ||
+    type.includes('stream') ||
+    type.includes('client')
+  );
+}
+
 // Get event type display info
 function getEventTypeInfo(eventType: string): { icon: string; className: string; label: string } {
   const type = eventType.toLowerCase();
@@ -611,10 +629,11 @@ export function StatsTab() {
     });
   };
 
-  // Filter events
+  // Filter events - first exclude non-streaming events, then apply user filter
+  const streamingEvents = events.filter(e => isStreamingEvent(e.event_type || ''));
   const filteredEvents = eventFilter
-    ? events.filter(e => e.event_type?.toLowerCase().includes(eventFilter.toLowerCase()))
-    : events;
+    ? streamingEvents.filter(e => e.event_type?.toLowerCase().includes(eventFilter.toLowerCase()))
+    : streamingEvents;
 
   // Calculate totals
   const totalClients = channelStats?.channels?.reduce((sum, ch) => sum + (ch.client_count || 0), 0) || 0;
@@ -1068,8 +1087,8 @@ export function StatsTab() {
           </div>
         )}
 
-        {/* System Events */}
-        {events.length > 0 && (
+        {/* System Events - only show streaming-related events */}
+        {streamingEvents.length > 0 && (
           <div className="events-section">
             <div className="events-header">
               <h3 className="section-title">Recent Events</h3>
