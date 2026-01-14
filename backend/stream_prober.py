@@ -57,6 +57,8 @@ class StreamProber:
         self._probe_progress_current = 0
         self._probe_progress_status = "idle"
         self._probe_progress_current_stream = ""
+        self._probe_progress_success_count = 0
+        self._probe_progress_failed_count = 0
 
     async def start(self):
         """Start the background scheduled probing task."""
@@ -468,6 +470,8 @@ class StreamProber:
         self._probe_progress_total = 0
         self._probe_progress_status = "fetching"
         self._probe_progress_current_stream = ""
+        self._probe_progress_success_count = 0
+        self._probe_progress_failed_count = 0
 
         probed_count = 0
         try:
@@ -496,9 +500,17 @@ class StreamProber:
                 self._probe_progress_current = probed_count + 1
                 self._probe_progress_current_stream = stream_name
 
-                await self.probe_stream(
+                result = await self.probe_stream(
                     stream["id"], stream.get("url"), stream_name
                 )
+
+                # Track success/failure
+                probe_status = result.get("probe_status", "failed")
+                if probe_status == "success":
+                    self._probe_progress_success_count += 1
+                else:
+                    self._probe_progress_failed_count += 1
+
                 probed_count += 1
                 await asyncio.sleep(0.5)  # Rate limiting
 
@@ -522,6 +534,8 @@ class StreamProber:
             "current": self._probe_progress_current,
             "status": self._probe_progress_status,
             "current_stream": self._probe_progress_current_stream,
+            "success_count": self._probe_progress_success_count,
+            "failed_count": self._probe_progress_failed_count,
             "percentage": round((self._probe_progress_current / self._probe_progress_total * 100) if self._probe_progress_total > 0 else 0, 1)
         }
 
