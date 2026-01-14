@@ -1152,7 +1152,7 @@ async def get_channel_groups_with_streams():
                 if stream_ids:  # Has at least one stream
                     channels_with_streams += 1
                     # Record this group as having a channel with streams
-                    channel_group_id = channel.get("channel_group")
+                    channel_group_id = channel.get("channel_group_id")
 
                     # Collect samples for debugging - dump first channel completely
                     if len(sample_channel_groups) == 0:

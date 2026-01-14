@@ -469,9 +469,9 @@ class StreamProber:
                 result = await self.client.get_channels(page=page, page_size=500)
                 channels = result.get("results", [])
                 for channel in channels:
-                    # If groups are selected, filter by channel_group
+                    # If groups are selected, filter by channel_group_id
                     if selected_group_ids:
-                        channel_group_id = channel.get("channel_group")
+                        channel_group_id = channel.get("channel_group_id")
                         if channel_group_id not in selected_group_ids:
                             continue  # Skip channels not in selected groups
 
