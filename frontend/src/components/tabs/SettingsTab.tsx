@@ -54,6 +54,14 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
   const [backendLogLevel, setBackendLogLevel] = useState('INFO');
   const [frontendLogLevel, setFrontendLogLevel] = useState('INFO');
 
+  // Stream probe settings
+  const [streamProbeEnabled, setStreamProbeEnabled] = useState(true);
+  const [streamProbeIntervalHours, setStreamProbeIntervalHours] = useState(24);
+  const [streamProbeBatchSize, setStreamProbeBatchSize] = useState(10);
+  const [streamProbeTimeout, setStreamProbeTimeout] = useState(30);
+  const [probingAll, setProbingAll] = useState(false);
+  const [probeAllResult, setProbeAllResult] = useState<{ success: boolean; message: string } | null>(null);
+
   // Preserve settings not managed by this tab (to avoid overwriting them on save)
   const [linkedM3UAccounts, setLinkedM3UAccounts] = useState<number[][]>([]);
 
@@ -123,6 +131,11 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
         logger.setLevel(frontendLogLevel as FrontendLogLevel);
       }
       setLinkedM3UAccounts(settings.linked_m3u_accounts ?? []);
+      // Stream probe settings
+      setStreamProbeEnabled(settings.stream_probe_enabled ?? true);
+      setStreamProbeIntervalHours(settings.stream_probe_interval_hours ?? 24);
+      setStreamProbeBatchSize(settings.stream_probe_batch_size ?? 10);
+      setStreamProbeTimeout(settings.stream_probe_timeout ?? 30);
       setNeedsRestart(false);
       setRestartResult(null);
       setTestResult(null);
@@ -208,6 +221,11 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
         frontend_log_level: frontendLogLevel,
         vlc_open_behavior: vlcOpenBehavior,
         linked_m3u_accounts: linkedM3UAccounts,
+        // Stream probe settings
+        stream_probe_enabled: streamProbeEnabled,
+        stream_probe_interval_hours: streamProbeIntervalHours,
+        stream_probe_batch_size: streamProbeBatchSize,
+        stream_probe_timeout: streamProbeTimeout,
       });
       // Apply frontend log level immediately
       const frontendLevel = frontendLogLevel === 'WARNING' ? 'WARN' : frontendLogLevel;
@@ -256,6 +274,22 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
       setRestartResult({ success: false, message: 'Failed to restart services' });
     } finally {
       setRestarting(false);
+    }
+  };
+
+  const handleProbeAllStreams = async () => {
+    setProbingAll(true);
+    setProbeAllResult(null);
+    try {
+      const result = await api.probeAllStreams();
+      setProbeAllResult({ success: true, message: result.message || 'Background probe started' });
+      // Clear result after 8 seconds
+      setTimeout(() => setProbeAllResult(null), 8000);
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : 'Failed to start probe';
+      setProbeAllResult({ success: false, message: errorMessage });
+    } finally {
+      setProbingAll(false);
     }
   };
 
@@ -1145,7 +1179,103 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
     <div className="settings-page">
       <div className="settings-page-header">
         <h2>Maintenance</h2>
-        <p>Database cleanup and maintenance tools.</p>
+        <p>Stream probing and database cleanup tools.</p>
+      </div>
+
+      {/* Stream Probing Section */}
+      <div className="settings-section">
+        <div className="settings-section-header">
+          <span className="material-icons">speed</span>
+          <h3>Stream Probing</h3>
+        </div>
+        <p className="form-hint" style={{ marginBottom: '1rem' }}>
+          Use ffprobe to gather stream metadata (resolution, FPS, codec, audio channels).
+          Scheduled probing runs automatically in the background.
+        </p>
+
+        <div className="checkbox-group">
+          <input
+            id="streamProbeEnabled"
+            type="checkbox"
+            checked={streamProbeEnabled}
+            onChange={(e) => setStreamProbeEnabled(e.target.checked)}
+          />
+          <div className="checkbox-content">
+            <label htmlFor="streamProbeEnabled">Enable scheduled probing</label>
+            <p>
+              Automatically probe streams on a schedule to keep metadata up to date.
+            </p>
+          </div>
+        </div>
+
+        {streamProbeEnabled && (
+          <div className="settings-group" style={{ marginTop: '1rem' }}>
+            <div className="form-group">
+              <label htmlFor="probeInterval">Probe interval (hours)</label>
+              <input
+                id="probeInterval"
+                type="number"
+                min="1"
+                max="168"
+                value={streamProbeIntervalHours}
+                onChange={(e) => setStreamProbeIntervalHours(Math.max(1, Math.min(168, parseInt(e.target.value) || 24)))}
+                style={{ width: '100px' }}
+              />
+              <span className="form-hint">How often to run scheduled probes (1-168 hours)</span>
+            </div>
+
+            <div className="form-group">
+              <label htmlFor="probeBatchSize">Batch size</label>
+              <input
+                id="probeBatchSize"
+                type="number"
+                min="1"
+                max="100"
+                value={streamProbeBatchSize}
+                onChange={(e) => setStreamProbeBatchSize(Math.max(1, Math.min(100, parseInt(e.target.value) || 10)))}
+                style={{ width: '100px' }}
+              />
+              <span className="form-hint">Streams to probe per scheduled cycle (1-100)</span>
+            </div>
+
+            <div className="form-group">
+              <label htmlFor="probeTimeout">Probe timeout (seconds)</label>
+              <input
+                id="probeTimeout"
+                type="number"
+                min="5"
+                max="120"
+                value={streamProbeTimeout}
+                onChange={(e) => setStreamProbeTimeout(Math.max(5, Math.min(120, parseInt(e.target.value) || 30)))}
+                style={{ width: '100px' }}
+              />
+              <span className="form-hint">Timeout for each probe attempt (5-120 seconds)</span>
+            </div>
+          </div>
+        )}
+
+        <div className="settings-group" style={{ marginTop: '1rem' }}>
+          <button
+            className="btn-secondary"
+            onClick={handleProbeAllStreams}
+            disabled={probingAll}
+          >
+            <span className={`material-icons ${probingAll ? 'spinning' : ''}`}>
+              {probingAll ? 'sync' : 'play_arrow'}
+            </span>
+            {probingAll ? 'Starting...' : 'Probe All Streams Now'}
+          </button>
+          <span className="form-hint" style={{ marginLeft: '1rem' }}>
+            Start a background probe of all streams immediately
+          </span>
+
+          {probeAllResult && (
+            <div className={probeAllResult.success ? 'success-message' : 'error-message'} style={{ marginTop: '1rem' }}>
+              <span className="material-icons">{probeAllResult.success ? 'check_circle' : 'error'}</span>
+              {probeAllResult.message}
+            </div>
+          )}
+        </div>
       </div>
 
       <div className="settings-section">

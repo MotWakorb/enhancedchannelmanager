@@ -192,6 +192,11 @@ class SettingsRequest(BaseModel):
     backend_log_level: str = "INFO"
     frontend_log_level: str = "INFO"
     vlc_open_behavior: str = "m3u_fallback"
+    # Stream probe settings
+    stream_probe_enabled: bool = True
+    stream_probe_interval_hours: int = 24
+    stream_probe_batch_size: int = 10
+    stream_probe_timeout: int = 30
 
 
 class SettingsResponse(BaseModel):
@@ -219,6 +224,11 @@ class SettingsResponse(BaseModel):
     backend_log_level: str
     frontend_log_level: str
     vlc_open_behavior: str
+    # Stream probe settings
+    stream_probe_enabled: bool
+    stream_probe_interval_hours: int
+    stream_probe_batch_size: int
+    stream_probe_timeout: int
 
 
 class TestConnectionRequest(BaseModel):
@@ -258,6 +268,10 @@ async def get_current_settings():
         backend_log_level=settings.backend_log_level,
         frontend_log_level=settings.frontend_log_level,
         vlc_open_behavior=settings.vlc_open_behavior,
+        stream_probe_enabled=settings.stream_probe_enabled,
+        stream_probe_interval_hours=settings.stream_probe_interval_hours,
+        stream_probe_batch_size=settings.stream_probe_batch_size,
+        stream_probe_timeout=settings.stream_probe_timeout,
     )
 
 
@@ -308,6 +322,10 @@ async def update_settings(request: SettingsRequest):
         backend_log_level=request.backend_log_level,
         frontend_log_level=request.frontend_log_level,
         vlc_open_behavior=request.vlc_open_behavior,
+        stream_probe_enabled=request.stream_probe_enabled,
+        stream_probe_interval_hours=request.stream_probe_interval_hours,
+        stream_probe_batch_size=request.stream_probe_batch_size,
+        stream_probe_timeout=request.stream_probe_timeout,
     )
     save_settings(new_settings)
     clear_settings_cache()
