@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import * as api from '../../services/api';
 import { NETWORK_PREFIXES, NETWORK_SUFFIXES } from '../../services/api';
-import type { Theme } from '../../services/api';
+import type { Theme, ProbeHistoryEntry } from '../../services/api';
 import type { ChannelProfile } from '../../types';
 import { logger } from '../../utils/logger';
 import type { LogLevel as FrontendLogLevel } from '../../utils/logger';
@@ -77,11 +77,13 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
   const [showProbeResultsModal, setShowProbeResultsModal] = useState(false);
   const [probeResultsType, setProbeResultsType] = useState<'success' | 'failed'>('success');
   const [probeResults, setProbeResults] = useState<{
-    success_streams: Array<{ id: number; name: string }>;
-    failed_streams: Array<{ id: number; name: string }>;
+    success_streams: Array<{ id: number; name: string; url?: string }>;
+    failed_streams: Array<{ id: number; name: string; url?: string }>;
     success_count: number;
     failed_count: number;
   } | null>(null);
+  const [probeHistory, setProbeHistory] = useState<ProbeHistoryEntry[]>([]);
+  const [copiedUrl, setCopiedUrl] = useState<string | null>(null);
   const [availableChannelGroups, setAvailableChannelGroups] = useState<Array<{ id: number; name: string }>>([]);
   const [probeChannelGroups, setProbeChannelGroups] = useState<string[]>([]);
   const [showGroupSelectModal, setShowGroupSelectModal] = useState(false);
@@ -119,6 +121,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
     loadSettings();
     loadStreamCount();
     loadAvailableChannelGroups();
+    loadProbeHistory();
   }, []);
 
   // Auto-populate probe channel groups with all groups if empty (default to all checked)
@@ -144,6 +147,8 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
         // Stop polling when probe is complete
         if (!progress.in_progress) {
           setProbingAll(false);
+          // Reload probe history when probe completes
+          loadProbeHistory();
           if (progress.status === 'completed') {
             setProbeAllResult({
               success: true,
@@ -191,6 +196,15 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
       setAvailableChannelGroups(result.groups);
     } catch (err) {
       logger.warn('Failed to load available channel groups', err);
+    }
+  };
+
+  const loadProbeHistory = async () => {
+    try {
+      const history = await api.getProbeHistory();
+      setProbeHistory(history);
+    } catch (err) {
+      logger.warn('Failed to load probe history', err);
     }
   };
 
@@ -415,6 +429,48 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
     // TODO: Implement re-run functionality for failed streams
     // For now, just trigger a full probe again
     await handleProbeAllStreams();
+  };
+
+  const handleCopyUrl = async (url: string) => {
+    try {
+      await navigator.clipboard.writeText(url);
+      setCopiedUrl(url);
+      // Clear the "copied" indicator after 2 seconds
+      setTimeout(() => setCopiedUrl(null), 2000);
+    } catch (err) {
+      logger.error('Failed to copy URL to clipboard', err);
+    }
+  };
+
+  const handleShowHistoryResults = (historyEntry: ProbeHistoryEntry, type: 'success' | 'failed') => {
+    // Use the history entry's streams for the modal
+    setProbeResults({
+      success_streams: historyEntry.success_streams,
+      failed_streams: historyEntry.failed_streams,
+      success_count: historyEntry.success_count,
+      failed_count: historyEntry.failed_count,
+    });
+    setProbeResultsType(type);
+    setShowProbeResultsModal(true);
+  };
+
+  const formatDuration = (seconds: number): string => {
+    if (seconds < 60) return `${seconds}s`;
+    const minutes = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    if (minutes < 60) return `${minutes}m ${secs}s`;
+    const hours = Math.floor(minutes / 60);
+    const mins = minutes % 60;
+    return `${hours}h ${mins}m`;
+  };
+
+  const formatTimestamp = (isoTimestamp: string): string => {
+    try {
+      const date = new Date(isoTimestamp);
+      return date.toLocaleString();
+    } catch {
+      return isoTimestamp;
+    }
   };
 
   const handleLoadOrphanedGroups = async () => {
@@ -1529,6 +1585,93 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
         </div>
       </div>
 
+      {/* Probe History Section */}
+      {probeHistory.length > 0 && (
+        <div className="settings-section">
+          <div className="settings-section-header">
+            <span className="material-icons">history</span>
+            <h3>Probe History</h3>
+          </div>
+          <p className="form-hint" style={{ marginBottom: '1rem' }}>
+            Recent probe runs. Click on success/failed counts to view stream details.
+          </p>
+
+          <div className="probe-history-list">
+            {probeHistory.map((entry, index) => (
+              <div key={index} className="probe-history-item" style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                padding: '0.75rem 1rem',
+                backgroundColor: 'var(--bg-tertiary)',
+                borderRadius: '6px',
+                marginBottom: '0.5rem',
+                border: '1px solid var(--border-color)'
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+                  <span className="material-icons" style={{
+                    color: entry.status === 'completed' ? '#2ecc71' : entry.status === 'failed' ? '#e74c3c' : '#f39c12'
+                  }}>
+                    {entry.status === 'completed' ? 'check_circle' : entry.status === 'failed' ? 'error' : 'warning'}
+                  </span>
+                  <div>
+                    <div style={{ fontWeight: '500', fontSize: '14px' }}>
+                      {formatTimestamp(entry.timestamp)}
+                    </div>
+                    <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
+                      {entry.total} streams in {formatDuration(entry.duration_seconds)}
+                      {entry.error && <span style={{ color: '#e74c3c' }}> - {entry.error}</span>}
+                    </div>
+                  </div>
+                </div>
+                <div style={{ display: 'flex', gap: '0.5rem' }}>
+                  <button
+                    className="probe-history-btn success"
+                    onClick={() => handleShowHistoryResults(entry, 'success')}
+                    style={{
+                      padding: '0.4rem 0.8rem',
+                      fontSize: '13px',
+                      backgroundColor: 'rgba(46, 204, 113, 0.15)',
+                      color: '#2ecc71',
+                      border: '1px solid rgba(46, 204, 113, 0.3)',
+                      borderRadius: '4px',
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '0.3rem'
+                    }}
+                    title="View successful streams"
+                  >
+                    <span className="material-icons" style={{ fontSize: '16px' }}>check</span>
+                    {entry.success_count}
+                  </button>
+                  <button
+                    className="probe-history-btn failed"
+                    onClick={() => handleShowHistoryResults(entry, 'failed')}
+                    style={{
+                      padding: '0.4rem 0.8rem',
+                      fontSize: '13px',
+                      backgroundColor: 'rgba(231, 76, 60, 0.15)',
+                      color: '#e74c3c',
+                      border: '1px solid rgba(231, 76, 60, 0.3)',
+                      borderRadius: '4px',
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '0.3rem'
+                    }}
+                    title="View failed streams"
+                  >
+                    <span className="material-icons" style={{ fontSize: '16px' }}>close</span>
+                    {entry.failed_count}
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       <div className="settings-section">
         <div className="settings-section-header">
           <span className="material-icons">folder_delete</span>
@@ -1680,8 +1823,35 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
                       key={stream.id}
                       className={`probe-result-item ${probeResultsType === 'success' ? 'success' : 'failed'}`}
                     >
-                      <div className="probe-result-item-name">{stream.name}</div>
-                      <div className="probe-result-item-id">ID: {stream.id}</div>
+                      <div className="probe-result-item-info">
+                        <div className="probe-result-item-name">{stream.name}</div>
+                        <div className="probe-result-item-id">ID: {stream.id}</div>
+                      </div>
+                      {stream.url && (
+                        <button
+                          className="probe-result-copy-btn"
+                          onClick={() => handleCopyUrl(stream.url!)}
+                          title={copiedUrl === stream.url ? 'Copied!' : 'Copy stream URL'}
+                          style={{
+                            padding: '0.3rem 0.6rem',
+                            fontSize: '12px',
+                            backgroundColor: copiedUrl === stream.url ? 'rgba(46, 204, 113, 0.2)' : 'var(--bg-secondary)',
+                            color: copiedUrl === stream.url ? '#2ecc71' : 'var(--text-secondary)',
+                            border: '1px solid var(--border-color)',
+                            borderRadius: '4px',
+                            cursor: 'pointer',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '0.25rem',
+                            flexShrink: 0
+                          }}
+                        >
+                          <span className="material-icons" style={{ fontSize: '14px' }}>
+                            {copiedUrl === stream.url ? 'check' : 'content_copy'}
+                          </span>
+                          {copiedUrl === stream.url ? 'Copied' : 'Copy URL'}
+                        </button>
+                      )}
                     </div>
                   ))}
                 </div>

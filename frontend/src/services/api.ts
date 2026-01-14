@@ -1719,17 +1719,36 @@ export async function getProbeProgress(): Promise<{
 }
 
 export async function getProbeResults(): Promise<{
-  success_streams: Array<{ id: number; name: string }>;
-  failed_streams: Array<{ id: number; name: string }>;
+  success_streams: Array<{ id: number; name: string; url?: string }>;
+  failed_streams: Array<{ id: number; name: string; url?: string }>;
   success_count: number;
   failed_count: number;
 }> {
   return fetchJson(`${API_BASE}/stream-stats/probe/results`, {
     method: 'GET',
   }) as Promise<{
-    success_streams: Array<{ id: number; name: string }>;
-    failed_streams: Array<{ id: number; name: string }>;
+    success_streams: Array<{ id: number; name: string; url?: string }>;
+    failed_streams: Array<{ id: number; name: string; url?: string }>;
     success_count: number;
     failed_count: number;
   }>;
+}
+
+export interface ProbeHistoryEntry {
+  timestamp: string;
+  end_timestamp: string;
+  duration_seconds: number;
+  total: number;
+  success_count: number;
+  failed_count: number;
+  status: string;
+  error?: string;
+  success_streams: Array<{ id: number; name: string; url?: string }>;
+  failed_streams: Array<{ id: number; name: string; url?: string }>;
+}
+
+export async function getProbeHistory(): Promise<ProbeHistoryEntry[]> {
+  return fetchJson(`${API_BASE}/stream-stats/probe/history`, {
+    method: 'GET',
+  }) as Promise<ProbeHistoryEntry[]>;
 }
