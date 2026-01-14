@@ -56,6 +56,7 @@ class StreamProber:
         self._probe_progress_total = 0
         self._probe_progress_current = 0
         self._probe_progress_status = "idle"
+        self._probe_progress_current_stream = ""
 
     async def start(self):
         """Start the background scheduled probing task."""
@@ -434,8 +435,30 @@ class StreamProber:
                 break
         return all_streams
 
+    async def _fetch_channel_stream_ids(self) -> set:
+        """Fetch all unique stream IDs from channels (paginated)."""
+        channel_stream_ids = set()
+        page = 1
+        while True:
+            try:
+                result = await self.client.get_channels(page=page, page_size=500)
+                channels = result.get("results", [])
+                for channel in channels:
+                    # Each channel has a "streams" field which is a list of stream IDs
+                    stream_ids = channel.get("streams", [])
+                    channel_stream_ids.update(stream_ids)
+                if not result.get("next"):
+                    break
+                page += 1
+                if page > 50:  # Safety limit
+                    break
+            except Exception as e:
+                logger.error(f"Failed to fetch channels page {page}: {e}")
+                break
+        return channel_stream_ids
+
     async def probe_all_streams(self):
-        """Probe all streams (runs in background)."""
+        """Probe all streams that are in channels (runs in background)."""
         if self._probing_in_progress:
             logger.warning("Probe already in progress")
             return {"status": "already_running"}
@@ -444,32 +467,49 @@ class StreamProber:
         self._probe_progress_current = 0
         self._probe_progress_total = 0
         self._probe_progress_status = "fetching"
+        self._probe_progress_current_stream = ""
 
         probed_count = 0
         try:
-            streams = await self._fetch_all_streams()
-            self._probe_progress_total = len(streams)
-            self._probe_progress_status = "probing"
-            logger.info(f"Starting probe of {len(streams)} streams")
+            # Fetch all channel stream IDs first
+            logger.info("Fetching channel stream IDs...")
+            channel_stream_ids = await self._fetch_channel_stream_ids()
+            logger.info(f"Found {len(channel_stream_ids)} unique streams across all channels")
 
-            for stream in streams:
+            # Fetch all streams
+            logger.info("Fetching stream details...")
+            all_streams = await self._fetch_all_streams()
+
+            # Filter to only streams that are in channels
+            streams_to_probe = [s for s in all_streams if s["id"] in channel_stream_ids]
+
+            self._probe_progress_total = len(streams_to_probe)
+            self._probe_progress_status = "probing"
+            logger.info(f"Starting probe of {len(streams_to_probe)} streams (filtered from {len(all_streams)} total)")
+
+            for stream in streams_to_probe:
                 if not self._running:
                     self._probe_progress_status = "cancelled"
                     break
 
+                stream_name = stream.get("name", f"Stream {stream['id']}")
                 self._probe_progress_current = probed_count + 1
+                self._probe_progress_current_stream = stream_name
+
                 await self.probe_stream(
-                    stream["id"], stream.get("url"), stream.get("name")
+                    stream["id"], stream.get("url"), stream_name
                 )
                 probed_count += 1
                 await asyncio.sleep(0.5)  # Rate limiting
 
             logger.info(f"Completed probing {probed_count} streams")
             self._probe_progress_status = "completed"
+            self._probe_progress_current_stream = ""
             return {"status": "completed", "probed": probed_count}
         except Exception as e:
             logger.error(f"Probe all streams failed: {e}")
             self._probe_progress_status = "failed"
+            self._probe_progress_current_stream = ""
             return {"status": "failed", "error": str(e), "probed": probed_count}
         finally:
             self._probing_in_progress = False
@@ -481,6 +521,7 @@ class StreamProber:
             "total": self._probe_progress_total,
             "current": self._probe_progress_current,
             "status": self._probe_progress_status,
+            "current_stream": self._probe_progress_current_stream,
             "percentage": round((self._probe_progress_current / self._probe_progress_total * 100) if self._probe_progress_total > 0 else 0, 1)
         }
 
