@@ -1677,3 +1677,24 @@ export async function probeAllStreams(): Promise<{ status: string; message: stri
     throw error;
   }
 }
+
+/**
+ * Get current probe all streams progress.
+ */
+export async function getProbeProgress(): Promise<{
+  in_progress: boolean;
+  total: number;
+  current: number;
+  status: string;
+  percentage: number;
+}> {
+  return fetchJson(`${API_BASE}/stream-stats/probe/progress`, {
+    method: 'GET',
+  }) as Promise<{
+    in_progress: boolean;
+    total: number;
+    current: number;
+    status: string;
+    percentage: number;
+  }>;
+}

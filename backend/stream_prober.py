@@ -52,6 +52,10 @@ class StreamProber:
         self._task: Optional[asyncio.Task] = None
         self._running = False
         self._probing_in_progress = False
+        # Progress tracking for probe all streams
+        self._probe_progress_total = 0
+        self._probe_progress_current = 0
+        self._probe_progress_status = "idle"
 
     async def start(self):
         """Start the background scheduled probing task."""
@@ -437,14 +441,23 @@ class StreamProber:
             return {"status": "already_running"}
 
         self._probing_in_progress = True
+        self._probe_progress_current = 0
+        self._probe_progress_total = 0
+        self._probe_progress_status = "fetching"
+
         probed_count = 0
         try:
             streams = await self._fetch_all_streams()
+            self._probe_progress_total = len(streams)
+            self._probe_progress_status = "probing"
             logger.info(f"Starting probe of {len(streams)} streams")
 
             for stream in streams:
                 if not self._running:
+                    self._probe_progress_status = "cancelled"
                     break
+
+                self._probe_progress_current = probed_count + 1
                 await self.probe_stream(
                     stream["id"], stream.get("url"), stream.get("name")
                 )
@@ -452,12 +465,24 @@ class StreamProber:
                 await asyncio.sleep(0.5)  # Rate limiting
 
             logger.info(f"Completed probing {probed_count} streams")
+            self._probe_progress_status = "completed"
             return {"status": "completed", "probed": probed_count}
         except Exception as e:
             logger.error(f"Probe all streams failed: {e}")
+            self._probe_progress_status = "failed"
             return {"status": "failed", "error": str(e), "probed": probed_count}
         finally:
             self._probing_in_progress = False
+
+    def get_probe_progress(self) -> dict:
+        """Get current probe all streams progress."""
+        return {
+            "in_progress": self._probing_in_progress,
+            "total": self._probe_progress_total,
+            "current": self._probe_progress_current,
+            "status": self._probe_progress_status,
+            "percentage": round((self._probe_progress_current / self._probe_progress_total * 100) if self._probe_progress_total > 0 else 0, 1)
+        }
 
     @staticmethod
     def get_all_stats() -> list:
