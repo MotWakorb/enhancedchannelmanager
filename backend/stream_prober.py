@@ -39,12 +39,16 @@ class StreamProber:
         probe_batch_size: int = DEFAULT_PROBE_BATCH_SIZE,
         probe_interval_hours: int = DEFAULT_PROBE_INTERVAL_HOURS,
         probe_enabled: bool = True,
+        schedule_time: str = "03:00",  # HH:MM format, 24h
+        user_timezone: str = "",  # IANA timezone name
     ):
         self.client = client
         self.probe_timeout = probe_timeout
         self.probe_batch_size = probe_batch_size
         self.probe_interval_hours = probe_interval_hours
         self.probe_enabled = probe_enabled
+        self.schedule_time = schedule_time
+        self.user_timezone = user_timezone
         self._task: Optional[asyncio.Task] = None
         self._running = False
         self._probing_in_progress = False
@@ -63,7 +67,7 @@ class StreamProber:
         self._running = True
         self._task = asyncio.create_task(self._scheduled_probe_loop())
         logger.info(
-            f"StreamProber started (interval: {self.probe_interval_hours}h, "
+            f"StreamProber started (schedule: {self.schedule_time}, interval: {self.probe_interval_hours}h, "
             f"batch: {self.probe_batch_size}, timeout: {self.probe_timeout}s)"
         )
 
@@ -79,6 +83,46 @@ class StreamProber:
             self._task = None
         logger.info("StreamProber stopped")
 
+    def _get_seconds_until_next_schedule(self) -> int:
+        """Calculate seconds until the next scheduled probe time."""
+        try:
+            # Parse schedule time
+            hour, minute = map(int, self.schedule_time.split(":"))
+        except (ValueError, AttributeError):
+            hour, minute = 3, 0  # Default to 3:00 AM
+
+        now = datetime.utcnow()
+
+        # If user has a timezone set, calculate in their local time
+        if self.user_timezone:
+            try:
+                import zoneinfo
+                tz = zoneinfo.ZoneInfo(self.user_timezone)
+                now_local = datetime.now(tz)
+                # Create next scheduled time in user's timezone
+                next_run_local = now_local.replace(hour=hour, minute=minute, second=0, microsecond=0)
+                if next_run_local <= now_local:
+                    # Already passed today, schedule for tomorrow
+                    next_run_local += timedelta(days=1)
+                # Convert to UTC for sleep calculation
+                next_run_utc = next_run_local.astimezone(zoneinfo.ZoneInfo("UTC")).replace(tzinfo=None)
+                seconds_until = (next_run_utc - now).total_seconds()
+            except Exception as e:
+                logger.warning(f"Failed to use timezone {self.user_timezone}, using UTC: {e}")
+                # Fall back to UTC
+                next_run = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+                if next_run <= now:
+                    next_run += timedelta(days=1)
+                seconds_until = (next_run - now).total_seconds()
+        else:
+            # No timezone set, use UTC
+            next_run = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+            if next_run <= now:
+                next_run += timedelta(days=1)
+            seconds_until = (next_run - now).total_seconds()
+
+        return max(60, int(seconds_until))  # At least 60 seconds
+
     async def _scheduled_probe_loop(self):
         """Main loop for scheduled probing."""
         # Wait a bit before first probe to let system stabilize
@@ -88,6 +132,18 @@ class StreamProber:
             return
 
         while self._running and self.probe_enabled:
+            # Calculate time until next scheduled probe
+            seconds_until = self._get_seconds_until_next_schedule()
+            hours_until = seconds_until / 3600
+            logger.info(f"StreamProber: Next scheduled probe in {hours_until:.1f} hours (at {self.schedule_time})")
+
+            # Sleep until scheduled time
+            try:
+                await asyncio.sleep(seconds_until)
+            except asyncio.CancelledError:
+                break
+
+            # Run the probe
             try:
                 await self._probe_stale_streams()
             except asyncio.CancelledError:
@@ -95,9 +151,9 @@ class StreamProber:
             except Exception as e:
                 logger.error(f"StreamProber scheduled probe error: {e}")
 
-            # Sleep until next cycle (convert hours to seconds)
+            # Small delay before calculating next schedule (to avoid immediate re-triggering)
             try:
-                await asyncio.sleep(self.probe_interval_hours * 3600)
+                await asyncio.sleep(60)
             except asyncio.CancelledError:
                 break
 

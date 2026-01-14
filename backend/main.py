@@ -99,7 +99,8 @@ async def startup_event():
         if settings.stream_probe_enabled:
             try:
                 logger.debug(
-                    f"Starting stream prober (interval: {settings.stream_probe_interval_hours}h, "
+                    f"Starting stream prober (schedule: {settings.stream_probe_schedule_time}, "
+                    f"interval: {settings.stream_probe_interval_hours}h, "
                     f"batch: {settings.stream_probe_batch_size}, timeout: {settings.stream_probe_timeout}s)"
                 )
                 prober = StreamProber(
@@ -108,6 +109,8 @@ async def startup_event():
                     probe_batch_size=settings.stream_probe_batch_size,
                     probe_interval_hours=settings.stream_probe_interval_hours,
                     probe_enabled=settings.stream_probe_enabled,
+                    schedule_time=settings.stream_probe_schedule_time,
+                    user_timezone=settings.user_timezone,
                 )
                 set_prober(prober)
                 await prober.start()
@@ -197,6 +200,7 @@ class SettingsRequest(BaseModel):
     stream_probe_interval_hours: int = 24
     stream_probe_batch_size: int = 10
     stream_probe_timeout: int = 30
+    stream_probe_schedule_time: str = "03:00"  # HH:MM format, 24h
 
 
 class SettingsResponse(BaseModel):
@@ -229,6 +233,7 @@ class SettingsResponse(BaseModel):
     stream_probe_interval_hours: int
     stream_probe_batch_size: int
     stream_probe_timeout: int
+    stream_probe_schedule_time: str  # HH:MM format, 24h
 
 
 class TestConnectionRequest(BaseModel):
@@ -272,6 +277,7 @@ async def get_current_settings():
         stream_probe_interval_hours=settings.stream_probe_interval_hours,
         stream_probe_batch_size=settings.stream_probe_batch_size,
         stream_probe_timeout=settings.stream_probe_timeout,
+        stream_probe_schedule_time=settings.stream_probe_schedule_time,
     )
 
 
@@ -326,6 +332,7 @@ async def update_settings(request: SettingsRequest):
         stream_probe_interval_hours=request.stream_probe_interval_hours,
         stream_probe_batch_size=request.stream_probe_batch_size,
         stream_probe_timeout=request.stream_probe_timeout,
+        stream_probe_schedule_time=request.stream_probe_schedule_time,
     )
     save_settings(new_settings)
     clear_settings_cache()

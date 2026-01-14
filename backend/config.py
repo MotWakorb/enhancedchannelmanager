@@ -67,6 +67,7 @@ class DispatcharrSettings(BaseModel):
     stream_probe_interval_hours: int = 24  # How often to auto-probe (hours)
     stream_probe_batch_size: int = 10  # Streams to probe per scheduled cycle
     stream_probe_timeout: int = 30  # Timeout in seconds for each probe
+    stream_probe_schedule_time: str = "03:00"  # Time of day to run probes (HH:MM, 24h format, user's local time)
 
     def is_configured(self) -> bool:
         return bool(self.url and self.username and self.password)

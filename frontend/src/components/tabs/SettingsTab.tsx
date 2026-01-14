@@ -59,6 +59,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
   const [streamProbeIntervalHours, setStreamProbeIntervalHours] = useState(24);
   const [streamProbeBatchSize, setStreamProbeBatchSize] = useState(10);
   const [streamProbeTimeout, setStreamProbeTimeout] = useState(30);
+  const [streamProbeScheduleTime, setStreamProbeScheduleTime] = useState('03:00');
   const [probingAll, setProbingAll] = useState(false);
   const [probeAllResult, setProbeAllResult] = useState<{ success: boolean; message: string } | null>(null);
 
@@ -136,6 +137,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
       setStreamProbeIntervalHours(settings.stream_probe_interval_hours ?? 24);
       setStreamProbeBatchSize(settings.stream_probe_batch_size ?? 10);
       setStreamProbeTimeout(settings.stream_probe_timeout ?? 30);
+      setStreamProbeScheduleTime(settings.stream_probe_schedule_time ?? '03:00');
       setNeedsRestart(false);
       setRestartResult(null);
       setTestResult(null);
@@ -226,6 +228,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
         stream_probe_interval_hours: streamProbeIntervalHours,
         stream_probe_batch_size: streamProbeBatchSize,
         stream_probe_timeout: streamProbeTimeout,
+        stream_probe_schedule_time: streamProbeScheduleTime,
       });
       // Apply frontend log level immediately
       const frontendLevel = frontendLogLevel === 'WARNING' ? 'WARN' : frontendLogLevel;
@@ -1250,6 +1253,18 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
                 style={{ width: '100px' }}
               />
               <span className="form-hint">Timeout for each probe attempt (5-120 seconds)</span>
+            </div>
+
+            <div className="form-group">
+              <label htmlFor="probeScheduleTime">Schedule time (local)</label>
+              <input
+                id="probeScheduleTime"
+                type="time"
+                value={streamProbeScheduleTime}
+                onChange={(e) => setStreamProbeScheduleTime(e.target.value || '03:00')}
+                style={{ width: '120px' }}
+              />
+              <span className="form-hint">Time of day to start scheduled probes (your local time)</span>
             </div>
           </div>
         )}
