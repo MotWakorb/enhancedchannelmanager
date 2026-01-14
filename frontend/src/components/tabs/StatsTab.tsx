@@ -657,6 +657,13 @@ export function StatsTab() {
       .sort((a, b) => a.name.localeCompare(b.name));
   })();
 
+  // Memoize bandwidth chart data preparation to avoid recalculating on every render
+  // NOTE: Must be called before any conditional returns to follow Rules of Hooks
+  const bandwidthChartData = useMemo(() => {
+    if (!bandwidthStats?.daily_history) return [];
+    return prepareBandwidthChartData(bandwidthStats.daily_history);
+  }, [bandwidthStats?.daily_history]);
+
   if (loading) {
     return (
       <div className="stats-tab">
@@ -667,12 +674,6 @@ export function StatsTab() {
       </div>
     );
   }
-
-  // Memoize bandwidth chart data preparation to avoid recalculating on every render
-  const bandwidthChartData = useMemo(() => {
-    if (!bandwidthStats?.daily_history) return [];
-    return prepareBandwidthChartData(bandwidthStats.daily_history);
-  }, [bandwidthStats?.daily_history]);
 
   return (
     <div className="stats-tab">
