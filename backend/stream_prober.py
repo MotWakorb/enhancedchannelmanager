@@ -439,18 +439,28 @@ class StreamProber:
                 break
         return all_streams
 
-    async def _fetch_channel_stream_ids(self) -> set:
-        """Fetch all unique stream IDs from channels (paginated)."""
+    async def _fetch_channel_stream_ids(self) -> tuple[set, dict]:
+        """
+        Fetch all unique stream IDs from channels (paginated).
+        Returns: (set of stream IDs, dict mapping stream_id -> list of channel names)
+        """
         channel_stream_ids = set()
+        stream_to_channels = {}  # stream_id -> list of channel names
         page = 1
         while True:
             try:
                 result = await self.client.get_channels(page=page, page_size=500)
                 channels = result.get("results", [])
                 for channel in channels:
+                    channel_name = channel.get("name", f"Channel {channel.get('id', 'Unknown')}")
                     # Each channel has a "streams" field which is a list of stream IDs
                     stream_ids = channel.get("streams", [])
                     channel_stream_ids.update(stream_ids)
+                    # Map each stream to its channel names
+                    for stream_id in stream_ids:
+                        if stream_id not in stream_to_channels:
+                            stream_to_channels[stream_id] = []
+                        stream_to_channels[stream_id].append(channel_name)
                 if not result.get("next"):
                     break
                 page += 1
@@ -459,7 +469,7 @@ class StreamProber:
             except Exception as e:
                 logger.error(f"Failed to fetch channels page {page}: {e}")
                 break
-        return channel_stream_ids
+        return channel_stream_ids, stream_to_channels
 
     async def probe_all_streams(self):
         """Probe all streams that are in channels (runs in background)."""
@@ -479,10 +489,21 @@ class StreamProber:
 
         probed_count = 0
         try:
-            # Fetch all channel stream IDs first
+            # Fetch all channel stream IDs and channel mappings
             logger.info("Fetching channel stream IDs...")
-            channel_stream_ids = await self._fetch_channel_stream_ids()
+            channel_stream_ids, stream_to_channels = await self._fetch_channel_stream_ids()
             logger.info(f"Found {len(channel_stream_ids)} unique streams across all channels")
+
+            # Fetch M3U accounts to map account IDs to names
+            logger.info("Fetching M3U accounts...")
+            m3u_accounts_map = {}
+            try:
+                m3u_accounts = await self.client.get_m3u_accounts()
+                for account in m3u_accounts:
+                    m3u_accounts_map[account["id"]] = account.get("name", f"M3U {account['id']}")
+                logger.info(f"Found {len(m3u_accounts_map)} M3U accounts")
+            except Exception as e:
+                logger.warning(f"Failed to fetch M3U accounts: {e}")
 
             # Fetch all streams
             logger.info("Fetching stream details...")
@@ -500,9 +521,37 @@ class StreamProber:
                     self._probe_progress_status = "cancelled"
                     break
 
-                stream_name = stream.get("name", f"Stream {stream['id']}")
+                stream_id = stream["id"]
+                stream_name = stream.get("name", f"Stream {stream_id}")
+
+                # Build display string: "channel(s): stream | M3U"
+                display_parts = []
+
+                # Add channel name(s)
+                if stream_id in stream_to_channels and stream_to_channels[stream_id]:
+                    channel_names = stream_to_channels[stream_id]
+                    # If stream is in multiple channels, show first one or combine
+                    if len(channel_names) == 1:
+                        display_parts.append(channel_names[0])
+                    else:
+                        # Show first channel + count if multiple
+                        display_parts.append(f"{channel_names[0]} (+{len(channel_names)-1})")
+                else:
+                    display_parts.append("Unknown Channel")
+
+                # Add stream name
+                display_parts.append(stream_name)
+
+                # Add M3U account name if available
+                m3u_account_id = stream.get("m3u_account")
+                if m3u_account_id and m3u_account_id in m3u_accounts_map:
+                    m3u_name = m3u_accounts_map[m3u_account_id]
+                    display_string = f"{display_parts[0]}: {display_parts[1]} | {m3u_name}"
+                else:
+                    display_string = f"{display_parts[0]}: {display_parts[1]}"
+
                 self._probe_progress_current = probed_count + 1
-                self._probe_progress_current_stream = stream_name
+                self._probe_progress_current_stream = display_string
 
                 result = await self.probe_stream(
                     stream["id"], stream.get("url"), stream_name
