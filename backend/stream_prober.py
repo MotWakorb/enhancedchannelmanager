@@ -7,8 +7,11 @@ import asyncio
 import json
 import logging
 import shutil
+import time
 from datetime import datetime, timedelta
 from typing import Optional
+
+import httpx
 
 from database import get_session
 from models import StreamStats
@@ -19,6 +22,7 @@ logger = logging.getLogger(__name__)
 DEFAULT_PROBE_TIMEOUT = 30  # seconds
 DEFAULT_PROBE_BATCH_SIZE = 10  # streams per cycle
 DEFAULT_PROBE_INTERVAL_HOURS = 24  # daily
+BITRATE_SAMPLE_DURATION = 8  # seconds to sample stream for bitrate measurement
 
 
 def check_ffprobe_available() -> bool:
@@ -240,8 +244,16 @@ class StreamProber:
         try:
             logger.debug(f"Running ffprobe for stream {stream_id}")
             result = await self._run_ffprobe(url)
-            logger.info(f"Stream {stream_id} probe succeeded")
-            return self._save_probe_result(stream_id, name, result, "success", None)
+            logger.info(f"Stream {stream_id} ffprobe succeeded")
+
+            # Measure actual bitrate by downloading stream data
+            logger.debug(f"Measuring bitrate for stream {stream_id}")
+            measured_bitrate = await self._measure_stream_bitrate(url)
+
+            # Save probe result with both ffprobe metadata and measured bitrate
+            return self._save_probe_result(
+                stream_id, name, result, "success", None, measured_bitrate
+            )
         except asyncio.TimeoutError:
             logger.warning(f"Stream {stream_id} probe timed out after {self.probe_timeout}s")
             return self._save_probe_result(
@@ -298,6 +310,56 @@ class StreamProber:
 
         return json.loads(output)
 
+    async def _measure_stream_bitrate(self, url: str) -> Optional[int]:
+        """
+        Measure actual stream bitrate by downloading data for a few seconds.
+        This is how Dispatcharr gets real bitrate - by measuring throughput.
+
+        Returns bitrate in bits per second, or None if measurement fails.
+        """
+        try:
+            logger.debug(f"Starting bitrate measurement for {BITRATE_SAMPLE_DURATION}s...")
+
+            bytes_downloaded = 0
+            start_time = time.time()
+
+            # Stream download with timeout
+            timeout = httpx.Timeout(connect=10.0, read=BITRATE_SAMPLE_DURATION + 5.0)
+
+            async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+                async with client.stream("GET", url) as response:
+                    response.raise_for_status()
+
+                    # Download stream data for the sample duration
+                    async for chunk in response.aiter_bytes(chunk_size=65536):  # 64KB chunks
+                        bytes_downloaded += len(chunk)
+                        elapsed = time.time() - start_time
+
+                        # Stop after sample duration
+                        if elapsed >= BITRATE_SAMPLE_DURATION:
+                            break
+
+            elapsed = time.time() - start_time
+
+            # Calculate bitrate (bits per second)
+            if elapsed > 0:
+                bitrate_bps = int((bytes_downloaded * 8) / elapsed)
+                logger.info(f"Measured bitrate: {bytes_downloaded:,} bytes in {elapsed:.2f}s = {bitrate_bps:,} bps ({bitrate_bps/1000000:.2f} Mbps)")
+                return bitrate_bps
+            else:
+                logger.warning("Bitrate measurement: elapsed time is zero")
+                return None
+
+        except httpx.HTTPStatusError as e:
+            logger.warning(f"HTTP error during bitrate measurement: {e.response.status_code}")
+            return None
+        except httpx.TimeoutException:
+            logger.warning(f"Timeout during bitrate measurement")
+            return None
+        except Exception as e:
+            logger.warning(f"Failed to measure bitrate: {e}")
+            return None
+
     def _save_probe_result(
         self,
         stream_id: int,
@@ -305,6 +367,7 @@ class StreamProber:
         ffprobe_data: Optional[dict],
         status: str,
         error_message: Optional[str],
+        measured_bitrate: Optional[int] = None,
     ) -> dict:
         """Parse ffprobe output and save to database."""
         session = get_session()
@@ -324,6 +387,11 @@ class StreamProber:
 
             if ffprobe_data and status == "success":
                 self._parse_ffprobe_data(stats, ffprobe_data)
+
+            # Apply measured bitrate if available (overrides ffprobe metadata)
+            if measured_bitrate is not None:
+                stats.video_bitrate = measured_bitrate
+                logger.debug(f"Applied measured bitrate: {measured_bitrate} bps")
 
             session.commit()
             result = stats.to_dict()
