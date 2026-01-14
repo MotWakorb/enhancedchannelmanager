@@ -62,6 +62,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
   const [streamProbeScheduleTime, setStreamProbeScheduleTime] = useState('03:00');
   const [probingAll, setProbingAll] = useState(false);
   const [probeAllResult, setProbeAllResult] = useState<{ success: boolean; message: string } | null>(null);
+  const [totalStreamCount, setTotalStreamCount] = useState(100); // Default to 100, will be updated on load
 
   // Preserve settings not managed by this tab (to avoid overwriting them on save)
   const [linkedM3UAccounts, setLinkedM3UAccounts] = useState<number[][]>([]);
@@ -93,7 +94,21 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
 
   useEffect(() => {
     loadSettings();
+    loadStreamCount();
   }, []);
+
+  const loadStreamCount = async () => {
+    try {
+      // Fetch just the count (page_size=1 to minimize data transfer)
+      const result = await api.getStreams({ pageSize: 1 });
+      if (result.count) {
+        setTotalStreamCount(Math.max(1, result.count));
+      }
+    } catch (err) {
+      logger.warn('Failed to load stream count for batch size max', err);
+      // Keep default of 100
+    }
+  };
 
   const loadSettings = async () => {
     try {
@@ -1233,12 +1248,12 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
                 id="probeBatchSize"
                 type="number"
                 min="1"
-                max="100"
+                max={totalStreamCount}
                 value={streamProbeBatchSize}
-                onChange={(e) => setStreamProbeBatchSize(Math.max(1, Math.min(100, parseInt(e.target.value) || 10)))}
+                onChange={(e) => setStreamProbeBatchSize(Math.max(1, Math.min(totalStreamCount, parseInt(e.target.value) || 10)))}
                 style={{ width: '100px' }}
               />
-              <span className="form-hint">Streams to probe per scheduled cycle (1-100)</span>
+              <span className="form-hint">Streams to probe per scheduled cycle (1-{totalStreamCount})</span>
             </div>
 
             <div className="form-group">

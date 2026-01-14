@@ -21,6 +21,7 @@ import {
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import type { Channel, ChannelGroup, ChannelProfile, Stream, StreamStats, M3UAccount, M3UGroupSetting, Logo, ChangeInfo, ChangeRecord, SavePoint, EPGData, EPGSource, StreamProfile, ChannelListFilterSettings } from '../types';
+import { logger } from '../utils/logger';
 import { ChannelProfilesListModal } from './ChannelProfilesListModal';
 import type { ChannelDefaults } from './StreamsPane';
 import * as api from '../services/api';
@@ -636,6 +637,8 @@ interface DroppableGroupHeaderProps {
   dragHandleProps?: any;
   onProbeGroup?: () => void;
   isProbing?: boolean;
+  onSortStreamsByQuality?: () => void;
+  isSortingByQuality?: boolean;
 }
 
 const DroppableGroupHeader = memo(function DroppableGroupHeader({
@@ -658,6 +661,8 @@ const DroppableGroupHeader = memo(function DroppableGroupHeader({
   dragHandleProps,
   onProbeGroup,
   isProbing = false,
+  onSortStreamsByQuality,
+  isSortingByQuality = false,
 }: DroppableGroupHeaderProps) {
   const droppableId = `group-${groupId}`;
   const { isOver, setNodeRef } = useDroppable({
@@ -794,6 +799,21 @@ const DroppableGroupHeader = memo(function DroppableGroupHeader({
         >
           <span className={`material-icons ${isProbing ? 'spinning' : ''}`}>
             {isProbing ? 'sync' : 'speed'}
+          </span>
+        </button>
+      )}
+      {isEditMode && !isEmpty && onSortStreamsByQuality && (
+        <button
+          className={`group-sort-quality-btn ${isSortingByQuality ? 'sorting' : ''}`}
+          onClick={(e) => {
+            e.stopPropagation();
+            onSortStreamsByQuality();
+          }}
+          disabled={isSortingByQuality}
+          title={isSortingByQuality ? 'Sorting streams...' : 'Sort streams by quality in this group'}
+        >
+          <span className={`material-icons ${isSortingByQuality ? 'spinning' : ''}`}>
+            {isSortingByQuality ? 'sync' : 'sort'}
           </span>
         </button>
       )}
@@ -1895,6 +1915,139 @@ export function ChannelsPane({
       onStageReorderStreams(selectedChannelId, newStreamIds, description);
     }
   };
+
+  // Sort streams by video quality (highest resolution first)
+  const handleSortStreamsByQuality = useCallback(() => {
+    if (!selectedChannelId || !isEditMode || !onStageReorderStreams) return;
+
+    const channel = channels.find((c) => c.id === selectedChannelId);
+
+    // Get resolution height for sorting priority
+    const getResolutionHeight = (stream: Stream): number => {
+      const stats = streamStatsMap.get(stream.id);
+      if (!stats?.resolution || stats.probe_status !== 'success') return -1;
+
+      const match = stats.resolution.match(/(\d+)x(\d+)/);
+      if (match) {
+        return parseInt(match[2], 10); // Return height in pixels
+      }
+      return -1;
+    };
+
+    // Sort by resolution height descending (highest first)
+    const sortedStreams = [...channelStreams].sort((a, b) =>
+      getResolutionHeight(b) - getResolutionHeight(a)
+    );
+
+    // Check if already sorted (no change needed)
+    const alreadySorted = sortedStreams.every((s, i) => s.id === channelStreams[i].id);
+    if (alreadySorted) return;
+
+    const newStreamIds = sortedStreams.map((s) => s.id);
+    const description = `Sorted streams by quality in "${channel?.name || 'channel'}"`;
+
+    setChannelStreams(sortedStreams);
+    onStageReorderStreams(selectedChannelId, newStreamIds, description);
+  }, [selectedChannelId, isEditMode, onStageReorderStreams, channelStreams, streamStatsMap, channels]);
+
+  // State for bulk sort operation
+  const [bulkSortingByQuality, setBulkSortingByQuality] = useState(false);
+
+  // Bulk sort streams by quality for multiple channels
+  const handleBulkSortStreamsByQuality = useCallback(async (channelIds: number[]) => {
+    if (!isEditMode || !onStageReorderStreams || channelIds.length === 0) return;
+
+    setBulkSortingByQuality(true);
+    try {
+      // Get all channels to process
+      const channelsToProcess = channels.filter(ch => channelIds.includes(ch.id) && ch.streams.length > 1);
+      if (channelsToProcess.length === 0) {
+        setBulkSortingByQuality(false);
+        return;
+      }
+
+      // Collect all stream IDs
+      const allStreamIds = channelsToProcess.flatMap(ch => ch.streams);
+
+      // Fetch stats for all streams
+      const stats = await api.getStreamStatsByIds(allStreamIds);
+
+      // Helper to get resolution height
+      const getResolutionHeight = (streamId: number): number => {
+        const stat = stats[streamId];
+        if (!stat?.resolution || stat.probe_status !== 'success') return -1;
+        const match = stat.resolution.match(/(\d+)x(\d+)/);
+        if (match) return parseInt(match[2], 10);
+        return -1;
+      };
+
+      // Start batch operation
+      if (onStartBatch) {
+        const scope = channelIds.length === channels.length ? 'all channels' :
+          channelIds.length === 1 ? `"${channelsToProcess[0]?.name}"` :
+          `${channelsToProcess.length} channels`;
+        onStartBatch(`Sort streams by quality in ${scope}`);
+      }
+
+      let changesCount = 0;
+      for (const channel of channelsToProcess) {
+        // Sort stream IDs by resolution
+        const sortedStreamIds = [...channel.streams].sort((a, b) =>
+          getResolutionHeight(b) - getResolutionHeight(a)
+        );
+
+        // Check if order changed
+        const changed = !sortedStreamIds.every((id, i) => id === channel.streams[i]);
+        if (changed) {
+          changesCount++;
+          onStageReorderStreams(channel.id, sortedStreamIds, `Sorted streams by quality in "${channel.name}"`);
+        }
+      }
+
+      if (onEndBatch) {
+        onEndBatch();
+      }
+
+      // Update local channelStreams if current channel was affected
+      if (selectedChannelId && channelIds.includes(selectedChannelId)) {
+        const currentChannel = channels.find(ch => ch.id === selectedChannelId);
+        if (currentChannel) {
+          const sortedIds = [...currentChannel.streams].sort((a, b) =>
+            getResolutionHeight(b) - getResolutionHeight(a)
+          );
+          const newStreams = sortedIds.map(id => channelStreams.find(s => s.id === id)).filter((s): s is Stream => !!s);
+          if (newStreams.length === channelStreams.length) {
+            setChannelStreams(newStreams);
+          }
+        }
+      }
+
+      logger.info(`Bulk sort by quality: ${changesCount} of ${channelsToProcess.length} channels reordered`);
+    } catch (err) {
+      logger.error('Failed to bulk sort streams by quality:', err);
+    } finally {
+      setBulkSortingByQuality(false);
+    }
+  }, [isEditMode, onStageReorderStreams, channels, onStartBatch, onEndBatch, selectedChannelId, channelStreams]);
+
+  // Sort all channels' streams by quality
+  const handleSortAllStreamsByQuality = useCallback(() => {
+    const allChannelIds = channels.map(ch => ch.id);
+    handleBulkSortStreamsByQuality(allChannelIds);
+  }, [channels, handleBulkSortStreamsByQuality]);
+
+  // Sort selected channels' streams by quality
+  const handleSortSelectedStreamsByQuality = useCallback(() => {
+    handleBulkSortStreamsByQuality(Array.from(selectedChannelIds));
+  }, [selectedChannelIds, handleBulkSortStreamsByQuality]);
+
+  // Sort a group's channels' streams by quality
+  const handleSortGroupStreamsByQuality = useCallback((groupId: number | 'ungrouped') => {
+    const groupChannelIds = channels
+      .filter(ch => (groupId === 'ungrouped' ? ch.channel_group_id === null : ch.channel_group_id === groupId))
+      .map(ch => ch.id);
+    handleBulkSortStreamsByQuality(groupChannelIds);
+  }, [channels, handleBulkSortStreamsByQuality]);
 
   const sensors = useSensors(
     useSensor(PointerSensor, {
@@ -3994,6 +4147,8 @@ export function ChannelsPane({
           onContextMenu={(e) => handleGroupContextMenu(groupChannels.map(ch => ch.id), e)}
           onProbeGroup={() => handleProbeGroup(groupId, groupChannels)}
           isProbing={probingGroups.has(groupId)}
+          onSortStreamsByQuality={() => handleSortGroupStreamsByQuality(groupId)}
+          isSortingByQuality={bulkSortingByQuality}
         />
         {isExpanded && isEmpty && (
           <div className="group-channels empty-group-placeholder">
@@ -4141,33 +4296,47 @@ export function ChannelsPane({
                             No streams assigned. Drag streams here to add.
                           </div>
                         ) : (
-                          <DndContext
-                            sensors={streamSensors}
-                            collisionDetection={closestCenter}
-                            onDragEnd={handleStreamDragEnd}
-                          >
-                            <SortableContext
-                              items={channelStreams.map((s) => s.id)}
-                              strategy={verticalListSortingStrategy}
-                            >
-                              <div className="inline-streams-list">
-                                {channelStreams.map((stream, index) => (
-                                  <div key={stream.id} className="inline-stream-row">
-                                    <span className="stream-priority">{index + 1}</span>
-                                    <SortableStreamItem
-                                      stream={stream}
-                                      providerName={providers.find((p) => p.id === stream.m3u_account)?.name ?? null}
-                                      isEditMode={isEditMode}
-                                      onRemove={handleRemoveStream}
-                                      onCopyUrl={stream.url ? () => handleCopyStreamUrl(stream.url!, stream.name) : undefined}
-                                      showStreamUrls={showStreamUrls}
-                                      streamStats={streamStatsMap.get(stream.id) ?? null}
-                                    />
-                                  </div>
-                                ))}
+                          <>
+                            {/* Stream toolbar - only in edit mode with multiple streams */}
+                            {isEditMode && onStageReorderStreams && channelStreams.length > 1 && (
+                              <div className="inline-streams-toolbar">
+                                <button
+                                  className="sort-quality-btn"
+                                  onClick={handleSortStreamsByQuality}
+                                  title="Sort by quality (4K > 1080p > 720p > 480p)"
+                                >
+                                  <span className="material-icons">sort</span>
+                                </button>
                               </div>
-                            </SortableContext>
-                          </DndContext>
+                            )}
+                            <DndContext
+                              sensors={streamSensors}
+                              collisionDetection={closestCenter}
+                              onDragEnd={handleStreamDragEnd}
+                            >
+                              <SortableContext
+                                items={channelStreams.map((s) => s.id)}
+                                strategy={verticalListSortingStrategy}
+                              >
+                                <div className="inline-streams-list">
+                                  {channelStreams.map((stream, index) => (
+                                    <div key={stream.id} className="inline-stream-row">
+                                      <span className="stream-priority">{index + 1}</span>
+                                      <SortableStreamItem
+                                        stream={stream}
+                                        providerName={providers.find((p) => p.id === stream.m3u_account)?.name ?? null}
+                                        isEditMode={isEditMode}
+                                        onRemove={handleRemoveStream}
+                                        onCopyUrl={stream.url ? () => handleCopyStreamUrl(stream.url!, stream.name) : undefined}
+                                        showStreamUrls={showStreamUrls}
+                                        streamStats={streamStatsMap.get(stream.id) ?? null}
+                                      />
+                                    </div>
+                                  ))}
+                                </div>
+                              </SortableContext>
+                            </DndContext>
+                          </>
                         )}
                       </div>
                     )}
@@ -4284,6 +4453,16 @@ export function ChannelsPane({
                   <span className="material-icons">tag</span>
                 </button>
                 <button
+                  className={`bulk-action-btn ${bulkSortingByQuality ? 'loading' : ''}`}
+                  onClick={handleSortSelectedStreamsByQuality}
+                  disabled={bulkSortingByQuality}
+                  title="Sort streams by quality in selected channels"
+                >
+                  <span className={`material-icons ${bulkSortingByQuality ? 'spinning' : ''}`}>
+                    {bulkSortingByQuality ? 'sync' : 'sort'}
+                  </span>
+                </button>
+                <button
                   className="bulk-action-btn bulk-action-btn--danger"
                   onClick={handleBulkDeleteClick}
                   title="Delete selected channels"
@@ -4366,6 +4545,17 @@ export function ChannelsPane({
               >
                 <span className="material-icons">visibility_off</span>
                 <span>Hidden</span>
+              </button>
+              <button
+                className={`sort-all-quality-btn ${bulkSortingByQuality ? 'loading' : ''}`}
+                onClick={handleSortAllStreamsByQuality}
+                disabled={bulkSortingByQuality}
+                title="Sort streams by quality in all channels"
+              >
+                <span className={`material-icons ${bulkSortingByQuality ? 'spinning' : ''}`}>
+                  {bulkSortingByQuality ? 'sync' : 'sort'}
+                </span>
+                <span>Sort Quality</span>
               </button>
             </>
           )}

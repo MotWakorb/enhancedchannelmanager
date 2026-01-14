@@ -362,6 +362,41 @@
   font-size: 18px;
 }
 
+/* Sort All by Quality Button */
+.sort-all-quality-btn {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.375rem 0.625rem;
+  font-size: 0.8rem;
+  font-weight: 500;
+  color: var(--text-secondary);
+  background-color: var(--button-secondary-bg);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.sort-all-quality-btn:hover:not(:disabled) {
+  background-color: var(--button-hover-bg);
+  border-color: var(--accent-primary);
+  color: var(--text-primary);
+}
+
+.sort-all-quality-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.sort-all-quality-btn .material-icons {
+  font-size: 18px;
+}
+
+.sort-all-quality-btn.loading .material-icons {
+  animation: spin 1s linear infinite;
+}
+
 .pane-filters {
   padding: 0.75rem;
   display: flex;
@@ -1202,6 +1237,38 @@
   color: var(--text-muted);
   padding: 0.5rem;
   text-align: center;
+}
+
+/* Inline streams toolbar */
+.inline-streams-toolbar {
+  display: flex;
+  gap: 4px;
+  padding: 2px 4px;
+  margin-bottom: 4px;
+}
+
+.sort-quality-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  background: transparent;
+  color: var(--text-muted);
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background-color 0.15s, color 0.15s;
+}
+
+.sort-quality-btn:hover {
+  background: var(--hover-bg);
+  color: var(--text-primary);
+}
+
+.sort-quality-btn .material-icons {
+  font-size: 18px;
 }
 
 .inline-streams-list {
@@ -3466,6 +3533,46 @@
 
 .group-sort-btn .material-icons {
   font-size: 1rem;
+}
+
+/* Group Sort by Quality Button */
+.group-sort-quality-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  margin-left: 0.25rem;
+  background: none;
+  border: none;
+  border-radius: 4px;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: background-color 0.15s, color 0.15s, opacity 0.15s;
+  opacity: 0;
+}
+
+.group-header:hover .group-sort-quality-btn {
+  opacity: 1;
+}
+
+.group-sort-quality-btn:hover:not(:disabled) {
+  background-color: rgba(100, 108, 255, 0.2);
+  color: var(--accent-primary);
+}
+
+.group-sort-quality-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.group-sort-quality-btn .material-icons {
+  font-size: 1rem;
+}
+
+.group-sort-quality-btn.sorting .material-icons {
+  animation: spin 1s linear infinite;
+  color: var(--accent-primary);
 }
 
 /* Group Delete Button */
