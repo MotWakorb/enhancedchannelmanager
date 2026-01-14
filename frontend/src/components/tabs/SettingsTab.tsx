@@ -139,11 +139,14 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
       }
     };
 
-    // Poll immediately and then every second
-    pollProgress();
+    // Wait a moment for the background task to start, then poll
+    const initialDelay = setTimeout(pollProgress, 300);
     const interval = setInterval(pollProgress, 1000);
 
-    return () => clearInterval(interval);
+    return () => {
+      clearTimeout(initialDelay);
+      clearInterval(interval);
+    };
   }, [probingAll]);
 
   const loadStreamCount = async () => {
