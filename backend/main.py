@@ -1155,13 +1155,24 @@ async def get_channel_groups_with_streams():
             group_id = group["id"]
             group_name = group["name"]
 
-            # Get channels in this group
+            # Get all channels in this group (paginated)
             try:
-                group_channels_result = await client.get_channels(page=1, page_size=1, channel_group_id=group_id)
-                group_channels = group_channels_result.get("results", [])
+                has_streams = False
+                group_page = 1
+                while True:
+                    group_channels_result = await client.get_channels(page=group_page, page_size=500, channel_group_id=group_id)
+                    group_channels = group_channels_result.get("results", [])
 
-                # Check if any of these channels have streams
-                has_streams = any(ch["id"] in channels_with_streams for ch in group_channels)
+                    # Check if any of these channels have streams
+                    if any(ch["id"] in channels_with_streams for ch in group_channels):
+                        has_streams = True
+                        break  # Found at least one channel with streams, no need to continue
+
+                    if not group_channels_result.get("next"):
+                        break
+                    group_page += 1
+                    if group_page > 50:  # Safety limit
+                        break
 
                 if has_streams:
                     groups_with_streams.append({
