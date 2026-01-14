@@ -1354,19 +1354,191 @@
   opacity: 1;
 }
 
+/* Stream Metadata Tags */
+.stream-metadata {
+  display: inline-flex;
+  gap: 4px;
+  margin-left: 8px;
+  flex-shrink: 0;
+}
+
+.meta-tag {
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: 3px;
+  background: var(--bg-tertiary);
+  color: var(--text-muted);
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.meta-tag.resolution {
+  background: rgba(59, 130, 246, 0.2);
+  color: #60a5fa;
+}
+
+.meta-tag.fps {
+  background: rgba(34, 197, 94, 0.2);
+  color: #4ade80;
+}
+
+.meta-tag.codec {
+  background: rgba(168, 85, 247, 0.2);
+  color: #c084fc;
+}
+
+.meta-tag.audio {
+  background: rgba(251, 146, 60, 0.2);
+  color: #fb923c;
+}
+
+.meta-tag.probe-failed,
+.meta-tag.probe-timeout {
+  background: rgba(239, 68, 68, 0.2);
+  color: #f87171;
+  cursor: help;
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 4px;
+}
+
+.meta-tag.probe-failed .material-icons,
+.meta-tag.probe-timeout .material-icons {
+  font-size: 12px;
+}
+
+/* Probe Button - always visible to make it discoverable */
+.probe-stream-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.25rem;
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  border-radius: 4px;
+  transition: color 0.15s, background 0.15s;
+  opacity: 0.5;
+}
+
+.inline-stream-item:hover .probe-stream-btn {
+  opacity: 1;
+}
+
+.probe-stream-btn:hover:not(:disabled) {
+  color: var(--accent-primary);
+  background: rgba(var(--accent-primary-rgb, 74, 144, 226), 0.1);
+}
+
+.probe-stream-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.probe-stream-btn .material-icons {
+  font-size: 18px;
+}
+
+.probe-stream-btn.probing .material-icons {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+/* Channel Probe Button - probes all streams in a channel */
+.probe-channel-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.25rem;
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  border-radius: 4px;
+  transition: color 0.15s, background 0.15s, opacity 0.15s;
+  opacity: 0.5;
+  margin-left: auto;
+  margin-right: 0.25rem;
+}
+
+.channel-item:hover .probe-channel-btn {
+  opacity: 1;
+}
+
+.probe-channel-btn:hover:not(:disabled) {
+  color: #14b8a6;
+  background: rgba(20, 184, 166, 0.1);
+}
+
+.probe-channel-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.probe-channel-btn .material-icons {
+  font-size: 18px;
+}
+
+.probe-channel-btn.probing .material-icons {
+  animation: spin 1s linear infinite;
+  color: #14b8a6;
+}
+
+/* Group Probe Button - probes all streams in all channels of a group */
+.probe-group-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.25rem 0.5rem;
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  border-radius: 4px;
+  transition: color 0.15s, background 0.15s, opacity 0.15s;
+  opacity: 0.5;
+  margin-left: 0.5rem;
+}
+
+.group-header:hover .probe-group-btn {
+  opacity: 1;
+}
+
+.probe-group-btn:hover:not(:disabled) {
+  color: #14b8a6;
+  background: rgba(20, 184, 166, 0.1);
+}
+
+.probe-group-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.probe-group-btn .material-icons {
+  font-size: 18px;
+}
+
+.probe-group-btn.probing .material-icons {
+  animation: spin 1s linear infinite;
+  color: #14b8a6;
+}
+
 .channel-item:hover .channel-copy-url-btn,
 .channel-item:hover .channel-vlc-btn {
   opacity: 1;
 }
 
 .channel-copy-url-btn {
-  margin-left: auto;
   margin-right: 0.25rem;
 }
 
 .channel-vlc-btn {
-  margin-left: auto;
-  margin-right: 0;
+  margin-right: 0.25rem;
 }
 
 .vlc-btn {

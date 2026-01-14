@@ -145,3 +145,53 @@ class HiddenChannelGroup(Base):
 
     def __repr__(self):
         return f"<HiddenChannelGroup(group_id={self.group_id}, name={self.group_name})>"
+
+
+class StreamStats(Base):
+    """
+    Stores ffprobe-derived stream metadata.
+    One row per stream, updated on each probe.
+    """
+    __tablename__ = "stream_stats"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    stream_id = Column(Integer, nullable=False, unique=True)  # Dispatcharr stream ID
+    stream_name = Column(String(255), nullable=True)  # Cached stream name
+    resolution = Column(String(20), nullable=True)  # e.g., "1920x1080"
+    fps = Column(String(20), nullable=True)  # e.g., "29.97" - stored as string for flexibility
+    video_codec = Column(String(50), nullable=True)  # e.g., "h264", "hevc"
+    audio_codec = Column(String(50), nullable=True)  # e.g., "aac", "ac3"
+    audio_channels = Column(Integer, nullable=True)  # e.g., 2, 6
+    stream_type = Column(String(20), nullable=True)  # e.g., "HLS", "MPEG-TS"
+    bitrate = Column(BigInteger, nullable=True)  # bits per second
+    probe_status = Column(String(20), nullable=False, default="pending")  # success, failed, pending, timeout
+    error_message = Column(Text, nullable=True)  # Error details for failed probes
+    last_probed = Column(DateTime, nullable=True)  # Last probe timestamp
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        Index("idx_stream_stats_stream_id", stream_id),
+        Index("idx_stream_stats_probe_status", probe_status),
+        Index("idx_stream_stats_last_probed", last_probed.desc()),
+    )
+
+    def to_dict(self) -> dict:
+        """Convert to dictionary for API responses."""
+        return {
+            "stream_id": self.stream_id,
+            "stream_name": self.stream_name,
+            "resolution": self.resolution,
+            "fps": self.fps,
+            "video_codec": self.video_codec,
+            "audio_codec": self.audio_codec,
+            "audio_channels": self.audio_channels,
+            "stream_type": self.stream_type,
+            "bitrate": self.bitrate,
+            "probe_status": self.probe_status,
+            "error_message": self.error_message,
+            "last_probed": self.last_probed.isoformat() + "Z" if self.last_probed else None,
+            "created_at": self.created_at.isoformat() + "Z" if self.created_at else None,
+        }
+
+    def __repr__(self):
+        return f"<StreamStats(stream_id={self.stream_id}, name={self.stream_name}, status={self.probe_status})>"
