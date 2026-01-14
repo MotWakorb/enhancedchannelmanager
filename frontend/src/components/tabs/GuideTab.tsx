@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import type { Channel, Logo, EPGProgram, EPGData, EPGSource, StreamProfile, ChannelProfile, ChannelGroup } from '../../types';
 import * as api from '../../services/api';
 import { EditChannelModal, type ChannelMetadataChanges } from '../EditChannelModal';
+import { PrintGuideModal } from '../PrintGuideModal';
 import './GuideTab.css';
 
 // Constants for grid layout
@@ -58,6 +59,9 @@ export function GuideTab({
   // Edit channel modal state
   const [channelToEdit, setChannelToEdit] = useState<Channel | null>(null);
   const [showEditModal, setShowEditModal] = useState(false);
+
+  // Print modal state
+  const [showPrintModal, setShowPrintModal] = useState(false);
 
   // Loading state
   const [loading, setLoading] = useState(true);
@@ -570,6 +574,15 @@ export function GuideTab({
           Refresh
         </button>
 
+        <button
+          className="print-btn"
+          onClick={() => setShowPrintModal(true)}
+          title="Print channel guide"
+        >
+          <span className="material-icons">print</span>
+          Print Guide
+        </button>
+
         {error && <span className="error-message">{error}</span>}
       </div>
 
@@ -668,6 +681,15 @@ export function GuideTab({
           }}
         />
       )}
+
+      {/* Print Guide Modal */}
+      <PrintGuideModal
+        isOpen={showPrintModal}
+        onClose={() => setShowPrintModal(false)}
+        channelGroups={channelGroups}
+        channels={channels}
+        title="TV Channel Guide"
+      />
     </div>
   );
 }

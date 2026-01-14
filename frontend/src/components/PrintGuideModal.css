@@ -1,0 +1,139 @@
+.print-guide-modal {
+  max-width: 550px;
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.print-guide-modal .modal-body {
+  overflow-y: auto;
+  flex: 1;
+  padding: 1rem 1.25rem;
+}
+
+.print-guide-description {
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+  margin-bottom: 1rem;
+  line-height: 1.4;
+}
+
+.group-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.group-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.75rem;
+  background-color: var(--bg-tertiary);
+  border-radius: 6px;
+  border: 1px solid var(--border-secondary);
+  transition: border-color 0.15s, background-color 0.15s;
+}
+
+.group-item.selected {
+  border-color: var(--accent-primary);
+  background-color: rgba(var(--accent-primary-rgb, 74, 144, 226), 0.1);
+}
+
+.group-checkbox-area {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex: 1;
+  cursor: pointer;
+  min-width: 0;
+}
+
+.group-checkbox-area input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+  accent-color: var(--accent-primary);
+  flex-shrink: 0;
+}
+
+.group-color-swatch {
+  width: 16px;
+  height: 16px;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+
+.group-info {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+  min-width: 0;
+}
+
+.group-name {
+  font-weight: 500;
+  color: var(--text-primary);
+  font-size: 0.95rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.group-details {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.mode-toggle {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+  margin-left: 0.75rem;
+}
+
+.mode-toggle .mode-btn {
+  padding: 0.35rem 0.6rem;
+  border: 2px solid #4A90E2;
+  border-radius: 4px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s;
+  background: transparent;
+  color: #4A90E2;
+}
+
+.mode-toggle .mode-btn.summary {
+  border-color: #E67E22;
+  color: #E67E22;
+}
+
+.mode-toggle .mode-btn.active {
+  background: #4A90E2;
+  color: #fff;
+}
+
+.mode-toggle .mode-btn.summary.active {
+  background: #E67E22;
+  color: #fff;
+}
+
+.mode-toggle .mode-btn:hover:not(.active) {
+  opacity: 0.8;
+}
+
+/* Modal footer adjustments */
+.print-guide-modal .modal-footer {
+  gap: 0.5rem;
+}
+
+.print-guide-modal .modal-footer .btn-primary {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.print-guide-modal .modal-footer .btn-primary .material-icons {
+  font-size: 1rem;
+}
