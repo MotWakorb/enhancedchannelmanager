@@ -377,12 +377,13 @@ export interface SystemEvent {
   created_at: string;
 }
 
-// Response from /api/core/system-events/
+// Response from /api/stats/activity (proxied from /api/core/system-events/)
 export interface SystemEventsResponse {
-  results: SystemEvent[];
+  events: SystemEvent[];
   count: number;
-  next?: string | null;
-  previous?: string | null;
+  total: number;
+  offset: number;
+  limit: number;
 }
 
 // Daily bandwidth record

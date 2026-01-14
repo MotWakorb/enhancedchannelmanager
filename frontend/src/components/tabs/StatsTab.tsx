@@ -386,7 +386,7 @@ export function StatsTab() {
           }),
         api.getSystemEvents({ limit: 50 })
           .then(result => {
-            logger.debug(`Stats Tab: System events fetched successfully (${result?.results?.length || 0} events)`);
+            logger.debug(`Stats Tab: System events fetched successfully (${result?.events?.length || 0} events)`);
             return result;
           })
           .catch(err => {
@@ -466,7 +466,7 @@ export function StatsTab() {
       logger.debug(`Stats Tab: Data fetched successfully in ${elapsed}ms`);
 
       setChannelStats(statsResult);
-      setEvents(eventsResult.results || []);
+      setEvents(eventsResult.events || []);
       if (bandwidthResult) {
         setBandwidthStats(bandwidthResult);
       }
