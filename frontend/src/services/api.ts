@@ -1704,3 +1704,19 @@ export async function getProbeProgress(): Promise<{
     percentage: number;
   }>;
 }
+
+export async function getProbeResults(): Promise<{
+  success_streams: Array<{ id: number; name: string }>;
+  failed_streams: Array<{ id: number; name: string }>;
+  success_count: number;
+  failed_count: number;
+}> {
+  return fetchJson(`${API_BASE}/stream-stats/probe/results`, {
+    method: 'GET',
+  }) as Promise<{
+    success_streams: Array<{ id: number; name: string }>;
+    failed_streams: Array<{ id: number; name: string }>;
+    success_count: number;
+    failed_count: number;
+  }>;
+}

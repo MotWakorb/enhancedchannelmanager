@@ -59,6 +59,8 @@ class StreamProber:
         self._probe_progress_current_stream = ""
         self._probe_progress_success_count = 0
         self._probe_progress_failed_count = 0
+        self._probe_success_streams = []  # List of {id, name} for successful probes
+        self._probe_failed_streams = []   # List of {id, name} for failed probes
 
     async def start(self):
         """Start the background scheduled probing task."""
@@ -472,6 +474,8 @@ class StreamProber:
         self._probe_progress_current_stream = ""
         self._probe_progress_success_count = 0
         self._probe_progress_failed_count = 0
+        self._probe_success_streams = []
+        self._probe_failed_streams = []
 
         probed_count = 0
         try:
@@ -506,10 +510,13 @@ class StreamProber:
 
                 # Track success/failure
                 probe_status = result.get("probe_status", "failed")
+                stream_info = {"id": stream["id"], "name": stream_name}
                 if probe_status == "success":
                     self._probe_progress_success_count += 1
+                    self._probe_success_streams.append(stream_info)
                 else:
                     self._probe_progress_failed_count += 1
+                    self._probe_failed_streams.append(stream_info)
 
                 probed_count += 1
                 await asyncio.sleep(0.5)  # Rate limiting
@@ -537,6 +544,15 @@ class StreamProber:
             "success_count": self._probe_progress_success_count,
             "failed_count": self._probe_progress_failed_count,
             "percentage": round((self._probe_progress_current / self._probe_progress_total * 100) if self._probe_progress_total > 0 else 0, 1)
+        }
+
+    def get_probe_results(self) -> dict:
+        """Get detailed results of the last probe all streams operation."""
+        return {
+            "success_streams": self._probe_success_streams,
+            "failed_streams": self._probe_failed_streams,
+            "success_count": len(self._probe_success_streams),
+            "failed_count": len(self._probe_failed_streams)
         }
 
     @staticmethod

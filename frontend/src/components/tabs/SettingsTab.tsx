@@ -73,6 +73,14 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
     failed_count: number;
     percentage: number;
   } | null>(null);
+  const [showProbeResultsModal, setShowProbeResultsModal] = useState(false);
+  const [probeResultsType, setProbeResultsType] = useState<'success' | 'failed'>('success');
+  const [probeResults, setProbeResults] = useState<{
+    success_streams: Array<{ id: number; name: string }>;
+    failed_streams: Array<{ id: number; name: string }>;
+    success_count: number;
+    failed_count: number;
+  } | null>(null);
 
   // Preserve settings not managed by this tab (to avoid overwriting them on save)
   const [linkedM3UAccounts, setLinkedM3UAccounts] = useState<number[][]>([]);
@@ -360,6 +368,24 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
       setProbeAllResult({ success: false, message: errorMessage });
       setProbingAll(false);
     }
+  };
+
+  const handleShowProbeResults = async (type: 'success' | 'failed') => {
+    try {
+      const results = await api.getProbeResults();
+      setProbeResults(results);
+      setProbeResultsType(type);
+      setShowProbeResultsModal(true);
+    } catch (err) {
+      console.error('Failed to fetch probe results:', err);
+    }
+  };
+
+  const handleRerunFailed = async () => {
+    setShowProbeResultsModal(false);
+    // TODO: Implement re-run functionality for failed streams
+    // For now, just trigger a full probe again
+    await handleProbeAllStreams();
   };
 
   const handleLoadOrphanedGroups = async () => {
@@ -1395,10 +1421,18 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
                       display: 'flex',
                       gap: '1rem'
                     }}>
-                      <span style={{ color: '#2ecc71' }}>
+                      <span
+                        style={{ color: '#2ecc71', cursor: 'pointer', textDecoration: 'underline' }}
+                        onClick={() => handleShowProbeResults('success')}
+                        title="Click to view successful streams"
+                      >
                         ✓ Success: {probeProgress.success_count}
                       </span>
-                      <span style={{ color: '#e74c3c' }}>
+                      <span
+                        style={{ color: '#e74c3c', cursor: 'pointer', textDecoration: 'underline' }}
+                        onClick={() => handleShowProbeResults('failed')}
+                        title="Click to view failed streams"
+                      >
                         ✗ Failed: {probeProgress.failed_count}
                       </span>
                     </div>
@@ -1529,6 +1563,126 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
         onConfirm={handleConfirmDelete}
         groups={orphanedGroups}
       />
+
+      {showProbeResultsModal && probeResults && (
+        <div
+          style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: 'rgba(0, 0, 0, 0.7)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 1000
+          }}
+          onClick={() => setShowProbeResultsModal(false)}
+        >
+          <div
+            style={{
+              backgroundColor: '#2c3e50',
+              color: '#ecf0f1',
+              borderRadius: '8px',
+              padding: '2rem',
+              maxWidth: '600px',
+              maxHeight: '80vh',
+              width: '90%',
+              display: 'flex',
+              flexDirection: 'column',
+              border: '2px solid #34495e'
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+              <h3 style={{ margin: 0, color: probeResultsType === 'success' ? '#2ecc71' : '#e74c3c' }}>
+                {probeResultsType === 'success' ? '✓ Successful Streams' : '✗ Failed Streams'} (
+                {probeResultsType === 'success' ? probeResults.success_count : probeResults.failed_count})
+              </h3>
+              <button
+                onClick={() => setShowProbeResultsModal(false)}
+                style={{
+                  background: 'transparent',
+                  border: 'none',
+                  color: '#ecf0f1',
+                  fontSize: '24px',
+                  cursor: 'pointer',
+                  padding: '0 0.5rem'
+                }}
+              >
+                ×
+              </button>
+            </div>
+
+            <div
+              style={{
+                flex: 1,
+                overflowY: 'auto',
+                marginBottom: '1rem',
+                padding: '0.5rem',
+                backgroundColor: '#34495e',
+                borderRadius: '4px'
+              }}
+            >
+              {(probeResultsType === 'success' ? probeResults.success_streams : probeResults.failed_streams).length === 0 ? (
+                <div style={{ padding: '1rem', textAlign: 'center', color: '#95a5a6' }}>
+                  No {probeResultsType === 'success' ? 'successful' : 'failed'} streams yet
+                </div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                  {(probeResultsType === 'success' ? probeResults.success_streams : probeResults.failed_streams).map((stream) => (
+                    <div
+                      key={stream.id}
+                      style={{
+                        padding: '0.5rem',
+                        backgroundColor: '#2c3e50',
+                        borderRadius: '4px',
+                        borderLeft: `3px solid ${probeResultsType === 'success' ? '#2ecc71' : '#e74c3c'}`
+                      }}
+                    >
+                      <div style={{ fontWeight: 'bold' }}>{stream.name}</div>
+                      <div style={{ fontSize: '12px', color: '#95a5a6' }}>ID: {stream.id}</div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div style={{ display: 'flex', gap: '1rem', justifyContent: 'flex-end' }}>
+              {probeResultsType === 'failed' && probeResults.failed_count > 0 && (
+                <button
+                  onClick={handleRerunFailed}
+                  style={{
+                    padding: '0.5rem 1rem',
+                    backgroundColor: '#e74c3c',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: '4px',
+                    cursor: 'pointer',
+                    fontWeight: 'bold'
+                  }}
+                >
+                  Re-run All Streams
+                </button>
+              )}
+              <button
+                onClick={() => setShowProbeResultsModal(false)}
+                style={{
+                  padding: '0.5rem 1rem',
+                  backgroundColor: '#7f8c8d',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: '4px',
+                  cursor: 'pointer'
+                }}
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
