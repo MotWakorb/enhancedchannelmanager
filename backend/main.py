@@ -219,6 +219,7 @@ class SettingsRequest(BaseModel):
     stream_probe_timeout: int = 30
     stream_probe_schedule_time: str = "03:00"  # HH:MM format, 24h
     probe_channel_groups: list[str] = []  # Channel groups to probe
+    bitrate_sample_duration: int = 10  # Duration in seconds to sample stream for bitrate (10, 20, or 30)
 
 
 class SettingsResponse(BaseModel):
@@ -253,6 +254,7 @@ class SettingsResponse(BaseModel):
     stream_probe_timeout: int
     stream_probe_schedule_time: str  # HH:MM format, 24h
     probe_channel_groups: list[str]
+    bitrate_sample_duration: int
 
 
 class TestConnectionRequest(BaseModel):
@@ -298,6 +300,7 @@ async def get_current_settings():
         stream_probe_timeout=settings.stream_probe_timeout,
         stream_probe_schedule_time=settings.stream_probe_schedule_time,
         probe_channel_groups=settings.probe_channel_groups,
+        bitrate_sample_duration=settings.bitrate_sample_duration,
     )
 
 
@@ -354,6 +357,7 @@ async def update_settings(request: SettingsRequest):
         stream_probe_timeout=request.stream_probe_timeout,
         stream_probe_schedule_time=request.stream_probe_schedule_time,
         probe_channel_groups=request.probe_channel_groups,
+        bitrate_sample_duration=request.bitrate_sample_duration,
     )
     save_settings(new_settings)
     clear_settings_cache()
