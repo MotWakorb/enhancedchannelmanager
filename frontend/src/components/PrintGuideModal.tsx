@@ -405,8 +405,8 @@ function generatePrintHtml(
     }
 
     .channel-group {
-      break-inside: avoid;
-      page-break-inside: avoid;
+      break-inside: auto;
+      page-break-inside: auto;
       border: 1px solid #999;
       border-radius: 2px;
       padding: 3px 4px;
@@ -455,7 +455,7 @@ function generatePrintHtml(
     @media screen {
       body {
         max-width: 11in;
-        max-height: none;
+        height: 7.9in;
         margin: 0 auto;
         padding: 20px;
         background: #f5f5f5;
