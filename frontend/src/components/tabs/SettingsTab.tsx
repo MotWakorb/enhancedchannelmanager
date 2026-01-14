@@ -1768,9 +1768,49 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
                 Cancel
               </button>
               <button
-                onClick={() => {
+                onClick={async () => {
+                  // Update state and save immediately
                   setProbeChannelGroups(tempProbeChannelGroups);
                   setShowGroupSelectModal(false);
+                  // Save settings with the new probe channel groups
+                  // We need to save directly since setState is async
+                  try {
+                    await api.saveSettings({
+                      url,
+                      username,
+                      auto_rename_channel_number: autoRenameChannelNumber,
+                      include_channel_number_in_name: includeChannelNumberInName,
+                      channel_number_separator: channelNumberSeparator,
+                      remove_country_prefix: removeCountryPrefix,
+                      include_country_in_name: includeCountryInName,
+                      country_separator: countrySeparator,
+                      timezone_preference: timezonePreference,
+                      show_stream_urls: showStreamUrls,
+                      hide_auto_sync_groups: hideAutoSyncGroups,
+                      hide_ungrouped_streams: hideUngroupedStreams,
+                      theme: theme,
+                      default_channel_profile_ids: defaultChannelProfileIds,
+                      epg_auto_match_threshold: epgAutoMatchThreshold,
+                      custom_network_prefixes: customNetworkPrefixes,
+                      custom_network_suffixes: customNetworkSuffixes,
+                      stats_poll_interval: statsPollInterval,
+                      user_timezone: userTimezone,
+                      backend_log_level: backendLogLevel,
+                      frontend_log_level: frontendLogLevel,
+                      vlc_open_behavior: vlcOpenBehavior,
+                      linked_m3u_accounts: linkedM3UAccounts,
+                      stream_probe_enabled: streamProbeEnabled,
+                      stream_probe_interval_hours: streamProbeIntervalHours,
+                      stream_probe_batch_size: streamProbeBatchSize,
+                      stream_probe_timeout: streamProbeTimeout,
+                      stream_probe_schedule_time: streamProbeScheduleTime,
+                      probe_channel_groups: tempProbeChannelGroups,
+                      bitrate_sample_duration: bitrateSampleDuration,
+                    });
+                    logger.info('Probe channel groups saved');
+                  } catch (err) {
+                    logger.error('Failed to save probe channel groups', err);
+                  }
                 }}
                 className="btn-primary"
               >
