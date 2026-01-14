@@ -67,8 +67,10 @@ class StreamProber:
         self._probe_progress_current_stream = ""
         self._probe_progress_success_count = 0
         self._probe_progress_failed_count = 0
-        self._probe_success_streams = []  # List of {id, name} for successful probes
-        self._probe_failed_streams = []   # List of {id, name} for failed probes
+        self._probe_success_streams = []  # List of {id, name, url} for successful probes
+        self._probe_failed_streams = []   # List of {id, name, url} for failed probes
+        # Probe history - list of last 5 probe runs
+        self._probe_history = []  # List of {timestamp, total, success_count, failed_count, status, success_streams, failed_streams}
 
     async def start(self):
         """Start the background scheduled probing task."""
@@ -537,11 +539,11 @@ class StreamProber:
                 break
         return all_streams
 
-    async def _fetch_channel_stream_ids(self, channel_groups_override: list[str] = None) -> tuple[set, dict]:
+    async def _fetch_channel_stream_ids(self, channel_groups_override: list[str] = None) -> tuple[set, dict, dict]:
         """
         Fetch all unique stream IDs from channels (paginated).
         Only fetches from selected groups if probe_channel_groups is set.
-        Returns: (set of stream IDs, dict mapping stream_id -> list of channel names)
+        Returns: (set of stream IDs, dict mapping stream_id -> list of channel names, dict mapping stream_id -> lowest channel number)
 
         Args:
             channel_groups_override: Optional list of channel group names to filter by.
@@ -549,6 +551,7 @@ class StreamProber:
         """
         channel_stream_ids = set()
         stream_to_channels = {}  # stream_id -> list of channel names
+        stream_to_channel_number = {}  # stream_id -> lowest channel number (for sorting)
 
         # Determine which groups to filter by
         groups_to_filter = channel_groups_override if channel_groups_override is not None else self.probe_channel_groups
@@ -579,14 +582,18 @@ class StreamProber:
                             continue  # Skip channels not in selected groups
 
                     channel_name = channel.get("name", f"Channel {channel.get('id', 'Unknown')}")
+                    channel_number = channel.get("channel_number", 999999)  # Default high number for sorting
                     # Each channel has a "streams" field which is a list of stream IDs
                     stream_ids = channel.get("streams", [])
                     channel_stream_ids.update(stream_ids)
-                    # Map each stream to its channel names
+                    # Map each stream to its channel names and track lowest channel number
                     for stream_id in stream_ids:
                         if stream_id not in stream_to_channels:
                             stream_to_channels[stream_id] = []
                         stream_to_channels[stream_id].append(channel_name)
+                        # Track the lowest channel number for this stream (for sorting)
+                        if stream_id not in stream_to_channel_number or channel_number < stream_to_channel_number[stream_id]:
+                            stream_to_channel_number[stream_id] = channel_number
                 if not result.get("next"):
                     break
                 page += 1
@@ -595,7 +602,7 @@ class StreamProber:
             except Exception as e:
                 logger.error(f"Failed to fetch channels page {page}: {e}")
                 break
-        return channel_stream_ids, stream_to_channels
+        return channel_stream_ids, stream_to_channels, stream_to_channel_number
 
     async def probe_all_streams(self, channel_groups_override: list[str] = None):
         """Probe all streams that are in channels (runs in background).
@@ -620,10 +627,11 @@ class StreamProber:
         self._probe_failed_streams = []
 
         probed_count = 0
+        start_time = datetime.utcnow()
         try:
             # Fetch all channel stream IDs and channel mappings
             logger.info(f"Fetching channel stream IDs (override groups: {channel_groups_override})...")
-            channel_stream_ids, stream_to_channels = await self._fetch_channel_stream_ids(channel_groups_override)
+            channel_stream_ids, stream_to_channels, stream_to_channel_number = await self._fetch_channel_stream_ids(channel_groups_override)
             logger.info(f"Found {len(channel_stream_ids)} unique streams across all channels")
 
             # Fetch M3U accounts to map account IDs to names
@@ -644,6 +652,10 @@ class StreamProber:
             # Filter to only streams that are in channels
             streams_to_probe = [s for s in all_streams if s["id"] in channel_stream_ids]
 
+            # Sort streams by their lowest channel number (lowest first)
+            streams_to_probe.sort(key=lambda s: stream_to_channel_number.get(s["id"], 999999))
+            logger.info(f"Sorted {len(streams_to_probe)} streams by channel number")
+
             self._probe_progress_total = len(streams_to_probe)
             self._probe_progress_status = "probing"
             logger.info(f"Starting probe of {len(streams_to_probe)} streams (filtered from {len(all_streams)} total)")
@@ -655,6 +667,7 @@ class StreamProber:
 
                 stream_id = stream["id"]
                 stream_name = stream.get("name", f"Stream {stream_id}")
+                stream_url = stream.get("url", "")
 
                 # Build display string: "channel(s): stream | M3U"
                 display_parts = []
@@ -689,9 +702,9 @@ class StreamProber:
                     stream["id"], stream.get("url"), stream_name
                 )
 
-                # Track success/failure
+                # Track success/failure with URL for copy button
                 probe_status = result.get("probe_status", "failed")
-                stream_info = {"id": stream["id"], "name": stream_name}
+                stream_info = {"id": stream["id"], "name": stream_name, "url": stream_url}
                 if probe_status == "success":
                     self._probe_progress_success_count += 1
                     self._probe_success_streams.append(stream_info)
@@ -705,11 +718,19 @@ class StreamProber:
             logger.info(f"Completed probing {probed_count} streams")
             self._probe_progress_status = "completed"
             self._probe_progress_current_stream = ""
+
+            # Save to probe history
+            self._save_probe_history(start_time, probed_count)
+
             return {"status": "completed", "probed": probed_count}
         except Exception as e:
             logger.error(f"Probe all streams failed: {e}")
             self._probe_progress_status = "failed"
             self._probe_progress_current_stream = ""
+
+            # Save failed run to history
+            self._save_probe_history(start_time, probed_count, error=str(e))
+
             return {"status": "failed", "error": str(e), "probed": probed_count}
         finally:
             self._probing_in_progress = False
@@ -735,6 +756,34 @@ class StreamProber:
             "success_count": len(self._probe_success_streams),
             "failed_count": len(self._probe_failed_streams)
         }
+
+    def _save_probe_history(self, start_time: datetime, total: int, error: str = None):
+        """Save a probe run to history (keeps last 5 runs)."""
+        end_time = datetime.utcnow()
+        duration_seconds = int((end_time - start_time).total_seconds())
+
+        history_entry = {
+            "timestamp": start_time.isoformat() + "Z",
+            "end_timestamp": end_time.isoformat() + "Z",
+            "duration_seconds": duration_seconds,
+            "total": total,
+            "success_count": self._probe_progress_success_count,
+            "failed_count": self._probe_progress_failed_count,
+            "status": "failed" if error else ("completed" if self._probe_progress_status == "completed" else self._probe_progress_status),
+            "error": error,
+            "success_streams": list(self._probe_success_streams),  # Copy the list
+            "failed_streams": list(self._probe_failed_streams),    # Copy the list
+        }
+
+        # Add to history and keep only last 5
+        self._probe_history.insert(0, history_entry)
+        self._probe_history = self._probe_history[:5]
+
+        logger.info(f"Saved probe history entry: {total} streams, {self._probe_progress_success_count} success, {self._probe_progress_failed_count} failed")
+
+    def get_probe_history(self) -> list:
+        """Get probe run history (last 5 runs)."""
+        return self._probe_history
 
     @staticmethod
     def get_all_stats() -> list:

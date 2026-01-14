@@ -1099,6 +1099,10 @@
   padding: 0.5rem;
   background-color: var(--bg-secondary);
   border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
 }
 
 .probe-result-item.success {
@@ -1109,9 +1113,15 @@
   border-left: 3px solid var(--error);
 }
 
+.probe-result-item-info {
+  flex: 1;
+  min-width: 0;
+}
+
 .probe-result-item-name {
   font-weight: bold;
   color: var(--text-primary);
+  word-break: break-word;
 }
 
 .probe-result-item-id {
