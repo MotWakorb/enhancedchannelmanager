@@ -445,6 +445,7 @@ export interface SettingsResponse {
   stream_probe_interval_hours: number;  // Hours between auto-probe cycles
   stream_probe_batch_size: number;  // Streams to probe per scheduled cycle
   stream_probe_timeout: number;  // Timeout in seconds for each probe
+  stream_probe_schedule_time: string;  // Time of day to run probes (HH:MM, 24h format)
 }
 
 export interface TestConnectionResult {
@@ -486,6 +487,7 @@ export async function saveSettings(settings: {
   stream_probe_interval_hours?: number;  // Optional - hours between auto-probe cycles, defaults to 24
   stream_probe_batch_size?: number;  // Optional - streams per scheduled cycle, defaults to 10
   stream_probe_timeout?: number;  // Optional - timeout in seconds, defaults to 30
+  stream_probe_schedule_time?: string;  // Optional - time of day for probes (HH:MM), defaults to "03:00"
 }): Promise<{ status: string; configured: boolean }> {
   return fetchJson(`${API_BASE}/settings`, {
     method: 'POST',
