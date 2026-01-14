@@ -279,8 +279,13 @@ const SortableStreamItem = memo(function SortableStreamItem({ stream, providerNa
                 {streamStats.video_codec}
               </span>
             )}
+            {streamStats.audio_codec && (
+              <span className="meta-tag audio-codec" title={`Audio codec: ${streamStats.audio_codec.toUpperCase()}`}>
+                {streamStats.audio_codec.toUpperCase()}
+              </span>
+            )}
             {streamStats.audio_channels && (
-              <span className="meta-tag audio" title={`Audio: ${streamStats.audio_codec || 'unknown'} ${streamStats.audio_channels}ch`}>
+              <span className="meta-tag audio" title={`${streamStats.audio_channels} channels`}>
                 {formatAudioChannels(streamStats.audio_channels)}
               </span>
             )}
