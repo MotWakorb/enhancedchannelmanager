@@ -441,24 +441,31 @@ class StreamProber:
                 break
         return all_streams
 
-    async def _fetch_channel_stream_ids(self) -> tuple[set, dict]:
+    async def _fetch_channel_stream_ids(self, channel_groups_override: list[str] = None) -> tuple[set, dict]:
         """
         Fetch all unique stream IDs from channels (paginated).
         Only fetches from selected groups if probe_channel_groups is set.
         Returns: (set of stream IDs, dict mapping stream_id -> list of channel names)
+
+        Args:
+            channel_groups_override: Optional list of channel group names to filter by.
+                                    If None, uses self.probe_channel_groups.
         """
         channel_stream_ids = set()
         stream_to_channels = {}  # stream_id -> list of channel names
 
+        # Determine which groups to filter by
+        groups_to_filter = channel_groups_override if channel_groups_override is not None else self.probe_channel_groups
+
         # If specific groups are selected, fetch all groups first to filter
         selected_group_ids = set()
-        if self.probe_channel_groups:
+        if groups_to_filter:
             try:
                 all_groups = await self.client.get_channel_groups()
                 for group in all_groups:
-                    if group.get("name") in self.probe_channel_groups:
+                    if group.get("name") in groups_to_filter:
                         selected_group_ids.add(group["id"])
-                logger.info(f"Filtering to {len(selected_group_ids)} selected groups: {self.probe_channel_groups}")
+                logger.info(f"Filtering to {len(selected_group_ids)} selected groups: {groups_to_filter}")
             except Exception as e:
                 logger.error(f"Failed to fetch channel groups for filtering: {e}")
                 # Continue without filtering if we can't fetch groups
@@ -494,8 +501,14 @@ class StreamProber:
                 break
         return channel_stream_ids, stream_to_channels
 
-    async def probe_all_streams(self):
-        """Probe all streams that are in channels (runs in background)."""
+    async def probe_all_streams(self, channel_groups_override: list[str] = None):
+        """Probe all streams that are in channels (runs in background).
+
+        Args:
+            channel_groups_override: Optional list of channel group names to filter by.
+                                    If None, uses self.probe_channel_groups.
+                                    If empty list, probes all groups.
+        """
         if self._probing_in_progress:
             logger.warning("Probe already in progress")
             return {"status": "already_running"}
@@ -513,8 +526,8 @@ class StreamProber:
         probed_count = 0
         try:
             # Fetch all channel stream IDs and channel mappings
-            logger.info("Fetching channel stream IDs...")
-            channel_stream_ids, stream_to_channels = await self._fetch_channel_stream_ids()
+            logger.info(f"Fetching channel stream IDs (override groups: {channel_groups_override})...")
+            channel_stream_ids, stream_to_channels = await self._fetch_channel_stream_ids(channel_groups_override)
             logger.info(f"Found {len(channel_stream_ids)} unique streams across all channels")
 
             # Fetch M3U accounts to map account IDs to names
