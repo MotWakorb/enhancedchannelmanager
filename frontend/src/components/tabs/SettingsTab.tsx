@@ -83,6 +83,8 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
   } | null>(null);
   const [availableChannelGroups, setAvailableChannelGroups] = useState<Array<{ id: number; name: string }>>([]);
   const [probeChannelGroups, setProbeChannelGroups] = useState<string[]>([]);
+  const [showGroupSelectModal, setShowGroupSelectModal] = useState(false);
+  const [tempProbeChannelGroups, setTempProbeChannelGroups] = useState<string[]>([]);
 
   // Preserve settings not managed by this tab (to avoid overwriting them on save)
   const [linkedM3UAccounts, setLinkedM3UAccounts] = useState<number[][]>([]);
@@ -1376,33 +1378,26 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
 
             <div className="form-group">
               <label>Channel groups to probe</label>
-              <p className="form-hint" style={{ marginTop: 0, marginBottom: '0.75rem' }}>
-                Select which channel groups to probe. Only groups with channels containing streams are shown.
-                Leave all unchecked to probe all groups with streams.
-                {availableChannelGroups.length === 0 && (
-                  <span className="form-hint-warning"> No groups with streams available.</span>
-                )}
-              </p>
-              {availableChannelGroups.length > 0 && (
-                <div className="profile-checkbox-list">
-                  {availableChannelGroups.map((group) => (
-                    <label key={group.id} className="profile-checkbox">
-                      <input
-                        type="checkbox"
-                        checked={probeChannelGroups.includes(group.name)}
-                        onChange={(e) => {
-                          if (e.target.checked) {
-                            setProbeChannelGroups([...probeChannelGroups, group.name]);
-                          } else {
-                            setProbeChannelGroups(probeChannelGroups.filter(name => name !== group.name));
-                          }
-                        }}
-                      />
-                      <span className="profile-checkbox-label">{group.name}</span>
-                    </label>
-                  ))}
-                </div>
-              )}
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => {
+                  setTempProbeChannelGroups([...probeChannelGroups]);
+                  setShowGroupSelectModal(true);
+                }}
+                disabled={availableChannelGroups.length === 0}
+                style={{ marginTop: '0.5rem' }}
+              >
+                <span className="material-icons">filter_list</span>
+                {probeChannelGroups.length === 0
+                  ? 'All groups'
+                  : `${probeChannelGroups.length} group${probeChannelGroups.length !== 1 ? 's' : ''} selected`}
+              </button>
+              <span className="form-hint" style={{ display: 'block', marginTop: '0.5rem' }}>
+                {availableChannelGroups.length === 0
+                  ? 'No groups with streams available.'
+                  : 'Click to select which groups to probe. Leave all unchecked to probe all groups.'}
+              </span>
             </div>
           </div>
         )}
@@ -1665,6 +1660,72 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
                 className="probe-results-close-btn"
               >
                 Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Channel Group Selection Modal */}
+      {showGroupSelectModal && (
+        <div className="modal-overlay" onClick={() => setShowGroupSelectModal(false)}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '500px' }}>
+            <div className="modal-header">
+              <h3>Select Channel Groups to Probe</h3>
+              <button
+                onClick={() => setShowGroupSelectModal(false)}
+                className="modal-close"
+              >
+                ×
+              </button>
+            </div>
+
+            <div className="modal-body" style={{ maxHeight: '400px', overflowY: 'auto' }}>
+              <p className="form-hint" style={{ marginTop: 0, marginBottom: '1rem' }}>
+                Select which channel groups to probe. Leave all unchecked to probe all groups with streams.
+              </p>
+
+              {availableChannelGroups.length === 0 ? (
+                <div style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>
+                  No groups with streams available
+                </div>
+              ) : (
+                <div className="profile-checkbox-list">
+                  {availableChannelGroups.map((group) => (
+                    <label key={group.id} className="profile-checkbox">
+                      <input
+                        type="checkbox"
+                        checked={tempProbeChannelGroups.includes(group.name)}
+                        onChange={(e) => {
+                          if (e.target.checked) {
+                            setTempProbeChannelGroups([...tempProbeChannelGroups, group.name]);
+                          } else {
+                            setTempProbeChannelGroups(tempProbeChannelGroups.filter(name => name !== group.name));
+                          }
+                        }}
+                      />
+                      <span className="profile-checkbox-label">{group.name}</span>
+                    </label>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div className="modal-footer">
+              <button
+                onClick={() => setShowGroupSelectModal(false)}
+                className="btn-secondary"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  setProbeChannelGroups(tempProbeChannelGroups);
+                  setShowGroupSelectModal(false);
+                }}
+                className="btn-primary"
+              >
+                OK
               </button>
             </div>
           </div>
