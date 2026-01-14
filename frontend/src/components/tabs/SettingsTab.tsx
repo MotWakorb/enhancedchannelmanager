@@ -1579,6 +1579,21 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
           )}
         </div>
       </div>
+
+      {saveSuccess && (
+        <div className="save-success">
+          <span className="material-icons">check_circle</span>
+          Settings saved successfully
+        </div>
+      )}
+
+      <div className="settings-actions">
+        <div className="settings-actions-left" />
+        <button className="btn-primary" onClick={handleSave} disabled={loading}>
+          <span className="material-icons">save</span>
+          {loading ? 'Saving...' : 'Save Settings'}
+        </button>
+      </div>
     </div>
   );
 
