@@ -122,7 +122,23 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
     loadStreamCount();
     loadAvailableChannelGroups();
     loadProbeHistory();
+    checkForOngoingProbe();
   }, []);
+
+  // Check if a probe is already in progress (e.g., when returning to Settings tab)
+  const checkForOngoingProbe = async () => {
+    try {
+      const progress = await api.getProbeProgress();
+      if (progress.in_progress) {
+        // A probe is running - restore the progress state and start polling
+        logger.info('Detected ongoing probe, resuming progress display');
+        setProbeProgress(progress);
+        setProbingAll(true);
+      }
+    } catch (err) {
+      logger.warn('Failed to check for ongoing probe', err);
+    }
+  };
 
   // Auto-populate probe channel groups with all groups if empty (default to all checked)
   useEffect(() => {
