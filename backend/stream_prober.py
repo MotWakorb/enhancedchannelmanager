@@ -606,30 +606,33 @@ class StreamProber:
                 break
         return channel_stream_ids, stream_to_channels, stream_to_channel_number
 
-    async def _get_m3u_active_connections(self, m3u_account_id: int) -> int:
+    async def _get_all_m3u_active_connections(self) -> dict[int, int]:
         """
-        Fetch current active connection count for a specific M3U account.
-        Makes a fresh API call to Dispatcharr to get real-time connection status.
+        Fetch current active connection counts for all M3U accounts.
+        Makes a single API call to Dispatcharr to get real-time connection status.
 
         Returns:
-            Number of active connections for this M3U, or 0 if unable to fetch.
+            Dict mapping M3U account ID to active connection count.
         """
         try:
             channel_stats = await self.client.get_channel_stats()
             channels = channel_stats.get("channels", [])
-            count = 0
+            counts = {}
             for ch in channels:
-                # Count connections for this M3U account
-                if ch.get("m3u_profile_id") == m3u_account_id:
-                    count += 1
-            return count
+                m3u_id = ch.get("m3u_profile_id")
+                if m3u_id:
+                    counts[m3u_id] = counts.get(m3u_id, 0) + 1
+            return counts
         except Exception as e:
-            logger.warning(f"Failed to fetch M3U connection count for account {m3u_account_id}: {e}")
-            # Return 0 on failure - allows probe to proceed (fail-open)
-            return 0
+            logger.warning(f"Failed to fetch M3U connection counts: {e}")
+            # Return empty dict on failure - allows probes to proceed (fail-open)
+            return {}
 
     async def probe_all_streams(self, channel_groups_override: list[str] = None):
         """Probe all streams that are in channels (runs in background).
+
+        Uses parallel probing - streams from different M3U accounts (or same M3U with
+        available capacity) are probed concurrently for faster completion.
 
         Args:
             channel_groups_override: Optional list of channel group names to filter by.
@@ -682,9 +685,6 @@ class StreamProber:
             except Exception as e:
                 logger.warning(f"Failed to fetch M3U accounts: {e}")
 
-            # Note: M3U connection checking is now done per-stream in the probe loop
-            # to allow streams to be tested if connections become available mid-probe
-
             # Fetch all streams
             logger.info("Fetching stream details...")
             all_streams = await self._fetch_all_streams()
@@ -698,83 +698,162 @@ class StreamProber:
 
             self._probe_progress_total = len(streams_to_probe)
             self._probe_progress_status = "probing"
-            logger.info(f"Starting probe of {len(streams_to_probe)} streams (filtered from {len(all_streams)} total)")
+            logger.info(f"Starting parallel probe of {len(streams_to_probe)} streams (filtered from {len(all_streams)} total)")
 
-            for stream in streams_to_probe:
-                if not self._running:
-                    self._probe_progress_status = "cancelled"
-                    break
+            # Track our own probe connections per M3U (separate from Dispatcharr's active connections)
+            # This lets us know how many streams WE are currently probing per M3U
+            probe_connections_lock = asyncio.Lock()
+            probe_connections = {}  # m3u_id -> count of our active probes
 
+            # Results lock for thread-safe updates
+            results_lock = asyncio.Lock()
+
+            async def probe_single_stream(stream: dict, display_string: str) -> tuple[str, dict]:
+                """Probe a single stream and return (status, stream_info)."""
                 stream_id = stream["id"]
                 stream_name = stream.get("name", f"Stream {stream_id}")
                 stream_url = stream.get("url", "")
+                m3u_account_id = stream.get("m3u_account")
 
-                # Build display string: "channel(s): stream | M3U"
-                display_parts = []
+                try:
+                    result = await self.probe_stream(stream_id, stream_url, stream_name)
+                    probe_status = result.get("probe_status", "failed")
+                    stream_info = {"id": stream_id, "name": stream_name, "url": stream_url}
+                    return (probe_status, stream_info)
+                finally:
+                    # Release our probe connection for this M3U
+                    if m3u_account_id:
+                        async with probe_connections_lock:
+                            if m3u_account_id in probe_connections:
+                                probe_connections[m3u_account_id] = max(0, probe_connections[m3u_account_id] - 1)
 
-                # Add channel name(s)
-                if stream_id in stream_to_channels and stream_to_channels[stream_id]:
-                    channel_names = stream_to_channels[stream_id]
-                    # If stream is in multiple channels, show first one or combine
-                    if len(channel_names) == 1:
-                        display_parts.append(channel_names[0])
+            # Process streams with parallel probing
+            pending_streams = list(streams_to_probe)  # Streams waiting to be probed
+            active_tasks = {}  # task -> (stream, display_string)
+
+            while pending_streams or active_tasks:
+                if not self._running:
+                    self._probe_progress_status = "cancelled"
+                    # Cancel active tasks
+                    for task in active_tasks:
+                        task.cancel()
+                    break
+
+                # Get fresh M3U connection counts from Dispatcharr
+                dispatcharr_connections = await self._get_all_m3u_active_connections()
+
+                # Try to start new probes for streams that have available M3U capacity
+                streams_started_this_round = []
+                for stream in pending_streams:
+                    m3u_account_id = stream.get("m3u_account")
+                    stream_id = stream["id"]
+                    stream_name = stream.get("name", f"Stream {stream_id}")
+                    stream_url = stream.get("url", "")
+
+                    # Build display string
+                    display_parts = []
+                    if stream_id in stream_to_channels and stream_to_channels[stream_id]:
+                        channel_names = stream_to_channels[stream_id]
+                        if len(channel_names) == 1:
+                            display_parts.append(channel_names[0])
+                        else:
+                            display_parts.append(f"{channel_names[0]} (+{len(channel_names)-1})")
                     else:
-                        # Show first channel + count if multiple
-                        display_parts.append(f"{channel_names[0]} (+{len(channel_names)-1})")
+                        display_parts.append("Unknown Channel")
+                    display_parts.append(stream_name)
+
+                    if m3u_account_id and m3u_account_id in m3u_accounts_map:
+                        m3u_name = m3u_accounts_map[m3u_account_id]
+                        display_string = f"{display_parts[0]}: {display_parts[1]} | {m3u_name}"
+                    else:
+                        display_string = f"{display_parts[0]}: {display_parts[1]}"
+
+                    # Check M3U capacity
+                    can_probe = True
+                    skip_reason = None
+
+                    if m3u_account_id:
+                        max_streams = m3u_max_streams.get(m3u_account_id, 0)
+                        if max_streams > 0:
+                            # Total connections = Dispatcharr active + our active probes
+                            dispatcharr_active = dispatcharr_connections.get(m3u_account_id, 0)
+                            async with probe_connections_lock:
+                                our_probes = probe_connections.get(m3u_account_id, 0)
+                            total_active = dispatcharr_active + our_probes
+
+                            if total_active >= max_streams:
+                                # Check if we have any active probes for this M3U
+                                # If we do, wait for them to finish (don't skip yet)
+                                if our_probes > 0:
+                                    can_probe = False  # Wait, don't skip
+                                else:
+                                    # No probes running, Dispatcharr is using all connections
+                                    m3u_name = m3u_accounts_map.get(m3u_account_id, f"M3U {m3u_account_id}")
+                                    skip_reason = f"M3U '{m3u_name}' at max connections ({dispatcharr_active}/{max_streams})"
+                                    logger.info(f"Skipping stream {stream_id} ({stream_name}): {skip_reason}")
+
+                    if skip_reason:
+                        # Skip this stream - M3U is at capacity with Dispatcharr connections
+                        stream_info = {"id": stream_id, "name": stream_name, "url": stream_url, "reason": skip_reason}
+                        async with results_lock:
+                            self._probe_progress_skipped_count += 1
+                            self._probe_skipped_streams.append(stream_info)
+                        probed_count += 1
+                        streams_started_this_round.append(stream)
+                        self._probe_progress_current = probed_count
+                        continue
+
+                    if can_probe:
+                        # Reserve a probe connection for this M3U
+                        if m3u_account_id:
+                            async with probe_connections_lock:
+                                probe_connections[m3u_account_id] = probe_connections.get(m3u_account_id, 0) + 1
+
+                        # Start the probe task
+                        task = asyncio.create_task(probe_single_stream(stream, display_string))
+                        active_tasks[task] = (stream, display_string)
+                        streams_started_this_round.append(stream)
+
+                        # Update progress display with active streams
+                        active_displays = [info[1] for info in active_tasks.values()]
+                        if len(active_displays) == 1:
+                            self._probe_progress_current_stream = active_displays[0]
+                        else:
+                            self._probe_progress_current_stream = f"[{len(active_displays)} parallel] {active_displays[0]}"
+
+                # Remove started streams from pending
+                for stream in streams_started_this_round:
+                    pending_streams.remove(stream)
+
+                # If we have active tasks, wait for at least one to complete
+                if active_tasks:
+                    done, _ = await asyncio.wait(active_tasks.keys(), return_when=asyncio.FIRST_COMPLETED)
+
+                    for task in done:
+                        stream, display_string = active_tasks.pop(task)
+                        try:
+                            probe_status, stream_info = task.result()
+                            async with results_lock:
+                                if probe_status == "success":
+                                    self._probe_progress_success_count += 1
+                                    self._probe_success_streams.append(stream_info)
+                                else:
+                                    self._probe_progress_failed_count += 1
+                                    self._probe_failed_streams.append(stream_info)
+                            probed_count += 1
+                            self._probe_progress_current = probed_count
+                        except asyncio.CancelledError:
+                            pass
+                        except Exception as e:
+                            logger.error(f"Probe task failed: {e}")
+                            probed_count += 1
+                            self._probe_progress_current = probed_count
+                elif not pending_streams:
+                    # No active tasks and no pending streams - we're done
+                    break
                 else:
-                    display_parts.append("Unknown Channel")
-
-                # Add stream name
-                display_parts.append(stream_name)
-
-                # Add M3U account name if available
-                m3u_account_id = stream.get("m3u_account")
-                if m3u_account_id and m3u_account_id in m3u_accounts_map:
-                    m3u_name = m3u_accounts_map[m3u_account_id]
-                    display_string = f"{display_parts[0]}: {display_parts[1]} | {m3u_name}"
-                else:
-                    display_string = f"{display_parts[0]}: {display_parts[1]}"
-
-                self._probe_progress_current = probed_count + 1
-                self._probe_progress_current_stream = display_string
-
-                # Check if M3U is at max connections before probing (fresh check each time)
-                m3u_account_id = stream.get("m3u_account")
-                skip_reason = None
-                if m3u_account_id:
-                    max_streams = m3u_max_streams.get(m3u_account_id, 0)
-                    if max_streams > 0:
-                        # Fetch fresh connection count for this M3U right before probing
-                        current_streams = await self._get_m3u_active_connections(m3u_account_id)
-                        if current_streams >= max_streams:
-                            m3u_name = m3u_accounts_map.get(m3u_account_id, f"M3U {m3u_account_id}")
-                            skip_reason = f"M3U '{m3u_name}' at max connections ({current_streams}/{max_streams})"
-                            logger.info(f"Skipping stream {stream_id} ({stream_name}): {skip_reason}")
-
-                if skip_reason:
-                    # Skip this stream - M3U is at capacity
-                    stream_info = {"id": stream["id"], "name": stream_name, "url": stream_url, "reason": skip_reason}
-                    self._probe_progress_skipped_count += 1
-                    self._probe_skipped_streams.append(stream_info)
-                    probed_count += 1
-                    continue
-
-                result = await self.probe_stream(
-                    stream["id"], stream.get("url"), stream_name
-                )
-
-                # Track success/failure with URL for copy button
-                probe_status = result.get("probe_status", "failed")
-                stream_info = {"id": stream["id"], "name": stream_name, "url": stream_url}
-                if probe_status == "success":
-                    self._probe_progress_success_count += 1
-                    self._probe_success_streams.append(stream_info)
-                else:
-                    self._probe_progress_failed_count += 1
-                    self._probe_failed_streams.append(stream_info)
-
-                probed_count += 1
-                await asyncio.sleep(0.5)  # Rate limiting
+                    # All pending streams are waiting for M3U capacity - wait a bit and retry
+                    await asyncio.sleep(0.5)
 
             logger.info(f"Completed probing {probed_count} streams")
             self._probe_progress_status = "completed"
