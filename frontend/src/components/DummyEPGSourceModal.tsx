@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useCallback } from 'react';
+import { useState, useEffect, useMemo, useCallback, memo } from 'react';
 import type { EPGSource, DummyEPGCustomProperties } from '../types';
 import type { CreateEPGSourceRequest } from '../services/api';
 import { useAsyncOperation } from '../hooks/useAsyncOperation';
@@ -42,7 +42,7 @@ interface CollapsibleSectionProps {
   children: React.ReactNode;
 }
 
-function CollapsibleSection({ title, isOpen, onToggle, children }: CollapsibleSectionProps) {
+const CollapsibleSection = memo(function CollapsibleSection({ title, isOpen, onToggle, children }: CollapsibleSectionProps) {
   return (
     <div className="collapsible-section">
       <button type="button" className="collapsible-header" onClick={onToggle}>
@@ -52,9 +52,9 @@ function CollapsibleSection({ title, isOpen, onToggle, children }: CollapsibleSe
       {isOpen && <div className="collapsible-content">{children}</div>}
     </div>
   );
-}
+});
 
-export function DummyEPGSourceModal({ isOpen, source, onClose, onSave }: DummyEPGSourceModalProps) {
+export const DummyEPGSourceModal = memo(function DummyEPGSourceModal({ isOpen, source, onClose, onSave }: DummyEPGSourceModalProps) {
   // Basic Info
   const [name, setName] = useState('');
   const [isActive, setIsActive] = useState(true);
@@ -791,4 +791,4 @@ export function DummyEPGSourceModal({ isOpen, source, onClose, onSave }: DummyEP
       </div>
     </div>
   );
-}
+});

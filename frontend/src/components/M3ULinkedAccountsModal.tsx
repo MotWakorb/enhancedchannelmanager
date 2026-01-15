@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, memo } from 'react';
 import type { M3UAccount } from '../types';
 import { naturalCompare } from '../utils/naturalSort';
 import './M3ULinkedAccountsModal.css';
@@ -11,7 +11,7 @@ interface M3ULinkedAccountsModalProps {
   linkGroups: number[][];
 }
 
-export function M3ULinkedAccountsModal({
+export const M3ULinkedAccountsModal = memo(function M3ULinkedAccountsModal({
   isOpen,
   onClose,
   onSave,
@@ -262,4 +262,4 @@ export function M3ULinkedAccountsModal({
       </div>
     </div>
   );
-}
+});

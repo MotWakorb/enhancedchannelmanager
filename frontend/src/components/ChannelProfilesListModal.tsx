@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, memo } from 'react';
 import type { ChannelProfile, Channel, ChannelGroup } from '../types';
 import * as api from '../services/api';
 import './ChannelProfilesListModal.css';
@@ -18,7 +18,7 @@ interface ProfileWithState extends ChannelProfile {
 
 type ViewMode = 'list' | 'channels';
 
-export function ChannelProfilesListModal({
+export const ChannelProfilesListModal = memo(function ChannelProfilesListModal({
   isOpen,
   onClose,
   onSaved,
@@ -585,4 +585,4 @@ export function ChannelProfilesListModal({
       </div>
     </div>
   );
-}
+});

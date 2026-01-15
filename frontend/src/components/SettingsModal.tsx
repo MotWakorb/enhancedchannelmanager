@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, memo } from 'react';
 import * as api from '../services/api';
 import type { Theme } from '../services/api';
 import './SettingsModal.css';
@@ -9,7 +9,7 @@ interface SettingsModalProps {
   onSaved: () => void;
 }
 
-export function SettingsModal({ isOpen, onClose, onSaved }: SettingsModalProps) {
+export const SettingsModal = memo(function SettingsModal({ isOpen, onClose, onSaved }: SettingsModalProps) {
   const [url, setUrl] = useState('');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
@@ -216,4 +216,4 @@ export function SettingsModal({ isOpen, onClose, onSaved }: SettingsModalProps) 
       </div>
     </div>
   );
-}
+});

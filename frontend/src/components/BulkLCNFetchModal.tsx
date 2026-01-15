@@ -5,7 +5,7 @@
  * selected channels at once. Uses batch API for efficient lookup.
  */
 
-import { useState, useEffect, useMemo, useRef } from 'react';
+import { useState, useEffect, useMemo, useRef, memo } from 'react';
 import type { Channel, EPGData } from '../types';
 import { getEPGLcnBatch } from '../services/api';
 import { naturalCompare } from '../utils/naturalSort';
@@ -35,7 +35,7 @@ interface ChannelLCNResult {
   alreadyHasLcn: boolean;
 }
 
-export function BulkLCNFetchModal({
+export const BulkLCNFetchModal = memo(function BulkLCNFetchModal({
   isOpen,
   selectedChannels,
   epgData,
@@ -486,6 +486,6 @@ export function BulkLCNFetchModal({
       </div>
     </div>
   );
-}
+});
 
 export default BulkLCNFetchModal;

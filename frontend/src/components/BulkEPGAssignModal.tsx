@@ -5,7 +5,7 @@
  * Features country-aware matching and conflict resolution.
  */
 
-import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import { useState, useEffect, useMemo, useCallback, useRef, memo } from 'react';
 import type { Channel, Stream, EPGData, EPGSource } from '../types';
 import {
   batchFindEPGMatchesAsync,
@@ -33,7 +33,7 @@ interface BulkEPGAssignModalProps {
 
 type Phase = 'analyzing' | 'review';
 
-export function BulkEPGAssignModal({
+export const BulkEPGAssignModal = memo(function BulkEPGAssignModal({
   isOpen,
   selectedChannels,
   streams,
@@ -877,7 +877,7 @@ export function BulkEPGAssignModal({
       </div>
     </div>
   );
-}
+});
 
 // Conflict card component - shows a single conflict as a card
 interface ConflictCardProps {
@@ -893,7 +893,7 @@ interface ConflictCardProps {
 
 const MAX_ALL_EPG_RESULTS = 50;
 
-function ConflictCard({ result, epgSources, allEpgData, selectedEpg, onSelect, recommendedEpg, searchFilter, onSearchChange }: ConflictCardProps) {
+const ConflictCard = memo(function ConflictCard({ result, epgSources, allEpgData, selectedEpg, onSelect, recommendedEpg, searchFilter, onSearchChange }: ConflictCardProps) {
   // State for "Search All EPG" mode
   const [searchAllMode, setSearchAllMode] = useState(false);
 
@@ -1053,7 +1053,7 @@ function ConflictCard({ result, epgSources, allEpgData, selectedEpg, onSelect, r
       </div>
     </div>
   );
-}
+});
 
 // EPG Search Card - for searching ALL EPG data (used for unmatched channels)
 interface EPGSearchCardProps {
@@ -1071,7 +1071,7 @@ interface EPGSearchCardProps {
 
 const MAX_SEARCH_RESULTS = 50;
 
-function EPGSearchCard({
+const EPGSearchCard = memo(function EPGSearchCard({
   channelName,
   normalizedName,
   detectedCountry,
@@ -1205,4 +1205,4 @@ function EPGSearchCard({
       </div>
     </div>
   );
-}
+});
