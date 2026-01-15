@@ -72,6 +72,8 @@ class DispatcharrSettings(BaseModel):
     bitrate_sample_duration: int = 10  # Duration in seconds to sample stream for bitrate measurement (10, 20, or 30)
     # Parallel probing - probe streams from different M3U accounts simultaneously
     parallel_probing_enabled: bool = True
+    # Skip streams that were successfully probed within the last N hours (0 = always probe)
+    skip_recently_probed_hours: int = 0
     # Stream sort priority order for "Smart Sort" feature
     # Order determines priority: first element is primary sort key, subsequent elements are tie-breakers
     # Valid values: "resolution", "bitrate", "framerate"

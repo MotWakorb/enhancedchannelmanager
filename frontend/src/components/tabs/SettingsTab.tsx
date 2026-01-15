@@ -183,6 +183,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
   const [streamProbeScheduleTime, setStreamProbeScheduleTime] = useState('03:00');
   const [bitrateSampleDuration, setBitrateSampleDuration] = useState(10);
   const [parallelProbingEnabled, setParallelProbingEnabled] = useState(true);
+  const [skipRecentlyProbedHours, setSkipRecentlyProbedHours] = useState(0);
   const [probingAll, setProbingAll] = useState(false);
   const [probeAllResult, setProbeAllResult] = useState<{ success: boolean; message: string } | null>(null);
   const [totalStreamCount, setTotalStreamCount] = useState(100); // Default to 100, will be updated on load
@@ -415,6 +416,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
       setProbeChannelGroups(settings.probe_channel_groups ?? []);
       setBitrateSampleDuration(settings.bitrate_sample_duration ?? 10);
       setParallelProbingEnabled(settings.parallel_probing_enabled ?? true);
+      setSkipRecentlyProbedHours(settings.skip_recently_probed_hours ?? 0);
       setStreamSortPriority(settings.stream_sort_priority ?? ['resolution', 'bitrate', 'framerate']);
       setStreamSortEnabled(settings.stream_sort_enabled ?? { resolution: true, bitrate: true, framerate: true });
       setDeprioritizeFailedStreams(settings.deprioritize_failed_streams ?? true);
@@ -512,6 +514,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
         probe_channel_groups: probeChannelGroups,
         bitrate_sample_duration: bitrateSampleDuration,
         parallel_probing_enabled: parallelProbingEnabled,
+        skip_recently_probed_hours: skipRecentlyProbedHours,
         stream_sort_priority: streamSortPriority,
         stream_sort_enabled: streamSortEnabled,
         deprioritize_failed_streams: deprioritizeFailedStreams,
@@ -1680,6 +1683,23 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
               <span className="form-hint">
                 When enabled, streams from different M3U accounts are probed simultaneously for faster completion.
                 Disable for sequential one-at-a-time probing.
+              </span>
+            </div>
+
+            <div className="form-group">
+              <label htmlFor="skipRecentlyProbedHours">Skip recently probed streams (hours)</label>
+              <input
+                id="skipRecentlyProbedHours"
+                type="number"
+                min="0"
+                max="168"
+                value={skipRecentlyProbedHours}
+                onChange={(e) => setSkipRecentlyProbedHours(Math.max(0, Math.min(168, parseInt(e.target.value) || 0)))}
+                style={{ width: '100px' }}
+              />
+              <span className="form-hint">
+                Skip streams that were successfully probed within the last N hours. Set to 0 to always probe all streams.
+                This prevents excessive probing requests when running multiple checks in succession.
               </span>
             </div>
 
