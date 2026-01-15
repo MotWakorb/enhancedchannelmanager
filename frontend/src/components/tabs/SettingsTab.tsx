@@ -53,10 +53,11 @@ function SortablePriorityItem({
     isDragging,
   } = useSortable({ id });
 
-  const style = {
+  const style: React.CSSProperties = {
     transform: CSS.Transform.toString(transform),
     transition,
     opacity: isDragging ? 0.5 : enabled ? 1 : 0.5,
+    touchAction: 'none',
   };
 
   const config = SORT_CRITERION_CONFIG[id];
@@ -69,6 +70,7 @@ function SortablePriorityItem({
       {...attributes}
       {...listeners}
     >
+      <span className="material-icons sort-priority-drag">drag_indicator</span>
       <input
         type="checkbox"
         checked={enabled}
@@ -84,7 +86,6 @@ function SortablePriorityItem({
         <span className="sort-priority-label">{config.label}</span>
         <span className="sort-priority-description">{config.description}</span>
       </div>
-      <span className="material-icons sort-priority-drag">drag_indicator</span>
     </div>
   );
 }
