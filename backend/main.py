@@ -203,6 +203,9 @@ class SettingsRequest(BaseModel):
     show_stream_urls: bool = True
     hide_auto_sync_groups: bool = False
     hide_ungrouped_streams: bool = True
+    hide_epg_urls: bool = False
+    hide_m3u_urls: bool = False
+    gracenote_conflict_mode: str = "ask"
     theme: str = "dark"
     default_channel_profile_ids: list[int] = []
     linked_m3u_accounts: list[list[int]] = []
@@ -223,8 +226,10 @@ class SettingsRequest(BaseModel):
     probe_channel_groups: list[str] = []  # Channel groups to probe
     bitrate_sample_duration: int = 10  # Duration in seconds to sample stream for bitrate (10, 20, or 30)
     parallel_probing_enabled: bool = True  # Probe multiple streams from different M3Us simultaneously
+    skip_recently_probed_hours: int = 0  # Skip streams successfully probed within last N hours (0 = always probe)
     stream_sort_priority: list[str] = ["resolution", "bitrate", "framerate"]  # Priority order for Smart Sort
     stream_sort_enabled: dict[str, bool] = {"resolution": True, "bitrate": True, "framerate": True}  # Which criteria are enabled
+    deprioritize_failed_streams: bool = True  # When enabled, failed/timeout/pending streams sort to bottom
 
 
 class SettingsResponse(BaseModel):
@@ -241,6 +246,9 @@ class SettingsResponse(BaseModel):
     show_stream_urls: bool
     hide_auto_sync_groups: bool
     hide_ungrouped_streams: bool
+    hide_epg_urls: bool
+    hide_m3u_urls: bool
+    gracenote_conflict_mode: str
     theme: str
     default_channel_profile_ids: list[int]
     linked_m3u_accounts: list[list[int]]
@@ -261,8 +269,10 @@ class SettingsResponse(BaseModel):
     probe_channel_groups: list[str]
     bitrate_sample_duration: int
     parallel_probing_enabled: bool  # Probe multiple streams from different M3Us simultaneously
+    skip_recently_probed_hours: int  # Skip streams successfully probed within last N hours (0 = always probe)
     stream_sort_priority: list[str]  # Priority order for Smart Sort
     stream_sort_enabled: dict[str, bool]  # Which criteria are enabled
+    deprioritize_failed_streams: bool  # When enabled, failed/timeout/pending streams sort to bottom
 
 
 class TestConnectionRequest(BaseModel):
@@ -291,6 +301,9 @@ async def get_current_settings():
         show_stream_urls=settings.show_stream_urls,
         hide_auto_sync_groups=settings.hide_auto_sync_groups,
         hide_ungrouped_streams=settings.hide_ungrouped_streams,
+        hide_epg_urls=settings.hide_epg_urls,
+        hide_m3u_urls=settings.hide_m3u_urls,
+        gracenote_conflict_mode=settings.gracenote_conflict_mode,
         theme=settings.theme,
         default_channel_profile_ids=settings.default_channel_profile_ids,
         linked_m3u_accounts=settings.linked_m3u_accounts,
@@ -310,8 +323,10 @@ async def get_current_settings():
         probe_channel_groups=settings.probe_channel_groups,
         bitrate_sample_duration=settings.bitrate_sample_duration,
         parallel_probing_enabled=settings.parallel_probing_enabled,
+        skip_recently_probed_hours=settings.skip_recently_probed_hours,
         stream_sort_priority=settings.stream_sort_priority,
         stream_sort_enabled=settings.stream_sort_enabled,
+        deprioritize_failed_streams=settings.deprioritize_failed_streams,
     )
 
 
@@ -351,6 +366,9 @@ async def update_settings(request: SettingsRequest):
         show_stream_urls=request.show_stream_urls,
         hide_auto_sync_groups=request.hide_auto_sync_groups,
         hide_ungrouped_streams=request.hide_ungrouped_streams,
+        hide_epg_urls=request.hide_epg_urls,
+        hide_m3u_urls=request.hide_m3u_urls,
+        gracenote_conflict_mode=request.gracenote_conflict_mode,
         theme=request.theme,
         default_channel_profile_ids=request.default_channel_profile_ids,
         linked_m3u_accounts=request.linked_m3u_accounts,
@@ -370,8 +388,10 @@ async def update_settings(request: SettingsRequest):
         probe_channel_groups=request.probe_channel_groups,
         bitrate_sample_duration=request.bitrate_sample_duration,
         parallel_probing_enabled=request.parallel_probing_enabled,
+        skip_recently_probed_hours=request.skip_recently_probed_hours,
         stream_sort_priority=request.stream_sort_priority,
         stream_sort_enabled=request.stream_sort_enabled,
+        deprioritize_failed_streams=request.deprioritize_failed_streams,
     )
     save_settings(new_settings)
     clear_settings_cache()
