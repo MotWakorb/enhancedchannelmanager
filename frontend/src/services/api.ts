@@ -722,13 +722,20 @@ export async function getEPGLcnByTvgId(tvgId: string): Promise<{ tvg_id: string;
   return fetchJson(`${API_BASE}/epg/lcn?tvg_id=${encodeURIComponent(tvgId)}`);
 }
 
-// Batch fetch LCN for multiple TVG-IDs at once (more efficient than individual calls)
-export async function getEPGLcnBatch(tvgIds: string[]): Promise<{
+// LCN lookup item with optional EPG source
+export interface LCNLookupItem {
+  tvg_id: string;
+  epg_source_id: number | null;
+}
+
+// Batch fetch LCN for multiple channels at once (more efficient than individual calls)
+// Each item can specify an EPG source - if provided, only that source is searched
+export async function getEPGLcnBatch(items: LCNLookupItem[]): Promise<{
   results: Record<string, { lcn: string; source: string }>;
 }> {
   return fetchJson(`${API_BASE}/epg/lcn/batch`, {
     method: 'POST',
-    body: JSON.stringify({ tvg_ids: tvgIds }),
+    body: JSON.stringify({ items }),
   });
 }
 
