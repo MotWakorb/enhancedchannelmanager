@@ -1174,3 +1174,90 @@
 .probe-counter-link.failed {
   color: var(--error);
 }
+
+/* Stream Sort Priority - Drag and Drop */
+.sort-priority-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.sort-priority-item {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem 1rem;
+  background-color: var(--input-bg);
+  border: 1px solid var(--border-primary);
+  border-radius: 6px;
+  cursor: grab;
+  transition: all 0.15s;
+  user-select: none;
+}
+
+.sort-priority-item:hover {
+  border-color: var(--border-secondary);
+  background-color: var(--bg-hover);
+}
+
+.sort-priority-item.dragging {
+  border-color: var(--accent-primary);
+  background-color: rgba(100, 108, 255, 0.1);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  cursor: grabbing;
+}
+
+.sort-priority-item:active {
+  cursor: grabbing;
+}
+
+.sort-priority-rank {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background-color: var(--accent-primary);
+  color: white;
+  font-size: 0.75rem;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.sort-priority-icon {
+  font-size: 20px;
+  color: var(--text-secondary);
+  flex-shrink: 0;
+}
+
+.sort-priority-content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+  min-width: 0;
+}
+
+.sort-priority-label {
+  font-size: 0.9rem;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.sort-priority-description {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+
+.sort-priority-drag {
+  font-size: 20px;
+  color: var(--text-muted);
+  flex-shrink: 0;
+  opacity: 0.5;
+  transition: opacity 0.15s;
+}
+
+.sort-priority-item:hover .sort-priority-drag {
+  opacity: 1;
+}
