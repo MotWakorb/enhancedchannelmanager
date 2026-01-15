@@ -15,6 +15,7 @@ interface M3UManagerTabProps {
   channelProfiles?: ChannelProfile[];
   streamProfiles?: StreamProfile[];
   onChannelGroupsChange?: () => void;
+  hideM3uUrls?: boolean;
 }
 
 interface M3UAccountRowProps {
@@ -27,6 +28,7 @@ interface M3UAccountRowProps {
   onManageFilters: (account: M3UAccount) => void;
   onManageProfiles: (account: M3UAccount) => void;
   linkedAccountNames?: string[];  // Names of accounts linked to this one
+  hideM3uUrls?: boolean;
 }
 
 function M3UAccountRow({
@@ -39,6 +41,7 @@ function M3UAccountRow({
   onManageFilters,
   onManageProfiles,
   linkedAccountNames,
+  hideM3uUrls = false,
 }: M3UAccountRowProps) {
   const getStatusIcon = (status: M3UAccount['status']) => {
     switch (status) {
@@ -127,7 +130,7 @@ function M3UAccountRow({
           <span className={`account-type ${account.account_type.toLowerCase()}`}>
             {getAccountTypeLabel(account.account_type)}
           </span>
-          {account.server_url && (
+          {account.server_url && !hideM3uUrls && (
             <span className="account-url" title={account.server_url}>
               {account.server_url}
             </span>
@@ -232,6 +235,7 @@ export function M3UManagerTab({
   channelProfiles = [],
   streamProfiles = [],
   onChannelGroupsChange,
+  hideM3uUrls = false,
 }: M3UManagerTabProps) {
   const [accounts, setAccounts] = useState<M3UAccount[]>([]);
   const [serverGroups, setServerGroups] = useState<ServerGroup[]>([]);
@@ -601,6 +605,7 @@ export function M3UManagerTab({
                 onManageFilters={handleManageFilters}
                 onManageProfiles={handleManageProfiles}
                 linkedAccountNames={linkedAccountNamesMap.get(account.id)}
+                hideM3uUrls={hideM3uUrls}
               />
             ))}
           </div>

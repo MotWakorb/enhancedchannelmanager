@@ -84,6 +84,8 @@ function App() {
   const [dispatcharrUrl, setDispatcharrUrl] = useState('');
   const [showStreamUrls, setShowStreamUrls] = useState(true);
   const [hideUngroupedStreams, setHideUngroupedStreams] = useState(true);
+  const [hideEpgUrls, setHideEpgUrls] = useState(false);
+  const [hideM3uUrls, setHideM3uUrls] = useState(false);
   const [epgAutoMatchThreshold, setEpgAutoMatchThreshold] = useState(80);
   const [showVLCHelperModal, setShowVLCHelperModal] = useState(false);
   const [vlcModalStreamUrl, setVlcModalStreamUrl] = useState('');
@@ -372,6 +374,8 @@ function App() {
         setDispatcharrUrl(settings.url);
         setShowStreamUrls(settings.show_stream_urls);
         setHideUngroupedStreams(settings.hide_ungrouped_streams);
+        setHideEpgUrls(settings.hide_epg_urls ?? false);
+        setHideM3uUrls(settings.hide_m3u_urls ?? false);
         setEpgAutoMatchThreshold(settings.epg_auto_match_threshold ?? 80);
         // Store VLC settings globally for vlc utility to access
         const vlcBehavior = (settings.vlc_open_behavior as 'protocol_only' | 'm3u_fallback' | 'm3u_only') || 'm3u_fallback';
@@ -570,6 +574,8 @@ function App() {
       setDispatcharrUrl(settings.url);
       setShowStreamUrls(settings.show_stream_urls);
       setHideUngroupedStreams(settings.hide_ungrouped_streams);
+      setHideEpgUrls(settings.hide_epg_urls ?? false);
+      setHideM3uUrls(settings.hide_m3u_urls ?? false);
       setEpgAutoMatchThreshold(settings.epg_auto_match_threshold ?? 80);
       setChannelDefaults({
         includeChannelNumberInName: settings.include_channel_number_in_name,
@@ -1765,9 +1771,10 @@ function App() {
               channelProfiles={channelProfiles}
               streamProfiles={streamProfiles}
               onChannelGroupsChange={loadChannelGroups}
+              hideM3uUrls={hideM3uUrls}
             />
           )}
-          {activeTab === 'epg-manager' && <EPGManagerTab onSourcesChange={loadEpgSources} />}
+          {activeTab === 'epg-manager' && <EPGManagerTab onSourcesChange={loadEpgSources} hideEpgUrls={hideEpgUrls} />}
           {activeTab === 'guide' && (
             <GuideTab
               channels={channels}

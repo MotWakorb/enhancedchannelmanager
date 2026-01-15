@@ -165,6 +165,8 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
   const [showStreamUrls, setShowStreamUrls] = useState(true);
   const [hideAutoSyncGroups, setHideAutoSyncGroups] = useState(false);
   const [hideUngroupedStreams, setHideUngroupedStreams] = useState(true);
+  const [hideEpgUrls, setHideEpgUrls] = useState(false);
+  const [hideM3uUrls, setHideM3uUrls] = useState(false);
   const [theme, setTheme] = useState<Theme>('dark');
   const [vlcOpenBehavior, setVlcOpenBehavior] = useState('m3u_fallback');
 
@@ -389,6 +391,8 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
       setShowStreamUrls(settings.show_stream_urls);
       setHideAutoSyncGroups(settings.hide_auto_sync_groups);
       setHideUngroupedStreams(settings.hide_ungrouped_streams);
+      setHideEpgUrls(settings.hide_epg_urls ?? false);
+      setHideM3uUrls(settings.hide_m3u_urls ?? false);
       setTheme(settings.theme || 'dark');
       setVlcOpenBehavior(settings.vlc_open_behavior || 'm3u_fallback');
       setDefaultChannelProfileIds(settings.default_channel_profile_ids);
@@ -495,6 +499,8 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
         show_stream_urls: showStreamUrls,
         hide_auto_sync_groups: hideAutoSyncGroups,
         hide_ungrouped_streams: hideUngroupedStreams,
+        hide_epg_urls: hideEpgUrls,
+        hide_m3u_urls: hideM3uUrls,
         theme: theme,
         default_channel_profile_ids: defaultChannelProfileIds,
         epg_auto_match_threshold: epgAutoMatchThreshold,
@@ -1069,6 +1075,38 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
             <p>
               Hide streams that don't have a group assigned (no group-title in M3U).
               These streams appear under "Ungrouped" in the Streams pane.
+            </p>
+          </div>
+        </div>
+
+        <div className="checkbox-group">
+          <input
+            id="hideEpgUrls"
+            type="checkbox"
+            checked={hideEpgUrls}
+            onChange={(e) => setHideEpgUrls(e.target.checked)}
+          />
+          <div className="checkbox-content">
+            <label htmlFor="hideEpgUrls">Hide EPG URLs</label>
+            <p>
+              Hide EPG source URLs in the EPG Manager tab. Enable this to prevent
+              accidental exposure of sensitive EPG URLs in screenshots or screen shares.
+            </p>
+          </div>
+        </div>
+
+        <div className="checkbox-group">
+          <input
+            id="hideM3uUrls"
+            type="checkbox"
+            checked={hideM3uUrls}
+            onChange={(e) => setHideM3uUrls(e.target.checked)}
+          />
+          <div className="checkbox-content">
+            <label htmlFor="hideM3uUrls">Hide M3U URLs</label>
+            <p>
+              Hide M3U server URLs in the M3U Manager tab. Enable this to prevent
+              accidental exposure of sensitive M3U URLs in screenshots or screen shares.
             </p>
           </div>
         </div>
@@ -2293,6 +2331,8 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
                       show_stream_urls: showStreamUrls,
                       hide_auto_sync_groups: hideAutoSyncGroups,
                       hide_ungrouped_streams: hideUngroupedStreams,
+                      hide_epg_urls: hideEpgUrls,
+                      hide_m3u_urls: hideM3uUrls,
                       theme: theme,
                       default_channel_profile_ids: defaultChannelProfileIds,
                       epg_auto_match_threshold: epgAutoMatchThreshold,
