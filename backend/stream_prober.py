@@ -606,6 +606,28 @@ class StreamProber:
                 break
         return channel_stream_ids, stream_to_channels, stream_to_channel_number
 
+    async def _get_m3u_active_connections(self, m3u_account_id: int) -> int:
+        """
+        Fetch current active connection count for a specific M3U account.
+        Makes a fresh API call to Dispatcharr to get real-time connection status.
+
+        Returns:
+            Number of active connections for this M3U, or 0 if unable to fetch.
+        """
+        try:
+            channel_stats = await self.client.get_channel_stats()
+            channels = channel_stats.get("channels", [])
+            count = 0
+            for ch in channels:
+                # Count connections for this M3U account
+                if ch.get("m3u_profile_id") == m3u_account_id:
+                    count += 1
+            return count
+        except Exception as e:
+            logger.warning(f"Failed to fetch M3U connection count for account {m3u_account_id}: {e}")
+            # Return 0 on failure - allows probe to proceed (fail-open)
+            return 0
+
     async def probe_all_streams(self, channel_groups_override: list[str] = None):
         """Probe all streams that are in channels (runs in background).
 
@@ -660,19 +682,8 @@ class StreamProber:
             except Exception as e:
                 logger.warning(f"Failed to fetch M3U accounts: {e}")
 
-            # Fetch current channel stats to check active connections per M3U
-            logger.info("Fetching channel stats for M3U connection check...")
-            m3u_active_connections = {}  # id -> current active connection count
-            try:
-                channel_stats = await self.client.get_channel_stats()
-                channels = channel_stats.get("channels", [])
-                for ch in channels:
-                    m3u_id = ch.get("m3u_profile_id")
-                    if m3u_id:
-                        m3u_active_connections[m3u_id] = m3u_active_connections.get(m3u_id, 0) + 1
-                logger.info(f"Active M3U connections: {m3u_active_connections}")
-            except Exception as e:
-                logger.warning(f"Failed to fetch channel stats: {e}")
+            # Note: M3U connection checking is now done per-stream in the probe loop
+            # to allow streams to be tested if connections become available mid-probe
 
             # Fetch all streams
             logger.info("Fetching stream details...")
@@ -727,16 +738,18 @@ class StreamProber:
                 self._probe_progress_current = probed_count + 1
                 self._probe_progress_current_stream = display_string
 
-                # Check if M3U is at max connections before probing
+                # Check if M3U is at max connections before probing (fresh check each time)
                 m3u_account_id = stream.get("m3u_account")
                 skip_reason = None
                 if m3u_account_id:
                     max_streams = m3u_max_streams.get(m3u_account_id, 0)
-                    current_streams = m3u_active_connections.get(m3u_account_id, 0)
-                    if max_streams > 0 and current_streams >= max_streams:
-                        m3u_name = m3u_accounts_map.get(m3u_account_id, f"M3U {m3u_account_id}")
-                        skip_reason = f"M3U '{m3u_name}' at max connections ({current_streams}/{max_streams})"
-                        logger.info(f"Skipping stream {stream_id} ({stream_name}): {skip_reason}")
+                    if max_streams > 0:
+                        # Fetch fresh connection count for this M3U right before probing
+                        current_streams = await self._get_m3u_active_connections(m3u_account_id)
+                        if current_streams >= max_streams:
+                            m3u_name = m3u_accounts_map.get(m3u_account_id, f"M3U {m3u_account_id}")
+                            skip_reason = f"M3U '{m3u_name}' at max connections ({current_streams}/{max_streams})"
+                            logger.info(f"Skipping stream {stream_id} ({stream_name}): {skip_reason}")
 
                 if skip_reason:
                     # Skip this stream - M3U is at capacity
