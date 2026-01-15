@@ -17,7 +17,8 @@
       "Bash(for id in kfqk h2o2 n6hh bt15 1k9i 1o4p)",
       "Bash(powershell -Command:*)",
       "Bash(git pull:*)",
-      "Bash(for id in n6hh bt15 1k9i 1o4p)"
+      "Bash(for id in n6hh bt15 1k9i 1o4p)",
+      "Bash(python -m py_compile:*)"
     ],
     "deny": [],
     "ask": [],

@@ -2034,15 +2034,15 @@ async def get_epg_lcn_batch(request: BatchLCNRequest):
                             if found:
                                 logger.info(f"Batch LCN: Found {len(found)} LCNs in {source.get('name')} (partial)")
 
-                    except httpx.HTTPError as e:
-                        logger.warning(f"Batch LCN: Failed to fetch {url}: {e}")
-                        continue
-                    except ET.ParseError as e:
-                        logger.warning(f"Batch LCN: Failed to parse {url}: {e}")
-                        continue
-                    except Exception as e:
-                        logger.warning(f"Batch LCN: Error processing {url}: {e}")
-                        continue
+                except httpx.HTTPError as e:
+                    logger.warning(f"Batch LCN: Failed to fetch {url}: {e}")
+                    continue
+                except ET.ParseError as e:
+                    logger.warning(f"Batch LCN: Failed to parse {url}: {e}")
+                    continue
+                except Exception as e:
+                    logger.warning(f"Batch LCN: Error processing {url}: {e}")
+                    continue
 
         logger.info(f"Batch LCN lookup complete: {len(results)}/{len(request.items)} found")
         return {"results": results}
