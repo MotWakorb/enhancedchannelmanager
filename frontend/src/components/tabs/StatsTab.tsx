@@ -641,19 +641,34 @@ export function StatsTab() {
 
   // Calculate connections per M3U (current/max for all accounts)
   const m3uConnectionStats = (() => {
-    // Count active connections per M3U account ID
+    // First, build a map of profile ID -> account ID
+    const profileToAccountMap = new Map<number, number>();
+    for (const account of m3uAccounts) {
+      for (const profile of account.profiles || []) {
+        profileToAccountMap.set(profile.id, account.id);
+      }
+    }
+
+    // Count active connections per M3U account ID (not profile ID!)
     const activeCount = new Map<number, number>();
     if (channelStats?.channels) {
       logger.debug(`Stats Tab M3U Debug: Processing ${channelStats.channels.length} active channels for M3U connection counts`);
       for (const ch of channelStats.channels) {
         logger.debug(`Stats Tab M3U Debug: Channel ${ch.channel_id} (${ch.channel_name}) - m3u_profile_id: ${ch.m3u_profile_id}, stream_name: ${ch.stream_name}`);
         if (ch.m3u_profile_id) {
-          activeCount.set(ch.m3u_profile_id, (activeCount.get(ch.m3u_profile_id) || 0) + 1);
+          // Map profile ID to account ID
+          const accountId = profileToAccountMap.get(ch.m3u_profile_id);
+          if (accountId) {
+            activeCount.set(accountId, (activeCount.get(accountId) || 0) + 1);
+            logger.debug(`Stats Tab M3U Debug: Profile ${ch.m3u_profile_id} -> Account ${accountId}, incremented count`);
+          } else {
+            logger.debug(`Stats Tab M3U Debug: Profile ${ch.m3u_profile_id} not found in any M3U account`);
+          }
         } else {
           logger.debug(`Stats Tab M3U Debug: Channel ${ch.channel_id} has NO m3u_profile_id - will not count toward any M3U`);
         }
       }
-      logger.debug(`Stats Tab M3U Debug: Active connection counts by M3U ID: ${JSON.stringify(Object.fromEntries(activeCount))}`);
+      logger.debug(`Stats Tab M3U Debug: Active connection counts by M3U Account ID: ${JSON.stringify(Object.fromEntries(activeCount))}`);
     } else {
       logger.debug('Stats Tab M3U Debug: No active channels to process');
     }
