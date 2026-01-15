@@ -717,19 +717,11 @@ export async function getEPGDataById(id: number): Promise<EPGData> {
 }
 
 // EPG Grid (programs for previous hour + next 24 hours)
+// Uses Dispatcharr's /api/epg/grid/ endpoint which automatically filters to:
+// - Programs ending after 1 hour ago
+// - Programs starting before 24 hours from now
 export async function getEPGGrid(): Promise<EPGProgram[]> {
-  // Calculate time range: 1 hour ago to 24 hours from now
-  // This reduces data size and prevents timeouts with large channel counts
-  const now = new Date();
-  const start = new Date(now.getTime() - 1 * 60 * 60 * 1000); // 1 hour ago
-  const end = new Date(now.getTime() + 24 * 60 * 60 * 1000); // 24 hours from now
-
-  const params = new URLSearchParams({
-    start: start.toISOString(),
-    end: end.toISOString(),
-  });
-
-  return fetchJson(`${API_BASE}/epg/grid?${params.toString()}`);
+  return fetchJson(`${API_BASE}/epg/grid`);
 }
 
 // Get LCN (Logical Channel Number / Gracenote ID) for a TVG-ID from EPG sources
