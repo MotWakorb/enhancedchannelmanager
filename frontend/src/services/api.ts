@@ -1652,13 +1652,13 @@ export async function getStreamStatsSummary(): Promise<import('../types').Stream
  * Probe a single stream on-demand.
  */
 export async function probeStream(streamId: number): Promise<import('../types').StreamStats> {
-  console.log(`[Probe] probeStream called for stream ID: ${streamId}`);
+  logger.debug(`[Probe] probeStream called for stream ID: ${streamId}`);
 
   try {
     const result = await fetchJson(`${API_BASE}/stream-stats/probe/${streamId}`, {
       method: 'POST',
     }) as import('../types').StreamStats;
-    console.log(`[Probe] probeStream succeeded for stream ${streamId}:`, result);
+    logger.debug(`[Probe] probeStream succeeded for stream ${streamId}:`, result);
     return result;
   } catch (error) {
     console.error(`[Probe] probeStream failed for stream ${streamId}:`, error);
@@ -1670,14 +1670,14 @@ export async function probeStream(streamId: number): Promise<import('../types').
  * Probe multiple streams on-demand.
  */
 export async function probeBulkStreams(streamIds: number[]): Promise<import('../types').BulkProbeResult> {
-  console.log(`[Probe] probeBulkStreams called with ${streamIds.length} stream IDs:`, streamIds);
+  logger.debug(`[Probe] probeBulkStreams called with ${streamIds.length} stream IDs:`, streamIds);
 
   try {
     const result = await fetchJson(`${API_BASE}/stream-stats/probe/bulk`, {
       method: 'POST',
       body: JSON.stringify({ stream_ids: streamIds }),
     }) as import('../types').BulkProbeResult;
-    console.log(`[Probe] probeBulkStreams succeeded, probed ${result.probed} streams`);
+    logger.debug(`[Probe] probeBulkStreams succeeded, probed ${result.probed} streams`);
     return result;
   } catch (error) {
     console.error(`[Probe] probeBulkStreams failed:`, error);
@@ -1689,7 +1689,7 @@ export async function probeBulkStreams(streamIds: number[]): Promise<import('../
  * Start background probe of all streams.
  */
 export async function probeAllStreams(channelGroups?: string[]): Promise<{ status: string; message: string }> {
-  console.log('[Probe] probeAllStreams called with groups:', channelGroups);
+  logger.debug('[Probe] probeAllStreams called with groups:', channelGroups);
 
   try {
     const result = await fetchJson(`${API_BASE}/stream-stats/probe/all`, {
@@ -1697,7 +1697,7 @@ export async function probeAllStreams(channelGroups?: string[]): Promise<{ statu
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ channel_groups: channelGroups || [] }),
     }) as { status: string; message: string };
-    console.log('[Probe] probeAllStreams request succeeded:', result);
+    logger.debug('[Probe] probeAllStreams request succeeded:', result);
     return result;
   } catch (error) {
     console.error('[Probe] probeAllStreams failed:', error);
