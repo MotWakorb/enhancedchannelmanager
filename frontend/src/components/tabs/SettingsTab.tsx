@@ -158,6 +158,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
   const [newSuffixInput, setNewSuffixInput] = useState('');
   const [streamSortPriority, setStreamSortPriority] = useState<SortCriterion[]>(['resolution', 'bitrate', 'framerate']);
   const [streamSortEnabled, setStreamSortEnabled] = useState<SortEnabledMap>({ resolution: true, bitrate: true, framerate: true });
+  const [deprioritizeFailedStreams, setDeprioritizeFailedStreams] = useState(true);
 
   // Appearance settings
   const [showStreamUrls, setShowStreamUrls] = useState(true);
@@ -416,6 +417,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
       setParallelProbingEnabled(settings.parallel_probing_enabled ?? true);
       setStreamSortPriority(settings.stream_sort_priority ?? ['resolution', 'bitrate', 'framerate']);
       setStreamSortEnabled(settings.stream_sort_enabled ?? { resolution: true, bitrate: true, framerate: true });
+      setDeprioritizeFailedStreams(settings.deprioritize_failed_streams ?? true);
       setNeedsRestart(false);
       setRestartResult(null);
       setTestResult(null);
@@ -512,6 +514,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
         parallel_probing_enabled: parallelProbingEnabled,
         stream_sort_priority: streamSortPriority,
         stream_sort_enabled: streamSortEnabled,
+        deprioritize_failed_streams: deprioritizeFailedStreams,
       });
       // Apply frontend log level immediately
       const frontendLevel = frontendLogLevel === 'WARNING' ? 'WARN' : frontendLogLevel;
@@ -1356,6 +1359,21 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
               </div>
             </SortableContext>
           </DndContext>
+        </div>
+
+        <div className="form-group">
+          <label className="checkbox-label">
+            <input
+              type="checkbox"
+              checked={deprioritizeFailedStreams}
+              onChange={(e) => setDeprioritizeFailedStreams(e.target.checked)}
+            />
+            <span>Deprioritize Failed Streams</span>
+          </label>
+          <p className="form-hint">
+            When enabled, streams that fail probe checks (dead/timeout) will automatically be sorted to the bottom when using stream sorting features.
+            This ensures working streams are prioritized for playback.
+          </p>
         </div>
       </div>
 

@@ -2153,6 +2153,20 @@ export function ChannelsPane({
       const aStats = getStats(aId);
       const bStats = getStats(bId);
 
+      // Check probe status FIRST if the setting is enabled - failed/timeout/pending streams sort to bottom
+      if (channelDefaults?.deprioritizeFailedStreams) {
+        const aProbeSuccess = aStats?.probe_status === 'success';
+        const bProbeSuccess = bStats?.probe_status === 'success';
+
+        // If one stream failed and the other succeeded, prioritize the successful one
+        if (aProbeSuccess && !bProbeSuccess) return -1; // a comes first (successful)
+        if (!aProbeSuccess && bProbeSuccess) return 1;  // b comes first (successful)
+
+        // If both failed/timeout/pending, maintain current order (stable sort)
+        if (!aProbeSuccess && !bProbeSuccess) return 0;
+      }
+
+      // Both streams succeeded (or setting disabled) - now sort by quality criteria
       for (const criterion of priority) {
         const aVal = getSortValue(aStats, criterion);
         const bVal = getSortValue(bStats, criterion);
@@ -2171,7 +2185,7 @@ export function ChannelsPane({
       // All criteria equal
       return 0;
     };
-  }, [getSortValue]);
+  }, [getSortValue, channelDefaults?.deprioritizeFailedStreams]);
 
   // Get effective sort priority based on mode, filtered by enabled criteria
   const getEffectivePriority = useCallback((mode: SortMode): SortCriterion[] => {

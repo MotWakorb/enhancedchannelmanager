@@ -79,6 +79,8 @@ class DispatcharrSettings(BaseModel):
     # Which sort criteria are enabled (users can disable criteria they don't want to use)
     # Only enabled criteria appear in sort dropdown and are used by Smart Sort
     stream_sort_enabled: dict[str, bool] = {"resolution": True, "bitrate": True, "framerate": True}
+    # Deprioritize failed streams - when enabled, failed/timeout/pending streams sort to bottom
+    deprioritize_failed_streams: bool = True
 
     def is_configured(self) -> bool:
         return bool(self.url and self.username and self.password)

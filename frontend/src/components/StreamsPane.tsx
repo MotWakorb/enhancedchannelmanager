@@ -29,6 +29,7 @@ export interface ChannelDefaults {
   customNetworkSuffixes?: string[];
   streamSortPriority?: ('resolution' | 'bitrate' | 'framerate')[];
   streamSortEnabled?: Record<'resolution' | 'bitrate' | 'framerate', boolean>;
+  deprioritizeFailedStreams?: boolean;
 }
 
 interface StreamsPaneProps {
