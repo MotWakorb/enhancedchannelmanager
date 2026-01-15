@@ -660,6 +660,7 @@ class StreamProber:
             return {"status": "already_running"}
 
         self._probing_in_progress = True
+        self._running = True  # Enable the probe loop (checked for cancellation)
         self._probe_progress_current = 0
         self._probe_progress_total = 0
         self._probe_progress_status = "fetching"
