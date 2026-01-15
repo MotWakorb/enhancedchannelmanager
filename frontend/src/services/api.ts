@@ -460,6 +460,7 @@ export interface SettingsResponse {
   probe_channel_groups: string[];  // Channel group names to probe (empty = all groups)
   bitrate_sample_duration: number;  // Duration in seconds to sample stream for bitrate (10, 20, or 30)
   parallel_probing_enabled: boolean;  // Probe streams from different M3Us simultaneously
+  skip_recently_probed_hours: number;  // Skip streams probed within last N hours (0 = always probe)
   stream_sort_priority: SortCriterion[];  // Priority order for Smart Sort (e.g., ['resolution', 'bitrate', 'framerate'])
   stream_sort_enabled: SortEnabledMap;  // Which sort criteria are enabled (e.g., { resolution: true, bitrate: true, framerate: false })
   deprioritize_failed_streams: boolean;  // When enabled, failed/timeout/pending streams sort to bottom
@@ -508,6 +509,7 @@ export async function saveSettings(settings: {
   probe_channel_groups?: string[];  // Optional - channel group names to probe, empty = all groups
   bitrate_sample_duration?: number;  // Optional - duration in seconds to sample stream for bitrate (10, 20, or 30), defaults to 10
   parallel_probing_enabled?: boolean;  // Optional - probe streams from different M3Us simultaneously, defaults to true
+  skip_recently_probed_hours?: number;  // Optional - skip streams probed within last N hours, defaults to 0 (always probe)
   stream_sort_priority?: SortCriterion[];  // Optional - priority order for Smart Sort, defaults to ['resolution', 'bitrate', 'framerate']
   stream_sort_enabled?: SortEnabledMap;  // Optional - which sort criteria are enabled, defaults to all true
   deprioritize_failed_streams?: boolean;  // Optional - deprioritize failed/timeout/pending streams in sort, defaults to true

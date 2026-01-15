@@ -48,6 +48,7 @@ class StreamProber:
         probe_channel_groups: list[str] = None,  # List of group names to probe (empty/None = all groups)
         bitrate_sample_duration: int = 10,  # Duration in seconds to sample stream for bitrate (10, 20, or 30)
         parallel_probing_enabled: bool = True,  # Probe streams from different M3Us simultaneously
+        skip_recently_probed_hours: int = 0,  # Skip streams probed within last N hours (0 = always probe)
     ):
         self.client = client
         self.probe_timeout = probe_timeout
@@ -59,6 +60,7 @@ class StreamProber:
         self.probe_channel_groups = probe_channel_groups or []
         self.bitrate_sample_duration = bitrate_sample_duration
         self.parallel_probing_enabled = parallel_probing_enabled
+        self.skip_recently_probed_hours = skip_recently_probed_hours
         self._task: Optional[asyncio.Task] = None
         self._running = False
         self._probing_in_progress = False
@@ -708,6 +710,29 @@ class StreamProber:
 
             # Filter to only streams that are in channels
             streams_to_probe = [s for s in all_streams if s["id"] in channel_stream_ids]
+
+            # Skip recently probed streams if configured
+            if self.skip_recently_probed_hours > 0:
+                from datetime import timedelta
+                skip_threshold = datetime.utcnow() - timedelta(hours=self.skip_recently_probed_hours)
+
+                # Query StreamStats for recently probed streams (only successful probes)
+                from .database import get_session
+                from .models import StreamStats
+                with get_session() as session:
+                    recent_probes = session.query(StreamStats).filter(
+                        StreamStats.stream_id.in_([s["id"] for s in streams_to_probe]),
+                        StreamStats.probe_status == "success",
+                        StreamStats.last_probed >= skip_threshold
+                    ).all()
+
+                    recently_probed_ids = {stat.stream_id for stat in recent_probes}
+                    original_count = len(streams_to_probe)
+                    streams_to_probe = [s for s in streams_to_probe if s["id"] not in recently_probed_ids]
+                    skipped_count = original_count - len(streams_to_probe)
+
+                    if skipped_count > 0:
+                        logger.info(f"Skipped {skipped_count} streams that were successfully probed within the last {self.skip_recently_probed_hours} hour(s)")
 
             # Sort streams by their lowest channel number (lowest first)
             streams_to_probe.sort(key=lambda s: stream_to_channel_number.get(s["id"], 999999))
