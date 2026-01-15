@@ -89,7 +89,7 @@ check_filesystem() {
     fi
 
     # Check frontend build
-    if [ -d "/app/frontend/dist" ]; then
+    if [ -d "/app/static" ]; then
         print_success "Frontend build found"
     else
         print_warning "Frontend build directory not found"
@@ -115,7 +115,7 @@ check_application() {
     print_info "Checking application modules..."
 
     # Check if main.py exists
-    if [ -f "/app/backend/main.py" ]; then
+    if [ -f "/app/main.py" ]; then
         print_success "Application entry point found"
     else
         print_error "Application entry point (main.py) not found"
@@ -123,7 +123,7 @@ check_application() {
     fi
 
     # Try to import the app module
-    cd /app/backend
+    cd /app
     if python3 -c "import main" 2>/dev/null; then
         print_success "Application module loads successfully"
     else
@@ -172,5 +172,5 @@ run_preflight_checks() {
 run_preflight_checks
 
 # Switch to non-root user and run the application
-cd /app/backend
+cd /app
 exec gosu appuser uvicorn main:app --host 0.0.0.0 --port 6100
