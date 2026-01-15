@@ -1858,14 +1858,23 @@ async def get_epg_lcn_by_tvg_id(tvg_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+class LCNLookupItem(BaseModel):
+    """Single item for LCN lookup."""
+    tvg_id: str
+    epg_source_id: int | None = None  # If provided, only search this EPG source
+
+
 class BatchLCNRequest(BaseModel):
     """Request body for batch LCN lookup."""
-    tvg_ids: list[str]
+    items: list[LCNLookupItem]
 
 
 @app.post("/api/epg/lcn/batch")
 async def get_epg_lcn_batch(request: BatchLCNRequest):
     """Get LCN (Logical Channel Number) for multiple TVG-IDs from EPG XML sources.
+
+    Each item can specify an EPG source ID. If provided, only that source is searched.
+    If not provided, all XMLTV sources are searched (fallback behavior).
 
     This is more efficient than calling the single endpoint multiple times
     because it fetches and parses each EPG XML source only once.
@@ -1877,22 +1886,29 @@ async def get_epg_lcn_batch(request: BatchLCNRequest):
     import io
     import httpx
 
-    tvg_ids_to_find = set(request.tvg_ids)
-    if not tvg_ids_to_find:
+    if not request.items:
         return {"results": {}}
+
+    # Group items by EPG source
+    # Map of epg_source_id -> set of tvg_ids to find in that source
+    source_to_tvg_ids: dict[int | None, set[str]] = {}
+    for item in request.items:
+        if item.epg_source_id not in source_to_tvg_ids:
+            source_to_tvg_ids[item.epg_source_id] = set()
+        source_to_tvg_ids[item.epg_source_id].add(item.tvg_id)
 
     client = get_client()
     try:
         # Get all EPG sources
-        sources = await client.get_epg_sources()
+        all_sources = await client.get_epg_sources()
 
         # Filter to XMLTV sources that have URLs
-        xmltv_sources = [
-            s for s in sources
+        all_xmltv_sources = [
+            s for s in all_sources
             if s.get("source_type") == "xmltv" and s.get("url")
         ]
 
-        if not xmltv_sources:
+        if not all_xmltv_sources:
             return {"results": {}}
 
         results: dict[str, dict] = {}
@@ -1923,18 +1939,35 @@ async def get_epg_lcn_batch(request: BatchLCNRequest):
                     break
             return found
 
-        logger.info(f"Batch LCN lookup for {len(tvg_ids_to_find)} TVG-IDs")
+        logger.info(f"Batch LCN lookup for {len(request.items)} items across {len(source_to_tvg_ids)} EPG source(s)")
 
         async with httpx.AsyncClient(timeout=120.0) as http_client:
-            for source in xmltv_sources:
-                url = source.get("url")
-                if not url:
-                    continue
+            # Process each EPG source group
+            for epg_source_id, tvg_ids_for_source in source_to_tvg_ids.items():
+                # Determine which sources to search
+                if epg_source_id is None:
+                    # No EPG source specified - search all sources (fallback)
+                    sources_to_search = all_xmltv_sources
+                    logger.info(f"Searching all EPG sources for {len(tvg_ids_for_source)} TVG-ID(s) with no EPG source")
+                else:
+                    # Search only the specified EPG source
+                    sources_to_search = [s for s in all_xmltv_sources if s.get("id") == epg_source_id]
+                    if not sources_to_search:
+                        logger.warning(f"EPG source {epg_source_id} not found or not XMLTV")
+                        continue
+                    logger.info(f"Searching EPG source {epg_source_id} for {len(tvg_ids_for_source)} TVG-ID(s)")
 
-                # Stop early if all found
-                remaining = tvg_ids_to_find - set(results.keys())
-                if not remaining:
-                    break
+                # Track what we still need to find for this source group
+                remaining = tvg_ids_for_source.copy()
+
+                for source in sources_to_search:
+                    url = source.get("url")
+                    if not url:
+                        continue
+
+                    # Stop early if all found for this source group
+                    if not remaining:
+                        break
 
                 try:
                     # Check file size
@@ -1957,6 +1990,7 @@ async def get_epg_lcn_batch(request: BatchLCNRequest):
 
                         found = parse_xml_for_lcns(content, source.get("name"), remaining)
                         results.update(found)
+                        remaining -= set(found.keys())
                         if found:
                             logger.info(f"Batch LCN: Found {len(found)} LCNs in {source.get('name')}")
                     else:
@@ -1980,6 +2014,7 @@ async def get_epg_lcn_batch(request: BatchLCNRequest):
 
                                 found = parse_xml_for_lcns(xml_partial, source.get("name"), remaining)
                                 results.update(found)
+                                remaining -= set(found.keys())
                                 if found:
                                     logger.info(f"Batch LCN: Found {len(found)} LCNs in {source.get('name')} (partial)")
                             except Exception as e:
@@ -1995,20 +2030,21 @@ async def get_epg_lcn_batch(request: BatchLCNRequest):
 
                             found = parse_xml_for_lcns(content, source.get("name"), remaining)
                             results.update(found)
+                            remaining -= set(found.keys())
                             if found:
                                 logger.info(f"Batch LCN: Found {len(found)} LCNs in {source.get('name')} (partial)")
 
-                except httpx.HTTPError as e:
-                    logger.warning(f"Batch LCN: Failed to fetch {url}: {e}")
-                    continue
-                except ET.ParseError as e:
-                    logger.warning(f"Batch LCN: Failed to parse {url}: {e}")
-                    continue
-                except Exception as e:
-                    logger.warning(f"Batch LCN: Error processing {url}: {e}")
-                    continue
+                    except httpx.HTTPError as e:
+                        logger.warning(f"Batch LCN: Failed to fetch {url}: {e}")
+                        continue
+                    except ET.ParseError as e:
+                        logger.warning(f"Batch LCN: Failed to parse {url}: {e}")
+                        continue
+                    except Exception as e:
+                        logger.warning(f"Batch LCN: Error processing {url}: {e}")
+                        continue
 
-        logger.info(f"Batch LCN lookup complete: {len(results)}/{len(tvg_ids_to_find)} found")
+        logger.info(f"Batch LCN lookup complete: {len(results)}/{len(request.items)} found")
         return {"results": results}
 
     except Exception as e:

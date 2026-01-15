@@ -7,7 +7,7 @@
 
 import { useState, useEffect, useMemo, useRef, memo } from 'react';
 import type { Channel, EPGData } from '../types';
-import { getEPGLcnBatch } from '../services/api';
+import { getEPGLcnBatch, type LCNLookupItem } from '../services/api';
 import { naturalCompare } from '../utils/naturalSort';
 import './BulkLCNFetchModal.css';
 
@@ -85,15 +85,16 @@ export const BulkLCNFetchModal = memo(function BulkLCNFetchModal({
       setPhase('fetching');
       setError(null);
 
-      // Build list of TVG-IDs to look up
+      // Build list of channels with TVG-IDs to look up
       const channelResults: ChannelLCNResult[] = [];
+      const lookupItems: LCNLookupItem[] = [];
       const tvgIdToChannels = new Map<string, Channel[]>();
 
       for (const channel of selectedChannels) {
-        // Get TVG-ID from channel's tvg_id field or EPG data
-        const tvgId = channel.tvg_id ||
-          epgData.find(e => e.id === channel.epg_data_id)?.tvg_id ||
-          null;
+        // Get TVG-ID and EPG source from channel's EPG data
+        const epgDataEntry = epgData.find(e => e.id === channel.epg_data_id);
+        const tvgId = channel.tvg_id || epgDataEntry?.tvg_id || null;
+        const epgSourceId = epgDataEntry?.epg_source ?? null;
 
         const alreadyHasLcn = Boolean(channel.tvc_guide_stationid);
 
@@ -111,15 +112,21 @@ export const BulkLCNFetchModal = memo(function BulkLCNFetchModal({
           const existing = tvgIdToChannels.get(tvgId) || [];
           existing.push(channel);
           tvgIdToChannels.set(tvgId, existing);
+
+          // Add lookup item with EPG source (only add once per unique tvg_id)
+          if (existing.length === 1) {
+            lookupItems.push({
+              tvg_id: tvgId,
+              epg_source_id: epgSourceId,
+            });
+          }
         }
       }
 
-      // Fetch LCNs for all unique TVG-IDs
-      const uniqueTvgIds = Array.from(tvgIdToChannels.keys());
-
-      if (uniqueTvgIds.length > 0) {
+      // Fetch LCNs for all lookup items
+      if (lookupItems.length > 0) {
         try {
-          const response = await getEPGLcnBatch(uniqueTvgIds);
+          const response = await getEPGLcnBatch(lookupItems);
           const lcnResults = response.results;
 
           // Map results back to channels
