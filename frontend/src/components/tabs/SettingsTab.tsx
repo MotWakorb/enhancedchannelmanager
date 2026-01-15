@@ -106,11 +106,12 @@ function SortablePriorityItem({
           width: '24px',
           height: '24px',
           borderRadius: '50%',
-          backgroundColor: enabled ? 'var(--accent-primary)' : 'var(--text-muted)',
-          color: 'white',
+          backgroundColor: enabled ? 'var(--accent-primary, #3b82f6)' : 'var(--text-muted, #6b7280)',
+          color: '#ffffff',
           fontSize: '0.75rem',
           fontWeight: 600,
           flexShrink: 0,
+          lineHeight: 1,
         }}
       >
         {enabled ? index + 1 : '-'}
@@ -1368,13 +1369,13 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
       <div className="settings-section">
         <div className="settings-section-header">
           <span className="material-icons">sort</span>
-          <h3>Stream Sort Priority</h3>
+          <h3>Smart Sort Priority</h3>
         </div>
 
         <div className="form-group">
           <p className="form-hint" style={{ marginTop: 0, marginBottom: '0.75rem' }}>
             Configure which criteria are used for stream sorting. Check/uncheck to enable/disable,
-            drag to reorder priority. Enabled criteria appear in the sort dropdown and are used by "Smart Sort".
+            drag to reorder priority. Enabled criteria appear in the sort dropdown and are used by Smart Sort.
           </p>
 
           <DndContext
