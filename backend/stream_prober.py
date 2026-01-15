@@ -690,9 +690,9 @@ class StreamProber:
                             if channel_group_id not in selected_group_ids:
                                 continue
 
-                        # Only reorder channels that have streams
-                        if channel.get("streams") and len(channel.get("streams")) > 1:
-                            channels_to_reorder.append(channel)
+                        # Add all channels - we'll check stream count later when we fetch full details
+                        # The paginated list might not include full stream data
+                        channels_to_reorder.append(channel)
 
                     if not result.get("next"):
                         break
@@ -703,14 +703,17 @@ class StreamProber:
                     logger.error(f"Failed to fetch channels page {page} for auto-reorder: {e}")
                     break
 
-            logger.info(f"Found {len(channels_to_reorder)} channels to reorder")
+            logger.info(f"Found {len(channels_to_reorder)} channels to potentially reorder")
 
-            # For each channel, fetch stream stats and reorder
+            # For each channel, fetch full details, get stream stats, and reorder
             for channel in channels_to_reorder:
                 try:
                     channel_id = channel["id"]
                     channel_name = channel.get("name", f"Channel {channel_id}")
-                    stream_ids = channel.get("streams", [])
+
+                    # Fetch full channel details to get streams list
+                    full_channel = await self.client.get_channel(channel_id)
+                    stream_ids = full_channel.get("streams", [])
 
                     if len(stream_ids) <= 1:
                         continue  # Skip if 0 or 1 streams
