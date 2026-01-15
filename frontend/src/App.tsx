@@ -91,6 +91,7 @@ function App() {
     defaultChannelProfileIds: [] as number[],
     customNetworkPrefixes: [] as string[],
     streamSortPriority: ['resolution', 'bitrate', 'framerate'] as ('resolution' | 'bitrate' | 'framerate')[],
+    streamSortEnabled: { resolution: true, bitrate: true, framerate: true } as Record<'resolution' | 'bitrate' | 'framerate', boolean>,
   });
   // Also keep separate state for use in callbacks (to avoid stale closure issues)
   const [defaultChannelProfileIds, setDefaultChannelProfileIds] = useState<number[]>([]);
@@ -375,6 +376,7 @@ function App() {
           defaultChannelProfileIds: settings.default_channel_profile_ids,
           customNetworkPrefixes: settings.custom_network_prefixes ?? [],
           streamSortPriority: settings.stream_sort_priority ?? ['resolution', 'bitrate', 'framerate'],
+          streamSortEnabled: settings.stream_sort_enabled ?? { resolution: true, bitrate: true, framerate: true },
         });
         setDefaultChannelProfileIds(settings.default_channel_profile_ids);
 
@@ -565,6 +567,7 @@ function App() {
         defaultChannelProfileIds: settings.default_channel_profile_ids,
         customNetworkPrefixes: settings.custom_network_prefixes ?? [],
         streamSortPriority: settings.stream_sort_priority ?? ['resolution', 'bitrate', 'framerate'],
+        streamSortEnabled: settings.stream_sort_enabled ?? { resolution: true, bitrate: true, framerate: true },
       });
       setDefaultChannelProfileIds(settings.default_channel_profile_ids);
 

@@ -606,6 +606,7 @@ interface SortDropdownButtonProps {
   className?: string;
   showLabel?: boolean;
   labelText?: string;
+  enabledCriteria?: Record<'resolution' | 'bitrate' | 'framerate', boolean>;
 }
 
 const SortDropdownButton = memo(function SortDropdownButton({
@@ -615,9 +616,13 @@ const SortDropdownButton = memo(function SortDropdownButton({
   className = '',
   showLabel = false,
   labelText = 'Sort',
+  enabledCriteria = { resolution: true, bitrate: true, framerate: true },
 }: SortDropdownButtonProps) {
   const [isOpen, setIsOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
+
+  // Check if any criteria are enabled (for Smart Sort to be useful)
+  const anyEnabled = enabledCriteria.resolution || enabledCriteria.bitrate || enabledCriteria.framerate;
 
   // Close on outside click
   useEffect(() => {
@@ -641,8 +646,8 @@ const SortDropdownButton = memo(function SortDropdownButton({
       <button
         className={`sort-dropdown-btn ${isLoading ? 'loading' : ''}`}
         onClick={() => setIsOpen(!isOpen)}
-        disabled={disabled || isLoading}
-        title={isLoading ? 'Sorting streams...' : 'Sort streams'}
+        disabled={disabled || isLoading || !anyEnabled}
+        title={isLoading ? 'Sorting streams...' : !anyEnabled ? 'No sort criteria enabled' : 'Sort streams'}
       >
         <span className={`material-icons ${isLoading ? 'spinning' : ''}`}>
           {isLoading ? 'sync' : 'sort'}
@@ -652,23 +657,33 @@ const SortDropdownButton = memo(function SortDropdownButton({
       </button>
       {isOpen && (
         <div className="sort-dropdown-menu">
-          <button className="sort-dropdown-item" onClick={() => handleModeClick('smart')}>
-            <span className="material-icons">auto_awesome</span>
-            <span>Smart Sort</span>
-          </button>
-          <div className="sort-dropdown-divider" />
-          <button className="sort-dropdown-item" onClick={() => handleModeClick('resolution')}>
-            <span className="material-icons">aspect_ratio</span>
-            <span>By Resolution</span>
-          </button>
-          <button className="sort-dropdown-item" onClick={() => handleModeClick('bitrate')}>
-            <span className="material-icons">speed</span>
-            <span>By Bitrate</span>
-          </button>
-          <button className="sort-dropdown-item" onClick={() => handleModeClick('framerate')}>
-            <span className="material-icons">slow_motion_video</span>
-            <span>By Framerate</span>
-          </button>
+          {anyEnabled && (
+            <>
+              <button className="sort-dropdown-item" onClick={() => handleModeClick('smart')}>
+                <span className="material-icons">auto_awesome</span>
+                <span>Smart Sort</span>
+              </button>
+              <div className="sort-dropdown-divider" />
+            </>
+          )}
+          {enabledCriteria.resolution && (
+            <button className="sort-dropdown-item" onClick={() => handleModeClick('resolution')}>
+              <span className="material-icons">aspect_ratio</span>
+              <span>By Resolution</span>
+            </button>
+          )}
+          {enabledCriteria.bitrate && (
+            <button className="sort-dropdown-item" onClick={() => handleModeClick('bitrate')}>
+              <span className="material-icons">speed</span>
+              <span>By Bitrate</span>
+            </button>
+          )}
+          {enabledCriteria.framerate && (
+            <button className="sort-dropdown-item" onClick={() => handleModeClick('framerate')}>
+              <span className="material-icons">slow_motion_video</span>
+              <span>By Framerate</span>
+            </button>
+          )}
         </div>
       )}
     </div>
@@ -738,6 +753,7 @@ interface DroppableGroupHeaderProps {
   onSortStreamsByQuality?: () => void;
   onSortStreamsByMode?: (mode: 'smart' | 'resolution' | 'bitrate' | 'framerate') => void;
   isSortingByQuality?: boolean;
+  enabledCriteria?: Record<'resolution' | 'bitrate' | 'framerate', boolean>;
 }
 
 const DroppableGroupHeader = memo(function DroppableGroupHeader({
@@ -763,6 +779,7 @@ const DroppableGroupHeader = memo(function DroppableGroupHeader({
   onSortStreamsByQuality,
   onSortStreamsByMode,
   isSortingByQuality = false,
+  enabledCriteria = { resolution: true, bitrate: true, framerate: true },
 }: DroppableGroupHeaderProps) {
   const droppableId = `group-${groupId}`;
   const { isOver, setNodeRef } = useDroppable({
@@ -925,7 +942,7 @@ const DroppableGroupHeader = memo(function DroppableGroupHeader({
           </span>
         </button>
       )}
-      {isEditMode && !isEmpty && (onSortStreamsByQuality || onSortStreamsByMode) && (
+      {isEditMode && !isEmpty && (onSortStreamsByQuality || onSortStreamsByMode) && (enabledCriteria.resolution || enabledCriteria.bitrate || enabledCriteria.framerate) && (
         <div className="sort-dropdown-container" ref={sortDropdownRef}>
           <button
             className={`group-sort-quality-btn ${isSortingByQuality ? 'sorting' : ''}`}
@@ -948,18 +965,24 @@ const DroppableGroupHeader = memo(function DroppableGroupHeader({
                 <span>Smart Sort</span>
               </button>
               <div className="sort-dropdown-divider" />
-              <button className="sort-dropdown-item" onClick={() => handleSortModeClick('resolution')}>
-                <span className="material-icons">aspect_ratio</span>
-                <span>By Resolution</span>
-              </button>
-              <button className="sort-dropdown-item" onClick={() => handleSortModeClick('bitrate')}>
-                <span className="material-icons">speed</span>
-                <span>By Bitrate</span>
-              </button>
-              <button className="sort-dropdown-item" onClick={() => handleSortModeClick('framerate')}>
-                <span className="material-icons">slow_motion_video</span>
-                <span>By Framerate</span>
-              </button>
+              {enabledCriteria.resolution && (
+                <button className="sort-dropdown-item" onClick={() => handleSortModeClick('resolution')}>
+                  <span className="material-icons">aspect_ratio</span>
+                  <span>By Resolution</span>
+                </button>
+              )}
+              {enabledCriteria.bitrate && (
+                <button className="sort-dropdown-item" onClick={() => handleSortModeClick('bitrate')}>
+                  <span className="material-icons">speed</span>
+                  <span>By Bitrate</span>
+                </button>
+              )}
+              {enabledCriteria.framerate && (
+                <button className="sort-dropdown-item" onClick={() => handleSortModeClick('framerate')}>
+                  <span className="material-icons">slow_motion_video</span>
+                  <span>By Framerate</span>
+                </button>
+              )}
             </div>
           )}
         </div>
@@ -2150,14 +2173,18 @@ export function ChannelsPane({
     };
   }, [getSortValue]);
 
-  // Get effective sort priority based on mode
+  // Get effective sort priority based on mode, filtered by enabled criteria
   const getEffectivePriority = useCallback((mode: SortMode): SortCriterion[] => {
+    const enabledMap = channelDefaults?.streamSortEnabled ?? { resolution: true, bitrate: true, framerate: true };
+
     if (mode === 'smart') {
-      return channelDefaults?.streamSortPriority ?? ['resolution', 'bitrate', 'framerate'];
+      // Filter the priority list to only include enabled criteria
+      const priority = channelDefaults?.streamSortPriority ?? ['resolution', 'bitrate', 'framerate'];
+      return priority.filter(criterion => enabledMap[criterion]);
     }
-    // Single criterion mode - just use that criterion
+    // Single criterion mode - just use that criterion (already enabled check done in UI)
     return [mode as SortCriterion];
-  }, [channelDefaults?.streamSortPriority]);
+  }, [channelDefaults?.streamSortPriority, channelDefaults?.streamSortEnabled]);
 
   // Sort streams by specified mode (single channel)
   const handleSortStreamsByMode = useCallback((mode: SortMode) => {
@@ -4377,6 +4404,7 @@ export function ChannelsPane({
           onSortStreamsByQuality={() => handleSortGroupStreamsByQuality(groupId)}
           onSortStreamsByMode={(mode) => handleSortGroupStreamsByMode(groupId, mode)}
           isSortingByQuality={bulkSortingByQuality}
+          enabledCriteria={channelDefaults?.streamSortEnabled}
         />
         {isExpanded && isEmpty && (
           <div className="group-channels empty-group-placeholder">
@@ -4531,6 +4559,7 @@ export function ChannelsPane({
                                 <SortDropdownButton
                                   onSortByMode={handleSortStreamsByMode}
                                   className="sort-quality-btn-wrapper"
+                                  enabledCriteria={channelDefaults?.streamSortEnabled}
                                 />
                               </div>
                             )}
@@ -4681,6 +4710,7 @@ export function ChannelsPane({
                   onSortByMode={handleSortSelectedStreamsByMode}
                   isLoading={bulkSortingByQuality}
                   className="bulk-action-btn-wrapper"
+                  enabledCriteria={channelDefaults?.streamSortEnabled}
                 />
                 <button
                   className="bulk-action-btn bulk-action-btn--danger"
@@ -4772,6 +4802,7 @@ export function ChannelsPane({
                 showLabel={true}
                 labelText="Sort"
                 className="sort-all-quality-btn-wrapper"
+                enabledCriteria={channelDefaults?.streamSortEnabled}
               />
             </>
           )}

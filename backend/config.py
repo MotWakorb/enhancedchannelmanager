@@ -74,6 +74,9 @@ class DispatcharrSettings(BaseModel):
     # Order determines priority: first element is primary sort key, subsequent elements are tie-breakers
     # Valid values: "resolution", "bitrate", "framerate"
     stream_sort_priority: list[str] = ["resolution", "bitrate", "framerate"]
+    # Which sort criteria are enabled (users can disable criteria they don't want to use)
+    # Only enabled criteria appear in sort dropdown and are used by Smart Sort
+    stream_sort_enabled: dict[str, bool] = {"resolution": True, "bitrate": True, "framerate": True}
 
     def is_configured(self) -> bool:
         return bool(self.url and self.username and self.password)

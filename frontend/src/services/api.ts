@@ -424,6 +424,7 @@ export type LogLevel = 'DEBUG' | 'INFO' | 'WARN' | 'WARNING' | 'ERROR' | 'CRITIC
 
 // Sort criteria for stream sorting
 export type SortCriterion = 'resolution' | 'bitrate' | 'framerate';
+export type SortEnabledMap = Record<SortCriterion, boolean>;
 
 export interface SettingsResponse {
   url: string;
@@ -459,6 +460,7 @@ export interface SettingsResponse {
   probe_channel_groups: string[];  // Channel group names to probe (empty = all groups)
   bitrate_sample_duration: number;  // Duration in seconds to sample stream for bitrate (10, 20, or 30)
   stream_sort_priority: SortCriterion[];  // Priority order for Smart Sort (e.g., ['resolution', 'bitrate', 'framerate'])
+  stream_sort_enabled: SortEnabledMap;  // Which sort criteria are enabled (e.g., { resolution: true, bitrate: true, framerate: false })
 }
 
 export interface TestConnectionResult {
@@ -504,6 +506,7 @@ export async function saveSettings(settings: {
   probe_channel_groups?: string[];  // Optional - channel group names to probe, empty = all groups
   bitrate_sample_duration?: number;  // Optional - duration in seconds to sample stream for bitrate (10, 20, or 30), defaults to 10
   stream_sort_priority?: SortCriterion[];  // Optional - priority order for Smart Sort, defaults to ['resolution', 'bitrate', 'framerate']
+  stream_sort_enabled?: SortEnabledMap;  // Optional - which sort criteria are enabled, defaults to all true
 }): Promise<{ status: string; configured: boolean }> {
   return fetchJson(`${API_BASE}/settings`, {
     method: 'POST',
