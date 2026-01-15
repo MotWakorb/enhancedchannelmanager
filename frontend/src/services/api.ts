@@ -1710,6 +1710,7 @@ export async function getProbeProgress(): Promise<{
   current_stream: string;
   success_count: number;
   failed_count: number;
+  skipped_count: number;
   percentage: number;
 }> {
   return fetchJson(`${API_BASE}/stream-stats/probe/progress`, {
@@ -1722,6 +1723,7 @@ export async function getProbeProgress(): Promise<{
     current_stream: string;
     success_count: number;
     failed_count: number;
+    skipped_count: number;
     percentage: number;
   }>;
 }
@@ -1729,16 +1731,20 @@ export async function getProbeProgress(): Promise<{
 export async function getProbeResults(): Promise<{
   success_streams: Array<{ id: number; name: string; url?: string }>;
   failed_streams: Array<{ id: number; name: string; url?: string }>;
+  skipped_streams: Array<{ id: number; name: string; url?: string; reason?: string }>;
   success_count: number;
   failed_count: number;
+  skipped_count: number;
 }> {
   return fetchJson(`${API_BASE}/stream-stats/probe/results`, {
     method: 'GET',
   }) as Promise<{
     success_streams: Array<{ id: number; name: string; url?: string }>;
     failed_streams: Array<{ id: number; name: string; url?: string }>;
+    skipped_streams: Array<{ id: number; name: string; url?: string; reason?: string }>;
     success_count: number;
     failed_count: number;
+    skipped_count: number;
   }>;
 }
 
@@ -1749,10 +1755,12 @@ export interface ProbeHistoryEntry {
   total: number;
   success_count: number;
   failed_count: number;
+  skipped_count: number;
   status: string;
   error?: string;
   success_streams: Array<{ id: number; name: string; url?: string }>;
   failed_streams: Array<{ id: number; name: string; url?: string }>;
+  skipped_streams: Array<{ id: number; name: string; url?: string; reason?: string }>;
 }
 
 export async function getProbeHistory(): Promise<ProbeHistoryEntry[]> {
