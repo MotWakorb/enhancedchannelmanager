@@ -398,6 +398,8 @@ async def update_settings(request: SettingsRequest):
         bitrate_sample_duration=request.bitrate_sample_duration,
         parallel_probing_enabled=request.parallel_probing_enabled,
         skip_recently_probed_hours=request.skip_recently_probed_hours,
+        refresh_m3us_before_probe=request.refresh_m3us_before_probe,
+        auto_reorder_after_probe=request.auto_reorder_after_probe,
         stream_sort_priority=request.stream_sort_priority,
         stream_sort_enabled=request.stream_sort_enabled,
         deprioritize_failed_streams=request.deprioritize_failed_streams,
