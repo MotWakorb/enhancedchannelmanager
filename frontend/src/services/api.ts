@@ -1770,3 +1770,9 @@ export async function getProbeHistory(): Promise<ProbeHistoryEntry[]> {
     method: 'GET',
   }) as Promise<ProbeHistoryEntry[]>;
 }
+
+export async function cancelProbe(): Promise<{ status: string; message: string }> {
+  return fetchJson(`${API_BASE}/stream-stats/probe/cancel`, {
+    method: 'POST',
+  }) as Promise<{ status: string; message: string }>;
+}

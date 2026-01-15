@@ -1930,12 +1930,40 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
                 transition: 'width 0.3s ease',
               }}></div>
             </div>
-            <div style={{ display: 'flex', gap: '1rem', marginTop: '0.5rem', fontSize: '12px' }}>
-              <span style={{ color: '#2ecc71' }}>✓ {probeProgress.success_count} success</span>
-              <span style={{ color: '#e74c3c' }}>✗ {probeProgress.failed_count} failed</span>
-              {probeProgress.skipped_count > 0 && (
-                <span style={{ color: '#f39c12' }}>⊘ {probeProgress.skipped_count} skipped</span>
-              )}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '0.5rem' }}>
+              <div style={{ display: 'flex', gap: '1rem', fontSize: '12px' }}>
+                <span style={{ color: '#2ecc71' }}>✓ {probeProgress.success_count} success</span>
+                <span style={{ color: '#e74c3c' }}>✗ {probeProgress.failed_count} failed</span>
+                {probeProgress.skipped_count > 0 && (
+                  <span style={{ color: '#f39c12' }}>⊘ {probeProgress.skipped_count} skipped</span>
+                )}
+              </div>
+              <button
+                onClick={async () => {
+                  try {
+                    await api.cancelProbe();
+                    logger.info('Probe cancellation requested');
+                  } catch (err) {
+                    logger.error('Failed to cancel probe', err);
+                  }
+                }}
+                style={{
+                  padding: '0.25rem 0.75rem',
+                  fontSize: '12px',
+                  backgroundColor: 'rgba(231, 76, 60, 0.15)',
+                  color: '#e74c3c',
+                  border: '1px solid rgba(231, 76, 60, 0.3)',
+                  borderRadius: '4px',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.25rem'
+                }}
+                title="Cancel the current probe operation"
+              >
+                <span className="material-icons" style={{ fontSize: '14px' }}>cancel</span>
+                Cancel
+              </button>
             </div>
           </div>
         )}

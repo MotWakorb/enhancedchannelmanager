@@ -112,6 +112,20 @@ class StreamProber:
             self._task = None
         logger.info("StreamProber stopped")
 
+    def cancel_probe(self) -> dict:
+        """Cancel an in-progress probe operation.
+
+        Returns:
+            Dict with status of the cancellation.
+        """
+        if not self._probing_in_progress:
+            return {"status": "no_probe_running", "message": "No probe is currently running"}
+
+        logger.info("Cancelling in-progress probe...")
+        self._running = False
+        # The probe loop will detect _running=False and set status to "cancelled"
+        return {"status": "cancelling", "message": "Probe cancellation requested"}
+
     def _get_seconds_until_next_schedule(self) -> int:
         """Calculate seconds until the next scheduled probe time."""
         try:
