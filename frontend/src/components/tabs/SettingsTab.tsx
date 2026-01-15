@@ -53,35 +53,74 @@ function SortablePriorityItem({
     isDragging,
   } = useSortable({ id });
 
-  const style = {
-    transform: CSS.Transform.toString(transform),
-    transition,
-    opacity: isDragging ? 0.5 : enabled ? 1 : 0.5,
-  };
-
   const config = SORT_CRITERION_CONFIG[id];
 
+  // Use inline styles to avoid any CSS conflicts
+  const containerStyle: React.CSSProperties = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    display: 'flex',
+    alignItems: 'center',
+    gap: '0.75rem',
+    padding: '0.75rem 1rem',
+    backgroundColor: 'var(--input-bg)',
+    border: '1px solid var(--border-primary)',
+    borderRadius: '6px',
+    opacity: isDragging ? 0.5 : enabled ? 1 : 0.6,
+    boxShadow: isDragging ? '0 4px 12px rgba(0, 0, 0, 0.3)' : undefined,
+  };
+
   return (
-    <div
-      ref={setNodeRef}
-      style={style}
-      className={`sort-priority-item ${isDragging ? 'dragging' : ''} ${!enabled ? 'disabled' : ''}`}
-    >
-      <span className="sort-priority-drag" {...attributes} {...listeners}>
-        <span className="material-icons">drag_indicator</span>
+    <div ref={setNodeRef} style={containerStyle}>
+      <span
+        {...attributes}
+        {...listeners}
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          cursor: 'grab',
+          color: 'var(--text-muted)',
+          touchAction: 'none',
+        }}
+      >
+        <span className="material-icons" style={{ fontSize: '20px' }}>drag_indicator</span>
       </span>
       <input
         type="checkbox"
         checked={enabled}
         onChange={() => onToggleEnabled(id)}
-        className="sort-priority-checkbox"
+        style={{
+          width: '16px',
+          height: '16px',
+          cursor: 'pointer',
+          accentColor: 'var(--accent-primary)',
+          flexShrink: 0,
+        }}
         title={enabled ? 'Click to disable this sort criterion' : 'Click to enable this sort criterion'}
       />
-      <span className={`sort-priority-rank ${!enabled ? 'disabled' : ''}`}>{enabled ? index + 1 : '-'}</span>
-      <span className="material-icons sort-priority-icon">{config.icon}</span>
-      <div className="sort-priority-content">
-        <span className="sort-priority-label">{config.label}</span>
-        <span className="sort-priority-description">{config.description}</span>
+      <span
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          width: '24px',
+          height: '24px',
+          borderRadius: '50%',
+          backgroundColor: enabled ? 'var(--accent-primary)' : 'var(--text-muted)',
+          color: 'white',
+          fontSize: '0.75rem',
+          fontWeight: 600,
+          flexShrink: 0,
+        }}
+      >
+        {enabled ? index + 1 : '-'}
+      </span>
+      <span className="material-icons" style={{ fontSize: '20px', color: 'var(--text-secondary)', flexShrink: 0 }}>
+        {config.icon}
+      </span>
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '0.125rem', minWidth: 0 }}>
+        <span style={{ fontSize: '0.9rem', fontWeight: 500, color: 'var(--text-primary)' }}>{config.label}</span>
+        <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{config.description}</span>
       </div>
     </div>
   );
