@@ -292,9 +292,20 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Checkout repository (for version extraction)
+        uses: actions/checkout@v4
+
       - name: Set lowercase image name
         id: image
         run: echo "name=${GITHUB_REPOSITORY,,}" >> $GITHUB_OUTPUT
+
+      - name: Extract version from package.json
+        id: version
+        run: |
+          VERSION=$(jq -r '.version' frontend/package.json)
+          echo "full=${VERSION}" >> $GITHUB_OUTPUT
+          # Extract major.minor (e.g., 0.7 from 0.7.20080)
+          echo "minor=$(echo $VERSION | cut -d. -f1,2)" >> $GITHUB_OUTPUT
 
       - name: Extract metadata (tags, labels)
         id: meta
@@ -310,6 +321,12 @@ jobs:
             type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
             # Dev tag on dev branch
             type=raw,value=dev,enable=${{ github.ref == 'refs/heads/dev' }}
+            # Semver tags with branch suffix on dev, plain on main
+            type=raw,value=${{ steps.version.outputs.full }}-dev,enable=${{ github.ref == 'refs/heads/dev' }}
+            type=raw,value=${{ steps.version.outputs.full }},enable=${{ github.ref == 'refs/heads/main' }}
+            # Minor version tags (e.g., 0.7-dev or 0.7)
+            type=raw,value=${{ steps.version.outputs.minor }}-dev,enable=${{ github.ref == 'refs/heads/dev' }}
+            type=raw,value=${{ steps.version.outputs.minor }},enable=${{ github.ref == 'refs/heads/main' }}
 
       - name: Create manifest list and push
         working-directory: /tmp
