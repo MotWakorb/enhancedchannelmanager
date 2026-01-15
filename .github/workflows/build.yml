@@ -130,16 +130,41 @@ jobs:
           docker run -d --name ecm-dast -p 6100:6100 \
             -e DISPATCHARR_URL=http://localhost:9999 \
             ecm:dast-test
+
           # Wait for the app to be ready
           echo "Waiting for application to start..."
+          READY=false
           for i in {1..30}; do
-            if curl -s http://localhost:6100/api/health > /dev/null 2>&1; then
-              echo "Application is ready!"
+            if curl -sf http://localhost:6100/api/health > /dev/null 2>&1; then
+              echo "✓ Application is ready!"
+              READY=true
               break
             fi
             echo "Waiting... ($i/30)"
             sleep 2
           done
+
+          # Fail if app never became ready
+          if [ "$READY" = "false" ]; then
+            echo "✗ Application failed to start within 60 seconds"
+            echo "Container logs:"
+            docker logs ecm-dast
+            echo "Container status:"
+            docker ps -a | grep ecm-dast
+            exit 1
+          fi
+
+      - name: Verify application health
+        run: |
+          echo "Testing health endpoint..."
+          HEALTH_RESPONSE=$(curl -s http://localhost:6100/api/health)
+          echo "Health response: $HEALTH_RESPONSE"
+
+          echo "Container status:"
+          docker ps | grep ecm-dast
+
+          echo "Recent container logs:"
+          docker logs --tail 50 ecm-dast
 
       - name: Run OWASP ZAP Baseline Scan
         uses: zaproxy/action-baseline@v0.14.0
@@ -151,9 +176,14 @@ jobs:
           # WARN alerts are logged but don't fail (appropriate for informational security headers)
           fail_action: false
 
-      - name: Stop application container
+      - name: Show container logs and stop
         if: always()
-        run: docker stop ecm-dast || true
+        run: |
+          echo "Final container logs:"
+          docker logs ecm-dast || true
+          echo "Stopping container..."
+          docker stop ecm-dast || true
+          docker rm ecm-dast || true
 
   # Build AMD64 image natively
   build-amd64:
