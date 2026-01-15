@@ -49,6 +49,9 @@ class StreamProber:
         bitrate_sample_duration: int = 10,  # Duration in seconds to sample stream for bitrate (10, 20, or 30)
         parallel_probing_enabled: bool = True,  # Probe streams from different M3Us simultaneously
         skip_recently_probed_hours: int = 0,  # Skip streams probed within last N hours (0 = always probe)
+        refresh_m3us_before_probe: bool = True,  # Refresh all M3U accounts before starting probe
+        auto_reorder_after_probe: bool = False,  # Automatically reorder streams in channels after probe completes
+        deprioritize_failed_streams: bool = True,  # Deprioritize failed streams in smart sort
     ):
         self.client = client
         self.probe_timeout = probe_timeout
@@ -61,6 +64,9 @@ class StreamProber:
         self.bitrate_sample_duration = bitrate_sample_duration
         self.parallel_probing_enabled = parallel_probing_enabled
         self.skip_recently_probed_hours = skip_recently_probed_hours
+        self.refresh_m3us_before_probe = refresh_m3us_before_probe
+        self.auto_reorder_after_probe = auto_reorder_after_probe
+        self.deprioritize_failed_streams = deprioritize_failed_streams
         self._task: Optional[asyncio.Task] = None
         self._running = False
         self._probing_in_progress = False
@@ -646,6 +652,138 @@ class StreamProber:
             # Return empty dict on failure - allows probes to proceed (fail-open)
             return {}
 
+    async def _auto_reorder_channels(self, channel_groups_override: list[str] = None, stream_to_channels: dict = None) -> list[dict]:
+        """
+        Auto-reorder streams in all channels from the selected groups using smart sort.
+        Returns a list of dicts with {channel_id, channel_name, stream_count} for channels that were reordered.
+        """
+        reordered = []
+
+        try:
+            # Determine which groups to filter by
+            groups_to_filter = channel_groups_override if channel_groups_override is not None else self.probe_channel_groups
+
+            # Get selected group IDs
+            selected_group_ids = set()
+            if groups_to_filter:
+                try:
+                    all_groups = await self.client.get_channel_groups()
+                    for group in all_groups:
+                        if group.get("name") in groups_to_filter:
+                            selected_group_ids.add(group["id"])
+                    logger.info(f"Auto-reorder: filtering to {len(selected_group_ids)} selected groups")
+                except Exception as e:
+                    logger.error(f"Failed to fetch channel groups for auto-reorder: {e}")
+                    return []
+
+            # Fetch all channels and filter by selected groups
+            page = 1
+            channels_to_reorder = []
+            while True:
+                try:
+                    result = await self.client.get_channels(page=page, page_size=500)
+                    channels = result.get("results", [])
+                    for channel in channels:
+                        # Filter by channel_group_id if groups selected
+                        if selected_group_ids:
+                            channel_group_id = channel.get("channel_group_id")
+                            if channel_group_id not in selected_group_ids:
+                                continue
+
+                        # Only reorder channels that have streams
+                        if channel.get("streams") and len(channel.get("streams")) > 1:
+                            channels_to_reorder.append(channel)
+
+                    if not result.get("next"):
+                        break
+                    page += 1
+                    if page > 50:  # Safety limit
+                        break
+                except Exception as e:
+                    logger.error(f"Failed to fetch channels page {page} for auto-reorder: {e}")
+                    break
+
+            logger.info(f"Found {len(channels_to_reorder)} channels to reorder")
+
+            # For each channel, fetch stream stats and reorder
+            for channel in channels_to_reorder:
+                try:
+                    channel_id = channel["id"]
+                    channel_name = channel.get("name", f"Channel {channel_id}")
+                    stream_ids = channel.get("streams", [])
+
+                    if len(stream_ids) <= 1:
+                        continue  # Skip if 0 or 1 streams
+
+                    # Fetch stream stats for this channel's streams
+                    from .database import get_session
+                    from .models import StreamStats
+                    with get_session() as session:
+                        stats_records = session.query(StreamStats).filter(
+                            StreamStats.stream_id.in_(stream_ids)
+                        ).all()
+
+                        # Build stats map
+                        stats_map = {stat.stream_id: stat for stat in stats_records}
+
+                        # Sort streams using smart sort logic (similar to frontend)
+                        sorted_stream_ids = self._smart_sort_streams(stream_ids, stats_map)
+
+                        # Only update if order changed
+                        if sorted_stream_ids != stream_ids:
+                            await self.client.update_channel(channel_id, {"streams": sorted_stream_ids})
+                            reordered.append({
+                                "channel_id": channel_id,
+                                "channel_name": channel_name,
+                                "stream_count": len(stream_ids)
+                            })
+                            logger.debug(f"Reordered channel {channel_id} ({channel_name}) with {len(stream_ids)} streams")
+
+                except Exception as e:
+                    logger.error(f"Failed to reorder channel {channel.get('id', 'unknown')}: {e}")
+                    continue
+
+        except Exception as e:
+            logger.error(f"Auto-reorder channels failed: {e}")
+
+        return reordered
+
+    def _smart_sort_streams(self, stream_ids: list[int], stats_map: dict) -> list[int]:
+        """
+        Sort stream IDs using smart sort logic based on stream stats.
+        Prioritizes working streams and sorts by resolution/bitrate/framerate.
+        """
+        def get_sort_value(stream_id: int) -> tuple:
+            stat = stats_map.get(stream_id)
+
+            # Deprioritize failed streams if enabled
+            if self.deprioritize_failed_streams:
+                if not stat or stat.probe_status in ('failed', 'timeout', 'pending'):
+                    return (1, 0, 0, 0)  # Failed streams sort to bottom
+
+            if not stat or stat.probe_status != 'success':
+                return (0, 0, 0, 0)
+
+            # Parse resolution (e.g., "1920x1080" -> width * height)
+            resolution_value = 0
+            if stat.resolution:
+                try:
+                    parts = stat.resolution.split('x')
+                    if len(parts) == 2:
+                        resolution_value = int(parts[0]) * int(parts[1])
+                except:
+                    pass
+
+            bitrate_value = stat.bitrate or 0
+            framerate_value = stat.framerate or 0
+
+            # Negate for descending sort (higher values first)
+            return (0, -resolution_value, -bitrate_value, -framerate_value)
+
+        # Sort stream IDs by their stats
+        sorted_ids = sorted(stream_ids, key=get_sort_value)
+        return sorted_ids
+
     async def probe_all_streams(self, channel_groups_override: list[str] = None):
         """Probe all streams that are in channels (runs in background).
 
@@ -677,7 +815,24 @@ class StreamProber:
         probed_count = 0
         start_time = datetime.utcnow()
         try:
+            # Refresh M3U accounts if configured
+            if self.refresh_m3us_before_probe:
+                logger.info("Refreshing all M3U accounts before probing...")
+                self._probe_progress_status = "refreshing"
+                self._probe_progress_current_stream = "Refreshing M3U accounts..."
+                try:
+                    await self.client.refresh_all_m3u_accounts()
+                    logger.info("M3U refresh triggered successfully")
+                    # Wait a reasonable amount of time for refresh to complete
+                    # Since Dispatcharr doesn't provide refresh status, we wait 60 seconds
+                    await asyncio.sleep(60)
+                    logger.info("M3U refresh wait period completed")
+                except Exception as e:
+                    logger.warning(f"Failed to refresh M3U accounts: {e}")
+                    logger.info("Continuing with probe despite refresh failure")
+
             # Fetch all channel stream IDs and channel mappings
+            self._probe_progress_status = "fetching"
             logger.info(f"Fetching channel stream IDs (override groups: {channel_groups_override})...")
             channel_stream_ids, stream_to_channels, stream_to_channel_number = await self._fetch_channel_stream_ids(channel_groups_override)
             logger.info(f"Found {len(channel_stream_ids)} unique streams across all channels")
@@ -976,10 +1131,22 @@ class StreamProber:
             self._probe_progress_status = "completed"
             self._probe_progress_current_stream = ""
 
-            # Save to probe history
-            self._save_probe_history(start_time, probed_count)
+            # Auto-reorder streams if configured
+            reordered_channels = []
+            if self.auto_reorder_after_probe:
+                logger.info("Auto-reorder is enabled, reordering streams in probed channels...")
+                self._probe_progress_status = "reordering"
+                self._probe_progress_current_stream = "Reordering streams..."
+                try:
+                    reordered_channels = await self._auto_reorder_channels(channel_groups_override, stream_to_channels)
+                    logger.info(f"Auto-reordered {len(reordered_channels)} channels")
+                except Exception as e:
+                    logger.error(f"Auto-reorder failed: {e}")
 
-            return {"status": "completed", "probed": probed_count}
+            # Save to probe history
+            self._save_probe_history(start_time, probed_count, reordered_channels=reordered_channels)
+
+            return {"status": "completed", "probed": probed_count, "reordered_channels": len(reordered_channels)}
         except Exception as e:
             logger.error(f"Probe all streams failed: {e}")
             self._probe_progress_status = "failed"
@@ -1017,7 +1184,7 @@ class StreamProber:
             "skipped_count": len(self._probe_skipped_streams)
         }
 
-    def _save_probe_history(self, start_time: datetime, total: int, error: str = None):
+    def _save_probe_history(self, start_time: datetime, total: int, error: str = None, reordered_channels: list = None):
         """Save a probe run to history (keeps last 5 runs)."""
         end_time = datetime.utcnow()
         duration_seconds = int((end_time - start_time).total_seconds())
@@ -1035,13 +1202,15 @@ class StreamProber:
             "success_streams": list(self._probe_success_streams),  # Copy the list
             "failed_streams": list(self._probe_failed_streams),    # Copy the list
             "skipped_streams": list(self._probe_skipped_streams),  # Copy the list
+            "reordered_channels": reordered_channels or [],  # List of channels that were reordered
         }
 
         # Add to history and keep only last 5
         self._probe_history.insert(0, history_entry)
         self._probe_history = self._probe_history[:5]
 
-        logger.info(f"Saved probe history entry: {total} streams, {self._probe_progress_success_count} success, {self._probe_progress_failed_count} failed, {self._probe_progress_skipped_count} skipped")
+        reorder_msg = f", {len(reordered_channels or [])} channels reordered" if reordered_channels else ""
+        logger.info(f"Saved probe history entry: {total} streams, {self._probe_progress_success_count} success, {self._probe_progress_failed_count} failed, {self._probe_progress_skipped_count} skipped{reorder_msg}")
 
     def get_probe_history(self) -> list:
         """Get probe run history (last 5 runs)."""

@@ -188,6 +188,8 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
   const [bitrateSampleDuration, setBitrateSampleDuration] = useState(10);
   const [parallelProbingEnabled, setParallelProbingEnabled] = useState(true);
   const [skipRecentlyProbedHours, setSkipRecentlyProbedHours] = useState(0);
+  const [refreshM3usBeforeProbe, setRefreshM3usBeforeProbe] = useState(true);
+  const [autoReorderAfterProbe, setAutoReorderAfterProbe] = useState(false);
   const [probingAll, setProbingAll] = useState(false);
   const [probeAllResult, setProbeAllResult] = useState<{ success: boolean; message: string } | null>(null);
   const [totalStreamCount, setTotalStreamCount] = useState(100); // Default to 100, will be updated on load
@@ -424,6 +426,8 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
       setBitrateSampleDuration(settings.bitrate_sample_duration ?? 10);
       setParallelProbingEnabled(settings.parallel_probing_enabled ?? true);
       setSkipRecentlyProbedHours(settings.skip_recently_probed_hours ?? 0);
+      setRefreshM3usBeforeProbe(settings.refresh_m3us_before_probe ?? true);
+      setAutoReorderAfterProbe(settings.auto_reorder_after_probe ?? false);
       setStreamSortPriority(settings.stream_sort_priority ?? ['resolution', 'bitrate', 'framerate']);
       setStreamSortEnabled(settings.stream_sort_enabled ?? { resolution: true, bitrate: true, framerate: true });
       setDeprioritizeFailedStreams(settings.deprioritize_failed_streams ?? true);
@@ -525,6 +529,8 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
         bitrate_sample_duration: bitrateSampleDuration,
         parallel_probing_enabled: parallelProbingEnabled,
         skip_recently_probed_hours: skipRecentlyProbedHours,
+        refresh_m3us_before_probe: refreshM3usBeforeProbe,
+        auto_reorder_after_probe: autoReorderAfterProbe,
         stream_sort_priority: streamSortPriority,
         stream_sort_enabled: streamSortEnabled,
         deprioritize_failed_streams: deprioritizeFailedStreams,
@@ -1794,6 +1800,35 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
               <span className="form-hint">
                 Skip streams that were successfully probed within the last N hours. Set to 0 to always probe all streams.
                 This prevents excessive probing requests when running multiple checks in succession.
+              </span>
+            </div>
+
+            <div className="form-group">
+              <label className="checkbox-label">
+                <input
+                  type="checkbox"
+                  checked={refreshM3usBeforeProbe}
+                  onChange={(e) => setRefreshM3usBeforeProbe(e.target.checked)}
+                />
+                Refresh M3Us before probing
+              </label>
+              <span className="form-hint">
+                When enabled, all M3U accounts will be refreshed before starting the probe to ensure latest stream information is used.
+              </span>
+            </div>
+
+            <div className="form-group">
+              <label className="checkbox-label">
+                <input
+                  type="checkbox"
+                  checked={autoReorderAfterProbe}
+                  onChange={(e) => setAutoReorderAfterProbe(e.target.checked)}
+                />
+                Auto-reorder streams after probe
+              </label>
+              <span className="form-hint">
+                When enabled, streams within channels will be automatically reordered using smart sort after probe completes.
+                Failed streams are deprioritized, and working streams are sorted by resolution, bitrate, and framerate.
               </span>
             </div>
 
