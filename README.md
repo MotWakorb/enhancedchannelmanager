@@ -291,6 +291,12 @@ These defaults are pre-loaded when opening the bulk create modal, with a "(from 
   - **High Contrast** - Maximum contrast for accessibility
 - **Show Stream URLs** - Toggle visibility of stream URLs in the UI (useful for screenshots or hiding sensitive information)
 - **Hide Auto-Sync Groups** - Automatically hide channel groups managed by M3U auto-sync on app load
+- **Hide EPG URLs** - Hide EPG source URLs in the EPG Manager tab to prevent accidental exposure in screenshots or screen shares
+- **Hide M3U URLs** - Hide M3U server URLs in the M3U Manager tab to prevent accidental exposure in screenshots or screen shares
+- **Gracenote ID Conflict Handling** - Control behavior when assigning Gracenote IDs to channels that already have different IDs:
+  - **Ask** (default) - Show conflict dialog to review and choose which channels to overwrite
+  - **Skip** - Automatically skip channels with existing IDs
+  - **Overwrite** - Automatically replace all existing IDs with new ones
 - **Frontend Log Level** - Set console logging verbosity (Error, Warn, Info, Debug) for troubleshooting
 
 ### Channel List Filters

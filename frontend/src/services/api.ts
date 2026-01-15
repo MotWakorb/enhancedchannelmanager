@@ -472,6 +472,8 @@ export type LogLevel = 'DEBUG' | 'INFO' | 'WARN' | 'WARNING' | 'ERROR' | 'CRITIC
 export type SortCriterion = 'resolution' | 'bitrate' | 'framerate';
 export type SortEnabledMap = Record<SortCriterion, boolean>;
 
+export type GracenoteConflictMode = 'ask' | 'skip' | 'overwrite';
+
 export interface SettingsResponse {
   url: string;
   username: string;
@@ -488,6 +490,7 @@ export interface SettingsResponse {
   hide_ungrouped_streams: boolean;
   hide_epg_urls: boolean;
   hide_m3u_urls: boolean;
+  gracenote_conflict_mode: GracenoteConflictMode;
   theme: Theme;
   default_channel_profile_ids: number[];
   linked_m3u_accounts: number[][];  // List of link groups, each is a list of account IDs
@@ -539,6 +542,7 @@ export async function saveSettings(settings: {
   hide_ungrouped_streams?: boolean;  // Optional - defaults to true
   hide_epg_urls?: boolean;  // Optional - defaults to false
   hide_m3u_urls?: boolean;  // Optional - defaults to false
+  gracenote_conflict_mode?: GracenoteConflictMode;  // Optional - defaults to 'ask'
   theme?: Theme;  // Optional - defaults to 'dark'
   default_channel_profile_ids?: number[];  // Optional - empty array means no defaults
   linked_m3u_accounts?: number[][];  // Optional - list of link groups
