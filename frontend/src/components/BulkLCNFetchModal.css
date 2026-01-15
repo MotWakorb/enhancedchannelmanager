@@ -333,10 +333,10 @@
 
 .bulk-lcn-footer .btn-primary {
   padding: 0.5rem 1rem;
-  background-color: var(--accent-primary);
+  background-color: var(--button-primary-bg);
   border: none;
   border-radius: 6px;
-  color: white;
+  color: var(--button-primary-text);
   cursor: pointer;
   font-size: 0.875rem;
   font-weight: 500;
