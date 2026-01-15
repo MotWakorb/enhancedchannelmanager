@@ -13,22 +13,8 @@ import type {
   Logo,
 } from '../types';
 import * as api from '../services/api';
-
-// Helper to create a snapshot from a channel
-function createSnapshot(channel: Channel): ChannelSnapshot {
-  return {
-    id: channel.id,
-    channel_number: channel.channel_number,
-    name: channel.name,
-    channel_group_id: channel.channel_group_id,
-    streams: [...channel.streams],
-  };
-}
-
-// Generate a unique ID
-function generateId(): string {
-  return `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-}
+import { createSnapshot } from '../utils/channelSnapshot';
+import { generateId } from '../utils/idGenerator';
 
 // Compute which channels are modified by comparing working copy to baseline
 function computeModifiedChannelIds(

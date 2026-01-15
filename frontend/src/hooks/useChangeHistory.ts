@@ -2,29 +2,14 @@ import { useState, useCallback, useRef, useEffect } from 'react';
 import type {
   Channel,
   ChangeRecord,
-  ChannelSnapshot,
   SavePoint,
   HistoryState,
 } from '../types';
 import * as api from '../services/api';
+import { createSnapshot } from '../utils/channelSnapshot';
+import { generateId } from '../utils/idGenerator';
 
 const MAX_HISTORY_SIZE = 100;
-
-// Helper to create a snapshot from a channel
-function createSnapshot(channel: Channel): ChannelSnapshot {
-  return {
-    id: channel.id,
-    channel_number: channel.channel_number,
-    name: channel.name,
-    channel_group_id: channel.channel_group_id,
-    streams: [...channel.streams],
-  };
-}
-
-// Generate a unique ID
-function generateId(): string {
-  return `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-}
 
 export interface UseChangeHistoryOptions {
   channels: Channel[];
