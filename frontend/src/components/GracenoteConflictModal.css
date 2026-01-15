@@ -188,9 +188,9 @@
 
 .conflict-modal-footer .btn-primary {
   padding: 0.5rem 1rem;
-  background-color: var(--accent-primary);
+  background-color: var(--button-primary-bg);
   border: none;
-  color: white;
+  color: var(--button-primary-text);
   border-radius: 6px;
   font-weight: 500;
   cursor: pointer;
