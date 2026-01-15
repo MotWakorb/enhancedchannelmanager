@@ -77,6 +77,10 @@ class DispatcharrSettings(BaseModel):
     parallel_probing_enabled: bool = True
     # Skip streams that were successfully probed within the last N hours (0 = always probe)
     skip_recently_probed_hours: int = 0
+    # Refresh all M3U accounts before starting probe
+    refresh_m3us_before_probe: bool = True
+    # Automatically reorder streams in channels after probe completes
+    auto_reorder_after_probe: bool = False
     # Stream sort priority order for "Smart Sort" feature
     # Order determines priority: first element is primary sort key, subsequent elements are tie-breakers
     # Valid values: "resolution", "bitrate", "framerate"
