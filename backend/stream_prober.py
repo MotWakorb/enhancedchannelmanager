@@ -69,6 +69,8 @@ class StreamProber:
         self._probe_progress_failed_count = 0
         self._probe_success_streams = []  # List of {id, name, url} for successful probes
         self._probe_failed_streams = []   # List of {id, name, url} for failed probes
+        self._probe_skipped_streams = []  # List of {id, name, url, reason} for skipped probes (e.g., M3U at max connections)
+        self._probe_progress_skipped_count = 0
         # Probe history - list of last 5 probe runs
         self._probe_history = []  # List of {timestamp, total, success_count, failed_count, status, success_streams, failed_streams}
 
@@ -623,8 +625,10 @@ class StreamProber:
         self._probe_progress_current_stream = ""
         self._probe_progress_success_count = 0
         self._probe_progress_failed_count = 0
+        self._probe_progress_skipped_count = 0
         self._probe_success_streams = []
         self._probe_failed_streams = []
+        self._probe_skipped_streams = []
 
         probed_count = 0
         start_time = datetime.utcnow()
@@ -634,16 +638,41 @@ class StreamProber:
             channel_stream_ids, stream_to_channels, stream_to_channel_number = await self._fetch_channel_stream_ids(channel_groups_override)
             logger.info(f"Found {len(channel_stream_ids)} unique streams across all channels")
 
-            # Fetch M3U accounts to map account IDs to names
+            # Fetch M3U accounts to map account IDs to names and max_streams
             logger.info("Fetching M3U accounts...")
-            m3u_accounts_map = {}
+            m3u_accounts_map = {}  # id -> name
+            m3u_max_streams = {}   # id -> max_streams (considering profiles)
             try:
                 m3u_accounts = await self.client.get_m3u_accounts()
                 for account in m3u_accounts:
-                    m3u_accounts_map[account["id"]] = account.get("name", f"M3U {account['id']}")
+                    account_id = account["id"]
+                    m3u_accounts_map[account_id] = account.get("name", f"M3U {account_id}")
+                    # Calculate max_streams considering profiles (like Stats tab does)
+                    profiles = account.get("profiles", [])
+                    active_profiles = [p for p in profiles if p.get("is_active", True)]
+                    if active_profiles:
+                        # Sum max_streams from active profiles
+                        profile_max = sum(p.get("max_streams", 0) for p in active_profiles)
+                        m3u_max_streams[account_id] = profile_max if profile_max > 0 else account.get("max_streams", 0)
+                    else:
+                        m3u_max_streams[account_id] = account.get("max_streams", 0)
                 logger.info(f"Found {len(m3u_accounts_map)} M3U accounts")
             except Exception as e:
                 logger.warning(f"Failed to fetch M3U accounts: {e}")
+
+            # Fetch current channel stats to check active connections per M3U
+            logger.info("Fetching channel stats for M3U connection check...")
+            m3u_active_connections = {}  # id -> current active connection count
+            try:
+                channel_stats = await self.client.get_channel_stats()
+                channels = channel_stats.get("channels", [])
+                for ch in channels:
+                    m3u_id = ch.get("m3u_profile_id")
+                    if m3u_id:
+                        m3u_active_connections[m3u_id] = m3u_active_connections.get(m3u_id, 0) + 1
+                logger.info(f"Active M3U connections: {m3u_active_connections}")
+            except Exception as e:
+                logger.warning(f"Failed to fetch channel stats: {e}")
 
             # Fetch all streams
             logger.info("Fetching stream details...")
@@ -698,6 +727,25 @@ class StreamProber:
                 self._probe_progress_current = probed_count + 1
                 self._probe_progress_current_stream = display_string
 
+                # Check if M3U is at max connections before probing
+                m3u_account_id = stream.get("m3u_account")
+                skip_reason = None
+                if m3u_account_id:
+                    max_streams = m3u_max_streams.get(m3u_account_id, 0)
+                    current_streams = m3u_active_connections.get(m3u_account_id, 0)
+                    if max_streams > 0 and current_streams >= max_streams:
+                        m3u_name = m3u_accounts_map.get(m3u_account_id, f"M3U {m3u_account_id}")
+                        skip_reason = f"M3U '{m3u_name}' at max connections ({current_streams}/{max_streams})"
+                        logger.info(f"Skipping stream {stream_id} ({stream_name}): {skip_reason}")
+
+                if skip_reason:
+                    # Skip this stream - M3U is at capacity
+                    stream_info = {"id": stream["id"], "name": stream_name, "url": stream_url, "reason": skip_reason}
+                    self._probe_progress_skipped_count += 1
+                    self._probe_skipped_streams.append(stream_info)
+                    probed_count += 1
+                    continue
+
                 result = await self.probe_stream(
                     stream["id"], stream.get("url"), stream_name
                 )
@@ -745,6 +793,7 @@ class StreamProber:
             "current_stream": self._probe_progress_current_stream,
             "success_count": self._probe_progress_success_count,
             "failed_count": self._probe_progress_failed_count,
+            "skipped_count": self._probe_progress_skipped_count,
             "percentage": round((self._probe_progress_current / self._probe_progress_total * 100) if self._probe_progress_total > 0 else 0, 1)
         }
 
@@ -753,8 +802,10 @@ class StreamProber:
         return {
             "success_streams": self._probe_success_streams,
             "failed_streams": self._probe_failed_streams,
+            "skipped_streams": self._probe_skipped_streams,
             "success_count": len(self._probe_success_streams),
-            "failed_count": len(self._probe_failed_streams)
+            "failed_count": len(self._probe_failed_streams),
+            "skipped_count": len(self._probe_skipped_streams)
         }
 
     def _save_probe_history(self, start_time: datetime, total: int, error: str = None):
@@ -769,17 +820,19 @@ class StreamProber:
             "total": total,
             "success_count": self._probe_progress_success_count,
             "failed_count": self._probe_progress_failed_count,
+            "skipped_count": self._probe_progress_skipped_count,
             "status": "failed" if error else ("completed" if self._probe_progress_status == "completed" else self._probe_progress_status),
             "error": error,
             "success_streams": list(self._probe_success_streams),  # Copy the list
             "failed_streams": list(self._probe_failed_streams),    # Copy the list
+            "skipped_streams": list(self._probe_skipped_streams),  # Copy the list
         }
 
         # Add to history and keep only last 5
         self._probe_history.insert(0, history_entry)
         self._probe_history = self._probe_history[:5]
 
-        logger.info(f"Saved probe history entry: {total} streams, {self._probe_progress_success_count} success, {self._probe_progress_failed_count} failed")
+        logger.info(f"Saved probe history entry: {total} streams, {self._probe_progress_success_count} success, {self._probe_progress_failed_count} failed, {self._probe_progress_skipped_count} skipped")
 
     def get_probe_history(self) -> list:
         """Get probe run history (last 5 runs)."""

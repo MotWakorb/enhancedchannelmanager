@@ -155,15 +155,18 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
     current_stream: string;
     success_count: number;
     failed_count: number;
+    skipped_count: number;
     percentage: number;
   } | null>(null);
   const [showProbeResultsModal, setShowProbeResultsModal] = useState(false);
-  const [probeResultsType, setProbeResultsType] = useState<'success' | 'failed'>('success');
+  const [probeResultsType, setProbeResultsType] = useState<'success' | 'failed' | 'skipped'>('success');
   const [probeResults, setProbeResults] = useState<{
     success_streams: Array<{ id: number; name: string; url?: string }>;
     failed_streams: Array<{ id: number; name: string; url?: string }>;
+    skipped_streams: Array<{ id: number; name: string; url?: string; reason?: string }>;
     success_count: number;
     failed_count: number;
+    skipped_count: number;
   } | null>(null);
   const [probeHistory, setProbeHistory] = useState<ProbeHistoryEntry[]>([]);
   const [copiedUrl, setCopiedUrl] = useState<string | null>(null);
@@ -268,9 +271,10 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
           // Reload probe history when probe completes
           loadProbeHistory();
           if (progress.status === 'completed') {
+            const skippedMsg = progress.skipped_count > 0 ? `, Skipped: ${progress.skipped_count}` : '';
             setProbeAllResult({
               success: true,
-              message: `Probe completed! ${progress.total} streams probed. Success: ${progress.success_count}, Failed: ${progress.failed_count}`
+              message: `Probe completed! ${progress.total} streams probed. Success: ${progress.success_count}, Failed: ${progress.failed_count}${skippedMsg}`
             });
           } else if (progress.status === 'failed') {
             setProbeAllResult({ success: false, message: 'Probe failed' });
@@ -553,13 +557,15 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
     }
   };
 
-  const handleShowHistoryResults = (historyEntry: ProbeHistoryEntry, type: 'success' | 'failed') => {
+  const handleShowHistoryResults = (historyEntry: ProbeHistoryEntry, type: 'success' | 'failed' | 'skipped') => {
     // Use the history entry's streams for the modal
     setProbeResults({
       success_streams: historyEntry.success_streams,
       failed_streams: historyEntry.failed_streams,
+      skipped_streams: historyEntry.skipped_streams || [],
       success_count: historyEntry.success_count,
       failed_count: historyEntry.failed_count,
+      skipped_count: historyEntry.skipped_count || 0,
     });
     setProbeResultsType(type);
     setShowProbeResultsModal(true);
@@ -1734,6 +1740,28 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
                     <span className="material-icons" style={{ fontSize: '16px' }}>close</span>
                     {entry.failed_count}
                   </button>
+                  {(entry.skipped_count ?? 0) > 0 && (
+                    <button
+                      className="probe-history-btn skipped"
+                      onClick={() => handleShowHistoryResults(entry, 'skipped')}
+                      style={{
+                        padding: '0.4rem 0.8rem',
+                        fontSize: '13px',
+                        backgroundColor: 'rgba(243, 156, 18, 0.15)',
+                        color: '#f39c12',
+                        border: '1px solid rgba(243, 156, 18, 0.3)',
+                        borderRadius: '4px',
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '0.3rem'
+                      }}
+                      title="View skipped streams (M3U at max connections)"
+                    >
+                      <span className="material-icons" style={{ fontSize: '16px' }}>block</span>
+                      {entry.skipped_count}
+                    </button>
+                  )}
                 </div>
               </div>
             ))}
@@ -1887,6 +1915,9 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
             <div style={{ display: 'flex', gap: '1rem', marginTop: '0.5rem', fontSize: '12px' }}>
               <span style={{ color: '#2ecc71' }}>✓ {probeProgress.success_count} success</span>
               <span style={{ color: '#e74c3c' }}>✗ {probeProgress.failed_count} failed</span>
+              {probeProgress.skipped_count > 0 && (
+                <span style={{ color: '#f39c12' }}>⊘ {probeProgress.skipped_count} skipped</span>
+              )}
             </div>
           </div>
         )}
@@ -1914,9 +1945,9 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
             onClick={(e) => e.stopPropagation()}
           >
             <div className="probe-results-modal-header">
-              <h3 className={probeResultsType === 'success' ? 'success' : 'failed'}>
-                {probeResultsType === 'success' ? '✓ Successful Streams' : '✗ Failed Streams'} (
-                {probeResultsType === 'success' ? probeResults.success_count : probeResults.failed_count})
+              <h3 className={probeResultsType === 'success' ? 'success' : probeResultsType === 'skipped' ? 'skipped' : 'failed'}>
+                {probeResultsType === 'success' ? '✓ Successful Streams' : probeResultsType === 'skipped' ? '⊘ Skipped Streams' : '✗ Failed Streams'} (
+                {probeResultsType === 'success' ? probeResults.success_count : probeResultsType === 'skipped' ? probeResults.skipped_count : probeResults.failed_count})
               </h3>
               <button
                 onClick={() => setShowProbeResultsModal(false)}
@@ -1927,50 +1958,68 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
             </div>
 
             <div className="probe-results-modal-body">
-              {(probeResultsType === 'success' ? probeResults.success_streams : probeResults.failed_streams).length === 0 ? (
-                <div className="probe-results-empty">
-                  No {probeResultsType === 'success' ? 'successful' : 'failed'} streams yet
-                </div>
-              ) : (
-                <div className="probe-results-list">
-                  {(probeResultsType === 'success' ? probeResults.success_streams : probeResults.failed_streams).map((stream) => (
-                    <div
-                      key={stream.id}
-                      className={`probe-result-item ${probeResultsType === 'success' ? 'success' : 'failed'}`}
-                    >
-                      <div className="probe-result-item-info">
-                        <div className="probe-result-item-name">{stream.name}</div>
-                        <div className="probe-result-item-id">ID: {stream.id}</div>
+              {(() => {
+                const streams = probeResultsType === 'success'
+                  ? probeResults.success_streams
+                  : probeResultsType === 'skipped'
+                  ? probeResults.skipped_streams
+                  : probeResults.failed_streams;
+                const emptyText = probeResultsType === 'success'
+                  ? 'successful'
+                  : probeResultsType === 'skipped'
+                  ? 'skipped'
+                  : 'failed';
+
+                return streams.length === 0 ? (
+                  <div className="probe-results-empty">
+                    No {emptyText} streams yet
+                  </div>
+                ) : (
+                  <div className="probe-results-list">
+                    {streams.map((stream) => (
+                      <div
+                        key={stream.id}
+                        className={`probe-result-item ${probeResultsType === 'success' ? 'success' : probeResultsType === 'skipped' ? 'skipped' : 'failed'}`}
+                      >
+                        <div className="probe-result-item-info">
+                          <div className="probe-result-item-name">{stream.name}</div>
+                          <div className="probe-result-item-id">ID: {stream.id}</div>
+                          {probeResultsType === 'skipped' && 'reason' in stream && (stream as { reason?: string }).reason && (
+                            <div className="probe-result-item-reason" style={{ fontSize: '11px', color: '#f39c12', marginTop: '2px' }}>
+                              {(stream as { reason?: string }).reason}
+                            </div>
+                          )}
+                        </div>
+                        {stream.url && (
+                          <button
+                            className="probe-result-copy-btn"
+                            onClick={() => handleCopyUrl(stream.url!)}
+                            title={copiedUrl === stream.url ? 'Copied!' : 'Copy stream URL'}
+                            style={{
+                              padding: '0.3rem 0.6rem',
+                              fontSize: '12px',
+                              backgroundColor: copiedUrl === stream.url ? 'rgba(46, 204, 113, 0.2)' : 'var(--bg-secondary)',
+                              color: copiedUrl === stream.url ? '#2ecc71' : 'var(--text-secondary)',
+                              border: '1px solid var(--border-color)',
+                              borderRadius: '4px',
+                              cursor: 'pointer',
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '0.25rem',
+                              flexShrink: 0
+                            }}
+                          >
+                            <span className="material-icons" style={{ fontSize: '14px' }}>
+                              {copiedUrl === stream.url ? 'check' : 'content_copy'}
+                            </span>
+                            {copiedUrl === stream.url ? 'Copied' : 'Copy URL'}
+                          </button>
+                        )}
                       </div>
-                      {stream.url && (
-                        <button
-                          className="probe-result-copy-btn"
-                          onClick={() => handleCopyUrl(stream.url!)}
-                          title={copiedUrl === stream.url ? 'Copied!' : 'Copy stream URL'}
-                          style={{
-                            padding: '0.3rem 0.6rem',
-                            fontSize: '12px',
-                            backgroundColor: copiedUrl === stream.url ? 'rgba(46, 204, 113, 0.2)' : 'var(--bg-secondary)',
-                            color: copiedUrl === stream.url ? '#2ecc71' : 'var(--text-secondary)',
-                            border: '1px solid var(--border-color)',
-                            borderRadius: '4px',
-                            cursor: 'pointer',
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: '0.25rem',
-                            flexShrink: 0
-                          }}
-                        >
-                          <span className="material-icons" style={{ fontSize: '14px' }}>
-                            {copiedUrl === stream.url ? 'check' : 'content_copy'}
-                          </span>
-                          {copiedUrl === stream.url ? 'Copied' : 'Copy URL'}
-                        </button>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              )}
+                    ))}
+                  </div>
+                );
+              })()}
             </div>
 
             <div className="probe-results-modal-footer">

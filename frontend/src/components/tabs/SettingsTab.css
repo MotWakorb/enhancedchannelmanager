@@ -1061,6 +1061,10 @@
   color: var(--error);
 }
 
+.probe-results-modal-header h3.skipped {
+  color: #f39c12;
+}
+
 .probe-results-modal-close {
   background: transparent;
   border: none;
@@ -1111,6 +1115,10 @@
 
 .probe-result-item.failed {
   border-left: 3px solid var(--error);
+}
+
+.probe-result-item.skipped {
+  border-left: 3px solid #f39c12;
 }
 
 .probe-result-item-info {
