@@ -1188,6 +1188,7 @@
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
+  width: 100%;
 }
 
 .sort-priority-item {
@@ -1201,6 +1202,8 @@
   cursor: grab;
   transition: all 0.15s;
   user-select: none;
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .sort-priority-item:hover {
