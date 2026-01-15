@@ -1261,3 +1261,27 @@
 .sort-priority-item:hover .sort-priority-drag {
   opacity: 1;
 }
+
+/* Sort priority checkbox */
+.sort-priority-checkbox {
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+  accent-color: var(--accent-primary);
+  flex-shrink: 0;
+}
+
+/* Disabled state for sort priority items */
+.sort-priority-item.disabled {
+  opacity: 0.6;
+}
+
+.sort-priority-item.disabled .sort-priority-icon,
+.sort-priority-item.disabled .sort-priority-label,
+.sort-priority-item.disabled .sort-priority-description {
+  opacity: 0.7;
+}
+
+.sort-priority-rank.disabled {
+  background-color: var(--text-muted);
+}

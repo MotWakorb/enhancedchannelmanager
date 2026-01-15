@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import * as api from '../../services/api';
 import { NETWORK_PREFIXES, NETWORK_SUFFIXES } from '../../services/api';
-import type { Theme, ProbeHistoryEntry, SortCriterion } from '../../services/api';
+import type { Theme, ProbeHistoryEntry, SortCriterion, SortEnabledMap } from '../../services/api';
 import type { ChannelProfile } from '../../types';
 import { logger } from '../../utils/logger';
 import type { LogLevel as FrontendLogLevel } from '../../utils/logger';
@@ -33,7 +33,17 @@ const SORT_CRITERION_CONFIG: Record<SortCriterion, { icon: string; label: string
 };
 
 // Sortable item component for drag-and-drop
-function SortablePriorityItem({ id, index }: { id: SortCriterion; index: number }) {
+function SortablePriorityItem({
+  id,
+  index,
+  enabled,
+  onToggleEnabled
+}: {
+  id: SortCriterion;
+  index: number;
+  enabled: boolean;
+  onToggleEnabled: (id: SortCriterion) => void;
+}) {
   const {
     attributes,
     listeners,
@@ -46,7 +56,7 @@ function SortablePriorityItem({ id, index }: { id: SortCriterion; index: number 
   const style = {
     transform: CSS.Transform.toString(transform),
     transition,
-    opacity: isDragging ? 0.5 : 1,
+    opacity: isDragging ? 0.5 : enabled ? 1 : 0.5,
   };
 
   const config = SORT_CRITERION_CONFIG[id];
@@ -55,11 +65,20 @@ function SortablePriorityItem({ id, index }: { id: SortCriterion; index: number 
     <div
       ref={setNodeRef}
       style={style}
-      className={`sort-priority-item ${isDragging ? 'dragging' : ''}`}
+      className={`sort-priority-item ${isDragging ? 'dragging' : ''} ${!enabled ? 'disabled' : ''}`}
       {...attributes}
       {...listeners}
     >
-      <span className="sort-priority-rank">{index + 1}</span>
+      <input
+        type="checkbox"
+        checked={enabled}
+        onChange={() => onToggleEnabled(id)}
+        onClick={(e) => e.stopPropagation()}
+        onPointerDown={(e) => e.stopPropagation()}
+        className="sort-priority-checkbox"
+        title={enabled ? 'Click to disable this sort criterion' : 'Click to enable this sort criterion'}
+      />
+      <span className={`sort-priority-rank ${!enabled ? 'disabled' : ''}`}>{enabled ? index + 1 : '-'}</span>
       <span className="material-icons sort-priority-icon">{config.icon}</span>
       <div className="sort-priority-content">
         <span className="sort-priority-label">{config.label}</span>
@@ -101,6 +120,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
   const [customNetworkSuffixes, setCustomNetworkSuffixes] = useState<string[]>([]);
   const [newSuffixInput, setNewSuffixInput] = useState('');
   const [streamSortPriority, setStreamSortPriority] = useState<SortCriterion[]>(['resolution', 'bitrate', 'framerate']);
+  const [streamSortEnabled, setStreamSortEnabled] = useState<SortEnabledMap>({ resolution: true, bitrate: true, framerate: true });
 
   // Appearance settings
   const [showStreamUrls, setShowStreamUrls] = useState(true);
@@ -352,6 +372,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
       setProbeChannelGroups(settings.probe_channel_groups ?? []);
       setBitrateSampleDuration(settings.bitrate_sample_duration ?? 10);
       setStreamSortPriority(settings.stream_sort_priority ?? ['resolution', 'bitrate', 'framerate']);
+      setStreamSortEnabled(settings.stream_sort_enabled ?? { resolution: true, bitrate: true, framerate: true });
       setNeedsRestart(false);
       setRestartResult(null);
       setTestResult(null);
@@ -446,6 +467,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
         probe_channel_groups: probeChannelGroups,
         bitrate_sample_duration: bitrateSampleDuration,
         stream_sort_priority: streamSortPriority,
+        stream_sort_enabled: streamSortEnabled,
       });
       // Apply frontend log level immediately
       const frontendLevel = frontendLogLevel === 'WARNING' ? 'WARN' : frontendLogLevel;
@@ -1265,8 +1287,8 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
 
         <div className="form-group">
           <p className="form-hint" style={{ marginTop: 0, marginBottom: '0.75rem' }}>
-            Drag to reorder how streams are sorted when using "Smart Sort".
-            The first criterion is the primary sort key; subsequent ones break ties.
+            Configure which criteria are used for stream sorting. Check/uncheck to enable/disable,
+            drag to reorder priority. Enabled criteria appear in the sort dropdown and are used by "Smart Sort".
           </p>
 
           <DndContext
@@ -1277,7 +1299,13 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
             <SortableContext items={streamSortPriority} strategy={verticalListSortingStrategy}>
               <div className="sort-priority-list">
                 {streamSortPriority.map((criterion, index) => (
-                  <SortablePriorityItem key={criterion} id={criterion} index={index} />
+                  <SortablePriorityItem
+                    key={criterion}
+                    id={criterion}
+                    index={index}
+                    enabled={streamSortEnabled[criterion]}
+                    onToggleEnabled={(id) => setStreamSortEnabled(prev => ({ ...prev, [id]: !prev[id] }))}
+                  />
                 ))}
               </div>
             </SortableContext>
@@ -2079,6 +2107,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
                       probe_channel_groups: tempProbeChannelGroups,
                       bitrate_sample_duration: bitrateSampleDuration,
                       stream_sort_priority: streamSortPriority,
+                      stream_sort_enabled: streamSortEnabled,
                     });
                     logger.info('Probe channel groups saved');
                   } catch (err) {

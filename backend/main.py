@@ -221,6 +221,7 @@ class SettingsRequest(BaseModel):
     probe_channel_groups: list[str] = []  # Channel groups to probe
     bitrate_sample_duration: int = 10  # Duration in seconds to sample stream for bitrate (10, 20, or 30)
     stream_sort_priority: list[str] = ["resolution", "bitrate", "framerate"]  # Priority order for Smart Sort
+    stream_sort_enabled: dict[str, bool] = {"resolution": True, "bitrate": True, "framerate": True}  # Which criteria are enabled
 
 
 class SettingsResponse(BaseModel):
@@ -257,6 +258,7 @@ class SettingsResponse(BaseModel):
     probe_channel_groups: list[str]
     bitrate_sample_duration: int
     stream_sort_priority: list[str]  # Priority order for Smart Sort
+    stream_sort_enabled: dict[str, bool]  # Which criteria are enabled
 
 
 class TestConnectionRequest(BaseModel):
@@ -304,6 +306,7 @@ async def get_current_settings():
         probe_channel_groups=settings.probe_channel_groups,
         bitrate_sample_duration=settings.bitrate_sample_duration,
         stream_sort_priority=settings.stream_sort_priority,
+        stream_sort_enabled=settings.stream_sort_enabled,
     )
 
 
@@ -362,6 +365,7 @@ async def update_settings(request: SettingsRequest):
         probe_channel_groups=request.probe_channel_groups,
         bitrate_sample_duration=request.bitrate_sample_duration,
         stream_sort_priority=request.stream_sort_priority,
+        stream_sort_enabled=request.stream_sort_enabled,
     )
     save_settings(new_settings)
     clear_settings_cache()
