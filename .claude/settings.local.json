@@ -9,7 +9,10 @@
       "Bash(bd:*)",
       "Bash(git add:*)",
       "Bash(git commit:*)",
-      "Bash(git push:*)"
+      "Bash(git push:*)",
+      "Bash(for id in 9mke s3rm kfqk deag h2o2)",
+      "Bash(do echo '=== $id ===')",
+      "Bash(done)"
     ],
     "deny": [],
     "ask": [],
