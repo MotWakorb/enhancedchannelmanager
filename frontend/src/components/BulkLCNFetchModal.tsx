@@ -190,14 +190,33 @@ export const BulkLCNFetchModal = memo(function BulkLCNFetchModal({
     const alreadyHasItems: ChannelLCNResult[] = [];
 
     for (const result of results) {
-      if (result.alreadyHasLcn) {
-        alreadyHasItems.push(result);
-      } else if (!result.tvgId) {
+      if (!result.tvgId) {
+        // No TVG-ID available
         noTvgIdItems.push(result);
       } else if (result.lcn) {
-        foundItems.push(result);
+        // EPG found a Gracenote ID
+        if (result.alreadyHasLcn) {
+          // Channel already has a Gracenote ID - check if it's different
+          if (result.channel.tvc_guide_stationid !== result.lcn) {
+            // Different ID - add to found so conflict modal can handle it
+            foundItems.push(result);
+          } else {
+            // Same ID - already correct
+            alreadyHasItems.push(result);
+          }
+        } else {
+          // Channel doesn't have one - new assignment
+          foundItems.push(result);
+        }
       } else {
-        notFoundItems.push(result);
+        // EPG doesn't have a Gracenote ID for this TVG-ID
+        if (result.alreadyHasLcn) {
+          // Channel has one but EPG doesn't - keep in alreadyHas
+          alreadyHasItems.push(result);
+        } else {
+          // Not found anywhere
+          notFoundItems.push(result);
+        }
       }
     }
 
