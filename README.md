@@ -8,8 +8,10 @@ A professional-grade web interface for managing IPTV configurations with Dispatc
 - **EPG Manager** - Manage EPG sources with drag-and-drop priority ordering
 - **Channel Manager** - Full-featured channel and stream management with split-pane layout
 - **Guide** - TV Guide with EPG grid view showing program schedules
-- **Logo Manager** - Logo management (coming soon)
-- **Settings** - Configure Dispatcharr connection, channel defaults, and channel profiles
+- **Logo Manager** - Logo management with search, upload, and URL import
+- **Journal** - Activity log tracking all changes to channels, EPG, and M3U accounts
+- **Stats** - Live streaming statistics, M3U connection counts, bandwidth tracking, and charts
+- **Settings** - Configure Dispatcharr connection, channel defaults, stream probing, and appearance
 
 ## Features
 
@@ -192,6 +194,35 @@ A unique workflow that lets you stage changes locally before committing to the s
 - **Assign to Channels** - Select which profile each channel uses
 - **Profile Metadata** - View profile name, command, and parameters
 
+### Stats (Live Dashboard)
+
+Real-time monitoring of your streaming infrastructure:
+
+- **Active Channels** - See all currently streaming channels with live data
+- **M3U Connection Counts** - Monitor connections per M3U account (current/max)
+- **Connected Clients** - Track total connected client count
+- **Per-Channel Metrics** - FFmpeg speed, FPS, bitrate, duration, and total bytes
+- **Speed Indicators** - Color-coded speed display (green ≥0.98x, yellow ≥0.90x, red <0.90x)
+- **Historical Charts** - Expandable per-channel charts showing speed and bandwidth over time
+- **Bandwidth Summary** - Daily bandwidth tracking with 7-day history chart
+- **Top Watched Channels** - Leaderboard of most-watched channels by watch time or view count
+- **System Events** - Live event feed (channel starts/stops, client connections)
+- **Auto-Refresh** - Configurable refresh interval (10s, 30s, 1m, 5m) or manual refresh
+- **Visibility-Aware** - Polling pauses when tab is hidden to save resources
+
+### Journal (Activity Log)
+
+Track all system activity with filtering and search:
+
+- **Activity Categories** - Filter by Channel, EPG, M3U, or Watch events
+- **Action Types** - Create, Update, Delete, Refresh, Start, Stop actions
+- **Time Range Filter** - Filter entries by time period (1h, 6h, 24h, 7d, 30d, all)
+- **Search** - Full-text search across all journal entries
+- **Entry Details** - View detailed metadata for each entry
+- **Statistics** - Summary counts by category and action type
+- **Pagination** - Efficient loading of large activity logs
+- **Color-Coded Actions** - Visual distinction between creates, updates, and deletes
+
 ### Global History (Undo/Redo)
 
 Separate from edit mode, provides session-wide history:
@@ -214,6 +245,33 @@ Add custom prefixes to strip during bulk channel creation. These are merged with
 #### Custom Network Suffixes
 Add custom suffixes to strip during bulk channel creation. These are merged with the built-in list (ENGLISH, LIVE, BACKUP, FEED, etc.) when "Strip network suffixes" is enabled.
 
+#### Stream Probing
+Automated stream health checking:
+
+- **Enable/Disable** - Toggle automatic stream probing
+- **Schedule Time** - Set the daily probe start time (e.g., 03:00 for off-peak)
+- **Interval** - Hours between probe cycles (default 24h)
+- **Batch Size** - Number of concurrent probes (default 10)
+- **Timeout** - Seconds to wait for each stream response (default 30s)
+- **Channel Group Filter** - Select which channel groups to include in probing
+- **Manual Probe** - Trigger an immediate probe of all streams
+- **Probe Progress** - Real-time progress bar with success/failed/skipped counts
+- **Probe History** - View past probe results with timestamps and statistics
+- **Parallel Probing** - Streams from different M3U accounts probe concurrently
+- **M3U Connection Awareness** - Respects M3U max connection limits during probing
+
+#### Stream Sort Priority
+Configure how streams are automatically sorted within channels:
+
+- **Drag-and-Drop Reordering** - Arrange sort criteria in priority order
+- **Enable/Disable Criteria** - Toggle individual sort criteria on/off
+- **Available Criteria**:
+  - Resolution (4K/UHD → FHD → HD → SD)
+  - Probe Status (working streams first)
+  - Provider Priority (custom M3U account ordering)
+  - Alphabetical (A-Z by stream name)
+- **Visual Rank Badges** - See sort priority numbers at a glance
+
 #### Channel Defaults
 Default options applied when using bulk channel creation:
 
@@ -233,6 +291,7 @@ These defaults are pre-loaded when opening the bulk create modal, with a "(from 
   - **High Contrast** - Maximum contrast for accessibility
 - **Show Stream URLs** - Toggle visibility of stream URLs in the UI (useful for screenshots or hiding sensitive information)
 - **Hide Auto-Sync Groups** - Automatically hide channel groups managed by M3U auto-sync on app load
+- **Frontend Log Level** - Set console logging verbosity (Error, Warn, Info, Debug) for troubleshooting
 
 ### Channel List Filters
 
@@ -352,6 +411,20 @@ uvicorn main:app --reload
 - `GET /api/settings` - Get current settings
 - `POST /api/settings` - Update settings
 - `POST /api/settings/test` - Test connection
+
+### Stream Stats
+- `GET /api/stream-stats` - Get live channel statistics
+- `GET /api/stream-stats/bandwidth` - Get bandwidth summary and history
+- `GET /api/stream-stats/events` - Get system events
+- `GET /api/stream-stats/top-watched` - Get top watched channels
+- `POST /api/stream-stats/probe` - Start stream probe
+- `GET /api/stream-stats/probe/progress` - Get probe progress
+- `POST /api/stream-stats/probe/cancel` - Cancel running probe
+- `GET /api/stream-stats/probe/history` - Get probe history
+
+### Journal
+- `GET /api/journal` - Get journal entries (paginated, filterable)
+- `GET /api/journal/stats` - Get journal statistics
 
 ### Health
 - `GET /api/health` - Health check
