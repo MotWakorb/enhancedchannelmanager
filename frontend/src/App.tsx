@@ -37,26 +37,29 @@ function App() {
   const [selectedChannelIds, setSelectedChannelIds] = useState<Set<number>>(new Set());
   const [lastSelectedChannelId, setLastSelectedChannelId] = useState<number | null>(null);
   const [channelToEditFromGuide, setChannelToEditFromGuide] = useState<Channel | null>(null);
-  const [channelsLoading, setChannelsLoading] = useState(true);
-  const [channelSearch, setChannelSearch] = useState('');
-  const [channelGroupFilter, setChannelGroupFilter] = useState<number[]>([]);
+
+  // Channel filters - grouped state
+  const [channelFilters, setChannelFilters] = useState({
+    search: '',
+    groupFilter: [] as number[],
+  });
 
   // Streams state
   const [streams, setStreams] = useState<Stream[]>([]);
   const [providers, setProviders] = useState<M3UAccount[]>([]);
   const [streamGroups, setStreamGroups] = useState<string[]>([]);
-  const [streamsLoading, setStreamsLoading] = useState(true);
-  const [streamSearch, setStreamSearch] = useState('');
-  const [streamProviderFilter, setStreamProviderFilter] = useState<number | null>(null);
-  const [streamGroupFilter, setStreamGroupFilter] = useState<string | null>(null);
-  // Multi-select filter state for streams pane (UI filtering) - persisted to localStorage
-  const [selectedProviderFilters, setSelectedProviderFilters] = useState<number[]>(() => {
-    const saved = localStorage.getItem('streamProviderFilters');
-    return saved ? JSON.parse(saved) : [];
-  });
-  const [selectedStreamGroupFilters, setSelectedStreamGroupFilters] = useState<string[]>(() => {
-    const saved = localStorage.getItem('streamGroupFilters');
-    return saved ? JSON.parse(saved) : [];
+
+  // Stream filters - grouped state (with localStorage initialization)
+  const [streamFilters, setStreamFilters] = useState(() => {
+    const savedProviders = localStorage.getItem('streamProviderFilters');
+    const savedGroups = localStorage.getItem('streamGroupFilters');
+    return {
+      search: '',
+      providerFilter: null as number | null,
+      groupFilter: null as string | null,
+      selectedProviders: savedProviders ? JSON.parse(savedProviders) : [] as number[],
+      selectedGroups: savedGroups ? JSON.parse(savedGroups) : [] as string[],
+    };
   });
 
   // Logos state
@@ -67,7 +70,13 @@ function App() {
   const [epgSources, setEpgSources] = useState<EPGSource[]>([]);
   const [streamProfiles, setStreamProfiles] = useState<StreamProfile[]>([]);
   const [channelProfiles, setChannelProfiles] = useState<ChannelProfile[]>([]);
-  const [epgDataLoading, setEpgDataLoading] = useState(false);
+
+  // Loading states - grouped state
+  const [loadingStates, setLoadingStates] = useState({
+    channels: true,
+    streams: true,
+    epgData: false,
+  });
 
   // Settings state
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -182,10 +191,10 @@ function App() {
 
       // Add newly created groups to the filter so they're visible
       if (createdGroupIds.length > 0) {
-        setChannelGroupFilter((prev) => {
-          const newIds = createdGroupIds.filter(id => !prev.includes(id));
+        setChannelFilters((prev) => {
+          const newIds = createdGroupIds.filter(id => !prev.groupFilter.includes(id));
           if (newIds.length > 0) {
-            return [...prev, ...newIds];
+            return { ...prev, groupFilter: [...prev.groupFilter, ...newIds] };
           }
           return prev;
         });
@@ -247,16 +256,19 @@ function App() {
     if (stagedGroups.length > 0) {
       // Add new staged groups to filter
       const stagedGroupIds = stagedGroups.map(g => g.id);
-      setChannelGroupFilter((prev) => {
-        const newIds = stagedGroupIds.filter(id => !prev.includes(id));
+      setChannelFilters((prev) => {
+        const newIds = stagedGroupIds.filter(id => !prev.groupFilter.includes(id));
         if (newIds.length > 0) {
-          return [...prev, ...newIds];
+          return { ...prev, groupFilter: [...prev.groupFilter, ...newIds] };
         }
         return prev;
       });
     } else if (!isEditMode) {
       // Edit mode ended - clean up any temp group IDs (negative numbers)
-      setChannelGroupFilter((prev) => prev.filter(id => id >= 0));
+      setChannelFilters((prev) => ({
+        ...prev,
+        groupFilter: prev.groupFilter.filter(id => id >= 0)
+      }));
     }
   }, [stagedGroups, isEditMode]);
 
@@ -478,7 +490,7 @@ function App() {
     if (channelListFilters.showAutoChannelGroups === false) {
       groupIds = groupIds.filter(id => !autoSyncRelatedGroups.has(id));
     }
-    setChannelGroupFilter(groupIds);
+    setChannelFilters(prev => ({ ...prev, groupFilter: groupIds }));
     channelGroupFilterInitialized.current = true;
   }, [channels, channelGroups, providerGroupSettings, channelListFilters.showAutoChannelGroups]);
 
@@ -516,14 +528,17 @@ function App() {
 
     if (channelListFilters.showAutoChannelGroups) {
       // Add auto-sync groups to selection
-      setChannelGroupFilter(prev => {
-        const newSet = new Set(prev);
+      setChannelFilters(prev => {
+        const newSet = new Set(prev.groupFilter);
         autoSyncGroupsWithChannels.forEach(id => newSet.add(id));
-        return Array.from(newSet);
+        return { ...prev, groupFilter: Array.from(newSet) };
       });
     } else {
       // Remove auto-sync groups from selection
-      setChannelGroupFilter(prev => prev.filter(id => !autoSyncRelatedGroups.has(id)));
+      setChannelFilters(prev => ({
+        ...prev,
+        groupFilter: prev.groupFilter.filter(id => !autoSyncRelatedGroups.has(id))
+      }));
     }
   }, [channelListFilters.showAutoChannelGroups, providerGroupSettings, channels]);
 
@@ -531,15 +546,15 @@ function App() {
   useEffect(() => {
     const existingGroupIds = new Set(channelGroups.map(g => g.id));
 
-    setChannelGroupFilter(prev => {
-      if (prev.length === 0) return prev;
+    setChannelFilters(prev => {
+      if (prev.groupFilter.length === 0) return prev;
 
-      const hasDeletedGroups = prev.some(id => !existingGroupIds.has(id));
+      const hasDeletedGroups = prev.groupFilter.some(id => !existingGroupIds.has(id));
 
       // If some group IDs no longer exist, remove them from the filter
       if (hasDeletedGroups) {
-        const validGroupIds = prev.filter(id => existingGroupIds.has(id));
-        return validGroupIds;
+        const validGroupIds = prev.groupFilter.filter(id => existingGroupIds.has(id));
+        return { ...prev, groupFilter: validGroupIds };
       }
 
       return prev;
@@ -633,18 +648,17 @@ function App() {
 
   // Wrapper functions to persist stream filters to localStorage
   const updateSelectedProviderFilters = useCallback((providerIds: number[]) => {
-    setSelectedProviderFilters(providerIds);
+    setStreamFilters(prev => ({ ...prev, selectedProviders: providerIds }));
     localStorage.setItem('streamProviderFilters', JSON.stringify(providerIds));
   }, []);
 
   const updateSelectedStreamGroupFilters = useCallback((groups: string[]) => {
-    setSelectedStreamGroupFilters(groups);
+    setStreamFilters(prev => ({ ...prev, selectedGroups: groups }));
     localStorage.setItem('streamGroupFilters', JSON.stringify(groups));
   }, []);
 
   const clearStreamFilters = useCallback(() => {
-    setSelectedProviderFilters([]);
-    setSelectedStreamGroupFilters([]);
+    setStreamFilters(prev => ({ ...prev, selectedProviders: [], selectedGroups: [] }));
     localStorage.removeItem('streamProviderFilters');
     localStorage.removeItem('streamGroupFilters');
   }, []);
@@ -654,7 +668,7 @@ function App() {
   }, []);
 
   const loadChannels = async (signal?: AbortSignal) => {
-    setChannelsLoading(true);
+    setLoadingStates(prev => ({ ...prev, channels: true }));
     try {
       // Fetch all pages of channels
       const allChannels: Channel[] = [];
@@ -665,7 +679,7 @@ function App() {
         const response = await api.getChannels({
           page,
           pageSize: 500,
-          search: channelSearch || undefined,
+          search: channelFilters.search || undefined,
           signal,
         });
         allChannels.push(...response.results);
@@ -680,7 +694,7 @@ function App() {
         logger.error('Failed to load channels:', err);
       }
     } finally {
-      setChannelsLoading(false);
+      setLoadingStates(prev => ({ ...prev, channels: false }));
     }
   };
 
@@ -750,19 +764,19 @@ function App() {
   };
 
   const loadEpgData = async () => {
-    setEpgDataLoading(true);
+    setLoadingStates(prev => ({ ...prev, epgData: true }));
     try {
       const data = await api.getEPGData();
       setEpgData(data);
     } catch (err) {
       logger.error('Failed to load EPG data:', err);
     } finally {
-      setEpgDataLoading(false);
+      setLoadingStates(prev => ({ ...prev, epgData: false }));
     }
   };
 
   const loadStreams = async (bypassCache: boolean = false, signal?: AbortSignal) => {
-    setStreamsLoading(true);
+    setLoadingStates(prev => ({ ...prev, streams: true }));
     try {
       // Fetch all pages of streams (like channels)
       const allStreams: Stream[] = [];
@@ -773,9 +787,9 @@ function App() {
         const response = await api.getStreams({
           page,
           pageSize: 500,
-          search: streamSearch || undefined,
-          m3uAccount: streamProviderFilter ?? undefined,
-          channelGroup: streamGroupFilter ?? undefined,
+          search: streamFilters.search || undefined,
+          m3uAccount: streamFilters.providerFilter ?? undefined,
+          channelGroup: streamFilters.groupFilter ?? undefined,
           bypassCache,
           signal,
         });
@@ -791,14 +805,14 @@ function App() {
         logger.error('Failed to load streams:', err);
       }
     } finally {
-      setStreamsLoading(false);
+      setLoadingStates(prev => ({ ...prev, streams: false }));
     }
   };
 
   // Force refresh streams from Dispatcharr (bypassing cache)
   const refreshStreams = useCallback(() => {
     loadStreams(true);
-  }, [streamSearch, streamProviderFilter, streamGroupFilter]);
+  }, [streamFilters.search, streamFilters.providerFilter, streamFilters.groupFilter]);
 
   // Reload channels when search changes
   useEffect(() => {
@@ -810,7 +824,7 @@ function App() {
       clearTimeout(timer);
       abortController.abort(); // Cancel in-flight request when search changes
     };
-  }, [channelSearch]);
+  }, [channelFilters.search]);
 
   // Reload streams when filters change
   useEffect(() => {
@@ -822,15 +836,15 @@ function App() {
       clearTimeout(timer);
       abortController.abort(); // Cancel in-flight request when filters change
     };
-  }, [streamSearch, streamProviderFilter, streamGroupFilter]);
+  }, [streamFilters.search, streamFilters.providerFilter, streamFilters.groupFilter]);
 
   // Initialize baseline when channels first load
   useEffect(() => {
-    if (channels.length > 0 && !channelsLoading && !baselineInitialized.current) {
+    if (channels.length > 0 && !loadingStates.channels && !baselineInitialized.current) {
       initializeBaseline(channels);
       baselineInitialized.current = true;
     }
-  }, [channels, channelsLoading, initializeBaseline]);
+  }, [channels, loadingStates.channels, initializeBaseline]);
 
   // Keyboard shortcuts for undo/redo
   useEffect(() => {
@@ -1341,9 +1355,9 @@ function App() {
         // If we used an existing group, add it to the visible filter now
         // (New groups will be added to filter after commit when they actually exist)
         if (targetGroupId !== null) {
-          setChannelGroupFilter((prev) => {
-            if (!prev.includes(targetGroupId!)) {
-              return [...prev, targetGroupId!];
+          setChannelFilters((prev) => {
+            if (!prev.groupFilter.includes(targetGroupId!)) {
+              return { ...prev, groupFilter: [...prev.groupFilter, targetGroupId!] };
             }
             return prev;
           });
@@ -1405,17 +1419,17 @@ function App() {
     let result = streams;
 
     // Filter by selected providers
-    if (selectedProviderFilters.length > 0) {
-      result = result.filter((s) => s.m3u_account !== null && selectedProviderFilters.includes(s.m3u_account));
+    if (streamFilters.selectedProviders.length > 0) {
+      result = result.filter((s) => s.m3u_account !== null && streamFilters.selectedProviders.includes(s.m3u_account));
     }
 
     // Filter by selected stream groups
-    if (selectedStreamGroupFilters.length > 0) {
-      result = result.filter((s) => selectedStreamGroupFilters.includes(s.channel_group_name || ''));
+    if (streamFilters.selectedGroups.length > 0) {
+      result = result.filter((s) => streamFilters.selectedGroups.includes(s.channel_group_name || ''));
     }
 
     return result;
-  }, [streams, selectedProviderFilters, selectedStreamGroupFilters]);
+  }, [streams, streamFilters.selectedProviders, streamFilters.selectedGroups]);
 
   const handleDeleteChannel = useCallback(
     async (channelId: number) => {
@@ -1625,13 +1639,13 @@ function App() {
               onChannelReorder={handleChannelReorder}
               onCreateChannel={handleCreateChannel}
               onDeleteChannel={handleDeleteChannel}
-              channelsLoading={channelsLoading}
+              channelsLoading={loadingStates.channels}
 
               // Channel Search & Filter
-              channelSearch={channelSearch}
-              onChannelSearchChange={setChannelSearch}
-              selectedGroups={channelGroupFilter}
-              onSelectedGroupsChange={setChannelGroupFilter}
+              channelSearch={channelFilters.search}
+              onChannelSearchChange={(search) => setChannelFilters(prev => ({ ...prev, search }))}
+              selectedGroups={channelFilters.groupFilter}
+              onSelectedGroupsChange={(groupFilter) => setChannelFilters(prev => ({ ...prev, groupFilter }))}
 
               // Multi-select
               selectedChannelIds={selectedChannelIds}
@@ -1681,7 +1695,7 @@ function App() {
               epgData={epgData}
               epgSources={epgSources}
               streamProfiles={streamProfiles}
-              epgDataLoading={epgDataLoading}
+              epgDataLoading={loadingStates.epgData}
 
               // Channel Profiles
               channelProfiles={channelProfiles}
@@ -1698,18 +1712,18 @@ function App() {
               streams={filteredStreams}
               providers={providers}
               streamGroups={streamGroups}
-              streamsLoading={streamsLoading}
+              streamsLoading={loadingStates.streams}
 
               // Stream Search & Filter
-              streamSearch={streamSearch}
-              onStreamSearchChange={setStreamSearch}
-              streamProviderFilter={streamProviderFilter}
-              onStreamProviderFilterChange={setStreamProviderFilter}
-              streamGroupFilter={streamGroupFilter}
-              onStreamGroupFilterChange={setStreamGroupFilter}
-              selectedProviders={selectedProviderFilters}
+              streamSearch={streamFilters.search}
+              onStreamSearchChange={(search) => setStreamFilters(prev => ({ ...prev, search }))}
+              streamProviderFilter={streamFilters.providerFilter}
+              onStreamProviderFilterChange={(providerFilter) => setStreamFilters(prev => ({ ...prev, providerFilter }))}
+              streamGroupFilter={streamFilters.groupFilter}
+              onStreamGroupFilterChange={(groupFilter) => setStreamFilters(prev => ({ ...prev, groupFilter }))}
+              selectedProviders={streamFilters.selectedProviders}
               onSelectedProvidersChange={updateSelectedProviderFilters}
-              selectedStreamGroups={selectedStreamGroupFilters}
+              selectedStreamGroups={streamFilters.selectedGroups}
               onSelectedStreamGroupsChange={updateSelectedStreamGroupFilters}
               onClearStreamFilters={clearStreamFilters}
 
@@ -1761,7 +1775,7 @@ function App() {
               epgData={epgData}
               epgSources={epgSources}
               streamProfiles={streamProfiles}
-              epgDataLoading={epgDataLoading}
+              epgDataLoading={loadingStates.epgData}
               onChannelUpdate={handleGuideChannelUpdate}
               onLogoCreate={handleLogoCreate}
               onLogoUpload={handleLogoUpload}
