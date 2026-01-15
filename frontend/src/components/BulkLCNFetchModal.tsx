@@ -239,18 +239,18 @@ export const BulkLCNFetchModal = memo(function BulkLCNFetchModal({
   // Count selected
   const selectedCount = useMemo(() => {
     let count = 0;
-    for (const result of found) {
-      if (selectedForAssignment.has(result.channel.id)) {
+    for (const result of results) {
+      if (selectedForAssignment.has(result.channel.id) && result.lcn) {
         count++;
       }
     }
     return count;
-  }, [found, selectedForAssignment]);
+  }, [results, selectedForAssignment]);
 
   // Handle assign
   const handleAssign = () => {
     const assignments: LCNAssignment[] = [];
-    for (const result of found) {
+    for (const result of results) {
       if (selectedForAssignment.has(result.channel.id) && result.lcn) {
         assignments.push({
           channelId: result.channel.id,
