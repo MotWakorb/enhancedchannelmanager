@@ -90,6 +90,7 @@ function App() {
     timezonePreference: 'both',
     defaultChannelProfileIds: [] as number[],
     customNetworkPrefixes: [] as string[],
+    streamSortPriority: ['resolution', 'bitrate', 'framerate'] as ('resolution' | 'bitrate' | 'framerate')[],
   });
   // Also keep separate state for use in callbacks (to avoid stale closure issues)
   const [defaultChannelProfileIds, setDefaultChannelProfileIds] = useState<number[]>([]);
@@ -373,6 +374,7 @@ function App() {
           timezonePreference: settings.timezone_preference,
           defaultChannelProfileIds: settings.default_channel_profile_ids,
           customNetworkPrefixes: settings.custom_network_prefixes ?? [],
+          streamSortPriority: settings.stream_sort_priority ?? ['resolution', 'bitrate', 'framerate'],
         });
         setDefaultChannelProfileIds(settings.default_channel_profile_ids);
 
@@ -562,6 +564,7 @@ function App() {
         timezonePreference: settings.timezone_preference,
         defaultChannelProfileIds: settings.default_channel_profile_ids,
         customNetworkPrefixes: settings.custom_network_prefixes ?? [],
+        streamSortPriority: settings.stream_sort_priority ?? ['resolution', 'bitrate', 'framerate'],
       });
       setDefaultChannelProfileIds(settings.default_channel_profile_ids);
 

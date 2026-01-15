@@ -27,6 +27,7 @@ export interface ChannelDefaults {
   defaultChannelProfileId?: number | null;
   customNetworkPrefixes?: string[];
   customNetworkSuffixes?: string[];
+  streamSortPriority?: ('resolution' | 'bitrate' | 'framerate')[];
 }
 
 interface StreamsPaneProps {

@@ -25,7 +25,7 @@ import { logger } from '../utils/logger';
 import { ChannelProfilesListModal } from './ChannelProfilesListModal';
 import type { ChannelDefaults } from './StreamsPane';
 import * as api from '../services/api';
-import type { NumberSeparator } from '../services/api';
+import type { NumberSeparator, SortCriterion } from '../services/api';
 import { HistoryToolbar } from './HistoryToolbar';
 import { BulkEPGAssignModal, type EPGAssignment } from './BulkEPGAssignModal';
 import { BulkLCNFetchModal, type LCNAssignment } from './BulkLCNFetchModal';
@@ -598,6 +598,83 @@ const SortableChannel = memo(function SortableChannel({
   );
 });
 
+// Reusable Sort Dropdown Button component
+interface SortDropdownButtonProps {
+  onSortByMode: (mode: 'smart' | 'resolution' | 'bitrate' | 'framerate') => void;
+  disabled?: boolean;
+  isLoading?: boolean;
+  className?: string;
+  showLabel?: boolean;
+  labelText?: string;
+}
+
+const SortDropdownButton = memo(function SortDropdownButton({
+  onSortByMode,
+  disabled = false,
+  isLoading = false,
+  className = '',
+  showLabel = false,
+  labelText = 'Sort',
+}: SortDropdownButtonProps) {
+  const [isOpen, setIsOpen] = useState(false);
+  const dropdownRef = useRef<HTMLDivElement>(null);
+
+  // Close on outside click
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleClickOutside = (e: MouseEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
+        setIsOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [isOpen]);
+
+  const handleModeClick = (mode: 'smart' | 'resolution' | 'bitrate' | 'framerate') => {
+    setIsOpen(false);
+    onSortByMode(mode);
+  };
+
+  return (
+    <div className={`sort-dropdown-container ${className}`} ref={dropdownRef}>
+      <button
+        className={`sort-dropdown-btn ${isLoading ? 'loading' : ''}`}
+        onClick={() => setIsOpen(!isOpen)}
+        disabled={disabled || isLoading}
+        title={isLoading ? 'Sorting streams...' : 'Sort streams'}
+      >
+        <span className={`material-icons ${isLoading ? 'spinning' : ''}`}>
+          {isLoading ? 'sync' : 'sort'}
+        </span>
+        {showLabel && <span>{labelText}</span>}
+        <span className="material-icons sort-dropdown-arrow">arrow_drop_down</span>
+      </button>
+      {isOpen && (
+        <div className="sort-dropdown-menu">
+          <button className="sort-dropdown-item" onClick={() => handleModeClick('smart')}>
+            <span className="material-icons">auto_awesome</span>
+            <span>Smart Sort</span>
+          </button>
+          <div className="sort-dropdown-divider" />
+          <button className="sort-dropdown-item" onClick={() => handleModeClick('resolution')}>
+            <span className="material-icons">aspect_ratio</span>
+            <span>By Resolution</span>
+          </button>
+          <button className="sort-dropdown-item" onClick={() => handleModeClick('bitrate')}>
+            <span className="material-icons">speed</span>
+            <span>By Bitrate</span>
+          </button>
+          <button className="sort-dropdown-item" onClick={() => handleModeClick('framerate')}>
+            <span className="material-icons">slow_motion_video</span>
+            <span>By Framerate</span>
+          </button>
+        </div>
+      )}
+    </div>
+  );
+});
+
 // Sortable Group Header wrapper for drag-and-drop group reordering
 interface SortableGroupHeaderProps extends Omit<DroppableGroupHeaderProps, 'groupId'> {
   groupId: number | 'ungrouped';
@@ -659,6 +736,7 @@ interface DroppableGroupHeaderProps {
   onProbeGroup?: () => void;
   isProbing?: boolean;
   onSortStreamsByQuality?: () => void;
+  onSortStreamsByMode?: (mode: 'smart' | 'resolution' | 'bitrate' | 'framerate') => void;
   isSortingByQuality?: boolean;
 }
 
@@ -683,6 +761,7 @@ const DroppableGroupHeader = memo(function DroppableGroupHeader({
   onProbeGroup,
   isProbing = false,
   onSortStreamsByQuality,
+  onSortStreamsByMode,
   isSortingByQuality = false,
 }: DroppableGroupHeaderProps) {
   const droppableId = `group-${groupId}`;
@@ -692,6 +771,20 @@ const DroppableGroupHeader = memo(function DroppableGroupHeader({
   });
 
   const [streamDragOver, setStreamDragOver] = useState(false);
+  const [sortDropdownOpen, setSortDropdownOpen] = useState(false);
+  const sortDropdownRef = useRef<HTMLDivElement>(null);
+
+  // Close dropdown on outside click
+  useEffect(() => {
+    if (!sortDropdownOpen) return;
+    const handleClickOutside = (e: MouseEvent) => {
+      if (sortDropdownRef.current && !sortDropdownRef.current.contains(e.target as Node)) {
+        setSortDropdownOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [sortDropdownOpen]);
 
   const handleSortClick = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -706,6 +799,15 @@ const DroppableGroupHeader = memo(function DroppableGroupHeader({
   const handleCheckboxClick = (e: React.MouseEvent) => {
     e.stopPropagation();
     onSelectAll?.();
+  };
+
+  const handleSortModeClick = (mode: 'smart' | 'resolution' | 'bitrate' | 'framerate') => {
+    setSortDropdownOpen(false);
+    if (onSortStreamsByMode) {
+      onSortStreamsByMode(mode);
+    } else if (onSortStreamsByQuality) {
+      onSortStreamsByQuality();
+    }
   };
 
 
@@ -823,20 +925,44 @@ const DroppableGroupHeader = memo(function DroppableGroupHeader({
           </span>
         </button>
       )}
-      {isEditMode && !isEmpty && onSortStreamsByQuality && (
-        <button
-          className={`group-sort-quality-btn ${isSortingByQuality ? 'sorting' : ''}`}
-          onClick={(e) => {
-            e.stopPropagation();
-            onSortStreamsByQuality();
-          }}
-          disabled={isSortingByQuality}
-          title={isSortingByQuality ? 'Sorting streams...' : 'Sort streams by quality in this group'}
-        >
-          <span className={`material-icons ${isSortingByQuality ? 'spinning' : ''}`}>
-            {isSortingByQuality ? 'sync' : 'sort'}
-          </span>
-        </button>
+      {isEditMode && !isEmpty && (onSortStreamsByQuality || onSortStreamsByMode) && (
+        <div className="sort-dropdown-container" ref={sortDropdownRef}>
+          <button
+            className={`group-sort-quality-btn ${isSortingByQuality ? 'sorting' : ''}`}
+            onClick={(e) => {
+              e.stopPropagation();
+              setSortDropdownOpen(!sortDropdownOpen);
+            }}
+            disabled={isSortingByQuality}
+            title={isSortingByQuality ? 'Sorting streams...' : 'Sort streams in this group'}
+          >
+            <span className={`material-icons ${isSortingByQuality ? 'spinning' : ''}`}>
+              {isSortingByQuality ? 'sync' : 'sort'}
+            </span>
+            <span className="material-icons sort-dropdown-arrow">arrow_drop_down</span>
+          </button>
+          {sortDropdownOpen && (
+            <div className="sort-dropdown-menu" onClick={(e) => e.stopPropagation()}>
+              <button className="sort-dropdown-item" onClick={() => handleSortModeClick('smart')}>
+                <span className="material-icons">auto_awesome</span>
+                <span>Smart Sort</span>
+              </button>
+              <div className="sort-dropdown-divider" />
+              <button className="sort-dropdown-item" onClick={() => handleSortModeClick('resolution')}>
+                <span className="material-icons">aspect_ratio</span>
+                <span>By Resolution</span>
+              </button>
+              <button className="sort-dropdown-item" onClick={() => handleSortModeClick('bitrate')}>
+                <span className="material-icons">speed</span>
+                <span>By Bitrate</span>
+              </button>
+              <button className="sort-dropdown-item" onClick={() => handleSortModeClick('framerate')}>
+                <span className="material-icons">slow_motion_video</span>
+                <span>By Framerate</span>
+              </button>
+            </div>
+          )}
+        </div>
       )}
       {isEditMode && !isEmpty && onSortAndRenumber && (
         <button
@@ -1956,45 +2082,110 @@ export function ChannelsPane({
     }
   };
 
-  // Sort streams by video quality (highest resolution first)
-  const handleSortStreamsByQuality = useCallback(() => {
+  // Sort mode types
+  type SortMode = 'smart' | 'resolution' | 'bitrate' | 'framerate';
+
+  // Sort mode labels for journal/description
+  const SORT_MODE_LABELS: Record<SortMode, string> = {
+    smart: 'Smart Sort',
+    resolution: 'resolution',
+    bitrate: 'bitrate',
+    framerate: 'framerate',
+  };
+
+  // Get sort value for a stream based on criterion
+  const getSortValue = useCallback((stats: StreamStats | undefined, criterion: SortCriterion): number => {
+    if (!stats || stats.probe_status !== 'success') return -1;
+    switch (criterion) {
+      case 'resolution': {
+        if (!stats.resolution) return -1;
+        const match = stats.resolution.match(/(\d+)x(\d+)/);
+        return match ? parseInt(match[2], 10) : -1; // Return height
+      }
+      case 'bitrate':
+        return stats.video_bitrate ?? stats.bitrate ?? -1;
+      case 'framerate': {
+        if (!stats.fps) return -1;
+        const fps = parseFloat(stats.fps);
+        return isNaN(fps) ? -1 : fps;
+      }
+      default:
+        return -1;
+    }
+  }, []);
+
+  // Create comparator for multi-criteria sorting
+  const createMultiCriteriaSortComparator = useCallback((
+    statsMap: Map<number, StreamStats> | Record<number, StreamStats>,
+    priority: SortCriterion[]
+  ) => {
+    const getStats = (id: number): StreamStats | undefined => {
+      if (statsMap instanceof Map) {
+        return statsMap.get(id);
+      }
+      return statsMap[id];
+    };
+
+    return (aId: number, bId: number): number => {
+      const aStats = getStats(aId);
+      const bStats = getStats(bId);
+
+      for (const criterion of priority) {
+        const aVal = getSortValue(aStats, criterion);
+        const bVal = getSortValue(bStats, criterion);
+
+        // Both have no data for this criterion - continue to next
+        if (aVal === -1 && bVal === -1) continue;
+
+        // One has no data - sort it to the end
+        if (aVal === -1) return 1;
+        if (bVal === -1) return -1;
+
+        // Both have data - compare (higher is better)
+        if (bVal !== aVal) return bVal - aVal;
+      }
+
+      // All criteria equal
+      return 0;
+    };
+  }, [getSortValue]);
+
+  // Get effective sort priority based on mode
+  const getEffectivePriority = useCallback((mode: SortMode): SortCriterion[] => {
+    if (mode === 'smart') {
+      return channelDefaults?.streamSortPriority ?? ['resolution', 'bitrate', 'framerate'];
+    }
+    // Single criterion mode - just use that criterion
+    return [mode as SortCriterion];
+  }, [channelDefaults?.streamSortPriority]);
+
+  // Sort streams by specified mode (single channel)
+  const handleSortStreamsByMode = useCallback((mode: SortMode) => {
     if (!selectedChannelId || !isEditMode || !onStageReorderStreams) return;
 
     const channel = channels.find((c) => c.id === selectedChannelId);
+    const priority = getEffectivePriority(mode);
+    const comparator = createMultiCriteriaSortComparator(streamStatsMap, priority);
 
-    // Get resolution height for sorting priority
-    const getResolutionHeight = (stream: Stream): number => {
-      const stats = streamStatsMap.get(stream.id);
-      if (!stats?.resolution || stats.probe_status !== 'success') return -1;
+    // Sort streams
+    const sortedStreams = [...channelStreams].sort((a, b) => comparator(a.id, b.id));
 
-      const match = stats.resolution.match(/(\d+)x(\d+)/);
-      if (match) {
-        return parseInt(match[2], 10); // Return height in pixels
-      }
-      return -1;
-    };
-
-    // Sort by resolution height descending (highest first)
-    const sortedStreams = [...channelStreams].sort((a, b) =>
-      getResolutionHeight(b) - getResolutionHeight(a)
-    );
-
-    // Check if already sorted (no change needed)
+    // Check if already sorted
     const alreadySorted = sortedStreams.every((s, i) => s.id === channelStreams[i].id);
     if (alreadySorted) return;
 
     const newStreamIds = sortedStreams.map((s) => s.id);
-    const description = `Sorted streams by quality in "${channel?.name || 'channel'}"`;
+    const description = `Sorted streams by ${SORT_MODE_LABELS[mode]} in "${channel?.name || 'channel'}"`;
 
     setChannelStreams(sortedStreams);
     onStageReorderStreams(selectedChannelId, newStreamIds, description);
-  }, [selectedChannelId, isEditMode, onStageReorderStreams, channelStreams, streamStatsMap, channels]);
+  }, [selectedChannelId, isEditMode, onStageReorderStreams, channelStreams, streamStatsMap, channels, getEffectivePriority, createMultiCriteriaSortComparator]);
 
   // State for bulk sort operation
   const [bulkSortingByQuality, setBulkSortingByQuality] = useState(false);
 
-  // Bulk sort streams by quality for multiple channels
-  const handleBulkSortStreamsByQuality = useCallback(async (channelIds: number[]) => {
+  // Bulk sort streams by mode for multiple channels
+  const handleBulkSortStreamsByMode = useCallback(async (channelIds: number[], mode: SortMode) => {
     if (!isEditMode || !onStageReorderStreams || channelIds.length === 0) return;
 
     setBulkSortingByQuality(true);
@@ -2012,35 +2203,28 @@ export function ChannelsPane({
       // Fetch stats for all streams
       const stats = await api.getStreamStatsByIds(allStreamIds);
 
-      // Helper to get resolution height
-      const getResolutionHeight = (streamId: number): number => {
-        const stat = stats[streamId];
-        if (!stat?.resolution || stat.probe_status !== 'success') return -1;
-        const match = stat.resolution.match(/(\d+)x(\d+)/);
-        if (match) return parseInt(match[2], 10);
-        return -1;
-      };
+      // Get sort priority and create comparator
+      const priority = getEffectivePriority(mode);
+      const comparator = createMultiCriteriaSortComparator(stats, priority);
 
       // Start batch operation
       if (onStartBatch) {
         const scope = channelIds.length === channels.length ? 'all channels' :
           channelIds.length === 1 ? `"${channelsToProcess[0]?.name}"` :
           `${channelsToProcess.length} channels`;
-        onStartBatch(`Sort streams by quality in ${scope}`);
+        onStartBatch(`Sort streams by ${SORT_MODE_LABELS[mode]} in ${scope}`);
       }
 
       let changesCount = 0;
       for (const channel of channelsToProcess) {
-        // Sort stream IDs by resolution
-        const sortedStreamIds = [...channel.streams].sort((a, b) =>
-          getResolutionHeight(b) - getResolutionHeight(a)
-        );
+        // Sort stream IDs
+        const sortedStreamIds = [...channel.streams].sort(comparator);
 
         // Check if order changed
         const changed = !sortedStreamIds.every((id, i) => id === channel.streams[i]);
         if (changed) {
           changesCount++;
-          onStageReorderStreams(channel.id, sortedStreamIds, `Sorted streams by quality in "${channel.name}"`);
+          onStageReorderStreams(channel.id, sortedStreamIds, `Sorted streams by ${SORT_MODE_LABELS[mode]} in "${channel.name}"`);
         }
       }
 
@@ -2052,9 +2236,7 @@ export function ChannelsPane({
       if (selectedChannelId && channelIds.includes(selectedChannelId)) {
         const currentChannel = channels.find(ch => ch.id === selectedChannelId);
         if (currentChannel) {
-          const sortedIds = [...currentChannel.streams].sort((a, b) =>
-            getResolutionHeight(b) - getResolutionHeight(a)
-          );
+          const sortedIds = [...currentChannel.streams].sort(comparator);
           const newStreams = sortedIds.map(id => channelStreams.find(s => s.id === id)).filter((s): s is Stream => !!s);
           if (newStreams.length === channelStreams.length) {
             setChannelStreams(newStreams);
@@ -2062,32 +2244,37 @@ export function ChannelsPane({
         }
       }
 
-      logger.info(`Bulk sort by quality: ${changesCount} of ${channelsToProcess.length} channels reordered`);
+      logger.info(`Bulk sort by ${SORT_MODE_LABELS[mode]}: ${changesCount} of ${channelsToProcess.length} channels reordered`);
     } catch (err) {
-      logger.error('Failed to bulk sort streams by quality:', err);
+      logger.error(`Failed to bulk sort streams by ${SORT_MODE_LABELS[mode]}:`, err);
     } finally {
       setBulkSortingByQuality(false);
     }
-  }, [isEditMode, onStageReorderStreams, channels, onStartBatch, onEndBatch, selectedChannelId, channelStreams]);
+  }, [isEditMode, onStageReorderStreams, channels, onStartBatch, onEndBatch, selectedChannelId, channelStreams, getEffectivePriority, createMultiCriteriaSortComparator]);
 
-  // Sort all channels' streams by quality
-  const handleSortAllStreamsByQuality = useCallback(() => {
+  // Sort all channels' streams by mode
+  const handleSortAllStreamsByMode = useCallback((mode: SortMode) => {
     const allChannelIds = channels.map(ch => ch.id);
-    handleBulkSortStreamsByQuality(allChannelIds);
-  }, [channels, handleBulkSortStreamsByQuality]);
+    handleBulkSortStreamsByMode(allChannelIds, mode);
+  }, [channels, handleBulkSortStreamsByMode]);
 
-  // Sort selected channels' streams by quality
-  const handleSortSelectedStreamsByQuality = useCallback(() => {
-    handleBulkSortStreamsByQuality(Array.from(selectedChannelIds));
-  }, [selectedChannelIds, handleBulkSortStreamsByQuality]);
+  // Sort selected channels' streams by mode
+  const handleSortSelectedStreamsByMode = useCallback((mode: SortMode) => {
+    handleBulkSortStreamsByMode(Array.from(selectedChannelIds), mode);
+  }, [selectedChannelIds, handleBulkSortStreamsByMode]);
 
-  // Sort a group's channels' streams by quality
-  const handleSortGroupStreamsByQuality = useCallback((groupId: number | 'ungrouped') => {
+  // Sort a group's channels' streams by mode
+  const handleSortGroupStreamsByMode = useCallback((groupId: number | 'ungrouped', mode: SortMode) => {
     const groupChannelIds = channels
       .filter(ch => (groupId === 'ungrouped' ? ch.channel_group_id === null : ch.channel_group_id === groupId))
       .map(ch => ch.id);
-    handleBulkSortStreamsByQuality(groupChannelIds);
-  }, [channels, handleBulkSortStreamsByQuality]);
+    handleBulkSortStreamsByMode(groupChannelIds, mode);
+  }, [channels, handleBulkSortStreamsByMode]);
+
+  // Legacy handler
+  const handleSortGroupStreamsByQuality = useCallback((groupId: number | 'ungrouped') => {
+    handleSortGroupStreamsByMode(groupId, 'smart');
+  }, [handleSortGroupStreamsByMode]);
 
   const sensors = useSensors(
     useSensor(PointerSensor, {
@@ -4188,6 +4375,7 @@ export function ChannelsPane({
           onProbeGroup={() => handleProbeGroup(groupId, groupChannels)}
           isProbing={probingGroups.has(groupId)}
           onSortStreamsByQuality={() => handleSortGroupStreamsByQuality(groupId)}
+          onSortStreamsByMode={(mode) => handleSortGroupStreamsByMode(groupId, mode)}
           isSortingByQuality={bulkSortingByQuality}
         />
         {isExpanded && isEmpty && (
@@ -4340,13 +4528,10 @@ export function ChannelsPane({
                             {/* Stream toolbar - only in edit mode with multiple streams */}
                             {isEditMode && onStageReorderStreams && channelStreams.length > 1 && (
                               <div className="inline-streams-toolbar">
-                                <button
-                                  className="sort-quality-btn"
-                                  onClick={handleSortStreamsByQuality}
-                                  title="Sort by quality (4K > 1080p > 720p > 480p)"
-                                >
-                                  <span className="material-icons">sort</span>
-                                </button>
+                                <SortDropdownButton
+                                  onSortByMode={handleSortStreamsByMode}
+                                  className="sort-quality-btn-wrapper"
+                                />
                               </div>
                             )}
                             <DndContext
@@ -4492,16 +4677,11 @@ export function ChannelsPane({
                 >
                   <span className="material-icons">tag</span>
                 </button>
-                <button
-                  className={`bulk-action-btn ${bulkSortingByQuality ? 'loading' : ''}`}
-                  onClick={handleSortSelectedStreamsByQuality}
-                  disabled={bulkSortingByQuality}
-                  title="Sort streams by quality in selected channels"
-                >
-                  <span className={`material-icons ${bulkSortingByQuality ? 'spinning' : ''}`}>
-                    {bulkSortingByQuality ? 'sync' : 'sort'}
-                  </span>
-                </button>
+                <SortDropdownButton
+                  onSortByMode={handleSortSelectedStreamsByMode}
+                  isLoading={bulkSortingByQuality}
+                  className="bulk-action-btn-wrapper"
+                />
                 <button
                   className="bulk-action-btn bulk-action-btn--danger"
                   onClick={handleBulkDeleteClick}
@@ -4586,17 +4766,13 @@ export function ChannelsPane({
                 <span className="material-icons">visibility_off</span>
                 <span>Hidden</span>
               </button>
-              <button
-                className={`sort-all-quality-btn ${bulkSortingByQuality ? 'loading' : ''}`}
-                onClick={handleSortAllStreamsByQuality}
-                disabled={bulkSortingByQuality}
-                title="Sort streams by quality in all channels"
-              >
-                <span className={`material-icons ${bulkSortingByQuality ? 'spinning' : ''}`}>
-                  {bulkSortingByQuality ? 'sync' : 'sort'}
-                </span>
-                <span>Sort Quality</span>
-              </button>
+              <SortDropdownButton
+                onSortByMode={handleSortAllStreamsByMode}
+                isLoading={bulkSortingByQuality}
+                showLabel={true}
+                labelText="Sort"
+                className="sort-all-quality-btn-wrapper"
+              />
             </>
           )}
           <button

@@ -422,6 +422,9 @@ export type Theme = 'dark' | 'light' | 'high-contrast';
 
 export type LogLevel = 'DEBUG' | 'INFO' | 'WARN' | 'WARNING' | 'ERROR' | 'CRITICAL';
 
+// Sort criteria for stream sorting
+export type SortCriterion = 'resolution' | 'bitrate' | 'framerate';
+
 export interface SettingsResponse {
   url: string;
   username: string;
@@ -455,6 +458,7 @@ export interface SettingsResponse {
   stream_probe_schedule_time: string;  // Time of day to run probes (HH:MM, 24h format)
   probe_channel_groups: string[];  // Channel group names to probe (empty = all groups)
   bitrate_sample_duration: number;  // Duration in seconds to sample stream for bitrate (10, 20, or 30)
+  stream_sort_priority: SortCriterion[];  // Priority order for Smart Sort (e.g., ['resolution', 'bitrate', 'framerate'])
 }
 
 export interface TestConnectionResult {
@@ -499,6 +503,7 @@ export async function saveSettings(settings: {
   stream_probe_schedule_time?: string;  // Optional - time of day for probes (HH:MM), defaults to "03:00"
   probe_channel_groups?: string[];  // Optional - channel group names to probe, empty = all groups
   bitrate_sample_duration?: number;  // Optional - duration in seconds to sample stream for bitrate (10, 20, or 30), defaults to 10
+  stream_sort_priority?: SortCriterion[];  // Optional - priority order for Smart Sort, defaults to ['resolution', 'bitrate', 'framerate']
 }): Promise<{ status: string; configured: boolean }> {
   return fetchJson(`${API_BASE}/settings`, {
     method: 'POST',

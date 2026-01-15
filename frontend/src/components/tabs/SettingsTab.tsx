@@ -1,12 +1,74 @@
 import { useState, useEffect } from 'react';
 import * as api from '../../services/api';
 import { NETWORK_PREFIXES, NETWORK_SUFFIXES } from '../../services/api';
-import type { Theme, ProbeHistoryEntry } from '../../services/api';
+import type { Theme, ProbeHistoryEntry, SortCriterion } from '../../services/api';
 import type { ChannelProfile } from '../../types';
 import { logger } from '../../utils/logger';
 import type { LogLevel as FrontendLogLevel } from '../../utils/logger';
 import { DeleteOrphanedGroupsModal } from '../DeleteOrphanedGroupsModal';
+import {
+  DndContext,
+  closestCenter,
+  KeyboardSensor,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  DragEndEvent,
+} from '@dnd-kit/core';
+import {
+  arrayMove,
+  SortableContext,
+  sortableKeyboardCoordinates,
+  useSortable,
+  verticalListSortingStrategy,
+} from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
 import './SettingsTab.css';
+
+// Sort priority item configuration
+const SORT_CRITERION_CONFIG: Record<SortCriterion, { icon: string; label: string; description: string }> = {
+  resolution: { icon: 'aspect_ratio', label: 'Resolution', description: '4K > 1080p > 720p' },
+  bitrate: { icon: 'speed', label: 'Bitrate', description: 'Higher bitrate first' },
+  framerate: { icon: 'slow_motion_video', label: 'Framerate', description: '60fps > 30fps' },
+};
+
+// Sortable item component for drag-and-drop
+function SortablePriorityItem({ id, index }: { id: SortCriterion; index: number }) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id });
+
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.5 : 1,
+  };
+
+  const config = SORT_CRITERION_CONFIG[id];
+
+  return (
+    <div
+      ref={setNodeRef}
+      style={style}
+      className={`sort-priority-item ${isDragging ? 'dragging' : ''}`}
+      {...attributes}
+      {...listeners}
+    >
+      <span className="sort-priority-rank">{index + 1}</span>
+      <span className="material-icons sort-priority-icon">{config.icon}</span>
+      <div className="sort-priority-content">
+        <span className="sort-priority-label">{config.label}</span>
+        <span className="sort-priority-description">{config.description}</span>
+      </div>
+      <span className="material-icons sort-priority-drag">drag_indicator</span>
+    </div>
+  );
+}
 
 interface SettingsTabProps {
   onSaved: () => void;
@@ -38,6 +100,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
   const [newPrefixInput, setNewPrefixInput] = useState('');
   const [customNetworkSuffixes, setCustomNetworkSuffixes] = useState<string[]>([]);
   const [newSuffixInput, setNewSuffixInput] = useState('');
+  const [streamSortPriority, setStreamSortPriority] = useState<SortCriterion[]>(['resolution', 'bitrate', 'framerate']);
 
   // Appearance settings
   const [showStreamUrls, setShowStreamUrls] = useState(true);
@@ -116,6 +179,25 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
   const [needsRestart, setNeedsRestart] = useState(false);
   const [restarting, setRestarting] = useState(false);
   const [restartResult, setRestartResult] = useState<{ success: boolean; message: string } | null>(null);
+
+  // DnD sensors for sort priority
+  const sensors = useSensors(
+    useSensor(PointerSensor),
+    useSensor(KeyboardSensor, {
+      coordinateGetter: sortableKeyboardCoordinates,
+    })
+  );
+
+  const handleSortPriorityDragEnd = (event: DragEndEvent) => {
+    const { active, over } = event;
+    if (over && active.id !== over.id) {
+      setStreamSortPriority((items) => {
+        const oldIndex = items.indexOf(active.id as SortCriterion);
+        const newIndex = items.indexOf(over.id as SortCriterion);
+        return arrayMove(items, oldIndex, newIndex);
+      });
+    }
+  };
 
   useEffect(() => {
     loadSettings();
@@ -269,6 +351,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
       setStreamProbeScheduleTime(settings.stream_probe_schedule_time ?? '03:00');
       setProbeChannelGroups(settings.probe_channel_groups ?? []);
       setBitrateSampleDuration(settings.bitrate_sample_duration ?? 10);
+      setStreamSortPriority(settings.stream_sort_priority ?? ['resolution', 'bitrate', 'framerate']);
       setNeedsRestart(false);
       setRestartResult(null);
       setTestResult(null);
@@ -362,6 +445,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
         stream_probe_schedule_time: streamProbeScheduleTime,
         probe_channel_groups: probeChannelGroups,
         bitrate_sample_duration: bitrateSampleDuration,
+        stream_sort_priority: streamSortPriority,
       });
       // Apply frontend log level immediately
       const frontendLevel = frontendLogLevel === 'WARNING' ? 'WARN' : frontendLogLevel;
@@ -1175,6 +1259,34 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
 
       <div className="settings-section">
         <div className="settings-section-header">
+          <span className="material-icons">sort</span>
+          <h3>Stream Sort Priority</h3>
+        </div>
+
+        <div className="form-group">
+          <p className="form-hint" style={{ marginTop: 0, marginBottom: '0.75rem' }}>
+            Drag to reorder how streams are sorted when using "Smart Sort".
+            The first criterion is the primary sort key; subsequent ones break ties.
+          </p>
+
+          <DndContext
+            sensors={sensors}
+            collisionDetection={closestCenter}
+            onDragEnd={handleSortPriorityDragEnd}
+          >
+            <SortableContext items={streamSortPriority} strategy={verticalListSortingStrategy}>
+              <div className="sort-priority-list">
+                {streamSortPriority.map((criterion, index) => (
+                  <SortablePriorityItem key={criterion} id={criterion} index={index} />
+                ))}
+              </div>
+            </SortableContext>
+          </DndContext>
+        </div>
+      </div>
+
+      <div className="settings-section">
+        <div className="settings-section-header">
           <span className="material-icons">label</span>
           <h3>Custom Network Prefixes</h3>
         </div>
@@ -1966,6 +2078,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
                       stream_probe_schedule_time: streamProbeScheduleTime,
                       probe_channel_groups: tempProbeChannelGroups,
                       bitrate_sample_duration: bitrateSampleDuration,
+                      stream_sort_priority: streamSortPriority,
                     });
                     logger.info('Probe channel groups saved');
                   } catch (err) {
