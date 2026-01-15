@@ -1696,6 +1696,7 @@ async def get_epg_grid(start: Optional[str] = None, end: Optional[str] = None):
     """Get EPG grid (programs from previous hour + next 24 hours).
 
     Optionally accepts start and end datetime parameters in ISO format.
+    Time filtering significantly reduces data size and prevents timeouts.
     """
     client = get_client()
     try:
@@ -1703,9 +1704,18 @@ async def get_epg_grid(start: Optional[str] = None, end: Optional[str] = None):
     except httpx.ReadTimeout:
         raise HTTPException(
             status_code=504,
-            detail="EPG data request timed out. This usually happens with very large EPG datasets. Try again or contact your Dispatcharr administrator to optimize EPG data size."
+            detail="EPG data request timed out. This usually happens with very large EPG datasets. Try reducing the time range or contact your Dispatcharr administrator to optimize EPG data size."
         )
+    except httpx.HTTPStatusError as e:
+        # Handle upstream 504 from Dispatcharr
+        if e.response.status_code == 504:
+            raise HTTPException(
+                status_code=504,
+                detail="Dispatcharr EPG service timed out. This usually happens with very large channel counts (~2000+). The time range has been reduced to help, but you may need to optimize your EPG sources or reduce the number of channels."
+            )
+        raise HTTPException(status_code=e.response.status_code, detail=str(e))
     except Exception as e:
+        logger.exception(f"Error fetching EPG grid: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
