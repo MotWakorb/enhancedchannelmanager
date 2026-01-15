@@ -587,9 +587,43 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
 
   const handleRerunFailed = async () => {
     setShowProbeResultsModal(false);
-    // TODO: Implement re-run functionality for failed streams
-    // For now, just trigger a full probe again
-    await handleProbeAllStreams();
+
+    // Null check for probeResults
+    if (!probeResults || !probeResults.failed_streams) {
+      logger.warn('No probe results available');
+      return;
+    }
+
+    // Extract stream IDs from failed streams
+    const failedStreamIds = probeResults.failed_streams.map(stream => stream.id);
+
+    if (failedStreamIds.length === 0) {
+      logger.warn('No failed streams to re-probe');
+      return;
+    }
+
+    logger.info(`Re-probing ${failedStreamIds.length} failed streams`);
+    setProbingAll(true);
+    setProbeAllResult(null);
+
+    try {
+      const result = await api.probeBulkStreams(failedStreamIds);
+      setProbeAllResult({
+        success: true,
+        message: `Re-probed ${result.probed} failed streams`
+      });
+
+      // Refresh probe history to show updated results
+      setTimeout(() => {
+        loadProbeHistory();
+      }, 1000);
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : 'Failed to re-probe streams';
+      logger.error('Failed to re-probe failed streams', err);
+      setProbeAllResult({ success: false, message: errorMessage });
+    } finally {
+      setProbingAll(false);
+    }
   };
 
   const handleCopyUrl = async (url: string) => {
@@ -2149,7 +2183,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
                   onClick={handleRerunFailed}
                   className="probe-results-rerun-btn"
                 >
-                  Re-run All Streams
+                  Re-probe Failed Streams
                 </button>
               )}
               <button
