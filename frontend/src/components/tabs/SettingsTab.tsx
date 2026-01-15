@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import * as api from '../../services/api';
 import { NETWORK_PREFIXES, NETWORK_SUFFIXES } from '../../constants/streamNormalization';
-import type { Theme, ProbeHistoryEntry, SortCriterion, SortEnabledMap } from '../../services/api';
+import type { Theme, ProbeHistoryEntry, SortCriterion, SortEnabledMap, GracenoteConflictMode } from '../../services/api';
 import type { ChannelProfile } from '../../types';
 import { logger } from '../../utils/logger';
 import type { LogLevel as FrontendLogLevel } from '../../utils/logger';
@@ -167,6 +167,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
   const [hideUngroupedStreams, setHideUngroupedStreams] = useState(true);
   const [hideEpgUrls, setHideEpgUrls] = useState(false);
   const [hideM3uUrls, setHideM3uUrls] = useState(false);
+  const [gracenoteConflictMode, setGracenoteConflictMode] = useState<GracenoteConflictMode>('ask');
   const [theme, setTheme] = useState<Theme>('dark');
   const [vlcOpenBehavior, setVlcOpenBehavior] = useState('m3u_fallback');
 
@@ -393,6 +394,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
       setHideUngroupedStreams(settings.hide_ungrouped_streams);
       setHideEpgUrls(settings.hide_epg_urls ?? false);
       setHideM3uUrls(settings.hide_m3u_urls ?? false);
+      setGracenoteConflictMode(settings.gracenote_conflict_mode || 'ask');
       setTheme(settings.theme || 'dark');
       setVlcOpenBehavior(settings.vlc_open_behavior || 'm3u_fallback');
       setDefaultChannelProfileIds(settings.default_channel_profile_ids);
@@ -501,6 +503,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
         hide_ungrouped_streams: hideUngroupedStreams,
         hide_epg_urls: hideEpgUrls,
         hide_m3u_urls: hideM3uUrls,
+        gracenote_conflict_mode: gracenoteConflictMode,
         theme: theme,
         default_channel_profile_ids: defaultChannelProfileIds,
         epg_auto_match_threshold: epgAutoMatchThreshold,
@@ -1109,6 +1112,24 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
               accidental exposure of sensitive M3U URLs in screenshots or screen shares.
             </p>
           </div>
+        </div>
+
+        <div className="form-group">
+          <label htmlFor="gracenoteConflictMode">Gracenote ID Conflict Handling</label>
+          <select
+            id="gracenoteConflictMode"
+            value={gracenoteConflictMode}
+            onChange={(e) => setGracenoteConflictMode(e.target.value as GracenoteConflictMode)}
+          >
+            <option value="ask">Ask me what to do (show conflict dialog)</option>
+            <option value="skip">Skip channels with existing IDs</option>
+            <option value="overwrite">Automatically overwrite existing IDs</option>
+          </select>
+          <p className="form-hint">
+            When assigning Gracenote IDs, this controls what happens if a channel already has a
+            different Gracenote ID. Choose "Ask" to review conflicts, "Skip" to leave existing
+            IDs unchanged, or "Overwrite" to always replace with new IDs.
+          </p>
         </div>
       </div>
 
@@ -2333,6 +2354,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
                       hide_ungrouped_streams: hideUngroupedStreams,
                       hide_epg_urls: hideEpgUrls,
                       hide_m3u_urls: hideM3uUrls,
+                      gracenote_conflict_mode: gracenoteConflictMode,
                       theme: theme,
                       default_channel_profile_ids: defaultChannelProfileIds,
                       epg_auto_match_threshold: epgAutoMatchThreshold,

@@ -25,10 +25,11 @@ import { logger } from '../utils/logger';
 import { ChannelProfilesListModal } from './ChannelProfilesListModal';
 import type { ChannelDefaults } from './StreamsPane';
 import * as api from '../services/api';
-import type { NumberSeparator, SortCriterion } from '../services/api';
+import type { NumberSeparator, SortCriterion, GracenoteConflictMode } from '../services/api';
 import { HistoryToolbar } from './HistoryToolbar';
 import { BulkEPGAssignModal, type EPGAssignment } from './BulkEPGAssignModal';
 import { BulkLCNFetchModal, type LCNAssignment } from './BulkLCNFetchModal';
+import { GracenoteConflictModal, type GracenoteConflict } from './GracenoteConflictModal';
 import { EditChannelModal, type ChannelMetadataChanges } from './EditChannelModal';
 import { NormalizeNamesModal } from './NormalizeNamesModal';
 import { naturalCompare } from '../utils/naturalSort';
@@ -127,6 +128,8 @@ interface ChannelsPaneProps {
   showStreamUrls?: boolean;
   // EPG matching settings
   epgAutoMatchThreshold?: number;
+  // Gracenote conflict handling
+  gracenoteConflictMode?: GracenoteConflictMode;
   // External trigger to open edit modal for a specific channel
   externalChannelToEdit?: Channel | null;
   onExternalChannelEditHandled?: () => void;
@@ -666,6 +669,8 @@ export function ChannelsPane({
   showStreamUrls = true,
   // EPG matching settings
   epgAutoMatchThreshold = 80,
+  // Gracenote conflict handling
+  gracenoteConflictMode = 'ask',
   // External trigger to open edit modal
   externalChannelToEdit,
   onExternalChannelEditHandled,
@@ -775,6 +780,11 @@ export function ChannelsPane({
 
   // Bulk LCN fetch modal state
   const bulkLCNModal = useModal();
+
+  // Gracenote conflict modal state
+  const gracenoteConflictModal = useModal();
+  const [gracenoteConflicts, setGracenoteConflicts] = useState<GracenoteConflict[]>([]);
+  const [pendingLCNAssignments, setPendingLCNAssignments] = useState<LCNAssignment[]>([]);
 
   // Normalize names modal state
   const normalizeModal = useModal();
@@ -1584,6 +1594,61 @@ export function ChannelsPane({
       return;
     }
 
+    // Detect conflicts: channels that already have a different gracenote ID
+    const conflicts: GracenoteConflict[] = [];
+    const nonConflicts: LCNAssignment[] = [];
+
+    for (const assignment of assignments) {
+      const channel = channels.find(c => c.id === assignment.channelId);
+      if (channel?.tvc_guide_stationid && channel.tvc_guide_stationid !== assignment.tvc_guide_stationid) {
+        // Conflict: channel has a different gracenote ID
+        conflicts.push({
+          channelId: assignment.channelId,
+          channelName: assignment.channelName,
+          oldGracenoteId: channel.tvc_guide_stationid,
+          newGracenoteId: assignment.tvc_guide_stationid,
+        });
+      } else {
+        // No conflict: either no existing ID or same ID
+        nonConflicts.push(assignment);
+      }
+    }
+
+    // Handle based on conflict mode
+    if (conflicts.length > 0) {
+      if (gracenoteConflictMode === 'ask') {
+        // Show conflict modal for user to decide
+        setGracenoteConflicts(conflicts);
+        setPendingLCNAssignments(assignments);
+        gracenoteConflictModal.open();
+        return; // Don't process yet, wait for user input
+      } else if (gracenoteConflictMode === 'skip') {
+        // Skip conflicted assignments, only process non-conflicts
+        processLCNAssignments(nonConflicts);
+        return;
+      }
+      // If 'overwrite', fall through to process all assignments
+    }
+
+    // No conflicts or mode is 'overwrite': process all assignments
+    processLCNAssignments(assignments);
+  };
+
+  // Process LCN assignments (extracted for reuse)
+  const processLCNAssignments = (assignments: LCNAssignment[]) => {
+    if (!onStageUpdateChannel || !onStartBatch || !onEndBatch) {
+      return;
+    }
+
+    if (assignments.length === 0) {
+      // Close modal and clear selection
+      bulkLCNModal.close();
+      if (onClearChannelSelection) {
+        onClearChannelSelection();
+      }
+      return;
+    }
+
     // Use batch to group all assignments as a single undo operation
     onStartBatch(`Assign Gracenote ID to ${assignments.length} channels`);
     for (const assignment of assignments) {
@@ -1599,6 +1664,36 @@ export function ChannelsPane({
     if (onClearChannelSelection) {
       onClearChannelSelection();
     }
+  };
+
+  // Handle conflict resolution from modal
+  const handleGracenoteConflictResolve = (channelsToUpdate: number[]) => {
+    // User selected which channels to overwrite
+    const selectedAssignments = pendingLCNAssignments.filter(assignment =>
+      channelsToUpdate.includes(assignment.channelId)
+    );
+
+    // Also include non-conflicted assignments
+    const nonConflicts = pendingLCNAssignments.filter(assignment => {
+      const isConflict = gracenoteConflicts.some(c => c.channelId === assignment.channelId);
+      return !isConflict;
+    });
+
+    const allAssignments = [...nonConflicts, ...selectedAssignments];
+
+    // Close conflict modal and process assignments
+    gracenoteConflictModal.close();
+    setGracenoteConflicts([]);
+    setPendingLCNAssignments([]);
+
+    processLCNAssignments(allAssignments);
+  };
+
+  // Handle conflict modal cancel
+  const handleGracenoteConflictCancel = () => {
+    gracenoteConflictModal.close();
+    setGracenoteConflicts([]);
+    setPendingLCNAssignments([]);
   };
 
   // Handle normalize names
@@ -4977,6 +5072,14 @@ export function ChannelsPane({
         epgData={epgData || []}
         onClose={() => bulkLCNModal.close()}
         onAssign={handleBulkLCNAssign}
+      />
+
+      {/* Gracenote Conflict Resolution Modal */}
+      <GracenoteConflictModal
+        isOpen={gracenoteConflictModal.isOpen}
+        conflicts={gracenoteConflicts}
+        onResolve={handleGracenoteConflictResolve}
+        onCancel={handleGracenoteConflictCancel}
       />
 
       {/* Normalize Names Modal */}
