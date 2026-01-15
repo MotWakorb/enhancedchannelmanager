@@ -144,6 +144,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
   const [streamProbeTimeout, setStreamProbeTimeout] = useState(30);
   const [streamProbeScheduleTime, setStreamProbeScheduleTime] = useState('03:00');
   const [bitrateSampleDuration, setBitrateSampleDuration] = useState(10);
+  const [parallelProbingEnabled, setParallelProbingEnabled] = useState(true);
   const [probingAll, setProbingAll] = useState(false);
   const [probeAllResult, setProbeAllResult] = useState<{ success: boolean; message: string } | null>(null);
   const [totalStreamCount, setTotalStreamCount] = useState(100); // Default to 100, will be updated on load
@@ -375,6 +376,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
       setStreamProbeScheduleTime(settings.stream_probe_schedule_time ?? '03:00');
       setProbeChannelGroups(settings.probe_channel_groups ?? []);
       setBitrateSampleDuration(settings.bitrate_sample_duration ?? 10);
+      setParallelProbingEnabled(settings.parallel_probing_enabled ?? true);
       setStreamSortPriority(settings.stream_sort_priority ?? ['resolution', 'bitrate', 'framerate']);
       setStreamSortEnabled(settings.stream_sort_enabled ?? { resolution: true, bitrate: true, framerate: true });
       setNeedsRestart(false);
@@ -470,6 +472,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
         stream_probe_schedule_time: streamProbeScheduleTime,
         probe_channel_groups: probeChannelGroups,
         bitrate_sample_duration: bitrateSampleDuration,
+        parallel_probing_enabled: parallelProbingEnabled,
         stream_sort_priority: streamSortPriority,
         stream_sort_enabled: streamSortEnabled,
       });
@@ -1611,6 +1614,21 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
             </div>
 
             <div className="form-group">
+              <label className="checkbox-label">
+                <input
+                  type="checkbox"
+                  checked={parallelProbingEnabled}
+                  onChange={(e) => setParallelProbingEnabled(e.target.checked)}
+                />
+                Enable parallel probing
+              </label>
+              <span className="form-hint">
+                When enabled, streams from different M3U accounts are probed simultaneously for faster completion.
+                Disable for sequential one-at-a-time probing.
+              </span>
+            </div>
+
+            <div className="form-group">
               <label>Channel groups to probe</label>
               <button
                 type="button"
@@ -2155,6 +2173,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
                       stream_probe_schedule_time: streamProbeScheduleTime,
                       probe_channel_groups: tempProbeChannelGroups,
                       bitrate_sample_duration: bitrateSampleDuration,
+                      parallel_probing_enabled: parallelProbingEnabled,
                       stream_sort_priority: streamSortPriority,
                       stream_sort_enabled: streamSortEnabled,
                     });

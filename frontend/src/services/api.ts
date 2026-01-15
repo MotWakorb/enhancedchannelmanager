@@ -459,6 +459,7 @@ export interface SettingsResponse {
   stream_probe_schedule_time: string;  // Time of day to run probes (HH:MM, 24h format)
   probe_channel_groups: string[];  // Channel group names to probe (empty = all groups)
   bitrate_sample_duration: number;  // Duration in seconds to sample stream for bitrate (10, 20, or 30)
+  parallel_probing_enabled: boolean;  // Probe streams from different M3Us simultaneously
   stream_sort_priority: SortCriterion[];  // Priority order for Smart Sort (e.g., ['resolution', 'bitrate', 'framerate'])
   stream_sort_enabled: SortEnabledMap;  // Which sort criteria are enabled (e.g., { resolution: true, bitrate: true, framerate: false })
 }
@@ -505,6 +506,7 @@ export async function saveSettings(settings: {
   stream_probe_schedule_time?: string;  // Optional - time of day for probes (HH:MM), defaults to "03:00"
   probe_channel_groups?: string[];  // Optional - channel group names to probe, empty = all groups
   bitrate_sample_duration?: number;  // Optional - duration in seconds to sample stream for bitrate (10, 20, or 30), defaults to 10
+  parallel_probing_enabled?: boolean;  // Optional - probe streams from different M3Us simultaneously, defaults to true
   stream_sort_priority?: SortCriterion[];  // Optional - priority order for Smart Sort, defaults to ['resolution', 'bitrate', 'framerate']
   stream_sort_enabled?: SortEnabledMap;  // Optional - which sort criteria are enabled, defaults to all true
 }): Promise<{ status: string; configured: boolean }> {

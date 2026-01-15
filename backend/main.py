@@ -114,6 +114,7 @@ async def startup_event():
                 user_timezone=settings.user_timezone,
                 probe_channel_groups=settings.probe_channel_groups,
                 bitrate_sample_duration=settings.bitrate_sample_duration,
+                parallel_probing_enabled=settings.parallel_probing_enabled,
             )
             logger.info(f"StreamProber instance created: {prober is not None}")
 
@@ -220,6 +221,7 @@ class SettingsRequest(BaseModel):
     stream_probe_schedule_time: str = "03:00"  # HH:MM format, 24h
     probe_channel_groups: list[str] = []  # Channel groups to probe
     bitrate_sample_duration: int = 10  # Duration in seconds to sample stream for bitrate (10, 20, or 30)
+    parallel_probing_enabled: bool = True  # Probe multiple streams from different M3Us simultaneously
     stream_sort_priority: list[str] = ["resolution", "bitrate", "framerate"]  # Priority order for Smart Sort
     stream_sort_enabled: dict[str, bool] = {"resolution": True, "bitrate": True, "framerate": True}  # Which criteria are enabled
 
@@ -257,6 +259,7 @@ class SettingsResponse(BaseModel):
     stream_probe_schedule_time: str  # HH:MM format, 24h
     probe_channel_groups: list[str]
     bitrate_sample_duration: int
+    parallel_probing_enabled: bool  # Probe multiple streams from different M3Us simultaneously
     stream_sort_priority: list[str]  # Priority order for Smart Sort
     stream_sort_enabled: dict[str, bool]  # Which criteria are enabled
 
@@ -305,6 +308,7 @@ async def get_current_settings():
         stream_probe_schedule_time=settings.stream_probe_schedule_time,
         probe_channel_groups=settings.probe_channel_groups,
         bitrate_sample_duration=settings.bitrate_sample_duration,
+        parallel_probing_enabled=settings.parallel_probing_enabled,
         stream_sort_priority=settings.stream_sort_priority,
         stream_sort_enabled=settings.stream_sort_enabled,
     )
@@ -364,6 +368,7 @@ async def update_settings(request: SettingsRequest):
         stream_probe_schedule_time=request.stream_probe_schedule_time,
         probe_channel_groups=request.probe_channel_groups,
         bitrate_sample_duration=request.bitrate_sample_duration,
+        parallel_probing_enabled=request.parallel_probing_enabled,
         stream_sort_priority=request.stream_sort_priority,
         stream_sort_enabled=request.stream_sort_enabled,
     )
@@ -453,6 +458,7 @@ async def restart_services():
                 user_timezone=settings.user_timezone,
                 probe_channel_groups=settings.probe_channel_groups,
                 bitrate_sample_duration=settings.bitrate_sample_duration,
+                parallel_probing_enabled=settings.parallel_probing_enabled,
             )
             set_prober(new_prober)
             await new_prober.start()
