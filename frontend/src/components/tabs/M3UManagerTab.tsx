@@ -277,6 +277,42 @@ export function M3UManagerTab({
     loadData();
   }, [loadData]);
 
+  // Auto-detect and poll for refresh status (e.g., when probe triggers M3U refresh)
+  useEffect(() => {
+    // Check if any accounts are currently refreshing
+    const checkRefreshStatus = () => {
+      const hasRefreshing = accounts.some(
+        a => a.is_active && (a.status === 'fetching' || a.status === 'parsing')
+      );
+
+      if (hasRefreshing && !refreshingAll) {
+        setRefreshingAll(true);
+      }
+
+      return hasRefreshing;
+    };
+
+    // Start polling if accounts are refreshing
+    if (accounts.length > 0 && checkRefreshStatus()) {
+      const pollInterval = setInterval(async () => {
+        const updatedAccounts = await api.getM3UAccounts();
+        setAccounts(updatedAccounts);
+
+        const stillRefreshing = updatedAccounts.some(
+          a => a.is_active && (a.status === 'fetching' || a.status === 'parsing')
+        );
+
+        if (!stillRefreshing) {
+          clearInterval(pollInterval);
+          setRefreshingAll(false);
+        }
+      }, 2000);
+
+      // Cleanup on unmount or when accounts change
+      return () => clearInterval(pollInterval);
+    }
+  }, [accounts, refreshingAll]);
+
   const handleAddAccount = () => {
     setEditingAccount(null);
     setModalOpen(true);
