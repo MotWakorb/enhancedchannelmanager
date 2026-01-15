@@ -1286,6 +1286,27 @@ export interface ProbeHistoryEntry {
   success_streams: Array<{ id: number; name: string; url?: string }>;
   failed_streams: Array<{ id: number; name: string; url?: string }>;
   skipped_streams: Array<{ id: number; name: string; url?: string; reason?: string }>;
+  reordered_channels?: Array<{
+    channel_id: number;
+    channel_name: string;
+    stream_count: number;
+    streams_before: Array<{
+      id: number;
+      name: string;
+      position: number;
+      status: string;
+      resolution?: string;
+      bitrate?: number;
+    }>;
+    streams_after: Array<{
+      id: number;
+      name: string;
+      position: number;
+      status: string;
+      resolution?: string;
+      bitrate?: number;
+    }>;
+  }>;
 }
 
 export async function getProbeHistory(): Promise<ProbeHistoryEntry[]> {

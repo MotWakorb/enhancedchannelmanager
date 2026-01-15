@@ -215,6 +215,8 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
     skipped_count: number;
   } | null>(null);
   const [probeHistory, setProbeHistory] = useState<ProbeHistoryEntry[]>([]);
+  const [showReorderModal, setShowReorderModal] = useState(false);
+  const [reorderData, setReorderData] = useState<ProbeHistoryEntry['reordered_channels'] | null>(null);
   const [copiedUrl, setCopiedUrl] = useState<string | null>(null);
   const [availableChannelGroups, setAvailableChannelGroups] = useState<Array<{ id: number; name: string }>>([]);
   const [probeChannelGroups, setProbeChannelGroups] = useState<string[]>([]);
@@ -665,6 +667,11 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
     });
     setProbeResultsType(type);
     setShowProbeResultsModal(true);
+  };
+
+  const handleShowReorderResults = (historyEntry: ProbeHistoryEntry) => {
+    setReorderData(historyEntry.reordered_channels || []);
+    setShowReorderModal(true);
   };
 
   const formatDuration = (seconds: number): string => {
@@ -1984,6 +1991,28 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
                       {entry.skipped_count}
                     </button>
                   )}
+                  {(entry.reordered_channels && entry.reordered_channels.length > 0) && (
+                    <button
+                      className="probe-history-btn reordered"
+                      onClick={() => handleShowReorderResults(entry)}
+                      style={{
+                        padding: '0.4rem 0.8rem',
+                        fontSize: '13px',
+                        backgroundColor: 'rgba(52, 152, 219, 0.15)',
+                        color: '#3498db',
+                        border: '1px solid rgba(52, 152, 219, 0.3)',
+                        borderRadius: '4px',
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '0.3rem'
+                      }}
+                      title="View reordered channels"
+                    >
+                      <span className="material-icons" style={{ fontSize: '16px' }}>sort</span>
+                      {entry.reordered_channels.length}
+                    </button>
+                  )}
                 </div>
               </div>
             ))}
@@ -2283,6 +2312,154 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
               )}
               <button
                 onClick={() => setShowProbeResultsModal(false)}
+                className="probe-results-close-btn"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Reordered Channels Modal */}
+      {showReorderModal && reorderData && (
+        <div
+          className="probe-results-modal-overlay"
+          onClick={() => setShowReorderModal(false)}
+        >
+          <div
+            className="probe-results-modal-content"
+            onClick={(e) => e.stopPropagation()}
+            style={{ maxWidth: '900px' }}
+          >
+            <div className="probe-results-modal-header">
+              <h3 style={{ color: '#3498db' }}>
+                ⇅ Reordered Channels ({reorderData.length})
+              </h3>
+              <button
+                onClick={() => setShowReorderModal(false)}
+                className="probe-results-modal-close"
+              >
+                ×
+              </button>
+            </div>
+
+            <div className="probe-results-modal-body">
+              {reorderData.length === 0 ? (
+                <div className="probe-results-empty">
+                  No channels were reordered
+                </div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                  {reorderData.map((channel) => (
+                    <div
+                      key={channel.channel_id}
+                      style={{
+                        padding: '1rem',
+                        backgroundColor: 'rgba(52, 152, 219, 0.05)',
+                        border: '1px solid rgba(52, 152, 219, 0.2)',
+                        borderRadius: '8px',
+                      }}
+                    >
+                      <div style={{
+                        fontSize: '14px',
+                        fontWeight: 600,
+                        marginBottom: '0.75rem',
+                        color: 'var(--text-primary)',
+                      }}>
+                        {channel.channel_name} ({channel.stream_count} streams)
+                      </div>
+
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+                        {/* Before */}
+                        <div>
+                          <div style={{
+                            fontSize: '12px',
+                            fontWeight: 600,
+                            marginBottom: '0.5rem',
+                            color: 'var(--text-secondary)',
+                          }}>
+                            Before
+                          </div>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+                            {channel.streams_before.map((stream, idx) => (
+                              <div
+                                key={stream.id}
+                                style={{
+                                  fontSize: '12px',
+                                  padding: '0.4rem',
+                                  backgroundColor: stream.status === 'failed' ? 'rgba(231, 76, 60, 0.1)' : 'var(--bg-secondary)',
+                                  borderLeft: `3px solid ${stream.status === 'failed' ? '#e74c3c' : stream.status === 'success' ? '#2ecc71' : '#95a5a6'}`,
+                                  borderRadius: '3px',
+                                  display: 'flex',
+                                  justifyContent: 'space-between',
+                                  alignItems: 'center',
+                                }}
+                              >
+                                <span>
+                                  {idx + 1}. {stream.name}
+                                </span>
+                                <span style={{
+                                  fontSize: '11px',
+                                  color: 'var(--text-secondary)',
+                                  fontFamily: 'monospace',
+                                }}>
+                                  {stream.resolution || '—'} {stream.bitrate ? `| ${(stream.bitrate / 1000000).toFixed(1)}Mbps` : ''}
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+
+                        {/* After */}
+                        <div>
+                          <div style={{
+                            fontSize: '12px',
+                            fontWeight: 600,
+                            marginBottom: '0.5rem',
+                            color: '#3498db',
+                          }}>
+                            After (Smart Sorted)
+                          </div>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+                            {channel.streams_after.map((stream, idx) => (
+                              <div
+                                key={stream.id}
+                                style={{
+                                  fontSize: '12px',
+                                  padding: '0.4rem',
+                                  backgroundColor: stream.status === 'failed' ? 'rgba(231, 76, 60, 0.1)' : 'var(--bg-secondary)',
+                                  borderLeft: `3px solid ${stream.status === 'failed' ? '#e74c3c' : stream.status === 'success' ? '#2ecc71' : '#95a5a6'}`,
+                                  borderRadius: '3px',
+                                  display: 'flex',
+                                  justifyContent: 'space-between',
+                                  alignItems: 'center',
+                                }}
+                              >
+                                <span>
+                                  {idx + 1}. {stream.name}
+                                </span>
+                                <span style={{
+                                  fontSize: '11px',
+                                  color: 'var(--text-secondary)',
+                                  fontFamily: 'monospace',
+                                }}>
+                                  {stream.resolution || '—'} {stream.bitrate ? `| ${(stream.bitrate / 1000000).toFixed(1)}Mbps` : ''}
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div className="probe-results-modal-footer">
+              <button
+                onClick={() => setShowReorderModal(false)}
                 className="probe-results-close-btn"
               >
                 Close
