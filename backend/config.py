@@ -31,6 +31,9 @@ class DispatcharrSettings(BaseModel):
     show_stream_urls: bool = True  # Show stream URLs in the UI (can hide for screenshots)
     hide_auto_sync_groups: bool = False  # Hide auto-sync channel groups by default
     hide_ungrouped_streams: bool = True  # Hide ungrouped streams in the streams pane
+    hide_epg_urls: bool = False  # Hide EPG URLs in EPG Manager tab
+    hide_m3u_urls: bool = False  # Hide M3U URLs in M3U Manager tab
+    gracenote_conflict_mode: str = "ask"  # Gracenote ID conflict handling: "ask", "skip", or "overwrite"
     theme: str = "dark"  # Theme: "dark", "light", or "high-contrast"
     # Default channel profiles for new channels (empty list means no defaults)
     default_channel_profile_ids: list[int] = []
