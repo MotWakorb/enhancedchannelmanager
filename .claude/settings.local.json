@@ -16,7 +16,8 @@
       "Bash(for id in 9mke kfqk deag h2o2 gu14 n6hh bt15 1k9i 1o4p fnla m7u6 gjsx c68z hyud 0fvn bu1u gn2o joc6 8p74 nmm9 5ayz fcui)",
       "Bash(for id in kfqk h2o2 n6hh bt15 1k9i 1o4p)",
       "Bash(powershell -Command:*)",
-      "Bash(git pull:*)"
+      "Bash(git pull:*)",
+      "Bash(for id in n6hh bt15 1k9i 1o4p)"
     ],
     "deny": [],
     "ask": [],
