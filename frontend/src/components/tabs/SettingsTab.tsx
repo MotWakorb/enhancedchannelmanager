@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import * as api from '../../services/api';
-import { NETWORK_PREFIXES, NETWORK_SUFFIXES } from '../../services/api';
+import { NETWORK_PREFIXES, NETWORK_SUFFIXES } from '../../constants/streamNormalization';
 import type { Theme, ProbeHistoryEntry, SortCriterion, SortEnabledMap } from '../../services/api';
 import type { ChannelProfile } from '../../types';
 import { logger } from '../../utils/logger';
