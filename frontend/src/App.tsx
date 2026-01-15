@@ -76,8 +76,6 @@ function App() {
   const [showStreamUrls, setShowStreamUrls] = useState(true);
   const [hideUngroupedStreams, setHideUngroupedStreams] = useState(true);
   const [epgAutoMatchThreshold, setEpgAutoMatchThreshold] = useState(80);
-  // @ts-ignore - vlcOpenBehavior is used via window.__vlcSettings in useEffect
-  const [vlcOpenBehavior, setVlcOpenBehavior] = useState<'protocol_only' | 'm3u_fallback' | 'm3u_only'>('m3u_fallback');
   const [showVLCHelperModal, setShowVLCHelperModal] = useState(false);
   const [vlcModalStreamUrl, setVlcModalStreamUrl] = useState('');
   const [vlcModalStreamName, setVlcModalStreamName] = useState('');
@@ -363,9 +361,8 @@ function App() {
         setShowStreamUrls(settings.show_stream_urls);
         setHideUngroupedStreams(settings.hide_ungrouped_streams);
         setEpgAutoMatchThreshold(settings.epg_auto_match_threshold ?? 80);
-        const vlcBehavior = (settings.vlc_open_behavior as 'protocol_only' | 'm3u_fallback' | 'm3u_only') || 'm3u_fallback';
-        setVlcOpenBehavior(vlcBehavior);
         // Store VLC settings globally for vlc utility to access
+        const vlcBehavior = (settings.vlc_open_behavior as 'protocol_only' | 'm3u_fallback' | 'm3u_only') || 'm3u_fallback';
         (window as any).__vlcSettings = { behavior: vlcBehavior };
         setChannelDefaults({
           includeChannelNumberInName: settings.include_channel_number_in_name,
