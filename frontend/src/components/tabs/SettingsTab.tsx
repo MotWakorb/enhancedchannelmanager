@@ -53,11 +53,10 @@ function SortablePriorityItem({
     isDragging,
   } = useSortable({ id });
 
-  const style: React.CSSProperties = {
+  const style = {
     transform: CSS.Transform.toString(transform),
     transition,
     opacity: isDragging ? 0.5 : enabled ? 1 : 0.5,
-    touchAction: 'none',
   };
 
   const config = SORT_CRITERION_CONFIG[id];
@@ -67,16 +66,14 @@ function SortablePriorityItem({
       ref={setNodeRef}
       style={style}
       className={`sort-priority-item ${isDragging ? 'dragging' : ''} ${!enabled ? 'disabled' : ''}`}
-      {...attributes}
-      {...listeners}
     >
-      <span className="material-icons sort-priority-drag">drag_indicator</span>
+      <span className="sort-priority-drag" {...attributes} {...listeners}>
+        <span className="material-icons">drag_indicator</span>
+      </span>
       <input
         type="checkbox"
         checked={enabled}
         onChange={() => onToggleEnabled(id)}
-        onClick={(e) => e.stopPropagation()}
-        onPointerDown={(e) => e.stopPropagation()}
         className="sort-priority-checkbox"
         title={enabled ? 'Click to disable this sort criterion' : 'Click to enable this sort criterion'}
       />
