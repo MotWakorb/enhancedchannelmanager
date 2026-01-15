@@ -1192,21 +1192,15 @@
 }
 
 .sort-priority-item {
-  display: flex !important;
-  flex-direction: row !important;
+  display: flex;
   align-items: center;
   gap: 0.75rem;
   padding: 0.75rem 1rem;
   background-color: var(--input-bg);
   border: 1px solid var(--border-primary);
   border-radius: 6px;
-  cursor: grab;
   transition: background-color 0.15s, border-color 0.15s, box-shadow 0.15s;
   user-select: none;
-  width: 100%;
-  max-width: 100%;
-  box-sizing: border-box;
-  touch-action: none;
 }
 
 .sort-priority-item:hover {
@@ -1218,10 +1212,9 @@
   border-color: var(--accent-primary);
   background-color: rgba(100, 108, 255, 0.1);
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
-  cursor: grabbing;
 }
 
-.sort-priority-item:active {
+.sort-priority-item.dragging .sort-priority-drag {
   cursor: grabbing;
 }
 
@@ -1265,15 +1258,27 @@
 }
 
 .sort-priority-drag {
-  font-size: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   color: var(--text-muted);
   flex-shrink: 0;
   opacity: 0.5;
   transition: opacity 0.15s;
+  cursor: grab;
+  touch-action: none;
+}
+
+.sort-priority-drag .material-icons {
+  font-size: 20px;
 }
 
 .sort-priority-item:hover .sort-priority-drag {
   opacity: 1;
+}
+
+.sort-priority-drag:active {
+  cursor: grabbing;
 }
 
 /* Sort priority checkbox */
