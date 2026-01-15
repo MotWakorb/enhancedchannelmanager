@@ -741,6 +741,19 @@ class DispatcharrClient:
         response = await self._request("GET", "/api/epg/grid/")
         response.raise_for_status()
         data = response.json()
+
+        # DEBUG: Log the response structure to understand what we're getting
+        logger.debug(f"EPG grid response type: {type(data)}")
+        if isinstance(data, dict):
+            logger.debug(f"EPG grid response keys: {data.keys()}")
+            logger.debug(f"EPG grid data length: {len(data.get('data', []))} items")
+            if data.get('data') and len(data.get('data', [])) > 0:
+                logger.debug(f"EPG grid first item sample: {data['data'][0]}")
+        elif isinstance(data, list):
+            logger.debug(f"EPG grid list length: {len(data)} items")
+            if data and len(data) > 0:
+                logger.debug(f"EPG grid first item sample: {data[0]}")
+
         # Dispatcharr returns {"data": [...]}
         if isinstance(data, dict):
             return data.get("data", [])
