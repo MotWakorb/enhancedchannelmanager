@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
+import { useState, useEffect, useMemo, useRef, useCallback, memo } from 'react';
 import type { AutoSyncCustomProperties, ChannelGroup, ChannelProfile, StreamProfile, EPGSource, Logo } from '../types';
 import * as api from '../services/api';
 import './AutoSyncSettingsModal.css';
@@ -16,7 +16,7 @@ interface AutoSyncSettingsModalProps {
   onGroupsChange?: () => void;
 }
 
-export function AutoSyncSettingsModal({
+export const AutoSyncSettingsModal = memo(function AutoSyncSettingsModal({
   isOpen,
   onClose,
   onSave,
@@ -696,4 +696,4 @@ export function AutoSyncSettingsModal({
       </div>
     </div>
   );
-}
+});

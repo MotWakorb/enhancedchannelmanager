@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback } from 'react';
+import { useState, useMemo, useCallback, memo } from 'react';
 import type { Channel, ChannelGroup } from '../types';
 import './PrintGuideModal.css';
 
@@ -49,7 +49,7 @@ interface PrintGuideModalProps {
   title?: string;
 }
 
-export function PrintGuideModal({
+export const PrintGuideModal = memo(function PrintGuideModal({
   isOpen,
   onClose,
   channelGroups,
@@ -276,7 +276,7 @@ export function PrintGuideModal({
       </div>
     </div>
   );
-}
+});
 
 // Generate the complete HTML for the print window
 function generatePrintHtml(

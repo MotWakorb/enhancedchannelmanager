@@ -1,3 +1,4 @@
+import { memo } from 'react';
 import './VLCProtocolHelperModal.css';
 
 interface VLCProtocolHelperModalProps {
@@ -7,7 +8,7 @@ interface VLCProtocolHelperModalProps {
   streamName: string;
 }
 
-export function VLCProtocolHelperModal({
+export const VLCProtocolHelperModal = memo(function VLCProtocolHelperModal({
   isOpen,
   onClose,
   onDownloadM3U,
@@ -98,4 +99,4 @@ export function VLCProtocolHelperModal({
       </div>
     </div>
   );
-}
+});

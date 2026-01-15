@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, memo } from 'react';
 import type { M3UAccount, M3UAccountType, ServerGroup } from '../types';
 import * as api from '../services/api';
 import { useAsyncOperation } from '../hooks/useAsyncOperation';
@@ -37,7 +37,7 @@ interface M3UAccountModalProps {
   serverGroups: ServerGroup[];
 }
 
-export function M3UAccountModal({
+export const M3UAccountModal = memo(function M3UAccountModal({
   isOpen,
   onClose,
   onSaved,
@@ -456,4 +456,4 @@ export function M3UAccountModal({
       </div>
     </div>
   );
-}
+});

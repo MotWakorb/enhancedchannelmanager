@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, memo } from 'react';
 import type { M3UAccount, M3UAccountProfile } from '../types';
 import type { M3UProfileCreateRequest } from '../services/api';
 import * as api from '../services/api';
@@ -30,7 +30,7 @@ const emptyProfile: EditingProfile = {
   replace_pattern: '$1',
 };
 
-export function M3UProfileModal({
+export const M3UProfileModal = memo(function M3UProfileModal({
   isOpen,
   onClose,
   onSaved,
@@ -374,4 +374,4 @@ export function M3UProfileModal({
       </div>
     </div>
   );
-}
+});
