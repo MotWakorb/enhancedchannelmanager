@@ -735,10 +735,38 @@ class StreamProber:
                         # Only update if order changed
                         if sorted_stream_ids != stream_ids:
                             await self.client.update_channel(channel_id, {"streams": sorted_stream_ids})
+
+                            # Build detailed stream info for before/after
+                            streams_before = []
+                            streams_after = []
+                            for idx, stream_id in enumerate(stream_ids):
+                                stat = stats_map.get(stream_id)
+                                streams_before.append({
+                                    "id": stream_id,
+                                    "name": stat.stream_name if stat else f"Stream {stream_id}",
+                                    "position": idx + 1,
+                                    "status": stat.probe_status if stat else "unknown",
+                                    "resolution": stat.resolution if stat else None,
+                                    "bitrate": stat.bitrate if stat else None,
+                                })
+
+                            for idx, stream_id in enumerate(sorted_stream_ids):
+                                stat = stats_map.get(stream_id)
+                                streams_after.append({
+                                    "id": stream_id,
+                                    "name": stat.stream_name if stat else f"Stream {stream_id}",
+                                    "position": idx + 1,
+                                    "status": stat.probe_status if stat else "unknown",
+                                    "resolution": stat.resolution if stat else None,
+                                    "bitrate": stat.bitrate if stat else None,
+                                })
+
                             reordered.append({
                                 "channel_id": channel_id,
                                 "channel_name": channel_name,
-                                "stream_count": len(stream_ids)
+                                "stream_count": len(stream_ids),
+                                "streams_before": streams_before,
+                                "streams_after": streams_after,
                             })
                             logger.debug(f"Reordered channel {channel_id} ({channel_name}) with {len(stream_ids)} streams")
 
