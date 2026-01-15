@@ -429,17 +429,6 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
     }
   };
 
-  const handleShowProbeResults = async (type: 'success' | 'failed') => {
-    try {
-      const results = await api.getProbeResults();
-      setProbeResults(results);
-      setProbeResultsType(type);
-      setShowProbeResultsModal(true);
-    } catch (err) {
-      console.error('Failed to fetch probe results:', err);
-    }
-  };
-
   const handleRerunFailed = async () => {
     setShowProbeResultsModal(false);
     // TODO: Implement re-run functionality for failed streams
@@ -1520,82 +1509,6 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
             <div className={probeAllResult.success ? 'success-message' : 'error-message'} style={{ marginTop: '1rem' }}>
               <span className="material-icons">{probeAllResult.success ? 'check_circle' : 'error'}</span>
               {probeAllResult.message}
-            </div>
-          )}
-
-          {probeProgress && probeProgress.in_progress && (
-            <div style={{
-              marginTop: '1rem',
-              padding: '1rem',
-              backgroundColor: '#2c3e50',
-              color: '#ecf0f1',
-              borderRadius: '8px',
-              border: '2px solid #34495e'
-            }}>
-              <div style={{ marginBottom: '0.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <div style={{ flex: 1 }}>
-                  <div style={{ fontWeight: '600', fontSize: '14px', marginBottom: '4px' }}>
-                    {probeProgress.status === 'fetching' && 'Fetching channel streams...'}
-                    {probeProgress.status === 'probing' && `Probing: ${probeProgress.current} / ${probeProgress.total}`}
-                    {probeProgress.status === 'completed' && 'Completed!'}
-                    {probeProgress.status === 'failed' && 'Failed'}
-                    {probeProgress.status === 'cancelled' && 'Cancelled'}
-                  </div>
-                  {probeProgress.status === 'probing' && probeProgress.current_stream && (
-                    <div style={{
-                      fontSize: '12px',
-                      color: '#bdc3c7',
-                      whiteSpace: 'nowrap',
-                      overflow: 'hidden',
-                      textOverflow: 'ellipsis',
-                      maxWidth: '500px'
-                    }}>
-                      Currently testing: {probeProgress.current_stream}
-                    </div>
-                  )}
-                  {probeProgress.status === 'probing' && (
-                    <div style={{
-                      fontSize: '12px',
-                      marginTop: '4px',
-                      display: 'flex',
-                      gap: '1rem'
-                    }}>
-                      <span
-                        className="probe-counter-link success"
-                        onClick={() => handleShowProbeResults('success')}
-                        title="Click to view successful streams"
-                      >
-                        ✓ Success: {probeProgress.success_count}
-                      </span>
-                      <span
-                        className="probe-counter-link failed"
-                        onClick={() => handleShowProbeResults('failed')}
-                        title="Click to view failed streams"
-                      >
-                        ✗ Failed: {probeProgress.failed_count}
-                      </span>
-                    </div>
-                  )}
-                </div>
-                <span style={{ fontWeight: '700', fontSize: '16px', color: '#3498db', marginLeft: '1rem' }}>
-                  {probeProgress.percentage}%
-                </span>
-              </div>
-              <div style={{
-                width: '100%',
-                height: '12px',
-                backgroundColor: '#34495e',
-                borderRadius: '6px',
-                overflow: 'hidden',
-                marginTop: '0.5rem'
-              }}>
-                <div style={{
-                  width: `${probeProgress.percentage}%`,
-                  height: '100%',
-                  background: 'linear-gradient(90deg, #3498db 0%, #2ecc71 100%)',
-                  transition: 'width 0.3s ease',
-                }}></div>
-              </div>
             </div>
           )}
         </div>
