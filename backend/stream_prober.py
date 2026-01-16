@@ -79,7 +79,8 @@ class StreamProber:
         self.stream_sort_priority = stream_sort_priority or ["resolution", "bitrate", "framerate"]
         self.stream_sort_enabled = stream_sort_enabled or {"resolution": True, "bitrate": True, "framerate": True}
         self._task: Optional[asyncio.Task] = None
-        self._running = False
+        self._running = False  # Controls the scheduler loop
+        self._probe_cancelled = False  # Controls cancellation of in-progress probe
         self._probing_in_progress = False
         # Progress tracking for probe all streams
         self._probe_progress_total = 0
@@ -169,8 +170,8 @@ class StreamProber:
             return {"status": "no_probe_running", "message": "No probe is currently running"}
 
         logger.info("Cancelling in-progress probe...")
-        self._running = False
-        # The probe loop will detect _running=False and set status to "cancelled"
+        self._probe_cancelled = True
+        # The probe loop will detect _probe_cancelled=True and set status to "cancelled"
         return {"status": "cancelling", "message": "Probe cancellation requested"}
 
     def force_reset_probe_state(self) -> dict:
@@ -183,7 +184,7 @@ class StreamProber:
         logger.warning(f"Force resetting probe state (was_in_progress={was_in_progress})")
 
         self._probing_in_progress = False
-        self._running = False
+        self._probe_cancelled = True  # Signal any running probe to stop
         self._probe_progress_status = "idle"
         self._probe_progress_current_stream = ""
 
@@ -273,6 +274,7 @@ class StreamProber:
             return
 
         self._probing_in_progress = True
+        self._probe_cancelled = False  # Reset cancellation flag
         start_time = datetime.utcnow()
         probed_count = 0
 
@@ -330,7 +332,7 @@ class StreamProber:
                         stream_to_channels[stream_id].append(channel_id)
 
                 for stream in to_probe:
-                    if not self._running:
+                    if self._probe_cancelled:
                         break
 
                     stream_id = stream["id"]
@@ -1109,7 +1111,7 @@ class StreamProber:
             return {"status": "already_running"}
 
         self._probing_in_progress = True
-        self._running = True  # Enable the probe loop (checked for cancellation)
+        self._probe_cancelled = False  # Reset cancellation flag
         self._probe_progress_current = 0
         self._probe_progress_total = 0
         self._probe_progress_status = "fetching"
@@ -1247,7 +1249,7 @@ class StreamProber:
                 active_tasks = {}  # task -> (stream, display_string)
 
                 while pending_streams or active_tasks:
-                    if not self._running:
+                    if self._probe_cancelled:
                         self._probe_progress_status = "cancelled"
                         # Cancel active tasks
                         for task in active_tasks:
@@ -1391,7 +1393,7 @@ class StreamProber:
                 logger.info(f"Starting sequential probe of {len(streams_to_probe)} streams (filtered from {len(all_streams)} total)")
 
                 for stream in streams_to_probe:
-                    if not self._running:
+                    if self._probe_cancelled:
                         self._probe_progress_status = "cancelled"
                         break
 
