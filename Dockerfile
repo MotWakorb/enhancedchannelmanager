@@ -3,6 +3,11 @@ FROM node:20-alpine AS frontend-builder
 WORKDIR /app/frontend
 COPY frontend/package.json frontend/package-lock.json* ./
 RUN npm install
+
+# Cache busting - invalidate cache when git commit changes
+ARG GIT_COMMIT=unknown
+ENV GIT_COMMIT=$GIT_COMMIT
+
 COPY frontend/ ./
 RUN npm run build
 
