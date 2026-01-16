@@ -1363,6 +1363,10 @@ class StreamProber:
                                 logger.error(f"Probe task failed: {e}")
                                 probed_count += 1
                                 self._probe_progress_current = probed_count
+
+                        # Small delay after probes complete to let devices (like HDHomeRun) release tuners
+                        # This prevents rapid-fire requests that can cause 5XX errors
+                        await asyncio.sleep(0.5)
                     elif not pending_streams:
                         # No active tasks and no pending streams - we're done
                         break

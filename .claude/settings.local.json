@@ -22,7 +22,8 @@
       "Bash(.scriptsquality-gates.bat)",
       "Bash(curl:*)",
       "Bash(python3:*)",
-      "Bash(gh run list:*)"
+      "Bash(gh run list:*)",
+      "Bash(docker ps:*)"
     ],
     "deny": [],
     "ask": [],
