@@ -215,6 +215,21 @@ class StreamProber:
             return
 
         self._probing_in_progress = True
+        start_time = datetime.utcnow()
+        probed_count = 0
+
+        # Reset tracking variables
+        self._probe_success_streams = []
+        self._probe_failed_streams = []
+        self._probe_skipped_streams = []
+        self._probe_progress_total = 0
+        self._probe_progress_current = 0
+        self._probe_progress_success_count = 0
+        self._probe_progress_failed_count = 0
+        self._probe_progress_skipped_count = 0
+        self._probe_progress_status = "probing"
+        self._probe_progress_current_stream = ""
+
         try:
             cutoff = datetime.utcnow() - timedelta(hours=self.probe_interval_hours)
 
@@ -243,16 +258,75 @@ class StreamProber:
 
                 logger.info(f"Scheduled probe: {len(to_probe)} streams to probe")
 
+                # Set progress tracking
+                self._probe_progress_total = len(to_probe)
+
+                # Build stream_id -> channel mapping for auto-reorder
+                stream_to_channels = {}
+                for stream in streams:
+                    stream_id = stream["id"]
+                    channel_id = stream.get("channel")
+                    if channel_id:
+                        if stream_id not in stream_to_channels:
+                            stream_to_channels[stream_id] = []
+                        stream_to_channels[stream_id].append(channel_id)
+
                 for stream in to_probe:
                     if not self._running:
                         break
-                    await self.probe_stream(
-                        stream["id"], stream.get("url"), stream.get("name")
-                    )
+
+                    stream_id = stream["id"]
+                    stream_url = stream.get("url")
+                    stream_name = stream.get("name")
+
+                    self._probe_progress_current = probed_count + 1
+                    self._probe_progress_current_stream = stream_name or f"Stream {stream_id}"
+
+                    result = await self.probe_stream(stream_id, stream_url, stream_name)
+
+                    # Track success/failure
+                    probe_status = result.get("probe_status", "failed")
+                    stream_info = {"id": stream_id, "name": stream_name, "url": stream_url}
+                    if probe_status == "success":
+                        self._probe_progress_success_count += 1
+                        self._probe_success_streams.append(stream_info)
+                    else:
+                        self._probe_progress_failed_count += 1
+                        self._probe_failed_streams.append(stream_info)
+
+                    probed_count += 1
                     await asyncio.sleep(1)  # Rate limiting
+
+                logger.info(f"Scheduled probe completed: {probed_count} streams probed")
+                self._probe_progress_status = "completed"
+                self._probe_progress_current_stream = ""
+
+                # Auto-reorder streams if configured
+                reordered_channels = []
+                if self.auto_reorder_after_probe:
+                    logger.info("Auto-reorder is enabled, reordering streams in probed channels...")
+                    self._probe_progress_status = "reordering"
+                    self._probe_progress_current_stream = "Reordering streams..."
+                    try:
+                        # Use the same channel groups filter as configured
+                        channel_groups_override = self.probe_channel_groups if self.probe_channel_groups else None
+                        reordered_channels = await self._auto_reorder_channels(channel_groups_override, stream_to_channels)
+                        logger.info(f"Auto-reordered {len(reordered_channels)} channels")
+                    except Exception as e:
+                        logger.error(f"Auto-reorder failed: {e}")
+
+                # Save to probe history
+                self._save_probe_history(start_time, probed_count, reordered_channels=reordered_channels)
 
             finally:
                 session.close()
+        except Exception as e:
+            logger.error(f"Scheduled probe failed: {e}")
+            self._probe_progress_status = "failed"
+            self._probe_progress_current_stream = ""
+
+            # Save failed run to history
+            self._save_probe_history(start_time, probed_count, error=str(e))
         finally:
             self._probing_in_progress = False
 

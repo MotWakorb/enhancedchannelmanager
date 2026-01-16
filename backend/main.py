@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Body
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
@@ -1272,7 +1272,7 @@ async def get_channel_groups_with_streams():
 
 
 @app.delete("/api/channel-groups/orphaned")
-async def delete_orphaned_channel_groups(request: DeleteOrphanedGroupsRequest = None):
+async def delete_orphaned_channel_groups(request: DeleteOrphanedGroupsRequest = Body(None)):
     """Delete channel groups that are truly orphaned.
 
     A group is deleted if it has no streams AND no channels.
