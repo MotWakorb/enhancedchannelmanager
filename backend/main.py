@@ -3051,9 +3051,19 @@ async def probe_all_streams_endpoint(request: ProbeAllRequest = ProbeAllRequest(
 
     import asyncio
 
+    async def run_probe_with_logging():
+        """Wrapper to catch and log any errors from the probe task."""
+        try:
+            logger.info("[PROBE-TASK] Background probe task starting...")
+            await prober.probe_all_streams(channel_groups_override=request.channel_groups or None)
+            logger.info("[PROBE-TASK] Background probe task completed successfully")
+        except Exception as e:
+            logger.error(f"[PROBE-TASK] Background probe task failed with error: {e}", exc_info=True)
+
     # Start background task with optional group filter
     logger.info(f"Starting background probe task (groups: {request.channel_groups or 'all'})")
-    asyncio.create_task(prober.probe_all_streams(channel_groups_override=request.channel_groups or None))
+    asyncio.create_task(run_probe_with_logging())
+    logger.info("Background task created, returning response")
     return {"status": "started", "message": "Background probe started"}
 
 
