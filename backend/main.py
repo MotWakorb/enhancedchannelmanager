@@ -184,6 +184,10 @@ class CreateChannelGroupRequest(BaseModel):
 class DeleteOrphanedGroupsRequest(BaseModel):
     group_ids: list[int] | None = None  # Optional list of group IDs to delete
 
+    class Config:
+        # Allow extra fields to be ignored (for future compatibility)
+        extra = "ignore"
+
 
 # Health check
 @app.get("/api/health")
