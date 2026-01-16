@@ -146,6 +146,8 @@ async def startup_event():
                 refresh_m3us_before_probe=settings.refresh_m3us_before_probe,
                 auto_reorder_after_probe=settings.auto_reorder_after_probe,
                 deprioritize_failed_streams=settings.deprioritize_failed_streams,
+                stream_sort_priority=settings.stream_sort_priority,
+                stream_sort_enabled=settings.stream_sort_enabled,
             )
             logger.info(f"StreamProber instance created: {prober is not None}")
 
@@ -526,6 +528,8 @@ async def restart_services():
                 refresh_m3us_before_probe=settings.refresh_m3us_before_probe,
                 auto_reorder_after_probe=settings.auto_reorder_after_probe,
                 deprioritize_failed_streams=settings.deprioritize_failed_streams,
+                stream_sort_priority=settings.stream_sort_priority,
+                stream_sort_enabled=settings.stream_sort_enabled,
             )
             set_prober(new_prober)
             await new_prober.start()

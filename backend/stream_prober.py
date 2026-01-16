@@ -58,6 +58,8 @@ class StreamProber:
         refresh_m3us_before_probe: bool = True,  # Refresh all M3U accounts before starting probe
         auto_reorder_after_probe: bool = False,  # Automatically reorder streams in channels after probe completes
         deprioritize_failed_streams: bool = True,  # Deprioritize failed streams in smart sort
+        stream_sort_priority: list[str] = None,  # Priority order for Smart Sort criteria
+        stream_sort_enabled: dict[str, bool] = None,  # Which criteria are enabled for Smart Sort
     ):
         self.client = client
         self.probe_timeout = probe_timeout
@@ -73,6 +75,9 @@ class StreamProber:
         self.refresh_m3us_before_probe = refresh_m3us_before_probe
         self.auto_reorder_after_probe = auto_reorder_after_probe
         self.deprioritize_failed_streams = deprioritize_failed_streams
+        # Smart Sort configuration
+        self.stream_sort_priority = stream_sort_priority or ["resolution", "bitrate", "framerate"]
+        self.stream_sort_enabled = stream_sort_enabled or {"resolution": True, "bitrate": True, "framerate": True}
         self._task: Optional[asyncio.Task] = None
         self._running = False
         self._probing_in_progress = False
@@ -338,16 +343,27 @@ class StreamProber:
                 # Auto-reorder streams if configured
                 reordered_channels = []
                 if self.auto_reorder_after_probe:
-                    logger.info("Auto-reorder is enabled, reordering streams in probed channels...")
+                    logger.info("=" * 60)
+                    logger.info("[AUTO-REORDER] Starting automatic stream reorder after probe")
+                    logger.info(f"[AUTO-REORDER] Configuration:")
+                    logger.info(f"[AUTO-REORDER]   Sort priority: {self.stream_sort_priority}")
+                    logger.info(f"[AUTO-REORDER]   Sort enabled: {self.stream_sort_enabled}")
+                    logger.info(f"[AUTO-REORDER]   Deprioritize failed: {self.deprioritize_failed_streams}")
+                    logger.info(f"[AUTO-REORDER]   Channel groups filter: {self.probe_channel_groups or 'ALL GROUPS'}")
+                    logger.info("=" * 60)
                     self._probe_progress_status = "reordering"
                     self._probe_progress_current_stream = "Reordering streams..."
                     try:
                         # Use the same channel groups filter as configured
                         channel_groups_override = self.probe_channel_groups if self.probe_channel_groups else None
                         reordered_channels = await self._auto_reorder_channels(channel_groups_override, stream_to_channels)
-                        logger.info(f"Auto-reordered {len(reordered_channels)} channels")
+                        logger.info("=" * 60)
+                        logger.info(f"[AUTO-REORDER] Completed: {len(reordered_channels)} channels reordered")
+                        for ch in reordered_channels:
+                            logger.info(f"[AUTO-REORDER]   - {ch['channel_name']} (id={ch['channel_id']}): {ch['stream_count']} streams")
+                        logger.info("=" * 60)
                     except Exception as e:
-                        logger.error(f"Auto-reorder failed: {e}")
+                        logger.error(f"[AUTO-REORDER] Failed: {e}")
 
                 # Save to probe history
                 self._save_probe_history(start_time, probed_count, reordered_channels=reordered_channels)
@@ -838,7 +854,7 @@ class StreamProber:
                         stats_map = {stat.stream_id: stat for stat in stats_records}
 
                         # Sort streams using smart sort logic (similar to frontend)
-                        sorted_stream_ids = self._smart_sort_streams(stream_ids, stats_map)
+                        sorted_stream_ids = self._smart_sort_streams(stream_ids, stats_map, channel_name)
 
                         # Only update if order changed
                         if sorted_stream_ids != stream_ids:
@@ -869,8 +885,10 @@ class StreamProber:
 
                             # Debug logging: log the proposed changes
                             logger.debug(f"[AUTO-REORDER] Channel {channel_id} ({channel_name}) - Proposing reorder:")
-                            logger.debug(f"[AUTO-REORDER]   Before: {[f'{s['name']} (pos={s['position']}, status={s['status']}, res={s['resolution']}, br={s['bitrate']})' for s in streams_before]}")
-                            logger.debug(f"[AUTO-REORDER]   After:  {[f'{s['name']} (pos={s['position']}, status={s['status']}, res={s['resolution']}, br={s['bitrate']})' for s in streams_after]}")
+                            before_str = [f"{s['name']} (pos={s['position']}, status={s['status']}, res={s['resolution']}, br={s['bitrate']})" for s in streams_before]
+                            after_str = [f"{s['name']} (pos={s['position']}, status={s['status']}, res={s['resolution']}, br={s['bitrate']})" for s in streams_after]
+                            logger.debug(f"[AUTO-REORDER]   Before: {before_str}")
+                            logger.debug(f"[AUTO-REORDER]   After:  {after_str}")
 
                             # Execute the reorder
                             try:
@@ -899,40 +917,100 @@ class StreamProber:
 
         return reordered
 
-    def _smart_sort_streams(self, stream_ids: list[int], stats_map: dict) -> list[int]:
+    def _smart_sort_streams(self, stream_ids: list[int], stats_map: dict, channel_name: str = "unknown") -> list[int]:
         """
         Sort stream IDs using smart sort logic based on stream stats.
-        Prioritizes working streams and sorts by resolution/bitrate/framerate.
+        Uses configurable sort priority and enabled criteria from settings.
+        Prioritizes working streams and sorts by enabled criteria in priority order.
+
+        Args:
+            stream_ids: List of stream IDs to sort
+            stats_map: Map of stream_id -> StreamStats
+            channel_name: Channel name for logging purposes
         """
+        # Get active sort criteria (enabled and in priority order)
+        active_criteria = [
+            criterion for criterion in self.stream_sort_priority
+            if self.stream_sort_enabled.get(criterion, False)
+        ]
+
+        logger.info(f"[SMART-SORT] Channel '{channel_name}': Sorting {len(stream_ids)} streams")
+        logger.info(f"[SMART-SORT] Sort config: priority={self.stream_sort_priority}, enabled={self.stream_sort_enabled}")
+        logger.info(f"[SMART-SORT] Active criteria (in order): {active_criteria}")
+        logger.info(f"[SMART-SORT] Deprioritize failed streams: {self.deprioritize_failed_streams}")
+
+        # Log each stream's stats before sorting
+        for stream_id in stream_ids:
+            stat = stats_map.get(stream_id)
+            if stat:
+                logger.debug(f"[SMART-SORT]   Stream {stream_id} ({stat.stream_name}): "
+                            f"status={stat.probe_status}, res={stat.resolution}, "
+                            f"bitrate={stat.bitrate}, fps={stat.fps}")
+            else:
+                logger.debug(f"[SMART-SORT]   Stream {stream_id}: NO STATS AVAILABLE")
+
         def get_sort_value(stream_id: int) -> tuple:
             stat = stats_map.get(stream_id)
+            stream_name = stat.stream_name if stat else f"Stream {stream_id}"
 
             # Deprioritize failed streams if enabled
             if self.deprioritize_failed_streams:
                 if not stat or stat.probe_status in ('failed', 'timeout', 'pending'):
-                    return (1, 0, 0, 0)  # Failed streams sort to bottom
+                    logger.debug(f"[SMART-SORT]   {stream_name}: DEPRIORITIZED (status={stat.probe_status if stat else 'no_stats'})")
+                    # Return tuple with 1 as first element to sort to bottom
+                    return (1,) + tuple(0 for _ in active_criteria)
 
             if not stat or stat.probe_status != 'success':
-                return (0, 0, 0, 0)
+                logger.debug(f"[SMART-SORT]   {stream_name}: No successful probe data")
+                return (0,) + tuple(0 for _ in active_criteria)
 
-            # Parse resolution (e.g., "1920x1080" -> width * height)
-            resolution_value = 0
-            if stat.resolution:
-                try:
-                    parts = stat.resolution.split('x')
-                    if len(parts) == 2:
-                        resolution_value = int(parts[0]) * int(parts[1])
-                except:
-                    pass
+            # Build sort values based on active criteria in priority order
+            sort_values = [0]  # First element: 0 = successful stream
 
-            bitrate_value = stat.bitrate or 0
-            framerate_value = stat.framerate or 0
+            for criterion in active_criteria:
+                if criterion == "resolution":
+                    # Parse resolution (e.g., "1920x1080" -> width * height)
+                    resolution_value = 0
+                    if stat.resolution:
+                        try:
+                            parts = stat.resolution.split('x')
+                            if len(parts) == 2:
+                                resolution_value = int(parts[0]) * int(parts[1])
+                        except:
+                            pass
+                    # Negate for descending sort (higher values first)
+                    sort_values.append(-resolution_value)
 
-            # Negate for descending sort (higher values first)
-            return (0, -resolution_value, -bitrate_value, -framerate_value)
+                elif criterion == "bitrate":
+                    bitrate_value = stat.bitrate or 0
+                    sort_values.append(-bitrate_value)
+
+                elif criterion == "framerate":
+                    # Parse fps - could be string like "29.97" or "30"
+                    framerate_value = 0
+                    if stat.fps:
+                        try:
+                            framerate_value = float(stat.fps)
+                        except:
+                            pass
+                    sort_values.append(-framerate_value)
+
+            logger.debug(f"[SMART-SORT]   {stream_name}: sort_tuple={tuple(sort_values)} "
+                        f"(res={stat.resolution}, br={stat.bitrate}, fps={stat.fps})")
+            return tuple(sort_values)
 
         # Sort stream IDs by their stats
         sorted_ids = sorted(stream_ids, key=get_sort_value)
+
+        # Log the final sorted order
+        logger.info(f"[SMART-SORT] Channel '{channel_name}' sorted order:")
+        for idx, stream_id in enumerate(sorted_ids):
+            stat = stats_map.get(stream_id)
+            stream_name = stat.stream_name if stat else f"Stream {stream_id}"
+            status = stat.probe_status if stat else "no_stats"
+            res = stat.resolution if stat else "?"
+            logger.info(f"[SMART-SORT]   #{idx+1}: {stream_name} (id={stream_id}, status={status}, res={res})")
+
         return sorted_ids
 
     async def probe_all_streams(self, channel_groups_override: list[str] = None):
