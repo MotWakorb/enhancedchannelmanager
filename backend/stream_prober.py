@@ -10,6 +10,8 @@ import shutil
 import time
 from datetime import datetime, timedelta
 from typing import Optional
+from pathlib import Path
+import os
 
 import httpx
 
@@ -23,6 +25,10 @@ DEFAULT_PROBE_TIMEOUT = 30  # seconds
 DEFAULT_PROBE_BATCH_SIZE = 10  # streams per cycle
 DEFAULT_PROBE_INTERVAL_HOURS = 24  # daily
 BITRATE_SAMPLE_DURATION = 8  # seconds to sample stream for bitrate measurement
+
+# Probe history persistence
+CONFIG_DIR = Path(os.environ.get("CONFIG_DIR", "/config"))
+PROBE_HISTORY_FILE = CONFIG_DIR / "probe_history.json"
 
 
 def check_ffprobe_available() -> bool:
@@ -83,6 +89,34 @@ class StreamProber:
         self._probe_progress_skipped_count = 0
         # Probe history - list of last 5 probe runs
         self._probe_history = []  # List of {timestamp, total, success_count, failed_count, status, success_streams, failed_streams}
+
+        # Load probe history from disk on initialization
+        self._load_probe_history()
+
+    def _load_probe_history(self):
+        """Load probe history from persistent storage."""
+        try:
+            if PROBE_HISTORY_FILE.exists():
+                with open(PROBE_HISTORY_FILE, 'r') as f:
+                    self._probe_history = json.load(f)
+                logger.info(f"Loaded {len(self._probe_history)} probe history entries from {PROBE_HISTORY_FILE}")
+            else:
+                logger.info(f"No probe history file found at {PROBE_HISTORY_FILE}, starting fresh")
+        except Exception as e:
+            logger.error(f"Failed to load probe history from {PROBE_HISTORY_FILE}: {e}")
+            self._probe_history = []
+
+    def _persist_probe_history(self):
+        """Persist probe history to disk."""
+        try:
+            # Ensure config directory exists
+            CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+
+            with open(PROBE_HISTORY_FILE, 'w') as f:
+                json.dump(self._probe_history, f, indent=2)
+            logger.debug(f"Persisted {len(self._probe_history)} probe history entries to {PROBE_HISTORY_FILE}")
+        except Exception as e:
+            logger.error(f"Failed to persist probe history to {PROBE_HISTORY_FILE}: {e}")
 
     async def start(self):
         """Start the background scheduled probing task."""
@@ -808,8 +842,6 @@ class StreamProber:
 
                         # Only update if order changed
                         if sorted_stream_ids != stream_ids:
-                            await self.client.update_channel(channel_id, {"streams": sorted_stream_ids})
-
                             # Build detailed stream info for before/after
                             streams_before = []
                             streams_after = []
@@ -835,6 +867,19 @@ class StreamProber:
                                     "bitrate": stat.bitrate if stat else None,
                                 })
 
+                            # Debug logging: log the proposed changes
+                            logger.debug(f"[AUTO-REORDER] Channel {channel_id} ({channel_name}) - Proposing reorder:")
+                            logger.debug(f"[AUTO-REORDER]   Before: {[f'{s['name']} (pos={s['position']}, status={s['status']}, res={s['resolution']}, br={s['bitrate']})' for s in streams_before]}")
+                            logger.debug(f"[AUTO-REORDER]   After:  {[f'{s['name']} (pos={s['position']}, status={s['status']}, res={s['resolution']}, br={s['bitrate']})' for s in streams_after]}")
+
+                            # Execute the reorder
+                            try:
+                                await self.client.update_channel(channel_id, {"streams": sorted_stream_ids})
+                                logger.debug(f"[AUTO-REORDER] Successfully reordered channel {channel_id} ({channel_name})")
+                            except Exception as update_err:
+                                logger.error(f"[AUTO-REORDER] Failed to update channel {channel_id} ({channel_name}): {update_err}")
+                                raise  # Re-raise to be caught by outer exception handler
+
                             reordered.append({
                                 "channel_id": channel_id,
                                 "channel_name": channel_name,
@@ -842,7 +887,8 @@ class StreamProber:
                                 "streams_before": streams_before,
                                 "streams_after": streams_after,
                             })
-                            logger.debug(f"Reordered channel {channel_id} ({channel_name}) with {len(stream_ids)} streams")
+                        else:
+                            logger.debug(f"[AUTO-REORDER] Channel {channel_id} ({channel_name}) - No reorder needed (already in correct order)")
 
                 except Exception as e:
                     logger.error(f"Failed to reorder channel {channel.get('id', 'unknown')}: {e}")
@@ -1316,6 +1362,9 @@ class StreamProber:
 
         reorder_msg = f", {len(reordered_channels or [])} channels reordered" if reordered_channels else ""
         logger.info(f"Saved probe history entry: {total} streams, {self._probe_progress_success_count} success, {self._probe_progress_failed_count} failed, {self._probe_progress_skipped_count} skipped{reorder_msg}")
+
+        # Persist to disk
+        self._persist_probe_history()
 
     def get_probe_history(self) -> list:
         """Get probe run history (last 5 runs)."""

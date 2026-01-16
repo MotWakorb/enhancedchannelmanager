@@ -1281,11 +1281,18 @@ async def delete_orphaned_channel_groups(request: DeleteOrphanedGroupsRequest = 
     Args:
         request: Optional request body with group_ids list. If None or empty, all orphaned groups are deleted.
     """
+    logger.debug(f"[DELETE-ORPHANED] Request received: {request}")
+    logger.debug(f"[DELETE-ORPHANED] Request type: {type(request)}")
+
     client = get_client()
     group_ids = request.group_ids if request else None
+    logger.debug(f"[DELETE-ORPHANED] Extracted group_ids: {group_ids}")
+
     try:
         # Use the same logic as GET to find orphaned groups
+        logger.debug(f"[DELETE-ORPHANED] Fetching all channel groups...")
         all_groups = await client.get_channel_groups()
+        logger.debug(f"[DELETE-ORPHANED] Found {len(all_groups)} total channel groups")
 
         # Get M3U group settings to see which groups are still in M3U accounts
         m3u_group_settings = await client.get_all_m3u_group_settings()
@@ -1344,6 +1351,7 @@ async def delete_orphaned_channel_groups(request: DeleteOrphanedGroupsRequest = 
         # Find orphaned groups
         # A group is orphaned if it has no streams AND no channels AND is NOT in any M3U account
         # AND is NOT a target of group_override from an auto_channel_sync M3U group
+        logger.debug(f"[DELETE-ORPHANED] Identifying orphaned groups...")
         orphaned_groups = []
         for group in all_groups:
             group_id = group["id"]
@@ -1369,8 +1377,12 @@ async def delete_orphaned_channel_groups(request: DeleteOrphanedGroupsRequest = 
                     "name": group_name,
                     "reason": "No streams, channels, or M3U association",
                 })
+                logger.debug(f"[DELETE-ORPHANED] Group {group_id} ({group_name}) is orphaned: streams={stream_count}, channels={channel_count}, m3u={m3u_info is not None}, override_target={is_override_target}")
+
+        logger.debug(f"[DELETE-ORPHANED] Found {len(orphaned_groups)} orphaned groups")
 
         if not orphaned_groups:
+            logger.debug(f"[DELETE-ORPHANED] No orphaned groups found, returning early")
             return {
                 "status": "ok",
                 "message": "No orphaned channel groups found",
@@ -1381,8 +1393,11 @@ async def delete_orphaned_channel_groups(request: DeleteOrphanedGroupsRequest = 
         # Filter to only the specified group IDs if provided
         groups_to_delete = orphaned_groups
         if group_ids is not None:
+            logger.debug(f"[DELETE-ORPHANED] Filtering to specified group IDs: {group_ids}")
             groups_to_delete = [g for g in orphaned_groups if g["id"] in group_ids]
+            logger.debug(f"[DELETE-ORPHANED] After filtering: {len(groups_to_delete)} groups to delete")
             if not groups_to_delete:
+                logger.debug(f"[DELETE-ORPHANED] No matching groups to delete, returning early")
                 return {
                     "status": "ok",
                     "message": "No matching orphaned groups to delete",
@@ -1391,18 +1406,20 @@ async def delete_orphaned_channel_groups(request: DeleteOrphanedGroupsRequest = 
                 }
 
         # Delete each orphaned group
+        logger.debug(f"[DELETE-ORPHANED] Deleting {len(groups_to_delete)} orphaned groups...")
         deleted_groups = []
         failed_groups = []
         for orphan in groups_to_delete:
             group_id = orphan["id"]
             group_name = orphan["name"]
             try:
+                logger.debug(f"[DELETE-ORPHANED] Attempting to delete group {group_id} ({group_name})...")
                 await client.delete_channel_group(group_id)
                 deleted_groups.append({"id": group_id, "name": group_name, "reason": orphan["reason"]})
-                logger.info(f"Deleted orphaned channel group: {group_id} ({group_name}) - {orphan['reason']}")
+                logger.info(f"[DELETE-ORPHANED] Successfully deleted orphaned channel group: {group_id} ({group_name}) - {orphan['reason']}")
             except Exception as group_err:
                 failed_groups.append({"id": group_id, "name": group_name, "error": str(group_err)})
-                logger.warning(f"Failed to delete orphaned channel group {group_id} ({group_name}): {group_err}")
+                logger.error(f"[DELETE-ORPHANED] Failed to delete orphaned channel group {group_id} ({group_name}): {group_err}")
 
         # Log to journal
         if deleted_groups:
