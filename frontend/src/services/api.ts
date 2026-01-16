@@ -1202,15 +1202,20 @@ export async function probeBulkStreams(streamIds: number[]): Promise<import('../
 
 /**
  * Start background probe of all streams.
+ * @param channelGroups - Optional list of channel group names to filter by
+ * @param skipM3uRefresh - If true, skip M3U refresh (use for on-demand probes from UI)
  */
-export async function probeAllStreams(channelGroups?: string[]): Promise<{ status: string; message: string }> {
-  logger.debug('[Probe] probeAllStreams called with groups:', channelGroups);
+export async function probeAllStreams(channelGroups?: string[], skipM3uRefresh?: boolean): Promise<{ status: string; message: string }> {
+  logger.debug('[Probe] probeAllStreams called with groups:', channelGroups, 'skipM3uRefresh:', skipM3uRefresh);
 
   try {
     const result = await fetchJson(`${API_BASE}/stream-stats/probe/all`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ channel_groups: channelGroups || [] }),
+      body: JSON.stringify({
+        channel_groups: channelGroups || [],
+        skip_m3u_refresh: skipM3uRefresh ?? false
+      }),
     }) as { status: string; message: string };
     logger.debug('[Probe] probeAllStreams request succeeded:', result);
     return result;
