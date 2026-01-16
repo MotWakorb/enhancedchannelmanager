@@ -4,6 +4,7 @@ import { NETWORK_PREFIXES, NETWORK_SUFFIXES } from '../../constants/streamNormal
 import type { Theme, ProbeHistoryEntry, SortCriterion, SortEnabledMap, GracenoteConflictMode } from '../../services/api';
 import type { ChannelProfile } from '../../types';
 import { logger } from '../../utils/logger';
+import { copyToClipboard } from '../../utils/clipboard';
 import type { LogLevel as FrontendLogLevel } from '../../utils/logger';
 import { DeleteOrphanedGroupsModal } from '../DeleteOrphanedGroupsModal';
 import {
@@ -688,13 +689,11 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
   };
 
   const handleCopyUrl = async (url: string) => {
-    try {
-      await navigator.clipboard.writeText(url);
+    const success = await copyToClipboard(url, 'stream URL');
+    if (success) {
       setCopiedUrl(url);
       // Clear the "copied" indicator after 2 seconds
       setTimeout(() => setCopiedUrl(null), 2000);
-    } catch (err) {
-      logger.error('Failed to copy URL to clipboard', err);
     }
   };
 
