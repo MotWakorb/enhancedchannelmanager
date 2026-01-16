@@ -13,6 +13,11 @@ RUN npm run build
 
 # Production image
 FROM python:3.12-slim
+
+# Cache busting - MUST be declared early in the stage to receive build arg
+ARG GIT_COMMIT=unknown
+ENV GIT_COMMIT=$GIT_COMMIT
+
 WORKDIR /app
 
 # Install gosu for proper user switching, ffmpeg for stream probing, and create non-root user
@@ -23,10 +28,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends gosu ffmpeg \
 # Install Python dependencies
 COPY backend/requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
-
-# Cache busting - this ARG invalidates cache when git commit changes
-ARG GIT_COMMIT=unknown
-ENV GIT_COMMIT=$GIT_COMMIT
 
 # Copy backend code
 COPY backend/ ./
