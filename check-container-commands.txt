@@ -1,0 +1,16 @@
+# Run these commands on your server:
+
+# 1. Check the GIT_COMMIT environment variable in the container
+docker exec ecm-ecm-1 printenv GIT_COMMIT
+
+# 2. Check if the debug logging code exists in the running container
+docker exec ecm-ecm-1 grep -n "\[DELETE-ORPHANED\]" main.py | head -5
+
+# 3. Check the actual endpoint definition (line 1278-1290)
+docker exec ecm-ecm-1 sed -n '1278,1290p' main.py
+
+# 4. Check the Pydantic model (around line 184-190)
+docker exec ecm-ecm-1 sed -n '184,190p' main.py
+
+# 5. Check when the main.py file was last modified in the container
+docker exec ecm-ecm-1 stat main.py | grep Modify

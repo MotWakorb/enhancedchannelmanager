@@ -21,7 +21,8 @@
       "Bash(python -m py_compile:*)",
       "Bash(.scriptsquality-gates.bat)",
       "Bash(curl:*)",
-      "Bash(python3:*)"
+      "Bash(python3:*)",
+      "Bash(gh run list:*)"
     ],
     "deny": [],
     "ask": [],
