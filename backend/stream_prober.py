@@ -451,7 +451,7 @@ class StreamProber:
         cmd = [
             "ffprobe",
             "-v",
-            "quiet",
+            "error",  # Show errors in stderr (was "quiet" which suppressed everything)
             "-print_format",
             "json",
             "-show_format",
@@ -476,7 +476,9 @@ class StreamProber:
             raise
 
         if process.returncode != 0:
-            error_text = stderr.decode()[:500] if stderr else "Unknown error"
+            error_text = stderr.decode().strip()[:500] if stderr else ""
+            if not error_text:
+                error_text = f"Exit code {process.returncode} (no stderr output)"
             raise RuntimeError(f"ffprobe failed: {error_text}")
 
         output = stdout.decode()
