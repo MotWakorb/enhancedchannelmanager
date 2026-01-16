@@ -237,12 +237,14 @@ export async function deleteOrphanedChannelGroups(groupIds?: number[]): Promise<
   deleted_groups: { id: number; name: string }[];
   failed_groups: { id: number; name: string; error: string }[];
 }> {
+  // Always send a body (even if empty) to avoid 422 errors
+  // When groupIds is undefined/empty, send empty object which FastAPI will parse as null request body
   return fetchJson(`${API_BASE}/channel-groups/orphaned`, {
     method: 'DELETE',
     headers: {
       'Content-Type': 'application/json',
     },
-    body: groupIds ? JSON.stringify({ group_ids: groupIds }) : undefined,
+    body: JSON.stringify(groupIds && groupIds.length > 0 ? { group_ids: groupIds } : {}),
   });
 }
 
