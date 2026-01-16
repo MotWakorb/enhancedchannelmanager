@@ -265,9 +265,15 @@ class StreamProber:
             except asyncio.CancelledError:
                 break
 
-            # Run the probe
+            # Run the probe using probe_all_streams (same as manual probe)
+            # This ensures scheduled probes use channel group filtering, parallel probing,
+            # HDHomeRun limits, M3U connection tracking, etc.
             try:
-                await self._probe_stale_streams()
+                logger.info("Starting scheduled probe using probe_all_streams...")
+                # Use configured channel groups (None means use self.probe_channel_groups)
+                # Don't skip M3U refresh for scheduled probes (that's the default behavior)
+                await self.probe_all_streams(channel_groups_override=None, skip_m3u_refresh=False)
+                logger.info("Scheduled probe completed")
             except asyncio.CancelledError:
                 break
             except Exception as e:
