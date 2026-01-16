@@ -562,7 +562,17 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
       const probeSettingsChanged = streamProbeEnabled !== originalProbeEnabled ||
                                    streamProbeScheduleTime !== originalProbeScheduleTime ||
                                    autoReorderAfterProbe !== originalAutoReorder;
+
+      // Debug logging for restart detection
+      logger.info(`[RESTART-CHECK] Poll interval: ${statsPollInterval} vs original ${originalPollInterval}`);
+      logger.info(`[RESTART-CHECK] Timezone: "${userTimezone}" vs original "${originalTimezone}"`);
+      logger.info(`[RESTART-CHECK] Probe enabled: ${streamProbeEnabled} vs original ${originalProbeEnabled}`);
+      logger.info(`[RESTART-CHECK] Schedule time: "${streamProbeScheduleTime}" vs original "${originalProbeScheduleTime}"`);
+      logger.info(`[RESTART-CHECK] Auto-reorder: ${autoReorderAfterProbe} vs original ${originalAutoReorder}`);
+      logger.info(`[RESTART-CHECK] pollOrTimezoneChanged=${pollOrTimezoneChanged}, probeSettingsChanged=${probeSettingsChanged}`);
+
       if (pollOrTimezoneChanged || probeSettingsChanged) {
+        logger.info('[RESTART-CHECK] Setting needsRestart=true');
         setNeedsRestart(true);
         if (pollOrTimezoneChanged) {
           logger.info('Stats polling or timezone changed - backend restart recommended');
@@ -570,6 +580,8 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
         if (probeSettingsChanged) {
           logger.info('Probe settings changed - backend restart required for schedule changes to take effect');
         }
+      } else {
+        logger.info('[RESTART-CHECK] No restart-requiring changes detected');
       }
       onSaved();
       // Clear success message after 8 seconds
