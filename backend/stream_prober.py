@@ -1288,7 +1288,7 @@ class StreamProber:
                         skip_reason = None
 
                         # Detect HDHomeRun-style URLs (local tuner devices)
-                        # These need sequential probing (1 at a time) because each probe locks a tuner
+                        # These need limited parallelism because each probe locks a tuner
                         is_hdhomerun = False
                         if stream_url:
                             # HDHomeRun URLs: http://192.168.x.x:5004/auto/... or http://IP:5004/...
@@ -1298,9 +1298,9 @@ class StreamProber:
                         if m3u_account_id:
                             max_streams = m3u_max_streams.get(m3u_account_id, 0)
 
-                            # For HDHomeRun devices, limit to 1 concurrent probe regardless of max_streams
-                            # This prevents 5XX errors from overwhelming the tuner
-                            effective_max = 1 if is_hdhomerun else max_streams
+                            # For HDHomeRun devices, limit to 2 concurrent probes regardless of max_streams
+                            # This prevents 5XX errors from overwhelming the tuner while still allowing some parallelism
+                            effective_max = 2 if is_hdhomerun else max_streams
 
                             if effective_max > 0:
                                 # Total connections = Dispatcharr active + our active probes
