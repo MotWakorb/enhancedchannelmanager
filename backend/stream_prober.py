@@ -235,10 +235,22 @@ class StreamProber:
 
     async def _scheduled_probe_loop(self):
         """Main loop for scheduled probing."""
+        logger.info(f"_scheduled_probe_loop started (probe_enabled={self.probe_enabled}, _running={self._running})")
+
         # Wait a bit before first probe to let system stabilize
         try:
+            logger.info("Waiting 60 seconds for system to stabilize...")
             await asyncio.sleep(60)
+            logger.info("Initial wait completed, entering scheduler loop")
         except asyncio.CancelledError:
+            logger.info("_scheduled_probe_loop cancelled during initial wait")
+            return
+
+        if not self._running:
+            logger.warning("Scheduler loop not starting: _running is False")
+            return
+        if not self.probe_enabled:
+            logger.warning("Scheduler loop not starting: probe_enabled is False")
             return
 
         while self._running and self.probe_enabled:
