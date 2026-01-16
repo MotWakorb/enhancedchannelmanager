@@ -1432,6 +1432,12 @@ class StreamProber:
             "failed_streams": list(self._probe_failed_streams),    # Copy the list
             "skipped_streams": list(self._probe_skipped_streams),  # Copy the list
             "reordered_channels": reordered_channels or [],  # List of channels that were reordered
+            # Include sort configuration used for this run (for UI display)
+            "sort_config": {
+                "priority": list(self.stream_sort_priority),
+                "enabled": dict(self.stream_sort_enabled),
+                "deprioritize_failed": self.deprioritize_failed_streams,
+            } if reordered_channels else None,
         }
 
         # Add to history and keep only last 5

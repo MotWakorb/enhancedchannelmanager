@@ -217,6 +217,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
   const [probeHistory, setProbeHistory] = useState<ProbeHistoryEntry[]>([]);
   const [showReorderModal, setShowReorderModal] = useState(false);
   const [reorderData, setReorderData] = useState<ProbeHistoryEntry['reordered_channels'] | null>(null);
+  const [reorderSortConfig, setReorderSortConfig] = useState<ProbeHistoryEntry['sort_config'] | null>(null);
   const [copiedUrl, setCopiedUrl] = useState<string | null>(null);
   const [availableChannelGroups, setAvailableChannelGroups] = useState<Array<{ id: number; name: string }>>([]);
   const [probeChannelGroups, setProbeChannelGroups] = useState<string[]>([]);
@@ -671,6 +672,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
 
   const handleShowReorderResults = (historyEntry: ProbeHistoryEntry) => {
     setReorderData(historyEntry.reordered_channels || []);
+    setReorderSortConfig(historyEntry.sort_config || null);
     setShowReorderModal(true);
   };
 
@@ -2343,6 +2345,33 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
                 ×
               </button>
             </div>
+
+            {/* Sort Configuration Summary */}
+            {reorderSortConfig && (
+              <div style={{
+                padding: '0.75rem 1rem',
+                backgroundColor: 'rgba(52, 152, 219, 0.1)',
+                borderBottom: '1px solid rgba(52, 152, 219, 0.2)',
+                fontSize: '13px',
+              }}>
+                <div style={{ fontWeight: 600, marginBottom: '0.5rem', color: 'var(--text-primary)' }}>
+                  Sort Configuration Used:
+                </div>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem 1rem', color: 'var(--text-secondary)' }}>
+                  <span>
+                    <strong>Priority:</strong>{' '}
+                    {reorderSortConfig.priority
+                      .filter(criterion => reorderSortConfig.enabled[criterion])
+                      .map(c => c.charAt(0).toUpperCase() + c.slice(1))
+                      .join(' → ') || 'None'}
+                  </span>
+                  <span>
+                    <strong>Deprioritize failed:</strong>{' '}
+                    {reorderSortConfig.deprioritize_failed ? 'Yes' : 'No'}
+                  </span>
+                </div>
+              </div>
+            )}
 
             <div className="probe-results-modal-body">
               {reorderData.length === 0 ? (
