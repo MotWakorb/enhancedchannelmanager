@@ -2,6 +2,8 @@ from fastapi import FastAPI, HTTPException, Request, Body
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from typing import Optional
 import httpx
@@ -50,6 +52,31 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# Custom validation error handler to log details
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    """Log detailed validation errors for debugging."""
+    logger.error(f"[VALIDATION-ERROR] Request path: {request.url.path}")
+    logger.error(f"[VALIDATION-ERROR] Request method: {request.method}")
+    logger.error(f"[VALIDATION-ERROR] Request headers: {dict(request.headers)}")
+
+    # Try to read the body
+    try:
+        body = await request.body()
+        logger.error(f"[VALIDATION-ERROR] Request body (raw): {body}")
+        logger.error(f"[VALIDATION-ERROR] Request body (decoded): {body.decode()}")
+    except Exception as e:
+        logger.error(f"[VALIDATION-ERROR] Could not read body: {e}")
+
+    logger.error(f"[VALIDATION-ERROR] Validation errors: {exc.errors()}")
+    logger.error(f"[VALIDATION-ERROR] Validation body: {exc.body}")
+
+    return JSONResponse(
+        status_code=422,
+        content={"detail": exc.errors(), "body": str(exc.body)},
+    )
 
 
 @app.on_event("startup")
