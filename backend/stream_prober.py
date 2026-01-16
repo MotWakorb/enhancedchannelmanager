@@ -711,31 +711,66 @@ class StreamProber:
         if groups_to_filter:
             try:
                 all_groups = await self.client.get_channel_groups()
+                available_group_names = [g.get("name") for g in all_groups]
+                logger.info(f"[PROBE-FILTER] Requested groups: {groups_to_filter}")
+                logger.info(f"[PROBE-FILTER] Available groups: {available_group_names}")
+
+                matched_groups = []
+                unmatched_groups = []
                 for group in all_groups:
-                    if group.get("name") in groups_to_filter:
+                    group_name = group.get("name")
+                    if group_name in groups_to_filter:
                         selected_group_ids.add(group["id"])
-                logger.info(f"Filtering to {len(selected_group_ids)} selected groups: {groups_to_filter}")
+                        matched_groups.append(f"{group_name} (id={group['id']})")
+
+                for requested in groups_to_filter:
+                    if requested not in [g.get("name") for g in all_groups]:
+                        unmatched_groups.append(requested)
+
+                logger.info(f"[PROBE-FILTER] Matched groups: {matched_groups}")
+                if unmatched_groups:
+                    logger.warning(f"[PROBE-FILTER] Requested groups NOT FOUND: {unmatched_groups}")
+                logger.info(f"[PROBE-FILTER] Filtering to {len(selected_group_ids)} groups")
             except Exception as e:
                 logger.error(f"Failed to fetch channel groups for filtering: {e}")
                 # Continue without filtering if we can't fetch groups
 
         page = 1
+        total_channels_seen = 0
+        channels_included = 0
+        channels_excluded_wrong_group = 0
+        channels_with_no_streams = 0
+        excluded_channel_names = []  # Track names for debug logging
+
         while True:
             try:
                 result = await self.client.get_channels(page=page, page_size=500)
                 channels = result.get("results", [])
                 for channel in channels:
+                    total_channels_seen += 1
+                    channel_name = channel.get("name", f"Channel {channel.get('id', 'Unknown')}")
+                    channel_group_id = channel.get("channel_group_id")
+
                     # If groups are selected, filter by channel_group_id
                     if selected_group_ids:
-                        channel_group_id = channel.get("channel_group_id")
                         if channel_group_id not in selected_group_ids:
+                            channels_excluded_wrong_group += 1
+                            excluded_channel_names.append(channel_name)
                             continue  # Skip channels not in selected groups
 
-                    channel_name = channel.get("name", f"Channel {channel.get('id', 'Unknown')}")
                     channel_number = channel.get("channel_number", 999999)  # Default high number for sorting
                     # Each channel has a "streams" field which is a list of stream IDs
                     stream_ids = channel.get("streams", [])
+
+                    if not stream_ids:
+                        channels_with_no_streams += 1
+                        logger.debug(f"[PROBE-FILTER] Channel '{channel_name}' has no streams, skipping")
+                        continue
+
+                    channels_included += 1
                     channel_stream_ids.update(stream_ids)
+                    logger.debug(f"[PROBE-FILTER] Including channel '{channel_name}' with {len(stream_ids)} stream(s)")
+
                     # Map each stream to its channel names and track lowest channel number
                     for stream_id in stream_ids:
                         if stream_id not in stream_to_channels:
@@ -752,6 +787,24 @@ class StreamProber:
             except Exception as e:
                 logger.error(f"Failed to fetch channels page {page}: {e}")
                 break
+
+        # Log summary of channel filtering
+        logger.info(f"[PROBE-FILTER] Channel filtering summary:")
+        logger.info(f"[PROBE-FILTER]   Total channels seen: {total_channels_seen}")
+        logger.info(f"[PROBE-FILTER]   Channels included: {channels_included}")
+        if selected_group_ids:
+            logger.info(f"[PROBE-FILTER]   Channels excluded (wrong group): {channels_excluded_wrong_group}")
+        if channels_with_no_streams > 0:
+            logger.info(f"[PROBE-FILTER]   Channels with no streams: {channels_with_no_streams}")
+        logger.info(f"[PROBE-FILTER]   Unique streams to probe: {len(channel_stream_ids)}")
+
+        # Log excluded channels if there are any (limit to first 20 to avoid log spam)
+        if excluded_channel_names:
+            sample = excluded_channel_names[:20]
+            logger.debug(f"[PROBE-FILTER] Excluded channels (first 20): {sample}")
+            if len(excluded_channel_names) > 20:
+                logger.debug(f"[PROBE-FILTER] ... and {len(excluded_channel_names) - 20} more")
+
         return channel_stream_ids, stream_to_channels, stream_to_channel_number
 
     async def _get_all_m3u_active_connections(self) -> dict[int, int]:
