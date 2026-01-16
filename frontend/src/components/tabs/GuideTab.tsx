@@ -96,6 +96,14 @@ export function GuideTab({
     return map;
   }, [logos]);
 
+  // Build EPG data map for looking up tvg_id by epg_data_id
+  // This allows us to match programs even when channel.tvg_id differs from the EPG's tvg_id
+  const epgDataById = useMemo(() => {
+    const map = new Map<number, EPGData>();
+    epgData.forEach(epg => map.set(epg.id, epg));
+    return map;
+  }, [epgData]);
+
   // Build programs map by tvg_id for quick lookup
   const programsByTvgId = useMemo(() => {
     const map = new Map<string, EPGProgram[]>();
@@ -322,10 +330,28 @@ export function GuideTab({
   }, [loading]);
 
   // Get programs for a channel within the visible time range
+  // Uses epg_data_id -> tvg_id indirection to match programs, similar to Dispatcharr's approach.
+  // This allows the guide to display correctly even if channel.tvg_id differs from the EPG's tvg_id.
   const getChannelPrograms = useCallback((channel: Channel): EPGProgram[] => {
-    if (!channel.tvg_id) return [];
+    // First, try to get the tvg_id via the epg_data_id (preferred method)
+    // This matches how Dispatcharr displays its guide
+    let lookupTvgId: string | null = null;
 
-    const channelPrograms = programsByTvgId.get(channel.tvg_id) || [];
+    if (channel.epg_data_id !== null) {
+      const epgDataEntry = epgDataById.get(channel.epg_data_id);
+      if (epgDataEntry) {
+        lookupTvgId = epgDataEntry.tvg_id;
+      }
+    }
+
+    // Fall back to channel.tvg_id if no epg_data_id mapping found
+    if (!lookupTvgId) {
+      lookupTvgId = channel.tvg_id;
+    }
+
+    if (!lookupTvgId) return [];
+
+    const channelPrograms = programsByTvgId.get(lookupTvgId) || [];
 
     // Filter to programs that overlap with our time range
     return channelPrograms.filter(program => {
@@ -333,7 +359,7 @@ export function GuideTab({
       const progEnd = new Date(program.end_time);
       return progStart < timeRange.end && progEnd > timeRange.start;
     });
-  }, [programsByTvgId, timeRange]);
+  }, [programsByTvgId, epgDataById, timeRange]);
 
   // Calculate position and width for a program block
   const getProgramStyle = useCallback((program: EPGProgram): React.CSSProperties => {
