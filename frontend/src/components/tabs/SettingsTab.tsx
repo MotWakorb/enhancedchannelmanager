@@ -920,7 +920,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
 
         <div className="form-group">
           <div className="threshold-label-row">
-            <label htmlFor="userTimezone">Timezone for stats</label>
+            <label htmlFor="userTimezone">Timezone</label>
             <select
               id="userTimezone"
               value={userTimezone}
@@ -957,7 +957,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
             </select>
           </div>
           <p className="form-hint">
-            Timezone used for daily bandwidth statistics. "Today" will roll over at midnight in your selected timezone.
+            Timezone used for daily bandwidth statistics and scheduled probe times. "Today" will roll over at midnight in your selected timezone, and scheduled probes will run at the configured time in this timezone.
           </p>
         </div>
       </div>
