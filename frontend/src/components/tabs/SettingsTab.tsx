@@ -209,7 +209,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
   const [probeResultsType, setProbeResultsType] = useState<'success' | 'failed' | 'skipped'>('success');
   const [probeResults, setProbeResults] = useState<{
     success_streams: Array<{ id: number; name: string; url?: string }>;
-    failed_streams: Array<{ id: number; name: string; url?: string }>;
+    failed_streams: Array<{ id: number; name: string; url?: string; error?: string }>;
     skipped_streams: Array<{ id: number; name: string; url?: string; reason?: string }>;
     success_count: number;
     failed_count: number;
@@ -2346,6 +2346,11 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
                           {probeResultsType === 'skipped' && 'reason' in stream && (stream as { reason?: string }).reason && (
                             <div className="probe-result-item-reason" style={{ fontSize: '11px', color: '#f39c12', marginTop: '2px' }}>
                               {(stream as { reason?: string }).reason}
+                            </div>
+                          )}
+                          {probeResultsType === 'failed' && 'error' in stream && (stream as { error?: string }).error && (
+                            <div className="probe-result-item-error" style={{ fontSize: '11px', color: '#e74c3c', marginTop: '2px' }}>
+                              {(stream as { error?: string }).error}
                             </div>
                           )}
                         </div>
