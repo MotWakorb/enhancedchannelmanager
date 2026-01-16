@@ -1287,16 +1287,29 @@ class StreamProber:
                         can_probe = True
                         skip_reason = None
 
+                        # Detect HDHomeRun-style URLs (local tuner devices)
+                        # These need sequential probing (1 at a time) because each probe locks a tuner
+                        is_hdhomerun = False
+                        if stream_url:
+                            # HDHomeRun URLs: http://192.168.x.x:5004/auto/... or http://IP:5004/...
+                            if ':5004/' in stream_url or 'hdhomerun' in stream_url.lower():
+                                is_hdhomerun = True
+
                         if m3u_account_id:
                             max_streams = m3u_max_streams.get(m3u_account_id, 0)
-                            if max_streams > 0:
+
+                            # For HDHomeRun devices, limit to 1 concurrent probe regardless of max_streams
+                            # This prevents 5XX errors from overwhelming the tuner
+                            effective_max = 1 if is_hdhomerun else max_streams
+
+                            if effective_max > 0:
                                 # Total connections = Dispatcharr active + our active probes
                                 dispatcharr_active = dispatcharr_connections.get(m3u_account_id, 0)
                                 async with probe_connections_lock:
                                     our_probes = probe_connections.get(m3u_account_id, 0)
                                 total_active = dispatcharr_active + our_probes
 
-                                if total_active >= max_streams:
+                                if total_active >= effective_max:
                                     # Check if we have any active probes for this M3U
                                     # If we do, wait for them to finish (don't skip yet)
                                     if our_probes > 0:
@@ -1304,7 +1317,7 @@ class StreamProber:
                                     else:
                                         # No probes running, Dispatcharr is using all connections
                                         m3u_name = m3u_accounts_map.get(m3u_account_id, f"M3U {m3u_account_id}")
-                                        skip_reason = f"M3U '{m3u_name}' at max connections ({dispatcharr_active}/{max_streams})"
+                                        skip_reason = f"M3U '{m3u_name}' at max connections ({dispatcharr_active}/{effective_max})"
                                         logger.info(f"Skipping stream {stream_id} ({stream_name}): {skip_reason}")
 
                         if skip_reason:
