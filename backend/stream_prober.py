@@ -744,12 +744,16 @@ class StreamProber:
             channel_groups_override: Optional list of channel group names to filter by.
                                     If None, uses self.probe_channel_groups.
         """
+        logger.info(f"[PROBE-FILTER] _fetch_channel_stream_ids called with override={channel_groups_override}")
+        logger.info(f"[PROBE-FILTER] self.probe_channel_groups={self.probe_channel_groups}")
+
         channel_stream_ids = set()
         stream_to_channels = {}  # stream_id -> list of channel names
         stream_to_channel_number = {}  # stream_id -> lowest channel number (for sorting)
 
         # Determine which groups to filter by
         groups_to_filter = channel_groups_override if channel_groups_override is not None else self.probe_channel_groups
+        logger.info(f"[PROBE-FILTER] groups_to_filter (after resolution)={groups_to_filter}")
 
         # If specific groups are selected, fetch all groups first to filter
         selected_group_ids = set()
@@ -1124,6 +1128,9 @@ class StreamProber:
             skip_m3u_refresh: If True, skip M3U refresh even if configured.
                              Use this for on-demand probes from the UI.
         """
+        logger.info(f"[PROBE] probe_all_streams called with channel_groups_override={channel_groups_override}, skip_m3u_refresh={skip_m3u_refresh}")
+        logger.info(f"[PROBE] self.probe_channel_groups={self.probe_channel_groups}")
+
         if self._probing_in_progress:
             logger.warning("Probe already in progress")
             return {"status": "already_running"}
