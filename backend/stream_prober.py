@@ -173,6 +173,25 @@ class StreamProber:
         # The probe loop will detect _running=False and set status to "cancelled"
         return {"status": "cancelling", "message": "Probe cancellation requested"}
 
+    def force_reset_probe_state(self) -> dict:
+        """Force reset the probe state. Use this if a probe got stuck.
+
+        Returns:
+            Dict with status of the reset.
+        """
+        was_in_progress = self._probing_in_progress
+        logger.warning(f"Force resetting probe state (was_in_progress={was_in_progress})")
+
+        self._probing_in_progress = False
+        self._running = False
+        self._probe_progress_status = "idle"
+        self._probe_progress_current_stream = ""
+
+        return {
+            "status": "reset",
+            "message": f"Probe state forcibly reset (was_in_progress={was_in_progress})"
+        }
+
     def _get_seconds_until_next_schedule(self) -> int:
         """Calculate seconds until the next scheduled probe time."""
         try:

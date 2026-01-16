@@ -3092,6 +3092,16 @@ async def cancel_probe():
     return prober.cancel_probe()
 
 
+@app.post("/api/stream-stats/probe/reset")
+async def reset_probe_state():
+    """Force reset the probe state if it gets stuck."""
+    prober = get_prober()
+    if not prober:
+        raise HTTPException(status_code=503, detail="Stream prober not available")
+
+    return prober.force_reset_probe_state()
+
+
 @app.post("/api/stream-stats/probe/{stream_id}")
 async def probe_single_stream(stream_id: int):
     """Trigger on-demand probe for a single stream."""
