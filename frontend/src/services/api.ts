@@ -237,14 +237,16 @@ export async function deleteOrphanedChannelGroups(groupIds?: number[]): Promise<
   deleted_groups: { id: number; name: string }[];
   failed_groups: { id: number; name: string; error: string }[];
 }> {
-  // Always send a body (even if empty) to avoid 422 errors
-  // When groupIds is undefined/empty, send empty object which FastAPI will parse as null request body
+  // Always send a body with group_ids field (either array or null)
+  // This ensures Pydantic can validate the request properly
   return fetchJson(`${API_BASE}/channel-groups/orphaned`, {
     method: 'DELETE',
     headers: {
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify(groupIds && groupIds.length > 0 ? { group_ids: groupIds } : {}),
+    body: JSON.stringify({
+      group_ids: (groupIds && groupIds.length > 0) ? groupIds : null
+    }),
   });
 }
 
