@@ -245,9 +245,12 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
   const [originalUrl, setOriginalUrl] = useState('');
   const [originalUsername, setOriginalUsername] = useState('');
 
-  // Track original poll interval and timezone to detect if restart is needed
+  // Track original settings to detect if restart is needed
   const [originalPollInterval, setOriginalPollInterval] = useState(10);
   const [originalTimezone, setOriginalTimezone] = useState('');
+  const [originalProbeEnabled, setOriginalProbeEnabled] = useState(true);
+  const [originalProbeScheduleTime, setOriginalProbeScheduleTime] = useState('03:00');
+  const [originalAutoReorder, setOriginalAutoReorder] = useState(false);
   const [needsRestart, setNeedsRestart] = useState(false);
   const [restarting, setRestarting] = useState(false);
   const [restartResult, setRestartResult] = useState<{ success: boolean; message: string } | null>(null);
@@ -421,16 +424,19 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
       setLinkedM3UAccounts(settings.linked_m3u_accounts ?? []);
       // Stream probe settings
       setStreamProbeEnabled(settings.stream_probe_enabled ?? true);
+      setOriginalProbeEnabled(settings.stream_probe_enabled ?? true);
       setStreamProbeIntervalHours(settings.stream_probe_interval_hours ?? 24);
       setStreamProbeBatchSize(settings.stream_probe_batch_size ?? 10);
       setStreamProbeTimeout(settings.stream_probe_timeout ?? 30);
       setStreamProbeScheduleTime(settings.stream_probe_schedule_time ?? '03:00');
+      setOriginalProbeScheduleTime(settings.stream_probe_schedule_time ?? '03:00');
       setProbeChannelGroups(settings.probe_channel_groups ?? []);
       setBitrateSampleDuration(settings.bitrate_sample_duration ?? 10);
       setParallelProbingEnabled(settings.parallel_probing_enabled ?? true);
       setSkipRecentlyProbedHours(settings.skip_recently_probed_hours ?? 0);
       setRefreshM3usBeforeProbe(settings.refresh_m3us_before_probe ?? true);
       setAutoReorderAfterProbe(settings.auto_reorder_after_probe ?? false);
+      setOriginalAutoReorder(settings.auto_reorder_after_probe ?? false);
       setStreamSortPriority(settings.stream_sort_priority ?? ['resolution', 'bitrate', 'framerate']);
       setStreamSortEnabled(settings.stream_sort_enabled ?? { resolution: true, bitrate: true, framerate: true });
       setDeprioritizeFailedStreams(settings.deprioritize_failed_streams ?? true);
@@ -551,10 +557,19 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
       setPassword('');
       setSaveSuccess(true);
       logger.info('Settings saved successfully');
-      // Check if poll interval or timezone changed and needs restart
-      if (statsPollInterval !== originalPollInterval || userTimezone !== originalTimezone) {
+      // Check if any settings that require a restart have changed
+      const pollOrTimezoneChanged = statsPollInterval !== originalPollInterval || userTimezone !== originalTimezone;
+      const probeSettingsChanged = streamProbeEnabled !== originalProbeEnabled ||
+                                   streamProbeScheduleTime !== originalProbeScheduleTime ||
+                                   autoReorderAfterProbe !== originalAutoReorder;
+      if (pollOrTimezoneChanged || probeSettingsChanged) {
         setNeedsRestart(true);
-        logger.info('Stats polling or timezone changed - backend restart recommended');
+        if (pollOrTimezoneChanged) {
+          logger.info('Stats polling or timezone changed - backend restart recommended');
+        }
+        if (probeSettingsChanged) {
+          logger.info('Probe settings changed - backend restart required for schedule changes to take effect');
+        }
       }
       onSaved();
       // Clear success message after 8 seconds
@@ -577,6 +592,9 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
       if (result.success) {
         setOriginalPollInterval(statsPollInterval);
         setOriginalTimezone(userTimezone);
+        setOriginalProbeEnabled(streamProbeEnabled);
+        setOriginalProbeScheduleTime(streamProbeScheduleTime);
+        setOriginalAutoReorder(autoReorderAfterProbe);
         setNeedsRestart(false);
         // Clear result after 3 seconds
         setTimeout(() => setRestartResult(null), 3000);
