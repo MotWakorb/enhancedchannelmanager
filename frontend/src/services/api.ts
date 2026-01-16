@@ -1269,6 +1269,12 @@ export async function getProbeResults(): Promise<{
   }>;
 }
 
+export interface SortConfig {
+  priority: string[];
+  enabled: Record<string, boolean>;
+  deprioritize_failed: boolean;
+}
+
 export interface ProbeHistoryEntry {
   timestamp: string;
   end_timestamp: string;
@@ -1303,6 +1309,7 @@ export interface ProbeHistoryEntry {
       bitrate?: number;
     }>;
   }>;
+  sort_config?: SortConfig | null;
 }
 
 export async function getProbeHistory(): Promise<ProbeHistoryEntry[]> {
