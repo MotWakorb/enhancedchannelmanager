@@ -634,6 +634,18 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
     }
   };
 
+  const handleResetProbeState = async () => {
+    try {
+      const result = await api.resetProbeState();
+      setProbeAllResult({ success: true, message: result.message || 'Probe state reset' });
+      setProbingAll(false);
+      setProbeProgress(null);
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : 'Failed to reset probe state';
+      setProbeAllResult({ success: false, message: errorMessage });
+    }
+  };
+
   const handleRerunFailed = async () => {
     setShowProbeResultsModal(false);
 
@@ -1924,19 +1936,30 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
         )}
 
         <div className="settings-group" style={{ marginTop: '1rem' }}>
-          <button
-            className="btn-secondary"
-            onClick={handleProbeAllStreams}
-            disabled={probingAll}
-          >
-            <span className={`material-icons ${probingAll ? 'spinning' : ''}`}>
-              {probingAll ? 'sync' : 'play_arrow'}
+          <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
+            <button
+              className="btn-secondary"
+              onClick={handleProbeAllStreams}
+              disabled={probingAll}
+            >
+              <span className={`material-icons ${probingAll ? 'spinning' : ''}`}>
+                {probingAll ? 'sync' : 'play_arrow'}
+              </span>
+              {probingAll ? (probeProgress && probeProgress.status === 'probing' ? 'Probing...' : 'Starting...') : 'Probe All Streams Now'}
+            </button>
+            <button
+              className="btn-secondary"
+              onClick={handleResetProbeState}
+              title="Reset probe state if it gets stuck"
+              style={{ minWidth: 'auto' }}
+            >
+              <span className="material-icons">restart_alt</span>
+              Reset
+            </button>
+            <span className="form-hint">
+              Start a background probe of all streams immediately
             </span>
-            {probingAll ? (probeProgress && probeProgress.status === 'probing' ? 'Probing...' : 'Starting...') : 'Probe All Streams Now'}
-          </button>
-          <span className="form-hint" style={{ marginLeft: '1rem' }}>
-            Start a background probe of all streams immediately
-          </span>
+          </div>
 
           {probeAllResult && (
             <div className={probeAllResult.success ? 'success-message' : 'error-message'} style={{ marginTop: '1rem' }}>

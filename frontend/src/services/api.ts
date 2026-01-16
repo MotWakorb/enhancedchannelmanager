@@ -1323,3 +1323,9 @@ export async function cancelProbe(): Promise<{ status: string; message: string }
     method: 'POST',
   }) as Promise<{ status: string; message: string }>;
 }
+
+export async function resetProbeState(): Promise<{ status: string; message: string }> {
+  return fetchJson(`${API_BASE}/stream-stats/probe/reset`, {
+    method: 'POST',
+  }) as Promise<{ status: string; message: string }>;
+}

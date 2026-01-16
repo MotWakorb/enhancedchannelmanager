@@ -3044,6 +3044,11 @@ async def probe_all_streams_endpoint(request: ProbeAllRequest = ProbeAllRequest(
         logger.error("Stream prober not available - returning 503")
         raise HTTPException(status_code=503, detail="Stream prober not available")
 
+    # If a probe is already "in progress" (possibly stuck), reset it first
+    if prober._probing_in_progress:
+        logger.warning("Probe state shows in_progress - resetting before starting new probe")
+        prober.force_reset_probe_state()
+
     import asyncio
 
     # Start background task with optional group filter
