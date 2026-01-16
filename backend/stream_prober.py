@@ -456,6 +456,7 @@ class StreamProber:
             "json",
             "-show_format",
             "-show_streams",
+            "-user_agent", "VLC/3.0.20 LibVLC/3.0.20",  # Mimic VLC to avoid server rejections
             "-timeout",
             str(self.probe_timeout * 1000000),  # microseconds
             url,
@@ -508,7 +509,8 @@ class StreamProber:
                 pool=10.0
             )
 
-            async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+            headers = {"User-Agent": "VLC/3.0.20 LibVLC/3.0.20"}
+            async with httpx.AsyncClient(timeout=timeout, follow_redirects=True, headers=headers) as client:
                 async with client.stream("GET", url) as response:
                     response.raise_for_status()
 
