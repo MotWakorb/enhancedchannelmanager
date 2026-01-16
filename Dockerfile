@@ -19,6 +19,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends gosu ffmpeg \
 COPY backend/requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Cache busting - this ARG invalidates cache when git commit changes
+ARG GIT_COMMIT=unknown
+ENV GIT_COMMIT=$GIT_COMMIT
+
 # Copy backend code
 COPY backend/ ./
 
