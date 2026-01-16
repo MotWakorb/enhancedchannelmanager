@@ -1035,24 +1035,47 @@ export function ChannelsPane({
     try {
       // Use the same backend probe logic as Settings -> Probe All Streams Now
       // This ensures consistent filtering, logging, and channel discovery
-      console.log(`[ChannelsPane] Calling probeAllStreams for group '${groupName}'`);
-      const result = await api.probeAllStreams([groupName]);
+      // Pass skipM3uRefresh=true since this is an on-demand probe from UI
+      console.log(`[ChannelsPane] Calling probeAllStreams for group '${groupName}' (skipping M3U refresh)`);
+      const result = await api.probeAllStreams([groupName], true);
       console.log(`[ChannelsPane] probeAllStreams started for group '${groupName}':`, result);
 
-      // Note: probeAllStreams is a background task, so results come via progress polling
-      // The UI will update via the existing progress/results mechanism
+      // Poll for probe completion to keep the spinner active
+      const pollInterval = setInterval(async () => {
+        try {
+          const progress = await api.getProbeProgress();
+          console.log(`[ChannelsPane] Probe progress for '${groupName}':`, progress);
+
+          if (!progress.in_progress) {
+            // Probe completed - clear the spinner
+            clearInterval(pollInterval);
+            setProbingGroups((prev) => {
+              const next = new Set(prev);
+              next.delete(groupId);
+              return next;
+            });
+            console.log(`[ChannelsPane] Probe completed for group '${groupName}'`);
+          }
+        } catch (err) {
+          // If we can't get progress, stop polling and clear spinner
+          console.error(`[ChannelsPane] Failed to get probe progress:`, err);
+          clearInterval(pollInterval);
+          setProbingGroups((prev) => {
+            const next = new Set(prev);
+            next.delete(groupId);
+            return next;
+          });
+        }
+      }, 2000); // Poll every 2 seconds
+
     } catch (err) {
       console.error(`[ChannelsPane] Failed to start probe for group '${groupName}':`, err);
-    } finally {
-      // Clear probing state after a short delay since it's now a background task
-      // The actual probing continues in the background
-      setTimeout(() => {
-        setProbingGroups((prev) => {
-          const next = new Set(prev);
-          next.delete(groupId);
-          return next;
-        });
-      }, 2000);
+      // Clear spinner on error
+      setProbingGroups((prev) => {
+        const next = new Set(prev);
+        next.delete(groupId);
+        return next;
+      });
     }
   }, []);
 

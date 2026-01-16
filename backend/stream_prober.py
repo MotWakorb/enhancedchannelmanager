@@ -1085,7 +1085,7 @@ class StreamProber:
 
         return sorted_ids
 
-    async def probe_all_streams(self, channel_groups_override: list[str] = None):
+    async def probe_all_streams(self, channel_groups_override: list[str] = None, skip_m3u_refresh: bool = False):
         """Probe all streams that are in channels (runs in background).
 
         Uses parallel probing - streams from different M3U accounts (or same M3U with
@@ -1095,6 +1095,8 @@ class StreamProber:
             channel_groups_override: Optional list of channel group names to filter by.
                                     If None, uses self.probe_channel_groups.
                                     If empty list, probes all groups.
+            skip_m3u_refresh: If True, skip M3U refresh even if configured.
+                             Use this for on-demand probes from the UI.
         """
         if self._probing_in_progress:
             logger.warning("Probe already in progress")
@@ -1116,8 +1118,9 @@ class StreamProber:
         probed_count = 0
         start_time = datetime.utcnow()
         try:
-            # Refresh M3U accounts if configured
-            if self.refresh_m3us_before_probe:
+            # Refresh M3U accounts if configured AND not explicitly skipped
+            # On-demand probes from UI should skip refresh; only scheduled probes refresh
+            if self.refresh_m3us_before_probe and not skip_m3u_refresh:
                 logger.info("Refreshing all M3U accounts before probing...")
                 self._probe_progress_status = "refreshing"
                 self._probe_progress_current_stream = "Refreshing M3U accounts..."
@@ -1131,6 +1134,8 @@ class StreamProber:
                 except Exception as e:
                     logger.warning(f"Failed to refresh M3U accounts: {e}")
                     logger.info("Continuing with probe despite refresh failure")
+            elif skip_m3u_refresh:
+                logger.info("Skipping M3U refresh (on-demand probe)")
 
             # Fetch all channel stream IDs and channel mappings
             self._probe_progress_status = "fetching"

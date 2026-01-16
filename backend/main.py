@@ -2984,6 +2984,7 @@ class BulkProbeRequest(BaseModel):
 class ProbeAllRequest(BaseModel):
     """Request for probe all streams endpoint with optional group filtering."""
     channel_groups: list[str] = []  # Empty list means all groups
+    skip_m3u_refresh: bool = False  # Skip M3U refresh for on-demand probes
 
 
 # NOTE: /probe/bulk and /probe/all MUST be defined BEFORE /probe/{stream_id}
@@ -3055,13 +3056,16 @@ async def probe_all_streams_endpoint(request: ProbeAllRequest = ProbeAllRequest(
         """Wrapper to catch and log any errors from the probe task."""
         try:
             logger.info("[PROBE-TASK] Background probe task starting...")
-            await prober.probe_all_streams(channel_groups_override=request.channel_groups or None)
+            await prober.probe_all_streams(
+                channel_groups_override=request.channel_groups or None,
+                skip_m3u_refresh=request.skip_m3u_refresh
+            )
             logger.info("[PROBE-TASK] Background probe task completed successfully")
         except Exception as e:
             logger.error(f"[PROBE-TASK] Background probe task failed with error: {e}", exc_info=True)
 
     # Start background task with optional group filter
-    logger.info(f"Starting background probe task (groups: {request.channel_groups or 'all'})")
+    logger.info(f"Starting background probe task (groups: {request.channel_groups or 'all'}, skip_m3u_refresh: {request.skip_m3u_refresh})")
     asyncio.create_task(run_probe_with_logging())
     logger.info("Background task created, returning response")
     return {"status": "started", "message": "Background probe started"}
