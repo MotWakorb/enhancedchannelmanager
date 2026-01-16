@@ -1256,7 +1256,7 @@ export async function getProbeProgress(): Promise<{
 
 export async function getProbeResults(): Promise<{
   success_streams: Array<{ id: number; name: string; url?: string }>;
-  failed_streams: Array<{ id: number; name: string; url?: string }>;
+  failed_streams: Array<{ id: number; name: string; url?: string; error?: string }>;
   skipped_streams: Array<{ id: number; name: string; url?: string; reason?: string }>;
   success_count: number;
   failed_count: number;
@@ -1266,7 +1266,7 @@ export async function getProbeResults(): Promise<{
     method: 'GET',
   }) as Promise<{
     success_streams: Array<{ id: number; name: string; url?: string }>;
-    failed_streams: Array<{ id: number; name: string; url?: string }>;
+    failed_streams: Array<{ id: number; name: string; url?: string; error?: string }>;
     skipped_streams: Array<{ id: number; name: string; url?: string; reason?: string }>;
     success_count: number;
     failed_count: number;
@@ -1291,7 +1291,7 @@ export interface ProbeHistoryEntry {
   status: string;
   error?: string;
   success_streams: Array<{ id: number; name: string; url?: string }>;
-  failed_streams: Array<{ id: number; name: string; url?: string }>;
+  failed_streams: Array<{ id: number; name: string; url?: string; error?: string }>;
   skipped_streams: Array<{ id: number; name: string; url?: string; reason?: string }>;
   reordered_channels?: Array<{
     channel_id: number;

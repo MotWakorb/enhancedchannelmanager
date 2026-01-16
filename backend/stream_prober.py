@@ -89,7 +89,7 @@ class StreamProber:
         self._probe_progress_success_count = 0
         self._probe_progress_failed_count = 0
         self._probe_success_streams = []  # List of {id, name, url} for successful probes
-        self._probe_failed_streams = []   # List of {id, name, url} for failed probes
+        self._probe_failed_streams = []   # List of {id, name, url, error} for failed probes
         self._probe_skipped_streams = []  # List of {id, name, url, reason} for skipped probes (e.g., M3U at max connections)
         self._probe_progress_skipped_count = 0
         # Probe history - list of last 5 probe runs
@@ -350,6 +350,8 @@ class StreamProber:
                         self._probe_success_streams.append(stream_info)
                     else:
                         self._probe_progress_failed_count += 1
+                        # Include error message for failed streams
+                        stream_info["error"] = result.get("error_message", "Unknown error")
                         self._probe_failed_streams.append(stream_info)
 
                     probed_count += 1
@@ -1225,6 +1227,9 @@ class StreamProber:
                         result = await self.probe_stream(stream_id, stream_url, stream_name)
                         probe_status = result.get("probe_status", "failed")
                         stream_info = {"id": stream_id, "name": stream_name, "url": stream_url}
+                        # Include error message for failed streams
+                        if probe_status != "success":
+                            stream_info["error"] = result.get("error_message", "Unknown error")
                         return (probe_status, stream_info)
                     finally:
                         # Release our probe connection for this M3U
@@ -1428,6 +1433,8 @@ class StreamProber:
                         self._probe_success_streams.append(stream_info)
                     else:
                         self._probe_progress_failed_count += 1
+                        # Include error message for failed streams
+                        stream_info["error"] = result.get("error_message", "Unknown error")
                         self._probe_failed_streams.append(stream_info)
 
                     probed_count += 1
