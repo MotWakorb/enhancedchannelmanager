@@ -1022,49 +1022,37 @@ export function ChannelsPane({
   }, []);
 
   // Handle probe group request - probes all streams in all channels of a group
-  const handleProbeGroup = useCallback(async (groupId: number | 'ungrouped', groupChannels: Channel[]) => {
-    console.log(`[ChannelsPane] handleProbeGroup called for group ${groupId} with ${groupChannels.length} channels`);
+  // Uses the same backend probe logic as "Probe All Streams Now" but filtered to a single group
+  const handleProbeGroup = useCallback(async (groupId: number | 'ungrouped', groupName: string) => {
+    console.log(`[ChannelsPane] handleProbeGroup called for group ${groupId} (${groupName})`);
 
-    // Collect all stream IDs from all channels in the group
-    // channel.streams is an array of stream IDs (numbers)
-    const streamIds: number[] = [];
-    for (const channel of groupChannels) {
-      for (const streamId of channel.streams) {
-        streamIds.push(streamId);
-      }
-    }
-
-    console.log(`[ChannelsPane] Collected ${streamIds.length} total streams from group ${groupId}`);
-
-    if (streamIds.length === 0) {
-      console.log(`[ChannelsPane] No streams to probe for group ${groupId}`);
+    if (groupId === 'ungrouped') {
+      console.log(`[ChannelsPane] Cannot probe ungrouped channels via group probe`);
       return;
     }
 
     setProbingGroups((prev) => new Set(prev).add(groupId));
     try {
-      console.log(`[ChannelsPane] Calling probeBulkStreams for group ${groupId}`);
-      const result = await api.probeBulkStreams(streamIds);
-      console.log(`[ChannelsPane] probeBulkStreams succeeded for group ${groupId}, probed ${result.probed} streams`);
+      // Use the same backend probe logic as Settings -> Probe All Streams Now
+      // This ensures consistent filtering, logging, and channel discovery
+      console.log(`[ChannelsPane] Calling probeAllStreams for group '${groupName}'`);
+      const result = await api.probeAllStreams([groupName]);
+      console.log(`[ChannelsPane] probeAllStreams started for group '${groupName}':`, result);
 
-      // Update stats map with results
-      if (result.results) {
-        setStreamStatsMap((prev) => {
-          const next = new Map(prev);
-          for (const stats of result.results) {
-            next.set(stats.stream_id, stats);
-          }
+      // Note: probeAllStreams is a background task, so results come via progress polling
+      // The UI will update via the existing progress/results mechanism
+    } catch (err) {
+      console.error(`[ChannelsPane] Failed to start probe for group '${groupName}':`, err);
+    } finally {
+      // Clear probing state after a short delay since it's now a background task
+      // The actual probing continues in the background
+      setTimeout(() => {
+        setProbingGroups((prev) => {
+          const next = new Set(prev);
+          next.delete(groupId);
           return next;
         });
-      }
-    } catch (err) {
-      console.error(`[ChannelsPane] Failed to probe group ${groupId} streams:`, err);
-    } finally {
-      setProbingGroups((prev) => {
-        const next = new Set(prev);
-        next.delete(groupId);
-        return next;
-      });
+      }, 2000);
     }
   }, []);
 
@@ -4049,7 +4037,7 @@ export function ChannelsPane({
           onSelectAll={handleSelectAllInGroup}
           onStreamDropOnGroup={handleStreamDropOnGroup}
           onContextMenu={(e) => handleGroupContextMenu(groupChannels.map(ch => ch.id), e)}
-          onProbeGroup={() => handleProbeGroup(groupId, groupChannels)}
+          onProbeGroup={() => handleProbeGroup(groupId, groupName)}
           isProbing={probingGroups.has(groupId)}
           onSortStreamsByQuality={() => handleSortGroupStreamsByQuality(groupId)}
           onSortStreamsByMode={(mode) => handleSortGroupStreamsByMode(groupId, mode)}
