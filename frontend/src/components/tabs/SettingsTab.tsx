@@ -307,7 +307,36 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
     }
   }, [availableChannelGroups, probeChannelGroups.length]);
 
-  // Poll for probe all streams progress
+  // Periodically check for scheduled probes (runs even when probingAll is false)
+  useEffect(() => {
+    // Don't run this polling if we're already tracking a probe
+    if (probingAll) {
+      return;
+    }
+
+    const checkForScheduledProbe = async () => {
+      try {
+        const progress = await api.getProbeProgress();
+        if (progress.in_progress) {
+          // A scheduled probe started - show it in the UI
+          logger.info('Detected scheduled probe starting, showing progress');
+          setProbeProgress(progress);
+          setProbingAll(true);
+        }
+      } catch (err) {
+        // Silently ignore errors - this is background polling
+      }
+    };
+
+    // Check every 5 seconds for scheduled probes
+    const interval = setInterval(checkForScheduledProbe, 5000);
+
+    return () => {
+      clearInterval(interval);
+    };
+  }, [probingAll]);
+
+  // Poll for probe all streams progress (faster polling when actively probing)
   useEffect(() => {
     if (!probingAll) {
       return;
