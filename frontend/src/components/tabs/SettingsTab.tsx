@@ -1871,6 +1871,32 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
               </span>
             </div>
 
+            {needsRestart && (
+              <div className="restart-notice">
+                <span className="material-icons">info</span>
+                <span>Probe settings changed. Restart services for schedule changes to take effect.</span>
+                <button
+                  className="btn-restart"
+                  onClick={handleRestart}
+                  disabled={restarting}
+                >
+                  <span className={`material-icons ${restarting ? 'spinning' : ''}`}>
+                    {restarting ? 'sync' : 'restart_alt'}
+                  </span>
+                  {restarting ? 'Restarting...' : 'Restart Now'}
+                </button>
+              </div>
+            )}
+
+            {restartResult && (
+              <div className={`restart-result ${restartResult.success ? 'success' : 'error'}`}>
+                <span className="material-icons">
+                  {restartResult.success ? 'check_circle' : 'error'}
+                </span>
+                {restartResult.message}
+              </div>
+            )}
+
             <div className="form-group">
               <label>Channel groups to probe</label>
               <button
