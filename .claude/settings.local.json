@@ -20,7 +20,8 @@
       "Bash(for id in n6hh bt15 1k9i 1o4p)",
       "Bash(python -m py_compile:*)",
       "Bash(.scriptsquality-gates.bat)",
-      "Bash(curl:*)"
+      "Bash(curl:*)",
+      "Bash(python3:*)"
     ],
     "deny": [],
     "ask": [],
