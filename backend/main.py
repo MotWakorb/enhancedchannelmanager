@@ -148,6 +148,7 @@ async def startup_event():
                 deprioritize_failed_streams=settings.deprioritize_failed_streams,
                 stream_sort_priority=settings.stream_sort_priority,
                 stream_sort_enabled=settings.stream_sort_enabled,
+                stream_fetch_page_limit=settings.stream_fetch_page_limit,
             )
             logger.info(f"StreamProber instance created: {prober is not None}")
 
@@ -265,6 +266,7 @@ class SettingsRequest(BaseModel):
     skip_recently_probed_hours: int = 0  # Skip streams successfully probed within last N hours (0 = always probe)
     refresh_m3us_before_probe: bool = True  # Refresh all M3U accounts before starting probe
     auto_reorder_after_probe: bool = False  # Automatically reorder streams in channels after probe completes
+    stream_fetch_page_limit: int = 200  # Max pages when fetching streams (200 pages * 500 = 100K streams)
     stream_sort_priority: list[str] = ["resolution", "bitrate", "framerate"]  # Priority order for Smart Sort
     stream_sort_enabled: dict[str, bool] = {"resolution": True, "bitrate": True, "framerate": True}  # Which criteria are enabled
     deprioritize_failed_streams: bool = True  # When enabled, failed/timeout/pending streams sort to bottom
@@ -310,6 +312,7 @@ class SettingsResponse(BaseModel):
     skip_recently_probed_hours: int  # Skip streams successfully probed within last N hours (0 = always probe)
     refresh_m3us_before_probe: bool  # Refresh all M3U accounts before starting probe
     auto_reorder_after_probe: bool  # Automatically reorder streams in channels after probe completes
+    stream_fetch_page_limit: int  # Max pages when fetching streams (200 pages * 500 = 100K streams)
     stream_sort_priority: list[str]  # Priority order for Smart Sort
     stream_sort_enabled: dict[str, bool]  # Which criteria are enabled
     deprioritize_failed_streams: bool  # When enabled, failed/timeout/pending streams sort to bottom
@@ -366,6 +369,7 @@ async def get_current_settings():
         skip_recently_probed_hours=settings.skip_recently_probed_hours,
         refresh_m3us_before_probe=settings.refresh_m3us_before_probe,
         auto_reorder_after_probe=settings.auto_reorder_after_probe,
+        stream_fetch_page_limit=settings.stream_fetch_page_limit,
         stream_sort_priority=settings.stream_sort_priority,
         stream_sort_enabled=settings.stream_sort_enabled,
         deprioritize_failed_streams=settings.deprioritize_failed_streams,
@@ -530,6 +534,7 @@ async def restart_services():
                 deprioritize_failed_streams=settings.deprioritize_failed_streams,
                 stream_sort_priority=settings.stream_sort_priority,
                 stream_sort_enabled=settings.stream_sort_enabled,
+                stream_fetch_page_limit=settings.stream_fetch_page_limit,
             )
             set_prober(new_prober)
             await new_prober.start()
