@@ -255,6 +255,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   const [originalProbeEnabled, setOriginalProbeEnabled] = useState(true);
   const [originalProbeScheduleTime, setOriginalProbeScheduleTime] = useState('03:00');
   const [originalAutoReorder, setOriginalAutoReorder] = useState(false);
+  const [originalRefreshM3usBeforeProbe, setOriginalRefreshM3usBeforeProbe] = useState(true);
   const [needsRestart, setNeedsRestart] = useState(false);
   const [restarting, setRestarting] = useState(false);
   const [restartResult, setRestartResult] = useState<{ success: boolean; message: string } | null>(null);
@@ -478,6 +479,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       setParallelProbingEnabled(settings.parallel_probing_enabled ?? true);
       setSkipRecentlyProbedHours(settings.skip_recently_probed_hours ?? 0);
       setRefreshM3usBeforeProbe(settings.refresh_m3us_before_probe ?? true);
+      setOriginalRefreshM3usBeforeProbe(settings.refresh_m3us_before_probe ?? true);
       setAutoReorderAfterProbe(settings.auto_reorder_after_probe ?? false);
       setOriginalAutoReorder(settings.auto_reorder_after_probe ?? false);
       setStreamFetchPageLimit(settings.stream_fetch_page_limit ?? 200);
@@ -606,7 +608,8 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       const pollOrTimezoneChanged = statsPollInterval !== originalPollInterval || userTimezone !== originalTimezone;
       const probeSettingsChanged = streamProbeEnabled !== originalProbeEnabled ||
                                    streamProbeScheduleTime !== originalProbeScheduleTime ||
-                                   autoReorderAfterProbe !== originalAutoReorder;
+                                   autoReorderAfterProbe !== originalAutoReorder ||
+                                   refreshM3usBeforeProbe !== originalRefreshM3usBeforeProbe;
 
       // Debug logging for restart detection
       logger.info(`[RESTART-CHECK] Poll interval: ${statsPollInterval} vs original ${originalPollInterval}`);
@@ -614,6 +617,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       logger.info(`[RESTART-CHECK] Probe enabled: ${streamProbeEnabled} vs original ${originalProbeEnabled}`);
       logger.info(`[RESTART-CHECK] Schedule time: "${streamProbeScheduleTime}" vs original "${originalProbeScheduleTime}"`);
       logger.info(`[RESTART-CHECK] Auto-reorder: ${autoReorderAfterProbe} vs original ${originalAutoReorder}`);
+      logger.info(`[RESTART-CHECK] Refresh M3Us: ${refreshM3usBeforeProbe} vs original ${originalRefreshM3usBeforeProbe}`);
       logger.info(`[RESTART-CHECK] pollOrTimezoneChanged=${pollOrTimezoneChanged}, probeSettingsChanged=${probeSettingsChanged}`);
 
       if (pollOrTimezoneChanged || probeSettingsChanged) {
