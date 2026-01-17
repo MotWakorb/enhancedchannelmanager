@@ -77,6 +77,7 @@ class StreamProber:
         self.auto_reorder_after_probe = auto_reorder_after_probe
         self.deprioritize_failed_streams = deprioritize_failed_streams
         self.stream_fetch_page_limit = stream_fetch_page_limit
+        logger.info(f"[PROBER-INIT] auto_reorder_after_probe={auto_reorder_after_probe}")
         # Smart Sort configuration
         self.stream_sort_priority = stream_sort_priority or ["resolution", "bitrate", "framerate"]
         self.stream_sort_enabled = stream_sort_enabled or {"resolution": True, "bitrate": True, "framerate": True}
@@ -1519,6 +1520,7 @@ class StreamProber:
 
             # Auto-reorder streams if configured
             reordered_channels = []
+            logger.info(f"[AUTO-REORDER] Checking auto_reorder_after_probe setting: {self.auto_reorder_after_probe}")
             if self.auto_reorder_after_probe:
                 logger.info("Auto-reorder is enabled, reordering streams in probed channels...")
                 self._probe_progress_status = "reordering"
