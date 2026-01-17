@@ -1369,6 +1369,7 @@ export interface TaskStatus {
   schedule: TaskScheduleConfig;
   last_run: string | null;
   next_run: string | null;
+  config: Record<string, unknown>;  // Task-specific configuration
 }
 
 export interface TaskExecution {
@@ -1396,6 +1397,7 @@ export interface TaskConfigUpdate {
   cron_expression?: string;
   schedule_time?: string;
   timezone?: string;
+  config?: Record<string, unknown>;  // Task-specific configuration
 }
 
 export interface CronPreset {

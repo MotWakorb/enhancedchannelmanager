@@ -50,6 +50,26 @@ class CleanupTask(TaskScheduler):
         self.journal_days: int = 30
         self.vacuum_db: bool = True
 
+    def get_config(self) -> dict:
+        """Get cleanup task configuration."""
+        return {
+            "probe_history_days": self.probe_history_days,
+            "task_history_days": self.task_history_days,
+            "journal_days": self.journal_days,
+            "vacuum_db": self.vacuum_db,
+        }
+
+    def update_config(self, config: dict) -> None:
+        """Update cleanup task configuration."""
+        if "probe_history_days" in config:
+            self.probe_history_days = config["probe_history_days"]
+        if "task_history_days" in config:
+            self.task_history_days = config["task_history_days"]
+        if "journal_days" in config:
+            self.journal_days = config["journal_days"]
+        if "vacuum_db" in config:
+            self.vacuum_db = config["vacuum_db"]
+
     async def execute(self) -> TaskResult:
         """Execute the cleanup task."""
         started_at = datetime.utcnow()

@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import * as api from '../services/api';
 import type { TaskStatus, CronPreset, CronValidationResult, TaskConfigUpdate } from '../services/api';
+import type { EPGSource, M3UAccount } from '../types';
 import { logger } from '../utils/logger';
 
 interface TaskEditorModalProps {
@@ -30,6 +31,13 @@ export function TaskEditorModal({ task, onClose, onSaved }: TaskEditorModalProps
   const [timezone, setTimezone] = useState(task.schedule.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone);
   const [enabled, setEnabled] = useState(task.enabled);
 
+  // Task-specific config state
+  const [taskConfig, setTaskConfig] = useState<Record<string, unknown>>(task.config || {});
+
+  // EPG/M3U data for selection
+  const [epgSources, setEpgSources] = useState<EPGSource[]>([]);
+  const [m3uAccounts, setM3uAccounts] = useState<M3UAccount[]>([]);
+
   // UI state
   const [cronPresets, setCronPresets] = useState<CronPreset[]>([]);
   const [cronValidation, setCronValidation] = useState<CronValidationResult | null>(null);
@@ -56,6 +64,24 @@ export function TaskEditorModal({ task, onClose, onSaved }: TaskEditorModalProps
     }
     loadPresets();
   }, []);
+
+  // Load EPG sources and M3U accounts for task-specific config
+  useEffect(() => {
+    async function loadData() {
+      try {
+        if (task.task_id === 'epg_refresh') {
+          const sources = await api.getEPGSources();
+          setEpgSources(sources);
+        } else if (task.task_id === 'm3u_refresh') {
+          const accounts = await api.getM3UAccounts();
+          setM3uAccounts(accounts);
+        }
+      } catch (err) {
+        logger.error('Failed to load data for task config', err);
+      }
+    }
+    loadData();
+  }, [task.task_id]);
 
   // Validate cron expression with debounce
   const validateCron = useCallback(async (expression: string) => {
@@ -108,6 +134,11 @@ export function TaskEditorModal({ task, onClose, onSaved }: TaskEditorModalProps
 
       if (timezone) {
         config.timezone = timezone;
+      }
+
+      // Include task-specific configuration
+      if (Object.keys(taskConfig).length > 0) {
+        config.config = taskConfig;
       }
 
       await api.updateTask(task.task_id, config);
@@ -548,6 +579,236 @@ export function TaskEditorModal({ task, onClose, onSaved }: TaskEditorModalProps
                   </option>
                 )}
               </select>
+            </div>
+          )}
+
+          {/* Task-Specific Configuration */}
+          {task.task_id === 'epg_refresh' && epgSources.length > 0 && (
+            <div style={{
+              backgroundColor: 'var(--bg-secondary)',
+              padding: '1rem',
+              borderRadius: '6px',
+              marginBottom: '1.5rem',
+            }}>
+              <label style={{
+                display: 'block',
+                marginBottom: '0.75rem',
+                fontWeight: 500,
+              }}>
+                EPG Sources to Refresh
+              </label>
+              <div style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginBottom: '0.75rem' }}>
+                Select specific sources or leave empty to refresh all active sources.
+              </div>
+              <div style={{ maxHeight: '200px', overflowY: 'auto' }}>
+                {epgSources.map((source) => (
+                  <label
+                    key={source.id}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '0.5rem',
+                      padding: '0.5rem',
+                      cursor: 'pointer',
+                      borderRadius: '4px',
+                    }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={((taskConfig.source_ids as number[]) || []).includes(source.id)}
+                      onChange={(e) => {
+                        const currentIds = (taskConfig.source_ids as number[]) || [];
+                        if (e.target.checked) {
+                          setTaskConfig({ ...taskConfig, source_ids: [...currentIds, source.id] });
+                        } else {
+                          setTaskConfig({ ...taskConfig, source_ids: currentIds.filter(id => id !== source.id) });
+                        }
+                      }}
+                      style={{ accentColor: 'var(--accent-primary)' }}
+                    />
+                    <span>{source.name}</span>
+                    {source.source_type === 'dummy' && (
+                      <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>(dummy)</span>
+                    )}
+                  </label>
+                ))}
+              </div>
+              <label style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.5rem',
+                marginTop: '0.75rem',
+                cursor: 'pointer',
+              }}>
+                <input
+                  type="checkbox"
+                  checked={taskConfig.skip_dummy !== false}
+                  onChange={(e) => setTaskConfig({ ...taskConfig, skip_dummy: e.target.checked })}
+                  style={{ accentColor: 'var(--accent-primary)' }}
+                />
+                <span>Skip dummy EPG sources</span>
+              </label>
+            </div>
+          )}
+
+          {task.task_id === 'm3u_refresh' && m3uAccounts.length > 0 && (
+            <div style={{
+              backgroundColor: 'var(--bg-secondary)',
+              padding: '1rem',
+              borderRadius: '6px',
+              marginBottom: '1.5rem',
+            }}>
+              <label style={{
+                display: 'block',
+                marginBottom: '0.75rem',
+                fontWeight: 500,
+              }}>
+                M3U Accounts to Refresh
+              </label>
+              <div style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginBottom: '0.75rem' }}>
+                Select specific accounts or leave empty to refresh all active accounts.
+              </div>
+              <div style={{ maxHeight: '200px', overflowY: 'auto' }}>
+                {m3uAccounts.map((account) => (
+                  <label
+                    key={account.id}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '0.5rem',
+                      padding: '0.5rem',
+                      cursor: 'pointer',
+                      borderRadius: '4px',
+                    }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={((taskConfig.account_ids as number[]) || []).includes(account.id)}
+                      onChange={(e) => {
+                        const currentIds = (taskConfig.account_ids as number[]) || [];
+                        if (e.target.checked) {
+                          setTaskConfig({ ...taskConfig, account_ids: [...currentIds, account.id] });
+                        } else {
+                          setTaskConfig({ ...taskConfig, account_ids: currentIds.filter(id => id !== account.id) });
+                        }
+                      }}
+                      style={{ accentColor: 'var(--accent-primary)' }}
+                    />
+                    <span>{account.name}</span>
+                    {!account.is_active && (
+                      <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>(inactive)</span>
+                    )}
+                  </label>
+                ))}
+              </div>
+              <label style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.5rem',
+                marginTop: '0.75rem',
+                cursor: 'pointer',
+              }}>
+                <input
+                  type="checkbox"
+                  checked={taskConfig.skip_inactive !== false}
+                  onChange={(e) => setTaskConfig({ ...taskConfig, skip_inactive: e.target.checked })}
+                  style={{ accentColor: 'var(--accent-primary)' }}
+                />
+                <span>Skip inactive accounts</span>
+              </label>
+            </div>
+          )}
+
+          {task.task_id === 'cleanup' && (
+            <div style={{
+              backgroundColor: 'var(--bg-secondary)',
+              padding: '1rem',
+              borderRadius: '6px',
+              marginBottom: '1.5rem',
+            }}>
+              <label style={{
+                display: 'block',
+                marginBottom: '0.75rem',
+                fontWeight: 500,
+              }}>
+                Retention Settings
+              </label>
+              <div style={{ display: 'grid', gap: '0.75rem' }}>
+                <div>
+                  <label style={{ display: 'block', fontSize: '0.85rem', marginBottom: '0.25rem' }}>
+                    Probe history retention (days)
+                  </label>
+                  <input
+                    type="number"
+                    min={1}
+                    max={365}
+                    value={(taskConfig.probe_history_days as number) || 30}
+                    onChange={(e) => setTaskConfig({ ...taskConfig, probe_history_days: parseInt(e.target.value) || 30 })}
+                    style={{
+                      width: '100px',
+                      padding: '0.5rem',
+                      border: '1px solid var(--border-color)',
+                      borderRadius: '4px',
+                      backgroundColor: 'var(--bg-primary)',
+                      color: 'var(--text-primary)',
+                    }}
+                  />
+                </div>
+                <div>
+                  <label style={{ display: 'block', fontSize: '0.85rem', marginBottom: '0.25rem' }}>
+                    Task history retention (days)
+                  </label>
+                  <input
+                    type="number"
+                    min={1}
+                    max={365}
+                    value={(taskConfig.task_history_days as number) || 30}
+                    onChange={(e) => setTaskConfig({ ...taskConfig, task_history_days: parseInt(e.target.value) || 30 })}
+                    style={{
+                      width: '100px',
+                      padding: '0.5rem',
+                      border: '1px solid var(--border-color)',
+                      borderRadius: '4px',
+                      backgroundColor: 'var(--bg-primary)',
+                      color: 'var(--text-primary)',
+                    }}
+                  />
+                </div>
+                <div>
+                  <label style={{ display: 'block', fontSize: '0.85rem', marginBottom: '0.25rem' }}>
+                    Journal retention (days)
+                  </label>
+                  <input
+                    type="number"
+                    min={1}
+                    max={365}
+                    value={(taskConfig.journal_days as number) || 30}
+                    onChange={(e) => setTaskConfig({ ...taskConfig, journal_days: parseInt(e.target.value) || 30 })}
+                    style={{
+                      width: '100px',
+                      padding: '0.5rem',
+                      border: '1px solid var(--border-color)',
+                      borderRadius: '4px',
+                      backgroundColor: 'var(--bg-primary)',
+                      color: 'var(--text-primary)',
+                    }}
+                  />
+                </div>
+                <label style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.5rem',
+                  cursor: 'pointer',
+                }}>
+                  <input
+                    type="checkbox"
+                    checked={taskConfig.vacuum_db !== false}
+                    onChange={(e) => setTaskConfig({ ...taskConfig, vacuum_db: e.target.checked })}
+                    style={{ accentColor: 'var(--accent-primary)' }}
+                  />
+                  <span>Run VACUUM after cleanup</span>
+                </label>
+              </div>
             </div>
           )}
 

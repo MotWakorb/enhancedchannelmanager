@@ -17,6 +17,7 @@ from database import get_session
 from models import TaskExecution
 from task_registry import get_registry
 from task_scheduler import TaskResult, TaskStatus
+from journal import log_entry
 
 logger = logging.getLogger(__name__)
 
@@ -202,6 +203,18 @@ class TaskEngine:
 
         try:
             logger.info(f"[{task_id}] Starting task execution (triggered_by={triggered_by})")
+
+            # Log task start to journal
+            log_entry(
+                category="task",
+                action_type="start",
+                entity_name=instance.task_name,
+                description=f"Started {instance.task_name} ({triggered_by})",
+                entity_id=execution_id,
+                after_value={"task_id": task_id, "triggered_by": triggered_by},
+                user_initiated=(triggered_by == "manual"),
+            )
+
             result = await instance.run()
 
             # Update execution record
@@ -231,10 +244,60 @@ class TaskEngine:
             # Update registry
             registry.sync_to_database(task_id)
 
+            # Log task completion to journal
+            if result.success:
+                log_entry(
+                    category="task",
+                    action_type="complete",
+                    entity_name=instance.task_name,
+                    description=f"Completed {instance.task_name}: {result.success_count} ok, {result.failed_count} failed",
+                    entity_id=execution_id,
+                    after_value={
+                        "task_id": task_id,
+                        "success": True,
+                        "duration_seconds": result.duration_seconds,
+                        "total_items": result.total_items,
+                        "success_count": result.success_count,
+                        "failed_count": result.failed_count,
+                        "skipped_count": result.skipped_count,
+                    },
+                    user_initiated=(triggered_by == "manual"),
+                )
+            else:
+                log_entry(
+                    category="task",
+                    action_type="fail",
+                    entity_name=instance.task_name,
+                    description=f"Failed {instance.task_name}: {result.error or result.message}",
+                    entity_id=execution_id,
+                    after_value={
+                        "task_id": task_id,
+                        "success": False,
+                        "error": result.error,
+                        "message": result.message,
+                    },
+                    user_initiated=(triggered_by == "manual"),
+                )
+
             return result
 
         except Exception as e:
             logger.exception(f"[{task_id}] Task execution failed: {e}")
+
+            # Log exception to journal
+            log_entry(
+                category="task",
+                action_type="error",
+                entity_name=instance.task_name,
+                description=f"Error in {instance.task_name}: {str(e)}",
+                entity_id=execution_id,
+                after_value={
+                    "task_id": task_id,
+                    "error": str(e),
+                    "triggered_by": triggered_by,
+                },
+                user_initiated=(triggered_by == "manual"),
+            )
 
             # Update execution record with error
             if execution_id:
