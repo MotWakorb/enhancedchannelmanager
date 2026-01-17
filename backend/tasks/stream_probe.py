@@ -48,6 +48,17 @@ class StreamProbeTask(TaskScheduler):
         self._prober = None
         self._channel_groups: list[str] = []  # Override for group filtering
 
+    def get_config(self) -> dict:
+        """Get stream probe configuration."""
+        return {
+            "channel_groups": self._channel_groups,
+        }
+
+    def update_config(self, config: dict) -> None:
+        """Update stream probe configuration."""
+        if "channel_groups" in config:
+            self._channel_groups = config["channel_groups"] or []
+
     def set_prober(self, prober):
         """Set the StreamProber instance to delegate to."""
         self._prober = prober

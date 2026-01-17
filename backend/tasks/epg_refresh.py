@@ -41,6 +41,20 @@ class EPGRefreshTask(TaskScheduler):
         self.source_ids: list[int] = []  # Empty = all sources
         self.skip_dummy: bool = True
 
+    def get_config(self) -> dict:
+        """Get EPG refresh configuration."""
+        return {
+            "source_ids": self.source_ids,
+            "skip_dummy": self.skip_dummy,
+        }
+
+    def update_config(self, config: dict) -> None:
+        """Update EPG refresh configuration."""
+        if "source_ids" in config:
+            self.source_ids = config["source_ids"] or []
+        if "skip_dummy" in config:
+            self.skip_dummy = config["skip_dummy"]
+
     async def execute(self) -> TaskResult:
         """Execute the EPG refresh."""
         client = get_client()

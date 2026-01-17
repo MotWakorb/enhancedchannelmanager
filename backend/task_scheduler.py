@@ -237,7 +237,25 @@ class TaskScheduler(ABC):
             "schedule": self.schedule_config.to_dict(),
             "last_run": self._last_run.isoformat() + "Z" if self._last_run else None,
             "next_run": self._next_run.isoformat() + "Z" if self._next_run else None,
+            "config": self.get_config(),
         }
+
+    def get_config(self) -> dict:
+        """
+        Get task-specific configuration.
+        Subclasses should override this to return their config options.
+        """
+        return {}
+
+    def update_config(self, config: dict) -> None:
+        """
+        Update task-specific configuration.
+        Subclasses should override this to apply config changes.
+
+        Args:
+            config: Dict with configuration values to update
+        """
+        pass
 
     # -------------------------------------------------------------------------
     # Progress Tracking (for use by subclasses)

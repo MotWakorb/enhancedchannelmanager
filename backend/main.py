@@ -3168,6 +3168,7 @@ class TaskConfigUpdate(BaseModel):
     cron_expression: Optional[str] = None
     schedule_time: Optional[str] = None
     timezone: Optional[str] = None
+    config: Optional[dict] = None  # Task-specific configuration (source_ids, account_ids, etc.)
 
 
 @app.get("/api/tasks")
@@ -3214,6 +3215,7 @@ async def update_task(task_id: str, config: TaskConfigUpdate):
             cron_expression=config.cron_expression,
             schedule_time=config.schedule_time,
             timezone=config.timezone,
+            task_config=config.config,
         )
 
         if result is None:

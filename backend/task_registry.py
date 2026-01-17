@@ -230,6 +230,7 @@ class TaskRegistry:
         cron_expression: Optional[str] = None,
         schedule_time: Optional[str] = None,
         timezone: Optional[str] = None,
+        task_config: Optional[dict] = None,
     ) -> Optional[dict]:
         """
         Update configuration for a task.
@@ -242,6 +243,7 @@ class TaskRegistry:
             cron_expression: Cron expression for cron scheduling
             schedule_time: HH:MM for daily scheduling
             timezone: IANA timezone name
+            task_config: Task-specific configuration dict
 
         Returns:
             Updated task status dict, or None if task not found
@@ -268,6 +270,10 @@ class TaskRegistry:
             instance.schedule_config.schedule_time = schedule_time
         if timezone is not None:
             instance.schedule_config.timezone = timezone
+
+        # Update task-specific configuration
+        if task_config is not None:
+            instance.update_config(task_config)
 
         # Recalculate next run if needed
         if instance._enabled and instance.schedule_config.schedule_type != ScheduleType.MANUAL:

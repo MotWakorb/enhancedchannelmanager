@@ -41,6 +41,20 @@ class M3URefreshTask(TaskScheduler):
         self.account_ids: list[int] = []  # Empty = all accounts
         self.skip_inactive: bool = True
 
+    def get_config(self) -> dict:
+        """Get M3U refresh configuration."""
+        return {
+            "account_ids": self.account_ids,
+            "skip_inactive": self.skip_inactive,
+        }
+
+    def update_config(self, config: dict) -> None:
+        """Update M3U refresh configuration."""
+        if "account_ids" in config:
+            self.account_ids = config["account_ids"] or []
+        if "skip_inactive" in config:
+            self.skip_inactive = config["skip_inactive"]
+
     async def execute(self) -> TaskResult:
         """Execute the M3U refresh."""
         client = get_client()
