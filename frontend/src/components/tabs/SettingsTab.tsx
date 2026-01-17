@@ -192,6 +192,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
   const [skipRecentlyProbedHours, setSkipRecentlyProbedHours] = useState(0);
   const [refreshM3usBeforeProbe, setRefreshM3usBeforeProbe] = useState(true);
   const [autoReorderAfterProbe, setAutoReorderAfterProbe] = useState(false);
+  const [streamFetchPageLimit, setStreamFetchPageLimit] = useState(200);
   const [probingAll, setProbingAll] = useState(false);
   const [probeAllResult, setProbeAllResult] = useState<{ success: boolean; message: string } | null>(null);
   const [totalStreamCount, setTotalStreamCount] = useState(100); // Default to 100, will be updated on load
@@ -468,6 +469,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
       setRefreshM3usBeforeProbe(settings.refresh_m3us_before_probe ?? true);
       setAutoReorderAfterProbe(settings.auto_reorder_after_probe ?? false);
       setOriginalAutoReorder(settings.auto_reorder_after_probe ?? false);
+      setStreamFetchPageLimit(settings.stream_fetch_page_limit ?? 200);
       setStreamSortPriority(settings.stream_sort_priority ?? ['resolution', 'bitrate', 'framerate']);
       setStreamSortEnabled(settings.stream_sort_enabled ?? { resolution: true, bitrate: true, framerate: true });
       setDeprioritizeFailedStreams(settings.deprioritize_failed_streams ?? true);
@@ -571,6 +573,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
         skip_recently_probed_hours: skipRecentlyProbedHours,
         refresh_m3us_before_probe: refreshM3usBeforeProbe,
         auto_reorder_after_probe: autoReorderAfterProbe,
+        stream_fetch_page_limit: streamFetchPageLimit,
         stream_sort_priority: streamSortPriority,
         stream_sort_enabled: streamSortEnabled,
         deprioritize_failed_streams: deprioritizeFailedStreams,
@@ -1849,6 +1852,23 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
                 <option value={30}>30 seconds</option>
               </select>
               <span className="form-hint">How long to sample streams when measuring bitrate</span>
+            </div>
+
+            <div className="form-group">
+              <label htmlFor="streamFetchPageLimit">Stream fetch page limit</label>
+              <input
+                id="streamFetchPageLimit"
+                type="number"
+                min="50"
+                max="1000"
+                value={streamFetchPageLimit}
+                onChange={(e) => setStreamFetchPageLimit(Math.max(50, Math.min(1000, parseInt(e.target.value) || 200)))}
+                style={{ width: '100px' }}
+              />
+              <span className="form-hint">
+                Max pages when fetching streams from Dispatcharr (×500 = max streams).
+                Default 200 = 100K streams. Increase if you have more streams.
+              </span>
             </div>
 
             <div className="form-group">
