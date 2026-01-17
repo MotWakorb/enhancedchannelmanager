@@ -953,7 +953,10 @@ class StreamProber:
                     stream_ids = full_channel.get("streams", [])
 
                     if len(stream_ids) <= 1:
+                        logger.debug(f"[AUTO-REORDER] Channel {channel_id} ({channel_name}) - Skipping, only {len(stream_ids)} streams")
                         continue  # Skip if 0 or 1 streams
+
+                    logger.info(f"[AUTO-REORDER] Processing channel {channel_id} ({channel_name}) with {len(stream_ids)} streams: {stream_ids}")
 
                     # Fetch stream stats for this channel's streams
                     from .database import get_session
@@ -965,9 +968,13 @@ class StreamProber:
 
                         # Build stats map
                         stats_map = {stat.stream_id: stat for stat in stats_records}
+                        logger.info(f"[AUTO-REORDER] Channel {channel_id}: Found stats for {len(stats_map)}/{len(stream_ids)} streams")
 
                         # Sort streams using smart sort logic (similar to frontend)
                         sorted_stream_ids = self._smart_sort_streams(stream_ids, stats_map, channel_name)
+                        logger.info(f"[AUTO-REORDER] Channel {channel_id}: Original order: {stream_ids}")
+                        logger.info(f"[AUTO-REORDER] Channel {channel_id}: Sorted order:   {sorted_stream_ids}")
+                        logger.info(f"[AUTO-REORDER] Channel {channel_id}: Order changed: {sorted_stream_ids != stream_ids}")
 
                         # Only update if order changed
                         if sorted_stream_ids != stream_ids:
