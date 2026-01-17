@@ -959,8 +959,16 @@ class StreamProber:
                     logger.info(f"[AUTO-REORDER] Processing channel {channel_id} ({channel_name}) with {len(stream_ids)} streams: {stream_ids}")
 
                     # Fetch stream stats for this channel's streams
-                    from .database import get_session
-                    from .models import StreamStats
+                    logger.info(f"[AUTO-REORDER] Channel {channel_id}: Importing database modules...")
+                    try:
+                        from .database import get_session
+                        from .models import StreamStats
+                        logger.info(f"[AUTO-REORDER] Channel {channel_id}: Database modules imported successfully")
+                    except Exception as import_err:
+                        logger.error(f"[AUTO-REORDER] Channel {channel_id}: Failed to import database modules: {import_err}")
+                        import traceback
+                        logger.error(f"[AUTO-REORDER] Traceback: {traceback.format_exc()}")
+                        continue
 
                     logger.info(f"[AUTO-REORDER] Channel {channel_id}: Opening database session...")
                     with get_session() as session:
