@@ -1530,7 +1530,7 @@ class StreamProber:
                 self._probe_progress_current_stream = "Reordering streams..."
                 try:
                     reordered_channels = await self._auto_reorder_channels(channel_groups_override, stream_to_channels)
-                    logger.info(f"Auto-reordered {len(reordered_channels)} channels")
+                    logger.info(f"[AUTO-REORDER] Auto-reordered {len(reordered_channels)} channels")
                 except Exception as e:
                     logger.error(f"Auto-reorder failed: {e}")
 
