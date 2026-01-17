@@ -1248,8 +1248,7 @@ class StreamProber:
                 skip_threshold = datetime.utcnow() - timedelta(hours=self.skip_recently_probed_hours)
 
                 # Query StreamStats for recently probed streams (only successful probes)
-                from .database import get_session
-                from .models import StreamStats
+                # get_session and StreamStats already imported at top of file
                 with get_session() as session:
                     recent_probes = session.query(StreamStats).filter(
                         StreamStats.stream_id.in_([s["id"] for s in streams_to_probe]),
