@@ -744,8 +744,8 @@ class StreamProber:
             channel_groups_override: Optional list of channel group names to filter by.
                                     If None, uses self.probe_channel_groups.
         """
-        logger.info(f"[PROBE-FILTER] _fetch_channel_stream_ids called with override={channel_groups_override}")
-        logger.info(f"[PROBE-FILTER] self.probe_channel_groups={self.probe_channel_groups}")
+        logger.debug(f"[PROBE-FILTER] _fetch_channel_stream_ids called with override={channel_groups_override}")
+        logger.debug(f"[PROBE-FILTER] self.probe_channel_groups={self.probe_channel_groups}")
 
         channel_stream_ids = set()
         stream_to_channels = {}  # stream_id -> list of channel names
@@ -753,7 +753,7 @@ class StreamProber:
 
         # Determine which groups to filter by
         groups_to_filter = channel_groups_override if channel_groups_override is not None else self.probe_channel_groups
-        logger.info(f"[PROBE-FILTER] groups_to_filter (after resolution)={groups_to_filter}")
+        logger.debug(f"[PROBE-FILTER] groups_to_filter (after resolution)={groups_to_filter}")
 
         # If specific groups are selected, fetch all groups first to filter
         selected_group_ids = set()
@@ -761,8 +761,8 @@ class StreamProber:
             try:
                 all_groups = await self.client.get_channel_groups()
                 available_group_names = [g.get("name") for g in all_groups]
-                logger.info(f"[PROBE-FILTER] Requested groups: {groups_to_filter}")
-                logger.info(f"[PROBE-FILTER] Available groups: {available_group_names}")
+                logger.debug(f"[PROBE-FILTER] Requested groups: {groups_to_filter}")
+                logger.debug(f"[PROBE-FILTER] Available groups: {available_group_names}")
 
                 matched_groups = []
                 unmatched_groups = []
@@ -776,10 +776,10 @@ class StreamProber:
                     if requested not in [g.get("name") for g in all_groups]:
                         unmatched_groups.append(requested)
 
-                logger.info(f"[PROBE-FILTER] Matched groups: {matched_groups}")
+                logger.debug(f"[PROBE-FILTER] Matched groups: {matched_groups}")
                 if unmatched_groups:
                     logger.warning(f"[PROBE-FILTER] Requested groups NOT FOUND: {unmatched_groups}")
-                logger.info(f"[PROBE-FILTER] Filtering to {len(selected_group_ids)} groups")
+                logger.debug(f"[PROBE-FILTER] Filtering to {len(selected_group_ids)} groups")
             except Exception as e:
                 logger.error(f"Failed to fetch channel groups for filtering: {e}")
                 # Continue without filtering if we can't fetch groups
@@ -838,14 +838,14 @@ class StreamProber:
                 break
 
         # Log summary of channel filtering
-        logger.info(f"[PROBE-FILTER] Channel filtering summary:")
-        logger.info(f"[PROBE-FILTER]   Total channels seen: {total_channels_seen}")
-        logger.info(f"[PROBE-FILTER]   Channels included: {channels_included}")
+        logger.debug(f"[PROBE-FILTER] Channel filtering summary:")
+        logger.debug(f"[PROBE-FILTER]   Total channels seen: {total_channels_seen}")
+        logger.debug(f"[PROBE-FILTER]   Channels included: {channels_included}")
         if selected_group_ids:
-            logger.info(f"[PROBE-FILTER]   Channels excluded (wrong group): {channels_excluded_wrong_group}")
+            logger.debug(f"[PROBE-FILTER]   Channels excluded (wrong group): {channels_excluded_wrong_group}")
         if channels_with_no_streams > 0:
-            logger.info(f"[PROBE-FILTER]   Channels with no streams: {channels_with_no_streams}")
-        logger.info(f"[PROBE-FILTER]   Unique streams to probe: {len(channel_stream_ids)}")
+            logger.debug(f"[PROBE-FILTER]   Channels with no streams: {channels_with_no_streams}")
+        logger.debug(f"[PROBE-FILTER]   Unique streams to probe: {len(channel_stream_ids)}")
 
         # Log excluded channels if there are any (limit to first 20 to avoid log spam)
         if excluded_channel_names:
@@ -1128,8 +1128,8 @@ class StreamProber:
             skip_m3u_refresh: If True, skip M3U refresh even if configured.
                              Use this for on-demand probes from the UI.
         """
-        logger.info(f"[PROBE] probe_all_streams called with channel_groups_override={channel_groups_override}, skip_m3u_refresh={skip_m3u_refresh}")
-        logger.info(f"[PROBE] self.probe_channel_groups={self.probe_channel_groups}")
+        logger.debug(f"[PROBE] probe_all_streams called with channel_groups_override={channel_groups_override}, skip_m3u_refresh={skip_m3u_refresh}")
+        logger.debug(f"[PROBE] self.probe_channel_groups={self.probe_channel_groups}")
 
         if self._probing_in_progress:
             logger.warning("Probe already in progress")
@@ -1201,14 +1201,14 @@ class StreamProber:
             # Fetch all streams
             logger.info("Fetching stream details...")
             all_streams = await self._fetch_all_streams()
-            logger.info(f"[PROBE-MATCH] Fetched {len(all_streams)} total streams from Dispatcharr")
+            logger.debug(f"[PROBE-MATCH] Fetched {len(all_streams)} total streams from Dispatcharr")
 
             # Log the stream IDs we're looking for
-            logger.info(f"[PROBE-MATCH] Looking for {len(channel_stream_ids)} channel stream IDs: {sorted(channel_stream_ids)}")
+            logger.debug(f"[PROBE-MATCH] Looking for {len(channel_stream_ids)} channel stream IDs: {sorted(channel_stream_ids)}")
 
             # Get all stream IDs from Dispatcharr
             all_stream_ids = {s["id"] for s in all_streams}
-            logger.info(f"[PROBE-MATCH] Dispatcharr returned {len(all_stream_ids)} unique stream IDs")
+            logger.debug(f"[PROBE-MATCH] Dispatcharr returned {len(all_stream_ids)} unique stream IDs")
 
             # Find which channel stream IDs are missing from Dispatcharr's stream list
             missing_ids = channel_stream_ids - all_stream_ids
@@ -1221,7 +1221,7 @@ class StreamProber:
 
             # Filter to only streams that are in channels
             streams_to_probe = [s for s in all_streams if s["id"] in channel_stream_ids]
-            logger.info(f"[PROBE-MATCH] Matched {len(streams_to_probe)} streams to probe")
+            logger.debug(f"[PROBE-MATCH] Matched {len(streams_to_probe)} streams to probe")
 
             # Skip recently probed streams if configured
             if self.skip_recently_probed_hours > 0:
