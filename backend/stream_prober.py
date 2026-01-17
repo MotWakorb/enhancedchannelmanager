@@ -60,6 +60,7 @@ class StreamProber:
         deprioritize_failed_streams: bool = True,  # Deprioritize failed streams in smart sort
         stream_sort_priority: list[str] = None,  # Priority order for Smart Sort criteria
         stream_sort_enabled: dict[str, bool] = None,  # Which criteria are enabled for Smart Sort
+        stream_fetch_page_limit: int = 200,  # Max pages when fetching streams (200 * 500 = 100K streams)
     ):
         self.client = client
         self.probe_timeout = probe_timeout
@@ -75,6 +76,7 @@ class StreamProber:
         self.refresh_m3us_before_probe = refresh_m3us_before_probe
         self.auto_reorder_after_probe = auto_reorder_after_probe
         self.deprioritize_failed_streams = deprioritize_failed_streams
+        self.stream_fetch_page_limit = stream_fetch_page_limit
         # Smart Sort configuration
         self.stream_sort_priority = stream_sort_priority or ["resolution", "bitrate", "framerate"]
         self.stream_sort_enabled = stream_sort_enabled or {"resolution": True, "bitrate": True, "framerate": True}
@@ -719,7 +721,7 @@ class StreamProber:
         """Fetch all streams from Dispatcharr (paginated)."""
         all_streams = []
         page = 1
-        page_limit = 200  # Safety limit: 200 pages * 500 = 100,000 streams max
+        page_limit = self.stream_fetch_page_limit  # Configurable: pages * 500 = max streams
         while True:
             try:
                 result = await self.client.get_streams(page=page, page_size=500)
@@ -731,7 +733,7 @@ class StreamProber:
                 if page > page_limit:
                     logger.warning(
                         f"[PROBE-MATCH] Pagination limit reached ({page_limit} pages, {len(all_streams)} streams). "
-                        f"Some streams may be missing. Consider investigating if channels are not being probed."
+                        f"Some streams may be missing. Increase 'Stream Fetch Page Limit' in settings if needed."
                     )
                     break
             except Exception as e:

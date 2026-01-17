@@ -518,6 +518,7 @@ export interface SettingsResponse {
   skip_recently_probed_hours: number;  // Skip streams probed within last N hours (0 = always probe)
   refresh_m3us_before_probe: boolean;  // Refresh all M3U accounts before starting probe
   auto_reorder_after_probe: boolean;  // Automatically reorder streams in channels after probe completes
+  stream_fetch_page_limit: number;  // Max pages when fetching streams (pages * 500 = max streams)
   stream_sort_priority: SortCriterion[];  // Priority order for Smart Sort (e.g., ['resolution', 'bitrate', 'framerate'])
   stream_sort_enabled: SortEnabledMap;  // Which sort criteria are enabled (e.g., { resolution: true, bitrate: true, framerate: false })
   deprioritize_failed_streams: boolean;  // When enabled, failed/timeout/pending streams sort to bottom
@@ -572,6 +573,7 @@ export async function saveSettings(settings: {
   skip_recently_probed_hours?: number;  // Optional - skip streams probed within last N hours, defaults to 0 (always probe)
   refresh_m3us_before_probe?: boolean;  // Optional - refresh all M3U accounts before starting probe, defaults to true
   auto_reorder_after_probe?: boolean;  // Optional - automatically reorder streams after probe, defaults to false
+  stream_fetch_page_limit?: number;  // Optional - max pages when fetching streams, defaults to 200 (100K streams)
   stream_sort_priority?: SortCriterion[];  // Optional - priority order for Smart Sort, defaults to ['resolution', 'bitrate', 'framerate']
   stream_sort_enabled?: SortEnabledMap;  // Optional - which sort criteria are enabled, defaults to all true
   deprioritize_failed_streams?: boolean;  // Optional - deprioritize failed/timeout/pending streams in sort, defaults to true

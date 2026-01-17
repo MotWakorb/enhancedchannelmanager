@@ -81,6 +81,9 @@ class DispatcharrSettings(BaseModel):
     refresh_m3us_before_probe: bool = True
     # Automatically reorder streams in channels after probe completes
     auto_reorder_after_probe: bool = False
+    # Maximum pages to fetch when retrieving streams from Dispatcharr (page_size=500)
+    # 200 pages = 100,000 streams max. Increase if you have more than 100K streams.
+    stream_fetch_page_limit: int = 200
     # Stream sort priority order for "Smart Sort" feature
     # Order determines priority: first element is primary sort key, subsequent elements are tie-breakers
     # Valid values: "resolution", "bitrate", "framerate"
