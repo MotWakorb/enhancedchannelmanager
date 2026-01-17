@@ -125,6 +125,37 @@ export interface Stream {
   is_custom: boolean;
 }
 
+// Stream probe statistics - metadata gathered via ffprobe
+export interface StreamStats {
+  stream_id: number;
+  stream_name: string | null;
+  resolution: string | null;       // e.g., "1920x1080"
+  fps: string | null;              // e.g., "29.97"
+  video_codec: string | null;      // e.g., "h264", "hevc"
+  audio_codec: string | null;      // e.g., "aac", "ac3"
+  audio_channels: number | null;   // e.g., 2, 6
+  stream_type: string | null;      // e.g., "HLS", "MPEG-TS"
+  bitrate: number | null;          // bits per second (overall stream)
+  video_bitrate: number | null;    // bits per second (video stream only)
+  probe_status: 'success' | 'failed' | 'pending' | 'timeout';
+  error_message: string | null;
+  last_probed: string | null;      // ISO timestamp
+  created_at: string;
+}
+
+export interface StreamStatsSummary {
+  total: number;
+  success: number;
+  failed: number;
+  timeout: number;
+  pending: number;
+}
+
+export interface BulkProbeResult {
+  probed: number;
+  results: StreamStats[];
+}
+
 // M3U Account types
 export type M3UAccountType = 'STD' | 'XC';
 export type M3UAccountStatus = 'idle' | 'fetching' | 'parsing' | 'error' | 'success' | 'pending_setup' | 'disabled';
@@ -377,12 +408,13 @@ export interface SystemEvent {
   created_at: string;
 }
 
-// Response from /api/core/system-events/
+// Response from /api/stats/activity (proxied from /api/core/system-events/)
 export interface SystemEventsResponse {
-  results: SystemEvent[];
+  events: SystemEvent[];
   count: number;
-  next?: string | null;
-  previous?: string | null;
+  total: number;
+  offset: number;
+  limit: number;
 }
 
 // Daily bandwidth record

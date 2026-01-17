@@ -517,7 +517,7 @@ paths:
       - api
     post:
       operationId: api_channels_channels_create
-      description: ''
+      description: Override create to handle channel profile membership
       parameters:
       - name: data
         in: body
@@ -658,9 +658,10 @@ paths:
               description: Desired channel name
               type: string
             channel_profile_ids:
-              description: (Optional) Channel profile ID(s) to add the channel to.
-                Can be a single ID or array of IDs. If not provided, channel is added
-                to all profiles.
+              description: '(Optional) Channel profile ID(s). Behavior: omitted =
+                add to ALL profiles (default); empty array [] = add to NO profiles;
+                [0] = add to ALL profiles (explicit); [1,2,...] = add only to specified
+                profiles.'
               type: array
               items:
                 type: integer
@@ -693,8 +694,10 @@ paths:
               items:
                 type: integer
             channel_profile_ids:
-              description: (Optional) Channel profile ID(s) to add the channels to.
-                If not provided, channels are added to all profiles.
+              description: '(Optional) Channel profile ID(s). Behavior: omitted =
+                add to ALL profiles (default); empty array [] = add to NO profiles;
+                [0] = add to ALL profiles (explicit); [1,2,...] = add only to specified
+                profiles.'
               type: array
               items:
                 type: integer
@@ -1396,14 +1399,64 @@ paths:
       description: A unique integer value identifying this channel profile.
       required: true
       type: integer
+  /api/channels/profiles/{id}/duplicate/:
+    post:
+      operationId: api_channels_profiles_duplicate
+      description: ''
+      parameters:
+      - name: data
+        in: body
+        required: true
+        schema:
+          $ref: '#/definitions/ChannelProfile'
+      responses:
+        '201':
+          description: ''
+          schema:
+            $ref: '#/definitions/ChannelProfile'
+      tags:
+      - api
+    parameters:
+    - name: id
+      in: path
+      description: A unique integer value identifying this channel profile.
+      required: true
+      type: integer
   /api/channels/profiles/{profile_id}/channels/bulk-update/:
     patch:
       operationId: api_channels_profiles_channels_bulk-update_partial_update
-      description: Bulk enable or disable channels for a specific profile
-      parameters: []
+      description: Bulk enable or disable channels for a specific profile. Creates
+        membership records if they don't exist.
+      parameters:
+      - name: data
+        in: body
+        required: true
+        schema:
+          $ref: '#/definitions/BulkChannelProfileMembership'
       responses:
         '200':
-          description: ''
+          description: Channels updated successfully
+          schema:
+            type: object
+            properties:
+              status:
+                type: string
+                example: success
+              updated:
+                description: Number of channels updated
+                type: integer
+              created:
+                description: Number of new memberships created
+                type: integer
+              invalid_channels:
+                description: List of channel IDs that don't exist
+                type: array
+                items:
+                  type: integer
+        '400':
+          description: Invalid request data
+        '404':
+          description: Profile not found
       tags:
       - api
     parameters:
@@ -4690,6 +4743,16 @@ definitions:
       custom_properties:
         title: Custom properties
         type: object
+      is_stale:
+        title: Is stale
+        description: Whether this group relationship is stale (not seen in recent
+          refresh, pending deletion)
+        type: boolean
+      last_seen:
+        title: Last seen
+        description: Last time this group was seen in the M3U source during a refresh
+        type: string
+        format: date-time
   ChannelGroup:
     required:
     - name
@@ -4705,11 +4768,11 @@ definitions:
         minLength: 1
       channel_count:
         title: Channel count
-        type: integer
+        type: string
         readOnly: true
       m3u_account_count:
         title: M3u account count
-        type: integer
+        type: string
         readOnly: true
       m3u_accounts:
         type: array
@@ -4769,6 +4832,27 @@ definitions:
         title: Channels
         type: string
         readOnly: true
+  ChanneProfilelMembershipUpdate:
+    required:
+    - channel_id
+    - enabled
+    type: object
+    properties:
+      channel_id:
+        title: Channel id
+        type: integer
+      enabled:
+        title: Enabled
+        type: boolean
+  BulkChannelProfileMembership:
+    required:
+    - channels
+    type: object
+    properties:
+      channels:
+        type: array
+        items:
+          $ref: '#/definitions/ChanneProfilelMembershipUpdate'
   Recording:
     required:
     - start_time
@@ -4900,6 +4984,11 @@ definitions:
         title: Last seen
         type: string
         format: date-time
+      is_stale:
+        title: Is stale
+        description: Whether this stream is stale (not seen in recent refresh, pending
+          deletion)
+        type: boolean
       stream_profile_id:
         title: Stream profile id
         type: integer
@@ -4935,7 +5024,6 @@ definitions:
     required:
     - key
     - name
-    - value
     type: object
     properties:
       id:
@@ -4954,9 +5042,7 @@ definitions:
         minLength: 1
       value:
         title: Value
-        type: string
-        maxLength: 255
-        minLength: 1
+        type: object
   StreamProfile:
     required:
     - name

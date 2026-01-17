@@ -139,6 +139,24 @@ function formatFps(fps: number | undefined): string {
   return fps.toFixed(2);
 }
 
+// Check if event type is streaming-related (not login, refresh, etc.)
+function isStreamingEvent(eventType: string): boolean {
+  const type = eventType.toLowerCase();
+  // Include: channel start/stop, client connect/disconnect, buffering, errors
+  // Exclude: login_success, login_failed, m3u_refresh, settings changes, etc.
+  return (
+    type.includes('start') ||
+    type.includes('stop') ||
+    type.includes('connect') ||
+    type.includes('disconnect') ||
+    type.includes('buffer') ||
+    type.includes('error') ||
+    type.includes('channel') ||
+    type.includes('stream') ||
+    type.includes('client')
+  );
+}
+
 // Get event type display info
 function getEventTypeInfo(eventType: string): { icon: string; className: string; label: string } {
   const type = eventType.toLowerCase();
@@ -386,7 +404,7 @@ export function StatsTab() {
           }),
         api.getSystemEvents({ limit: 50 })
           .then(result => {
-            logger.debug(`Stats Tab: System events fetched successfully (${result?.results?.length || 0} events)`);
+            logger.debug(`Stats Tab: System events fetched successfully (${result?.events?.length || 0} events)`);
             return result;
           })
           .catch(err => {
@@ -466,7 +484,7 @@ export function StatsTab() {
       logger.debug(`Stats Tab: Data fetched successfully in ${elapsed}ms`);
 
       setChannelStats(statsResult);
-      setEvents(eventsResult.results || []);
+      setEvents(eventsResult.events || []);
       if (bandwidthResult) {
         setBandwidthStats(bandwidthResult);
       }
@@ -611,10 +629,11 @@ export function StatsTab() {
     });
   };
 
-  // Filter events
+  // Filter events - first exclude non-streaming events, then apply user filter
+  const streamingEvents = events.filter(e => isStreamingEvent(e.event_type || ''));
   const filteredEvents = eventFilter
-    ? events.filter(e => e.event_type?.toLowerCase().includes(eventFilter.toLowerCase()))
-    : events;
+    ? streamingEvents.filter(e => e.event_type?.toLowerCase().includes(eventFilter.toLowerCase()))
+    : streamingEvents;
 
   // Calculate totals
   const totalClients = channelStats?.channels?.reduce((sum, ch) => sum + (ch.client_count || 0), 0) || 0;
@@ -622,40 +641,81 @@ export function StatsTab() {
 
   // Calculate connections per M3U (current/max for all accounts)
   const m3uConnectionStats = (() => {
-    // Count active connections per M3U account ID
+    // First, build a map of profile ID -> account ID
+    const profileToAccountMap = new Map<number, number>();
+    for (const account of m3uAccounts) {
+      for (const profile of account.profiles || []) {
+        profileToAccountMap.set(profile.id, account.id);
+      }
+    }
+
+    // Count active connections per M3U account ID (not profile ID!)
     const activeCount = new Map<number, number>();
     if (channelStats?.channels) {
+      logger.debug(`Stats Tab M3U Debug: Processing ${channelStats.channels.length} active channels for M3U connection counts`);
       for (const ch of channelStats.channels) {
+        logger.debug(`Stats Tab M3U Debug: Channel ${ch.channel_id} (${ch.channel_name}) - m3u_profile_id: ${ch.m3u_profile_id}, stream_name: ${ch.stream_name}`);
         if (ch.m3u_profile_id) {
-          activeCount.set(ch.m3u_profile_id, (activeCount.get(ch.m3u_profile_id) || 0) + 1);
+          // Map profile ID to account ID
+          const accountId = profileToAccountMap.get(ch.m3u_profile_id);
+          if (accountId) {
+            activeCount.set(accountId, (activeCount.get(accountId) || 0) + 1);
+            logger.debug(`Stats Tab M3U Debug: Profile ${ch.m3u_profile_id} -> Account ${accountId}, incremented count`);
+          } else {
+            logger.debug(`Stats Tab M3U Debug: Profile ${ch.m3u_profile_id} not found in any M3U account`);
+          }
+        } else {
+          logger.debug(`Stats Tab M3U Debug: Channel ${ch.channel_id} has NO m3u_profile_id - will not count toward any M3U`);
         }
       }
+      logger.debug(`Stats Tab M3U Debug: Active connection counts by M3U Account ID: ${JSON.stringify(Object.fromEntries(activeCount))}`);
+    } else {
+      logger.debug('Stats Tab M3U Debug: No active channels to process');
     }
 
     // Build stats for all M3U accounts (exclude "Custom" M3U)
     // If profiles exist, use sum of active profile max_streams (profiles include the base account)
     // Otherwise use account.max_streams directly
-    return m3uAccounts
-      .filter(account => account.is_active && account.name.toLowerCase() !== 'custom')
+    logger.debug(`Stats Tab M3U Debug: Processing ${m3uAccounts.length} M3U accounts`);
+    const result = m3uAccounts
+      .filter(account => {
+        const include = account.is_active && account.name.toLowerCase() !== 'custom';
+        if (!include) {
+          logger.debug(`Stats Tab M3U Debug: Excluding M3U account "${account.name}" (id=${account.id}) - is_active: ${account.is_active}, name check: ${account.name.toLowerCase() !== 'custom'}`);
+        }
+        return include;
+      })
       .map(account => {
         // Sum max_streams from active profiles
-        const profileStreams = (account.profiles || [])
-          .filter(p => p.is_active)
-          .reduce((sum, p) => sum + (p.max_streams || 0), 0);
+        const activeProfiles = (account.profiles || []).filter(p => p.is_active);
+        const profileStreams = activeProfiles.reduce((sum, p) => sum + (p.max_streams || 0), 0);
 
         // If profiles exist, they include ALL accounts (base + linked), so don't add account.max_streams
         // Otherwise, use account.max_streams as fallback
         const totalMax = profileStreams > 0 ? profileStreams : account.max_streams;
+        const currentConnections = activeCount.get(account.id) || 0;
+
+        logger.debug(`Stats Tab M3U Debug: M3U "${account.name}" (id=${account.id}): current=${currentConnections}, max=${totalMax}, account.max_streams=${account.max_streams}, profiles=${activeProfiles.length}, profileStreams=${profileStreams}`);
 
         return {
           id: account.id,
           name: account.name,
-          current: activeCount.get(account.id) || 0,
+          current: currentConnections,
           max: totalMax,
         };
       })
       .sort((a, b) => a.name.localeCompare(b.name));
+
+    logger.debug(`Stats Tab M3U Debug: Final M3U connection stats: ${JSON.stringify(result)}`);
+    return result;
   })();
+
+  // Memoize bandwidth chart data preparation to avoid recalculating on every render
+  // NOTE: Must be called before any conditional returns to follow Rules of Hooks
+  const bandwidthChartData = useMemo(() => {
+    if (!bandwidthStats?.daily_history) return [];
+    return prepareBandwidthChartData(bandwidthStats.daily_history);
+  }, [bandwidthStats?.daily_history]);
 
   if (loading) {
     return (
@@ -667,12 +727,6 @@ export function StatsTab() {
       </div>
     );
   }
-
-  // Memoize bandwidth chart data preparation to avoid recalculating on every render
-  const bandwidthChartData = useMemo(() => {
-    if (!bandwidthStats?.daily_history) return [];
-    return prepareBandwidthChartData(bandwidthStats.daily_history);
-  }, [bandwidthStats?.daily_history]);
 
   return (
     <div className="stats-tab">
@@ -804,6 +858,11 @@ export function StatsTab() {
                     {streamProfileName && (
                       <span className="stream-profile" title={`Stream Profile: ${streamProfileName}`}>
                         {streamProfileName}
+                      </span>
+                    )}
+                    {channel.audio_codec && (
+                      <span className="audio-codec-badge" title={`Audio Codec: ${channel.audio_codec.toUpperCase()}`}>
+                        {channel.audio_codec.toUpperCase()}
                       </span>
                     )}
                     <span className={`channel-state ${channel.state?.toLowerCase() || ''}`}>
@@ -1067,8 +1126,8 @@ export function StatsTab() {
           </div>
         )}
 
-        {/* System Events */}
-        {events.length > 0 && (
+        {/* System Events - only show streaming-related events */}
+        {streamingEvents.length > 0 && (
           <div className="events-section">
             <div className="events-header">
               <h3 className="section-title">Recent Events</h3>

@@ -1,7 +1,9 @@
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Body
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from typing import Optional
 import httpx
@@ -25,6 +27,7 @@ from cache import get_cache
 from database import init_db
 import journal
 from bandwidth_tracker import BandwidthTracker, set_tracker, get_tracker
+from stream_prober import StreamProber, set_prober, get_prober
 
 # Configure logging
 # Start with environment variable, will be updated from settings in startup
@@ -49,6 +52,31 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# Custom validation error handler to log details
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    """Log detailed validation errors for debugging."""
+    logger.error(f"[VALIDATION-ERROR] Request path: {request.url.path}")
+    logger.error(f"[VALIDATION-ERROR] Request method: {request.method}")
+    logger.error(f"[VALIDATION-ERROR] Request headers: {dict(request.headers)}")
+
+    # Try to read the body
+    try:
+        body = await request.body()
+        logger.error(f"[VALIDATION-ERROR] Request body (raw): {body}")
+        logger.error(f"[VALIDATION-ERROR] Request body (decoded): {body.decode()}")
+    except Exception as e:
+        logger.error(f"[VALIDATION-ERROR] Could not read body: {e}")
+
+    logger.error(f"[VALIDATION-ERROR] Validation errors: {exc.errors()}")
+    logger.error(f"[VALIDATION-ERROR] Validation body: {exc.body}")
+
+    return JSONResponse(
+        status_code=422,
+        content={"detail": exc.errors(), "body": str(exc.body)},
+    )
 
 
 @app.on_event("startup")
@@ -94,6 +122,53 @@ async def startup_event():
         except Exception as e:
             logger.error(f"Failed to start bandwidth tracker: {e}", exc_info=True)
 
+        # Always create stream prober for on-demand probing support
+        # Scheduled probing is controlled by probe_enabled flag
+        try:
+            logger.debug(
+                f"Initializing stream prober (scheduled: {settings.stream_probe_enabled}, "
+                f"schedule: {settings.stream_probe_schedule_time}, "
+                f"interval: {settings.stream_probe_interval_hours}h, "
+                f"batch: {settings.stream_probe_batch_size}, timeout: {settings.stream_probe_timeout}s)"
+            )
+            prober = StreamProber(
+                get_client(),
+                probe_timeout=settings.stream_probe_timeout,
+                probe_batch_size=settings.stream_probe_batch_size,
+                probe_interval_hours=settings.stream_probe_interval_hours,
+                probe_enabled=settings.stream_probe_enabled,
+                schedule_time=settings.stream_probe_schedule_time,
+                user_timezone=settings.user_timezone,
+                probe_channel_groups=settings.probe_channel_groups,
+                bitrate_sample_duration=settings.bitrate_sample_duration,
+                parallel_probing_enabled=settings.parallel_probing_enabled,
+                skip_recently_probed_hours=settings.skip_recently_probed_hours,
+                refresh_m3us_before_probe=settings.refresh_m3us_before_probe,
+                auto_reorder_after_probe=settings.auto_reorder_after_probe,
+                deprioritize_failed_streams=settings.deprioritize_failed_streams,
+                stream_sort_priority=settings.stream_sort_priority,
+                stream_sort_enabled=settings.stream_sort_enabled,
+            )
+            logger.info(f"StreamProber instance created: {prober is not None}")
+
+            set_prober(prober)
+            logger.info("set_prober() called successfully")
+
+            await prober.start()
+            logger.info("prober.start() completed")
+
+            # Verify prober is accessible via get_prober()
+            test_prober = get_prober()
+            logger.info(f"Verification: get_prober() returns: {test_prober is not None}")
+
+            if settings.stream_probe_enabled:
+                logger.info("Stream prober initialized with scheduled probing enabled")
+            else:
+                logger.info("Stream prober initialized (scheduled probing disabled, on-demand available)")
+        except Exception as e:
+            logger.error(f"Failed to initialize stream prober: {e}", exc_info=True)
+            logger.error("Stream probing will not be available!")
+
     logger.info("=" * 60)
 
 
@@ -106,6 +181,11 @@ async def shutdown_event():
     tracker = get_tracker()
     if tracker:
         await tracker.stop()
+
+    # Stop stream prober
+    prober = get_prober()
+    if prober:
+        await prober.stop()
 
 
 # Request models
@@ -133,6 +213,10 @@ class CreateChannelGroupRequest(BaseModel):
 class DeleteOrphanedGroupsRequest(BaseModel):
     group_ids: list[int] | None = None  # Optional list of group IDs to delete
 
+    class Config:
+        # Allow extra fields to be ignored (for future compatibility)
+        extra = "ignore"
+
 
 # Health check
 @app.get("/api/health")
@@ -155,6 +239,9 @@ class SettingsRequest(BaseModel):
     show_stream_urls: bool = True
     hide_auto_sync_groups: bool = False
     hide_ungrouped_streams: bool = True
+    hide_epg_urls: bool = False
+    hide_m3u_urls: bool = False
+    gracenote_conflict_mode: str = "ask"
     theme: str = "dark"
     default_channel_profile_ids: list[int] = []
     linked_m3u_accounts: list[list[int]] = []
@@ -166,6 +253,21 @@ class SettingsRequest(BaseModel):
     backend_log_level: str = "INFO"
     frontend_log_level: str = "INFO"
     vlc_open_behavior: str = "m3u_fallback"
+    # Stream probe settings
+    stream_probe_enabled: bool = True
+    stream_probe_interval_hours: int = 24
+    stream_probe_batch_size: int = 10
+    stream_probe_timeout: int = 30
+    stream_probe_schedule_time: str = "03:00"  # HH:MM format, 24h
+    probe_channel_groups: list[str] = []  # Channel groups to probe
+    bitrate_sample_duration: int = 10  # Duration in seconds to sample stream for bitrate (10, 20, or 30)
+    parallel_probing_enabled: bool = True  # Probe multiple streams from different M3Us simultaneously
+    skip_recently_probed_hours: int = 0  # Skip streams successfully probed within last N hours (0 = always probe)
+    refresh_m3us_before_probe: bool = True  # Refresh all M3U accounts before starting probe
+    auto_reorder_after_probe: bool = False  # Automatically reorder streams in channels after probe completes
+    stream_sort_priority: list[str] = ["resolution", "bitrate", "framerate"]  # Priority order for Smart Sort
+    stream_sort_enabled: dict[str, bool] = {"resolution": True, "bitrate": True, "framerate": True}  # Which criteria are enabled
+    deprioritize_failed_streams: bool = True  # When enabled, failed/timeout/pending streams sort to bottom
 
 
 class SettingsResponse(BaseModel):
@@ -182,6 +284,9 @@ class SettingsResponse(BaseModel):
     show_stream_urls: bool
     hide_auto_sync_groups: bool
     hide_ungrouped_streams: bool
+    hide_epg_urls: bool
+    hide_m3u_urls: bool
+    gracenote_conflict_mode: str
     theme: str
     default_channel_profile_ids: list[int]
     linked_m3u_accounts: list[list[int]]
@@ -193,6 +298,21 @@ class SettingsResponse(BaseModel):
     backend_log_level: str
     frontend_log_level: str
     vlc_open_behavior: str
+    # Stream probe settings
+    stream_probe_enabled: bool
+    stream_probe_interval_hours: int
+    stream_probe_batch_size: int
+    stream_probe_timeout: int
+    stream_probe_schedule_time: str  # HH:MM format, 24h
+    probe_channel_groups: list[str]
+    bitrate_sample_duration: int
+    parallel_probing_enabled: bool  # Probe multiple streams from different M3Us simultaneously
+    skip_recently_probed_hours: int  # Skip streams successfully probed within last N hours (0 = always probe)
+    refresh_m3us_before_probe: bool  # Refresh all M3U accounts before starting probe
+    auto_reorder_after_probe: bool  # Automatically reorder streams in channels after probe completes
+    stream_sort_priority: list[str]  # Priority order for Smart Sort
+    stream_sort_enabled: dict[str, bool]  # Which criteria are enabled
+    deprioritize_failed_streams: bool  # When enabled, failed/timeout/pending streams sort to bottom
 
 
 class TestConnectionRequest(BaseModel):
@@ -221,6 +341,9 @@ async def get_current_settings():
         show_stream_urls=settings.show_stream_urls,
         hide_auto_sync_groups=settings.hide_auto_sync_groups,
         hide_ungrouped_streams=settings.hide_ungrouped_streams,
+        hide_epg_urls=settings.hide_epg_urls,
+        hide_m3u_urls=settings.hide_m3u_urls,
+        gracenote_conflict_mode=settings.gracenote_conflict_mode,
         theme=settings.theme,
         default_channel_profile_ids=settings.default_channel_profile_ids,
         linked_m3u_accounts=settings.linked_m3u_accounts,
@@ -232,6 +355,20 @@ async def get_current_settings():
         backend_log_level=settings.backend_log_level,
         frontend_log_level=settings.frontend_log_level,
         vlc_open_behavior=settings.vlc_open_behavior,
+        stream_probe_enabled=settings.stream_probe_enabled,
+        stream_probe_interval_hours=settings.stream_probe_interval_hours,
+        stream_probe_batch_size=settings.stream_probe_batch_size,
+        stream_probe_timeout=settings.stream_probe_timeout,
+        stream_probe_schedule_time=settings.stream_probe_schedule_time,
+        probe_channel_groups=settings.probe_channel_groups,
+        bitrate_sample_duration=settings.bitrate_sample_duration,
+        parallel_probing_enabled=settings.parallel_probing_enabled,
+        skip_recently_probed_hours=settings.skip_recently_probed_hours,
+        refresh_m3us_before_probe=settings.refresh_m3us_before_probe,
+        auto_reorder_after_probe=settings.auto_reorder_after_probe,
+        stream_sort_priority=settings.stream_sort_priority,
+        stream_sort_enabled=settings.stream_sort_enabled,
+        deprioritize_failed_streams=settings.deprioritize_failed_streams,
     )
 
 
@@ -271,6 +408,9 @@ async def update_settings(request: SettingsRequest):
         show_stream_urls=request.show_stream_urls,
         hide_auto_sync_groups=request.hide_auto_sync_groups,
         hide_ungrouped_streams=request.hide_ungrouped_streams,
+        hide_epg_urls=request.hide_epg_urls,
+        hide_m3u_urls=request.hide_m3u_urls,
+        gracenote_conflict_mode=request.gracenote_conflict_mode,
         theme=request.theme,
         default_channel_profile_ids=request.default_channel_profile_ids,
         linked_m3u_accounts=request.linked_m3u_accounts,
@@ -282,6 +422,20 @@ async def update_settings(request: SettingsRequest):
         backend_log_level=request.backend_log_level,
         frontend_log_level=request.frontend_log_level,
         vlc_open_behavior=request.vlc_open_behavior,
+        stream_probe_enabled=request.stream_probe_enabled,
+        stream_probe_interval_hours=request.stream_probe_interval_hours,
+        stream_probe_batch_size=request.stream_probe_batch_size,
+        stream_probe_timeout=request.stream_probe_timeout,
+        stream_probe_schedule_time=request.stream_probe_schedule_time,
+        probe_channel_groups=request.probe_channel_groups,
+        bitrate_sample_duration=request.bitrate_sample_duration,
+        parallel_probing_enabled=request.parallel_probing_enabled,
+        skip_recently_probed_hours=request.skip_recently_probed_hours,
+        refresh_m3us_before_probe=request.refresh_m3us_before_probe,
+        auto_reorder_after_probe=request.auto_reorder_after_probe,
+        stream_sort_priority=request.stream_sort_priority,
+        stream_sort_enabled=request.stream_sort_enabled,
+        deprioritize_failed_streams=request.deprioritize_failed_streams,
     )
     save_settings(new_settings)
     clear_settings_cache()
@@ -334,7 +488,7 @@ async def test_connection(request: TestConnectionRequest):
 
 @app.post("/api/settings/restart-services")
 async def restart_services():
-    """Restart background services (bandwidth tracker) to apply new settings."""
+    """Restart background services (bandwidth tracker and stream prober) to apply new settings."""
     settings = get_settings()
 
     # Stop existing tracker
@@ -343,16 +497,47 @@ async def restart_services():
         await tracker.stop()
         logger.info("Stopped existing bandwidth tracker")
 
-    # Start new tracker with current settings
+    # Stop existing stream prober
+    prober = get_prober()
+    if prober:
+        await prober.stop()
+        logger.info("Stopped existing stream prober")
+
+    # Start new tracker and prober with current settings
     if settings.is_configured():
         try:
+            # Restart bandwidth tracker
             new_tracker = BandwidthTracker(get_client(), poll_interval=settings.stats_poll_interval)
             set_tracker(new_tracker)
             await new_tracker.start()
             logger.info(f"Restarted bandwidth tracker with {settings.stats_poll_interval}s poll interval, timezone: {settings.user_timezone or 'UTC'}")
+
+            # Restart stream prober
+            new_prober = StreamProber(
+                get_client(),
+                probe_timeout=settings.stream_probe_timeout,
+                probe_batch_size=settings.stream_probe_batch_size,
+                probe_interval_hours=settings.stream_probe_interval_hours,
+                probe_enabled=settings.stream_probe_enabled,
+                schedule_time=settings.stream_probe_schedule_time,
+                user_timezone=settings.user_timezone,
+                probe_channel_groups=settings.probe_channel_groups,
+                bitrate_sample_duration=settings.bitrate_sample_duration,
+                parallel_probing_enabled=settings.parallel_probing_enabled,
+                skip_recently_probed_hours=settings.skip_recently_probed_hours,
+                refresh_m3us_before_probe=settings.refresh_m3us_before_probe,
+                auto_reorder_after_probe=settings.auto_reorder_after_probe,
+                deprioritize_failed_streams=settings.deprioritize_failed_streams,
+                stream_sort_priority=settings.stream_sort_priority,
+                stream_sort_enabled=settings.stream_sort_enabled,
+            )
+            set_prober(new_prober)
+            await new_prober.start()
+            logger.info(f"Restarted stream prober with updated settings (groups: {len(settings.probe_channel_groups)} selected)")
+
             return {"success": True, "message": "Services restarted with new settings"}
         except Exception as e:
-            logger.error(f"Failed to restart bandwidth tracker: {e}")
+            logger.error(f"Failed to restart services: {e}")
             return {"success": False, "message": str(e)}
     else:
         return {"success": False, "message": "Settings not configured"}
@@ -832,6 +1017,181 @@ async def update_channel_group(group_id: int, data: dict):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.delete("/api/channel-groups/orphaned")
+async def delete_orphaned_channel_groups(request: DeleteOrphanedGroupsRequest | None = Body(None)):
+    """Delete channel groups that are truly orphaned.
+
+    A group is deleted if it has no streams AND no channels.
+    M3U groups contain streams, manual groups contain channels.
+
+    Args:
+        request: Optional request body with group_ids list. If None or empty, all orphaned groups are deleted.
+    """
+    logger.debug(f"[DELETE-ORPHANED] Request received: {request}")
+    logger.debug(f"[DELETE-ORPHANED] Request type: {type(request)}")
+
+    client = get_client()
+    group_ids = request.group_ids if request else None
+    logger.debug(f"[DELETE-ORPHANED] Extracted group_ids: {group_ids}")
+
+    try:
+        # Use the same logic as GET to find orphaned groups
+        logger.debug(f"[DELETE-ORPHANED] Fetching all channel groups...")
+        all_groups = await client.get_channel_groups()
+        logger.debug(f"[DELETE-ORPHANED] Found {len(all_groups)} total channel groups")
+
+        # Get M3U group settings to see which groups are still in M3U accounts
+        m3u_group_settings = await client.get_all_m3u_group_settings()
+
+        # Get all streams (paginated)
+        streams = []
+        page = 1
+        while True:
+            result = await client.get_streams(page=page, page_size=500)
+            page_streams = result.get("results", [])
+            streams.extend(page_streams)
+
+            # Check if there are more pages
+            if len(page_streams) < 500:
+                break
+            page += 1
+
+        # Get all channels (paginated)
+        channels = []
+        page = 1
+        while True:
+            result = await client.get_channels(page=page, page_size=500)
+            page_channels = result.get("results", [])
+            channels.extend(page_channels)
+
+            # Check if there are more pages
+            if len(page_channels) < 500:
+                break
+            page += 1
+
+        # Build map of group_id -> stream count (streams use group ID, not name)
+        group_stream_count = {}
+        for stream in streams:
+            group_id = stream.get("channel_group")
+            if group_id:
+                group_stream_count[group_id] = group_stream_count.get(group_id, 0) + 1
+
+        # Build map of group_id -> channel count
+        group_channel_count = {}
+        for channel in channels:
+            group_id = channel.get("channel_group_id")
+            if group_id:
+                group_channel_count[group_id] = group_channel_count.get(group_id, 0) + 1
+
+        # Build a set of group IDs that are targets of group_override from auto_channel_sync M3U groups
+        # These groups may be empty now but will be populated by Auto Channel Sync
+        group_override_targets = set()
+        for group_id, m3u_info in m3u_group_settings.items():
+            if m3u_info.get("auto_channel_sync"):
+                custom_props = m3u_info.get("custom_properties", {})
+                if custom_props and isinstance(custom_props, dict):
+                    group_override = custom_props.get("group_override")
+                    if group_override:
+                        group_override_targets.add(group_override)
+
+        # Find orphaned groups
+        # A group is orphaned if it has no streams AND no channels AND is NOT in any M3U account
+        # AND is NOT a target of group_override from an auto_channel_sync M3U group
+        logger.debug(f"[DELETE-ORPHANED] Identifying orphaned groups...")
+        orphaned_groups = []
+        for group in all_groups:
+            group_id = group["id"]
+            group_name = group["name"]
+
+            stream_count = group_stream_count.get(group_id, 0)
+            channel_count = group_channel_count.get(group_id, 0)
+
+            # Check if this group is associated with any M3U account
+            m3u_info = m3u_group_settings.get(group_id)
+
+            # Check if this group is a target of group_override (will be populated by Auto Channel Sync)
+            is_override_target = group_id in group_override_targets
+
+            # Only consider it orphaned if:
+            # 1. It has no streams AND no channels
+            # 2. AND it's not in any M3U account (truly orphaned from deleted M3U)
+            # 3. AND it's not a target of group_override from an auto_channel_sync M3U group
+            if stream_count == 0 and channel_count == 0 and m3u_info is None and not is_override_target:
+                # Group is truly orphaned - not in any M3U and has no content
+                orphaned_groups.append({
+                    "id": group_id,
+                    "name": group_name,
+                    "reason": "No streams, channels, or M3U association",
+                })
+                logger.debug(f"[DELETE-ORPHANED] Group {group_id} ({group_name}) is orphaned: streams={stream_count}, channels={channel_count}, m3u={m3u_info is not None}, override_target={is_override_target}")
+
+        logger.debug(f"[DELETE-ORPHANED] Found {len(orphaned_groups)} orphaned groups")
+
+        if not orphaned_groups:
+            logger.debug(f"[DELETE-ORPHANED] No orphaned groups found, returning early")
+            return {
+                "status": "ok",
+                "message": "No orphaned channel groups found",
+                "deleted_groups": [],
+                "failed_groups": [],
+            }
+
+        # Filter to only the specified group IDs if provided
+        groups_to_delete = orphaned_groups
+        if group_ids is not None:
+            logger.debug(f"[DELETE-ORPHANED] Filtering to specified group IDs: {group_ids}")
+            groups_to_delete = [g for g in orphaned_groups if g["id"] in group_ids]
+            logger.debug(f"[DELETE-ORPHANED] After filtering: {len(groups_to_delete)} groups to delete")
+            if not groups_to_delete:
+                logger.debug(f"[DELETE-ORPHANED] No matching groups to delete, returning early")
+                return {
+                    "status": "ok",
+                    "message": "No matching orphaned groups to delete",
+                    "deleted_groups": [],
+                    "failed_groups": [],
+                }
+
+        # Delete each orphaned group
+        logger.debug(f"[DELETE-ORPHANED] Deleting {len(groups_to_delete)} orphaned groups...")
+        deleted_groups = []
+        failed_groups = []
+        for orphan in groups_to_delete:
+            group_id = orphan["id"]
+            group_name = orphan["name"]
+            try:
+                logger.debug(f"[DELETE-ORPHANED] Attempting to delete group {group_id} ({group_name})...")
+                await client.delete_channel_group(group_id)
+                deleted_groups.append({"id": group_id, "name": group_name, "reason": orphan["reason"]})
+                logger.info(f"[DELETE-ORPHANED] Successfully deleted orphaned channel group: {group_id} ({group_name}) - {orphan['reason']}")
+            except Exception as group_err:
+                failed_groups.append({"id": group_id, "name": group_name, "error": str(group_err)})
+                logger.error(f"[DELETE-ORPHANED] Failed to delete orphaned channel group {group_id} ({group_name}): {group_err}")
+
+        # Log to journal
+        if deleted_groups:
+            journal.log_entry(
+                category="channel",
+                action_type="cleanup",
+                entity_id=None,
+                entity_name="Orphaned Groups Cleanup",
+                description=f"Deleted {len(deleted_groups)} orphaned channel groups",
+                after_value={
+                    "deleted_groups": deleted_groups,
+                    "failed_groups": failed_groups,
+                },
+            )
+
+        return {
+            "status": "ok",
+            "message": f"Deleted {len(deleted_groups)} orphaned channel groups",
+            "deleted_groups": deleted_groups,
+            "failed_groups": failed_groups,
+        }
+    except Exception as e:
+        logger.error(f"Failed to delete orphaned channel groups: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.delete("/api/channel-groups/{group_id}")
 async def delete_channel_group(group_id: int):
     client = get_client()
@@ -1022,161 +1382,102 @@ async def get_orphaned_channel_groups():
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.delete("/api/channel-groups/orphaned")
-async def delete_orphaned_channel_groups(request: DeleteOrphanedGroupsRequest = None):
-    """Delete channel groups that are truly orphaned.
+@app.get("/api/channel-groups/with-streams")
+async def get_channel_groups_with_streams():
+    """Get all channel groups that have channels with streams.
 
-    A group is deleted if it has no streams AND no channels.
-    M3U groups contain streams, manual groups contain channels.
-
-    Args:
-        request: Optional request body with group_ids list. If None or empty, all orphaned groups are deleted.
+    Returns groups that have at least one channel containing at least one stream.
+    These are the groups that can be probed.
     """
     client = get_client()
-    group_ids = request.group_ids if request else None
     try:
-        # Use the same logic as GET to find orphaned groups
+        # Get all channel groups first
         all_groups = await client.get_channel_groups()
+        logger.info(f"Found {len(all_groups)} total channel groups")
 
-        # Get M3U group settings to see which groups are still in M3U accounts
-        m3u_group_settings = await client.get_all_m3u_group_settings()
+        # Build a map of group_id -> group info for easy lookup
+        group_map = {g["id"]: g for g in all_groups}
 
-        # Get all streams (paginated)
-        streams = []
+        # Track which groups have channels with streams
+        groups_with_streams_ids = set()
+
+        # Fetch all channels and check which groups have channels with streams
         page = 1
-        while True:
-            result = await client.get_streams(page=page, page_size=500)
-            page_streams = result.get("results", [])
-            streams.extend(page_streams)
+        total_channels = 0
+        channels_with_streams = 0
+        sample_channel_groups = []  # Track first 5 for debugging
 
-            # Check if there are more pages
-            if len(page_streams) < 500:
-                break
-            page += 1
-
-        # Get all channels (paginated)
-        channels = []
-        page = 1
         while True:
             result = await client.get_channels(page=page, page_size=500)
             page_channels = result.get("results", [])
-            channels.extend(page_channels)
+            total_channels += len(page_channels)
 
-            # Check if there are more pages
-            if len(page_channels) < 500:
+            for channel in page_channels:
+                # Check if channel has any streams
+                stream_ids = channel.get("streams", [])
+                if stream_ids:  # Has at least one stream
+                    channels_with_streams += 1
+                    # Record this group as having a channel with streams
+                    channel_group_id = channel.get("channel_group_id")
+
+                    # Collect samples for debugging - dump first channel completely
+                    if len(sample_channel_groups) == 0:
+                        logger.info(f"First channel with streams (FULL DATA): {channel}")
+
+                    if len(sample_channel_groups) < 5:
+                        sample_channel_groups.append({
+                            "channel_id": channel.get("id"),
+                            "channel_name": channel.get("name"),
+                            "channel_group_id": channel_group_id,
+                            "channel_group_type": type(channel_group_id).__name__,
+                            "stream_count": len(stream_ids)
+                        })
+
+                    # IMPORTANT: Check for not None instead of truthy to handle group ID 0
+                    if channel_group_id is not None:
+                        groups_with_streams_ids.add(channel_group_id)
+
+            if not result.get("next"):
                 break
             page += 1
+            if page > 50:  # Safety limit
+                break
 
-        # Build map of group_id -> stream count (streams use group ID, not name)
-        group_stream_count = {}
-        for stream in streams:
-            group_id = stream.get("channel_group")
-            if group_id:
-                group_stream_count[group_id] = group_stream_count.get(group_id, 0) + 1
+        # Log samples for debugging
+        if sample_channel_groups:
+            logger.info(f"Sample channels with streams (first 5): {sample_channel_groups}")
 
-        # Build map of group_id -> channel count
-        group_channel_count = {}
-        for channel in channels:
-            group_id = channel.get("channel_group_id")
-            if group_id:
-                group_channel_count[group_id] = group_channel_count.get(group_id, 0) + 1
+        logger.info(f"Scanned {total_channels} channels, found {channels_with_streams} with streams")
+        logger.info(f"Found {len(groups_with_streams_ids)} groups with channels containing streams")
+        logger.info(f"Group IDs found: {sorted(list(groups_with_streams_ids))}")
+        logger.info(f"Group IDs in group_map: {sorted(list(group_map.keys()))}")
 
-        # Build a set of group IDs that are targets of group_override from auto_channel_sync M3U groups
-        # These groups may be empty now but will be populated by Auto Channel Sync
-        group_override_targets = set()
-        for group_id, m3u_info in m3u_group_settings.items():
-            if m3u_info.get("auto_channel_sync"):
-                custom_props = m3u_info.get("custom_properties", {})
-                if custom_props and isinstance(custom_props, dict):
-                    group_override = custom_props.get("group_override")
-                    if group_override:
-                        group_override_targets.add(group_override)
-
-        # Find orphaned groups
-        # A group is orphaned if it has no streams AND no channels AND is NOT in any M3U account
-        # AND is NOT a target of group_override from an auto_channel_sync M3U group
-        orphaned_groups = []
-        for group in all_groups:
-            group_id = group["id"]
-            group_name = group["name"]
-
-            stream_count = group_stream_count.get(group_id, 0)
-            channel_count = group_channel_count.get(group_id, 0)
-
-            # Check if this group is associated with any M3U account
-            m3u_info = m3u_group_settings.get(group_id)
-
-            # Check if this group is a target of group_override (will be populated by Auto Channel Sync)
-            is_override_target = group_id in group_override_targets
-
-            # Only consider it orphaned if:
-            # 1. It has no streams AND no channels
-            # 2. AND it's not in any M3U account (truly orphaned from deleted M3U)
-            # 3. AND it's not a target of group_override from an auto_channel_sync M3U group
-            if stream_count == 0 and channel_count == 0 and m3u_info is None and not is_override_target:
-                # Group is truly orphaned - not in any M3U and has no content
-                orphaned_groups.append({
-                    "id": group_id,
-                    "name": group_name,
-                    "reason": "No streams, channels, or M3U association",
+        # Build the result list
+        groups_with_streams = []
+        not_in_map = []
+        for group_id in groups_with_streams_ids:
+            if group_id in group_map:
+                group = group_map[group_id]
+                groups_with_streams.append({
+                    "id": group["id"],
+                    "name": group["name"]
                 })
+            else:
+                not_in_map.append(group_id)
 
-        if not orphaned_groups:
-            return {
-                "status": "ok",
-                "message": "No orphaned channel groups found",
-                "deleted_groups": [],
-                "failed_groups": [],
-            }
+        if not_in_map:
+            logger.warning(f"Found {len(not_in_map)} group IDs in channels but not in group_map: {not_in_map}")
 
-        # Filter to only the specified group IDs if provided
-        groups_to_delete = orphaned_groups
-        if group_ids is not None:
-            groups_to_delete = [g for g in orphaned_groups if g["id"] in group_ids]
-            if not groups_to_delete:
-                return {
-                    "status": "ok",
-                    "message": "No matching orphaned groups to delete",
-                    "deleted_groups": [],
-                    "failed_groups": [],
-                }
+        # Sort by name for consistent display
+        groups_with_streams.sort(key=lambda g: g["name"].lower())
 
-        # Delete each orphaned group
-        deleted_groups = []
-        failed_groups = []
-        for orphan in groups_to_delete:
-            group_id = orphan["id"]
-            group_name = orphan["name"]
-            try:
-                await client.delete_channel_group(group_id)
-                deleted_groups.append({"id": group_id, "name": group_name, "reason": orphan["reason"]})
-                logger.info(f"Deleted orphaned channel group: {group_id} ({group_name}) - {orphan['reason']}")
-            except Exception as group_err:
-                failed_groups.append({"id": group_id, "name": group_name, "error": str(group_err)})
-                logger.warning(f"Failed to delete orphaned channel group {group_id} ({group_name}): {group_err}")
-
-        # Log to journal
-        if deleted_groups:
-            journal.log_entry(
-                category="channel",
-                action_type="cleanup",
-                entity_id=None,
-                entity_name="Orphaned Groups Cleanup",
-                description=f"Deleted {len(deleted_groups)} orphaned channel groups",
-                after_value={
-                    "deleted_groups": deleted_groups,
-                    "failed_groups": failed_groups,
-                },
-            )
-
+        logger.info(f"Returning {len(groups_with_streams)} groups with streams")
         return {
-            "status": "ok",
-            "message": f"Deleted {len(deleted_groups)} orphaned channel groups",
-            "deleted_groups": deleted_groups,
-            "failed_groups": failed_groups,
+            "groups": groups_with_streams,
+            "total_groups": len(all_groups)
         }
     except Exception as e:
-        logger.error(f"Failed to delete orphaned channel groups: {e}")
+        logger.error(f"Failed to get channel groups with streams: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -1447,6 +1748,7 @@ async def get_epg_grid(start: Optional[str] = None, end: Optional[str] = None):
     """Get EPG grid (programs from previous hour + next 24 hours).
 
     Optionally accepts start and end datetime parameters in ISO format.
+    Time filtering significantly reduces data size and prevents timeouts.
     """
     client = get_client()
     try:
@@ -1454,9 +1756,18 @@ async def get_epg_grid(start: Optional[str] = None, end: Optional[str] = None):
     except httpx.ReadTimeout:
         raise HTTPException(
             status_code=504,
-            detail="EPG data request timed out. This usually happens with very large EPG datasets. Try again or contact your Dispatcharr administrator to optimize EPG data size."
+            detail="EPG data request timed out. This usually happens with very large EPG datasets. Try reducing the time range or contact your Dispatcharr administrator to optimize EPG data size."
         )
+    except httpx.HTTPStatusError as e:
+        # Handle upstream 504 from Dispatcharr
+        if e.response.status_code == 504:
+            raise HTTPException(
+                status_code=504,
+                detail="Dispatcharr EPG service timed out. This usually happens with very large channel counts (~2000+). The time range has been reduced to help, but you may need to optimize your EPG sources or reduce the number of channels."
+            )
+        raise HTTPException(status_code=e.response.status_code, detail=str(e))
     except Exception as e:
+        logger.exception(f"Error fetching EPG grid: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -1623,14 +1934,23 @@ async def get_epg_lcn_by_tvg_id(tvg_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+class LCNLookupItem(BaseModel):
+    """Single item for LCN lookup."""
+    tvg_id: str
+    epg_source_id: int | None = None  # If provided, only search this EPG source
+
+
 class BatchLCNRequest(BaseModel):
     """Request body for batch LCN lookup."""
-    tvg_ids: list[str]
+    items: list[LCNLookupItem]
 
 
 @app.post("/api/epg/lcn/batch")
 async def get_epg_lcn_batch(request: BatchLCNRequest):
     """Get LCN (Logical Channel Number) for multiple TVG-IDs from EPG XML sources.
+
+    Each item can specify an EPG source ID. If provided, only that source is searched.
+    If not provided, all XMLTV sources are searched (fallback behavior).
 
     This is more efficient than calling the single endpoint multiple times
     because it fetches and parses each EPG XML source only once.
@@ -1642,22 +1962,29 @@ async def get_epg_lcn_batch(request: BatchLCNRequest):
     import io
     import httpx
 
-    tvg_ids_to_find = set(request.tvg_ids)
-    if not tvg_ids_to_find:
+    if not request.items:
         return {"results": {}}
+
+    # Group items by EPG source
+    # Map of epg_source_id -> set of tvg_ids to find in that source
+    source_to_tvg_ids: dict[int | None, set[str]] = {}
+    for item in request.items:
+        if item.epg_source_id not in source_to_tvg_ids:
+            source_to_tvg_ids[item.epg_source_id] = set()
+        source_to_tvg_ids[item.epg_source_id].add(item.tvg_id)
 
     client = get_client()
     try:
         # Get all EPG sources
-        sources = await client.get_epg_sources()
+        all_sources = await client.get_epg_sources()
 
         # Filter to XMLTV sources that have URLs
-        xmltv_sources = [
-            s for s in sources
+        all_xmltv_sources = [
+            s for s in all_sources
             if s.get("source_type") == "xmltv" and s.get("url")
         ]
 
-        if not xmltv_sources:
+        if not all_xmltv_sources:
             return {"results": {}}
 
         results: dict[str, dict] = {}
@@ -1688,18 +2015,35 @@ async def get_epg_lcn_batch(request: BatchLCNRequest):
                     break
             return found
 
-        logger.info(f"Batch LCN lookup for {len(tvg_ids_to_find)} TVG-IDs")
+        logger.info(f"Batch LCN lookup for {len(request.items)} items across {len(source_to_tvg_ids)} EPG source(s)")
 
         async with httpx.AsyncClient(timeout=120.0) as http_client:
-            for source in xmltv_sources:
-                url = source.get("url")
-                if not url:
-                    continue
+            # Process each EPG source group
+            for epg_source_id, tvg_ids_for_source in source_to_tvg_ids.items():
+                # Determine which sources to search
+                if epg_source_id is None:
+                    # No EPG source specified - search all sources (fallback)
+                    sources_to_search = all_xmltv_sources
+                    logger.info(f"Searching all EPG sources for {len(tvg_ids_for_source)} TVG-ID(s) with no EPG source")
+                else:
+                    # Search only the specified EPG source
+                    sources_to_search = [s for s in all_xmltv_sources if s.get("id") == epg_source_id]
+                    if not sources_to_search:
+                        logger.warning(f"EPG source {epg_source_id} not found or not XMLTV")
+                        continue
+                    logger.info(f"Searching EPG source {epg_source_id} for {len(tvg_ids_for_source)} TVG-ID(s)")
 
-                # Stop early if all found
-                remaining = tvg_ids_to_find - set(results.keys())
-                if not remaining:
-                    break
+                # Track what we still need to find for this source group
+                remaining = tvg_ids_for_source.copy()
+
+                for source in sources_to_search:
+                    url = source.get("url")
+                    if not url:
+                        continue
+
+                    # Stop early if all found for this source group
+                    if not remaining:
+                        break
 
                 try:
                     # Check file size
@@ -1722,6 +2066,7 @@ async def get_epg_lcn_batch(request: BatchLCNRequest):
 
                         found = parse_xml_for_lcns(content, source.get("name"), remaining)
                         results.update(found)
+                        remaining -= set(found.keys())
                         if found:
                             logger.info(f"Batch LCN: Found {len(found)} LCNs in {source.get('name')}")
                     else:
@@ -1745,6 +2090,7 @@ async def get_epg_lcn_batch(request: BatchLCNRequest):
 
                                 found = parse_xml_for_lcns(xml_partial, source.get("name"), remaining)
                                 results.update(found)
+                                remaining -= set(found.keys())
                                 if found:
                                     logger.info(f"Batch LCN: Found {len(found)} LCNs in {source.get('name')} (partial)")
                             except Exception as e:
@@ -1760,6 +2106,7 @@ async def get_epg_lcn_batch(request: BatchLCNRequest):
 
                             found = parse_xml_for_lcns(content, source.get("name"), remaining)
                             results.update(found)
+                            remaining -= set(found.keys())
                             if found:
                                 logger.info(f"Batch LCN: Found {len(found)} LCNs in {source.get('name')} (partial)")
 
@@ -1773,7 +2120,7 @@ async def get_epg_lcn_batch(request: BatchLCNRequest):
                     logger.warning(f"Batch LCN: Error processing {url}: {e}")
                     continue
 
-        logger.info(f"Batch LCN lookup complete: {len(results)}/{len(tvg_ids_to_find)} found")
+        logger.info(f"Batch LCN lookup complete: {len(results)}/{len(request.items)} found")
         return {"results": results}
 
     except Exception as e:
@@ -2573,6 +2920,239 @@ async def get_top_watched_channels(limit: int = 10, sort_by: str = "views"):
         return BandwidthTracker.get_top_watched_channels(limit=limit, sort_by=sort_by)
     except Exception as e:
         logger.error(f"Failed to get top watched channels: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# =============================================================================
+# Stream Stats / Probing Endpoints
+# =============================================================================
+
+
+@app.get("/api/stream-stats")
+async def get_all_stream_stats():
+    """Get all stream probe statistics."""
+    try:
+        return StreamProber.get_all_stats()
+    except Exception as e:
+        logger.error(f"Failed to get stream stats: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/stream-stats/summary")
+async def get_stream_stats_summary():
+    """Get summary of stream probe statistics."""
+    try:
+        return StreamProber.get_stats_summary()
+    except Exception as e:
+        logger.error(f"Failed to get stream stats summary: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/stream-stats/{stream_id}")
+async def get_stream_stats_by_id(stream_id: int):
+    """Get probe stats for a specific stream."""
+    try:
+        stats = StreamProber.get_stats_by_stream_id(stream_id)
+        if not stats:
+            raise HTTPException(status_code=404, detail="Stream stats not found")
+        return stats
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get stream stats for {stream_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class BulkStreamStatsRequest(BaseModel):
+    stream_ids: list[int]
+
+
+@app.post("/api/stream-stats/by-ids")
+async def get_stream_stats_by_ids(request: BulkStreamStatsRequest):
+    """Get probe stats for multiple streams by their IDs."""
+    try:
+        return StreamProber.get_stats_by_stream_ids(request.stream_ids)
+    except Exception as e:
+        logger.error(f"Failed to get stream stats by IDs: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class BulkProbeRequest(BaseModel):
+    stream_ids: list[int]
+
+
+class ProbeAllRequest(BaseModel):
+    """Request for probe all streams endpoint with optional group filtering."""
+    channel_groups: list[str] = []  # Empty list means all groups
+    skip_m3u_refresh: bool = False  # Skip M3U refresh for on-demand probes
+
+
+# NOTE: /probe/bulk and /probe/all MUST be defined BEFORE /probe/{stream_id}
+# to avoid the path parameter matching "bulk" or "all" as a stream_id
+@app.post("/api/stream-stats/probe/bulk")
+async def probe_bulk_streams(request: BulkProbeRequest):
+    """Trigger on-demand probe for multiple streams."""
+    logger.info(f"Bulk probe request received for {len(request.stream_ids)} streams: {request.stream_ids}")
+
+    prober = get_prober()
+    logger.info(f"get_prober() returned: {prober is not None}")
+
+    if not prober:
+        logger.error("Stream prober not available - returning 503")
+        raise HTTPException(status_code=503, detail="Stream prober not available")
+
+    try:
+        import asyncio
+
+        logger.debug("Fetching all streams for bulk probe")
+        all_streams = await prober._fetch_all_streams()
+        logger.info(f"Fetched {len(all_streams)} total streams")
+
+        stream_map = {s["id"]: s for s in all_streams}
+
+        results = []
+        for stream_id in request.stream_ids:
+            stream = stream_map.get(stream_id)
+            if stream:
+                logger.debug(f"Probing stream {stream_id}")
+                result = await prober.probe_stream(
+                    stream_id, stream.get("url"), stream.get("name")
+                )
+                results.append(result)
+                await asyncio.sleep(0.5)  # Rate limiting
+            else:
+                logger.warning(f"Stream {stream_id} not found in stream list")
+
+        logger.info(f"Bulk probe completed: {len(results)} streams probed")
+        return {"probed": len(results), "results": results}
+    except Exception as e:
+        logger.error(f"Bulk probe failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/stream-stats/probe/all")
+async def probe_all_streams_endpoint(request: ProbeAllRequest = ProbeAllRequest()):
+    """Trigger probe for all streams (background task).
+
+    Optionally filter by channel groups. If channel_groups is empty, probes all groups.
+    """
+    logger.info(f"Probe all streams request received with groups filter: {request.channel_groups}")
+
+    prober = get_prober()
+    logger.info(f"get_prober() returned: {prober is not None}")
+
+    if not prober:
+        logger.error("Stream prober not available - returning 503")
+        raise HTTPException(status_code=503, detail="Stream prober not available")
+
+    # If a probe is already "in progress" (possibly stuck), reset it first
+    if prober._probing_in_progress:
+        logger.warning("Probe state shows in_progress - resetting before starting new probe")
+        prober.force_reset_probe_state()
+
+    import asyncio
+
+    async def run_probe_with_logging():
+        """Wrapper to catch and log any errors from the probe task."""
+        try:
+            logger.info("[PROBE-TASK] Background probe task starting...")
+            await prober.probe_all_streams(
+                channel_groups_override=request.channel_groups or None,
+                skip_m3u_refresh=request.skip_m3u_refresh
+            )
+            logger.info("[PROBE-TASK] Background probe task completed successfully")
+        except Exception as e:
+            logger.error(f"[PROBE-TASK] Background probe task failed with error: {e}", exc_info=True)
+
+    # Start background task with optional group filter
+    logger.info(f"Starting background probe task (groups: {request.channel_groups or 'all'}, skip_m3u_refresh: {request.skip_m3u_refresh})")
+    asyncio.create_task(run_probe_with_logging())
+    logger.info("Background task created, returning response")
+    return {"status": "started", "message": "Background probe started"}
+
+
+@app.get("/api/stream-stats/probe/progress")
+async def get_probe_progress():
+    """Get current probe all streams progress."""
+    prober = get_prober()
+    if not prober:
+        raise HTTPException(status_code=503, detail="Stream prober not available")
+
+    return prober.get_probe_progress()
+
+
+@app.get("/api/stream-stats/probe/results")
+async def get_probe_results():
+    """Get detailed results of the last probe all streams operation."""
+    prober = get_prober()
+    if not prober:
+        raise HTTPException(status_code=503, detail="Stream prober not available")
+
+    return prober.get_probe_results()
+
+
+@app.get("/api/stream-stats/probe/history")
+async def get_probe_history():
+    """Get probe run history (last 5 runs)."""
+    prober = get_prober()
+    if not prober:
+        raise HTTPException(status_code=503, detail="Stream prober not available")
+
+    return prober.get_probe_history()
+
+
+@app.post("/api/stream-stats/probe/cancel")
+async def cancel_probe():
+    """Cancel an in-progress probe operation."""
+    prober = get_prober()
+    if not prober:
+        raise HTTPException(status_code=503, detail="Stream prober not available")
+
+    return prober.cancel_probe()
+
+
+@app.post("/api/stream-stats/probe/reset")
+async def reset_probe_state():
+    """Force reset the probe state if it gets stuck."""
+    prober = get_prober()
+    if not prober:
+        raise HTTPException(status_code=503, detail="Stream prober not available")
+
+    return prober.force_reset_probe_state()
+
+
+@app.post("/api/stream-stats/probe/{stream_id}")
+async def probe_single_stream(stream_id: int):
+    """Trigger on-demand probe for a single stream."""
+    logger.info(f"Single stream probe request received for stream_id={stream_id}")
+
+    prober = get_prober()
+    logger.info(f"get_prober() returned: {prober is not None}")
+
+    if not prober:
+        logger.error("Stream prober not available - returning 503")
+        raise HTTPException(status_code=503, detail="Stream prober not available")
+
+    try:
+        # Get all streams and find the one we want
+        logger.debug(f"Fetching all streams to find stream {stream_id}")
+        all_streams = await prober._fetch_all_streams()
+        stream = next((s for s in all_streams if s["id"] == stream_id), None)
+
+        if not stream:
+            logger.warning(f"Stream {stream_id} not found")
+            raise HTTPException(status_code=404, detail="Stream not found")
+
+        logger.info(f"Probing single stream {stream_id}")
+        result = await prober.probe_stream(
+            stream_id, stream.get("url"), stream.get("name")
+        )
+        logger.info(f"Single stream probe completed for {stream_id}")
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to probe stream {stream_id}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

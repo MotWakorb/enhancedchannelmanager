@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, memo } from 'react';
 import type { M3UAccount, ChannelGroupM3UAccount, ChannelGroup, AutoSyncCustomProperties, ChannelProfile, StreamProfile, EPGSource } from '../types';
 import * as api from '../services/api';
 import { naturalCompare } from '../utils/naturalSort';
@@ -25,7 +25,7 @@ interface GroupWithName extends ChannelGroupM3UAccount {
   name: string;
 }
 
-export function M3UGroupsModal({
+export const M3UGroupsModal = memo(function M3UGroupsModal({
   isOpen,
   onClose,
   onSaved,
@@ -455,4 +455,4 @@ export function M3UGroupsModal({
       )}
     </div>
   );
-}
+});

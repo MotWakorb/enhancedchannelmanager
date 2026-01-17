@@ -267,6 +267,18 @@
   opacity: 0.85;
 }
 
+.audio-codec-badge {
+  font-size: 0.7rem;
+  padding: 0.2rem 0.5rem;
+  border-radius: 4px;
+  background: #8b5cf6;
+  color: white;
+  flex-shrink: 0;
+  white-space: nowrap;
+  font-weight: 600;
+  opacity: 0.9;
+}
+
 .channel-state {
   display: flex;
   align-items: center;

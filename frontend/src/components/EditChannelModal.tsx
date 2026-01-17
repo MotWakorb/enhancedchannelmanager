@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, memo } from 'react';
 import type { Channel, Logo } from '../types';
 import * as api from '../services/api';
 
@@ -25,7 +25,7 @@ export interface EditChannelModalProps {
   epgDataLoading?: boolean;
 }
 
-export function EditChannelModal({
+export const EditChannelModal = memo(function EditChannelModal({
   channel,
   logos,
   epgData,
@@ -717,6 +717,6 @@ export function EditChannelModal({
       </div>
     </div>
   );
-}
+});
 
 export default EditChannelModal;

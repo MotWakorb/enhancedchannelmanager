@@ -1,12 +1,132 @@
 import { useState, useEffect } from 'react';
 import * as api from '../../services/api';
-import { NETWORK_PREFIXES, NETWORK_SUFFIXES } from '../../services/api';
-import type { Theme } from '../../services/api';
+import { NETWORK_PREFIXES, NETWORK_SUFFIXES } from '../../constants/streamNormalization';
+import type { Theme, ProbeHistoryEntry, SortCriterion, SortEnabledMap, GracenoteConflictMode } from '../../services/api';
 import type { ChannelProfile } from '../../types';
 import { logger } from '../../utils/logger';
+import { copyToClipboard } from '../../utils/clipboard';
 import type { LogLevel as FrontendLogLevel } from '../../utils/logger';
 import { DeleteOrphanedGroupsModal } from '../DeleteOrphanedGroupsModal';
+import {
+  DndContext,
+  closestCenter,
+  KeyboardSensor,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  DragEndEvent,
+} from '@dnd-kit/core';
+import {
+  arrayMove,
+  SortableContext,
+  sortableKeyboardCoordinates,
+  useSortable,
+  verticalListSortingStrategy,
+} from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
 import './SettingsTab.css';
+
+// Sort priority item configuration
+const SORT_CRITERION_CONFIG: Record<SortCriterion, { icon: string; label: string; description: string }> = {
+  resolution: { icon: 'aspect_ratio', label: 'Resolution', description: '4K > 1080p > 720p' },
+  bitrate: { icon: 'speed', label: 'Bitrate', description: 'Higher bitrate first' },
+  framerate: { icon: 'slow_motion_video', label: 'Framerate', description: '60fps > 30fps' },
+};
+
+// Sortable item component for drag-and-drop
+function SortablePriorityItem({
+  id,
+  index,
+  enabled,
+  onToggleEnabled
+}: {
+  id: SortCriterion;
+  index: number;
+  enabled: boolean;
+  onToggleEnabled: (id: SortCriterion) => void;
+}) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id });
+
+  const config = SORT_CRITERION_CONFIG[id];
+
+  // Use inline styles to avoid any CSS conflicts
+  const containerStyle: React.CSSProperties = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    display: 'flex',
+    alignItems: 'center',
+    gap: '0.75rem',
+    padding: '0.75rem 1rem',
+    backgroundColor: 'var(--input-bg)',
+    border: '1px solid var(--border-primary)',
+    borderRadius: '6px',
+    opacity: isDragging ? 0.5 : enabled ? 1 : 0.6,
+    boxShadow: isDragging ? '0 4px 12px rgba(0, 0, 0, 0.3)' : undefined,
+  };
+
+  return (
+    <div ref={setNodeRef} style={containerStyle}>
+      <span
+        {...attributes}
+        {...listeners}
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          cursor: 'grab',
+          color: 'var(--text-muted)',
+          touchAction: 'none',
+        }}
+      >
+        <span className="material-icons" style={{ fontSize: '20px' }}>drag_indicator</span>
+      </span>
+      <input
+        type="checkbox"
+        checked={enabled}
+        onChange={() => onToggleEnabled(id)}
+        style={{
+          width: '16px',
+          height: '16px',
+          cursor: 'pointer',
+          accentColor: 'var(--accent-primary)',
+          flexShrink: 0,
+        }}
+        title={enabled ? 'Click to disable this sort criterion' : 'Click to enable this sort criterion'}
+      />
+      <span
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          width: '24px',
+          height: '24px',
+          borderRadius: '50%',
+          backgroundColor: enabled ? 'var(--accent-primary, #3b82f6)' : 'var(--text-muted, #6b7280)',
+          color: '#ffffff',
+          fontSize: '0.75rem',
+          fontWeight: 600,
+          flexShrink: 0,
+          lineHeight: 1,
+        }}
+      >
+        {enabled ? index + 1 : '-'}
+      </span>
+      <span className="material-icons" style={{ fontSize: '20px', color: 'var(--text-secondary)', flexShrink: 0 }}>
+        {config.icon}
+      </span>
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '0.125rem', minWidth: 0 }}>
+        <span style={{ fontSize: '0.9rem', fontWeight: 500, color: 'var(--text-primary)' }}>{config.label}</span>
+        <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{config.description}</span>
+      </div>
+    </div>
+  );
+}
 
 interface SettingsTabProps {
   onSaved: () => void;
@@ -38,11 +158,17 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
   const [newPrefixInput, setNewPrefixInput] = useState('');
   const [customNetworkSuffixes, setCustomNetworkSuffixes] = useState<string[]>([]);
   const [newSuffixInput, setNewSuffixInput] = useState('');
+  const [streamSortPriority, setStreamSortPriority] = useState<SortCriterion[]>(['resolution', 'bitrate', 'framerate']);
+  const [streamSortEnabled, setStreamSortEnabled] = useState<SortEnabledMap>({ resolution: true, bitrate: true, framerate: true });
+  const [deprioritizeFailedStreams, setDeprioritizeFailedStreams] = useState(true);
 
   // Appearance settings
   const [showStreamUrls, setShowStreamUrls] = useState(true);
   const [hideAutoSyncGroups, setHideAutoSyncGroups] = useState(false);
   const [hideUngroupedStreams, setHideUngroupedStreams] = useState(true);
+  const [hideEpgUrls, setHideEpgUrls] = useState(false);
+  const [hideM3uUrls, setHideM3uUrls] = useState(false);
+  const [gracenoteConflictMode, setGracenoteConflictMode] = useState<GracenoteConflictMode>('ask');
   const [theme, setTheme] = useState<Theme>('dark');
   const [vlcOpenBehavior, setVlcOpenBehavior] = useState('m3u_fallback');
 
@@ -53,6 +179,51 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
   // Log level settings
   const [backendLogLevel, setBackendLogLevel] = useState('INFO');
   const [frontendLogLevel, setFrontendLogLevel] = useState('INFO');
+
+  // Stream probe settings
+  const [streamProbeEnabled, setStreamProbeEnabled] = useState(true);
+  const [streamProbeIntervalHours, setStreamProbeIntervalHours] = useState(24);
+  const [streamProbeBatchSize, setStreamProbeBatchSize] = useState(10);
+  const [streamProbeTimeout, setStreamProbeTimeout] = useState(30);
+  const [streamProbeScheduleTime, setStreamProbeScheduleTime] = useState('03:00');
+  const [bitrateSampleDuration, setBitrateSampleDuration] = useState(10);
+  const [parallelProbingEnabled, setParallelProbingEnabled] = useState(true);
+  const [skipRecentlyProbedHours, setSkipRecentlyProbedHours] = useState(0);
+  const [refreshM3usBeforeProbe, setRefreshM3usBeforeProbe] = useState(true);
+  const [autoReorderAfterProbe, setAutoReorderAfterProbe] = useState(false);
+  const [probingAll, setProbingAll] = useState(false);
+  const [probeAllResult, setProbeAllResult] = useState<{ success: boolean; message: string } | null>(null);
+  const [totalStreamCount, setTotalStreamCount] = useState(100); // Default to 100, will be updated on load
+  const [probeProgress, setProbeProgress] = useState<{
+    in_progress: boolean;
+    total: number;
+    current: number;
+    status: string;
+    current_stream: string;
+    success_count: number;
+    failed_count: number;
+    skipped_count: number;
+    percentage: number;
+  } | null>(null);
+  const [showProbeResultsModal, setShowProbeResultsModal] = useState(false);
+  const [probeResultsType, setProbeResultsType] = useState<'success' | 'failed' | 'skipped'>('success');
+  const [probeResults, setProbeResults] = useState<{
+    success_streams: Array<{ id: number; name: string; url?: string }>;
+    failed_streams: Array<{ id: number; name: string; url?: string; error?: string }>;
+    skipped_streams: Array<{ id: number; name: string; url?: string; reason?: string }>;
+    success_count: number;
+    failed_count: number;
+    skipped_count: number;
+  } | null>(null);
+  const [probeHistory, setProbeHistory] = useState<ProbeHistoryEntry[]>([]);
+  const [showReorderModal, setShowReorderModal] = useState(false);
+  const [reorderData, setReorderData] = useState<ProbeHistoryEntry['reordered_channels'] | null>(null);
+  const [reorderSortConfig, setReorderSortConfig] = useState<ProbeHistoryEntry['sort_config'] | null>(null);
+  const [copiedUrl, setCopiedUrl] = useState<string | null>(null);
+  const [availableChannelGroups, setAvailableChannelGroups] = useState<Array<{ id: number; name: string }>>([]);
+  const [probeChannelGroups, setProbeChannelGroups] = useState<string[]>([]);
+  const [showGroupSelectModal, setShowGroupSelectModal] = useState(false);
+  const [tempProbeChannelGroups, setTempProbeChannelGroups] = useState<string[]>([]);
 
   // Preserve settings not managed by this tab (to avoid overwriting them on save)
   const [linkedM3UAccounts, setLinkedM3UAccounts] = useState<number[][]>([]);
@@ -75,16 +246,171 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
   const [originalUrl, setOriginalUrl] = useState('');
   const [originalUsername, setOriginalUsername] = useState('');
 
-  // Track original poll interval and timezone to detect if restart is needed
+  // Track original settings to detect if restart is needed
   const [originalPollInterval, setOriginalPollInterval] = useState(10);
   const [originalTimezone, setOriginalTimezone] = useState('');
+  const [originalProbeEnabled, setOriginalProbeEnabled] = useState(true);
+  const [originalProbeScheduleTime, setOriginalProbeScheduleTime] = useState('03:00');
+  const [originalAutoReorder, setOriginalAutoReorder] = useState(false);
   const [needsRestart, setNeedsRestart] = useState(false);
   const [restarting, setRestarting] = useState(false);
   const [restartResult, setRestartResult] = useState<{ success: boolean; message: string } | null>(null);
 
+  // DnD sensors for sort priority
+  const sensors = useSensors(
+    useSensor(PointerSensor),
+    useSensor(KeyboardSensor, {
+      coordinateGetter: sortableKeyboardCoordinates,
+    })
+  );
+
+  const handleSortPriorityDragEnd = (event: DragEndEvent) => {
+    const { active, over } = event;
+    if (over && active.id !== over.id) {
+      setStreamSortPriority((items) => {
+        const oldIndex = items.indexOf(active.id as SortCriterion);
+        const newIndex = items.indexOf(over.id as SortCriterion);
+        return arrayMove(items, oldIndex, newIndex);
+      });
+    }
+  };
+
   useEffect(() => {
     loadSettings();
+    loadStreamCount();
+    loadAvailableChannelGroups();
+    loadProbeHistory();
+    checkForOngoingProbe();
   }, []);
+
+  // Check if a probe is already in progress (e.g., when returning to Settings tab)
+  const checkForOngoingProbe = async () => {
+    try {
+      const progress = await api.getProbeProgress();
+      if (progress.in_progress) {
+        // A probe is running - restore the progress state and start polling
+        logger.info('Detected ongoing probe, resuming progress display');
+        setProbeProgress(progress);
+        setProbingAll(true);
+      }
+    } catch (err) {
+      logger.warn('Failed to check for ongoing probe', err);
+    }
+  };
+
+  // Auto-populate probe channel groups with all groups if empty (default to all checked)
+  useEffect(() => {
+    if (availableChannelGroups.length > 0 && probeChannelGroups.length === 0) {
+      // If no groups are selected, default to all groups
+      const allGroupNames = availableChannelGroups.map(g => g.name);
+      setProbeChannelGroups(allGroupNames);
+    }
+  }, [availableChannelGroups, probeChannelGroups.length]);
+
+  // Periodically check for scheduled probes (runs even when probingAll is false)
+  useEffect(() => {
+    // Don't run this polling if we're already tracking a probe
+    if (probingAll) {
+      return;
+    }
+
+    const checkForScheduledProbe = async () => {
+      try {
+        const progress = await api.getProbeProgress();
+        if (progress.in_progress) {
+          // A scheduled probe started - show it in the UI
+          logger.info('Detected scheduled probe starting, showing progress');
+          setProbeProgress(progress);
+          setProbingAll(true);
+        }
+      } catch (err) {
+        // Silently ignore errors - this is background polling
+      }
+    };
+
+    // Check every 5 seconds for scheduled probes
+    const interval = setInterval(checkForScheduledProbe, 5000);
+
+    return () => {
+      clearInterval(interval);
+    };
+  }, [probingAll]);
+
+  // Poll for probe all streams progress (faster polling when actively probing)
+  useEffect(() => {
+    if (!probingAll) {
+      return;
+    }
+
+    const pollProgress = async () => {
+      try {
+        const progress = await api.getProbeProgress();
+        setProbeProgress(progress);
+
+        // Stop polling when probe is complete
+        if (!progress.in_progress) {
+          setProbingAll(false);
+          // Reload probe history when probe completes
+          loadProbeHistory();
+          if (progress.status === 'completed') {
+            const skippedMsg = progress.skipped_count > 0 ? `, Skipped: ${progress.skipped_count}` : '';
+            setProbeAllResult({
+              success: true,
+              message: `Probe completed! ${progress.total} streams probed. Success: ${progress.success_count}, Failed: ${progress.failed_count}${skippedMsg}`
+            });
+          } else if (progress.status === 'failed') {
+            setProbeAllResult({ success: false, message: 'Probe failed' });
+          } else if (progress.status === 'cancelled') {
+            setProbeAllResult({ success: false, message: 'Probe was cancelled' });
+          }
+          // Clear result after 8 seconds
+          setTimeout(() => setProbeAllResult(null), 8000);
+        }
+      } catch (err) {
+        console.error('Failed to fetch probe progress:', err);
+      }
+    };
+
+    // Wait a moment for the background task to start, then poll
+    const initialDelay = setTimeout(pollProgress, 300);
+    const interval = setInterval(pollProgress, 1000);
+
+    return () => {
+      clearTimeout(initialDelay);
+      clearInterval(interval);
+    };
+  }, [probingAll]);
+
+  const loadStreamCount = async () => {
+    try {
+      // Fetch just the count (page_size=1 to minimize data transfer)
+      const result = await api.getStreams({ pageSize: 1 });
+      if (result.count) {
+        setTotalStreamCount(Math.max(1, result.count));
+      }
+    } catch (err) {
+      logger.warn('Failed to load stream count for batch size max', err);
+      // Keep default of 100
+    }
+  };
+
+  const loadAvailableChannelGroups = async () => {
+    try {
+      const result = await api.getChannelGroupsWithStreams();
+      setAvailableChannelGroups(result.groups);
+    } catch (err) {
+      logger.warn('Failed to load available channel groups', err);
+    }
+  };
+
+  const loadProbeHistory = async () => {
+    try {
+      const history = await api.getProbeHistory();
+      setProbeHistory(history);
+    } catch (err) {
+      logger.warn('Failed to load probe history', err);
+    }
+  };
 
   const loadSettings = async () => {
     try {
@@ -104,6 +430,9 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
       setShowStreamUrls(settings.show_stream_urls);
       setHideAutoSyncGroups(settings.hide_auto_sync_groups);
       setHideUngroupedStreams(settings.hide_ungrouped_streams);
+      setHideEpgUrls(settings.hide_epg_urls ?? false);
+      setHideM3uUrls(settings.hide_m3u_urls ?? false);
+      setGracenoteConflictMode(settings.gracenote_conflict_mode || 'ask');
       setTheme(settings.theme || 'dark');
       setVlcOpenBehavior(settings.vlc_open_behavior || 'm3u_fallback');
       setDefaultChannelProfileIds(settings.default_channel_profile_ids);
@@ -123,6 +452,24 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
         logger.setLevel(frontendLogLevel as FrontendLogLevel);
       }
       setLinkedM3UAccounts(settings.linked_m3u_accounts ?? []);
+      // Stream probe settings
+      setStreamProbeEnabled(settings.stream_probe_enabled ?? true);
+      setOriginalProbeEnabled(settings.stream_probe_enabled ?? true);
+      setStreamProbeIntervalHours(settings.stream_probe_interval_hours ?? 24);
+      setStreamProbeBatchSize(settings.stream_probe_batch_size ?? 10);
+      setStreamProbeTimeout(settings.stream_probe_timeout ?? 30);
+      setStreamProbeScheduleTime(settings.stream_probe_schedule_time ?? '03:00');
+      setOriginalProbeScheduleTime(settings.stream_probe_schedule_time ?? '03:00');
+      setProbeChannelGroups(settings.probe_channel_groups ?? []);
+      setBitrateSampleDuration(settings.bitrate_sample_duration ?? 10);
+      setParallelProbingEnabled(settings.parallel_probing_enabled ?? true);
+      setSkipRecentlyProbedHours(settings.skip_recently_probed_hours ?? 0);
+      setRefreshM3usBeforeProbe(settings.refresh_m3us_before_probe ?? true);
+      setAutoReorderAfterProbe(settings.auto_reorder_after_probe ?? false);
+      setOriginalAutoReorder(settings.auto_reorder_after_probe ?? false);
+      setStreamSortPriority(settings.stream_sort_priority ?? ['resolution', 'bitrate', 'framerate']);
+      setStreamSortEnabled(settings.stream_sort_enabled ?? { resolution: true, bitrate: true, framerate: true });
+      setDeprioritizeFailedStreams(settings.deprioritize_failed_streams ?? true);
       setNeedsRestart(false);
       setRestartResult(null);
       setTestResult(null);
@@ -197,6 +544,9 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
         show_stream_urls: showStreamUrls,
         hide_auto_sync_groups: hideAutoSyncGroups,
         hide_ungrouped_streams: hideUngroupedStreams,
+        hide_epg_urls: hideEpgUrls,
+        hide_m3u_urls: hideM3uUrls,
+        gracenote_conflict_mode: gracenoteConflictMode,
         theme: theme,
         default_channel_profile_ids: defaultChannelProfileIds,
         epg_auto_match_threshold: epgAutoMatchThreshold,
@@ -208,6 +558,21 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
         frontend_log_level: frontendLogLevel,
         vlc_open_behavior: vlcOpenBehavior,
         linked_m3u_accounts: linkedM3UAccounts,
+        // Stream probe settings
+        stream_probe_enabled: streamProbeEnabled,
+        stream_probe_interval_hours: streamProbeIntervalHours,
+        stream_probe_batch_size: streamProbeBatchSize,
+        stream_probe_timeout: streamProbeTimeout,
+        stream_probe_schedule_time: streamProbeScheduleTime,
+        probe_channel_groups: probeChannelGroups,
+        bitrate_sample_duration: bitrateSampleDuration,
+        parallel_probing_enabled: parallelProbingEnabled,
+        skip_recently_probed_hours: skipRecentlyProbedHours,
+        refresh_m3us_before_probe: refreshM3usBeforeProbe,
+        auto_reorder_after_probe: autoReorderAfterProbe,
+        stream_sort_priority: streamSortPriority,
+        stream_sort_enabled: streamSortEnabled,
+        deprioritize_failed_streams: deprioritizeFailedStreams,
       });
       // Apply frontend log level immediately
       const frontendLevel = frontendLogLevel === 'WARNING' ? 'WARN' : frontendLogLevel;
@@ -222,10 +587,31 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
       setPassword('');
       setSaveSuccess(true);
       logger.info('Settings saved successfully');
-      // Check if poll interval or timezone changed and needs restart
-      if (statsPollInterval !== originalPollInterval || userTimezone !== originalTimezone) {
+      // Check if any settings that require a restart have changed
+      const pollOrTimezoneChanged = statsPollInterval !== originalPollInterval || userTimezone !== originalTimezone;
+      const probeSettingsChanged = streamProbeEnabled !== originalProbeEnabled ||
+                                   streamProbeScheduleTime !== originalProbeScheduleTime ||
+                                   autoReorderAfterProbe !== originalAutoReorder;
+
+      // Debug logging for restart detection
+      logger.info(`[RESTART-CHECK] Poll interval: ${statsPollInterval} vs original ${originalPollInterval}`);
+      logger.info(`[RESTART-CHECK] Timezone: "${userTimezone}" vs original "${originalTimezone}"`);
+      logger.info(`[RESTART-CHECK] Probe enabled: ${streamProbeEnabled} vs original ${originalProbeEnabled}`);
+      logger.info(`[RESTART-CHECK] Schedule time: "${streamProbeScheduleTime}" vs original "${originalProbeScheduleTime}"`);
+      logger.info(`[RESTART-CHECK] Auto-reorder: ${autoReorderAfterProbe} vs original ${originalAutoReorder}`);
+      logger.info(`[RESTART-CHECK] pollOrTimezoneChanged=${pollOrTimezoneChanged}, probeSettingsChanged=${probeSettingsChanged}`);
+
+      if (pollOrTimezoneChanged || probeSettingsChanged) {
+        logger.info('[RESTART-CHECK] Setting needsRestart=true');
         setNeedsRestart(true);
-        logger.info('Stats polling or timezone changed - backend restart recommended');
+        if (pollOrTimezoneChanged) {
+          logger.info('Stats polling or timezone changed - backend restart recommended');
+        }
+        if (probeSettingsChanged) {
+          logger.info('Probe settings changed - backend restart required for schedule changes to take effect');
+        }
+      } else {
+        logger.info('[RESTART-CHECK] No restart-requiring changes detected');
       }
       onSaved();
       // Clear success message after 8 seconds
@@ -248,6 +634,9 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
       if (result.success) {
         setOriginalPollInterval(statsPollInterval);
         setOriginalTimezone(userTimezone);
+        setOriginalProbeEnabled(streamProbeEnabled);
+        setOriginalProbeScheduleTime(streamProbeScheduleTime);
+        setOriginalAutoReorder(autoReorderAfterProbe);
         setNeedsRestart(false);
         // Clear result after 3 seconds
         setTimeout(() => setRestartResult(null), 3000);
@@ -256,6 +645,123 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
       setRestartResult({ success: false, message: 'Failed to restart services' });
     } finally {
       setRestarting(false);
+    }
+  };
+
+  const handleProbeAllStreams = async () => {
+    setProbingAll(true);
+    setProbeAllResult(null);
+    setProbeProgress(null);
+    try {
+      // Pass currently selected groups (even if not saved)
+      const result = await api.probeAllStreams(probeChannelGroups);
+      setProbeAllResult({ success: true, message: result.message || 'Background probe started' });
+      // Start polling for progress
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : 'Failed to start probe';
+      setProbeAllResult({ success: false, message: errorMessage });
+      setProbingAll(false);
+    }
+  };
+
+  const handleResetProbeState = async () => {
+    try {
+      const result = await api.resetProbeState();
+      setProbeAllResult({ success: true, message: result.message || 'Probe state reset' });
+      setProbingAll(false);
+      setProbeProgress(null);
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : 'Failed to reset probe state';
+      setProbeAllResult({ success: false, message: errorMessage });
+    }
+  };
+
+  const handleRerunFailed = async () => {
+    setShowProbeResultsModal(false);
+
+    // Null check for probeResults
+    if (!probeResults || !probeResults.failed_streams) {
+      logger.warn('No probe results available');
+      return;
+    }
+
+    // Extract stream IDs from failed streams
+    const failedStreamIds = probeResults.failed_streams.map(stream => stream.id);
+
+    if (failedStreamIds.length === 0) {
+      logger.warn('No failed streams to re-probe');
+      return;
+    }
+
+    logger.info(`Re-probing ${failedStreamIds.length} failed streams`);
+    setProbingAll(true);
+    setProbeAllResult(null);
+
+    try {
+      const result = await api.probeBulkStreams(failedStreamIds);
+      setProbeAllResult({
+        success: true,
+        message: `Re-probed ${result.probed} failed streams`
+      });
+
+      // Refresh probe history to show updated results
+      setTimeout(() => {
+        loadProbeHistory();
+      }, 1000);
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : 'Failed to re-probe streams';
+      logger.error('Failed to re-probe failed streams', err);
+      setProbeAllResult({ success: false, message: errorMessage });
+    } finally {
+      setProbingAll(false);
+    }
+  };
+
+  const handleCopyUrl = async (url: string) => {
+    const success = await copyToClipboard(url, 'stream URL');
+    if (success) {
+      setCopiedUrl(url);
+      // Clear the "copied" indicator after 2 seconds
+      setTimeout(() => setCopiedUrl(null), 2000);
+    }
+  };
+
+  const handleShowHistoryResults = (historyEntry: ProbeHistoryEntry, type: 'success' | 'failed' | 'skipped') => {
+    // Use the history entry's streams for the modal
+    setProbeResults({
+      success_streams: historyEntry.success_streams,
+      failed_streams: historyEntry.failed_streams,
+      skipped_streams: historyEntry.skipped_streams || [],
+      success_count: historyEntry.success_count,
+      failed_count: historyEntry.failed_count,
+      skipped_count: historyEntry.skipped_count || 0,
+    });
+    setProbeResultsType(type);
+    setShowProbeResultsModal(true);
+  };
+
+  const handleShowReorderResults = (historyEntry: ProbeHistoryEntry) => {
+    setReorderData(historyEntry.reordered_channels || []);
+    setReorderSortConfig(historyEntry.sort_config || null);
+    setShowReorderModal(true);
+  };
+
+  const formatDuration = (seconds: number): string => {
+    if (seconds < 60) return `${seconds}s`;
+    const minutes = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    if (minutes < 60) return `${minutes}m ${secs}s`;
+    const hours = Math.floor(minutes / 60);
+    const mins = minutes % 60;
+    return `${hours}h ${mins}m`;
+  };
+
+  const formatTimestamp = (isoTimestamp: string): string => {
+    try {
+      const date = new Date(isoTimestamp);
+      return date.toLocaleString();
+    } catch {
+      return isoTimestamp;
     }
   };
 
@@ -443,7 +949,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
 
         <div className="form-group">
           <div className="threshold-label-row">
-            <label htmlFor="userTimezone">Timezone for stats</label>
+            <label htmlFor="userTimezone">Timezone</label>
             <select
               id="userTimezone"
               value={userTimezone}
@@ -480,7 +986,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
             </select>
           </div>
           <p className="form-hint">
-            Timezone used for daily bandwidth statistics. "Today" will roll over at midnight in your selected timezone.
+            Timezone used for daily bandwidth statistics and scheduled probe times. "Today" will roll over at midnight in your selected timezone, and scheduled probes will run at the configured time in this timezone.
           </p>
         </div>
       </div>
@@ -659,6 +1165,56 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
               These streams appear under "Ungrouped" in the Streams pane.
             </p>
           </div>
+        </div>
+
+        <div className="checkbox-group">
+          <input
+            id="hideEpgUrls"
+            type="checkbox"
+            checked={hideEpgUrls}
+            onChange={(e) => setHideEpgUrls(e.target.checked)}
+          />
+          <div className="checkbox-content">
+            <label htmlFor="hideEpgUrls">Hide EPG URLs</label>
+            <p>
+              Hide EPG source URLs in the EPG Manager tab. Enable this to prevent
+              accidental exposure of sensitive EPG URLs in screenshots or screen shares.
+            </p>
+          </div>
+        </div>
+
+        <div className="checkbox-group">
+          <input
+            id="hideM3uUrls"
+            type="checkbox"
+            checked={hideM3uUrls}
+            onChange={(e) => setHideM3uUrls(e.target.checked)}
+          />
+          <div className="checkbox-content">
+            <label htmlFor="hideM3uUrls">Hide M3U URLs</label>
+            <p>
+              Hide M3U server URLs in the M3U Manager tab. Enable this to prevent
+              accidental exposure of sensitive M3U URLs in screenshots or screen shares.
+            </p>
+          </div>
+        </div>
+
+        <div className="form-group">
+          <label htmlFor="gracenoteConflictMode">Gracenote ID Conflict Handling</label>
+          <select
+            id="gracenoteConflictMode"
+            value={gracenoteConflictMode}
+            onChange={(e) => setGracenoteConflictMode(e.target.value as GracenoteConflictMode)}
+          >
+            <option value="ask">Ask me what to do (show conflict dialog)</option>
+            <option value="skip">Skip channels with existing IDs</option>
+            <option value="overwrite">Automatically overwrite existing IDs</option>
+          </select>
+          <p className="form-hint">
+            When assigning Gracenote IDs, this controls what happens if a channel already has a
+            different Gracenote ID. Choose "Ask" to review conflicts, "Skip" to leave existing
+            IDs unchanged, or "Overwrite" to always replace with new IDs.
+          </p>
         </div>
       </div>
 
@@ -956,6 +1512,55 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
 
       <div className="settings-section">
         <div className="settings-section-header">
+          <span className="material-icons">sort</span>
+          <h3>Smart Sort Priority</h3>
+        </div>
+
+        <div className="form-group">
+          <p className="form-hint" style={{ marginTop: 0, marginBottom: '0.75rem' }}>
+            Configure which criteria are used for stream sorting. Check/uncheck to enable/disable,
+            drag to reorder priority. Enabled criteria appear in the sort dropdown and are used by Smart Sort.
+          </p>
+
+          <DndContext
+            sensors={sensors}
+            collisionDetection={closestCenter}
+            onDragEnd={handleSortPriorityDragEnd}
+          >
+            <SortableContext items={streamSortPriority} strategy={verticalListSortingStrategy}>
+              <div className="sort-priority-list">
+                {streamSortPriority.map((criterion, index) => (
+                  <SortablePriorityItem
+                    key={criterion}
+                    id={criterion}
+                    index={index}
+                    enabled={streamSortEnabled[criterion]}
+                    onToggleEnabled={(id) => setStreamSortEnabled(prev => ({ ...prev, [id]: !prev[id] }))}
+                  />
+                ))}
+              </div>
+            </SortableContext>
+          </DndContext>
+        </div>
+
+        <div className="form-group">
+          <label className="checkbox-label">
+            <input
+              type="checkbox"
+              checked={deprioritizeFailedStreams}
+              onChange={(e) => setDeprioritizeFailedStreams(e.target.checked)}
+            />
+            <span>Deprioritize Failed Streams</span>
+          </label>
+          <p className="form-hint">
+            When enabled, streams that fail probe checks (dead/timeout) will automatically be sorted to the bottom when using stream sorting features.
+            This ensures working streams are prioritized for playback.
+          </p>
+        </div>
+      </div>
+
+      <div className="settings-section">
+        <div className="settings-section-header">
           <span className="material-icons">label</span>
           <h3>Custom Network Prefixes</h3>
         </div>
@@ -1145,8 +1750,384 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
     <div className="settings-page">
       <div className="settings-page-header">
         <h2>Maintenance</h2>
-        <p>Database cleanup and maintenance tools.</p>
+        <p>Stream probing and database cleanup tools.</p>
       </div>
+
+      {/* Stream Probing Section */}
+      <div className="settings-section">
+        <div className="settings-section-header">
+          <span className="material-icons">speed</span>
+          <h3>Stream Probing</h3>
+        </div>
+        <p className="form-hint" style={{ marginBottom: '1rem' }}>
+          Use ffprobe to gather stream metadata (resolution, FPS, codec, audio channels).
+          Scheduled probing runs automatically in the background.
+        </p>
+
+        <div className="checkbox-group">
+          <input
+            id="streamProbeEnabled"
+            type="checkbox"
+            checked={streamProbeEnabled}
+            onChange={(e) => setStreamProbeEnabled(e.target.checked)}
+          />
+          <div className="checkbox-content">
+            <label htmlFor="streamProbeEnabled">Enable scheduled probing</label>
+            <p>
+              Automatically probe streams on a schedule to keep metadata up to date.
+            </p>
+          </div>
+        </div>
+
+        {streamProbeEnabled && (
+          <div className="settings-group" style={{ marginTop: '1rem' }}>
+            <div className="form-group">
+              <label htmlFor="probeInterval">Probe interval (hours)</label>
+              <input
+                id="probeInterval"
+                type="number"
+                min="1"
+                max="168"
+                value={streamProbeIntervalHours}
+                onChange={(e) => setStreamProbeIntervalHours(Math.max(1, Math.min(168, parseInt(e.target.value) || 24)))}
+                style={{ width: '100px' }}
+              />
+              <span className="form-hint">How often to run scheduled probes (1-168 hours)</span>
+            </div>
+
+            <div className="form-group">
+              <label htmlFor="probeBatchSize">Batch size</label>
+              <input
+                id="probeBatchSize"
+                type="number"
+                min="1"
+                max={totalStreamCount}
+                value={streamProbeBatchSize}
+                onChange={(e) => setStreamProbeBatchSize(Math.max(1, Math.min(totalStreamCount, parseInt(e.target.value) || 10)))}
+                style={{ width: '100px' }}
+              />
+              <span className="form-hint">Streams to probe per scheduled cycle (1-{totalStreamCount})</span>
+            </div>
+
+            <div className="form-group">
+              <label htmlFor="probeTimeout">Probe timeout (seconds)</label>
+              <input
+                id="probeTimeout"
+                type="number"
+                min="5"
+                max="120"
+                value={streamProbeTimeout}
+                onChange={(e) => setStreamProbeTimeout(Math.max(5, Math.min(120, parseInt(e.target.value) || 30)))}
+                style={{ width: '100px' }}
+              />
+              <span className="form-hint">Timeout for each probe attempt (5-120 seconds)</span>
+            </div>
+
+            <div className="form-group">
+              <label htmlFor="probeScheduleTime">Schedule time (local)</label>
+              <input
+                id="probeScheduleTime"
+                type="time"
+                value={streamProbeScheduleTime}
+                onChange={(e) => setStreamProbeScheduleTime(e.target.value || '03:00')}
+                style={{ width: '120px' }}
+              />
+              <span className="form-hint">Time of day to start scheduled probes (your local time)</span>
+            </div>
+
+            <div className="form-group">
+              <label htmlFor="bitrateSampleDuration">Bitrate measurement duration</label>
+              <select
+                id="bitrateSampleDuration"
+                value={bitrateSampleDuration}
+                onChange={(e) => setBitrateSampleDuration(Number(e.target.value))}
+                style={{ width: '120px' }}
+              >
+                <option value={10}>10 seconds</option>
+                <option value={20}>20 seconds</option>
+                <option value={30}>30 seconds</option>
+              </select>
+              <span className="form-hint">How long to sample streams when measuring bitrate</span>
+            </div>
+
+            <div className="form-group">
+              <label className="checkbox-label">
+                <input
+                  type="checkbox"
+                  checked={parallelProbingEnabled}
+                  onChange={(e) => setParallelProbingEnabled(e.target.checked)}
+                />
+                Enable parallel probing
+              </label>
+              <span className="form-hint">
+                When enabled, streams from different M3U accounts are probed simultaneously for faster completion.
+                Disable for sequential one-at-a-time probing.
+              </span>
+            </div>
+
+            <div className="form-group">
+              <label htmlFor="skipRecentlyProbedHours">Skip recently probed streams (hours)</label>
+              <input
+                id="skipRecentlyProbedHours"
+                type="number"
+                min="0"
+                max="168"
+                value={skipRecentlyProbedHours}
+                onChange={(e) => setSkipRecentlyProbedHours(Math.max(0, Math.min(168, parseInt(e.target.value) || 0)))}
+                style={{ width: '100px' }}
+              />
+              <span className="form-hint">
+                Skip streams that were successfully probed within the last N hours. Set to 0 to always probe all streams.
+                This prevents excessive probing requests when running multiple checks in succession.
+              </span>
+            </div>
+
+            <div className="form-group">
+              <label className="checkbox-label">
+                <input
+                  type="checkbox"
+                  checked={refreshM3usBeforeProbe}
+                  onChange={(e) => setRefreshM3usBeforeProbe(e.target.checked)}
+                />
+                Refresh M3Us before probing
+              </label>
+              <span className="form-hint">
+                When enabled, all M3U accounts will be refreshed before starting the probe to ensure latest stream information is used.
+              </span>
+            </div>
+
+            <div className="form-group">
+              <label className="checkbox-label">
+                <input
+                  type="checkbox"
+                  checked={autoReorderAfterProbe}
+                  onChange={(e) => setAutoReorderAfterProbe(e.target.checked)}
+                />
+                Auto-reorder streams after probe
+              </label>
+              <span className="form-hint">
+                When enabled, streams within channels will be automatically reordered using smart sort after probe completes.
+                Failed streams are deprioritized, and working streams are sorted by resolution, bitrate, and framerate.
+              </span>
+            </div>
+
+            {needsRestart && (
+              <div className="restart-notice">
+                <span className="material-icons">info</span>
+                <span>Probe settings changed. Restart services for schedule changes to take effect.</span>
+                <button
+                  className="btn-restart"
+                  onClick={handleRestart}
+                  disabled={restarting}
+                >
+                  <span className={`material-icons ${restarting ? 'spinning' : ''}`}>
+                    {restarting ? 'sync' : 'restart_alt'}
+                  </span>
+                  {restarting ? 'Restarting...' : 'Restart Now'}
+                </button>
+              </div>
+            )}
+
+            {restartResult && (
+              <div className={`restart-result ${restartResult.success ? 'success' : 'error'}`}>
+                <span className="material-icons">
+                  {restartResult.success ? 'check_circle' : 'error'}
+                </span>
+                {restartResult.message}
+              </div>
+            )}
+
+            <div className="form-group">
+              <label>Channel groups to probe</label>
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => {
+                  setTempProbeChannelGroups([...probeChannelGroups]);
+                  setShowGroupSelectModal(true);
+                }}
+                disabled={availableChannelGroups.length === 0}
+                style={{ marginTop: '0.5rem' }}
+              >
+                <span className="material-icons">filter_list</span>
+                {probeChannelGroups.length === availableChannelGroups.length
+                  ? `All ${availableChannelGroups.length} group${availableChannelGroups.length !== 1 ? 's' : ''}`
+                  : `${probeChannelGroups.length} of ${availableChannelGroups.length} group${availableChannelGroups.length !== 1 ? 's' : ''}`}
+              </button>
+              <span className="form-hint" style={{ display: 'block', marginTop: '0.5rem' }}>
+                {availableChannelGroups.length === 0
+                  ? 'No groups with streams available.'
+                  : 'Select which groups to probe. All groups are selected by default.'}
+              </span>
+            </div>
+          </div>
+        )}
+
+        <div className="settings-group" style={{ marginTop: '1rem' }}>
+          <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
+            <button
+              className="btn-secondary"
+              onClick={handleProbeAllStreams}
+              disabled={probingAll}
+            >
+              <span className={`material-icons ${probingAll ? 'spinning' : ''}`}>
+                {probingAll ? 'sync' : 'play_arrow'}
+              </span>
+              {probingAll ? (probeProgress && probeProgress.status === 'probing' ? 'Probing...' : 'Starting...') : 'Probe All Streams Now'}
+            </button>
+            <button
+              className="btn-secondary"
+              onClick={handleResetProbeState}
+              title="Reset probe state if it gets stuck"
+              style={{ minWidth: 'auto' }}
+            >
+              <span className="material-icons">restart_alt</span>
+              Reset
+            </button>
+            <span className="form-hint">
+              Start a background probe of all streams immediately
+            </span>
+          </div>
+
+          {probeAllResult && (
+            <div className={probeAllResult.success ? 'success-message' : 'error-message'} style={{ marginTop: '1rem' }}>
+              <span className="material-icons">{probeAllResult.success ? 'check_circle' : 'error'}</span>
+              {probeAllResult.message}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Probe History Section */}
+      {probeHistory.length > 0 && (
+        <div className="settings-section">
+          <div className="settings-section-header">
+            <span className="material-icons">history</span>
+            <h3>Probe History</h3>
+          </div>
+          <p className="form-hint" style={{ marginBottom: '1rem' }}>
+            Recent probe runs. Click on success/failed counts to view stream details.
+          </p>
+
+          <div className="probe-history-list">
+            {probeHistory.map((entry, index) => (
+              <div key={index} className="probe-history-item" style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                padding: '0.75rem 1rem',
+                backgroundColor: 'var(--bg-tertiary)',
+                borderRadius: '6px',
+                marginBottom: '0.5rem',
+                border: '1px solid var(--border-color)'
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+                  <span className="material-icons" style={{
+                    color: entry.status === 'completed' ? '#2ecc71' : entry.status === 'failed' ? '#e74c3c' : '#f39c12'
+                  }}>
+                    {entry.status === 'completed' ? 'check_circle' : entry.status === 'failed' ? 'error' : 'warning'}
+                  </span>
+                  <div>
+                    <div style={{ fontWeight: '500', fontSize: '14px' }}>
+                      {formatTimestamp(entry.timestamp)}
+                    </div>
+                    <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
+                      {entry.total} streams in {formatDuration(entry.duration_seconds)}
+                      {entry.error && <span style={{ color: '#e74c3c' }}> - {entry.error}</span>}
+                    </div>
+                  </div>
+                </div>
+                <div style={{ display: 'flex', gap: '0.5rem' }}>
+                  <button
+                    className="probe-history-btn success"
+                    onClick={() => handleShowHistoryResults(entry, 'success')}
+                    style={{
+                      padding: '0.4rem 0.8rem',
+                      fontSize: '13px',
+                      backgroundColor: 'rgba(46, 204, 113, 0.15)',
+                      color: '#2ecc71',
+                      border: '1px solid rgba(46, 204, 113, 0.3)',
+                      borderRadius: '4px',
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '0.3rem'
+                    }}
+                    title="View successful streams"
+                  >
+                    <span className="material-icons" style={{ fontSize: '16px' }}>check</span>
+                    {entry.success_count}
+                  </button>
+                  <button
+                    className="probe-history-btn failed"
+                    onClick={() => handleShowHistoryResults(entry, 'failed')}
+                    style={{
+                      padding: '0.4rem 0.8rem',
+                      fontSize: '13px',
+                      backgroundColor: 'rgba(231, 76, 60, 0.15)',
+                      color: '#e74c3c',
+                      border: '1px solid rgba(231, 76, 60, 0.3)',
+                      borderRadius: '4px',
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '0.3rem'
+                    }}
+                    title="View failed streams"
+                  >
+                    <span className="material-icons" style={{ fontSize: '16px' }}>close</span>
+                    {entry.failed_count}
+                  </button>
+                  {(entry.skipped_count ?? 0) > 0 && (
+                    <button
+                      className="probe-history-btn skipped"
+                      onClick={() => handleShowHistoryResults(entry, 'skipped')}
+                      style={{
+                        padding: '0.4rem 0.8rem',
+                        fontSize: '13px',
+                        backgroundColor: 'rgba(243, 156, 18, 0.15)',
+                        color: '#f39c12',
+                        border: '1px solid rgba(243, 156, 18, 0.3)',
+                        borderRadius: '4px',
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '0.3rem'
+                      }}
+                      title="View skipped streams (M3U at max connections)"
+                    >
+                      <span className="material-icons" style={{ fontSize: '16px' }}>block</span>
+                      {entry.skipped_count}
+                    </button>
+                  )}
+                  {(entry.reordered_channels && entry.reordered_channels.length > 0) && (
+                    <button
+                      className="probe-history-btn reordered"
+                      onClick={() => handleShowReorderResults(entry)}
+                      style={{
+                        padding: '0.4rem 0.8rem',
+                        fontSize: '13px',
+                        backgroundColor: 'rgba(52, 152, 219, 0.15)',
+                        color: '#3498db',
+                        border: '1px solid rgba(52, 152, 219, 0.3)',
+                        borderRadius: '4px',
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '0.3rem'
+                      }}
+                      title="View reordered channels"
+                    >
+                      <span className="material-icons" style={{ fontSize: '16px' }}>sort</span>
+                      {entry.reordered_channels.length}
+                    </button>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       <div className="settings-section">
         <div className="settings-section-header">
@@ -1198,6 +2179,21 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
           )}
         </div>
       </div>
+
+      {saveSuccess && (
+        <div className="save-success">
+          <span className="material-icons">check_circle</span>
+          Settings saved successfully
+        </div>
+      )}
+
+      <div className="settings-actions">
+        <div className="settings-actions-left" />
+        <button className="btn-primary" onClick={handleSave} disabled={loading}>
+          <span className="material-icons">save</span>
+          {loading ? 'Saving...' : 'Save Settings'}
+        </button>
+      </div>
     </div>
   );
 
@@ -1237,6 +2233,83 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
       </nav>
 
       <div className="settings-content">
+        {/* Global probe progress indicator - shows on all pages when probing */}
+        {probingAll && probeProgress && (
+          <div className="probe-global-progress" style={{
+            marginBottom: '1rem',
+            padding: '1rem',
+            backgroundColor: 'var(--bg-tertiary)',
+            borderRadius: '8px',
+            border: '1px solid var(--border-color)'
+          }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <span className="material-icons" style={{ color: '#3498db', animation: 'spin 1s linear infinite' }}>
+                  sync
+                </span>
+                <span style={{ fontWeight: '600' }}>Probing Streams...</span>
+              </div>
+              <span style={{ fontWeight: '700', color: '#3498db' }}>
+                {probeProgress.current} / {probeProgress.total} ({probeProgress.percentage}%)
+              </span>
+            </div>
+            {probeProgress.current_stream && (
+              <div style={{ fontSize: '13px', color: 'var(--text-secondary)', marginBottom: '0.5rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {probeProgress.current_stream}
+              </div>
+            )}
+            <div style={{
+              width: '100%',
+              height: '8px',
+              backgroundColor: '#34495e',
+              borderRadius: '4px',
+              overflow: 'hidden'
+            }}>
+              <div style={{
+                width: `${probeProgress.percentage}%`,
+                height: '100%',
+                background: 'linear-gradient(90deg, #3498db 0%, #2ecc71 100%)',
+                transition: 'width 0.3s ease',
+              }}></div>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '0.5rem' }}>
+              <div style={{ display: 'flex', gap: '1rem', fontSize: '12px' }}>
+                <span style={{ color: '#2ecc71' }}>✓ {probeProgress.success_count} success</span>
+                <span style={{ color: '#e74c3c' }}>✗ {probeProgress.failed_count} failed</span>
+                {probeProgress.skipped_count > 0 && (
+                  <span style={{ color: '#f39c12' }}>⊘ {probeProgress.skipped_count} skipped</span>
+                )}
+              </div>
+              <button
+                onClick={async () => {
+                  try {
+                    await api.cancelProbe();
+                    logger.info('Probe cancellation requested');
+                  } catch (err) {
+                    logger.error('Failed to cancel probe', err);
+                  }
+                }}
+                style={{
+                  padding: '0.25rem 0.75rem',
+                  fontSize: '12px',
+                  backgroundColor: 'rgba(231, 76, 60, 0.15)',
+                  color: '#e74c3c',
+                  border: '1px solid rgba(231, 76, 60, 0.3)',
+                  borderRadius: '4px',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.25rem'
+                }}
+                title="Cancel the current probe operation"
+              >
+                <span className="material-icons" style={{ fontSize: '14px' }}>cancel</span>
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
+
         {activePage === 'general' && renderGeneralPage()}
         {activePage === 'channel-defaults' && renderChannelDefaultsPage()}
         {activePage === 'appearance' && renderAppearancePage()}
@@ -1249,6 +2322,427 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
         onConfirm={handleConfirmDelete}
         groups={orphanedGroups}
       />
+
+      {showProbeResultsModal && probeResults && (
+        <div
+          className="probe-results-modal-overlay"
+          onClick={() => setShowProbeResultsModal(false)}
+        >
+          <div
+            className="probe-results-modal-content"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="probe-results-modal-header">
+              <h3 className={probeResultsType === 'success' ? 'success' : probeResultsType === 'skipped' ? 'skipped' : 'failed'}>
+                {probeResultsType === 'success' ? '✓ Successful Streams' : probeResultsType === 'skipped' ? '⊘ Skipped Streams' : '✗ Failed Streams'} (
+                {probeResultsType === 'success' ? probeResults.success_count : probeResultsType === 'skipped' ? probeResults.skipped_count : probeResults.failed_count})
+              </h3>
+              <button
+                onClick={() => setShowProbeResultsModal(false)}
+                className="probe-results-modal-close"
+              >
+                ×
+              </button>
+            </div>
+
+            <div className="probe-results-modal-body">
+              {(() => {
+                const streams = probeResultsType === 'success'
+                  ? probeResults.success_streams
+                  : probeResultsType === 'skipped'
+                  ? probeResults.skipped_streams
+                  : probeResults.failed_streams;
+                const emptyText = probeResultsType === 'success'
+                  ? 'successful'
+                  : probeResultsType === 'skipped'
+                  ? 'skipped'
+                  : 'failed';
+
+                return streams.length === 0 ? (
+                  <div className="probe-results-empty">
+                    No {emptyText} streams yet
+                  </div>
+                ) : (
+                  <div className="probe-results-list">
+                    {streams.map((stream) => (
+                      <div
+                        key={stream.id}
+                        className={`probe-result-item ${probeResultsType === 'success' ? 'success' : probeResultsType === 'skipped' ? 'skipped' : 'failed'}`}
+                      >
+                        <div className="probe-result-item-info">
+                          <div className="probe-result-item-name">{stream.name}</div>
+                          <div className="probe-result-item-id">ID: {stream.id}</div>
+                          {probeResultsType === 'skipped' && 'reason' in stream && (stream as { reason?: string }).reason && (
+                            <div className="probe-result-item-reason" style={{ fontSize: '11px', color: '#f39c12', marginTop: '2px' }}>
+                              {(stream as { reason?: string }).reason}
+                            </div>
+                          )}
+                          {probeResultsType === 'failed' && 'error' in stream && (stream as { error?: string }).error && (
+                            <div className="probe-result-item-error" style={{ fontSize: '11px', color: '#e74c3c', marginTop: '2px' }}>
+                              {(stream as { error?: string }).error}
+                            </div>
+                          )}
+                        </div>
+                        {stream.url && (
+                          <button
+                            className="probe-result-copy-btn"
+                            onClick={() => handleCopyUrl(stream.url!)}
+                            title={copiedUrl === stream.url ? 'Copied!' : 'Copy stream URL'}
+                            style={{
+                              padding: '0.3rem 0.6rem',
+                              fontSize: '12px',
+                              backgroundColor: copiedUrl === stream.url ? 'rgba(46, 204, 113, 0.2)' : 'var(--bg-secondary)',
+                              color: copiedUrl === stream.url ? '#2ecc71' : 'var(--text-secondary)',
+                              border: '1px solid var(--border-color)',
+                              borderRadius: '4px',
+                              cursor: 'pointer',
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '0.25rem',
+                              flexShrink: 0
+                            }}
+                          >
+                            <span className="material-icons" style={{ fontSize: '14px' }}>
+                              {copiedUrl === stream.url ? 'check' : 'content_copy'}
+                            </span>
+                            {copiedUrl === stream.url ? 'Copied' : 'Copy URL'}
+                          </button>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                );
+              })()}
+            </div>
+
+            <div className="probe-results-modal-footer">
+              {probeResultsType === 'failed' && probeResults.failed_count > 0 && (
+                <button
+                  onClick={handleRerunFailed}
+                  className="probe-results-rerun-btn"
+                >
+                  Re-probe Failed Streams
+                </button>
+              )}
+              <button
+                onClick={() => setShowProbeResultsModal(false)}
+                className="probe-results-close-btn"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Reordered Channels Modal */}
+      {showReorderModal && reorderData && (
+        <div
+          className="probe-results-modal-overlay"
+          onClick={() => setShowReorderModal(false)}
+        >
+          <div
+            className="probe-results-modal-content"
+            onClick={(e) => e.stopPropagation()}
+            style={{ maxWidth: '900px' }}
+          >
+            <div className="probe-results-modal-header">
+              <h3 style={{ color: '#3498db' }}>
+                ⇅ Reordered Channels ({reorderData.length})
+              </h3>
+              <button
+                onClick={() => setShowReorderModal(false)}
+                className="probe-results-modal-close"
+              >
+                ×
+              </button>
+            </div>
+
+            {/* Sort Configuration Summary */}
+            {reorderSortConfig && (
+              <div style={{
+                padding: '0.75rem 1rem',
+                backgroundColor: 'rgba(52, 152, 219, 0.1)',
+                borderBottom: '1px solid rgba(52, 152, 219, 0.2)',
+                fontSize: '13px',
+              }}>
+                <div style={{ fontWeight: 600, marginBottom: '0.5rem', color: 'var(--text-primary)' }}>
+                  Sort Configuration Used:
+                </div>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem 1rem', color: 'var(--text-secondary)' }}>
+                  <span>
+                    <strong>Priority:</strong>{' '}
+                    {reorderSortConfig.priority
+                      .filter(criterion => reorderSortConfig.enabled[criterion])
+                      .map(c => c.charAt(0).toUpperCase() + c.slice(1))
+                      .join(' → ') || 'None'}
+                  </span>
+                  <span>
+                    <strong>Deprioritize failed:</strong>{' '}
+                    {reorderSortConfig.deprioritize_failed ? 'Yes' : 'No'}
+                  </span>
+                </div>
+              </div>
+            )}
+
+            <div className="probe-results-modal-body">
+              {reorderData.length === 0 ? (
+                <div className="probe-results-empty">
+                  No channels were reordered
+                </div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                  {reorderData.map((channel) => (
+                    <div
+                      key={channel.channel_id}
+                      style={{
+                        padding: '1rem',
+                        backgroundColor: 'rgba(52, 152, 219, 0.05)',
+                        border: '1px solid rgba(52, 152, 219, 0.2)',
+                        borderRadius: '8px',
+                      }}
+                    >
+                      <div style={{
+                        fontSize: '14px',
+                        fontWeight: 600,
+                        marginBottom: '0.75rem',
+                        color: 'var(--text-primary)',
+                      }}>
+                        {channel.channel_name} ({channel.stream_count} streams)
+                      </div>
+
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+                        {/* Before */}
+                        <div>
+                          <div style={{
+                            fontSize: '12px',
+                            fontWeight: 600,
+                            marginBottom: '0.5rem',
+                            color: 'var(--text-secondary)',
+                          }}>
+                            Before
+                          </div>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+                            {channel.streams_before.map((stream, idx) => (
+                              <div
+                                key={stream.id}
+                                style={{
+                                  fontSize: '12px',
+                                  padding: '0.4rem',
+                                  backgroundColor: stream.status === 'failed' ? 'rgba(231, 76, 60, 0.1)' : 'var(--bg-secondary)',
+                                  borderLeft: `3px solid ${stream.status === 'failed' ? '#e74c3c' : stream.status === 'success' ? '#2ecc71' : '#95a5a6'}`,
+                                  borderRadius: '3px',
+                                  display: 'flex',
+                                  justifyContent: 'space-between',
+                                  alignItems: 'center',
+                                }}
+                              >
+                                <span>
+                                  {idx + 1}. {stream.name}
+                                </span>
+                                <span style={{
+                                  fontSize: '11px',
+                                  color: 'var(--text-secondary)',
+                                  fontFamily: 'monospace',
+                                }}>
+                                  {stream.resolution || '—'} {stream.bitrate ? `| ${(stream.bitrate / 1000000).toFixed(1)}Mbps` : ''}
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+
+                        {/* After */}
+                        <div>
+                          <div style={{
+                            fontSize: '12px',
+                            fontWeight: 600,
+                            marginBottom: '0.5rem',
+                            color: '#3498db',
+                          }}>
+                            After (Smart Sorted)
+                          </div>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+                            {channel.streams_after.map((stream, idx) => (
+                              <div
+                                key={stream.id}
+                                style={{
+                                  fontSize: '12px',
+                                  padding: '0.4rem',
+                                  backgroundColor: stream.status === 'failed' ? 'rgba(231, 76, 60, 0.1)' : 'var(--bg-secondary)',
+                                  borderLeft: `3px solid ${stream.status === 'failed' ? '#e74c3c' : stream.status === 'success' ? '#2ecc71' : '#95a5a6'}`,
+                                  borderRadius: '3px',
+                                  display: 'flex',
+                                  justifyContent: 'space-between',
+                                  alignItems: 'center',
+                                }}
+                              >
+                                <span>
+                                  {idx + 1}. {stream.name}
+                                </span>
+                                <span style={{
+                                  fontSize: '11px',
+                                  color: 'var(--text-secondary)',
+                                  fontFamily: 'monospace',
+                                }}>
+                                  {stream.resolution || '—'} {stream.bitrate ? `| ${(stream.bitrate / 1000000).toFixed(1)}Mbps` : ''}
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div className="probe-results-modal-footer">
+              <button
+                onClick={() => setShowReorderModal(false)}
+                className="probe-results-close-btn"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Channel Group Selection Modal */}
+      {showGroupSelectModal && (
+        <div className="modal-overlay" onClick={() => setShowGroupSelectModal(false)}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '500px' }}>
+            <div className="modal-header">
+              <h3>Select Channel Groups to Probe</h3>
+              <button
+                onClick={() => setShowGroupSelectModal(false)}
+                className="modal-close"
+              >
+                ×
+              </button>
+            </div>
+
+            <div className="modal-body" style={{ maxHeight: '400px', overflowY: 'auto' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+                <p className="form-hint" style={{ margin: 0 }}>
+                  Select which channel groups to probe. Uncheck groups to exclude them from probing.
+                </p>
+                {availableChannelGroups.length > 0 && (
+                  <div style={{ display: 'flex', gap: '0.5rem' }}>
+                    <button
+                      type="button"
+                      className="btn-secondary"
+                      style={{ padding: '0.3rem 0.6rem', fontSize: '0.85rem' }}
+                      onClick={() => setTempProbeChannelGroups(availableChannelGroups.map(g => g.name))}
+                    >
+                      Select All
+                    </button>
+                    <button
+                      type="button"
+                      className="btn-secondary"
+                      style={{ padding: '0.3rem 0.6rem', fontSize: '0.85rem' }}
+                      onClick={() => setTempProbeChannelGroups([])}
+                    >
+                      Deselect All
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              {availableChannelGroups.length === 0 ? (
+                <div style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>
+                  No groups with streams available
+                </div>
+              ) : (
+                <div className="profile-checkbox-list">
+                  {availableChannelGroups.map((group) => (
+                    <label key={group.id} className="profile-checkbox">
+                      <input
+                        type="checkbox"
+                        checked={tempProbeChannelGroups.includes(group.name)}
+                        onChange={(e) => {
+                          if (e.target.checked) {
+                            setTempProbeChannelGroups([...tempProbeChannelGroups, group.name]);
+                          } else {
+                            setTempProbeChannelGroups(tempProbeChannelGroups.filter(name => name !== group.name));
+                          }
+                        }}
+                      />
+                      <span className="profile-checkbox-label">{group.name}</span>
+                    </label>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div className="modal-footer">
+              <button
+                onClick={() => setShowGroupSelectModal(false)}
+                className="btn-secondary"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={async () => {
+                  // Update state and save immediately
+                  setProbeChannelGroups(tempProbeChannelGroups);
+                  setShowGroupSelectModal(false);
+                  // Save settings with the new probe channel groups
+                  // We need to save directly since setState is async
+                  try {
+                    await api.saveSettings({
+                      url,
+                      username,
+                      auto_rename_channel_number: autoRenameChannelNumber,
+                      include_channel_number_in_name: includeChannelNumberInName,
+                      channel_number_separator: channelNumberSeparator,
+                      remove_country_prefix: removeCountryPrefix,
+                      include_country_in_name: includeCountryInName,
+                      country_separator: countrySeparator,
+                      timezone_preference: timezonePreference,
+                      show_stream_urls: showStreamUrls,
+                      hide_auto_sync_groups: hideAutoSyncGroups,
+                      hide_ungrouped_streams: hideUngroupedStreams,
+                      hide_epg_urls: hideEpgUrls,
+                      hide_m3u_urls: hideM3uUrls,
+                      gracenote_conflict_mode: gracenoteConflictMode,
+                      theme: theme,
+                      default_channel_profile_ids: defaultChannelProfileIds,
+                      epg_auto_match_threshold: epgAutoMatchThreshold,
+                      custom_network_prefixes: customNetworkPrefixes,
+                      custom_network_suffixes: customNetworkSuffixes,
+                      stats_poll_interval: statsPollInterval,
+                      user_timezone: userTimezone,
+                      backend_log_level: backendLogLevel,
+                      frontend_log_level: frontendLogLevel,
+                      vlc_open_behavior: vlcOpenBehavior,
+                      linked_m3u_accounts: linkedM3UAccounts,
+                      stream_probe_enabled: streamProbeEnabled,
+                      stream_probe_interval_hours: streamProbeIntervalHours,
+                      stream_probe_batch_size: streamProbeBatchSize,
+                      stream_probe_timeout: streamProbeTimeout,
+                      stream_probe_schedule_time: streamProbeScheduleTime,
+                      probe_channel_groups: tempProbeChannelGroups,
+                      bitrate_sample_duration: bitrateSampleDuration,
+                      parallel_probing_enabled: parallelProbingEnabled,
+                      stream_sort_priority: streamSortPriority,
+                      stream_sort_enabled: streamSortEnabled,
+                    });
+                    logger.info('Probe channel groups saved');
+                  } catch (err) {
+                    logger.error('Failed to save probe channel groups', err);
+                  }
+                }}
+                className="btn-primary"
+              >
+                OK
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

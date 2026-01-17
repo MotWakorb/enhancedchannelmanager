@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, memo } from 'react';
 import type { M3UAccount, M3UFilter, M3UFilterCreateRequest } from '../types';
 import * as api from '../services/api';
 import './M3UFiltersModal.css';
@@ -27,7 +27,7 @@ const emptyFilter: EditingFilter = {
   order: 0,
 };
 
-export function M3UFiltersModal({
+export const M3UFiltersModal = memo(function M3UFiltersModal({
   isOpen,
   onClose,
   onSaved,
@@ -325,4 +325,4 @@ export function M3UFiltersModal({
       </div>
     </div>
   );
-}
+});

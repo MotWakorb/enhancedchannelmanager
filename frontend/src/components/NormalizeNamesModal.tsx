@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useMemo, memo } from 'react';
 import { previewNameNormalizations } from '../utils/epgMatching';
 import { naturalCompare } from '../utils/naturalSort';
 import './NormalizeNamesModal.css';
@@ -14,7 +14,7 @@ interface NormalizeNamesModalProps {
   onCancel: () => void;
 }
 
-export function NormalizeNamesModal({ channels, onConfirm, onCancel }: NormalizeNamesModalProps) {
+export const NormalizeNamesModal = memo(function NormalizeNamesModal({ channels, onConfirm, onCancel }: NormalizeNamesModalProps) {
   const normalizations = useMemo(() => {
     const results = previewNameNormalizations(channels);
     // Sort by current name in natural order (e.g., "700 | NFL..." before "701 | NFL...")
@@ -89,4 +89,4 @@ export function NormalizeNamesModal({ channels, onConfirm, onCancel }: Normalize
       </div>
     </div>
   );
-}
+});
