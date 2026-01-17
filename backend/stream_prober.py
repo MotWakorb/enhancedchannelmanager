@@ -1547,7 +1547,7 @@ class StreamProber:
 
     def get_probe_progress(self) -> dict:
         """Get current probe all streams progress."""
-        return {
+        progress = {
             "in_progress": self._probing_in_progress,
             "total": self._probe_progress_total,
             "current": self._probe_progress_current,
@@ -1558,6 +1558,10 @@ class StreamProber:
             "skipped_count": self._probe_progress_skipped_count,
             "percentage": round((self._probe_progress_current / self._probe_progress_total * 100) if self._probe_progress_total > 0 else 0, 1)
         }
+        # Log when probing is in progress for debugging
+        if self._probing_in_progress:
+            logger.debug(f"[PROBE-PROGRESS] in_progress=True, status={self._probe_progress_status}, {self._probe_progress_current}/{self._probe_progress_total}")
+        return progress
 
     def get_probe_results(self) -> dict:
         """Get detailed results of the last probe all streams operation."""
