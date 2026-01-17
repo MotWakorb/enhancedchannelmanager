@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, memo } from 'react';
 import './DeleteOrphanedGroupsModal.css';
 
 interface OrphanedGroup {
@@ -14,7 +14,7 @@ interface DeleteOrphanedGroupsModalProps {
   groups: OrphanedGroup[];
 }
 
-export function DeleteOrphanedGroupsModal({
+export const DeleteOrphanedGroupsModal = memo(function DeleteOrphanedGroupsModal({
   isOpen,
   onClose,
   onConfirm,
@@ -130,4 +130,4 @@ export function DeleteOrphanedGroupsModal({
       </div>
     </div>
   );
-}
+});

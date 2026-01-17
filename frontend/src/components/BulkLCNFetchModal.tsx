@@ -5,9 +5,9 @@
  * selected channels at once. Uses batch API for efficient lookup.
  */
 
-import { useState, useEffect, useMemo, useRef } from 'react';
+import { useState, useEffect, useMemo, useRef, memo } from 'react';
 import type { Channel, EPGData } from '../types';
-import { getEPGLcnBatch } from '../services/api';
+import { getEPGLcnBatch, type LCNLookupItem } from '../services/api';
 import { naturalCompare } from '../utils/naturalSort';
 import './BulkLCNFetchModal.css';
 
@@ -35,7 +35,7 @@ interface ChannelLCNResult {
   alreadyHasLcn: boolean;
 }
 
-export function BulkLCNFetchModal({
+export const BulkLCNFetchModal = memo(function BulkLCNFetchModal({
   isOpen,
   selectedChannels,
   epgData,
@@ -85,15 +85,16 @@ export function BulkLCNFetchModal({
       setPhase('fetching');
       setError(null);
 
-      // Build list of TVG-IDs to look up
+      // Build list of channels with TVG-IDs to look up
       const channelResults: ChannelLCNResult[] = [];
+      const lookupItems: LCNLookupItem[] = [];
       const tvgIdToChannels = new Map<string, Channel[]>();
 
       for (const channel of selectedChannels) {
-        // Get TVG-ID from channel's tvg_id field or EPG data
-        const tvgId = channel.tvg_id ||
-          epgData.find(e => e.id === channel.epg_data_id)?.tvg_id ||
-          null;
+        // Get TVG-ID and EPG source from channel's EPG data
+        const epgDataEntry = epgData.find(e => e.id === channel.epg_data_id);
+        const tvgId = channel.tvg_id || epgDataEntry?.tvg_id || null;
+        const epgSourceId = epgDataEntry?.epg_source ?? null;
 
         const alreadyHasLcn = Boolean(channel.tvc_guide_stationid);
 
@@ -111,15 +112,21 @@ export function BulkLCNFetchModal({
           const existing = tvgIdToChannels.get(tvgId) || [];
           existing.push(channel);
           tvgIdToChannels.set(tvgId, existing);
+
+          // Add lookup item with EPG source (only add once per unique tvg_id)
+          if (existing.length === 1) {
+            lookupItems.push({
+              tvg_id: tvgId,
+              epg_source_id: epgSourceId,
+            });
+          }
         }
       }
 
-      // Fetch LCNs for all unique TVG-IDs
-      const uniqueTvgIds = Array.from(tvgIdToChannels.keys());
-
-      if (uniqueTvgIds.length > 0) {
+      // Fetch LCNs for all lookup items
+      if (lookupItems.length > 0) {
         try {
-          const response = await getEPGLcnBatch(uniqueTvgIds);
+          const response = await getEPGLcnBatch(lookupItems);
           const lcnResults = response.results;
 
           // Map results back to channels
@@ -183,14 +190,33 @@ export function BulkLCNFetchModal({
     const alreadyHasItems: ChannelLCNResult[] = [];
 
     for (const result of results) {
-      if (result.alreadyHasLcn) {
-        alreadyHasItems.push(result);
-      } else if (!result.tvgId) {
+      if (!result.tvgId) {
+        // No TVG-ID available
         noTvgIdItems.push(result);
       } else if (result.lcn) {
-        foundItems.push(result);
+        // EPG found a Gracenote ID
+        if (result.alreadyHasLcn) {
+          // Channel already has a Gracenote ID - check if it's different
+          if (result.channel.tvc_guide_stationid !== result.lcn) {
+            // Different ID - add to found so conflict modal can handle it
+            foundItems.push(result);
+          } else {
+            // Same ID - already correct
+            alreadyHasItems.push(result);
+          }
+        } else {
+          // Channel doesn't have one - new assignment
+          foundItems.push(result);
+        }
       } else {
-        notFoundItems.push(result);
+        // EPG doesn't have a Gracenote ID for this TVG-ID
+        if (result.alreadyHasLcn) {
+          // Channel has one but EPG doesn't - keep in alreadyHas
+          alreadyHasItems.push(result);
+        } else {
+          // Not found anywhere
+          notFoundItems.push(result);
+        }
       }
     }
 
@@ -239,18 +265,18 @@ export function BulkLCNFetchModal({
   // Count selected
   const selectedCount = useMemo(() => {
     let count = 0;
-    for (const result of found) {
-      if (selectedForAssignment.has(result.channel.id)) {
+    for (const result of results) {
+      if (selectedForAssignment.has(result.channel.id) && result.lcn) {
         count++;
       }
     }
     return count;
-  }, [found, selectedForAssignment]);
+  }, [results, selectedForAssignment]);
 
   // Handle assign
   const handleAssign = () => {
     const assignments: LCNAssignment[] = [];
-    for (const result of found) {
+    for (const result of results) {
       if (selectedForAssignment.has(result.channel.id) && result.lcn) {
         assignments.push({
           channelId: result.channel.id,
@@ -486,6 +512,6 @@ export function BulkLCNFetchModal({
       </div>
     </div>
   );
-}
+});
 
 export default BulkLCNFetchModal;

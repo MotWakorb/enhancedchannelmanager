@@ -27,9 +27,10 @@ interface SortableEPGSourceRowProps {
   onDelete: (source: EPGSource) => void;
   onRefresh: (source: EPGSource) => void;
   onToggleActive: (source: EPGSource) => void;
+  hideEpgUrls?: boolean;
 }
 
-function SortableEPGSourceRow({ source, onEdit, onDelete, onRefresh, onToggleActive }: SortableEPGSourceRowProps) {
+function SortableEPGSourceRow({ source, onEdit, onDelete, onRefresh, onToggleActive, hideEpgUrls = false }: SortableEPGSourceRowProps) {
   const {
     attributes,
     listeners,
@@ -138,7 +139,7 @@ function SortableEPGSourceRow({ source, onEdit, onDelete, onRefresh, onToggleAct
         <div className="source-name">{source.name}</div>
         <div className="source-details">
           <span className="source-type">{getSourceTypeLabel(source.source_type)}</span>
-          {source.url && <span className="source-url" title={source.url}>{source.url}</span>}
+          {source.url && !hideEpgUrls && <span className="source-url" title={source.url}>{source.url}</span>}
         </div>
         {source.last_message && source.status === 'error' && (
           <div className="source-message" title={source.last_message}>
@@ -159,7 +160,7 @@ function SortableEPGSourceRow({ source, onEdit, onDelete, onRefresh, onToggleAct
       </div>
 
       <div className="source-actions">
-        {source.url && (
+        {source.url && !hideEpgUrls && (
           <button
             className="action-btn"
             onClick={() => {
@@ -400,9 +401,10 @@ function EPGSourceModal({ isOpen, source, onClose, onSave }: EPGSourceModalProps
 
 interface EPGManagerTabProps {
   onSourcesChange?: () => void;
+  hideEpgUrls?: boolean;
 }
 
-export function EPGManagerTab({ onSourcesChange }: EPGManagerTabProps) {
+export function EPGManagerTab({ onSourcesChange, hideEpgUrls = false }: EPGManagerTabProps) {
   const [sources, setSources] = useState<EPGSource[]>([]);
   const [dummySources, setDummySources] = useState<EPGSource[]>([]);
   const [loading, setLoading] = useState(true);
@@ -711,6 +713,7 @@ export function EPGManagerTab({ onSourcesChange }: EPGManagerTabProps) {
                   onDelete={handleDeleteSource}
                   onRefresh={handleRefreshSource}
                   onToggleActive={handleToggleActive}
+                  hideEpgUrls={hideEpgUrls}
                 />
               ))}
             </SortableContext>

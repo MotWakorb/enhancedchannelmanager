@@ -122,6 +122,8 @@ jobs:
           context: .
           load: true
           tags: ecm:dast-test
+          build-args: |
+            GIT_COMMIT=${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -130,16 +132,41 @@ jobs:
           docker run -d --name ecm-dast -p 6100:6100 \
             -e DISPATCHARR_URL=http://localhost:9999 \
             ecm:dast-test
+
           # Wait for the app to be ready
           echo "Waiting for application to start..."
+          READY=false
           for i in {1..30}; do
-            if curl -s http://localhost:6100/api/health > /dev/null 2>&1; then
-              echo "Application is ready!"
+            if curl -sf http://localhost:6100/api/health > /dev/null 2>&1; then
+              echo "✓ Application is ready!"
+              READY=true
               break
             fi
             echo "Waiting... ($i/30)"
             sleep 2
           done
+
+          # Fail if app never became ready
+          if [ "$READY" = "false" ]; then
+            echo "✗ Application failed to start within 60 seconds"
+            echo "Container logs:"
+            docker logs ecm-dast
+            echo "Container status:"
+            docker ps -a | grep ecm-dast
+            exit 1
+          fi
+
+      - name: Verify application health
+        run: |
+          echo "Testing health endpoint..."
+          HEALTH_RESPONSE=$(curl -s http://localhost:6100/api/health)
+          echo "Health response: $HEALTH_RESPONSE"
+
+          echo "Container status:"
+          docker ps | grep ecm-dast
+
+          echo "Recent container logs:"
+          docker logs --tail 50 ecm-dast
 
       - name: Run OWASP ZAP Baseline Scan
         uses: zaproxy/action-baseline@v0.14.0
@@ -151,9 +178,14 @@ jobs:
           # WARN alerts are logged but don't fail (appropriate for informational security headers)
           fail_action: false
 
-      - name: Stop application container
+      - name: Show container logs and stop
         if: always()
-        run: docker stop ecm-dast || true
+        run: |
+          echo "Final container logs:"
+          docker logs ecm-dast || true
+          echo "Stopping container..."
+          docker stop ecm-dast || true
+          docker rm ecm-dast || true
 
   # Build AMD64 image natively
   build-amd64:
@@ -198,6 +230,8 @@ jobs:
           load: true
           tags: ecm-scan:latest
           platforms: linux/amd64
+          build-args: |
+            GIT_COMMIT=${{ github.sha }}
           cache-from: type=gha,scope=amd64
           cache-to: type=gha,mode=max,scope=amd64
 
@@ -219,6 +253,8 @@ jobs:
           platforms: linux/amd64
           push: ${{ github.event_name != 'pull_request' }}
           labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            GIT_COMMIT=${{ github.sha }}
           outputs: type=image,name=${{ env.REGISTRY }}/${{ steps.image.outputs.name }},push-by-digest=true,name-canonical=true,push=${{ github.event_name != 'pull_request' }}
           cache-from: type=gha,scope=amd64
           cache-to: type=gha,mode=max,scope=amd64
@@ -267,6 +303,8 @@ jobs:
           platforms: linux/arm64
           push: ${{ github.event_name != 'pull_request' }}
           labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            GIT_COMMIT=${{ github.sha }}
           outputs: type=image,name=${{ env.REGISTRY }}/${{ steps.image.outputs.name }},push-by-digest=true,name-canonical=true,push=${{ github.event_name != 'pull_request' }}
           cache-from: type=gha,scope=arm64
           cache-to: type=gha,mode=max,scope=arm64
@@ -292,9 +330,20 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Checkout repository (for version extraction)
+        uses: actions/checkout@v4
+
       - name: Set lowercase image name
         id: image
         run: echo "name=${GITHUB_REPOSITORY,,}" >> $GITHUB_OUTPUT
+
+      - name: Extract version from package.json
+        id: version
+        run: |
+          VERSION=$(jq -r '.version' frontend/package.json)
+          echo "full=${VERSION}" >> $GITHUB_OUTPUT
+          # Extract major.minor (e.g., 0.7 from 0.7.20080)
+          echo "minor=$(echo $VERSION | cut -d. -f1,2)" >> $GITHUB_OUTPUT
 
       - name: Extract metadata (tags, labels)
         id: meta
@@ -310,6 +359,12 @@ jobs:
             type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
             # Dev tag on dev branch
             type=raw,value=dev,enable=${{ github.ref == 'refs/heads/dev' }}
+            # Semver tags with branch suffix on dev, plain on main
+            type=raw,value=${{ steps.version.outputs.full }}-dev,enable=${{ github.ref == 'refs/heads/dev' }}
+            type=raw,value=${{ steps.version.outputs.full }},enable=${{ github.ref == 'refs/heads/main' }}
+            # Minor version tags (e.g., 0.7-dev or 0.7)
+            type=raw,value=${{ steps.version.outputs.minor }}-dev,enable=${{ github.ref == 'refs/heads/dev' }}
+            type=raw,value=${{ steps.version.outputs.minor }},enable=${{ github.ref == 'refs/heads/main' }}
 
       - name: Create manifest list and push
         working-directory: /tmp

@@ -25,3 +25,65 @@ export const LEAGUE_PREFIXES = [
   'UEFA', 'FIFA', 'F1', 'NASCAR', 'PGA', 'ATP', 'WTA',
   'WWE', 'UFC', 'AEW', 'BOXING',
 ];
+
+// Network/channel prefixes that should be stripped when followed by content names
+// These are networks that often prefix their content with their branding
+// Format: "NETWORK | Content Name" or "NETWORK: Content Name"
+export const NETWORK_PREFIXES = [
+  // Sports networks
+  'CHAMP', 'CHAMPIONSHIP', 'PPV', 'PAY PER VIEW',
+  'PREMIER', 'PREMIER LEAGUE', 'PL', 'PRIME',
+  'NFL', 'NBA', 'MLB', 'NHL', 'MLS', 'NCAA',
+  'UFC', 'WWE', 'AEW', 'BOXING',
+  'GOLF', 'TENNIS', 'CRICKET', 'RUGBY',
+  'RACING', 'MOTORSPORT', 'F1', 'NASCAR',
+  // General networks that prefix content
+  'LIVE', 'SPORTS', 'MATCH', 'GAME',
+  '24/7', 'LINEAR',
+  // Regional sports networks pattern
+  'RSN',
+];
+
+// Network/channel suffixes that should be stripped from channel names
+// These are commonly appended tags that don't contribute to channel identity
+// Format: "Channel Name (SUFFIX)" or "Channel Name [SUFFIX]" or "Channel Name SUFFIX"
+export const NETWORK_SUFFIXES = [
+  // Language/region tags
+  'ENGLISH', 'ENG', 'SPANISH', 'ESP', 'FRENCH', 'FRA', 'GERMAN', 'DEU', 'PORTUGUESE', 'POR',
+  // Content type tags
+  'LIVE', 'REPLAY', 'DELAY', 'BACKUP', 'ALT', 'ALTERNATE', 'MAIN',
+  // Source/provider tags
+  'FEED', 'MULTI', 'CLEAN', 'RAW', 'PRIMARY', 'SECONDARY',
+  // Event-specific tags
+  'PPV', 'EVENT', 'SPECIAL', 'EXCLUSIVE',
+  // Technical tags (less commonly used - quality tags are handled separately)
+  'MPEG2', 'MPEG4', 'AVC', 'STEREO', 'MONO', '5.1', 'SURROUND',
+];
+
+// Quality priority for stream ordering (lower number = higher priority/quality)
+// Streams without quality indicators default to 720p position (priority 30)
+export const QUALITY_PRIORITY: Record<string, number> = {
+  // Ultra HD / 4K (highest quality)
+  'UHD': 10,
+  '4K': 10,
+  '2160P': 10,
+  // Full HD
+  'FHD': 20,
+  '1080P': 20,
+  '1080I': 21, // Slightly lower than progressive
+  // HD (default level for unknown quality)
+  'HD': 30,
+  '720P': 30,
+  // Standard Definition (lowest)
+  'SD': 40,
+  '480P': 40,
+};
+
+// Default priority for streams without quality indicators (treated as HD/720p)
+export const DEFAULT_QUALITY_PRIORITY = 30;
+
+// Common country prefixes found in stream names
+// These typically appear at the start of the name followed by a separator
+export const COUNTRY_PREFIXES = [
+  'US', 'USA', 'UK', 'CA', 'AU', 'NZ', 'IE', 'IN', 'PH', 'MX', 'BR', 'DE', 'FR', 'ES', 'IT', 'NL', 'BE', 'CH', 'AT', 'PL', 'SE', 'NO', 'DK', 'FI', 'PT', 'GR', 'TR', 'RU', 'JP', 'KR', 'CN', 'TW', 'HK', 'SG', 'MY', 'TH', 'ID', 'VN', 'PK', 'BD', 'LK', 'ZA', 'EG', 'NG', 'KE', 'GH', 'AR', 'CL', 'CO', 'PE', 'VE', 'EC', 'PR', 'DO', 'CU', 'JM', 'TT', 'BB', 'CR', 'PA', 'HN', 'SV', 'GT', 'NI', 'BZ', 'IL', 'AE', 'SA', 'QA', 'KW', 'BH', 'OM', 'JO', 'LB', 'IR', 'IQ', 'AF', 'LATAM', 'LATINO', 'LATIN',
+];

@@ -3,15 +3,25 @@ FROM node:20-alpine AS frontend-builder
 WORKDIR /app/frontend
 COPY frontend/package.json frontend/package-lock.json* ./
 RUN npm install
+
+# Cache busting - invalidate cache when git commit changes
+ARG GIT_COMMIT=unknown
+ENV GIT_COMMIT=$GIT_COMMIT
+
 COPY frontend/ ./
 RUN npm run build
 
 # Production image
 FROM python:3.12-slim
+
+# Cache busting - MUST be declared early in the stage to receive build arg
+ARG GIT_COMMIT=unknown
+ENV GIT_COMMIT=$GIT_COMMIT
+
 WORKDIR /app
 
-# Install gosu for proper user switching and create non-root user
-RUN apt-get update && apt-get install -y --no-install-recommends gosu \
+# Install gosu for proper user switching, ffmpeg for stream probing, and create non-root user
+RUN apt-get update && apt-get install -y --no-install-recommends gosu ffmpeg \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --create-home --shell /bin/bash appuser
 

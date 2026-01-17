@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, memo } from 'react';
 import type { Logo } from '../types';
 import * as api from '../services/api';
 import './LogoModal.css';
@@ -10,7 +10,7 @@ interface LogoModalProps {
   logo: Logo | null; // null = creating new
 }
 
-export function LogoModal({ isOpen, onClose, onSaved, logo }: LogoModalProps) {
+export const LogoModal = memo(function LogoModal({ isOpen, onClose, onSaved, logo }: LogoModalProps) {
   const isEdit = logo !== null;
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -370,4 +370,4 @@ export function LogoModal({ isOpen, onClose, onSaved, logo }: LogoModalProps) {
       </div>
     </div>
   );
-}
+});

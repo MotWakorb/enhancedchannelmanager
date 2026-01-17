@@ -31,6 +31,9 @@ class DispatcharrSettings(BaseModel):
     show_stream_urls: bool = True  # Show stream URLs in the UI (can hide for screenshots)
     hide_auto_sync_groups: bool = False  # Hide auto-sync channel groups by default
     hide_ungrouped_streams: bool = True  # Hide ungrouped streams in the streams pane
+    hide_epg_urls: bool = False  # Hide EPG URLs in EPG Manager tab
+    hide_m3u_urls: bool = False  # Hide M3U URLs in M3U Manager tab
+    gracenote_conflict_mode: str = "ask"  # Gracenote ID conflict handling: "ask", "skip", or "overwrite"
     theme: str = "dark"  # Theme: "dark", "light", or "high-contrast"
     # Default channel profiles for new channels (empty list means no defaults)
     default_channel_profile_ids: list[int] = []
@@ -62,6 +65,31 @@ class DispatcharrSettings(BaseModel):
     # m3u_fallback: Try vlc:// protocol, download M3U if it fails (current default)
     # m3u_only: Always download M3U file without trying protocol
     vlc_open_behavior: str = "m3u_fallback"
+    # Stream probe settings - uses ffprobe to gather stream metadata
+    stream_probe_enabled: bool = True  # Enable scheduled background probing
+    stream_probe_interval_hours: int = 24  # How often to auto-probe (hours)
+    stream_probe_batch_size: int = 10  # Streams to probe per scheduled cycle
+    stream_probe_timeout: int = 30  # Timeout in seconds for each probe
+    stream_probe_schedule_time: str = "03:00"  # Time of day to run probes (HH:MM, 24h format, user's local time)
+    probe_channel_groups: list[str] = []  # Channel groups to probe (empty = all groups with streams)
+    bitrate_sample_duration: int = 10  # Duration in seconds to sample stream for bitrate measurement (10, 20, or 30)
+    # Parallel probing - probe streams from different M3U accounts simultaneously
+    parallel_probing_enabled: bool = True
+    # Skip streams that were successfully probed within the last N hours (0 = always probe)
+    skip_recently_probed_hours: int = 0
+    # Refresh all M3U accounts before starting probe
+    refresh_m3us_before_probe: bool = True
+    # Automatically reorder streams in channels after probe completes
+    auto_reorder_after_probe: bool = False
+    # Stream sort priority order for "Smart Sort" feature
+    # Order determines priority: first element is primary sort key, subsequent elements are tie-breakers
+    # Valid values: "resolution", "bitrate", "framerate"
+    stream_sort_priority: list[str] = ["resolution", "bitrate", "framerate"]
+    # Which sort criteria are enabled (users can disable criteria they don't want to use)
+    # Only enabled criteria appear in sort dropdown and are used by Smart Sort
+    stream_sort_enabled: dict[str, bool] = {"resolution": True, "bitrate": True, "framerate": True}
+    # Deprioritize failed streams - when enabled, failed/timeout/pending streams sort to bottom
+    deprioritize_failed_streams: bool = True
 
     def is_configured(self) -> bool:
         return bool(self.url and self.username and self.password)

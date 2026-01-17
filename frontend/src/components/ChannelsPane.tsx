@@ -20,22 +20,25 @@ import {
   verticalListSortingStrategy,
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import type { Channel, ChannelGroup, ChannelProfile, Stream, M3UAccount, M3UGroupSetting, Logo, ChangeInfo, ChangeRecord, SavePoint, EPGData, EPGSource, StreamProfile, ChannelListFilterSettings } from '../types';
+import type { Channel, ChannelGroup, ChannelProfile, Stream, StreamStats, M3UAccount, M3UGroupSetting, Logo, ChangeInfo, ChangeRecord, SavePoint, EPGData, EPGSource, StreamProfile, ChannelListFilterSettings } from '../types';
+import { logger } from '../utils/logger';
 import { ChannelProfilesListModal } from './ChannelProfilesListModal';
 import type { ChannelDefaults } from './StreamsPane';
 import * as api from '../services/api';
-import type { NumberSeparator } from '../services/api';
+import type { NumberSeparator, SortCriterion, GracenoteConflictMode } from '../services/api';
 import { HistoryToolbar } from './HistoryToolbar';
 import { BulkEPGAssignModal, type EPGAssignment } from './BulkEPGAssignModal';
 import { BulkLCNFetchModal, type LCNAssignment } from './BulkLCNFetchModal';
+import { GracenoteConflictModal, type GracenoteConflict } from './GracenoteConflictModal';
 import { EditChannelModal, type ChannelMetadataChanges } from './EditChannelModal';
 import { NormalizeNamesModal } from './NormalizeNamesModal';
 import { naturalCompare } from '../utils/naturalSort';
-import { openInVLC } from '../utils/vlc';
 import { useCopyFeedback } from '../hooks/useCopyFeedback';
 import { useDropdown } from '../hooks/useDropdown';
 import { useContextMenu } from '../hooks/useContextMenu';
 import { useModal } from '../hooks/useModal';
+import { ChannelListItem } from './ChannelListItem';
+import { StreamListItem } from './StreamListItem';
 import './ChannelsPane.css';
 
 interface ChannelsPaneProps {
@@ -125,6 +128,8 @@ interface ChannelsPaneProps {
   showStreamUrls?: boolean;
   // EPG matching settings
   epgAutoMatchThreshold?: number;
+  // Gracenote conflict handling
+  gracenoteConflictMode?: GracenoteConflictMode;
   // External trigger to open edit modal for a specific channel
   externalChannelToEdit?: Channel | null;
   onExternalChannelEditHandled?: () => void;
@@ -134,363 +139,96 @@ interface GroupState {
   [groupId: number]: boolean;
 }
 
-interface SortableChannelProps {
-  channel: Channel;
-  isSelected: boolean;
-  isMultiSelected: boolean;
-  isExpanded: boolean;
-  isDragOver: boolean;
-  isEditingNumber: boolean;
-  isEditingName: boolean;
-  isModified: boolean;
-  isEditMode: boolean;
-  editingNumber: string;
-  editingName: string;
-  logoUrl: string | null;
-  multiSelectCount: number;
-  onEditingNumberChange: (value: string) => void;
-  onEditingNameChange: (value: string) => void;
-  onStartEditNumber: (e: React.MouseEvent) => void;
-  onStartEditName: (e: React.MouseEvent) => void;
-  onSaveNumber: () => void;
-  onSaveName: () => void;
-  onCancelEditNumber: () => void;
-  onCancelEditName: () => void;
-  onClick: (e: React.MouseEvent) => void;
-  onToggleExpand: () => void;
-  onToggleSelect: (e: React.MouseEvent) => void;
-  onStreamDragOver: (e: React.DragEvent) => void;
-  onStreamDragLeave: () => void;
-  onStreamDrop: (e: React.DragEvent) => void;
-  onDelete: () => void;
-  onEditChannel: () => void;
-  onCopyChannelUrl?: () => void;
-  onContextMenu?: (e: React.MouseEvent) => void;
-  channelUrl?: string;
-  showStreamUrls?: boolean;
+// ChannelListItem component extracted to ChannelListItem.tsx
+// StreamListItem component extracted to StreamListItem.tsx
+
+// Reusable Sort Dropdown Button component
+interface SortDropdownButtonProps {
+  onSortByMode: (mode: 'smart' | 'resolution' | 'bitrate' | 'framerate') => void;
+  disabled?: boolean;
+  isLoading?: boolean;
+  className?: string;
+  showLabel?: boolean;
+  labelText?: string;
+  enabledCriteria?: Record<'resolution' | 'bitrate' | 'framerate', boolean>;
 }
 
-interface SortableStreamItemProps {
-  stream: Stream;
-  providerName: string | null;
-  isEditMode: boolean;
-  onRemove: (streamId: number) => void;
-  onCopyUrl?: () => void;
-  showStreamUrls?: boolean;
-}
+const SortDropdownButton = memo(function SortDropdownButton({
+  onSortByMode,
+  disabled = false,
+  isLoading = false,
+  className = '',
+  showLabel = false,
+  labelText = 'Sort',
+  enabledCriteria = { resolution: true, bitrate: true, framerate: true },
+}: SortDropdownButtonProps) {
+  const [isOpen, setIsOpen] = useState(false);
+  const dropdownRef = useRef<HTMLDivElement>(null);
 
-const SortableStreamItem = memo(function SortableStreamItem({ stream, providerName, isEditMode, onRemove, onCopyUrl, showStreamUrls = true }: SortableStreamItemProps) {
-  const {
-    attributes,
-    listeners,
-    setNodeRef,
-    transform,
-    transition,
-    isDragging,
-  } = useSortable({ id: stream.id, disabled: !isEditMode });
+  // Check if any criteria are enabled (for Smart Sort to be useful)
+  const anyEnabled = enabledCriteria.resolution || enabledCriteria.bitrate || enabledCriteria.framerate;
 
-  const style = {
-    transform: CSS.Transform.toString(transform),
-    transition,
-    opacity: isDragging ? 0.5 : 1,
+  // Close on outside click
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleClickOutside = (e: MouseEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
+        setIsOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [isOpen]);
+
+  const handleModeClick = (mode: 'smart' | 'resolution' | 'bitrate' | 'framerate') => {
+    setIsOpen(false);
+    onSortByMode(mode);
   };
 
   return (
-    <div ref={setNodeRef} style={style} className="inline-stream-item">
-      <span
-        className={`stream-drag-handle ${!isEditMode ? 'disabled' : ''}`}
-        {...(isEditMode ? { ...attributes, ...listeners } : {})}
-        title={isEditMode ? 'Drag to reorder' : 'Enter Edit Mode to reorder streams'}
+    <div className={`sort-dropdown-container ${className}`} ref={dropdownRef}>
+      <button
+        className={`sort-dropdown-btn ${isLoading ? 'loading' : ''}`}
+        onClick={() => setIsOpen(!isOpen)}
+        disabled={disabled || isLoading || !anyEnabled}
+        title={isLoading ? 'Sorting streams...' : !anyEnabled ? 'No sort criteria enabled' : 'Sort streams'}
       >
-        ⋮⋮
-      </span>
-      {stream.logo_url && (
-        <img
-          src={stream.logo_url}
-          alt=""
-          className="stream-logo-small"
-          onError={(e) => {
-            (e.target as HTMLImageElement).style.display = 'none';
-          }}
-        />
-      )}
-      <div className="inline-stream-info">
-        <span className="inline-stream-name">{stream.name}</span>
-        {showStreamUrls && stream.url && (
-          <span className="inline-stream-url" title={stream.url}>
-            {stream.url}
-          </span>
-        )}
-        {providerName && <span className="inline-stream-provider">{providerName}</span>}
-      </div>
-      {stream.url && (
-        <button
-          className="vlc-btn"
-          onClick={(e) => {
-            e.stopPropagation();
-            openInVLC(stream.url!, stream.name);
-          }}
-          title="Open in VLC"
-        >
-          <span className="material-icons">play_circle</span>
-        </button>
-      )}
-      {onCopyUrl && (
-        <button
-          className="copy-url-btn"
-          onClick={(e) => {
-            e.stopPropagation();
-            onCopyUrl();
-          }}
-          title="Copy stream URL"
-        >
-          <span className="material-icons">content_copy</span>
-        </button>
-      )}
-      {isEditMode && (
-        <button
-          className="remove-stream-btn"
-          onClick={(e) => {
-            e.stopPropagation();
-            onRemove(stream.id);
-          }}
-          title="Remove stream"
-        >
-          ✕
-        </button>
-      )}
-    </div>
-  );
-});
-
-const SortableChannel = memo(function SortableChannel({
-  channel,
-  isSelected,
-  isMultiSelected,
-  isExpanded,
-  isDragOver,
-  isEditingNumber,
-  isEditingName,
-  isModified,
-  isEditMode,
-  editingNumber,
-  editingName,
-  logoUrl,
-  multiSelectCount,
-  onEditingNumberChange,
-  onEditingNameChange,
-  onStartEditNumber,
-  onStartEditName,
-  onSaveNumber,
-  onSaveName,
-  onCancelEditNumber,
-  onCancelEditName,
-  onClick,
-  onToggleExpand,
-  onToggleSelect,
-  onStreamDragOver,
-  onStreamDragLeave,
-  onStreamDrop,
-  onDelete,
-  onEditChannel,
-  onCopyChannelUrl,
-  onContextMenu,
-  channelUrl,
-  showStreamUrls = true,
-}: SortableChannelProps) {
-  const {
-    attributes,
-    listeners,
-    setNodeRef,
-    transform,
-    transition,
-    isDragging,
-  } = useSortable({ id: channel.id, disabled: !isEditMode });
-
-  const style = {
-    transform: CSS.Transform.toString(transform),
-    transition,
-    opacity: isDragging ? 0.5 : 1,
-  };
-
-  const handleNumberKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter') {
-      onSaveNumber();
-    } else if (e.key === 'Escape') {
-      onCancelEditNumber();
-    }
-  };
-
-  const handleNameKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter') {
-      onSaveName();
-    } else if (e.key === 'Escape') {
-      onCancelEditName();
-    }
-  };
-
-  return (
-    <div
-      ref={setNodeRef}
-      style={style}
-      className={`channel-item ${isSelected && isEditMode ? 'selected' : ''} ${isMultiSelected ? 'multi-selected' : ''} ${isDragOver ? 'drag-over' : ''} ${isDragging ? 'dragging' : ''} ${isModified ? 'channel-modified' : ''} ${channel.streams.length === 0 ? 'no-streams' : ''}`}
-      onClick={onClick}
-      onContextMenu={onContextMenu}
-      onDragOver={onStreamDragOver}
-      onDragLeave={onStreamDragLeave}
-      onDrop={onStreamDrop}
-    >
-      {isEditMode && (
-        <span
-          className={`channel-select-indicator ${isMultiSelected ? 'selected' : ''}`}
-          onClick={(e) => {
-            e.stopPropagation();
-            e.preventDefault();
-            onToggleSelect(e);
-          }}
-          onPointerDown={(e) => e.stopPropagation()}
-          onMouseDown={(e) => e.stopPropagation()}
-          onTouchStart={(e) => e.stopPropagation()}
-          title="Click to select/deselect"
-        >
-          {isMultiSelected ? (
-            <span className="material-icons">check_box</span>
-          ) : (
-            <span className="material-icons">check_box_outline_blank</span>
+        <span className={`material-icons ${isLoading ? 'spinning' : ''}`}>
+          {isLoading ? 'sync' : 'sort'}
+        </span>
+        {showLabel && <span>{labelText}</span>}
+        <span className="material-icons sort-dropdown-arrow">arrow_drop_down</span>
+      </button>
+      {isOpen && (
+        <div className="sort-dropdown-menu">
+          {anyEnabled && (
+            <>
+              <button className="sort-dropdown-item" onClick={() => handleModeClick('smart')}>
+                <span className="material-icons">auto_awesome</span>
+                <span>Smart Sort</span>
+              </button>
+              <div className="sort-dropdown-divider" />
+            </>
           )}
-        </span>
-      )}
-      <span
-        className={`channel-drag-handle ${!isEditMode ? 'disabled' : ''}`}
-        {...(isEditMode ? { ...attributes, ...listeners } : {})}
-        title={isEditMode ? (multiSelectCount > 1 && isMultiSelected ? `Drag ${multiSelectCount} channels` : 'Drag to reorder') : 'Enter Edit Mode to reorder channels'}
-      >
-        ⋮⋮
-      </span>
-      <span
-        className="channel-expand-icon"
-        onClick={(e) => {
-          e.stopPropagation();
-          onToggleExpand();
-        }}
-        title="Click to expand/collapse"
-      >
-        {isExpanded ? '▼︎' : '▶︎'}
-      </span>
-      <div
-        className="channel-logo-container"
-      >
-        {logoUrl ? (
-          <img
-            src={logoUrl}
-            alt=""
-            className="channel-logo"
-            onError={(e) => {
-              (e.target as HTMLImageElement).style.display = 'none';
-            }}
-          />
-        ) : (
-          <div className="channel-logo-placeholder">
-            <span className="material-icons">image</span>
-          </div>
-        )}
-      </div>
-      {isEditingNumber ? (
-        <input
-          type="text"
-          className="channel-number-input"
-          value={editingNumber}
-          onChange={(e) => onEditingNumberChange(e.target.value)}
-          onKeyDown={handleNumberKeyDown}
-          onBlur={onSaveNumber}
-          onClick={(e) => e.stopPropagation()}
-          autoFocus
-        />
-      ) : (
-        <span
-          className={`channel-number ${isEditMode ? 'editable' : ''}`}
-          onDoubleClick={onStartEditNumber}
-          title={isEditMode ? 'Double-click to edit' : 'Enter Edit Mode to change channel number'}
-        >
-          {channel.channel_number ?? '-'}
-        </span>
-      )}
-      {isEditingName ? (
-        <input
-          type="text"
-          className="channel-name-input"
-          value={editingName}
-          onChange={(e) => onEditingNameChange(e.target.value)}
-          onKeyDown={handleNameKeyDown}
-          onBlur={onSaveName}
-          onClick={(e) => e.stopPropagation()}
-          autoFocus
-        />
-      ) : (
-        <span
-          className={`channel-name ${isEditMode ? 'editable' : ''}`}
-          onDoubleClick={onStartEditName}
-          title={isEditMode ? 'Double-click to edit name' : 'Enter Edit Mode to change channel name'}
-        >
-          {channel.name}
-        </span>
-      )}
-      {showStreamUrls && channelUrl && (
-        <span className="channel-url" title={channelUrl}>
-          {channelUrl}
-        </span>
-      )}
-      <span className={`channel-streams-count ${channel.streams.length === 0 ? 'no-streams' : ''}`}>
-        {channel.streams.length === 0 && <span className="material-icons warning-icon">warning</span>}
-        {channel.streams.length} stream{channel.streams.length !== 1 ? 's' : ''}
-      </span>
-      {channelUrl && (
-        <button
-          className="vlc-btn channel-vlc-btn"
-          onClick={(e) => {
-            e.stopPropagation();
-            openInVLC(channelUrl, channel.name);
-          }}
-          title="Open channel in VLC"
-        >
-          <span className="material-icons">play_circle</span>
-        </button>
-      )}
-      {onCopyChannelUrl && (
-        <button
-          className="copy-url-btn channel-copy-url-btn"
-          onClick={(e) => {
-            e.stopPropagation();
-            onCopyChannelUrl();
-          }}
-          title="Copy channel stream URL"
-        >
-          <span className="material-icons">content_copy</span>
-        </button>
-      )}
-      {isEditMode && (
-        <>
-          <button
-            className="channel-row-edit-btn"
-            onClick={(e) => {
-              e.stopPropagation();
-              onEditChannel();
-            }}
-            title="Edit channel"
-          >
-            <span className="material-icons">edit</span>
-          </button>
-          <button
-            className="channel-row-delete-btn"
-            onClick={(e) => {
-              e.stopPropagation();
-              onDelete();
-            }}
-            title="Delete channel"
-          >
-            <span className="material-icons">delete</span>
-          </button>
-        </>
+          {enabledCriteria.resolution && (
+            <button className="sort-dropdown-item" onClick={() => handleModeClick('resolution')}>
+              <span className="material-icons">aspect_ratio</span>
+              <span>By Resolution</span>
+            </button>
+          )}
+          {enabledCriteria.bitrate && (
+            <button className="sort-dropdown-item" onClick={() => handleModeClick('bitrate')}>
+              <span className="material-icons">speed</span>
+              <span>By Bitrate</span>
+            </button>
+          )}
+          {enabledCriteria.framerate && (
+            <button className="sort-dropdown-item" onClick={() => handleModeClick('framerate')}>
+              <span className="material-icons">slow_motion_video</span>
+              <span>By Framerate</span>
+            </button>
+          )}
+        </div>
       )}
     </div>
   );
@@ -554,6 +292,12 @@ interface DroppableGroupHeaderProps {
   onStreamDropOnGroup?: (groupId: number | 'ungrouped', streamIds: number[]) => void;
   onContextMenu?: (e: React.MouseEvent) => void;
   dragHandleProps?: any;
+  onProbeGroup?: () => void;
+  isProbing?: boolean;
+  onSortStreamsByQuality?: () => void;
+  onSortStreamsByMode?: (mode: 'smart' | 'resolution' | 'bitrate' | 'framerate') => void;
+  isSortingByQuality?: boolean;
+  enabledCriteria?: Record<'resolution' | 'bitrate' | 'framerate', boolean>;
 }
 
 const DroppableGroupHeader = memo(function DroppableGroupHeader({
@@ -574,6 +318,12 @@ const DroppableGroupHeader = memo(function DroppableGroupHeader({
   onStreamDropOnGroup,
   onContextMenu,
   dragHandleProps,
+  onProbeGroup,
+  isProbing = false,
+  onSortStreamsByQuality,
+  onSortStreamsByMode,
+  isSortingByQuality = false,
+  enabledCriteria = { resolution: true, bitrate: true, framerate: true },
 }: DroppableGroupHeaderProps) {
   const droppableId = `group-${groupId}`;
   const { isOver, setNodeRef } = useDroppable({
@@ -582,6 +332,20 @@ const DroppableGroupHeader = memo(function DroppableGroupHeader({
   });
 
   const [streamDragOver, setStreamDragOver] = useState(false);
+  const [sortDropdownOpen, setSortDropdownOpen] = useState(false);
+  const sortDropdownRef = useRef<HTMLDivElement>(null);
+
+  // Close dropdown on outside click
+  useEffect(() => {
+    if (!sortDropdownOpen) return;
+    const handleClickOutside = (e: MouseEvent) => {
+      if (sortDropdownRef.current && !sortDropdownRef.current.contains(e.target as Node)) {
+        setSortDropdownOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [sortDropdownOpen]);
 
   const handleSortClick = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -596,6 +360,15 @@ const DroppableGroupHeader = memo(function DroppableGroupHeader({
   const handleCheckboxClick = (e: React.MouseEvent) => {
     e.stopPropagation();
     onSelectAll?.();
+  };
+
+  const handleSortModeClick = (mode: 'smart' | 'resolution' | 'bitrate' | 'framerate') => {
+    setSortDropdownOpen(false);
+    if (onSortStreamsByMode) {
+      onSortStreamsByMode(mode);
+    } else if (onSortStreamsByQuality) {
+      onSortStreamsByQuality();
+    }
   };
 
 
@@ -698,6 +471,66 @@ const DroppableGroupHeader = memo(function DroppableGroupHeader({
         </span>
       )}
       {isEmpty && <span className="group-empty-badge">Empty</span>}
+      {onProbeGroup && !isEmpty && (
+        <button
+          className={`probe-group-btn ${isProbing ? 'probing' : ''}`}
+          onClick={(e) => {
+            e.stopPropagation();
+            onProbeGroup();
+          }}
+          disabled={isProbing}
+          title={isProbing ? 'Probing streams...' : 'Probe all streams in this group'}
+        >
+          <span className={`material-icons ${isProbing ? 'spinning' : ''}`}>
+            {isProbing ? 'sync' : 'speed'}
+          </span>
+        </button>
+      )}
+      {isEditMode && !isEmpty && (onSortStreamsByQuality || onSortStreamsByMode) && (enabledCriteria.resolution || enabledCriteria.bitrate || enabledCriteria.framerate) && (
+        <div className="sort-dropdown-container" ref={sortDropdownRef}>
+          <button
+            className={`group-sort-quality-btn ${isSortingByQuality ? 'sorting' : ''}`}
+            onClick={(e) => {
+              e.stopPropagation();
+              setSortDropdownOpen(!sortDropdownOpen);
+            }}
+            disabled={isSortingByQuality}
+            title={isSortingByQuality ? 'Sorting streams...' : 'Sort streams in this group'}
+          >
+            <span className={`material-icons ${isSortingByQuality ? 'spinning' : ''}`}>
+              {isSortingByQuality ? 'sync' : 'sort'}
+            </span>
+            <span className="material-icons sort-dropdown-arrow">arrow_drop_down</span>
+          </button>
+          {sortDropdownOpen && (
+            <div className="sort-dropdown-menu" onClick={(e) => e.stopPropagation()}>
+              <button className="sort-dropdown-item" onClick={() => handleSortModeClick('smart')}>
+                <span className="material-icons">auto_awesome</span>
+                <span>Smart Sort</span>
+              </button>
+              <div className="sort-dropdown-divider" />
+              {enabledCriteria.resolution && (
+                <button className="sort-dropdown-item" onClick={() => handleSortModeClick('resolution')}>
+                  <span className="material-icons">aspect_ratio</span>
+                  <span>By Resolution</span>
+                </button>
+              )}
+              {enabledCriteria.bitrate && (
+                <button className="sort-dropdown-item" onClick={() => handleSortModeClick('bitrate')}>
+                  <span className="material-icons">speed</span>
+                  <span>By Bitrate</span>
+                </button>
+              )}
+              {enabledCriteria.framerate && (
+                <button className="sort-dropdown-item" onClick={() => handleSortModeClick('framerate')}>
+                  <span className="material-icons">slow_motion_video</span>
+                  <span>By Framerate</span>
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+      )}
       {isEditMode && !isEmpty && onSortAndRenumber && (
         <button
           className="group-sort-btn"
@@ -836,6 +669,8 @@ export function ChannelsPane({
   showStreamUrls = true,
   // EPG matching settings
   epgAutoMatchThreshold = 80,
+  // Gracenote conflict handling
+  gracenoteConflictMode = 'ask',
   // External trigger to open edit modal
   externalChannelToEdit,
   onExternalChannelEditHandled,
@@ -900,6 +735,11 @@ export function ChannelsPane({
   const [channelStreams, setChannelStreams] = useState<Stream[]>([]);
   const [streamsLoading, setStreamsLoading] = useState(false);
 
+  // Stream stats state for displaying probe metadata
+  const [streamStatsMap, setStreamStatsMap] = useState<Map<number, StreamStats>>(new Map());
+  const [probingChannels, setProbingChannels] = useState<Set<number>>(new Set());
+  const [probingGroups, setProbingGroups] = useState<Set<number | 'ungrouped'>>(new Set());
+
   // Delete channel state
   const deleteConfirmModal = useModal();
   const [channelToDelete, setChannelToDelete] = useState<Channel | null>(null);
@@ -940,6 +780,11 @@ export function ChannelsPane({
 
   // Bulk LCN fetch modal state
   const bulkLCNModal = useModal();
+
+  // Gracenote conflict modal state
+  const gracenoteConflictModal = useModal();
+  const [gracenoteConflicts, setGracenoteConflicts] = useState<GracenoteConflict[]>([]);
+  const [pendingLCNAssignments, setPendingLCNAssignments] = useState<LCNAssignment[]>([]);
 
   // Normalize names modal state
   const normalizeModal = useModal();
@@ -1114,6 +959,125 @@ export function ChannelsPane({
     };
     loadStreams();
   }, [selectedChannelId, channels, isEditMode, allStreams]);
+
+  // Fetch stream stats when channelStreams changes
+  useEffect(() => {
+    const fetchStreamStats = async () => {
+      if (channelStreams.length === 0) return;
+
+      const streamIds = channelStreams.map((s) => s.id);
+      try {
+        const stats = await api.getStreamStatsByIds(streamIds);
+        setStreamStatsMap((prev) => {
+          const next = new Map(prev);
+          for (const [idStr, stat] of Object.entries(stats)) {
+            next.set(parseInt(idStr, 10), stat);
+          }
+          return next;
+        });
+      } catch (err) {
+        // Stats not available is OK - they may not have been probed yet
+        console.debug('Failed to fetch stream stats:', err);
+      }
+    };
+    fetchStreamStats();
+  }, [channelStreams]);
+
+  // Handle probe channel request - probes all streams in a channel
+  const handleProbeChannel = useCallback(async (channel: Channel) => {
+    // channel.streams is an array of stream IDs (numbers)
+    const streamIds = channel.streams;
+    console.log(`[ChannelsPane] handleProbeChannel called for channel ${channel.id} (${channel.name}) with ${streamIds.length} streams`);
+
+    if (streamIds.length === 0) {
+      console.log(`[ChannelsPane] No streams to probe for channel ${channel.id}`);
+      return;
+    }
+
+    setProbingChannels((prev) => new Set(prev).add(channel.id));
+    try {
+      console.log(`[ChannelsPane] Calling probeBulkStreams for channel ${channel.id}`);
+      const result = await api.probeBulkStreams(streamIds);
+      console.log(`[ChannelsPane] probeBulkStreams succeeded for channel ${channel.id}, probed ${result.probed} streams`);
+
+      // Update stats map with results
+      if (result.results) {
+        setStreamStatsMap((prev) => {
+          const next = new Map(prev);
+          for (const stats of result.results) {
+            next.set(stats.stream_id, stats);
+          }
+          return next;
+        });
+      }
+    } catch (err) {
+      console.error(`[ChannelsPane] Failed to probe channel ${channel.id} streams:`, err);
+    } finally {
+      setProbingChannels((prev) => {
+        const next = new Set(prev);
+        next.delete(channel.id);
+        return next;
+      });
+    }
+  }, []);
+
+  // Handle probe group request - probes all streams in all channels of a group
+  // Uses the same backend probe logic as "Probe All Streams Now" but filtered to a single group
+  const handleProbeGroup = useCallback(async (groupId: number | 'ungrouped', groupName: string) => {
+    console.log(`[ChannelsPane] handleProbeGroup called for group ${groupId} (${groupName})`);
+
+    if (groupId === 'ungrouped') {
+      console.log(`[ChannelsPane] Cannot probe ungrouped channels via group probe`);
+      return;
+    }
+
+    setProbingGroups((prev) => new Set(prev).add(groupId));
+    try {
+      // Use the same backend probe logic as Settings -> Probe All Streams Now
+      // This ensures consistent filtering, logging, and channel discovery
+      // Pass skipM3uRefresh=true since this is an on-demand probe from UI
+      console.log(`[ChannelsPane] Calling probeAllStreams for group '${groupName}' (skipping M3U refresh)`);
+      const result = await api.probeAllStreams([groupName], true);
+      console.log(`[ChannelsPane] probeAllStreams started for group '${groupName}':`, result);
+
+      // Poll for probe completion to keep the spinner active
+      const pollInterval = setInterval(async () => {
+        try {
+          const progress = await api.getProbeProgress();
+          console.log(`[ChannelsPane] Probe progress for '${groupName}':`, progress);
+
+          if (!progress.in_progress) {
+            // Probe completed - clear the spinner
+            clearInterval(pollInterval);
+            setProbingGroups((prev) => {
+              const next = new Set(prev);
+              next.delete(groupId);
+              return next;
+            });
+            console.log(`[ChannelsPane] Probe completed for group '${groupName}'`);
+          }
+        } catch (err) {
+          // If we can't get progress, stop polling and clear spinner
+          console.error(`[ChannelsPane] Failed to get probe progress:`, err);
+          clearInterval(pollInterval);
+          setProbingGroups((prev) => {
+            const next = new Set(prev);
+            next.delete(groupId);
+            return next;
+          });
+        }
+      }, 2000); // Poll every 2 seconds
+
+    } catch (err) {
+      console.error(`[ChannelsPane] Failed to start probe for group '${groupName}':`, err);
+      // Clear spinner on error
+      setProbingGroups((prev) => {
+        const next = new Set(prev);
+        next.delete(groupId);
+        return next;
+      });
+    }
+  }, []);
 
   // Handle channel row click - in edit mode handles multi-select, outside edit mode expands
   const handleChannelClick = (channel: Channel, e: React.MouseEvent, groupChannelIds: number[]) => {
@@ -1641,6 +1605,61 @@ export function ChannelsPane({
       return;
     }
 
+    // Detect conflicts: channels that already have a different gracenote ID
+    const conflicts: GracenoteConflict[] = [];
+    const nonConflicts: LCNAssignment[] = [];
+
+    for (const assignment of assignments) {
+      const channel = channels.find(c => c.id === assignment.channelId);
+      if (channel?.tvc_guide_stationid && channel.tvc_guide_stationid !== assignment.tvc_guide_stationid) {
+        // Conflict: channel has a different gracenote ID
+        conflicts.push({
+          channelId: assignment.channelId,
+          channelName: assignment.channelName,
+          oldGracenoteId: channel.tvc_guide_stationid,
+          newGracenoteId: assignment.tvc_guide_stationid,
+        });
+      } else {
+        // No conflict: either no existing ID or same ID
+        nonConflicts.push(assignment);
+      }
+    }
+
+    // Handle based on conflict mode
+    if (conflicts.length > 0) {
+      if (gracenoteConflictMode === 'ask') {
+        // Show conflict modal for user to decide
+        setGracenoteConflicts(conflicts);
+        setPendingLCNAssignments(assignments);
+        gracenoteConflictModal.open();
+        return; // Don't process yet, wait for user input
+      } else if (gracenoteConflictMode === 'skip') {
+        // Skip conflicted assignments, only process non-conflicts
+        processLCNAssignments(nonConflicts);
+        return;
+      }
+      // If 'overwrite', fall through to process all assignments
+    }
+
+    // No conflicts or mode is 'overwrite': process all assignments
+    processLCNAssignments(assignments);
+  };
+
+  // Process LCN assignments (extracted for reuse)
+  const processLCNAssignments = (assignments: LCNAssignment[]) => {
+    if (!onStageUpdateChannel || !onStartBatch || !onEndBatch) {
+      return;
+    }
+
+    if (assignments.length === 0) {
+      // Close modal and clear selection
+      bulkLCNModal.close();
+      if (onClearChannelSelection) {
+        onClearChannelSelection();
+      }
+      return;
+    }
+
     // Use batch to group all assignments as a single undo operation
     onStartBatch(`Assign Gracenote ID to ${assignments.length} channels`);
     for (const assignment of assignments) {
@@ -1656,6 +1675,36 @@ export function ChannelsPane({
     if (onClearChannelSelection) {
       onClearChannelSelection();
     }
+  };
+
+  // Handle conflict resolution from modal
+  const handleGracenoteConflictResolve = (channelsToUpdate: number[]) => {
+    // User selected which channels to overwrite
+    const selectedAssignments = pendingLCNAssignments.filter(assignment =>
+      channelsToUpdate.includes(assignment.channelId)
+    );
+
+    // Also include non-conflicted assignments
+    const nonConflicts = pendingLCNAssignments.filter(assignment => {
+      const isConflict = gracenoteConflicts.some(c => c.channelId === assignment.channelId);
+      return !isConflict;
+    });
+
+    const allAssignments = [...nonConflicts, ...selectedAssignments];
+
+    // Close conflict modal and process assignments
+    gracenoteConflictModal.close();
+    setGracenoteConflicts([]);
+    setPendingLCNAssignments([]);
+
+    processLCNAssignments(allAssignments);
+  };
+
+  // Handle conflict modal cancel
+  const handleGracenoteConflictCancel = () => {
+    gracenoteConflictModal.close();
+    setGracenoteConflicts([]);
+    setPendingLCNAssignments([]);
   };
 
   // Handle normalize names
@@ -1702,6 +1751,218 @@ export function ChannelsPane({
       onStageReorderStreams(selectedChannelId, newStreamIds, description);
     }
   };
+
+  // Sort mode types
+  type SortMode = 'smart' | 'resolution' | 'bitrate' | 'framerate';
+
+  // Sort mode labels for journal/description
+  const SORT_MODE_LABELS: Record<SortMode, string> = {
+    smart: 'Smart Sort',
+    resolution: 'resolution',
+    bitrate: 'bitrate',
+    framerate: 'framerate',
+  };
+
+  // Get sort value for a stream based on criterion
+  const getSortValue = useCallback((stats: StreamStats | undefined, criterion: SortCriterion): number => {
+    if (!stats || stats.probe_status !== 'success') return -1;
+    switch (criterion) {
+      case 'resolution': {
+        if (!stats.resolution) return -1;
+        const match = stats.resolution.match(/(\d+)x(\d+)/);
+        return match ? parseInt(match[2], 10) : -1; // Return height
+      }
+      case 'bitrate':
+        return stats.video_bitrate ?? stats.bitrate ?? -1;
+      case 'framerate': {
+        if (!stats.fps) return -1;
+        const fps = parseFloat(stats.fps);
+        return isNaN(fps) ? -1 : fps;
+      }
+      default:
+        return -1;
+    }
+  }, []);
+
+  // Create comparator for multi-criteria sorting
+  const createMultiCriteriaSortComparator = useCallback((
+    statsMap: Map<number, StreamStats> | Record<number, StreamStats>,
+    priority: SortCriterion[]
+  ) => {
+    const getStats = (id: number): StreamStats | undefined => {
+      if (statsMap instanceof Map) {
+        return statsMap.get(id);
+      }
+      return statsMap[id];
+    };
+
+    return (aId: number, bId: number): number => {
+      const aStats = getStats(aId);
+      const bStats = getStats(bId);
+
+      // Check probe status FIRST if the setting is enabled - failed/timeout/pending streams sort to bottom
+      if (channelDefaults?.deprioritizeFailedStreams) {
+        const aProbeSuccess = aStats?.probe_status === 'success';
+        const bProbeSuccess = bStats?.probe_status === 'success';
+
+        // If one stream failed and the other succeeded, prioritize the successful one
+        if (aProbeSuccess && !bProbeSuccess) return -1; // a comes first (successful)
+        if (!aProbeSuccess && bProbeSuccess) return 1;  // b comes first (successful)
+
+        // If both failed/timeout/pending, maintain current order (stable sort)
+        if (!aProbeSuccess && !bProbeSuccess) return 0;
+      }
+
+      // Both streams succeeded (or setting disabled) - now sort by quality criteria
+      for (const criterion of priority) {
+        const aVal = getSortValue(aStats, criterion);
+        const bVal = getSortValue(bStats, criterion);
+
+        // Both have no data for this criterion - continue to next
+        if (aVal === -1 && bVal === -1) continue;
+
+        // One has no data - sort it to the end
+        if (aVal === -1) return 1;
+        if (bVal === -1) return -1;
+
+        // Both have data - compare (higher is better)
+        if (bVal !== aVal) return bVal - aVal;
+      }
+
+      // All criteria equal
+      return 0;
+    };
+  }, [getSortValue, channelDefaults?.deprioritizeFailedStreams]);
+
+  // Get effective sort priority based on mode, filtered by enabled criteria
+  const getEffectivePriority = useCallback((mode: SortMode): SortCriterion[] => {
+    const enabledMap = channelDefaults?.streamSortEnabled ?? { resolution: true, bitrate: true, framerate: true };
+
+    if (mode === 'smart') {
+      // Filter the priority list to only include enabled criteria
+      const priority = channelDefaults?.streamSortPriority ?? ['resolution', 'bitrate', 'framerate'];
+      return priority.filter(criterion => enabledMap[criterion]);
+    }
+    // Single criterion mode - just use that criterion (already enabled check done in UI)
+    return [mode as SortCriterion];
+  }, [channelDefaults?.streamSortPriority, channelDefaults?.streamSortEnabled]);
+
+  // Sort streams by specified mode (single channel)
+  const handleSortStreamsByMode = useCallback((mode: SortMode) => {
+    if (!selectedChannelId || !isEditMode || !onStageReorderStreams) return;
+
+    const channel = channels.find((c) => c.id === selectedChannelId);
+    const priority = getEffectivePriority(mode);
+    const comparator = createMultiCriteriaSortComparator(streamStatsMap, priority);
+
+    // Sort streams
+    const sortedStreams = [...channelStreams].sort((a, b) => comparator(a.id, b.id));
+
+    // Check if already sorted
+    const alreadySorted = sortedStreams.every((s, i) => s.id === channelStreams[i].id);
+    if (alreadySorted) return;
+
+    const newStreamIds = sortedStreams.map((s) => s.id);
+    const description = `Sorted streams by ${SORT_MODE_LABELS[mode]} in "${channel?.name || 'channel'}"`;
+
+    setChannelStreams(sortedStreams);
+    onStageReorderStreams(selectedChannelId, newStreamIds, description);
+  }, [selectedChannelId, isEditMode, onStageReorderStreams, channelStreams, streamStatsMap, channels, getEffectivePriority, createMultiCriteriaSortComparator]);
+
+  // State for bulk sort operation
+  const [bulkSortingByQuality, setBulkSortingByQuality] = useState(false);
+
+  // Bulk sort streams by mode for multiple channels
+  const handleBulkSortStreamsByMode = useCallback(async (channelIds: number[], mode: SortMode) => {
+    if (!isEditMode || !onStageReorderStreams || channelIds.length === 0) return;
+
+    setBulkSortingByQuality(true);
+    try {
+      // Get all channels to process
+      const channelsToProcess = channels.filter(ch => channelIds.includes(ch.id) && ch.streams.length > 1);
+      if (channelsToProcess.length === 0) {
+        setBulkSortingByQuality(false);
+        return;
+      }
+
+      // Collect all stream IDs
+      const allStreamIds = channelsToProcess.flatMap(ch => ch.streams);
+
+      // Fetch stats for all streams
+      const stats = await api.getStreamStatsByIds(allStreamIds);
+
+      // Get sort priority and create comparator
+      const priority = getEffectivePriority(mode);
+      const comparator = createMultiCriteriaSortComparator(stats, priority);
+
+      // Start batch operation
+      if (onStartBatch) {
+        const scope = channelIds.length === channels.length ? 'all channels' :
+          channelIds.length === 1 ? `"${channelsToProcess[0]?.name}"` :
+          `${channelsToProcess.length} channels`;
+        onStartBatch(`Sort streams by ${SORT_MODE_LABELS[mode]} in ${scope}`);
+      }
+
+      let changesCount = 0;
+      for (const channel of channelsToProcess) {
+        // Sort stream IDs
+        const sortedStreamIds = [...channel.streams].sort(comparator);
+
+        // Check if order changed
+        const changed = !sortedStreamIds.every((id, i) => id === channel.streams[i]);
+        if (changed) {
+          changesCount++;
+          onStageReorderStreams(channel.id, sortedStreamIds, `Sorted streams by ${SORT_MODE_LABELS[mode]} in "${channel.name}"`);
+        }
+      }
+
+      if (onEndBatch) {
+        onEndBatch();
+      }
+
+      // Update local channelStreams if current channel was affected
+      if (selectedChannelId && channelIds.includes(selectedChannelId)) {
+        const currentChannel = channels.find(ch => ch.id === selectedChannelId);
+        if (currentChannel) {
+          const sortedIds = [...currentChannel.streams].sort(comparator);
+          const newStreams = sortedIds.map(id => channelStreams.find(s => s.id === id)).filter((s): s is Stream => !!s);
+          if (newStreams.length === channelStreams.length) {
+            setChannelStreams(newStreams);
+          }
+        }
+      }
+
+      logger.info(`Bulk sort by ${SORT_MODE_LABELS[mode]}: ${changesCount} of ${channelsToProcess.length} channels reordered`);
+    } catch (err) {
+      logger.error(`Failed to bulk sort streams by ${SORT_MODE_LABELS[mode]}:`, err);
+    } finally {
+      setBulkSortingByQuality(false);
+    }
+  }, [isEditMode, onStageReorderStreams, channels, onStartBatch, onEndBatch, selectedChannelId, channelStreams, getEffectivePriority, createMultiCriteriaSortComparator]);
+
+  // Sort all channels' streams by mode
+  const handleSortAllStreamsByMode = useCallback((mode: SortMode) => {
+    const allChannelIds = channels.map(ch => ch.id);
+    handleBulkSortStreamsByMode(allChannelIds, mode);
+  }, [channels, handleBulkSortStreamsByMode]);
+
+  // Sort selected channels' streams by mode
+  const handleSortSelectedStreamsByMode = useCallback((mode: SortMode) => {
+    handleBulkSortStreamsByMode(Array.from(selectedChannelIds), mode);
+  }, [selectedChannelIds, handleBulkSortStreamsByMode]);
+
+  // Sort a group's channels' streams by mode
+  const handleSortGroupStreamsByMode = useCallback((groupId: number | 'ungrouped', mode: SortMode) => {
+    const groupChannelIds = channels
+      .filter(ch => (groupId === 'ungrouped' ? ch.channel_group_id === null : ch.channel_group_id === groupId))
+      .map(ch => ch.id);
+    handleBulkSortStreamsByMode(groupChannelIds, mode);
+  }, [channels, handleBulkSortStreamsByMode]);
+
+  // Legacy handler
+  const handleSortGroupStreamsByQuality = useCallback((groupId: number | 'ungrouped') => {
+    handleSortGroupStreamsByMode(groupId, 'smart');
+  }, [handleSortGroupStreamsByMode]);
 
   const sensors = useSensors(
     useSensor(PointerSensor, {
@@ -3799,6 +4060,12 @@ export function ChannelsPane({
           onSelectAll={handleSelectAllInGroup}
           onStreamDropOnGroup={handleStreamDropOnGroup}
           onContextMenu={(e) => handleGroupContextMenu(groupChannels.map(ch => ch.id), e)}
+          onProbeGroup={() => handleProbeGroup(groupId, groupName)}
+          isProbing={probingGroups.has(groupId)}
+          onSortStreamsByQuality={() => handleSortGroupStreamsByQuality(groupId)}
+          onSortStreamsByMode={(mode) => handleSortGroupStreamsByMode(groupId, mode)}
+          isSortingByQuality={bulkSortingByQuality}
+          enabledCriteria={channelDefaults?.streamSortEnabled}
         />
         {isExpanded && isEmpty && (
           <div className="group-channels empty-group-placeholder">
@@ -3900,7 +4167,7 @@ export function ChannelsPane({
                         <div className="drop-indicator-line" />
                       </div>
                     )}
-                    <SortableChannel
+                    <ChannelListItem
                       channel={channel}
                       isSelected={selectedChannelId === channel.id}
                       isMultiSelected={selectedChannelIds.has(channel.id)}
@@ -3934,6 +4201,8 @@ export function ChannelsPane({
                       onContextMenu={(e) => handleContextMenu(channel, e)}
                       channelUrl={dispatcharrUrl && channel.uuid ? `${dispatcharrUrl}/proxy/ts/stream/${channel.uuid}` : undefined}
                       showStreamUrls={showStreamUrls}
+                      onProbeChannel={() => handleProbeChannel(channel)}
+                      isProbing={probingChannels.has(channel.id)}
                     />
                     {selectedChannelId === channel.id && (
                       <div className="inline-streams">
@@ -3944,32 +4213,45 @@ export function ChannelsPane({
                             No streams assigned. Drag streams here to add.
                           </div>
                         ) : (
-                          <DndContext
-                            sensors={streamSensors}
-                            collisionDetection={closestCenter}
-                            onDragEnd={handleStreamDragEnd}
-                          >
-                            <SortableContext
-                              items={channelStreams.map((s) => s.id)}
-                              strategy={verticalListSortingStrategy}
-                            >
-                              <div className="inline-streams-list">
-                                {channelStreams.map((stream, index) => (
-                                  <div key={stream.id} className="inline-stream-row">
-                                    <span className="stream-priority">{index + 1}</span>
-                                    <SortableStreamItem
-                                      stream={stream}
-                                      providerName={providers.find((p) => p.id === stream.m3u_account)?.name ?? null}
-                                      isEditMode={isEditMode}
-                                      onRemove={handleRemoveStream}
-                                      onCopyUrl={stream.url ? () => handleCopyStreamUrl(stream.url!, stream.name) : undefined}
-                                      showStreamUrls={showStreamUrls}
-                                    />
-                                  </div>
-                                ))}
+                          <>
+                            {/* Stream toolbar - only in edit mode with multiple streams */}
+                            {isEditMode && onStageReorderStreams && channelStreams.length > 1 && (
+                              <div className="inline-streams-toolbar">
+                                <SortDropdownButton
+                                  onSortByMode={handleSortStreamsByMode}
+                                  className="sort-quality-btn-wrapper"
+                                  enabledCriteria={channelDefaults?.streamSortEnabled}
+                                />
                               </div>
-                            </SortableContext>
-                          </DndContext>
+                            )}
+                            <DndContext
+                              sensors={streamSensors}
+                              collisionDetection={closestCenter}
+                              onDragEnd={handleStreamDragEnd}
+                            >
+                              <SortableContext
+                                items={channelStreams.map((s) => s.id)}
+                                strategy={verticalListSortingStrategy}
+                              >
+                                <div className="inline-streams-list">
+                                  {channelStreams.map((stream, index) => (
+                                    <div key={stream.id} className="inline-stream-row">
+                                      <span className="stream-priority">{index + 1}</span>
+                                      <StreamListItem
+                                        stream={stream}
+                                        providerName={providers.find((p) => p.id === stream.m3u_account)?.name ?? null}
+                                        isEditMode={isEditMode}
+                                        onRemove={handleRemoveStream}
+                                        onCopyUrl={stream.url ? () => handleCopyStreamUrl(stream.url!, stream.name) : undefined}
+                                        showStreamUrls={showStreamUrls}
+                                        streamStats={streamStatsMap.get(stream.id) ?? null}
+                                      />
+                                    </div>
+                                  ))}
+                                </div>
+                              </SortableContext>
+                            </DndContext>
+                          </>
                         )}
                       </div>
                     )}
@@ -4085,6 +4367,12 @@ export function ChannelsPane({
                 >
                   <span className="material-icons">tag</span>
                 </button>
+                <SortDropdownButton
+                  onSortByMode={handleSortSelectedStreamsByMode}
+                  isLoading={bulkSortingByQuality}
+                  className="bulk-action-btn-wrapper"
+                  enabledCriteria={channelDefaults?.streamSortEnabled}
+                />
                 <button
                   className="bulk-action-btn bulk-action-btn--danger"
                   onClick={handleBulkDeleteClick}
@@ -4169,6 +4457,14 @@ export function ChannelsPane({
                 <span className="material-icons">visibility_off</span>
                 <span>Hidden</span>
               </button>
+              <SortDropdownButton
+                onSortByMode={handleSortAllStreamsByMode}
+                isLoading={bulkSortingByQuality}
+                showLabel={true}
+                labelText="Sort"
+                className="sort-all-quality-btn-wrapper"
+                enabledCriteria={channelDefaults?.streamSortEnabled}
+              />
             </>
           )}
           <button
@@ -4787,6 +5083,14 @@ export function ChannelsPane({
         epgData={epgData || []}
         onClose={() => bulkLCNModal.close()}
         onAssign={handleBulkLCNAssign}
+      />
+
+      {/* Gracenote Conflict Resolution Modal */}
+      <GracenoteConflictModal
+        isOpen={gracenoteConflictModal.isOpen}
+        conflicts={gracenoteConflicts}
+        onResolve={handleGracenoteConflictResolve}
+        onCancel={handleGracenoteConflictCancel}
       />
 
       {/* Normalize Names Modal */}

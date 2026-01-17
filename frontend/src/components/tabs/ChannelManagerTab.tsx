@@ -118,6 +118,9 @@ export interface ChannelManagerTabProps {
   // EPG matching settings
   epgAutoMatchThreshold?: number;
 
+  // Gracenote conflict handling
+  gracenoteConflictMode?: 'ask' | 'skip' | 'overwrite';
+
   // Refresh streams (bypasses cache)
   onRefreshStreams?: () => void;
 
@@ -278,6 +281,9 @@ export function ChannelManagerTab({
   // EPG matching settings
   epgAutoMatchThreshold = 80,
 
+  // Gracenote conflict handling
+  gracenoteConflictMode = 'ask',
+
   // Refresh streams
   onRefreshStreams,
 
@@ -381,6 +387,7 @@ export function ChannelManagerTab({
           onBulkStreamsDrop={onBulkStreamsDrop}
           showStreamUrls={showStreamUrls}
           epgAutoMatchThreshold={epgAutoMatchThreshold}
+          gracenoteConflictMode={gracenoteConflictMode}
           externalChannelToEdit={externalChannelToEdit}
           onExternalChannelEditHandled={onExternalChannelEditHandled}
         />

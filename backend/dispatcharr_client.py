@@ -78,11 +78,11 @@ class DispatcharrClient:
         headers = kwargs.pop("headers", {})
         headers["Authorization"] = f"Bearer {self.access_token}"
 
-        # Use extended timeout for EPG programs endpoint (large datasets)
+        # Use extended timeout for EPG grid endpoint (large channel counts)
         request_timeout = kwargs.pop("timeout", None)
-        if request_timeout is None and path == "/api/epg/programs/":
-            request_timeout = 120.0  # 2 minutes for EPG data
-            logger.debug(f"Using extended timeout ({request_timeout}s) for EPG programs request")
+        if request_timeout is None and path == "/api/epg/grid/":
+            request_timeout = 120.0  # 2 minutes for filtered EPG grid data
+            logger.debug(f"Using extended timeout ({request_timeout}s) for EPG grid request")
 
         try:
             response = await self._client.request(
@@ -725,23 +725,40 @@ class DispatcharrClient:
         return response.json()
 
     async def get_epg_grid(self, start: str = None, end: str = None) -> list:
-        """Get EPG programs.
+        """Get EPG programs for the guide grid.
 
-        Uses /api/epg/programs/ endpoint which returns all programs.
+        Uses /api/epg/grid/ endpoint which automatically filters to:
+        - Programs ending after 1 hour ago
+        - Programs starting before 24 hours from now
+
+        This endpoint does NOT support custom time ranges via parameters.
+        The time range is hard-coded on the Dispatcharr side.
 
         Args:
-            start: Optional start datetime in ISO format (not currently used)
-            end: Optional end datetime in ISO format (not currently used)
+            start: Ignored - kept for API compatibility
+            end: Ignored - kept for API compatibility
         """
-        response = await self._request("GET", "/api/epg/programs/")
+        response = await self._request("GET", "/api/epg/grid/")
         response.raise_for_status()
         data = response.json()
-        # Handle both list and dict responses
-        if isinstance(data, list):
-            return data
-        elif isinstance(data, dict):
-            return data.get("data", data.get("results", []))
-        return []
+
+        # DEBUG: Log the response structure to understand what we're getting
+        logger.debug(f"EPG grid response type: {type(data)}")
+        if isinstance(data, dict):
+            logger.debug(f"EPG grid response keys: {data.keys()}")
+            logger.debug(f"EPG grid data length: {len(data.get('data', []))} items")
+            if data.get('data') and len(data.get('data', [])) > 0:
+                logger.debug(f"EPG grid first item sample: {data['data'][0]}")
+        elif isinstance(data, list):
+            logger.debug(f"EPG grid list length: {len(data)} items")
+            if data and len(data) > 0:
+                logger.debug(f"EPG grid first item sample: {data[0]}")
+
+        # Dispatcharr returns {"data": [...]}
+        if isinstance(data, dict):
+            return data.get("data", [])
+        # Fallback for list response
+        return data if isinstance(data, list) else []
 
     # -------------------------------------------------------------------------
     # Stream Profiles
