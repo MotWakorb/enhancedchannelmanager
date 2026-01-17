@@ -133,11 +133,12 @@ interface SettingsTabProps {
   onSaved: () => void;
   onThemeChange?: (theme: Theme) => void;
   channelProfiles?: ChannelProfile[];
+  onProbeComplete?: () => void;
 }
 
 type SettingsPage = 'general' | 'channel-defaults' | 'appearance' | 'scheduled-tasks' | 'maintenance';
 
-export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: SettingsTabProps) {
+export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onProbeComplete }: SettingsTabProps) {
   const [activePage, setActivePage] = useState<SettingsPage>('general');
 
   // Connection settings
@@ -362,6 +363,8 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
           setProbingAll(false);
           // Reload probe history when probe completes
           loadProbeHistory();
+          // Notify parent to reload channels (auto-reorder may have changed stream order)
+          onProbeComplete?.();
           if (progress.status === 'completed') {
             const skippedMsg = progress.skipped_count > 0 ? `, Skipped: ${progress.skipped_count}` : '';
             setProbeAllResult({

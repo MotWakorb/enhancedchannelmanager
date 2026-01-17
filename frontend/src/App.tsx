@@ -1798,7 +1798,7 @@ function App() {
           {activeTab === 'logo-manager' && <LogoManagerTab />}
           {activeTab === 'journal' && <JournalTab />}
           {activeTab === 'stats' && <StatsTab />}
-          {activeTab === 'settings' && <SettingsTab onSaved={handleSettingsSaved} channelProfiles={channelProfiles} />}
+          {activeTab === 'settings' && <SettingsTab onSaved={handleSettingsSaved} channelProfiles={channelProfiles} onProbeComplete={loadChannels} />}
         </Suspense>
       </main>
 
