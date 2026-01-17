@@ -3156,6 +3156,189 @@ async def probe_single_stream(stream_id: int):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# -------------------------------------------------------------------------
+# Scheduled Tasks API
+# -------------------------------------------------------------------------
+
+class TaskConfigUpdate(BaseModel):
+    """Request model for updating task configuration."""
+    enabled: Optional[bool] = None
+    schedule_type: Optional[str] = None
+    interval_seconds: Optional[int] = None
+    cron_expression: Optional[str] = None
+    schedule_time: Optional[str] = None
+    timezone: Optional[str] = None
+
+
+@app.get("/api/tasks")
+async def list_tasks():
+    """Get all registered tasks with their status."""
+    try:
+        from task_registry import get_registry
+        registry = get_registry()
+        return {"tasks": registry.get_all_task_statuses()}
+    except Exception as e:
+        logger.error(f"Failed to list tasks: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/tasks/{task_id}")
+async def get_task(task_id: str):
+    """Get status for a specific task."""
+    try:
+        from task_registry import get_registry
+        registry = get_registry()
+        status = registry.get_task_status(task_id)
+        if status is None:
+            raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
+        return status
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get task {task_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.patch("/api/tasks/{task_id}")
+async def update_task(task_id: str, config: TaskConfigUpdate):
+    """Update task configuration."""
+    try:
+        from task_registry import get_registry
+        registry = get_registry()
+
+        result = registry.update_task_config(
+            task_id=task_id,
+            enabled=config.enabled,
+            schedule_type=config.schedule_type,
+            interval_seconds=config.interval_seconds,
+            cron_expression=config.cron_expression,
+            schedule_time=config.schedule_time,
+            timezone=config.timezone,
+        )
+
+        if result is None:
+            raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
+
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to update task {task_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/tasks/{task_id}/run")
+async def run_task(task_id: str):
+    """Manually trigger a task execution."""
+    try:
+        from task_engine import get_engine
+        engine = get_engine()
+        result = await engine.run_task(task_id)
+
+        if result is None:
+            raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
+
+        return result.to_dict()
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to run task {task_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/tasks/{task_id}/cancel")
+async def cancel_task(task_id: str):
+    """Cancel a running task."""
+    try:
+        from task_engine import get_engine
+        engine = get_engine()
+        return engine.cancel_task(task_id)
+    except Exception as e:
+        logger.error(f"Failed to cancel task {task_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/tasks/{task_id}/history")
+async def get_task_history(task_id: str, limit: int = 50, offset: int = 0):
+    """Get execution history for a task."""
+    try:
+        from task_engine import get_engine
+        engine = get_engine()
+        history = engine.get_task_history(task_id=task_id, limit=limit, offset=offset)
+        return {"history": history}
+    except Exception as e:
+        logger.error(f"Failed to get history for task {task_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/tasks/engine/status")
+async def get_engine_status():
+    """Get task engine status."""
+    try:
+        from task_engine import get_engine
+        engine = get_engine()
+        return engine.get_status()
+    except Exception as e:
+        logger.error(f"Failed to get engine status: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/tasks/history/all")
+async def get_all_task_history(limit: int = 100, offset: int = 0):
+    """Get execution history for all tasks."""
+    try:
+        from task_engine import get_engine
+        engine = get_engine()
+        history = engine.get_task_history(task_id=None, limit=limit, offset=offset)
+        return {"history": history}
+    except Exception as e:
+        logger.error(f"Failed to get all task history: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/cron/presets")
+async def get_cron_presets():
+    """Get available cron presets for task scheduling."""
+    try:
+        from cron_parser import get_preset_list
+        return {"presets": get_preset_list()}
+    except Exception as e:
+        logger.error(f"Failed to get cron presets: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class CronValidateRequest(BaseModel):
+    """Request to validate a cron expression."""
+    expression: str
+
+
+@app.post("/api/cron/validate")
+async def validate_cron(request: CronValidateRequest):
+    """Validate a cron expression."""
+    try:
+        from cron_parser import validate_cron_expression, describe_cron_expression, get_next_n_run_times
+
+        is_valid, error = validate_cron_expression(request.expression)
+
+        if not is_valid:
+            return {
+                "valid": False,
+                "error": error,
+            }
+
+        # Get next run times for valid expressions
+        next_times = get_next_n_run_times(request.expression, n=5)
+
+        return {
+            "valid": True,
+            "description": describe_cron_expression(request.expression),
+            "next_runs": [t.isoformat() + "Z" for t in next_times],
+        }
+    except Exception as e:
+        logger.error(f"Failed to validate cron expression: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # Serve static files in production
 static_dir = os.path.join(os.path.dirname(__file__), "static")
 if os.path.exists(static_dir):

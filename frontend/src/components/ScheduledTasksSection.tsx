@@ -1,0 +1,385 @@
+import { useState, useEffect, useCallback } from 'react';
+import * as api from '../services/api';
+import type { TaskStatus } from '../services/api';
+import { logger } from '../utils/logger';
+import { TaskEditorModal } from './TaskEditorModal';
+import { TaskHistoryPanel } from './TaskHistoryPanel';
+
+interface ScheduledTasksSectionProps {
+  userTimezone?: string;
+}
+
+function formatDateTime(isoString: string | null): string {
+  if (!isoString) return 'Never';
+  const date = new Date(isoString);
+  return date.toLocaleString();
+}
+
+function formatSchedule(task: TaskStatus): string {
+  const { schedule } = task;
+  if (schedule.schedule_type === 'manual') {
+    return 'Manual only';
+  }
+  if (schedule.schedule_type === 'interval' && schedule.interval_seconds > 0) {
+    const hours = schedule.interval_seconds / 3600;
+    if (hours >= 1) {
+      return `Every ${hours} hour${hours !== 1 ? 's' : ''}`;
+    }
+    const minutes = schedule.interval_seconds / 60;
+    return `Every ${minutes} minute${minutes !== 1 ? 's' : ''}`;
+  }
+  if (schedule.schedule_type === 'cron' && schedule.cron_expression) {
+    return `Cron: ${schedule.cron_expression}`;
+  }
+  if (schedule.schedule_time) {
+    return `Daily at ${schedule.schedule_time}`;
+  }
+  return 'Not scheduled';
+}
+
+function TaskCard({ task, onRunNow, onToggleEnabled, onEdit, isRunning }: {
+  task: TaskStatus;
+  onRunNow: (taskId: string) => void;
+  onToggleEnabled: (taskId: string, enabled: boolean) => void;
+  onEdit: (task: TaskStatus) => void;
+  isRunning: boolean;
+}) {
+  const [showHistory, setShowHistory] = useState(false);
+
+  const statusIcon = () => {
+    if (isRunning || task.status === 'running') {
+      return <span className="material-icons" style={{ color: '#3498db', animation: 'spin 1s linear infinite' }}>sync</span>;
+    }
+    if (!task.enabled) {
+      return <span className="material-icons" style={{ color: 'var(--text-muted)' }}>pause_circle</span>;
+    }
+    return <span className="material-icons" style={{ color: '#2ecc71' }}>check_circle</span>;
+  };
+
+  return (
+    <div style={{
+      backgroundColor: 'var(--bg-secondary)',
+      border: '1px solid var(--border-color)',
+      borderRadius: '8px',
+      marginBottom: '1rem',
+      overflow: 'hidden',
+    }}>
+      {/* Header */}
+      <div style={{
+        display: 'flex',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        padding: '1rem',
+        borderBottom: showHistory ? '1px solid var(--border-color)' : 'none',
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+          {statusIcon()}
+          <div>
+            <div style={{ fontWeight: 600, fontSize: '1rem' }}>{task.task_name}</div>
+            <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>{task.task_description}</div>
+          </div>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+          {/* Enable/Disable toggle */}
+          <label style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '0.5rem',
+            cursor: 'pointer',
+            fontSize: '0.85rem',
+            color: 'var(--text-secondary)',
+          }}>
+            <input
+              type="checkbox"
+              checked={task.enabled}
+              onChange={(e) => onToggleEnabled(task.task_id, e.target.checked)}
+              style={{ accentColor: 'var(--accent-primary)' }}
+            />
+            Enabled
+          </label>
+          {/* Run Now button */}
+          <button
+            onClick={() => onRunNow(task.task_id)}
+            disabled={isRunning || task.status === 'running'}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.25rem',
+              padding: '0.5rem 0.75rem',
+              backgroundColor: 'var(--accent-primary)',
+              color: 'white',
+              border: 'none',
+              borderRadius: '4px',
+              cursor: isRunning ? 'not-allowed' : 'pointer',
+              opacity: isRunning ? 0.6 : 1,
+              fontSize: '0.85rem',
+            }}
+          >
+            <span className="material-icons" style={{ fontSize: '16px' }}>play_arrow</span>
+            Run Now
+          </button>
+          {/* Edit button */}
+          <button
+            onClick={() => onEdit(task)}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.25rem',
+              padding: '0.5rem 0.75rem',
+              backgroundColor: 'var(--bg-tertiary)',
+              color: 'var(--text-primary)',
+              border: '1px solid var(--border-color)',
+              borderRadius: '4px',
+              cursor: 'pointer',
+              fontSize: '0.85rem',
+            }}
+          >
+            <span className="material-icons" style={{ fontSize: '16px' }}>edit</span>
+            Edit
+          </button>
+          {/* History toggle */}
+          <button
+            onClick={() => setShowHistory(!showHistory)}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.25rem',
+              padding: '0.5rem 0.75rem',
+              backgroundColor: 'var(--bg-tertiary)',
+              color: 'var(--text-primary)',
+              border: '1px solid var(--border-color)',
+              borderRadius: '4px',
+              cursor: 'pointer',
+              fontSize: '0.85rem',
+            }}
+          >
+            <span className="material-icons" style={{ fontSize: '16px' }}>
+              {showHistory ? 'expand_less' : 'expand_more'}
+            </span>
+            History
+          </button>
+        </div>
+      </div>
+
+      {/* Status info */}
+      <div style={{
+        display: 'grid',
+        gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
+        gap: '1rem',
+        padding: '1rem',
+        backgroundColor: 'var(--bg-tertiary)',
+        fontSize: '0.85rem',
+      }}>
+        <div>
+          <div style={{ color: 'var(--text-muted)', marginBottom: '0.25rem' }}>Schedule</div>
+          <div>{formatSchedule(task)}</div>
+        </div>
+        <div>
+          <div style={{ color: 'var(--text-muted)', marginBottom: '0.25rem' }}>Last Run</div>
+          <div>{formatDateTime(task.last_run)}</div>
+        </div>
+        <div>
+          <div style={{ color: 'var(--text-muted)', marginBottom: '0.25rem' }}>Next Run</div>
+          <div>{task.enabled ? formatDateTime(task.next_run) : 'Disabled'}</div>
+        </div>
+        <div>
+          <div style={{ color: 'var(--text-muted)', marginBottom: '0.25rem' }}>Status</div>
+          <div style={{
+            color: task.status === 'running' ? '#3498db' :
+                   task.status === 'failed' ? '#e74c3c' :
+                   task.enabled ? '#2ecc71' : 'var(--text-muted)',
+          }}>
+            {task.status.charAt(0).toUpperCase() + task.status.slice(1)}
+          </div>
+        </div>
+      </div>
+
+      {/* Progress bar when running */}
+      {(isRunning || task.status === 'running') && task.progress.total > 0 && (
+        <div style={{ padding: '0 1rem 1rem 1rem' }}>
+          <div style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            marginBottom: '0.5rem',
+            fontSize: '0.85rem',
+          }}>
+            <span>{task.progress.current_item || 'Processing...'}</span>
+            <span>{task.progress.current} / {task.progress.total} ({task.progress.percentage}%)</span>
+          </div>
+          <div style={{
+            height: '6px',
+            backgroundColor: 'var(--bg-tertiary)',
+            borderRadius: '3px',
+            overflow: 'hidden',
+          }}>
+            <div style={{
+              width: `${task.progress.percentage}%`,
+              height: '100%',
+              backgroundColor: '#3498db',
+              transition: 'width 0.3s ease',
+            }} />
+          </div>
+          <div style={{
+            display: 'flex',
+            gap: '1rem',
+            marginTop: '0.5rem',
+            fontSize: '0.8rem',
+          }}>
+            <span style={{ color: '#2ecc71' }}>Success: {task.progress.success_count}</span>
+            <span style={{ color: '#e74c3c' }}>Failed: {task.progress.failed_count}</span>
+            {task.progress.skipped_count > 0 && (
+              <span style={{ color: '#f39c12' }}>Skipped: {task.progress.skipped_count}</span>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* History panel */}
+      <TaskHistoryPanel taskId={task.task_id} visible={showHistory} />
+    </div>
+  );
+}
+
+export function ScheduledTasksSection({ userTimezone: _userTimezone }: ScheduledTasksSectionProps) {
+  // userTimezone can be used in future for display formatting
+  void _userTimezone;
+  const [tasks, setTasks] = useState<TaskStatus[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [runningTasks, setRunningTasks] = useState<Set<string>>(new Set());
+  const [error, setError] = useState<string | null>(null);
+  const [editingTask, setEditingTask] = useState<TaskStatus | null>(null);
+
+  const loadTasks = useCallback(async () => {
+    try {
+      const result = await api.getTasks();
+      setTasks(result.tasks);
+      setError(null);
+    } catch (err) {
+      logger.error('Failed to load tasks', err);
+      setError('Failed to load scheduled tasks');
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadTasks();
+    // Poll for updates every 5 seconds
+    const interval = setInterval(loadTasks, 5000);
+    return () => clearInterval(interval);
+  }, [loadTasks]);
+
+  const handleRunNow = async (taskId: string) => {
+    setRunningTasks((prev) => new Set(prev).add(taskId));
+    try {
+      const result = await api.runTask(taskId);
+      logger.info(`Task ${taskId} completed`, result);
+      // Reload tasks to get updated status
+      await loadTasks();
+    } catch (err) {
+      logger.error(`Failed to run task ${taskId}`, err);
+    } finally {
+      setRunningTasks((prev) => {
+        const next = new Set(prev);
+        next.delete(taskId);
+        return next;
+      });
+    }
+  };
+
+  const handleToggleEnabled = async (taskId: string, enabled: boolean) => {
+    try {
+      await api.updateTask(taskId, { enabled });
+      await loadTasks();
+    } catch (err) {
+      logger.error(`Failed to update task ${taskId}`, err);
+    }
+  };
+
+  if (loading) {
+    return (
+      <div style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>
+        Loading scheduled tasks...
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div style={{ padding: '2rem', textAlign: 'center', color: '#e74c3c' }}>
+        {error}
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <div style={{
+        display: 'flex',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        marginBottom: '1.5rem',
+      }}>
+        <div>
+          <h2 style={{ margin: 0, fontSize: '1.5rem' }}>Scheduled Tasks</h2>
+          <p style={{ margin: '0.5rem 0 0 0', color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
+            Manage automated tasks like EPG refresh, M3U refresh, and database cleanup
+          </p>
+        </div>
+        <button
+          onClick={loadTasks}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '0.25rem',
+            padding: '0.5rem 0.75rem',
+            backgroundColor: 'var(--bg-tertiary)',
+            color: 'var(--text-primary)',
+            border: '1px solid var(--border-color)',
+            borderRadius: '4px',
+            cursor: 'pointer',
+            fontSize: '0.85rem',
+          }}
+        >
+          <span className="material-icons" style={{ fontSize: '16px' }}>refresh</span>
+          Refresh
+        </button>
+      </div>
+
+      {tasks.length === 0 ? (
+        <div style={{
+          padding: '3rem',
+          textAlign: 'center',
+          color: 'var(--text-secondary)',
+          backgroundColor: 'var(--bg-secondary)',
+          borderRadius: '8px',
+        }}>
+          <span className="material-icons" style={{ fontSize: '48px', marginBottom: '1rem', display: 'block' }}>
+            schedule
+          </span>
+          No scheduled tasks available
+        </div>
+      ) : (
+        tasks.map((task) => (
+          <TaskCard
+            key={task.task_id}
+            task={task}
+            onRunNow={handleRunNow}
+            onToggleEnabled={handleToggleEnabled}
+            onEdit={setEditingTask}
+            isRunning={runningTasks.has(task.task_id)}
+          />
+        ))
+      )}
+
+      {/* Task Editor Modal */}
+      {editingTask && (
+        <TaskEditorModal
+          task={editingTask}
+          onClose={() => setEditingTask(null)}
+          onSaved={loadTasks}
+        />
+      )}
+    </div>
+  );
+}

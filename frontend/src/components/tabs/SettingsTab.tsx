@@ -7,6 +7,7 @@ import { logger } from '../../utils/logger';
 import { copyToClipboard } from '../../utils/clipboard';
 import type { LogLevel as FrontendLogLevel } from '../../utils/logger';
 import { DeleteOrphanedGroupsModal } from '../DeleteOrphanedGroupsModal';
+import { ScheduledTasksSection } from '../ScheduledTasksSection';
 import {
   DndContext,
   closestCenter,
@@ -134,7 +135,7 @@ interface SettingsTabProps {
   channelProfiles?: ChannelProfile[];
 }
 
-type SettingsPage = 'general' | 'channel-defaults' | 'appearance' | 'maintenance';
+type SettingsPage = 'general' | 'channel-defaults' | 'appearance' | 'scheduled-tasks' | 'maintenance';
 
 export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: SettingsTabProps) {
   const [activePage, setActivePage] = useState<SettingsPage>('general');
@@ -2223,6 +2224,13 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
             Appearance
           </li>
           <li
+            className={`settings-nav-item ${activePage === 'scheduled-tasks' ? 'active' : ''}`}
+            onClick={() => setActivePage('scheduled-tasks')}
+          >
+            <span className="material-icons">schedule</span>
+            Scheduled Tasks
+          </li>
+          <li
             className={`settings-nav-item ${activePage === 'maintenance' ? 'active' : ''}`}
             onClick={() => setActivePage('maintenance')}
           >
@@ -2313,6 +2321,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
         {activePage === 'general' && renderGeneralPage()}
         {activePage === 'channel-defaults' && renderChannelDefaultsPage()}
         {activePage === 'appearance' && renderAppearancePage()}
+        {activePage === 'scheduled-tasks' && <ScheduledTasksSection userTimezone={userTimezone} />}
         {activePage === 'maintenance' && renderMaintenancePage()}
       </div>
 

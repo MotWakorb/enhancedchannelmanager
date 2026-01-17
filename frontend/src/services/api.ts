@@ -1334,3 +1334,163 @@ export async function resetProbeState(): Promise<{ status: string; message: stri
     method: 'POST',
   }) as Promise<{ status: string; message: string }>;
 }
+
+// -------------------------------------------------------------------------
+// Scheduled Tasks API
+// -------------------------------------------------------------------------
+
+export interface TaskScheduleConfig {
+  schedule_type: 'interval' | 'cron' | 'manual';
+  interval_seconds: number;
+  cron_expression: string;
+  schedule_time: string;
+  timezone: string;
+}
+
+export interface TaskProgress {
+  total: number;
+  current: number;
+  percentage: number;
+  status: string;
+  current_item: string;
+  success_count: number;
+  failed_count: number;
+  skipped_count: number;
+  started_at: string | null;
+}
+
+export interface TaskStatus {
+  task_id: string;
+  task_name: string;
+  task_description: string;
+  status: 'idle' | 'scheduled' | 'running' | 'paused' | 'cancelled' | 'completed' | 'failed';
+  enabled: boolean;
+  progress: TaskProgress;
+  schedule: TaskScheduleConfig;
+  last_run: string | null;
+  next_run: string | null;
+}
+
+export interface TaskExecution {
+  id: number;
+  task_id: string;
+  started_at: string;
+  completed_at: string | null;
+  duration_seconds: number | null;
+  status: 'running' | 'completed' | 'failed' | 'cancelled';
+  success: boolean | null;
+  message: string | null;
+  error: string | null;
+  total_items: number;
+  success_count: number;
+  failed_count: number;
+  skipped_count: number;
+  details: Record<string, unknown> | null;
+  triggered_by: 'scheduled' | 'manual' | 'api';
+}
+
+export interface TaskConfigUpdate {
+  enabled?: boolean;
+  schedule_type?: 'interval' | 'cron' | 'manual';
+  interval_seconds?: number;
+  cron_expression?: string;
+  schedule_time?: string;
+  timezone?: string;
+}
+
+export interface CronPreset {
+  name: string;
+  expression: string;
+  description: string;
+}
+
+export interface CronValidationResult {
+  valid: boolean;
+  error?: string;
+  description?: string;
+  next_runs?: string[];
+}
+
+export interface TaskEngineStatus {
+  running: boolean;
+  check_interval: number;
+  max_concurrent: number;
+  active_tasks: string[];
+  active_task_count: number;
+  registered_task_count: number;
+}
+
+export async function getTasks(): Promise<{ tasks: TaskStatus[] }> {
+  return fetchJson(`${API_BASE}/tasks`, {
+    method: 'GET',
+  });
+}
+
+export async function getTask(taskId: string): Promise<TaskStatus> {
+  return fetchJson(`${API_BASE}/tasks/${encodeURIComponent(taskId)}`, {
+    method: 'GET',
+  });
+}
+
+export async function updateTask(taskId: string, config: TaskConfigUpdate): Promise<TaskStatus> {
+  return fetchJson(`${API_BASE}/tasks/${encodeURIComponent(taskId)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(config),
+  });
+}
+
+export async function runTask(taskId: string): Promise<{
+  success: boolean;
+  message: string;
+  started_at: string;
+  completed_at: string;
+  total_items: number;
+  success_count: number;
+  failed_count: number;
+  skipped_count: number;
+}> {
+  return fetchJson(`${API_BASE}/tasks/${encodeURIComponent(taskId)}/run`, {
+    method: 'POST',
+  });
+}
+
+export async function cancelTask(taskId: string): Promise<{ status: string; message: string }> {
+  return fetchJson(`${API_BASE}/tasks/${encodeURIComponent(taskId)}/cancel`, {
+    method: 'POST',
+  });
+}
+
+export async function getTaskHistory(taskId: string, limit = 50, offset = 0): Promise<{ history: TaskExecution[] }> {
+  const query = buildQuery({ limit, offset });
+  return fetchJson(`${API_BASE}/tasks/${encodeURIComponent(taskId)}/history${query}`, {
+    method: 'GET',
+  });
+}
+
+export async function getAllTaskHistory(limit = 100, offset = 0): Promise<{ history: TaskExecution[] }> {
+  const query = buildQuery({ limit, offset });
+  return fetchJson(`${API_BASE}/tasks/history/all${query}`, {
+    method: 'GET',
+  });
+}
+
+export async function getTaskEngineStatus(): Promise<TaskEngineStatus> {
+  return fetchJson(`${API_BASE}/tasks/engine/status`, {
+    method: 'GET',
+  });
+}
+
+export async function getCronPresets(): Promise<{ presets: CronPreset[] }> {
+  return fetchJson(`${API_BASE}/cron/presets`, {
+    method: 'GET',
+  });
+}
+
+export async function validateCronExpression(expression: string): Promise<CronValidationResult> {
+  return fetchJson(`${API_BASE}/cron/validate`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ expression }),
+  });
+}

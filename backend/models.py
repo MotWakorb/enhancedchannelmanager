@@ -2,7 +2,7 @@
 SQLAlchemy ORM models for the Journal and Bandwidth tracking features.
 """
 from datetime import datetime, date
-from sqlalchemy import Column, Integer, BigInteger, String, Text, Boolean, DateTime, Date, Index
+from sqlalchemy import Column, Integer, BigInteger, String, Text, Boolean, DateTime, Date, Float, Index
 from database import Base
 
 
@@ -197,3 +197,119 @@ class StreamStats(Base):
 
     def __repr__(self):
         return f"<StreamStats(stream_id={self.stream_id}, name={self.stream_name}, status={self.probe_status})>"
+
+
+class ScheduledTask(Base):
+    """
+    Configuration for a scheduled task.
+    One row per task type with its schedule and settings.
+    """
+    __tablename__ = "scheduled_tasks"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    task_id = Column(String(50), nullable=False, unique=True)  # e.g., "stream_probe", "epg_refresh"
+    task_name = Column(String(100), nullable=False)  # Human-readable name
+    description = Column(Text, nullable=True)  # Task description
+    enabled = Column(Boolean, default=True, nullable=False)  # Is task enabled
+    # Schedule configuration
+    schedule_type = Column(String(20), nullable=False, default="manual")  # "interval", "cron", "manual"
+    interval_seconds = Column(Integer, nullable=True)  # For interval scheduling
+    cron_expression = Column(String(100), nullable=True)  # For cron scheduling
+    schedule_time = Column(String(10), nullable=True)  # HH:MM for daily scheduling
+    timezone = Column(String(50), nullable=True)  # IANA timezone name
+    # Task-specific configuration (JSON)
+    config = Column(Text, nullable=True)  # JSON with task-specific settings
+    # Timestamps
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+    last_run_at = Column(DateTime, nullable=True)  # Last execution start
+    next_run_at = Column(DateTime, nullable=True)  # Next scheduled execution
+
+    __table_args__ = (
+        Index("idx_scheduled_task_id", task_id),
+        Index("idx_scheduled_task_enabled", enabled),
+        Index("idx_scheduled_task_next_run", next_run_at),
+    )
+
+    def to_dict(self) -> dict:
+        """Convert to dictionary for API responses."""
+        import json
+        return {
+            "id": self.id,
+            "task_id": self.task_id,
+            "task_name": self.task_name,
+            "description": self.description,
+            "enabled": self.enabled,
+            "schedule_type": self.schedule_type,
+            "interval_seconds": self.interval_seconds,
+            "cron_expression": self.cron_expression,
+            "schedule_time": self.schedule_time,
+            "timezone": self.timezone,
+            "config": json.loads(self.config) if self.config else None,
+            "created_at": self.created_at.isoformat() + "Z" if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() + "Z" if self.updated_at else None,
+            "last_run_at": self.last_run_at.isoformat() + "Z" if self.last_run_at else None,
+            "next_run_at": self.next_run_at.isoformat() + "Z" if self.next_run_at else None,
+        }
+
+    def __repr__(self):
+        return f"<ScheduledTask(task_id={self.task_id}, enabled={self.enabled})>"
+
+
+class TaskExecution(Base):
+    """
+    Record of a task execution.
+    One row per execution attempt with results.
+    """
+    __tablename__ = "task_executions"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    task_id = Column(String(50), nullable=False)  # References ScheduledTask.task_id
+    # Execution timing
+    started_at = Column(DateTime, nullable=False)
+    completed_at = Column(DateTime, nullable=True)
+    duration_seconds = Column(Float, nullable=True)
+    # Execution result
+    status = Column(String(20), nullable=False)  # "running", "completed", "failed", "cancelled"
+    success = Column(Boolean, nullable=True)  # True if completed successfully
+    message = Column(Text, nullable=True)  # Summary message
+    error = Column(Text, nullable=True)  # Error message if failed
+    # Counters
+    total_items = Column(Integer, default=0, nullable=False)
+    success_count = Column(Integer, default=0, nullable=False)
+    failed_count = Column(Integer, default=0, nullable=False)
+    skipped_count = Column(Integer, default=0, nullable=False)
+    # Details (JSON)
+    details = Column(Text, nullable=True)  # JSON with execution details
+    # Trigger info
+    triggered_by = Column(String(20), default="scheduled", nullable=False)  # "scheduled", "manual", "api"
+
+    __table_args__ = (
+        Index("idx_task_exec_task_id", task_id),
+        Index("idx_task_exec_started_at", started_at.desc()),
+        Index("idx_task_exec_status", status),
+    )
+
+    def to_dict(self) -> dict:
+        """Convert to dictionary for API responses."""
+        import json
+        return {
+            "id": self.id,
+            "task_id": self.task_id,
+            "started_at": self.started_at.isoformat() + "Z" if self.started_at else None,
+            "completed_at": self.completed_at.isoformat() + "Z" if self.completed_at else None,
+            "duration_seconds": self.duration_seconds,
+            "status": self.status,
+            "success": self.success,
+            "message": self.message,
+            "error": self.error,
+            "total_items": self.total_items,
+            "success_count": self.success_count,
+            "failed_count": self.failed_count,
+            "skipped_count": self.skipped_count,
+            "details": json.loads(self.details) if self.details else None,
+            "triggered_by": self.triggered_by,
+        }
+
+    def __repr__(self):
+        return f"<TaskExecution(id={self.id}, task_id={self.task_id}, status={self.status})>"
