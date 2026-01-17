@@ -43,6 +43,7 @@ A professional-grade web interface for managing IPTV configurations with Dispatc
 - **Channel Groups** - Organize channels into groups for better organization
 - **Group Channel Range** - Each group header displays the channel number range (e.g., #100–150)
 - **Delete Groups** - Delete channel groups with option to also delete contained channels
+- **Delete Orphaned Groups** - Automatically detect and remove channel groups that have no streams, no channels, and no M3U association (groups left behind after M3U account deletions)
 - **Bulk Delete** - Select multiple channels and delete them at once
 - **Search & Filter** - Search channels by name, filter by one or more groups
 - **Inline Stream Display** - View assigned streams directly in the channel list
@@ -257,8 +258,10 @@ Automated stream health checking:
 - **Manual Probe** - Trigger an immediate probe of all streams
 - **Probe Progress** - Real-time progress bar with success/failed/skipped counts
 - **Probe History** - View past probe results with timestamps and statistics
+- **Auto-Reorder After Probe** - Automatically reorder streams by quality and status after scheduled probes complete
 - **Parallel Probing** - Streams from different M3U accounts probe concurrently
 - **M3U Connection Awareness** - Respects M3U max connection limits during probing
+- **Persistent History** - Probe results saved to `/config/probe_history.json` and persist across container restarts
 
 #### Stream Sort Priority
 Configure how streams are automatically sorted within channels:
@@ -382,9 +385,11 @@ uvicorn main:app --reload
 
 ### Channel Groups
 - `GET /api/channel-groups` - List all groups
+- `GET /api/channel-groups/orphaned` - List orphaned groups (no streams, channels, or M3U association)
 - `POST /api/channel-groups` - Create group
 - `PATCH /api/channel-groups/{id}` - Update group
 - `DELETE /api/channel-groups/{id}` - Delete group
+- `DELETE /api/channel-groups/orphaned` - Delete orphaned groups (optionally specify group IDs)
 
 ### Streams
 - `GET /api/streams` - List streams (paginated, searchable, filterable)
@@ -434,6 +439,41 @@ uvicorn main:app --reload
 
 ### Health
 - `GET /api/health` - Health check
+
+## Utility Scripts
+
+### Search Stream Script
+
+The `scripts/search-stream.sh` utility allows you to search for streams in Dispatcharr via the command line:
+
+```bash
+# Make executable
+chmod +x scripts/search-stream.sh
+
+# Search for a stream
+./scripts/search-stream.sh http://dispatcharr:9191 admin password "HBO Max HD"
+
+# Search with special characters
+./scripts/search-stream.sh http://dispatcharr:9191 admin password "[PPV EVENT 38]"
+
+# Search partial name
+./scripts/search-stream.sh http://dispatcharr:9191 admin password "ESPN"
+```
+
+**Features:**
+- Handles authentication automatically
+- URL-encodes special characters and spaces
+- Returns pretty-printed JSON results
+- Supports searching across all M3U accounts
+
+**Extract specific fields:**
+```bash
+# Get just name and ID
+./scripts/search-stream.sh http://dispatcharr:9191 admin pass "HBO" | jq '.results[] | {id, name}'
+
+# Get count of results
+./scripts/search-stream.sh http://dispatcharr:9191 admin pass "ESPN" | jq '.count'
+```
 
 ## Keyboard Shortcuts
 
