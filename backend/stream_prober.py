@@ -719,6 +719,7 @@ class StreamProber:
         """Fetch all streams from Dispatcharr (paginated)."""
         all_streams = []
         page = 1
+        page_limit = 200  # Safety limit: 200 pages * 500 = 100,000 streams max
         while True:
             try:
                 result = await self.client.get_streams(page=page, page_size=500)
@@ -727,7 +728,11 @@ class StreamProber:
                 if not result.get("next"):
                     break
                 page += 1
-                if page > 50:  # Safety limit
+                if page > page_limit:
+                    logger.warning(
+                        f"[PROBE-MATCH] Pagination limit reached ({page_limit} pages, {len(all_streams)} streams). "
+                        f"Some streams may be missing. Consider investigating if channels are not being probed."
+                    )
                     break
             except Exception as e:
                 logger.error(f"Failed to fetch streams page {page}: {e}")
