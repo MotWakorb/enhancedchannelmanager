@@ -896,16 +896,19 @@ class StreamProber:
         try:
             # Determine which groups to filter by
             groups_to_filter = channel_groups_override if channel_groups_override is not None else self.probe_channel_groups
+            logger.info(f"[AUTO-REORDER] groups_to_filter={groups_to_filter}, channel_groups_override={channel_groups_override}, self.probe_channel_groups={self.probe_channel_groups}")
 
             # Get selected group IDs
             selected_group_ids = set()
             if groups_to_filter:
                 try:
                     all_groups = await self.client.get_channel_groups()
+                    available_group_names = [g.get("name") for g in all_groups]
+                    logger.info(f"[AUTO-REORDER] Available groups: {available_group_names[:10]}... (total: {len(all_groups)})")
                     for group in all_groups:
                         if group.get("name") in groups_to_filter:
                             selected_group_ids.add(group["id"])
-                    logger.info(f"Auto-reorder: filtering to {len(selected_group_ids)} selected groups")
+                    logger.info(f"[AUTO-REORDER] Filtering to {len(selected_group_ids)} selected groups (matched: {selected_group_ids})")
                 except Exception as e:
                     logger.error(f"Failed to fetch channel groups for auto-reorder: {e}")
                     return []
@@ -937,7 +940,7 @@ class StreamProber:
                     logger.error(f"Failed to fetch channels page {page} for auto-reorder: {e}")
                     break
 
-            logger.info(f"Found {len(channels_to_reorder)} channels to potentially reorder")
+            logger.info(f"[AUTO-REORDER] Found {len(channels_to_reorder)} channels to potentially reorder")
 
             # For each channel, fetch full details, get stream stats, and reorder
             for channel in channels_to_reorder:
