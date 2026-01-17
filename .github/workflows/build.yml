@@ -5,18 +5,25 @@ on:
     branches:
       - main
       - dev
+    paths-ignore:
+      - '.beads/**'
+      - '**.md'
   pull_request:
     branches:
       - main
+    paths-ignore:
+      - '.beads/**'
+      - '**.md'
 
 env:
   REGISTRY: ghcr.io
 
 jobs:
-  # Security scanning jobs run first
+  # Security scanning jobs - only run on PRs to main
   security-scan-frontend:
     name: Frontend Security Scan
     runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request' && github.base_ref == 'main'
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -39,6 +46,7 @@ jobs:
   security-scan-backend:
     name: Backend Security Scan
     runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request' && github.base_ref == 'main'
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -58,6 +66,7 @@ jobs:
   codeql-analysis:
     name: CodeQL Analysis
     runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request' && github.base_ref == 'main'
     permissions:
       security-events: write
       contents: read
@@ -87,6 +96,7 @@ jobs:
   iac-security-scan:
     name: IaC Security Scan
     runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request' && github.base_ref == 'main'
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -108,6 +118,7 @@ jobs:
   dast-scan:
     name: DAST Security Scan
     runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request' && github.base_ref == 'main'
     needs: [security-scan-frontend, security-scan-backend]
     steps:
       - name: Checkout repository
@@ -191,7 +202,9 @@ jobs:
   build-amd64:
     name: Build Docker Image (AMD64)
     runs-on: ubuntu-latest
+    # On PRs to main, wait for security scans; on dev branch pushes, run immediately
     needs: [security-scan-frontend, security-scan-backend, codeql-analysis, iac-security-scan, dast-scan]
+    if: always() && (github.event_name != 'pull_request' || !contains(needs.*.result, 'failure'))
     permissions:
       contents: read
       packages: write
@@ -263,7 +276,9 @@ jobs:
   build-arm64:
     name: Build Docker Image (ARM64)
     runs-on: ubuntu-24.04-arm
+    # On PRs to main, wait for security scans; on dev branch pushes, run immediately
     needs: [security-scan-frontend, security-scan-backend, codeql-analysis, iac-security-scan, dast-scan]
+    if: always() && (github.event_name != 'pull_request' || !contains(needs.*.result, 'failure'))
     permissions:
       contents: read
       packages: write
