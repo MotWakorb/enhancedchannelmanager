@@ -1201,9 +1201,27 @@ class StreamProber:
             # Fetch all streams
             logger.info("Fetching stream details...")
             all_streams = await self._fetch_all_streams()
+            logger.info(f"[PROBE-MATCH] Fetched {len(all_streams)} total streams from Dispatcharr")
+
+            # Log the stream IDs we're looking for
+            logger.info(f"[PROBE-MATCH] Looking for {len(channel_stream_ids)} channel stream IDs: {sorted(channel_stream_ids)}")
+
+            # Get all stream IDs from Dispatcharr
+            all_stream_ids = {s["id"] for s in all_streams}
+            logger.info(f"[PROBE-MATCH] Dispatcharr returned {len(all_stream_ids)} unique stream IDs")
+
+            # Find which channel stream IDs are missing from Dispatcharr's stream list
+            missing_ids = channel_stream_ids - all_stream_ids
+            if missing_ids:
+                logger.warning(f"[PROBE-MATCH] {len(missing_ids)} channel stream IDs NOT FOUND in Dispatcharr streams: {sorted(missing_ids)}")
+                # Log which channels reference these missing streams
+                for missing_id in missing_ids:
+                    channel_names = stream_to_channels.get(missing_id, ["Unknown"])
+                    logger.warning(f"[PROBE-MATCH]   Missing stream {missing_id} is referenced by channels: {channel_names}")
 
             # Filter to only streams that are in channels
             streams_to_probe = [s for s in all_streams if s["id"] in channel_stream_ids]
+            logger.info(f"[PROBE-MATCH] Matched {len(streams_to_probe)} streams to probe")
 
             # Skip recently probed streams if configured
             if self.skip_recently_probed_hours > 0:
