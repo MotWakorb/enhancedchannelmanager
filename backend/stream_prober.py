@@ -961,10 +961,14 @@ class StreamProber:
                     # Fetch stream stats for this channel's streams
                     from .database import get_session
                     from .models import StreamStats
+
+                    logger.debug(f"[AUTO-REORDER] Channel {channel_id}: Opening database session...")
                     with get_session() as session:
+                        logger.debug(f"[AUTO-REORDER] Channel {channel_id}: Querying stats for stream_ids: {stream_ids}")
                         stats_records = session.query(StreamStats).filter(
                             StreamStats.stream_id.in_(stream_ids)
                         ).all()
+                        logger.debug(f"[AUTO-REORDER] Channel {channel_id}: Query returned {len(stats_records)} records")
 
                         # Build stats map
                         stats_map = {stat.stream_id: stat for stat in stats_records}
