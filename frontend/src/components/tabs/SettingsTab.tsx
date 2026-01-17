@@ -656,6 +656,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         setOriginalProbeEnabled(streamProbeEnabled);
         setOriginalProbeScheduleTime(streamProbeScheduleTime);
         setOriginalAutoReorder(autoReorderAfterProbe);
+        setOriginalRefreshM3usBeforeProbe(refreshM3usBeforeProbe);
         setNeedsRestart(false);
         // Clear result after 3 seconds
         setTimeout(() => setRestartResult(null), 3000);
