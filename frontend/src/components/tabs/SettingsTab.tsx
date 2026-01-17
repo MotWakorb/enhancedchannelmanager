@@ -373,12 +373,12 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
       }
     };
 
-    // Wait a moment for the background task to start, then poll
-    const initialDelay = setTimeout(pollProgress, 300);
+    // Poll immediately, then continue every second
+    // Using immediate poll to catch fast probes that might complete quickly
+    pollProgress();
     const interval = setInterval(pollProgress, 1000);
 
     return () => {
-      clearTimeout(initialDelay);
       clearInterval(interval);
     };
   }, [probingAll]);

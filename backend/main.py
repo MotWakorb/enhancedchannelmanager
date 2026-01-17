@@ -155,6 +155,19 @@ async def startup_event():
             set_prober(prober)
             logger.info("set_prober() called successfully")
 
+            # Connect the prober to the StreamProbeTask in the task registry
+            try:
+                from task_registry import get_registry
+                registry = get_registry()
+                stream_probe_task = registry.get_task_instance("stream_probe")
+                if stream_probe_task:
+                    stream_probe_task.set_prober(prober)
+                    logger.info("Connected StreamProber to StreamProbeTask")
+                else:
+                    logger.warning("StreamProbeTask not found in registry")
+            except Exception as e:
+                logger.warning(f"Failed to connect prober to task: {e}")
+
             await prober.start()
             logger.info("prober.start() completed")
 
@@ -537,6 +550,18 @@ async def restart_services():
                 stream_fetch_page_limit=settings.stream_fetch_page_limit,
             )
             set_prober(new_prober)
+
+            # Connect the new prober to the StreamProbeTask
+            try:
+                from task_registry import get_registry
+                registry = get_registry()
+                stream_probe_task = registry.get_task_instance("stream_probe")
+                if stream_probe_task:
+                    stream_probe_task.set_prober(new_prober)
+                    logger.info("Connected new StreamProber to StreamProbeTask")
+            except Exception as e:
+                logger.warning(f"Failed to connect prober to task: {e}")
+
             await new_prober.start()
             logger.info(f"Restarted stream prober with updated settings (groups: {len(settings.probe_channel_groups)} selected)")
 
