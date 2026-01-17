@@ -301,13 +301,21 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
   };
 
   // Auto-populate probe channel groups with all groups if empty (default to all checked)
+  // Also filter out any stale groups that no longer exist
   useEffect(() => {
-    if (availableChannelGroups.length > 0 && probeChannelGroups.length === 0) {
-      // If no groups are selected, default to all groups
-      const allGroupNames = availableChannelGroups.map(g => g.name);
-      setProbeChannelGroups(allGroupNames);
+    if (availableChannelGroups.length > 0) {
+      const availableNames = new Set(availableChannelGroups.map(g => g.name));
+      const validGroups = probeChannelGroups.filter(name => availableNames.has(name));
+
+      if (validGroups.length === 0) {
+        // If no valid groups are selected, default to all groups
+        setProbeChannelGroups(availableChannelGroups.map(g => g.name));
+      } else if (validGroups.length !== probeChannelGroups.length) {
+        // Filter out stale groups that no longer exist
+        setProbeChannelGroups(validGroups);
+      }
     }
-  }, [availableChannelGroups, probeChannelGroups.length]);
+  }, [availableChannelGroups, probeChannelGroups]);
 
   // Periodically check for scheduled probes (runs even when probingAll is false)
   useEffect(() => {
