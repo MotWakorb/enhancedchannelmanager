@@ -267,9 +267,9 @@ export function TaskEditorModal({ task, onClose, onSaved }: TaskEditorModalProps
                   style={{
                     flex: 1,
                     padding: '0.75rem',
-                    border: `1px solid ${scheduleType === type ? 'var(--accent-primary)' : 'var(--border-color)'}`,
+                    border: `1px solid ${scheduleType === type ? 'var(--success)' : 'var(--border-color)'}`,
                     borderRadius: '6px',
-                    backgroundColor: scheduleType === type ? 'var(--accent-primary)' : 'var(--bg-secondary)',
+                    backgroundColor: scheduleType === type ? 'var(--success)' : 'var(--bg-secondary)',
                     color: scheduleType === type ? 'white' : 'var(--text-primary)',
                     cursor: 'pointer',
                     fontWeight: 500,
@@ -311,9 +311,9 @@ export function TaskEditorModal({ task, onClose, onSaved }: TaskEditorModalProps
                     onClick={() => handleIntervalPresetChange(preset.value)}
                     style={{
                       padding: '0.5rem',
-                      border: `1px solid ${!useCustomInterval && intervalSeconds === preset.value ? 'var(--accent-primary)' : 'var(--border-color)'}`,
+                      border: `1px solid ${!useCustomInterval && intervalSeconds === preset.value ? 'var(--success)' : 'var(--border-color)'}`,
                       borderRadius: '4px',
-                      backgroundColor: !useCustomInterval && intervalSeconds === preset.value ? 'var(--accent-primary)' : 'var(--bg-tertiary)',
+                      backgroundColor: !useCustomInterval && intervalSeconds === preset.value ? 'var(--success)' : 'var(--bg-tertiary)',
                       color: !useCustomInterval && intervalSeconds === preset.value ? 'white' : 'var(--text-primary)',
                       cursor: 'pointer',
                       fontSize: '0.8rem',
@@ -855,7 +855,7 @@ export function TaskEditorModal({ task, onClose, onSaved }: TaskEditorModalProps
               padding: '0.75rem 1.5rem',
               border: 'none',
               borderRadius: '6px',
-              backgroundColor: 'var(--accent-primary)',
+              backgroundColor: 'var(--success)',
               color: 'white',
               cursor: saving ? 'not-allowed' : 'pointer',
               opacity: saving ? 0.6 : 1,

@@ -106,7 +106,7 @@ function TaskCard({ task, onRunNow, onToggleEnabled, onEdit, isRunning }: {
               alignItems: 'center',
               gap: '0.25rem',
               padding: '0.5rem 0.75rem',
-              backgroundColor: 'var(--accent-primary)',
+              backgroundColor: 'var(--success)',
               color: 'white',
               border: 'none',
               borderRadius: '4px',
