@@ -126,7 +126,7 @@ function TaskCard({ task, onRunNow, onToggleEnabled, onEdit, isRunning }: {
               gap: '0.25rem',
               padding: '0.5rem 0.75rem',
               backgroundColor: 'var(--success)',
-              color: 'white',
+              color: 'var(--success-text)',
               border: 'none',
               borderRadius: '4px',
               cursor: isRunning ? 'not-allowed' : 'pointer',

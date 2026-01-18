@@ -1287,7 +1287,7 @@
   height: 24px;
   border-radius: 50%;
   background-color: var(--accent-primary);
-  color: white;
+  color: var(--button-primary-text);
   font-size: 0.75rem;
   font-weight: 600;
   flex-shrink: 0;

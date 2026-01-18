@@ -273,7 +273,7 @@
 .checkpoint-name-btn.confirm {
   background-color: var(--accent-primary);
   border: 1px solid var(--accent-primary);
-  color: white;
+  color: var(--button-primary-text);
 }
 
 .checkpoint-name-btn.confirm:hover {

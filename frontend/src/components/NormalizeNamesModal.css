@@ -191,14 +191,14 @@
 }
 
 .normalize-btn-confirm {
-  background: var(--accent-color);
-  border: 1px solid var(--accent-color);
-  color: white;
+  background: var(--accent-primary);
+  border: 1px solid var(--accent-primary);
+  color: var(--button-primary-text);
 }
 
 .normalize-btn-confirm:hover {
-  background: var(--accent-hover);
-  border-color: var(--accent-hover);
+  background: var(--accent-secondary);
+  border-color: var(--accent-secondary);
 }
 
 .normalize-btn-confirm .material-icons {

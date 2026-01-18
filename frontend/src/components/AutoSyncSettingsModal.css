@@ -333,7 +333,7 @@
   background-color: var(--accent-primary);
   border: none;
   border-radius: 4px;
-  color: white;
+  color: var(--button-primary-text);
   cursor: pointer;
   transition: opacity 0.15s;
 }
@@ -404,7 +404,7 @@
   background-color: var(--accent-primary);
   border: none;
   border-radius: 4px;
-  color: white;
+  color: var(--button-primary-text);
   cursor: pointer;
   transition: opacity 0.15s;
 }

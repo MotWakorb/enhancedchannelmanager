@@ -196,7 +196,7 @@
   background: var(--accent-primary);
   border: none;
   border-radius: 4px;
-  color: white;
+  color: var(--button-primary-text);
   font-size: 0.85rem;
   font-weight: 500;
   cursor: pointer;
@@ -1273,7 +1273,7 @@
 .conflict-card-mode-toggle .mode-btn.active {
   background: var(--accent-primary);
   border-color: var(--accent-primary);
-  color: white;
+  color: var(--button-primary-text);
 }
 
 /* Confidence score badges and displays */

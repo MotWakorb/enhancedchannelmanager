@@ -81,11 +81,11 @@
 .schedule-editor .type-button.active {
   border-color: var(--success);
   background-color: var(--success);
-  color: white;
+  color: var(--success-text);
 }
 
 .schedule-editor .type-button.active .material-icons {
-  color: white;
+  color: var(--success-text);
 }
 
 /* Config Section */
@@ -133,7 +133,7 @@
 .schedule-editor .preset-button.active {
   border-color: var(--success);
   background-color: var(--success);
-  color: white;
+  color: var(--success-text);
 }
 
 /* Custom Interval */
@@ -238,7 +238,7 @@
 .schedule-editor .day-button.active {
   border-color: var(--success);
   background-color: var(--success);
-  color: white;
+  color: var(--success-text);
 }
 
 /* Monthly Day Row */
@@ -297,7 +297,7 @@
 .schedule-editor .btn-save {
   border: none;
   background-color: var(--success);
-  color: white;
+  color: var(--success-text);
 }
 
 .schedule-editor .btn-save:disabled {

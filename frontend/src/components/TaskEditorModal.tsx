@@ -272,7 +272,7 @@ export function TaskEditorModal({ task, onClose, onSaved }: TaskEditorModalProps
                   border: 'none',
                   borderRadius: '4px',
                   backgroundColor: 'var(--accent-primary)',
-                  color: 'white',
+                  color: 'var(--button-primary-text)',
                   cursor: 'pointer',
                   fontSize: '0.85rem',
                 }}
@@ -636,7 +636,7 @@ export function TaskEditorModal({ task, onClose, onSaved }: TaskEditorModalProps
               border: 'none',
               borderRadius: '6px',
               backgroundColor: 'var(--success)',
-              color: 'white',
+              color: 'var(--success-text)',
               cursor: saving ? 'not-allowed' : 'pointer',
               opacity: saving ? 0.6 : 1,
               display: 'flex',
