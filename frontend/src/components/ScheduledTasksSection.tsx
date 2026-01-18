@@ -321,7 +321,7 @@ export function ScheduledTasksSection({ userTimezone: _userTimezone }: Scheduled
         marginBottom: '1.5rem',
       }}>
         <div>
-          <h2 style={{ margin: 0, fontSize: '1.5rem' }}>Scheduled Tasks</h2>
+          <h2 style={{ margin: 0, fontSize: '1.5rem', fontWeight: 600, color: 'var(--text-primary)' }}>Scheduled Tasks</h2>
           <p style={{ margin: '0.5rem 0 0 0', color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
             Manage automated tasks like EPG refresh, M3U refresh, and database cleanup
           </p>
