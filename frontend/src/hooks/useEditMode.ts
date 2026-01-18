@@ -61,6 +61,7 @@ function computeModifiedChannelIds(
  * - Multiple bulkAssignChannelNumbers → single call with final positions
  * - Add then remove same stream → both operations cancelled
  * - Multiple reorderChannelStreams for same channel → only final order kept
+ * - Operations targeting channels that will be deleted are removed
  *
  * Operations that cannot be consolidated:
  * - createChannel, deleteChannel, createGroup, deleteChannelGroup (order matters)
@@ -82,19 +83,36 @@ function consolidateOperations(operations: StagedOperation[], workingCopy: Chann
   // Operations that must be preserved in order (create, delete operations)
   const orderedOperations: StagedOperation[] = [];
 
+  // Track channel IDs that will be deleted (including temp IDs)
+  // Any operations targeting these channels should be skipped
+  const channelsToDelete = new Set<number>();
+
+  // First pass: identify all channels that will be deleted
+  for (const op of operations) {
+    if (op.apiCall.type === 'deleteChannel') {
+      channelsToDelete.add(op.apiCall.channelId);
+    }
+  }
+
   // Process all operations to build final state
   for (const op of operations) {
     switch (op.apiCall.type) {
       case 'bulkAssignChannelNumbers': {
-        // Track final number for each channel
+        // Track final number for each channel, excluding deleted channels
         const startNum = op.apiCall.startingNumber ?? 0;
         op.apiCall.channelIds.forEach((id, index) => {
-          channelFinalNumbers.set(id, startNum + index);
+          if (!channelsToDelete.has(id)) {
+            channelFinalNumbers.set(id, startNum + index);
+          }
         });
         break;
       }
 
       case 'updateChannel': {
+        // Skip if channel will be deleted
+        if (channelsToDelete.has(op.apiCall.channelId)) {
+          break;
+        }
         // Merge update data for same channel
         const existing = channelFinalUpdates.get(op.apiCall.channelId);
         if (existing) {
@@ -113,6 +131,10 @@ function consolidateOperations(operations: StagedOperation[], workingCopy: Chann
       }
 
       case 'reorderChannelStreams': {
+        // Skip if channel will be deleted
+        if (channelsToDelete.has(op.apiCall.channelId)) {
+          break;
+        }
         // Only keep the final order
         channelFinalStreamOrder.set(op.apiCall.channelId, {
           streamIds: op.apiCall.streamIds,
@@ -122,6 +144,10 @@ function consolidateOperations(operations: StagedOperation[], workingCopy: Chann
       }
 
       case 'addStreamToChannel': {
+        // Skip if channel will be deleted
+        if (channelsToDelete.has(op.apiCall.channelId)) {
+          break;
+        }
         const key = `${op.apiCall.channelId}:${op.apiCall.streamId}`;
         const existing = streamOperations.get(key) || { added: null, removed: null };
         existing.added = op;
@@ -130,6 +156,10 @@ function consolidateOperations(operations: StagedOperation[], workingCopy: Chann
       }
 
       case 'removeStreamFromChannel': {
+        // Skip if channel will be deleted
+        if (channelsToDelete.has(op.apiCall.channelId)) {
+          break;
+        }
         const key = `${op.apiCall.channelId}:${op.apiCall.streamId}`;
         const existing = streamOperations.get(key) || { added: null, removed: null };
         existing.removed = op;
@@ -138,8 +168,34 @@ function consolidateOperations(operations: StagedOperation[], workingCopy: Chann
       }
 
       // These operations must be preserved in order
-      case 'createChannel':
-      case 'deleteChannel':
+      case 'createChannel': {
+        // Skip createChannel if the temp ID will be deleted later
+        // (the channel is created then immediately deleted, so both cancel out)
+        const tempId = op.afterSnapshot[0]?.id;
+        if (tempId !== undefined && channelsToDelete.has(tempId)) {
+          break;
+        }
+        orderedOperations.push(op);
+        break;
+      }
+      case 'deleteChannel': {
+        // Check if this is deleting a temp channel that was created in this batch
+        // If so, the createChannel was already skipped, so skip this too
+        const isNewChannel = op.apiCall.channelId < 0;
+        if (isNewChannel) {
+          // Find if there's a createChannel for this temp ID that we skipped
+          const wasCreatedAndDeleted = operations.some(
+            o => o.apiCall.type === 'createChannel' &&
+                 o.afterSnapshot[0]?.id === op.apiCall.channelId
+          );
+          if (wasCreatedAndDeleted) {
+            // Both create and delete cancel out - skip the delete
+            break;
+          }
+        }
+        orderedOperations.push(op);
+        break;
+      }
       case 'createGroup':
       case 'deleteChannelGroup':
         orderedOperations.push(op);
