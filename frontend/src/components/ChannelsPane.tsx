@@ -828,6 +828,7 @@ export function ChannelsPane({
   const [sortRenumberStartingNumber, setSortRenumberStartingNumber] = useState<string>('');
   const [sortStripNumbers, setSortStripNumbers] = useState<boolean>(true);
   const [sortIgnoreCountry, setSortIgnoreCountry] = useState<boolean>(false);
+  const [sortRenumberUpdateNames, setSortRenumberUpdateNames] = useState<boolean>(true);
 
   // Mass Renumber modal state
   const massRenumberModal = useModal();
@@ -3992,9 +3993,9 @@ export function ChannelsPane({
     sortedChannels.forEach((channel, index) => {
       const newNumber = startingNumber + index;
       if (channel.channel_number !== newNumber) {
-        // Apply auto-rename if enabled
+        // Apply auto-rename if enabled in dialog
         let updates: Partial<Channel> = { channel_number: newNumber };
-        if (autoRenameChannelNumber && channel.channel_number !== null) {
+        if (sortRenumberUpdateNames && channel.channel_number !== null) {
           const newName = computeAutoRename(channel.name, channel.channel_number, newNumber);
           if (newName && newName !== channel.name) {
             updates.name = newName;
@@ -4017,6 +4018,7 @@ export function ChannelsPane({
     setSortRenumberStartingNumber('');
     setSortStripNumbers(true);
     setSortIgnoreCountry(false);
+    setSortRenumberUpdateNames(true);
   };
 
   // Mass Renumber handlers
@@ -5721,6 +5723,14 @@ export function ChannelsPane({
                 />
                 <span>Ignore country prefix when sorting (e.g., "US | ", "UK: ")</span>
               </label>
+              <label className="sort-renumber-checkbox">
+                <input
+                  type="checkbox"
+                  checked={sortRenumberUpdateNames}
+                  onChange={(e) => setSortRenumberUpdateNames(e.target.checked)}
+                />
+                <span>Update channel numbers in names (e.g., "209 | A&E" → "200 | A&E")</span>
+              </label>
             </div>
 
             {/* Preview of sorted order */}
@@ -5745,12 +5755,23 @@ export function ChannelsPane({
                   .map((ch, index) => {
                     const startNum = parseInt(sortRenumberStartingNumber, 10) || 1;
                     const newNumber = startNum + index;
+                    const newName = sortRenumberUpdateNames && ch.channel_number !== null
+                      ? computeAutoRename(ch.name, ch.channel_number, newNumber)
+                      : undefined;
                     return (
                       <li key={ch.id}>
                         <span className="preview-old-number">{ch.channel_number ?? '-'}</span>
                         <span className="preview-arrow">→</span>
                         <span className="preview-new-number">{newNumber}</span>
-                        <span className="preview-name">{ch.name}</span>
+                        {newName ? (
+                          <>
+                            <span className="preview-name preview-name-old">{ch.name}</span>
+                            <span className="preview-arrow">→</span>
+                            <span className="preview-name preview-name-new">{newName}</span>
+                          </>
+                        ) : (
+                          <span className="preview-name">{ch.name}</span>
+                        )}
                       </li>
                     );
                   })}
