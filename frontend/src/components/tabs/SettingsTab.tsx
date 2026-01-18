@@ -860,8 +860,9 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
           <h3>Dispatcharr Connection</h3>
         </div>
 
-        <div className="form-group">
+        <div className="form-group-vertical">
           <label htmlFor="url">Server URL</label>
+          <span className="form-description">The URL of your Dispatcharr server (e.g., http://localhost:9191)</span>
           <input
             id="url"
             type="text"
@@ -871,32 +872,31 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
           />
         </div>
 
-        <div className="form-row">
-          <div className="form-group">
-            <label htmlFor="username">Username</label>
-            <input
-              id="username"
-              type="text"
-              placeholder="admin"
-              value={username}
-              onChange={(e) => setUsername(e.target.value)}
-            />
-          </div>
-
-          <div className="form-group">
-            <label htmlFor="password">Password</label>
-            <input
-              id="password"
-              type="password"
-              placeholder="Enter password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-            />
-            <p className="form-hint">Only required when changing URL or username</p>
-          </div>
+        <div className="form-group-vertical">
+          <label htmlFor="username">Username</label>
+          <span className="form-description">Your Dispatcharr admin username</span>
+          <input
+            id="username"
+            type="text"
+            placeholder="admin"
+            value={username}
+            onChange={(e) => setUsername(e.target.value)}
+          />
         </div>
 
-        <div className="test-connection-row">
+        <div className="form-group-vertical">
+          <label htmlFor="password">Password</label>
+          <span className="form-description">Only required when changing URL or username</span>
+          <input
+            id="password"
+            type="password"
+            placeholder="Enter password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+          />
+        </div>
+
+        <div className="form-group-vertical">
           <button className="btn-test" onClick={handleTest} disabled={testing || loading}>
             <span className="material-icons">wifi_tethering</span>
             {testing ? 'Testing...' : 'Test Connection'}
@@ -910,35 +910,33 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
           <h3>Stats Polling</h3>
         </div>
 
-        <div className="form-group">
-          <div className="threshold-label-row">
-            <label htmlFor="statsPollInterval">Poll interval (seconds)</label>
-            <div className="threshold-input-group">
-              <input
-                id="statsPollInterval"
-                type="number"
-                min="5"
-                max="300"
-                value={statsPollInterval}
-                onChange={(e) => {
-                  const value = Number(e.target.value);
-                  if (!isNaN(value)) {
-                    setStatsPollInterval(value);
-                  }
-                }}
-                onBlur={(e) => {
-                  const value = Math.max(5, Math.min(300, Number(e.target.value) || 10));
-                  setStatsPollInterval(value);
-                }}
-                className="threshold-input"
-              />
-              <span className="threshold-percent">sec</span>
-            </div>
-          </div>
-          <p className="form-hint">
+        <div className="form-group-vertical">
+          <label htmlFor="statsPollInterval">Poll interval (seconds)</label>
+          <span className="form-description">
             How often to poll Dispatcharr for channel statistics and bandwidth tracking.
             Lower values provide more frequent updates but use more resources.
-          </p>
+          </span>
+          <div className="threshold-input-group">
+            <input
+              id="statsPollInterval"
+              type="number"
+              min="5"
+              max="300"
+              value={statsPollInterval}
+              onChange={(e) => {
+                const value = Number(e.target.value);
+                if (!isNaN(value)) {
+                  setStatsPollInterval(value);
+                }
+              }}
+              onBlur={(e) => {
+                const value = Math.max(5, Math.min(300, Number(e.target.value) || 10));
+                setStatsPollInterval(value);
+              }}
+              className="threshold-input"
+            />
+            <span className="threshold-percent">sec</span>
+          </div>
 
           {needsRestart && (
             <div className="restart-notice">
@@ -967,47 +965,45 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
           )}
         </div>
 
-        <div className="form-group">
-          <div className="threshold-label-row">
-            <label htmlFor="userTimezone">Timezone</label>
-            <select
-              id="userTimezone"
-              value={userTimezone}
-              onChange={(e) => setUserTimezone(e.target.value)}
-              className="timezone-select"
-            >
-              <option value="">UTC (Default)</option>
-              <optgroup label="US & Canada">
-                <option value="America/New_York">Eastern Time (ET)</option>
-                <option value="America/Chicago">Central Time (CT)</option>
-                <option value="America/Denver">Mountain Time (MT)</option>
-                <option value="America/Los_Angeles">Pacific Time (PT)</option>
-                <option value="America/Anchorage">Alaska Time (AKT)</option>
-                <option value="Pacific/Honolulu">Hawaii Time (HT)</option>
-              </optgroup>
-              <optgroup label="Europe">
-                <option value="Europe/London">London (GMT/BST)</option>
-                <option value="Europe/Paris">Paris (CET/CEST)</option>
-                <option value="Europe/Berlin">Berlin (CET/CEST)</option>
-                <option value="Europe/Amsterdam">Amsterdam (CET/CEST)</option>
-                <option value="Europe/Rome">Rome (CET/CEST)</option>
-                <option value="Europe/Madrid">Madrid (CET/CEST)</option>
-              </optgroup>
-              <optgroup label="Asia & Pacific">
-                <option value="Asia/Tokyo">Tokyo (JST)</option>
-                <option value="Asia/Shanghai">Shanghai (CST)</option>
-                <option value="Asia/Hong_Kong">Hong Kong (HKT)</option>
-                <option value="Asia/Singapore">Singapore (SGT)</option>
-                <option value="Asia/Dubai">Dubai (GST)</option>
-                <option value="Australia/Sydney">Sydney (AEST/AEDT)</option>
-                <option value="Australia/Melbourne">Melbourne (AEST/AEDT)</option>
-                <option value="Pacific/Auckland">Auckland (NZST/NZDT)</option>
-              </optgroup>
-            </select>
-          </div>
-          <p className="form-hint">
+        <div className="form-group-vertical">
+          <label htmlFor="userTimezone">Timezone</label>
+          <span className="form-description">
             Timezone used for daily bandwidth statistics and scheduled probe times. "Today" will roll over at midnight in your selected timezone, and scheduled probes will run at the configured time in this timezone.
-          </p>
+          </span>
+          <select
+            id="userTimezone"
+            value={userTimezone}
+            onChange={(e) => setUserTimezone(e.target.value)}
+            className="timezone-select"
+          >
+            <option value="">UTC (Default)</option>
+            <optgroup label="US & Canada">
+              <option value="America/New_York">Eastern Time (ET)</option>
+              <option value="America/Chicago">Central Time (CT)</option>
+              <option value="America/Denver">Mountain Time (MT)</option>
+              <option value="America/Los_Angeles">Pacific Time (PT)</option>
+              <option value="America/Anchorage">Alaska Time (AKT)</option>
+              <option value="Pacific/Honolulu">Hawaii Time (HT)</option>
+            </optgroup>
+            <optgroup label="Europe">
+              <option value="Europe/London">London (GMT/BST)</option>
+              <option value="Europe/Paris">Paris (CET/CEST)</option>
+              <option value="Europe/Berlin">Berlin (CET/CEST)</option>
+              <option value="Europe/Amsterdam">Amsterdam (CET/CEST)</option>
+              <option value="Europe/Rome">Rome (CET/CEST)</option>
+              <option value="Europe/Madrid">Madrid (CET/CEST)</option>
+            </optgroup>
+            <optgroup label="Asia & Pacific">
+              <option value="Asia/Tokyo">Tokyo (JST)</option>
+              <option value="Asia/Shanghai">Shanghai (CST)</option>
+              <option value="Asia/Hong_Kong">Hong Kong (HKT)</option>
+              <option value="Asia/Singapore">Singapore (SGT)</option>
+              <option value="Asia/Dubai">Dubai (GST)</option>
+              <option value="Australia/Sydney">Sydney (AEST/AEDT)</option>
+              <option value="Australia/Melbourne">Melbourne (AEST/AEDT)</option>
+              <option value="Pacific/Auckland">Auckland (NZST/NZDT)</option>
+            </optgroup>
+          </select>
         </div>
       </div>
 
@@ -1017,8 +1013,12 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
           <h3>Logging</h3>
         </div>
 
-        <div className="form-group">
+        <div className="form-group-vertical">
           <label htmlFor="backendLogLevel">Backend Log Level</label>
+          <span className="form-description">
+            Controls Python backend logging level. Changes apply immediately.
+            Check Docker logs to see backend messages.
+          </span>
           <select
             id="backendLogLevel"
             value={backendLogLevel}
@@ -1030,14 +1030,14 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
             <option value="ERROR">ERROR - Show errors only</option>
             <option value="CRITICAL">CRITICAL - Show only critical errors</option>
           </select>
-          <p className="form-hint">
-            Controls Python backend logging level. Changes apply immediately.
-            Check Docker logs to see backend messages.
-          </p>
         </div>
 
-        <div className="form-group">
+        <div className="form-group-vertical">
           <label htmlFor="frontendLogLevel">Frontend Log Level</label>
+          <span className="form-description">
+            Controls browser console logging level. Changes apply immediately.
+            Open browser DevTools (F12) to see frontend messages.
+          </span>
           <select
             id="frontendLogLevel"
             value={frontendLogLevel}
@@ -1048,10 +1048,6 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
             <option value="WARN">WARN - Show warnings and errors only</option>
             <option value="ERROR">ERROR - Show errors only</option>
           </select>
-          <p className="form-hint">
-            Controls browser console logging level. Changes apply immediately.
-            Open browser DevTools (F12) to see frontend messages.
-          </p>
         </div>
       </div>
 
