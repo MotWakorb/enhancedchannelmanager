@@ -1,0 +1,70 @@
+name: Bug Report
+description: Report a bug or issue with Enhanced Channel Manager
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a bug! Please fill out the information below to help us understand and fix the issue.
+
+  - type: input
+    id: version
+    attributes:
+      label: ECM Version
+      description: What version of Enhanced Channel Manager are you running?
+      placeholder: e.g., 0.8.0-0029
+    validations:
+      required: true
+
+  - type: dropdown
+    id: priority
+    attributes:
+      label: Priority
+      description: How severe is this bug?
+      options:
+        - "Priority 1: ECM is unusable"
+        - "Priority 2: ECM is severely degraded"
+        - "Priority 3: Medium, needs looking at soon but not immediate"
+        - "Priority 4: When you get to it"
+    validations:
+      required: true
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What is the bug?
+      description: Describe the bug you're seeing
+      placeholder: Describe what's happening that shouldn't be
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps-to-reproduce
+    attributes:
+      label: Steps to Reproduce
+      description: What did you do for the issue to occur?
+      placeholder: |
+        1. Go to '...'
+        2. Click on '...'
+        3. See error
+    validations:
+      required: true
+
+  - type: textarea
+    id: artifacts
+    attributes:
+      label: Screenshots / Logs / Artifacts
+      description: Add any screenshots, log snippets, or other artifacts that show the bug in action
+      placeholder: Drag and drop images here, or paste log output
+    validations:
+      required: false
+
+  - type: textarea
+    id: additional-context
+    attributes:
+      label: Additional Context
+      description: Any other context about the problem (browser, OS, Dispatcharr version, etc.)
+      placeholder: e.g., Using Chrome on Windows 11, Dispatcharr v1.2.3
+    validations:
+      required: false
