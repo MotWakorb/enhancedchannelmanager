@@ -15,6 +15,18 @@ bd list --status closed  # View closed beads for historical context
 
 ## Development Workflow
 
+**IMPORTANT: Always work from the `dev` branch, never from `main`.**
+
+The `dev` branch is checked out in a beads worktree at:
+```
+/home/lecaptainc/ecm/enhancedchannelmanager/.git/beads-worktrees/dev
+```
+
+At the start of any session, ensure you're working in the dev worktree or switch to it:
+```bash
+cd /home/lecaptainc/ecm/enhancedchannelmanager/.git/beads-worktrees/dev
+```
+
 When doing work on this project, follow these steps in order:
 
 1. **Check closed beads for historical context** - Review closed beads to understand features implemented, past bugs fixed, and avoid repeating mistakes:
