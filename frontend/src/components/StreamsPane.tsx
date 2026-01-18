@@ -434,10 +434,10 @@ export function StreamsPane({
   );
 
   // Bulk create handlers - apply settings defaults
-  const openBulkCreateModal = useCallback((group: StreamGroup) => {
+  const openBulkCreateModal = useCallback((group: StreamGroup, startingNumber?: number | null) => {
     setBulkCreateGroup(group);
     setBulkCreateStreams([]);
-    setBulkCreateStartingNumber('');
+    setBulkCreateStartingNumber(startingNumber != null ? startingNumber.toString() : '');
     setBulkCreateGroupOption('same');
     setBulkCreateSelectedGroupId(null);
     setBulkCreateNewGroupName('');
@@ -689,7 +689,7 @@ export function StreamsPane({
   }, [groupedStreams, selectedIds, channelDefaults]);
 
   // Open bulk create modal for explicitly provided groups (used by external trigger)
-  const openBulkCreateModalForMultipleGroups = useCallback((groups: StreamGroup[]) => {
+  const openBulkCreateModalForMultipleGroups = useCallback((groups: StreamGroup[], startingNumber?: number | null) => {
     setBulkCreateGroup(null);
     setBulkCreateGroups(groups);
     setBulkCreateStreams([]);
@@ -700,7 +700,7 @@ export function StreamsPane({
     setBulkCreateCustomGroupNames(initialNames);
     // Initialize per-group start numbers (empty by default)
     setBulkCreateGroupStartNumbers(new Map());
-    setBulkCreateStartingNumber('');
+    setBulkCreateStartingNumber(startingNumber != null ? startingNumber.toString() : '');
     setBulkCreateGroupOption('same'); // Default to same name for multi-group
     setBulkCreateSelectedGroupId(null);
     setBulkCreateNewGroupName('');
@@ -731,19 +731,19 @@ export function StreamsPane({
         // Single group - use single group modal
         const matchingGroup = groupedStreams.find(g => g.name === externalTriggerGroupNames[0]);
         if (matchingGroup) {
-          openBulkCreateModal(matchingGroup);
+          openBulkCreateModal(matchingGroup, externalTriggerStartingNumber);
         }
       } else {
         // Multiple groups - use multi-group modal
         const matchingGroups = groupedStreams.filter(g => externalTriggerGroupNames.includes(g.name));
         if (matchingGroups.length > 0) {
-          openBulkCreateModalForMultipleGroups(matchingGroups);
+          openBulkCreateModalForMultipleGroups(matchingGroups, externalTriggerStartingNumber);
         }
       }
       // Signal that we've handled the trigger
       onExternalTriggerHandled?.();
     }
-  }, [externalTriggerGroupNames, groupedStreams, openBulkCreateModal, openBulkCreateModalForMultipleGroups, onBulkCreateFromGroup, onExternalTriggerHandled]);
+  }, [externalTriggerGroupNames, externalTriggerStartingNumber, groupedStreams, openBulkCreateModal, openBulkCreateModalForMultipleGroups, onBulkCreateFromGroup, onExternalTriggerHandled]);
 
   // Handle external trigger to open bulk create modal for specific stream IDs
   useEffect(() => {
