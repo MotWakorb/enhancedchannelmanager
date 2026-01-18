@@ -1807,7 +1807,6 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                 max="168"
                 value={streamProbeIntervalHours}
                 onChange={(e) => setStreamProbeIntervalHours(Math.max(1, Math.min(168, parseInt(e.target.value) || 24)))}
-                style={{ width: '100px' }}
               />
             </div>
 
@@ -1821,7 +1820,6 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                 max={totalStreamCount}
                 value={streamProbeBatchSize}
                 onChange={(e) => setStreamProbeBatchSize(Math.max(1, Math.min(totalStreamCount, parseInt(e.target.value) || 10)))}
-                style={{ width: '100px' }}
               />
             </div>
 
@@ -1835,7 +1833,6 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                 max="120"
                 value={streamProbeTimeout}
                 onChange={(e) => setStreamProbeTimeout(Math.max(5, Math.min(120, parseInt(e.target.value) || 30)))}
-                style={{ width: '100px' }}
               />
             </div>
 
@@ -1857,7 +1854,6 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                 id="bitrateSampleDuration"
                 value={bitrateSampleDuration}
                 onChange={(e) => setBitrateSampleDuration(Number(e.target.value))}
-                style={{ width: '140px' }}
               >
                 <option value={10}>10 seconds</option>
                 <option value={20}>20 seconds</option>
@@ -1878,7 +1874,6 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                 max="1000"
                 value={streamFetchPageLimit}
                 onChange={(e) => setStreamFetchPageLimit(Math.max(50, Math.min(1000, parseInt(e.target.value) || 200)))}
-                style={{ width: '100px' }}
               />
             </div>
 
@@ -1910,7 +1905,6 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                 max="168"
                 value={skipRecentlyProbedHours}
                 onChange={(e) => setSkipRecentlyProbedHours(Math.max(0, Math.min(168, parseInt(e.target.value) || 0)))}
-                style={{ width: '100px' }}
               />
             </div>
 

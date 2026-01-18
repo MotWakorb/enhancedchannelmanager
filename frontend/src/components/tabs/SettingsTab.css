@@ -220,10 +220,36 @@
 .form-group-vertical input,
 .form-group-vertical select {
   display: block;
+  min-width: 280px;
+  max-width: 400px;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--border-secondary);
+  border-radius: 6px;
+  background-color: var(--input-bg);
+  color: var(--text-primary);
+  font-size: 0.875rem;
+}
+
+.form-group-vertical input:focus,
+.form-group-vertical select:focus {
+  outline: none;
+  border-color: var(--accent-primary);
+  box-shadow: 0 0 0 2px rgba(100, 108, 255, 0.2);
 }
 
 .form-group-vertical input[type="time"] {
   min-width: 140px;
+  max-width: 160px;
+}
+
+.form-group-vertical input[type="number"] {
+  min-width: 100px;
+  max-width: 140px;
+}
+
+.form-group-vertical input[type="checkbox"] {
+  min-width: auto;
+  max-width: auto;
 }
 
 .form-group-vertical button {
