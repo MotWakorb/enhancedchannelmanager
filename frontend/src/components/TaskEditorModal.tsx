@@ -669,7 +669,7 @@ export function TaskEditorModal({ task, onClose, onSaved }: TaskEditorModalProps
                 Select specific accounts or leave empty to refresh all active accounts.
               </div>
               <div style={{ maxHeight: '200px', overflowY: 'auto' }}>
-                {m3uAccounts.map((account) => (
+                {m3uAccounts.filter((account) => account.name !== 'Custom').map((account) => (
                   <label
                     key={account.id}
                     style={{
