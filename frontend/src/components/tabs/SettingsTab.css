@@ -196,6 +196,36 @@
   margin-top: 0.25rem;
 }
 
+/* Vertical form layout: label → description → input */
+.form-group-vertical {
+  margin-bottom: 1.25rem;
+}
+
+.form-group-vertical label {
+  display: block;
+  font-size: 0.875rem;
+  color: var(--button-text);
+  font-weight: 500;
+  margin-bottom: 0.25rem;
+}
+
+.form-group-vertical .form-description {
+  display: block;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  margin-bottom: 0.5rem;
+  line-height: 1.4;
+}
+
+.form-group-vertical input,
+.form-group-vertical select {
+  display: block;
+}
+
+.form-group-vertical input[type="time"] {
+  min-width: 140px;
+}
+
 .checkbox-group {
   display: flex;
   align-items: flex-start;
