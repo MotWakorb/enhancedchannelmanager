@@ -269,10 +269,11 @@ Configure how streams are automatically sorted within channels:
 - **Drag-and-Drop Reordering** - Arrange sort criteria in priority order
 - **Enable/Disable Criteria** - Toggle individual sort criteria on/off
 - **Available Criteria**:
-  - Resolution (4K/UHD → FHD → HD → SD)
-  - Probe Status (working streams first)
-  - Provider Priority (custom M3U account ordering)
-  - Alphabetical (A-Z by stream name)
+  - Resolution - Supports any resolution (2160p → 1440p → 1080p → 720p → 576p → 540p → 480p → etc.)
+  - Bitrate (higher bitrate first)
+  - Framerate (higher FPS first)
+- **Arbitrary Resolution Support** - Any resolution ending in 'p' or 'i' is automatically parsed and sorted (e.g., 476p, 544p, 1440p)
+- **Deprioritize Failed Streams** - Option to automatically sort failed/dead streams to the bottom
 - **Visual Rank Badges** - See sort priority numbers at a glance
 
 #### Channel Defaults
@@ -325,12 +326,15 @@ Fine-tune which groups appear in the channel list:
 
 Here's what's coming to Enhanced Channel Manager:
 
-### v0.8.0 - Scheduled Tasks
-Automated background tasks for keeping your setup current:
-- Scheduled EPG refresh
-- Scheduled M3U refresh
-- Automatic cleanup of stale data
-- Task history and manual run options
+### ~~v0.8.0 - Scheduled Tasks~~ ✅ Implemented
+Automated background tasks with flexible multi-schedule support:
+- **Multiple Schedules Per Task** - Each task can have multiple independent schedules
+- **User-Friendly Schedule Types** - No cron expressions; choose from Interval, Daily, Weekly, Bi-weekly, or Monthly
+- **Timezone-Aware** - All schedules respect your configured timezone
+- **Task Types** - EPG refresh, M3U refresh, Stream probing, Database cleanup
+- **Task History** - View execution history with success/failure details
+- **Manual Run** - Trigger any task immediately with one click
+- **Enable/Disable** - Toggle individual schedules or entire tasks on/off
 
 ### v0.8.2 - Notifications
 In-app notifications and external alerts:
