@@ -1021,6 +1021,71 @@ export function useEditMode({
       }
     }
 
+    // Build summary of operation types for better progress feedback
+    const opCounts = {
+      createChannel: 0,
+      updateChannel: 0,
+      deleteChannel: 0,
+      addStream: 0,
+      removeStream: 0,
+      reorderStreams: 0,
+      assignNumbers: 0,
+      createGroup: 0,
+      deleteGroup: 0,
+    };
+
+    for (const op of consolidatedOps) {
+      switch (op.apiCall.type) {
+        case 'createChannel': opCounts.createChannel++; break;
+        case 'updateChannel': opCounts.updateChannel++; break;
+        case 'deleteChannel': opCounts.deleteChannel++; break;
+        case 'addStreamToChannel': opCounts.addStream++; break;
+        case 'removeStreamFromChannel': opCounts.removeStream++; break;
+        case 'reorderChannelStreams': opCounts.reorderStreams++; break;
+        case 'bulkAssignChannelNumbers':
+          opCounts.assignNumbers += op.apiCall.channelIds.length;
+          break;
+        case 'createGroup': opCounts.createGroup++; break;
+        case 'deleteChannelGroup': opCounts.deleteGroup++; break;
+      }
+    }
+    // Add groups from createChannel newGroupName
+    opCounts.createGroup += newGroupNames.size;
+
+    // Build human-readable summary of what's being done
+    const summaryParts: string[] = [];
+    if (opCounts.createGroup > 0) {
+      summaryParts.push(`${opCounts.createGroup} group${opCounts.createGroup !== 1 ? 's' : ''}`);
+    }
+    if (opCounts.createChannel > 0) {
+      summaryParts.push(`${opCounts.createChannel} channel${opCounts.createChannel !== 1 ? 's' : ''}`);
+    }
+    if (opCounts.updateChannel > 0) {
+      summaryParts.push(`${opCounts.updateChannel} update${opCounts.updateChannel !== 1 ? 's' : ''}`);
+    }
+    if (opCounts.addStream > 0) {
+      summaryParts.push(`${opCounts.addStream} stream assignment${opCounts.addStream !== 1 ? 's' : ''}`);
+    }
+    if (opCounts.removeStream > 0) {
+      summaryParts.push(`${opCounts.removeStream} stream removal${opCounts.removeStream !== 1 ? 's' : ''}`);
+    }
+    if (opCounts.reorderStreams > 0) {
+      summaryParts.push(`${opCounts.reorderStreams} stream reorder${opCounts.reorderStreams !== 1 ? 's' : ''}`);
+    }
+    if (opCounts.assignNumbers > 0) {
+      summaryParts.push(`${opCounts.assignNumbers} number assignment${opCounts.assignNumbers !== 1 ? 's' : ''}`);
+    }
+    if (opCounts.deleteChannel > 0) {
+      summaryParts.push(`${opCounts.deleteChannel} channel deletion${opCounts.deleteChannel !== 1 ? 's' : ''}`);
+    }
+    if (opCounts.deleteGroup > 0) {
+      summaryParts.push(`${opCounts.deleteGroup} group deletion${opCounts.deleteGroup !== 1 ? 's' : ''}`);
+    }
+
+    const operationSummary = summaryParts.length > 0
+      ? summaryParts.join(', ')
+      : 'No operations';
+
     // With bulk commit, we have 2 main steps: bulk commit + fetch updated channels
     const totalOperations = 2;
     let currentOperation = 0;
@@ -1125,8 +1190,8 @@ export function useEditMode({
       // Prepare groups to create
       const groupsToCreate = Array.from(newGroupNames).map((name) => ({ name }));
 
-      // Report progress for bulk commit
-      reportProgress(`Applying ${bulkOperations.length} operations...`);
+      // Report progress for bulk commit with detailed breakdown
+      reportProgress(`Applying: ${operationSummary}`);
 
       // Execute bulk commit
       const bulkResponse = await api.bulkCommit({
