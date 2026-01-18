@@ -129,16 +129,63 @@ export interface EditModeState {
 }
 
 /**
+ * Validation issue found during pre-commit validation
+ */
+export interface ValidationIssue {
+  type: 'missing_channel' | 'missing_stream' | 'invalid_operation';
+  severity: 'error' | 'warning';
+  message: string;
+  operationIndex?: number;
+  channelId?: number;
+  channelName?: string;
+  streamId?: number;
+  streamName?: string;
+}
+
+/**
+ * Result of a validation operation
+ */
+export interface ValidationResult {
+  passed: boolean;
+  issues: ValidationIssue[];
+}
+
+/**
+ * Detailed error from a failed operation
+ */
+export interface CommitError {
+  operationId: string;
+  operationType?: string;
+  error: string;
+  channelId?: number;
+  channelName?: string;
+  streamId?: number;
+  streamName?: string;
+  entityName?: string;
+}
+
+/**
+ * Options for commit operation
+ */
+export interface CommitOptions {
+  /** If true, continue processing even when individual operations fail */
+  continueOnError?: boolean;
+  /** Skip validation step (use when user already confirmed to proceed) */
+  skipValidation?: boolean;
+}
+
+/**
  * Result of a commit operation
  */
 export interface CommitResult {
   success: boolean;
   operationsApplied: number;
   operationsFailed: number;
-  errors: Array<{
-    operationId: string;
-    error: string;
-  }>;
+  errors: CommitError[];
+  // Validation issues found during pre-validation
+  validationIssues?: ValidationIssue[];
+  // Whether validation passed (no errors, may have warnings)
+  validationPassed?: boolean;
   // Updated channels after commit
   updatedChannels: Channel[];
 }
@@ -184,7 +231,10 @@ export interface UseEditModeReturn {
 
   // Commit/Discard
   getSummary: () => EditModeSummary;
-  commit: (onProgress?: (progress: CommitProgress) => void) => Promise<CommitResult>;
+  /** Validate operations without executing - returns validation issues */
+  validate: () => Promise<ValidationResult>;
+  /** Commit with optional progress callback and options (continueOnError, skipValidation) */
+  commit: (onProgress?: (progress: CommitProgress) => void, options?: CommitOptions) => Promise<CommitResult>;
   discard: () => void;
 
   // Check for conflicts with server

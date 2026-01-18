@@ -209,15 +209,45 @@ export interface BulkOperation {
 export interface BulkCommitRequest {
   operations: BulkOperation[];
   groupsToCreate?: { name: string }[];
+  /** If true, only validate without executing (returns validation issues) */
+  validateOnly?: boolean;
+  /** If true, continue processing even when individual operations fail */
+  continueOnError?: boolean;
+}
+
+export interface ValidationIssue {
+  type: 'missing_channel' | 'missing_stream' | 'invalid_operation';
+  severity: 'error' | 'warning';
+  message: string;
+  operationIndex?: number;
+  channelId?: number;
+  channelName?: string;
+  streamId?: number;
+  streamName?: string;
+}
+
+export interface BulkCommitError {
+  operationId: string;
+  operationType?: string;
+  error: string;
+  channelId?: number;
+  channelName?: string;
+  streamId?: number;
+  streamName?: string;
+  entityName?: string;
 }
 
 export interface BulkCommitResponse {
   success: boolean;
   operationsApplied: number;
   operationsFailed: number;
-  errors: { operationId: string; error: string }[];
+  errors: BulkCommitError[];
   tempIdMap: Record<number, number>;
   groupIdMap: Record<string, number>;
+  /** Validation issues found during pre-validation */
+  validationIssues?: ValidationIssue[];
+  /** Whether validation passed (no errors, may have warnings) */
+  validationPassed?: boolean;
 }
 
 /**

@@ -8,6 +8,8 @@ import type {
   EditModeSummary,
   CommitResult,
   CommitProgress,
+  CommitOptions,
+  ValidationResult,
   UseEditModeReturn,
   ApiCallSpec,
 } from '../types';
@@ -975,8 +977,146 @@ export function useEditMode({
     }
   }, [state.baselineSnapshot, state.modifiedChannelIds]);
 
+  // Helper to build bulk operations from consolidated staged operations
+  const buildBulkOperations = useCallback((consolidatedOps: StagedOperation[]) => {
+    const bulkOperations: api.BulkOperation[] = [];
+    const newGroupNames = new Set<string>();
+
+    // Collect new group names
+    for (const operation of consolidatedOps) {
+      if (operation.apiCall.type === 'createChannel') {
+        if (operation.apiCall.newGroupName) {
+          newGroupNames.add(operation.apiCall.newGroupName);
+        }
+      }
+    }
+
+    // Build operations
+    for (const operation of consolidatedOps) {
+      const { apiCall } = operation;
+
+      switch (apiCall.type) {
+        case 'updateChannel':
+          bulkOperations.push({
+            type: 'updateChannel',
+            channelId: apiCall.channelId,
+            data: apiCall.data,
+          });
+          break;
+
+        case 'addStreamToChannel':
+          bulkOperations.push({
+            type: 'addStreamToChannel',
+            channelId: apiCall.channelId,
+            streamId: apiCall.streamId,
+          });
+          break;
+
+        case 'removeStreamFromChannel':
+          bulkOperations.push({
+            type: 'removeStreamFromChannel',
+            channelId: apiCall.channelId,
+            streamId: apiCall.streamId,
+          });
+          break;
+
+        case 'reorderChannelStreams':
+          bulkOperations.push({
+            type: 'reorderChannelStreams',
+            channelId: apiCall.channelId,
+            streamIds: apiCall.streamIds,
+          });
+          break;
+
+        case 'bulkAssignChannelNumbers':
+          bulkOperations.push({
+            type: 'bulkAssignChannelNumbers',
+            channelIds: apiCall.channelIds,
+            startingNumber: apiCall.startingNumber,
+          });
+          break;
+
+        case 'createChannel': {
+          const tempId = operation.afterSnapshot[0]?.id ?? -1;
+          bulkOperations.push({
+            type: 'createChannel',
+            tempId: tempId,
+            name: apiCall.name,
+            channelNumber: apiCall.channelNumber,
+            groupId: apiCall.groupId,
+            newGroupName: apiCall.newGroupName,
+            logoId: apiCall.logoId,
+            logoUrl: apiCall.logoUrl,
+            tvgId: apiCall.tvgId,
+          });
+          break;
+        }
+
+        case 'deleteChannel':
+          bulkOperations.push({
+            type: 'deleteChannel',
+            channelId: apiCall.channelId,
+          });
+          break;
+
+        case 'createGroup':
+          bulkOperations.push({
+            type: 'createGroup',
+            name: apiCall.name,
+          });
+          break;
+
+        case 'deleteChannelGroup':
+          bulkOperations.push({
+            type: 'deleteChannelGroup',
+            groupId: apiCall.groupId,
+          });
+          break;
+      }
+    }
+
+    const groupsToCreate = Array.from(newGroupNames).map((name) => ({ name }));
+    return { bulkOperations, groupsToCreate, newGroupNames };
+  }, []);
+
+  // Validate staged operations without executing
+  const validate = useCallback(async (): Promise<ValidationResult> => {
+    if (!state.isActive || state.stagedOperations.length === 0) {
+      return { passed: true, issues: [] };
+    }
+
+    const consolidatedOps = consolidateOperations(state.stagedOperations, state.workingCopy);
+    const { bulkOperations, groupsToCreate } = buildBulkOperations(consolidatedOps);
+
+    try {
+      const response = await api.bulkCommit({
+        operations: bulkOperations,
+        groupsToCreate: groupsToCreate.length > 0 ? groupsToCreate : undefined,
+        validateOnly: true,
+      });
+
+      return {
+        passed: response.validationPassed ?? true,
+        issues: response.validationIssues ?? [],
+      };
+    } catch (err) {
+      console.error('Validation failed:', err);
+      return {
+        passed: false,
+        issues: [{
+          type: 'invalid_operation',
+          severity: 'error',
+          message: 'Validation request failed: ' + (err instanceof Error ? err.message : 'Unknown error'),
+        }],
+      };
+    }
+  }, [state.isActive, state.stagedOperations, state.workingCopy, buildBulkOperations]);
+
   // Commit all staged operations to server
-  const commit = useCallback(async (onProgress?: (progress: CommitProgress) => void): Promise<CommitResult> => {
+  const commit = useCallback(async (
+    onProgress?: (progress: CommitProgress) => void,
+    options?: CommitOptions
+  ): Promise<CommitResult> => {
     if (!state.isActive || state.stagedOperations.length === 0) {
       return {
         success: true,
@@ -1100,103 +1240,17 @@ export function useEditMode({
     };
 
     try {
-      // Convert consolidated operations to bulk format
-      const bulkOperations: api.BulkOperation[] = [];
-
-      for (const operation of consolidatedOps) {
-        const { apiCall } = operation;
-
-        switch (apiCall.type) {
-          case 'updateChannel':
-            bulkOperations.push({
-              type: 'updateChannel',
-              channelId: apiCall.channelId,
-              data: apiCall.data,
-            });
-            break;
-
-          case 'addStreamToChannel':
-            bulkOperations.push({
-              type: 'addStreamToChannel',
-              channelId: apiCall.channelId,
-              streamId: apiCall.streamId,
-            });
-            break;
-
-          case 'removeStreamFromChannel':
-            bulkOperations.push({
-              type: 'removeStreamFromChannel',
-              channelId: apiCall.channelId,
-              streamId: apiCall.streamId,
-            });
-            break;
-
-          case 'reorderChannelStreams':
-            bulkOperations.push({
-              type: 'reorderChannelStreams',
-              channelId: apiCall.channelId,
-              streamIds: apiCall.streamIds,
-            });
-            break;
-
-          case 'bulkAssignChannelNumbers':
-            bulkOperations.push({
-              type: 'bulkAssignChannelNumbers',
-              channelIds: apiCall.channelIds,
-              startingNumber: apiCall.startingNumber,
-            });
-            break;
-
-          case 'createChannel': {
-            // Get temp ID from the afterSnapshot
-            const tempId = operation.afterSnapshot[0]?.id ?? -1;
-            bulkOperations.push({
-              type: 'createChannel',
-              tempId: tempId,
-              name: apiCall.name,
-              channelNumber: apiCall.channelNumber,
-              groupId: apiCall.groupId,
-              newGroupName: apiCall.newGroupName,
-              logoId: apiCall.logoId,
-              logoUrl: apiCall.logoUrl,
-              tvgId: apiCall.tvgId,
-            });
-            break;
-          }
-
-          case 'deleteChannel':
-            bulkOperations.push({
-              type: 'deleteChannel',
-              channelId: apiCall.channelId,
-            });
-            break;
-
-          case 'createGroup':
-            bulkOperations.push({
-              type: 'createGroup',
-              name: apiCall.name,
-            });
-            break;
-
-          case 'deleteChannelGroup':
-            bulkOperations.push({
-              type: 'deleteChannelGroup',
-              groupId: apiCall.groupId,
-            });
-            break;
-        }
-      }
-
-      // Prepare groups to create
-      const groupsToCreate = Array.from(newGroupNames).map((name) => ({ name }));
+      // Build bulk operations using helper
+      const { bulkOperations, groupsToCreate } = buildBulkOperations(consolidatedOps);
 
       // Report progress for bulk commit with detailed breakdown
       reportProgress(`Applying: ${operationSummary}`);
 
-      // Execute bulk commit
+      // Execute bulk commit with options
       const bulkResponse = await api.bulkCommit({
         operations: bulkOperations,
         groupsToCreate: groupsToCreate.length > 0 ? groupsToCreate : undefined,
+        continueOnError: options?.continueOnError,
       });
 
       // Map response to result
@@ -1204,6 +1258,8 @@ export function useEditMode({
       result.operationsApplied = bulkResponse.operationsApplied;
       result.operationsFailed = bulkResponse.operationsFailed;
       result.errors = bulkResponse.errors;
+      result.validationIssues = bulkResponse.validationIssues;
+      result.validationPassed = bulkResponse.validationPassed;
 
       // Populate tempIdMap and newGroupIdMap from response
       for (const [tempIdStr, realId] of Object.entries(bulkResponse.tempIdMap)) {
@@ -1239,9 +1295,17 @@ export function useEditMode({
         const createdGroupIds = Array.from(newGroupIdMap.values());
         onCommitComplete?.(createdGroupIds);
       } else {
-        onError?.(
-          `Failed to apply ${result.operationsFailed} operation(s): ${result.errors[0]?.error}`
-        );
+        // Build a detailed error message
+        let errorMessage = `Failed to apply ${result.operationsFailed} operation(s)`;
+        if (result.errors.length > 0) {
+          const firstError = result.errors[0];
+          const details: string[] = [];
+          if (firstError.channelName) details.push(`channel: ${firstError.channelName}`);
+          if (firstError.streamName) details.push(`stream: ${firstError.streamName}`);
+          const detailStr = details.length > 0 ? ` (${details.join(', ')})` : '';
+          errorMessage += `: ${firstError.error}${detailStr}`;
+        }
+        onError?.(errorMessage);
       }
     } catch (err) {
       console.error('Commit failed:', err);
@@ -1255,10 +1319,12 @@ export function useEditMode({
   }, [
     state.isActive,
     state.stagedOperations,
+    state.workingCopy,
     channels,
     onChannelsChange,
     onCommitComplete,
     onError,
+    buildBulkOperations,
   ]);
 
   // Compute edit mode duration with live updates (in seconds)
@@ -1325,6 +1391,7 @@ export function useEditMode({
 
     // Commit/Discard
     getSummary,
+    validate,
     commit,
     discard,
     checkForConflicts,
