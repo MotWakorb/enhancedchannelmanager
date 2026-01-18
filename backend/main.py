@@ -1222,10 +1222,15 @@ async def bulk_commit_operations(request: BulkCommitRequest):
         if referenced_channel_ids:
             try:
                 logger.debug(f"[BULK-VALIDATE] Fetching existing channels for validation...")
-                # Fetch all channels to build lookup
-                all_channels = await client.get_channels()
-                for ch in all_channels:
-                    existing_channels[ch["id"]] = ch
+                # Fetch all pages of channels to build lookup
+                page = 1
+                while True:
+                    response = await client.get_channels(page=page, page_size=500)
+                    for ch in response.get("results", []):
+                        existing_channels[ch["id"]] = ch
+                    if not response.get("next"):
+                        break
+                    page += 1
                 logger.debug(f"[BULK-VALIDATE] Loaded {len(existing_channels)} existing channels")
             except Exception as e:
                 logger.warning(f"[BULK-VALIDATE] Failed to fetch channels for validation: {e}")
@@ -1233,10 +1238,15 @@ async def bulk_commit_operations(request: BulkCommitRequest):
         if referenced_stream_ids:
             try:
                 logger.debug(f"[BULK-VALIDATE] Fetching existing streams for validation...")
-                # Fetch all streams to build lookup
-                all_streams = await client.get_streams()
-                for s in all_streams:
-                    existing_streams[s["id"]] = s
+                # Fetch all pages of streams to build lookup
+                page = 1
+                while True:
+                    response = await client.get_streams(page=page, page_size=500)
+                    for s in response.get("results", []):
+                        existing_streams[s["id"]] = s
+                    if not response.get("next"):
+                        break
+                    page += 1
                 logger.debug(f"[BULK-VALIDATE] Loaded {len(existing_streams)} existing streams")
             except Exception as e:
                 logger.warning(f"[BULK-VALIDATE] Failed to fetch streams for validation: {e}")
