@@ -1251,17 +1251,33 @@ function App() {
 
         // Only push down channels if explicitly requested via pushDownOnConflict
         if (pushDownOnConflict) {
-          // Get ALL channels >= startingNumber
-          // This ensures we don't create gaps
+          // Calculate the decimal/integer mode for shifting
+          const hasDecimalShift = startingNumber % 1 !== 0;
+          const incrementShift = hasDecimalShift ? 0.1 : 1;
+
+          // Calculate the ending number of the new channel range
+          const rawEndingNumber = startingNumber + (channelCount - 1) * incrementShift;
+          const endingNumber = hasDecimalShift
+            ? Math.round(rawEndingNumber * 10) / 10
+            : rawEndingNumber;
+
+          // Only shift channels that actually conflict with the new channel range
+          // (not ALL channels >= startingNumber)
           const channelsToShift = displayChannels
-            .filter((ch) => ch.channel_number !== null && ch.channel_number >= startingNumber)
+            .filter((ch) => ch.channel_number !== null &&
+                    ch.channel_number >= startingNumber &&
+                    ch.channel_number <= endingNumber)
             .sort((a, b) => (b.channel_number ?? 0) - (a.channel_number ?? 0)); // Sort descending to avoid conflicts
 
-          // Shift each channel by the count of new channels (starting from highest to avoid conflicts)
+          // Shift amount is the total range taken by new channels
+          const shiftAmount = channelCount * incrementShift;
+
+          // Shift each conflicting channel to just after the new range
           for (const ch of channelsToShift) {
-            const newNum = ch.channel_number! + channelCount;
-            // Note: We don't auto-rename here because we're shifting by multiple positions
-            // and the original channel name relationship would be lost
+            const rawNewNum = ch.channel_number! + shiftAmount;
+            const newNum = hasDecimalShift
+              ? Math.round(rawNewNum * 10) / 10
+              : rawNewNum;
             stageUpdateChannel(ch.id, { channel_number: newNum }, `Shifted channel ${ch.channel_number} to ${newNum} to make room`);
           }
         }
@@ -1305,9 +1321,19 @@ function App() {
           channelIndex++;
 
           // Build channel name with proper prefixes
+          // First, strip any existing channel number prefix from the name
+          // Pattern: number (with optional decimal) followed by separator (|, -, :, space+letter)
+          // Examples: "123 | ESPN" -> "ESPN", "45.1 - CNN" -> "CNN", "7: ABC" -> "ABC"
+          const stripChannelNumber = (name: string): string => {
+            const match = name.match(/^\d+(?:\.\d+)?\s*[|\-:]\s*(.+)$/);
+            return match ? match[1] : name;
+          };
+
           let channelName = normalizedName;
           if (addChannelNumber && keepCountryPrefix) {
-            const countryMatch = normalizedName.match(new RegExp(`^([A-Z]{2,6})\\s*[${countrySeparator ?? '|'}]\\s*(.+)$`));
+            // Strip existing channel number before checking for country prefix
+            const nameWithoutNumber = stripChannelNumber(normalizedName);
+            const countryMatch = nameWithoutNumber.match(new RegExp(`^([A-Z]{2,6})\\s*[${countrySeparator ?? '|'}]\\s*(.+)$`));
             if (countryMatch) {
               const [, countryCode, baseName] = countryMatch;
               if (prefixOrder === 'country-first') {
@@ -1316,10 +1342,11 @@ function App() {
                 channelName = `${channelNumber} ${numberSeparator} ${countryCode} ${countrySeparator} ${baseName}`;
               }
             } else {
-              channelName = `${channelNumber} ${numberSeparator} ${normalizedName}`;
+              channelName = `${channelNumber} ${numberSeparator} ${nameWithoutNumber}`;
             }
           } else if (addChannelNumber) {
-            channelName = `${channelNumber} ${numberSeparator} ${normalizedName}`;
+            const nameWithoutNumber = stripChannelNumber(normalizedName);
+            channelName = `${channelNumber} ${numberSeparator} ${nameWithoutNumber}`;
           }
 
           // Find logo URL from the first stream that has one
