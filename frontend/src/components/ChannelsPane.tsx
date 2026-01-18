@@ -1380,7 +1380,7 @@ export function ChannelsPane({
         // Renumber each subsequent channel (move up by 1)
         for (const ch of subsequentChannels) {
           const newNumber = ch.channel_number! - 1;
-          const newName = computeAutoRename(ch.name, ch.channel_number, newNumber);
+          const newName = autoRenameChannelNumber ? computeAutoRename(ch.name, ch.channel_number, newNumber) : undefined;
           const description = newName
             ? `Changed "${ch.name}" to "${newName}"`
             : `Changed channel number from ${ch.channel_number} to ${newNumber}`;
@@ -1396,7 +1396,7 @@ export function ChannelsPane({
             const subsequent = subsequentChannels.find((s) => s.id === ch.id);
             if (subsequent) {
               const newNumber = ch.channel_number! - 1;
-              const newName = computeAutoRename(ch.name, ch.channel_number, newNumber);
+              const newName = autoRenameChannelNumber ? computeAutoRename(ch.name, ch.channel_number, newNumber) : undefined;
               return {
                 ...ch,
                 channel_number: newNumber,
@@ -2435,7 +2435,7 @@ export function ChannelsPane({
         // Shift each channel down by 1 (starting from highest to avoid conflicts)
         for (const ch of channelsToShift) {
           const newNum = ch.channel_number! + 1;
-          const newName = computeAutoRename(ch.name, ch.channel_number, newNum);
+          const newName = autoRenameChannelNumber ? computeAutoRename(ch.name, ch.channel_number, newNum) : undefined;
           const description = newName
             ? `Changed "${ch.name}" to "${newName}"`
             : `Changed channel number from ${ch.channel_number} to ${newNum}`;
@@ -2451,7 +2451,7 @@ export function ChannelsPane({
             const shift = channelsToShift.find((s) => s.id === ch.id);
             if (shift) {
               const newNum = ch.channel_number! + 1;
-              const newName = computeAutoRename(ch.name, ch.channel_number, newNum);
+              const newName = autoRenameChannelNumber ? computeAutoRename(ch.name, ch.channel_number, newNum) : undefined;
               return { ...ch, channel_number: newNum, ...(newName ? { name: newName } : {}) };
             }
             return ch;
@@ -2488,14 +2488,15 @@ export function ChannelsPane({
   };
 
   // Helper function to compute auto-rename for a channel number change
-  // Returns the new name if auto-rename should apply, undefined otherwise
+  // Returns the new name if a channel number is detected in the name, undefined otherwise
+  // The caller is responsible for checking whether auto-rename is enabled
   // Memoized with useCallback to avoid recreating regex functions on every render
   const computeAutoRename = useCallback((
     channelName: string,
     _oldNumber: number | null,
     newNumber: number | null
   ): string | undefined => {
-    if (!autoRenameChannelNumber || newNumber === null) {
+    if (newNumber === null) {
       return undefined;
     }
 
@@ -2545,7 +2546,7 @@ export function ChannelsPane({
     }
 
     return undefined;
-  }, [autoRenameChannelNumber]);
+  }, []);
 
   // Helper function to strip leading/trailing/middle channel numbers from a name for sorting purposes
   // Matches same patterns as computeAutoRename: "123 | Name", "123-Name", "US | 5034 - Name", "Name | 123"
@@ -2608,7 +2609,7 @@ export function ChannelsPane({
     let nameChanged = false;
 
     // If auto-rename is enabled, check if we should update the channel name
-    if (channel) {
+    if (channel && autoRenameChannelNumber) {
       const newName = computeAutoRename(channel.name, channel.channel_number, newNumber);
       if (newName) {
         updateData.name = newName;
@@ -3336,7 +3337,7 @@ export function ChannelsPane({
       const channelUpdates: Array<{ id: number; newNumber: number; newName?: string; oldName: string }> = [];
       reorderedGroup.forEach((ch, index) => {
         const newNumber = startingNumber + index;
-        const newName = computeAutoRename(ch.name, ch.channel_number, newNumber);
+        const newName = autoRenameChannelNumber ? computeAutoRename(ch.name, ch.channel_number, newNumber) : undefined;
         channelUpdates.push({ id: ch.id, newNumber, newName, oldName: ch.name });
       });
 
@@ -3433,7 +3434,7 @@ export function ChannelsPane({
           newNumber = chNum + 1;
         }
 
-        const newName = computeAutoRename(ch.name, chNum, newNumber);
+        const newName = autoRenameChannelNumber ? computeAutoRename(ch.name, chNum, newNumber) : undefined;
         channelUpdates.push({
           id: ch.id,
           oldNumber: chNum,
@@ -3642,9 +3643,11 @@ export function ChannelsPane({
           let finalName = channel.name;
 
           // Apply auto-rename if enabled
-          const newName = computeAutoRename(channel.name, channel.channel_number, newNumber);
-          if (newName) {
-            finalName = newName;
+          if (autoRenameChannelNumber) {
+            const newName = computeAutoRename(channel.name, channel.channel_number, newNumber);
+            if (newName) {
+              finalName = newName;
+            }
           }
 
           shiftUpdates.push({ channel, finalChannelNumber: newNumber, finalName });
@@ -3671,9 +3674,11 @@ export function ChannelsPane({
         const newNumber = sourceGroupMinChannel + index;
         if (newNumber !== channel.channel_number) {
           let finalName = channel.name;
-          const newName = computeAutoRename(channel.name, channel.channel_number, newNumber);
-          if (newName) {
-            finalName = newName;
+          if (autoRenameChannelNumber) {
+            const newName = computeAutoRename(channel.name, channel.channel_number, newNumber);
+            if (newName) {
+              finalName = newName;
+            }
           }
           sourceRenumberUpdates.push({ channel, finalChannelNumber: newNumber, finalName });
         }
@@ -3690,7 +3695,7 @@ export function ChannelsPane({
 
       // Check if auto-rename applies when changing channel number
       let finalName = channel.name;
-      if (!keepChannelNumber && finalChannelNumber !== null && finalChannelNumber !== channel.channel_number) {
+      if (autoRenameChannelNumber && !keepChannelNumber && finalChannelNumber !== null && finalChannelNumber !== channel.channel_number) {
         const newName = computeAutoRename(channel.name, channel.channel_number, finalChannelNumber);
         if (newName) {
           finalName = newName;
@@ -5031,7 +5036,7 @@ export function ChannelsPane({
                   <div className="renumber-preview">
                     {subsequentChannels.slice(0, 3).map((ch) => {
                       const newNumber = ch.channel_number! - 1;
-                      const newName = computeAutoRename(ch.name, ch.channel_number, newNumber);
+                      const newName = autoRenameChannelNumber ? computeAutoRename(ch.name, ch.channel_number, newNumber) : undefined;
                       return (
                         <div key={ch.id} className="renumber-preview-item">
                           <span className="renumber-old">{ch.channel_number}</span>
