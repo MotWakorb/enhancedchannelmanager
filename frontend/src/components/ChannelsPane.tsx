@@ -838,6 +838,20 @@ export function ChannelsPane({
   const hiddenGroupsModal = useModal();
   const [hiddenGroups, setHiddenGroups] = useState<{ id: number; name: string; hidden_at: string }[]>([]);
 
+  // Group reorder modal state
+  const groupReorderModal = useModal();
+  const [groupReorderData, setGroupReorderData] = useState<{
+    groupId: number;
+    groupName: string;
+    channels: Channel[];
+    newPosition: number;  // Index in the group order
+    suggestedStartingNumber: number | null;
+    precedingGroupName: string | null;
+    precedingGroupMaxChannel: number | null;
+  } | null>(null);
+  const [groupReorderNumberingOption, setGroupReorderNumberingOption] = useState<'keep' | 'suggested' | 'custom'>('suggested');
+  const [groupReorderCustomNumber, setGroupReorderCustomNumber] = useState<string>('');
+
   // Drag overlay state
   const [activeDragId, setActiveDragId] = useState<number | null>(null);
   // Drop indicator state - tracks where to show the drop indicator line
@@ -3059,10 +3073,59 @@ export function ChannelsPane({
       const oldIndex = currentOrder.indexOf(activeGroupNumId);
       const newIndex = currentOrder.indexOf(overGroupNumId);
 
-      if (oldIndex !== -1 && newIndex !== -1) {
-        // Reorder the groups
+      if (oldIndex !== -1 && newIndex !== -1 && oldIndex !== newIndex) {
+        // Calculate the new order to find the preceding group
         const newOrder = arrayMove(currentOrder, oldIndex, newIndex);
-        setGroupOrder(newOrder);
+        const newPositionInOrder = newOrder.indexOf(activeGroupNumId);
+
+        // Get the group being moved and its channels
+        const movedGroup = channelGroups.find(g => g.id === activeGroupNumId);
+        const movedGroupChannels = channelsByGroup[activeGroupNumId] || [];
+
+        // Find the preceding group (if any) to calculate suggested starting number
+        let precedingGroupName: string | null = null;
+        let precedingGroupMaxChannel: number | null = null;
+        let suggestedStartingNumber: number | null = null;
+
+        if (newPositionInOrder > 0) {
+          const precedingGroupId = newOrder[newPositionInOrder - 1];
+          const precedingGroup = channelGroups.find(g => g.id === precedingGroupId);
+          const precedingGroupChannels = channelsByGroup[precedingGroupId] || [];
+
+          if (precedingGroup) {
+            precedingGroupName = precedingGroup.name;
+
+            // Find the max channel number in the preceding group
+            const precedingChannelNumbers = precedingGroupChannels
+              .map(ch => ch.channel_number)
+              .filter((n): n is number => n !== null);
+
+            if (precedingChannelNumbers.length > 0) {
+              precedingGroupMaxChannel = Math.max(...precedingChannelNumbers);
+              suggestedStartingNumber = precedingGroupMaxChannel + 1;
+            }
+          }
+        } else {
+          // First position - suggest starting at 1
+          suggestedStartingNumber = 1;
+        }
+
+        // Show the group reorder modal
+        setGroupReorderData({
+          groupId: activeGroupNumId,
+          groupName: movedGroup?.name ?? 'Unknown Group',
+          channels: movedGroupChannels,
+          newPosition: newPositionInOrder,
+          suggestedStartingNumber,
+          precedingGroupName,
+          precedingGroupMaxChannel,
+        });
+        setGroupReorderNumberingOption('suggested');
+        setGroupReorderCustomNumber(suggestedStartingNumber?.toString() ?? '');
+        groupReorderModal.open();
+
+        // Store the pending new order to apply when confirmed
+        // We'll use the modal data to track this
       }
       return;
     }
@@ -3433,6 +3496,82 @@ export function ChannelsPane({
         }
       }
     }
+  };
+
+  // Handle group reorder confirmation
+  const handleGroupReorderConfirm = () => {
+    if (!groupReorderData) return;
+
+    const { groupId, channels, newPosition } = groupReorderData;
+
+    // First, apply the group reorder
+    let currentOrder = groupOrder;
+    if (currentOrder.length === 0) {
+      currentOrder = sortedChannelGroups.map(g => g.id);
+    }
+
+    const oldIndex = currentOrder.indexOf(groupId);
+    if (oldIndex !== -1) {
+      // We need to calculate the new order based on newPosition
+      // Remove from old position
+      const withoutGroup = currentOrder.filter(id => id !== groupId);
+      // Insert at new position
+      const newOrder = [
+        ...withoutGroup.slice(0, newPosition),
+        groupId,
+        ...withoutGroup.slice(newPosition),
+      ];
+      setGroupOrder(newOrder);
+    }
+
+    // Then, renumber channels if requested
+    if (groupReorderNumberingOption !== 'keep' && channels.length > 0) {
+      let startingNumber: number;
+
+      if (groupReorderNumberingOption === 'custom') {
+        startingNumber = parseInt(groupReorderCustomNumber, 10);
+        if (isNaN(startingNumber)) {
+          startingNumber = groupReorderData.suggestedStartingNumber ?? 1;
+        }
+      } else {
+        startingNumber = groupReorderData.suggestedStartingNumber ?? 1;
+      }
+
+      // Sort channels by current channel number to maintain relative order
+      const sortedChannels = [...channels].sort((a, b) =>
+        (a.channel_number ?? 0) - (b.channel_number ?? 0)
+      );
+
+      // Use batch operation for renumbering
+      startBatch(`Renumber "${groupReorderData.groupName}" starting at ${startingNumber}`);
+
+      sortedChannels.forEach((channel, index) => {
+        const newNumber = startingNumber + index;
+        if (channel.channel_number !== newNumber) {
+          stageUpdateChannel(
+            channel.id,
+            { channel_number: newNumber },
+            `Renumber "${channel.name}" to ${newNumber}`
+          );
+        }
+      });
+
+      endBatch();
+    }
+
+    // Close modal and reset state
+    groupReorderModal.close();
+    setGroupReorderData(null);
+    setGroupReorderNumberingOption('suggested');
+    setGroupReorderCustomNumber('');
+  };
+
+  // Handle group reorder cancel
+  const handleGroupReorderCancel = () => {
+    groupReorderModal.close();
+    setGroupReorderData(null);
+    setGroupReorderNumberingOption('suggested');
+    setGroupReorderCustomNumber('');
   };
 
   // Handle cross-group move confirmation (supports multiple channels)
@@ -5396,6 +5535,132 @@ export function ChannelsPane({
                 disabled={!isMoveButtonEnabled()}
               >
                 Move {crossGroupMoveData.channels.length > 1 ? `${crossGroupMoveData.channels.length} Channels` : 'Channel'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Group Reorder Modal */}
+      {groupReorderModal.isOpen && groupReorderData && (
+        <div className="modal-overlay">
+          <div className="modal-content cross-group-move-dialog" onClick={(e) => e.stopPropagation()}>
+            <h3>Reorder Group</h3>
+
+            <div className="cross-group-move-info">
+              <p>
+                Moving <strong>{groupReorderData.groupName}</strong> with{' '}
+                <strong>{groupReorderData.channels.length} channel{groupReorderData.channels.length !== 1 ? 's' : ''}</strong>
+                {groupReorderData.precedingGroupName && (
+                  <> to after <span className="group-tag">{groupReorderData.precedingGroupName}</span></>
+                )}
+                {!groupReorderData.precedingGroupName && groupReorderData.newPosition === 0 && (
+                  <> to the <strong>first position</strong></>
+                )}
+              </p>
+              {groupReorderData.precedingGroupMaxChannel !== null && (
+                <p className="group-range-info">
+                  Preceding group ends at channel {groupReorderData.precedingGroupMaxChannel}
+                </p>
+              )}
+            </div>
+
+            <div className="cross-group-move-options">
+              <div className="channel-number-section">
+                <label>Channel Numbers</label>
+              </div>
+
+              <div className="move-option-radio-group">
+                {/* Keep current numbers option */}
+                <label className={`move-option-radio ${groupReorderNumberingOption === 'keep' ? 'selected' : ''}`}>
+                  <input
+                    type="radio"
+                    name="groupReorderNumberingOption"
+                    checked={groupReorderNumberingOption === 'keep'}
+                    onChange={() => setGroupReorderNumberingOption('keep')}
+                  />
+                  <span className="material-icons">numbers</span>
+                  <div className="move-option-text">
+                    <strong>Keep current numbers</strong>
+                    <span>Don't change channel numbers</span>
+                  </div>
+                </label>
+
+                {/* Suggested number option */}
+                {groupReorderData.suggestedStartingNumber !== null && (
+                  <label className={`move-option-radio ${groupReorderNumberingOption === 'suggested' ? 'selected' : ''}`}>
+                    <input
+                      type="radio"
+                      name="groupReorderNumberingOption"
+                      checked={groupReorderNumberingOption === 'suggested'}
+                      onChange={() => setGroupReorderNumberingOption('suggested')}
+                    />
+                    <span className="material-icons">auto_fix_high</span>
+                    <div className="move-option-text">
+                      <strong>Renumber sequentially</strong>
+                      <span>
+                        Starting at {groupReorderData.suggestedStartingNumber}
+                        {groupReorderData.channels.length > 1 && (
+                          <> ({groupReorderData.suggestedStartingNumber}–{groupReorderData.suggestedStartingNumber + groupReorderData.channels.length - 1})</>
+                        )}
+                      </span>
+                    </div>
+                  </label>
+                )}
+
+                {/* Custom number option */}
+                <label className={`move-option-radio ${groupReorderNumberingOption === 'custom' ? 'selected' : ''}`}>
+                  <input
+                    type="radio"
+                    name="groupReorderNumberingOption"
+                    checked={groupReorderNumberingOption === 'custom'}
+                    onChange={() => setGroupReorderNumberingOption('custom')}
+                  />
+                  <span className="material-icons">edit</span>
+                  <div className="move-option-text">
+                    <strong>Custom starting number</strong>
+                    {groupReorderNumberingOption === 'custom' ? (
+                      <div className="custom-number-inline">
+                        <input
+                          type="number"
+                          className="custom-number-input-inline"
+                          placeholder="Enter starting number"
+                          value={groupReorderCustomNumber}
+                          onChange={(e) => setGroupReorderCustomNumber(e.target.value)}
+                          onClick={(e) => e.stopPropagation()}
+                          min="1"
+                          autoFocus
+                        />
+                        {groupReorderCustomNumber && !isNaN(parseInt(groupReorderCustomNumber, 10)) && parseInt(groupReorderCustomNumber, 10) >= 1 && groupReorderData.channels.length > 1 && (
+                          <span className="custom-number-range-inline">
+                            → {parseInt(groupReorderCustomNumber, 10)}–{parseInt(groupReorderCustomNumber, 10) + groupReorderData.channels.length - 1}
+                          </span>
+                        )}
+                      </div>
+                    ) : (
+                      <span>Enter a specific starting number</span>
+                    )}
+                  </div>
+                </label>
+              </div>
+            </div>
+
+            <div className="modal-actions">
+              <button
+                className="modal-btn cancel"
+                onClick={handleGroupReorderCancel}
+              >
+                Cancel
+              </button>
+              <button
+                className="modal-btn primary"
+                onClick={handleGroupReorderConfirm}
+                disabled={
+                  groupReorderNumberingOption === 'custom' &&
+                  (!groupReorderCustomNumber || isNaN(parseInt(groupReorderCustomNumber, 10)) || parseInt(groupReorderCustomNumber, 10) < 1)
+                }
+              >
+                Confirm
               </button>
             </div>
           </div>
