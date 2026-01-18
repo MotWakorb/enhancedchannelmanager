@@ -1832,8 +1832,8 @@
 }
 
 .modal-form .separator-btn.active {
-  background-color: var(--accent-primary);
-  border-color: var(--accent-primary);
+  background-color: var(--button-primary-bg);
+  border-color: var(--button-primary-bg);
   color: var(--button-primary-text);
 }
 

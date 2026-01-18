@@ -193,7 +193,7 @@
   justify-content: center;
   gap: 6px;
   padding: 8px 12px;
-  background: var(--accent-primary);
+  background: var(--button-primary-bg);
   border: none;
   border-radius: 4px;
   color: var(--button-primary-text);
@@ -1271,8 +1271,8 @@
 }
 
 .conflict-card-mode-toggle .mode-btn.active {
-  background: var(--accent-primary);
-  border-color: var(--accent-primary);
+  background: var(--button-primary-bg);
+  border-color: var(--button-primary-bg);
   color: var(--button-primary-text);
 }
 

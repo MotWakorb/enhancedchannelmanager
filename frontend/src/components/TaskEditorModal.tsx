@@ -271,7 +271,7 @@ export function TaskEditorModal({ task, onClose, onSaved }: TaskEditorModalProps
                   padding: '0.5rem 0.75rem',
                   border: 'none',
                   borderRadius: '4px',
-                  backgroundColor: 'var(--accent-primary)',
+                  backgroundColor: 'var(--button-primary-bg)',
                   color: 'var(--button-primary-text)',
                   cursor: 'pointer',
                   fontSize: '0.85rem',
