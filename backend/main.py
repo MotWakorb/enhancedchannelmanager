@@ -308,6 +308,22 @@ class BulkCommitRequest(BaseModel):
     operations: list[BulkOperation]
     # Groups to create before processing operations (name -> temp group ID mapping)
     groupsToCreate: Optional[list[dict]] = None
+    # If true, only validate without executing (returns validation issues)
+    validateOnly: Optional[bool] = False
+    # If true, continue processing even when individual operations fail
+    continueOnError: Optional[bool] = False
+
+
+class ValidationIssue(BaseModel):
+    """Represents a validation issue found during pre-validation"""
+    type: str  # 'missing_channel', 'missing_stream', 'invalid_operation', etc.
+    severity: str  # 'error', 'warning'
+    message: str
+    operationIndex: Optional[int] = None
+    channelId: Optional[int] = None
+    channelName: Optional[str] = None
+    streamId: Optional[int] = None
+    streamName: Optional[str] = None
 
 
 class BulkCommitResponse(BaseModel):
@@ -319,6 +335,10 @@ class BulkCommitResponse(BaseModel):
     tempIdMap: dict[int, int]
     # Map of group names to real IDs
     groupIdMap: dict[str, int]
+    # Validation issues found during pre-validation
+    validationIssues: Optional[list[dict]] = None
+    # Whether validation passed (no errors, may have warnings)
+    validationPassed: Optional[bool] = None
 
 
 # Health check
@@ -1091,8 +1111,13 @@ async def bulk_commit_operations(request: BulkCommitRequest):
     - Processing all operations in a single HTTP request
     - Tracking temp ID -> real ID mappings for newly created channels
     - Creating groups before processing channel operations that reference them
+    - Pre-validating that referenced channels/streams exist
 
-    Returns a response with success status and ID mappings.
+    Options:
+    - validateOnly: If true, only validate without executing
+    - continueOnError: If true, continue processing even when operations fail
+
+    Returns a response with success status, ID mappings, and validation issues.
     """
     import uuid
 
@@ -1106,6 +1131,8 @@ async def bulk_commit_operations(request: BulkCommitRequest):
         "errors": [],
         "tempIdMap": {},  # temp channel ID -> real ID
         "groupIdMap": {},  # group name -> real ID
+        "validationIssues": [],
+        "validationPassed": True,
     }
 
     # Helper to resolve temp IDs to real IDs
@@ -1119,6 +1146,153 @@ async def bulk_commit_operations(request: BulkCommitRequest):
         return group_id
 
     try:
+        # Phase 0: Pre-validation - check that referenced entities exist
+        # Collect all channel IDs that are referenced (not created) in operations
+        referenced_channel_ids = set()
+        referenced_stream_ids = set()
+        channels_to_create = set()  # Temp IDs that will be created
+
+        for idx, op in enumerate(request.operations):
+            if op.type == "createChannel":
+                # This creates a channel, track its temp ID
+                channels_to_create.add(op.tempId)
+            elif op.type in ("updateChannel", "deleteChannel"):
+                if op.channelId >= 0:  # Only real IDs need validation
+                    referenced_channel_ids.add(op.channelId)
+            elif op.type == "addStreamToChannel":
+                if op.channelId >= 0:
+                    referenced_channel_ids.add(op.channelId)
+                referenced_stream_ids.add(op.streamId)
+            elif op.type == "removeStreamFromChannel":
+                if op.channelId >= 0:
+                    referenced_channel_ids.add(op.channelId)
+                referenced_stream_ids.add(op.streamId)
+            elif op.type == "reorderChannelStreams":
+                if op.channelId >= 0:
+                    referenced_channel_ids.add(op.channelId)
+                for sid in op.streamIds:
+                    referenced_stream_ids.add(sid)
+            elif op.type == "bulkAssignChannelNumbers":
+                for cid in op.channelIds:
+                    if cid >= 0:
+                        referenced_channel_ids.add(cid)
+
+        # Fetch existing channels and streams to validate
+        existing_channels = {}  # id -> channel dict
+        existing_streams = {}   # id -> stream dict
+
+        if referenced_channel_ids:
+            try:
+                # Fetch all channels to build lookup
+                all_channels = await client.get_channels()
+                for ch in all_channels:
+                    existing_channels[ch["id"]] = ch
+            except Exception as e:
+                logger.warning(f"Failed to fetch channels for validation: {e}")
+
+        if referenced_stream_ids:
+            try:
+                # Fetch all streams to build lookup
+                all_streams = await client.get_streams()
+                for s in all_streams:
+                    existing_streams[s["id"]] = s
+            except Exception as e:
+                logger.warning(f"Failed to fetch streams for validation: {e}")
+
+        # Validate each operation
+        for idx, op in enumerate(request.operations):
+            if op.type in ("updateChannel", "deleteChannel"):
+                if op.channelId >= 0 and op.channelId not in existing_channels:
+                    ch_name = f"Channel {op.channelId}"
+                    result["validationIssues"].append({
+                        "type": "missing_channel",
+                        "severity": "error",
+                        "message": f"Channel {op.channelId} does not exist in Dispatcharr",
+                        "operationIndex": idx,
+                        "channelId": op.channelId,
+                        "channelName": ch_name,
+                    })
+                    result["validationPassed"] = False
+
+            elif op.type == "addStreamToChannel":
+                if op.channelId >= 0 and op.channelId not in existing_channels:
+                    ch_name = f"Channel {op.channelId}"
+                    result["validationIssues"].append({
+                        "type": "missing_channel",
+                        "severity": "error",
+                        "message": f"Cannot add stream to channel {op.channelId}: channel does not exist",
+                        "operationIndex": idx,
+                        "channelId": op.channelId,
+                        "channelName": ch_name,
+                        "streamId": op.streamId,
+                    })
+                    result["validationPassed"] = False
+                elif op.channelId >= 0:
+                    ch_name = existing_channels[op.channelId].get("name", f"Channel {op.channelId}")
+                    # Check stream exists
+                    if op.streamId not in existing_streams:
+                        result["validationIssues"].append({
+                            "type": "missing_stream",
+                            "severity": "error",
+                            "message": f"Stream {op.streamId} does not exist",
+                            "operationIndex": idx,
+                            "channelId": op.channelId,
+                            "channelName": ch_name,
+                            "streamId": op.streamId,
+                        })
+                        result["validationPassed"] = False
+
+            elif op.type == "removeStreamFromChannel":
+                if op.channelId >= 0 and op.channelId not in existing_channels:
+                    result["validationIssues"].append({
+                        "type": "missing_channel",
+                        "severity": "error",
+                        "message": f"Cannot remove stream from channel {op.channelId}: channel does not exist",
+                        "operationIndex": idx,
+                        "channelId": op.channelId,
+                        "streamId": op.streamId,
+                    })
+                    result["validationPassed"] = False
+
+            elif op.type == "reorderChannelStreams":
+                if op.channelId >= 0 and op.channelId not in existing_channels:
+                    result["validationIssues"].append({
+                        "type": "missing_channel",
+                        "severity": "error",
+                        "message": f"Cannot reorder streams for channel {op.channelId}: channel does not exist",
+                        "operationIndex": idx,
+                        "channelId": op.channelId,
+                    })
+                    result["validationPassed"] = False
+
+            elif op.type == "bulkAssignChannelNumbers":
+                for cid in op.channelIds:
+                    if cid >= 0 and cid not in existing_channels:
+                        result["validationIssues"].append({
+                            "type": "missing_channel",
+                            "severity": "error",
+                            "message": f"Cannot assign number to channel {cid}: channel does not exist",
+                            "operationIndex": idx,
+                            "channelId": cid,
+                        })
+                        result["validationPassed"] = False
+
+        # If validateOnly, return now without executing
+        if request.validateOnly:
+            logger.info(f"Bulk commit validation only: {len(result['validationIssues'])} issues found")
+            result["success"] = result["validationPassed"]
+            return result
+
+        # If validation failed and continueOnError is false, return without executing
+        if not result["validationPassed"] and not request.continueOnError:
+            logger.warning(f"Bulk commit validation failed with {len(result['validationIssues'])} issues")
+            result["success"] = False
+            return result
+
+        # Log if continuing despite validation issues
+        if not result["validationPassed"] and request.continueOnError:
+            logger.warning(f"Bulk commit continuing despite {len(result['validationIssues'])} validation issues (continueOnError=true)")
+
         # Phase 1: Create groups first (if any)
         if request.groupsToCreate:
             for group_info in request.groupsToCreate:
@@ -1246,15 +1420,54 @@ async def bulk_commit_operations(request: BulkCommitRequest):
                     result["operationsApplied"] += 1
 
             except Exception as e:
-                logger.error(f"Bulk commit operation {op_id} failed: {e}")
-                result["success"] = False
-                result["operationsFailed"] += 1
-                result["errors"].append({
+                # Build detailed error info with channel/stream names
+                error_details = {
                     "operationId": op_id,
-                    "error": str(e)
-                })
-                # Stop on first failure to maintain consistency
-                break
+                    "operationType": op.type,
+                    "error": str(e),
+                }
+
+                # Add context based on operation type
+                if hasattr(op, 'channelId'):
+                    error_details["channelId"] = op.channelId
+                    # Try to get channel name from our lookup
+                    if op.channelId in existing_channels:
+                        error_details["channelName"] = existing_channels[op.channelId].get("name", f"Channel {op.channelId}")
+                    else:
+                        error_details["channelName"] = f"Channel {op.channelId}"
+
+                if hasattr(op, 'streamId'):
+                    error_details["streamId"] = op.streamId
+                    # Try to get stream name from our lookup
+                    if op.streamId in existing_streams:
+                        error_details["streamName"] = existing_streams[op.streamId].get("name", f"Stream {op.streamId}")
+                    else:
+                        error_details["streamName"] = f"Stream {op.streamId}"
+
+                if hasattr(op, 'name'):
+                    error_details["entityName"] = op.name
+
+                # Log with detailed context
+                channel_info = f" (channel: {error_details.get('channelName', 'N/A')})" if 'channelName' in error_details else ""
+                stream_info = f" (stream: {error_details.get('streamName', 'N/A')})" if 'streamName' in error_details else ""
+                logger.error(f"Bulk commit operation {op_id} failed{channel_info}{stream_info}: {e}")
+
+                result["operationsFailed"] += 1
+                result["errors"].append(error_details)
+
+                # If continueOnError, keep processing; otherwise stop
+                if not request.continueOnError:
+                    result["success"] = False
+                    break
+                # If continuing, mark as partial failure but keep going
+                # success will be determined at the end based on whether any ops succeeded
+
+        # Determine final success status
+        # If continueOnError was used, success means at least some operations succeeded
+        if request.continueOnError:
+            result["success"] = result["operationsFailed"] == 0 or result["operationsApplied"] > 0
+        else:
+            result["success"] = result["operationsFailed"] == 0
 
         # Log summary to journal
         journal.log_entry(
@@ -1262,17 +1475,21 @@ async def bulk_commit_operations(request: BulkCommitRequest):
             action_type="bulk_commit",
             entity_id=None,
             entity_name="Bulk Commit",
-            description=f"Applied {result['operationsApplied']} operations in bulk commit",
+            description=f"Applied {result['operationsApplied']} operations in bulk commit" +
+                        (f" ({result['operationsFailed']} failed)" if result["operationsFailed"] > 0 else ""),
             after_value={
                 "operations_applied": result["operationsApplied"],
                 "operations_failed": result["operationsFailed"],
                 "channels_created": len(result["tempIdMap"]),
                 "groups_created": len(result["groupIdMap"]),
+                "validation_issues": len(result["validationIssues"]),
+                "continue_on_error": request.continueOnError,
             },
             batch_id=batch_id,
         )
 
-        logger.info(f"Bulk commit completed: {result['operationsApplied']} applied, {result['operationsFailed']} failed")
+        logger.info(f"Bulk commit completed: {result['operationsApplied']} applied, {result['operationsFailed']} failed" +
+                   (f", {len(result['validationIssues'])} validation issues" if result["validationIssues"] else ""))
         return result
 
     except Exception as e:
