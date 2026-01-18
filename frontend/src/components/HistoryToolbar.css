@@ -271,12 +271,12 @@
 }
 
 .checkpoint-name-btn.confirm {
-  background-color: var(--accent-primary);
-  border: 1px solid var(--accent-primary);
+  background-color: var(--button-primary-bg);
+  border: 1px solid var(--button-primary-bg);
   color: var(--button-primary-text);
 }
 
 .checkpoint-name-btn.confirm:hover {
-  background-color: var(--accent-secondary);
-  border-color: var(--accent-secondary);
+  background-color: var(--button-hover-bg);
+  border-color: var(--button-hover-bg);
 }
