@@ -321,6 +321,41 @@ Fine-tune which groups appear in the channel list:
 - **Auto-Channel Sync** - Configure automatic channel synchronization per group
 - **Group Settings** - Per-group provider configuration with start channel numbers
 
+## Roadmap
+
+Here's what's coming to Enhanced Channel Manager:
+
+### v0.8.0 - Scheduled Tasks
+Automated background tasks for keeping your setup current:
+- Scheduled EPG refresh
+- Scheduled M3U refresh
+- Automatic cleanup of stale data
+- Task history and manual run options
+
+### v0.8.2 - Notifications
+In-app notifications and external alerts:
+- Toast notifications for actions and errors
+- Notification center with history
+- Email alerts (SMTP)
+- Discord webhook alerts
+- Telegram bot alerts
+
+### v0.8.6 - Tag-Based Channel Normalization
+Improved UI for managing stream name normalization:
+- Expandable tag groups (Country, League, Network, Quality, Timezone)
+- Toggle individual built-in tags on/off
+- Custom tags with prefix/suffix/both mode
+- Quick tag management in bulk create modal
+
+### v0.9.0 - Mobile Interface
+Full mobile support for managing channels on the go:
+- Responsive layouts for phones and tablets
+- Touch-optimized controls
+- Mobile-friendly navigation
+- Progressive Web App (PWA) support
+
+---
+
 ## Technical Stack
 
 ### Frontend
