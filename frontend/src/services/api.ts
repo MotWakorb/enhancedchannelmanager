@@ -200,6 +200,37 @@ export async function createChannel(data: {
   });
 }
 
+// Bulk operation types for bulk commit
+export interface BulkOperation {
+  type: string;
+  [key: string]: unknown;
+}
+
+export interface BulkCommitRequest {
+  operations: BulkOperation[];
+  groupsToCreate?: { name: string }[];
+}
+
+export interface BulkCommitResponse {
+  success: boolean;
+  operationsApplied: number;
+  operationsFailed: number;
+  errors: { operationId: string; error: string }[];
+  tempIdMap: Record<number, number>;
+  groupIdMap: Record<string, number>;
+}
+
+/**
+ * Commit multiple channel operations in a single request.
+ * This is much more efficient than making individual API calls for 1000+ operations.
+ */
+export async function bulkCommit(request: BulkCommitRequest): Promise<BulkCommitResponse> {
+  return fetchJson(`${API_BASE}/channels/bulk-commit`, {
+    method: 'POST',
+    body: JSON.stringify(request),
+  });
+}
+
 // Channel Groups
 export async function getChannelGroups(): Promise<ChannelGroup[]> {
   return fetchJson(`${API_BASE}/channel-groups`);
