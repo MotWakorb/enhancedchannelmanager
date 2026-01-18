@@ -2141,14 +2141,16 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         </p>
 
         <div className="settings-group">
-          <button
-            className="btn-secondary"
-            onClick={handleLoadOrphanedGroups}
-            disabled={loadingOrphaned || cleaningOrphaned}
-          >
-            <span className="material-icons">search</span>
-            {loadingOrphaned ? 'Scanning...' : 'Scan for Orphaned Groups'}
-          </button>
+          <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+            <button
+              className="btn-secondary"
+              onClick={handleLoadOrphanedGroups}
+              disabled={loadingOrphaned || cleaningOrphaned}
+            >
+              <span className="material-icons">search</span>
+              {loadingOrphaned ? 'Scanning...' : 'Scan for Orphaned Groups'}
+            </button>
+          </div>
 
           {orphanedGroups.length > 0 && (
             <div style={{ marginTop: '1rem' }}>
