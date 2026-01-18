@@ -2628,7 +2628,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
               <h3>Select Channel Groups to Probe</h3>
               <button
                 onClick={() => setShowGroupSelectModal(false)}
-                className="modal-close"
+                className="probe-results-modal-close"
               >
                 ×
               </button>
