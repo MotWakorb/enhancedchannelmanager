@@ -226,6 +226,11 @@
   min-width: 140px;
 }
 
+.form-group-vertical button {
+  display: block;
+  margin-left: auto;
+}
+
 .checkbox-group {
   display: flex;
   align-items: flex-start;
