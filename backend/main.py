@@ -1146,6 +1146,17 @@ async def bulk_commit_operations(request: BulkCommitRequest):
     client = get_client()
     batch_id = str(uuid.uuid4())[:8]
 
+    # Count operation types for logging
+    op_counts = {}
+    for op in request.operations:
+        op_counts[op.type] = op_counts.get(op.type, 0) + 1
+    op_summary = ", ".join(f"{count} {op_type}" for op_type, count in sorted(op_counts.items()))
+
+    logger.debug(f"[BULK-COMMIT] Starting bulk commit (batch={batch_id}): {len(request.operations)} operations ({op_summary})")
+    logger.debug(f"[BULK-COMMIT] Options: validateOnly={request.validateOnly}, continueOnError={request.continueOnError}")
+    if request.groupsToCreate:
+        logger.debug(f"[BULK-COMMIT] Groups to create: {[g.get('name') for g in request.groupsToCreate]}")
+
     result = {
         "success": True,
         "operationsApplied": 0,
@@ -1169,6 +1180,8 @@ async def bulk_commit_operations(request: BulkCommitRequest):
 
     try:
         # Phase 0: Pre-validation - check that referenced entities exist
+        logger.debug(f"[BULK-VALIDATE] Phase 0: Starting pre-validation")
+
         # Collect all channel IDs that are referenced (not created) in operations
         referenced_channel_ids = set()
         referenced_stream_ids = set()
@@ -1203,23 +1216,30 @@ async def bulk_commit_operations(request: BulkCommitRequest):
         existing_channels = {}  # id -> channel dict
         existing_streams = {}   # id -> stream dict
 
+        logger.debug(f"[BULK-VALIDATE] Referenced entities: {len(referenced_channel_ids)} channels, {len(referenced_stream_ids)} streams")
+        logger.debug(f"[BULK-VALIDATE] Channels to create: {len(channels_to_create)} (temp IDs: {sorted(channels_to_create)})")
+
         if referenced_channel_ids:
             try:
+                logger.debug(f"[BULK-VALIDATE] Fetching existing channels for validation...")
                 # Fetch all channels to build lookup
                 all_channels = await client.get_channels()
                 for ch in all_channels:
                     existing_channels[ch["id"]] = ch
+                logger.debug(f"[BULK-VALIDATE] Loaded {len(existing_channels)} existing channels")
             except Exception as e:
-                logger.warning(f"Failed to fetch channels for validation: {e}")
+                logger.warning(f"[BULK-VALIDATE] Failed to fetch channels for validation: {e}")
 
         if referenced_stream_ids:
             try:
+                logger.debug(f"[BULK-VALIDATE] Fetching existing streams for validation...")
                 # Fetch all streams to build lookup
                 all_streams = await client.get_streams()
                 for s in all_streams:
                     existing_streams[s["id"]] = s
+                logger.debug(f"[BULK-VALIDATE] Loaded {len(existing_streams)} existing streams")
             except Exception as e:
-                logger.warning(f"Failed to fetch streams for validation: {e}")
+                logger.warning(f"[BULK-VALIDATE] Failed to fetch streams for validation: {e}")
 
         # Validate each operation
         for idx, op in enumerate(request.operations):
@@ -1299,93 +1319,117 @@ async def bulk_commit_operations(request: BulkCommitRequest):
                         })
                         result["validationPassed"] = False
 
+        # Log validation summary
+        logger.debug(f"[BULK-VALIDATE] Validation complete: passed={result['validationPassed']}, issues={len(result['validationIssues'])}")
+        for issue in result['validationIssues']:
+            logger.debug(f"[BULK-VALIDATE] Issue: {issue['type']} - {issue['message']}")
+
         # If validateOnly, return now without executing
         if request.validateOnly:
-            logger.info(f"Bulk commit validation only: {len(result['validationIssues'])} issues found")
+            logger.info(f"[BULK-COMMIT] Validation only mode: {len(result['validationIssues'])} issues found, returning without executing")
             result["success"] = result["validationPassed"]
             return result
 
         # If validation failed and continueOnError is false, return without executing
         if not result["validationPassed"] and not request.continueOnError:
-            logger.warning(f"Bulk commit validation failed with {len(result['validationIssues'])} issues")
+            logger.warning(f"[BULK-COMMIT] Validation failed with {len(result['validationIssues'])} issues, aborting (continueOnError=false)")
             result["success"] = False
             return result
 
         # Log if continuing despite validation issues
         if not result["validationPassed"] and request.continueOnError:
-            logger.warning(f"Bulk commit continuing despite {len(result['validationIssues'])} validation issues (continueOnError=true)")
+            logger.warning(f"[BULK-COMMIT] Continuing despite {len(result['validationIssues'])} validation issues (continueOnError=true)")
 
         # Phase 1: Create groups first (if any)
         if request.groupsToCreate:
+            logger.debug(f"[BULK-GROUP] Phase 1: Creating {len(request.groupsToCreate)} groups")
             for group_info in request.groupsToCreate:
                 group_name = group_info.get("name")
                 if not group_name:
+                    logger.debug(f"[BULK-GROUP] Skipping group with no name")
                     continue
                 try:
+                    logger.debug(f"[BULK-GROUP] Creating group: '{group_name}'")
                     # Try to create the group
                     new_group = await client.create_channel_group(group_name)
                     result["groupIdMap"][group_name] = new_group["id"]
-                    logger.info(f"Bulk commit: Created group '{group_name}' with id {new_group['id']}")
+                    logger.debug(f"[BULK-GROUP] Created group '{group_name}' -> ID {new_group['id']}")
                 except Exception as e:
                     error_str = str(e)
                     # If group already exists, try to find it
                     if "400" in error_str or "already exists" in error_str.lower():
+                        logger.debug(f"[BULK-GROUP] Group '{group_name}' may already exist, searching...")
                         try:
                             groups = await client.get_channel_groups()
                             for g in groups:
                                 if g.get("name") == group_name:
                                     result["groupIdMap"][group_name] = g["id"]
-                                    logger.info(f"Bulk commit: Found existing group '{group_name}' with id {g['id']}")
+                                    logger.debug(f"[BULK-GROUP] Found existing group '{group_name}' -> ID {g['id']}")
                                     break
-                        except Exception:
-                            pass
+                        except Exception as find_err:
+                            logger.debug(f"[BULK-GROUP] Failed to search for existing group: {find_err}")
                     else:
                         # Non-duplicate error - fail the whole operation
+                        logger.error(f"[BULK-GROUP] Failed to create group '{group_name}': {e}")
                         result["success"] = False
                         result["errors"].append({
                             "operationId": f"create-group-{group_name}",
                             "error": str(e)
                         })
                         return result
+            logger.debug(f"[BULK-GROUP] Group creation complete: {len(result['groupIdMap'])} groups mapped")
 
         # Phase 2: Process operations sequentially
+        logger.debug(f"[BULK-APPLY] Phase 2: Processing {len(request.operations)} operations")
         for idx, op in enumerate(request.operations):
             op_id = f"op-{idx}-{op.type}"
             try:
                 if op.type == "updateChannel":
                     channel_id = resolve_id(op.channelId)
+                    logger.debug(f"[BULK-APPLY] [{idx+1}/{len(request.operations)}] updateChannel: channel_id={channel_id}, data={op.data}")
                     await client.update_channel(channel_id, op.data)
                     result["operationsApplied"] += 1
 
                 elif op.type == "addStreamToChannel":
                     channel_id = resolve_id(op.channelId)
+                    logger.debug(f"[BULK-APPLY] [{idx+1}/{len(request.operations)}] addStreamToChannel: channel_id={channel_id}, stream_id={op.streamId}")
                     channel = await client.get_channel(channel_id)
                     current_streams = channel.get("streams", [])
                     if op.streamId not in current_streams:
                         current_streams.append(op.streamId)
                         await client.update_channel(channel_id, {"streams": current_streams})
+                        logger.debug(f"[BULK-APPLY] Added stream {op.streamId} to channel {channel_id}")
+                    else:
+                        logger.debug(f"[BULK-APPLY] Stream {op.streamId} already in channel {channel_id}, skipping")
                     result["operationsApplied"] += 1
 
                 elif op.type == "removeStreamFromChannel":
                     channel_id = resolve_id(op.channelId)
+                    logger.debug(f"[BULK-APPLY] [{idx+1}/{len(request.operations)}] removeStreamFromChannel: channel_id={channel_id}, stream_id={op.streamId}")
                     channel = await client.get_channel(channel_id)
                     current_streams = channel.get("streams", [])
                     if op.streamId in current_streams:
                         current_streams.remove(op.streamId)
                         await client.update_channel(channel_id, {"streams": current_streams})
+                        logger.debug(f"[BULK-APPLY] Removed stream {op.streamId} from channel {channel_id}")
+                    else:
+                        logger.debug(f"[BULK-APPLY] Stream {op.streamId} not in channel {channel_id}, skipping")
                     result["operationsApplied"] += 1
 
                 elif op.type == "reorderChannelStreams":
                     channel_id = resolve_id(op.channelId)
+                    logger.debug(f"[BULK-APPLY] [{idx+1}/{len(request.operations)}] reorderChannelStreams: channel_id={channel_id}, streams={op.streamIds}")
                     await client.update_channel(channel_id, {"streams": op.streamIds})
                     result["operationsApplied"] += 1
 
                 elif op.type == "bulkAssignChannelNumbers":
                     resolved_ids = [resolve_id(cid) for cid in op.channelIds]
+                    logger.debug(f"[BULK-APPLY] [{idx+1}/{len(request.operations)}] bulkAssignChannelNumbers: {len(resolved_ids)} channels starting at {op.startingNumber}")
                     await client.assign_channel_numbers(resolved_ids, op.startingNumber)
                     result["operationsApplied"] += 1
 
                 elif op.type == "createChannel":
+                    logger.debug(f"[BULK-APPLY] [{idx+1}/{len(request.operations)}] createChannel: name='{op.name}', tempId={op.tempId}, groupId={op.groupId}, newGroupName={op.newGroupName}")
                     # Resolve group ID
                     group_id = resolve_group_id(op.groupId, op.newGroupName)
 
@@ -1393,16 +1437,19 @@ async def bulk_commit_operations(request: BulkCommitRequest):
                     logo_id = op.logoId
                     if not logo_id and op.logoUrl:
                         try:
+                            logger.debug(f"[BULK-APPLY] Looking for logo by URL for channel '{op.name}'")
                             # Try to find existing logo by URL
                             existing_logo = await client.find_logo_by_url(op.logoUrl)
                             if existing_logo:
                                 logo_id = existing_logo["id"]
+                                logger.debug(f"[BULK-APPLY] Found existing logo ID {logo_id}")
                             else:
                                 # Create new logo
                                 new_logo = await client.create_logo({"name": op.name, "url": op.logoUrl})
                                 logo_id = new_logo["id"]
+                                logger.debug(f"[BULK-APPLY] Created new logo ID {logo_id}")
                         except Exception as logo_err:
-                            logger.warning(f"Failed to create/find logo for channel {op.name}: {logo_err}")
+                            logger.warning(f"[BULK-APPLY] Failed to create/find logo for channel '{op.name}': {logo_err}")
                             # Continue without logo
 
                     # Create the channel
@@ -1416,6 +1463,7 @@ async def bulk_commit_operations(request: BulkCommitRequest):
                     if op.tvgId is not None:
                         channel_data["tvg_id"] = op.tvgId
 
+                    logger.debug(f"[BULK-APPLY] Creating channel with data: {channel_data}")
                     new_channel = await client.create_channel(channel_data)
 
                     # Track temp ID -> real ID mapping
@@ -1423,23 +1471,31 @@ async def bulk_commit_operations(request: BulkCommitRequest):
                         result["tempIdMap"][op.tempId] = new_channel["id"]
 
                     result["operationsApplied"] += 1
-                    logger.info(f"Bulk commit: Created channel '{op.name}' (temp: {op.tempId} -> real: {new_channel['id']})")
+                    logger.debug(f"[BULK-APPLY] Created channel '{op.name}' (temp: {op.tempId} -> real: {new_channel['id']})")
 
                 elif op.type == "deleteChannel":
                     channel_id = resolve_id(op.channelId)
+                    logger.debug(f"[BULK-APPLY] [{idx+1}/{len(request.operations)}] deleteChannel: channel_id={channel_id}")
                     await client.delete_channel(channel_id)
                     result["operationsApplied"] += 1
+                    logger.debug(f"[BULK-APPLY] Deleted channel {channel_id}")
 
                 elif op.type == "createGroup":
+                    logger.debug(f"[BULK-APPLY] [{idx+1}/{len(request.operations)}] createGroup: name='{op.name}'")
                     # Groups should be created in Phase 1, but handle here if needed
                     if op.name not in result["groupIdMap"]:
                         new_group = await client.create_channel_group(op.name)
                         result["groupIdMap"][op.name] = new_group["id"]
+                        logger.debug(f"[BULK-APPLY] Created group '{op.name}' -> ID {new_group['id']}")
+                    else:
+                        logger.debug(f"[BULK-APPLY] Group '{op.name}' already exists with ID {result['groupIdMap'][op.name]}")
                     result["operationsApplied"] += 1
 
                 elif op.type == "deleteChannelGroup":
+                    logger.debug(f"[BULK-APPLY] [{idx+1}/{len(request.operations)}] deleteChannelGroup: groupId={op.groupId}")
                     await client.delete_channel_group(op.groupId)
                     result["operationsApplied"] += 1
+                    logger.debug(f"[BULK-APPLY] Deleted group {op.groupId}")
 
             except Exception as e:
                 # Build detailed error info with channel/stream names
@@ -1472,15 +1528,18 @@ async def bulk_commit_operations(request: BulkCommitRequest):
                 # Log with detailed context
                 channel_info = f" (channel: {error_details.get('channelName', 'N/A')})" if 'channelName' in error_details else ""
                 stream_info = f" (stream: {error_details.get('streamName', 'N/A')})" if 'streamName' in error_details else ""
-                logger.error(f"Bulk commit operation {op_id} failed{channel_info}{stream_info}: {e}")
+                logger.error(f"[BULK-APPLY] Operation {op_id} failed{channel_info}{stream_info}: {e}")
 
                 result["operationsFailed"] += 1
                 result["errors"].append(error_details)
 
                 # If continueOnError, keep processing; otherwise stop
                 if not request.continueOnError:
+                    logger.debug(f"[BULK-APPLY] Stopping due to error (continueOnError=false)")
                     result["success"] = False
                     break
+                else:
+                    logger.debug(f"[BULK-APPLY] Continuing despite error (continueOnError=true)")
                 # If continuing, mark as partial failure but keep going
                 # success will be determined at the end based on whether any ops succeeded
 
@@ -1490,6 +1549,10 @@ async def bulk_commit_operations(request: BulkCommitRequest):
             result["success"] = result["operationsFailed"] == 0 or result["operationsApplied"] > 0
         else:
             result["success"] = result["operationsFailed"] == 0
+
+        # Log summary
+        logger.debug(f"[BULK-COMMIT] Phase 2 complete: {result['operationsApplied']} applied, {result['operationsFailed']} failed")
+        logger.debug(f"[BULK-COMMIT] ID mappings: {len(result['tempIdMap'])} channels, {len(result['groupIdMap'])} groups")
 
         # Log summary to journal
         journal.log_entry(
@@ -1510,12 +1573,12 @@ async def bulk_commit_operations(request: BulkCommitRequest):
             batch_id=batch_id,
         )
 
-        logger.info(f"Bulk commit completed: {result['operationsApplied']} applied, {result['operationsFailed']} failed" +
-                   (f", {len(result['validationIssues'])} validation issues" if result["validationIssues"] else ""))
+        logger.info(f"[BULK-COMMIT] Completed (batch={batch_id}): success={result['success']}, applied={result['operationsApplied']}, failed={result['operationsFailed']}" +
+                   (f", validation_issues={len(result['validationIssues'])}" if result["validationIssues"] else ""))
         return result
 
     except Exception as e:
-        logger.exception(f"Bulk commit failed: {e}")
+        logger.exception(f"[BULK-COMMIT] Unexpected error (batch={batch_id}): {e}")
         result["success"] = False
         result["errors"].append({
             "operationId": "bulk-commit",
