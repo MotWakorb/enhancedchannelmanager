@@ -806,7 +806,7 @@ export function TaskEditorModal({ task, onClose, onSaved }: TaskEditorModalProps
                     onChange={(e) => setTaskConfig({ ...taskConfig, vacuum_db: e.target.checked })}
                     style={{ accentColor: 'var(--accent-primary)' }}
                   />
-                  <span>Run VACUUM after cleanup</span>
+                  <span>Compact database after cleanup</span>
                 </label>
               </div>
             </div>
