@@ -183,6 +183,20 @@ async def startup_event():
             logger.error(f"Failed to initialize stream prober: {e}", exc_info=True)
             logger.error("Stream probing will not be available!")
 
+    # Start the task execution engine
+    try:
+        # Import tasks module to trigger @register_task decorators
+        import tasks  # noqa: F401 - imported for side effects
+        logger.info("Task modules loaded and registered")
+
+        # Start the task engine
+        from task_engine import start_engine
+        await start_engine()
+        logger.info("Task execution engine started")
+    except Exception as e:
+        logger.error(f"Failed to start task engine: {e}", exc_info=True)
+        logger.error("Scheduled tasks will not be available!")
+
     logger.info("=" * 60)
 
 
@@ -190,6 +204,14 @@ async def startup_event():
 async def shutdown_event():
     """Clean up on shutdown."""
     logger.info("Enhanced Channel Manager shutting down")
+
+    # Stop task engine
+    try:
+        from task_engine import stop_engine
+        await stop_engine()
+        logger.info("Task execution engine stopped")
+    except Exception as e:
+        logger.error(f"Error stopping task engine: {e}")
 
     # Stop bandwidth tracker
     tracker = get_tracker()
