@@ -1801,8 +1801,9 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
 
         {streamProbeEnabled && (
           <div className="settings-group" style={{ marginTop: '1rem' }}>
-            <div className="form-group">
+            <div className="form-group-vertical">
               <label htmlFor="probeInterval">Probe interval (hours)</label>
+              <span className="form-description">How often to run scheduled probes (1-168 hours)</span>
               <input
                 id="probeInterval"
                 type="number"
@@ -1812,11 +1813,11 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                 onChange={(e) => setStreamProbeIntervalHours(Math.max(1, Math.min(168, parseInt(e.target.value) || 24)))}
                 style={{ width: '100px' }}
               />
-              <span className="form-hint">How often to run scheduled probes (1-168 hours)</span>
             </div>
 
-            <div className="form-group">
+            <div className="form-group-vertical">
               <label htmlFor="probeBatchSize">Batch size</label>
+              <span className="form-description">Streams to probe per scheduled cycle (1-{totalStreamCount})</span>
               <input
                 id="probeBatchSize"
                 type="number"
@@ -1826,11 +1827,11 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                 onChange={(e) => setStreamProbeBatchSize(Math.max(1, Math.min(totalStreamCount, parseInt(e.target.value) || 10)))}
                 style={{ width: '100px' }}
               />
-              <span className="form-hint">Streams to probe per scheduled cycle (1-{totalStreamCount})</span>
             </div>
 
-            <div className="form-group">
+            <div className="form-group-vertical">
               <label htmlFor="probeTimeout">Probe timeout (seconds)</label>
+              <span className="form-description">Timeout for each probe attempt (5-120 seconds)</span>
               <input
                 id="probeTimeout"
                 type="number"
@@ -1840,38 +1841,40 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                 onChange={(e) => setStreamProbeTimeout(Math.max(5, Math.min(120, parseInt(e.target.value) || 30)))}
                 style={{ width: '100px' }}
               />
-              <span className="form-hint">Timeout for each probe attempt (5-120 seconds)</span>
             </div>
 
-            <div className="form-group">
+            <div className="form-group-vertical">
               <label htmlFor="probeScheduleTime">Schedule time (local)</label>
+              <span className="form-description">Time of day to start scheduled probes (your local time)</span>
               <input
                 id="probeScheduleTime"
                 type="time"
                 value={streamProbeScheduleTime}
                 onChange={(e) => setStreamProbeScheduleTime(e.target.value || '03:00')}
-                style={{ width: '120px' }}
               />
-              <span className="form-hint">Time of day to start scheduled probes (your local time)</span>
             </div>
 
-            <div className="form-group">
+            <div className="form-group-vertical">
               <label htmlFor="bitrateSampleDuration">Bitrate measurement duration</label>
+              <span className="form-description">How long to sample streams when measuring bitrate</span>
               <select
                 id="bitrateSampleDuration"
                 value={bitrateSampleDuration}
                 onChange={(e) => setBitrateSampleDuration(Number(e.target.value))}
-                style={{ width: '120px' }}
+                style={{ width: '140px' }}
               >
                 <option value={10}>10 seconds</option>
                 <option value={20}>20 seconds</option>
                 <option value={30}>30 seconds</option>
               </select>
-              <span className="form-hint">How long to sample streams when measuring bitrate</span>
             </div>
 
-            <div className="form-group">
+            <div className="form-group-vertical">
               <label htmlFor="streamFetchPageLimit">Stream fetch page limit</label>
+              <span className="form-description">
+                Max pages when fetching streams from Dispatcharr (×500 = max streams).
+                Default 200 = 100K streams. Increase if you have more streams.
+              </span>
               <input
                 id="streamFetchPageLimit"
                 type="number"
@@ -1881,13 +1884,9 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                 onChange={(e) => setStreamFetchPageLimit(Math.max(50, Math.min(1000, parseInt(e.target.value) || 200)))}
                 style={{ width: '100px' }}
               />
-              <span className="form-hint">
-                Max pages when fetching streams from Dispatcharr (×500 = max streams).
-                Default 200 = 100K streams. Increase if you have more streams.
-              </span>
             </div>
 
-            <div className="form-group">
+            <div className="form-group-vertical">
               <label className="checkbox-label">
                 <input
                   type="checkbox"
@@ -1896,14 +1895,18 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                 />
                 Enable parallel probing
               </label>
-              <span className="form-hint">
+              <span className="form-description">
                 When enabled, streams from different M3U accounts are probed simultaneously for faster completion.
                 Disable for sequential one-at-a-time probing.
               </span>
             </div>
 
-            <div className="form-group">
+            <div className="form-group-vertical">
               <label htmlFor="skipRecentlyProbedHours">Skip recently probed streams (hours)</label>
+              <span className="form-description">
+                Skip streams that were successfully probed within the last N hours. Set to 0 to always probe all streams.
+                This prevents excessive probing requests when running multiple checks in succession.
+              </span>
               <input
                 id="skipRecentlyProbedHours"
                 type="number"
@@ -1913,13 +1916,9 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                 onChange={(e) => setSkipRecentlyProbedHours(Math.max(0, Math.min(168, parseInt(e.target.value) || 0)))}
                 style={{ width: '100px' }}
               />
-              <span className="form-hint">
-                Skip streams that were successfully probed within the last N hours. Set to 0 to always probe all streams.
-                This prevents excessive probing requests when running multiple checks in succession.
-              </span>
             </div>
 
-            <div className="form-group">
+            <div className="form-group-vertical">
               <label className="checkbox-label">
                 <input
                   type="checkbox"
@@ -1928,12 +1927,12 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                 />
                 Refresh M3Us before probing
               </label>
-              <span className="form-hint">
+              <span className="form-description">
                 When enabled, all M3U accounts will be refreshed before starting the probe to ensure latest stream information is used.
               </span>
             </div>
 
-            <div className="form-group">
+            <div className="form-group-vertical">
               <label className="checkbox-label">
                 <input
                   type="checkbox"
@@ -1942,7 +1941,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                 />
                 Auto-reorder streams after probe
               </label>
-              <span className="form-hint">
+              <span className="form-description">
                 When enabled, streams within channels will be automatically reordered using smart sort after probe completes.
                 Failed streams are deprioritized, and working streams are sorted by resolution, bitrate, and framerate.
               </span>
@@ -1974,8 +1973,13 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
               </div>
             )}
 
-            <div className="form-group">
+            <div className="form-group-vertical">
               <label>Channel groups to probe</label>
+              <span className="form-description">
+                {availableChannelGroups.length === 0
+                  ? 'No groups with streams available.'
+                  : 'Select which groups to probe. All groups are selected by default.'}
+              </span>
               <button
                 type="button"
                 className="btn-secondary"
@@ -1984,55 +1988,16 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                   setShowGroupSelectModal(true);
                 }}
                 disabled={availableChannelGroups.length === 0}
-                style={{ marginTop: '0.5rem' }}
               >
                 <span className="material-icons">filter_list</span>
                 {probeChannelGroups.length === availableChannelGroups.length
                   ? `All ${availableChannelGroups.length} group${availableChannelGroups.length !== 1 ? 's' : ''}`
                   : `${probeChannelGroups.length} of ${availableChannelGroups.length} group${availableChannelGroups.length !== 1 ? 's' : ''}`}
               </button>
-              <span className="form-hint" style={{ display: 'block', marginTop: '0.5rem' }}>
-                {availableChannelGroups.length === 0
-                  ? 'No groups with streams available.'
-                  : 'Select which groups to probe. All groups are selected by default.'}
-              </span>
             </div>
           </div>
         )}
 
-        <div className="settings-group" style={{ marginTop: '1rem' }}>
-          <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
-            <button
-              className="btn-secondary"
-              onClick={handleProbeAllStreams}
-              disabled={probingAll}
-            >
-              <span className={`material-icons ${probingAll ? 'spinning' : ''}`}>
-                {probingAll ? 'sync' : 'play_arrow'}
-              </span>
-              {probingAll ? (probeProgress && probeProgress.status === 'probing' ? 'Probing...' : 'Starting...') : 'Probe All Streams Now'}
-            </button>
-            <button
-              className="btn-secondary"
-              onClick={handleResetProbeState}
-              title="Reset probe state if it gets stuck"
-              style={{ minWidth: 'auto' }}
-            >
-              <span className="material-icons">restart_alt</span>
-              Reset
-            </button>
-            <span className="form-hint">
-              Start a background probe of all streams immediately
-            </span>
-          </div>
-
-          {probeAllResult && (
-            <div className={probeAllResult.success ? 'success-message' : 'error-message'} style={{ marginTop: '1rem' }}>
-              <span className="material-icons">{probeAllResult.success ? 'check_circle' : 'error'}</span>
-              {probeAllResult.message}
-            </div>
-          )}
-        </div>
       </div>
 
       {/* Probe History Section */}
