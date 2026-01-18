@@ -833,6 +833,7 @@ export function ChannelsPane({
   const massRenumberModal = useModal();
   const [massRenumberStartingNumber, setMassRenumberStartingNumber] = useState<string>('');
   const [massRenumberChannels, setMassRenumberChannels] = useState<Channel[]>([]);
+  const [massRenumberUpdateNames, setMassRenumberUpdateNames] = useState<boolean>(true);
 
   // Hidden groups state
   const hiddenGroupsModal = useModal();
@@ -4086,8 +4087,8 @@ export function ChannelsPane({
         const newNumber = endNum + 1 + (sortedConflicts.length - 1 - index);
         let updates: Partial<Channel> = { channel_number: newNumber };
 
-        // Apply auto-rename if enabled
-        if (autoRenameChannelNumber && channel.channel_number !== null) {
+        // Apply auto-rename if enabled in the dialog
+        if (massRenumberUpdateNames && channel.channel_number !== null) {
           const newName = computeAutoRename(channel.name, channel.channel_number, newNumber);
           if (newName && newName !== channel.name) {
             updates.name = newName;
@@ -4095,7 +4096,7 @@ export function ChannelsPane({
         }
 
         const description = updates.name
-          ? `Shift "${channel.name}" to ch.${newNumber} (was ${channel.channel_number})`
+          ? `Shift "${channel.name}" → "${updates.name}" to ch.${newNumber}`
           : `Shift ch.${channel.channel_number} → ${newNumber}`;
         onStageUpdateChannel(channel.id, updates, description);
       });
@@ -4107,8 +4108,8 @@ export function ChannelsPane({
       if (channel.channel_number !== newNumber) {
         let updates: Partial<Channel> = { channel_number: newNumber };
 
-        // Apply auto-rename if enabled
-        if (autoRenameChannelNumber && channel.channel_number !== null) {
+        // Apply auto-rename if enabled in the dialog
+        if (massRenumberUpdateNames && channel.channel_number !== null) {
           const newName = computeAutoRename(channel.name, channel.channel_number, newNumber);
           if (newName && newName !== channel.name) {
             updates.name = newName;
@@ -4116,7 +4117,7 @@ export function ChannelsPane({
         }
 
         const description = updates.name
-          ? `Renumber "${channel.name}" to ch.${newNumber}`
+          ? `Renumber "${channel.name}" → "${updates.name}" to ch.${newNumber}`
           : `Renumber ch.${channel.channel_number ?? '?'} → ${newNumber}`;
         onStageUpdateChannel(channel.id, updates, description);
       }
@@ -4140,6 +4141,7 @@ export function ChannelsPane({
     massRenumberModal.close();
     setMassRenumberChannels([]);
     setMassRenumberStartingNumber('');
+    setMassRenumberUpdateNames(true); // Reset to default
   };
 
   const renderGroup = (groupId: number | 'ungrouped', groupName: string, groupChannels: Channel[], isEmpty: boolean = false) => {
@@ -5802,6 +5804,14 @@ export function ChannelsPane({
                   </span>
                 )}
               </div>
+              <label className="mass-renumber-checkbox">
+                <input
+                  type="checkbox"
+                  checked={massRenumberUpdateNames}
+                  onChange={(e) => setMassRenumberUpdateNames(e.target.checked)}
+                />
+                Update channel numbers in names (e.g., "209 | A&E" → "200 | A&E")
+              </label>
             </div>
 
             {/* Conflict Warning */}
@@ -5836,12 +5846,23 @@ export function ChannelsPane({
                   const startNum = parseInt(massRenumberStartingNumber, 10) || 1;
                   const newNumber = startNum + index;
                   const hasChange = ch.channel_number !== newNumber;
+                  const newName = massRenumberUpdateNames && ch.channel_number !== null
+                    ? computeAutoRename(ch.name, ch.channel_number, newNumber)
+                    : undefined;
                   return (
                     <li key={ch.id} className={hasChange ? 'has-change' : ''}>
                       <span className="preview-old-number">{ch.channel_number ?? '-'}</span>
                       <span className="preview-arrow">→</span>
                       <span className="preview-new-number">{newNumber}</span>
-                      <span className="preview-name">{ch.name}</span>
+                      {newName ? (
+                        <>
+                          <span className="preview-name preview-name-old">{ch.name}</span>
+                          <span className="preview-arrow">→</span>
+                          <span className="preview-name preview-name-new">{newName}</span>
+                        </>
+                      ) : (
+                        <span className="preview-name">{ch.name}</span>
+                      )}
                     </li>
                   );
                 })}
