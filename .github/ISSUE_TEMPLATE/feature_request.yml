@@ -1,0 +1,49 @@
+name: Feature Request
+description: Suggest a new feature or enhancement for Enhanced Channel Manager
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for suggesting a feature! Your ideas help make ECM better.
+
+  - type: textarea
+    id: feature-description
+    attributes:
+      label: What would you like this feature to do?
+      description: Describe the feature and what problem it would solve
+      placeholder: I would like ECM to...
+    validations:
+      required: true
+
+  - type: textarea
+    id: implementation-suggestion
+    attributes:
+      label: How would you suggest implementing?
+      description: If you have ideas on how this could be implemented, share them here
+      placeholder: This could work by...
+    validations:
+      required: false
+
+  - type: dropdown
+    id: criticality
+    attributes:
+      label: How critical do you think this is?
+      description: How important is this feature to your workflow?
+      options:
+        - "Critical - Can't effectively use ECM without it"
+        - "High - Would significantly improve my experience"
+        - "Medium - Nice to have, would use it regularly"
+        - "Low - Minor improvement, not urgent"
+    validations:
+      required: true
+
+  - type: textarea
+    id: additional-context
+    attributes:
+      label: Additional Context
+      description: Any other context, mockups, or examples that might help explain the feature
+      placeholder: Add any other context here
+    validations:
+      required: false
