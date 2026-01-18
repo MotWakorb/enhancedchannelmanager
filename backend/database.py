@@ -53,7 +53,7 @@ def init_db() -> None:
         _SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=_engine)
 
         # Import models to register them with Base
-        from models import JournalEntry, BandwidthDaily, ChannelWatchStats, HiddenChannelGroup, StreamStats, ScheduledTask, TaskExecution  # noqa: F401
+        from models import JournalEntry, BandwidthDaily, ChannelWatchStats, HiddenChannelGroup, StreamStats, ScheduledTask, TaskSchedule, TaskExecution  # noqa: F401
 
         # Create all tables
         Base.metadata.create_all(bind=_engine)
@@ -102,10 +102,210 @@ def _run_migrations(engine) -> None:
                 conn.commit()
                 logger.info("Migration complete: added video_bitrate column")
 
+            # Migrate existing schedules from scheduled_tasks to task_schedules
+            _migrate_task_schedules(conn)
+
             logger.debug("All migrations complete - schema is up to date")
     except Exception as e:
         logger.exception(f"Migration failed: {e}")
         raise
+
+
+def _migrate_task_schedules(conn) -> None:
+    """Migrate existing schedules from ScheduledTask to TaskSchedule table."""
+    from sqlalchemy import text
+
+    # Check if task_schedules table exists and has any data
+    result = conn.execute(text(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='task_schedules'"
+    ))
+    if not result.fetchone():
+        logger.debug("task_schedules table doesn't exist yet, skipping migration")
+        return
+
+    # Check if we've already migrated (table has data)
+    result = conn.execute(text("SELECT COUNT(*) FROM task_schedules"))
+    count = result.fetchone()[0]
+    if count > 0:
+        logger.debug(f"task_schedules already has {count} entries, skipping migration")
+        return
+
+    # Get all scheduled_tasks with non-manual schedules that need migration
+    result = conn.execute(text("""
+        SELECT task_id, schedule_type, interval_seconds, cron_expression,
+               schedule_time, timezone
+        FROM scheduled_tasks
+        WHERE schedule_type != 'manual'
+    """))
+    tasks_to_migrate = result.fetchall()
+
+    if not tasks_to_migrate:
+        logger.debug("No scheduled tasks need migration to task_schedules")
+        return
+
+    logger.info(f"Migrating {len(tasks_to_migrate)} task schedules to new format")
+
+    for task in tasks_to_migrate:
+        task_id = task[0]
+        schedule_type = task[1]
+        interval_seconds = task[2]
+        cron_expression = task[3]
+        schedule_time = task[4]
+        timezone = task[5]
+
+        # Convert old schedule types to new format
+        if schedule_type == "interval":
+            # Keep as interval
+            conn.execute(text("""
+                INSERT INTO task_schedules
+                (task_id, name, enabled, schedule_type, interval_seconds, timezone, created_at, updated_at)
+                VALUES (:task_id, 'Migrated Schedule', 1, 'interval', :interval_seconds, :timezone,
+                        datetime('now'), datetime('now'))
+            """), {
+                "task_id": task_id,
+                "interval_seconds": interval_seconds,
+                "timezone": timezone or "UTC"
+            })
+            logger.info(f"Migrated {task_id} interval schedule: every {interval_seconds}s")
+
+        elif schedule_type == "cron":
+            # Convert cron to appropriate type based on expression
+            new_schedule = _convert_cron_to_schedule(cron_expression, timezone)
+            if new_schedule:
+                conn.execute(text("""
+                    INSERT INTO task_schedules
+                    (task_id, name, enabled, schedule_type, interval_seconds, schedule_time,
+                     timezone, days_of_week, day_of_month, created_at, updated_at)
+                    VALUES (:task_id, 'Migrated Schedule', 1, :schedule_type, :interval_seconds,
+                            :schedule_time, :timezone, :days_of_week, :day_of_month,
+                            datetime('now'), datetime('now'))
+                """), {
+                    "task_id": task_id,
+                    **new_schedule
+                })
+                logger.info(f"Migrated {task_id} cron schedule to {new_schedule['schedule_type']}")
+            else:
+                # Fallback to daily if cron can't be converted
+                time_str = schedule_time or "03:00"
+                conn.execute(text("""
+                    INSERT INTO task_schedules
+                    (task_id, name, enabled, schedule_type, schedule_time, timezone,
+                     created_at, updated_at)
+                    VALUES (:task_id, 'Migrated Schedule', 1, 'daily', :schedule_time, :timezone,
+                            datetime('now'), datetime('now'))
+                """), {
+                    "task_id": task_id,
+                    "schedule_time": time_str,
+                    "timezone": timezone or "UTC"
+                })
+                logger.info(f"Migrated {task_id} cron to daily at {time_str} (cron conversion fallback)")
+
+    conn.commit()
+    logger.info("Task schedule migration complete")
+
+
+def _convert_cron_to_schedule(cron_expr: str, timezone: str) -> dict:
+    """
+    Convert a cron expression to the new schedule format.
+    Returns a dict with schedule parameters or None if can't convert.
+    """
+    if not cron_expr:
+        return None
+
+    parts = cron_expr.strip().split()
+    if len(parts) != 5:
+        return None
+
+    minute, hour, day_of_month, month, day_of_week = parts
+
+    # Check for interval patterns (e.g., */30 * * * * = every 30 minutes)
+    if minute.startswith("*/") and hour == "*" and day_of_month == "*" and month == "*" and day_of_week == "*":
+        try:
+            minutes = int(minute[2:])
+            return {
+                "schedule_type": "interval",
+                "interval_seconds": minutes * 60,
+                "schedule_time": None,
+                "timezone": timezone or "UTC",
+                "days_of_week": None,
+                "day_of_month": None,
+            }
+        except ValueError:
+            pass
+
+    if hour.startswith("*/") and day_of_month == "*" and month == "*" and day_of_week == "*":
+        try:
+            hours = int(hour[2:])
+            return {
+                "schedule_type": "interval",
+                "interval_seconds": hours * 3600,
+                "schedule_time": None,
+                "timezone": timezone or "UTC",
+                "days_of_week": None,
+                "day_of_month": None,
+            }
+        except ValueError:
+            pass
+
+    # Check for daily pattern (e.g., 0 3 * * * = daily at 3:00 AM)
+    if day_of_month == "*" and month == "*" and day_of_week == "*":
+        try:
+            h = int(hour) if hour != "*" else 0
+            m = int(minute) if minute != "*" else 0
+            return {
+                "schedule_type": "daily",
+                "interval_seconds": None,
+                "schedule_time": f"{h:02d}:{m:02d}",
+                "timezone": timezone or "UTC",
+                "days_of_week": None,
+                "day_of_month": None,
+            }
+        except ValueError:
+            pass
+
+    # Check for weekly pattern (e.g., 0 3 * * 0,3,6 = specific days of week)
+    if day_of_month == "*" and month == "*" and day_of_week != "*":
+        try:
+            h = int(hour) if hour != "*" else 0
+            m = int(minute) if minute != "*" else 0
+            # Parse day_of_week (can be comma-separated or ranges)
+            days = []
+            for part in day_of_week.split(","):
+                if "-" in part:
+                    start, end = part.split("-")
+                    days.extend(range(int(start), int(end) + 1))
+                else:
+                    days.append(int(part))
+            return {
+                "schedule_type": "weekly",
+                "interval_seconds": None,
+                "schedule_time": f"{h:02d}:{m:02d}",
+                "timezone": timezone or "UTC",
+                "days_of_week": ",".join(str(d) for d in sorted(set(days))),
+                "day_of_month": None,
+            }
+        except ValueError:
+            pass
+
+    # Check for monthly pattern (e.g., 0 3 15 * * = 15th of each month)
+    if day_of_month != "*" and month == "*" and day_of_week == "*":
+        try:
+            h = int(hour) if hour != "*" else 0
+            m = int(minute) if minute != "*" else 0
+            dom = int(day_of_month)
+            return {
+                "schedule_type": "monthly",
+                "interval_seconds": None,
+                "schedule_time": f"{h:02d}:{m:02d}",
+                "timezone": timezone or "UTC",
+                "days_of_week": None,
+                "day_of_month": dom,
+            }
+        except ValueError:
+            pass
+
+    # Can't convert this cron expression
+    return None
 
 
 def _perform_maintenance(engine) -> None:

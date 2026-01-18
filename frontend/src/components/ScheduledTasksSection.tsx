@@ -15,26 +15,45 @@ function formatDateTime(isoString: string | null): string {
   return date.toLocaleString();
 }
 
-function formatSchedule(task: TaskStatus): string {
+function formatSchedule(task: TaskStatus): { summary: string; details: string[] } {
+  // Use new multi-schedule system if schedules are available
+  if (task.schedules && task.schedules.length > 0) {
+    const enabledSchedules = task.schedules.filter(s => s.enabled);
+    if (enabledSchedules.length === 0) {
+      return { summary: 'No active schedules', details: [] };
+    }
+    if (enabledSchedules.length === 1) {
+      return {
+        summary: enabledSchedules[0].description,
+        details: [],
+      };
+    }
+    return {
+      summary: `${enabledSchedules.length} schedules active`,
+      details: enabledSchedules.map(s => s.description),
+    };
+  }
+
+  // Fallback to legacy schedule
   const { schedule } = task;
   if (schedule.schedule_type === 'manual') {
-    return 'Manual only';
+    return { summary: 'Manual only', details: [] };
   }
   if (schedule.schedule_type === 'interval' && schedule.interval_seconds > 0) {
     const hours = schedule.interval_seconds / 3600;
     if (hours >= 1) {
-      return `Every ${hours} hour${hours !== 1 ? 's' : ''}`;
+      return { summary: `Every ${hours} hour${hours !== 1 ? 's' : ''}`, details: [] };
     }
     const minutes = schedule.interval_seconds / 60;
-    return `Every ${minutes} minute${minutes !== 1 ? 's' : ''}`;
+    return { summary: `Every ${minutes} minute${minutes !== 1 ? 's' : ''}`, details: [] };
   }
   if (schedule.schedule_type === 'cron' && schedule.cron_expression) {
-    return `Cron: ${schedule.cron_expression}`;
+    return { summary: `Cron: ${schedule.cron_expression}`, details: [] };
   }
   if (schedule.schedule_time) {
-    return `Daily at ${schedule.schedule_time}`;
+    return { summary: `Daily at ${schedule.schedule_time}`, details: [] };
   }
-  return 'Not scheduled';
+  return { summary: 'Not scheduled', details: [] };
 }
 
 function TaskCard({ task, onRunNow, onToggleEnabled, onEdit, isRunning }: {
@@ -172,7 +191,23 @@ function TaskCard({ task, onRunNow, onToggleEnabled, onEdit, isRunning }: {
       }}>
         <div>
           <div style={{ color: 'var(--text-muted)', marginBottom: '0.25rem' }}>Schedule</div>
-          <div>{formatSchedule(task)}</div>
+          <div>
+            {(() => {
+              const scheduleInfo = formatSchedule(task);
+              return (
+                <div>
+                  <div>{scheduleInfo.summary}</div>
+                  {scheduleInfo.details.length > 0 && (
+                    <div style={{ marginTop: '0.25rem', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+                      {scheduleInfo.details.map((detail, i) => (
+                        <div key={i}>{detail}</div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
+          </div>
         </div>
         <div>
           <div style={{ color: 'var(--text-muted)', marginBottom: '0.25rem' }}>Last Run</div>

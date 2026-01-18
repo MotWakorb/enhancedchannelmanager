@@ -211,7 +211,7 @@ class ScheduledTask(Base):
     task_name = Column(String(100), nullable=False)  # Human-readable name
     description = Column(Text, nullable=True)  # Task description
     enabled = Column(Boolean, default=True, nullable=False)  # Is task enabled
-    # Schedule configuration
+    # Legacy schedule configuration (kept for backwards compatibility, will be migrated to TaskSchedule)
     schedule_type = Column(String(20), nullable=False, default="manual")  # "interval", "cron", "manual"
     interval_seconds = Column(Integer, nullable=True)  # For interval scheduling
     cron_expression = Column(String(100), nullable=True)  # For cron scheduling
@@ -223,7 +223,7 @@ class ScheduledTask(Base):
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
     last_run_at = Column(DateTime, nullable=True)  # Last execution start
-    next_run_at = Column(DateTime, nullable=True)  # Next scheduled execution
+    next_run_at = Column(DateTime, nullable=True)  # Next scheduled execution (computed from schedules)
 
     __table_args__ = (
         Index("idx_scheduled_task_id", task_id),
@@ -254,6 +254,84 @@ class ScheduledTask(Base):
 
     def __repr__(self):
         return f"<ScheduledTask(task_id={self.task_id}, enabled={self.enabled})>"
+
+
+class TaskSchedule(Base):
+    """
+    Individual schedule for a task (many-to-one with ScheduledTask).
+    Supports multiple schedules per task with different types:
+    - interval: Run every X seconds
+    - daily: Run once per day at a specific time
+    - weekly: Run on specific days each week
+    - biweekly: Run every other week on specific days
+    - monthly: Run on a specific day of month
+    """
+    __tablename__ = "task_schedules"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    task_id = Column(String(50), nullable=False)  # References ScheduledTask.task_id
+    name = Column(String(100), nullable=True)  # Optional label for this schedule
+    enabled = Column(Boolean, default=True, nullable=False)  # Is this schedule active
+    # Schedule type: interval, daily, weekly, biweekly, monthly
+    schedule_type = Column(String(20), nullable=False)
+    # For interval type: number of seconds between runs
+    interval_seconds = Column(Integer, nullable=True)
+    # For daily/weekly/biweekly/monthly: time of day (HH:MM in 24h format)
+    schedule_time = Column(String(10), nullable=True)
+    # IANA timezone name (e.g., "America/New_York")
+    timezone = Column(String(50), nullable=True)
+    # For weekly/biweekly: comma-separated list of days (0=Sunday, 6=Saturday)
+    days_of_week = Column(String(20), nullable=True)  # e.g., "0,3,6" for Sun, Wed, Sat
+    # For monthly: day of month (1-31, or -1 for last day)
+    day_of_month = Column(Integer, nullable=True)
+    # For biweekly: which week (0 or 1) - used to track odd/even weeks
+    week_parity = Column(Integer, nullable=True)  # 0 = even weeks, 1 = odd weeks
+    # Calculated next run time
+    next_run_at = Column(DateTime, nullable=True)
+    # Timestamps
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        Index("idx_task_schedule_task_id", task_id),
+        Index("idx_task_schedule_enabled", enabled),
+        Index("idx_task_schedule_next_run", next_run_at),
+    )
+
+    def get_days_of_week_list(self) -> list:
+        """Parse days_of_week string into list of integers."""
+        if not self.days_of_week:
+            return []
+        try:
+            return [int(d.strip()) for d in self.days_of_week.split(",") if d.strip()]
+        except ValueError:
+            return []
+
+    def set_days_of_week_list(self, days: list) -> None:
+        """Set days_of_week from list of integers."""
+        self.days_of_week = ",".join(str(d) for d in sorted(days)) if days else None
+
+    def to_dict(self) -> dict:
+        """Convert to dictionary for API responses."""
+        return {
+            "id": self.id,
+            "task_id": self.task_id,
+            "name": self.name,
+            "enabled": self.enabled,
+            "schedule_type": self.schedule_type,
+            "interval_seconds": self.interval_seconds,
+            "schedule_time": self.schedule_time,
+            "timezone": self.timezone,
+            "days_of_week": self.get_days_of_week_list(),
+            "day_of_month": self.day_of_month,
+            "week_parity": self.week_parity,
+            "next_run_at": self.next_run_at.isoformat() + "Z" if self.next_run_at else None,
+            "created_at": self.created_at.isoformat() + "Z" if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() + "Z" if self.updated_at else None,
+        }
+
+    def __repr__(self):
+        return f"<TaskSchedule(id={self.id}, task_id={self.task_id}, type={self.schedule_type})>"
 
 
 class TaskExecution(Base):

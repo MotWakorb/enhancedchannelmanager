@@ -1,0 +1,323 @@
+.schedule-editor {
+  padding: 1rem;
+}
+
+.schedule-editor .form-group {
+  margin-bottom: 1.25rem;
+}
+
+.schedule-editor .form-group > label {
+  display: block;
+  font-weight: 500;
+  margin-bottom: 0.5rem;
+  color: var(--text-primary);
+}
+
+.schedule-editor .form-input {
+  width: 100%;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
+  font-size: 0.9rem;
+}
+
+.schedule-editor .form-input:focus {
+  outline: none;
+  border-color: var(--accent-primary);
+}
+
+.schedule-editor .checkbox-group {
+  margin-bottom: 1rem;
+}
+
+.schedule-editor .checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  cursor: pointer;
+}
+
+.schedule-editor .checkbox-label input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent-primary);
+}
+
+/* Type Selector */
+.schedule-editor .type-selector {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.schedule-editor .type-button {
+  flex: 1;
+  min-width: 80px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.75rem 0.5rem;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background-color: var(--bg-secondary);
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  font-size: 0.8rem;
+}
+
+.schedule-editor .type-button .material-icons {
+  font-size: 20px;
+  color: var(--text-secondary);
+}
+
+.schedule-editor .type-button:hover {
+  border-color: var(--accent-primary);
+}
+
+.schedule-editor .type-button.active {
+  border-color: var(--success);
+  background-color: var(--success);
+  color: white;
+}
+
+.schedule-editor .type-button.active .material-icons {
+  color: white;
+}
+
+/* Config Section */
+.schedule-editor .config-section {
+  background-color: var(--bg-secondary);
+  border-radius: 6px;
+  padding: 1rem;
+  margin-bottom: 1.5rem;
+}
+
+.schedule-editor .config-section > label {
+  display: block;
+  font-weight: 500;
+  margin-bottom: 0.5rem;
+  margin-top: 1rem;
+  color: var(--text-primary);
+}
+
+.schedule-editor .config-section > label:first-child {
+  margin-top: 0;
+}
+
+/* Interval Presets */
+.schedule-editor .interval-presets {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 0.5rem;
+}
+
+.schedule-editor .preset-button {
+  padding: 0.5rem;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background-color: var(--bg-tertiary);
+  color: var(--text-primary);
+  cursor: pointer;
+  font-size: 0.85rem;
+  transition: all 0.15s ease;
+}
+
+.schedule-editor .preset-button:hover {
+  border-color: var(--accent-primary);
+}
+
+.schedule-editor .preset-button.active {
+  border-color: var(--success);
+  background-color: var(--success);
+  color: white;
+}
+
+/* Custom Interval */
+.schedule-editor .custom-interval {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.schedule-editor .number-input {
+  width: 60px;
+  padding: 0.5rem;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
+  text-align: center;
+}
+
+.schedule-editor .number-input:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Time Picker Row */
+.schedule-editor .time-picker-row {
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.schedule-editor .time-input {
+  padding: 0.5rem;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
+  font-size: 0.9rem;
+}
+
+.schedule-editor .timezone-select {
+  flex: 1;
+  min-width: 150px;
+  padding: 0.5rem;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
+  font-size: 0.9rem;
+}
+
+/* Day Quick Select */
+.schedule-editor .day-quick-select {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+
+.schedule-editor .quick-button {
+  padding: 0.25rem 0.5rem;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background-color: var(--bg-tertiary);
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 0.75rem;
+  transition: all 0.15s ease;
+}
+
+.schedule-editor .quick-button:hover {
+  border-color: var(--accent-primary);
+  color: var(--text-primary);
+}
+
+/* Days Grid */
+.schedule-editor .days-grid {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.schedule-editor .day-button {
+  width: 42px;
+  height: 42px;
+  border: 1px solid var(--border-color);
+  border-radius: 50%;
+  background-color: var(--bg-tertiary);
+  color: var(--text-primary);
+  cursor: pointer;
+  font-size: 0.75rem;
+  font-weight: 500;
+  transition: all 0.15s ease;
+}
+
+.schedule-editor .day-button:hover {
+  border-color: var(--accent-primary);
+}
+
+.schedule-editor .day-button.active {
+  border-color: var(--success);
+  background-color: var(--success);
+  color: white;
+}
+
+/* Monthly Day Row */
+.schedule-editor .monthly-day-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.schedule-editor .day-select {
+  padding: 0.5rem;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
+  font-size: 0.9rem;
+  min-width: 80px;
+}
+
+.schedule-editor .day-suffix {
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+}
+
+/* Actions */
+.schedule-editor .editor-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.75rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border-color);
+}
+
+.schedule-editor .btn-cancel,
+.schedule-editor .btn-save {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.75rem 1.25rem;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.9rem;
+  font-weight: 500;
+}
+
+.schedule-editor .btn-cancel {
+  border: 1px solid var(--border-color);
+  background-color: var(--bg-secondary);
+  color: var(--text-primary);
+}
+
+.schedule-editor .btn-cancel:hover {
+  background-color: var(--bg-tertiary);
+}
+
+.schedule-editor .btn-save {
+  border: none;
+  background-color: var(--success);
+  color: white;
+}
+
+.schedule-editor .btn-save:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.schedule-editor .btn-save:not(:disabled):hover {
+  filter: brightness(1.1);
+}
+
+.schedule-editor .btn-save .material-icons {
+  font-size: 18px;
+}
+
+.schedule-editor .spinning {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}

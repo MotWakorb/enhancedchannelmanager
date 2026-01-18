@@ -3819,13 +3819,37 @@ async def list_tasks():
 
 @app.get("/api/tasks/{task_id}")
 async def get_task(task_id: str):
-    """Get status for a specific task."""
+    """Get status for a specific task, including all schedules."""
     try:
         from task_registry import get_registry
+        from database import get_session
+        from models import TaskSchedule
+        from schedule_calculator import describe_schedule
+
         registry = get_registry()
         status = registry.get_task_status(task_id)
         if status is None:
             raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
+
+        # Include schedules in the response
+        session = get_session()
+        try:
+            schedules = session.query(TaskSchedule).filter(TaskSchedule.task_id == task_id).all()
+            status['schedules'] = []
+            for schedule in schedules:
+                schedule_dict = schedule.to_dict()
+                schedule_dict['description'] = describe_schedule(
+                    schedule_type=schedule.schedule_type,
+                    interval_seconds=schedule.interval_seconds,
+                    schedule_time=schedule.schedule_time,
+                    timezone=schedule.timezone,
+                    days_of_week=schedule.get_days_of_week_list(),
+                    day_of_month=schedule.day_of_month,
+                )
+                status['schedules'].append(schedule_dict)
+        finally:
+            session.close()
+
         return status
     except HTTPException:
         raise
@@ -3973,6 +3997,279 @@ async def validate_cron(request: CronValidateRequest):
     except Exception as e:
         logger.error(f"Failed to validate cron expression: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# =========================================================================
+# Task Schedule API - Multiple schedules per task
+# =========================================================================
+
+class TaskScheduleCreate(BaseModel):
+    """Request body for creating a task schedule."""
+    name: Optional[str] = None
+    enabled: bool = True
+    schedule_type: Literal['interval', 'daily', 'weekly', 'biweekly', 'monthly']
+    interval_seconds: Optional[int] = None
+    schedule_time: Optional[str] = None  # HH:MM format
+    timezone: Optional[str] = None
+    days_of_week: Optional[list] = None  # List of day numbers (0=Sunday, 6=Saturday)
+    day_of_month: Optional[int] = None  # 1-31, or -1 for last day
+
+
+class TaskScheduleUpdate(BaseModel):
+    """Request body for updating a task schedule."""
+    name: Optional[str] = None
+    enabled: Optional[bool] = None
+    schedule_type: Optional[Literal['interval', 'daily', 'weekly', 'biweekly', 'monthly']] = None
+    interval_seconds: Optional[int] = None
+    schedule_time: Optional[str] = None
+    timezone: Optional[str] = None
+    days_of_week: Optional[list] = None
+    day_of_month: Optional[int] = None
+
+
+@app.get("/api/tasks/{task_id}/schedules")
+async def list_task_schedules(task_id: str):
+    """Get all schedules for a task."""
+    try:
+        from database import get_session
+        from models import TaskSchedule, ScheduledTask
+        from schedule_calculator import describe_schedule
+
+        session = get_session()
+        try:
+            # Verify task exists
+            task = session.query(ScheduledTask).filter(ScheduledTask.task_id == task_id).first()
+            if not task:
+                raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
+
+            # Get all schedules for this task
+            schedules = session.query(TaskSchedule).filter(TaskSchedule.task_id == task_id).all()
+
+            result = []
+            for schedule in schedules:
+                schedule_dict = schedule.to_dict()
+                # Add human-readable description
+                schedule_dict['description'] = describe_schedule(
+                    schedule_type=schedule.schedule_type,
+                    interval_seconds=schedule.interval_seconds,
+                    schedule_time=schedule.schedule_time,
+                    timezone=schedule.timezone,
+                    days_of_week=schedule.get_days_of_week_list(),
+                    day_of_month=schedule.day_of_month,
+                )
+                result.append(schedule_dict)
+
+            return {"schedules": result}
+        finally:
+            session.close()
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to list schedules for task {task_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/tasks/{task_id}/schedules")
+async def create_task_schedule(task_id: str, data: TaskScheduleCreate):
+    """Create a new schedule for a task."""
+    try:
+        from database import get_session
+        from models import TaskSchedule, ScheduledTask
+        from schedule_calculator import calculate_next_run, describe_schedule
+
+        session = get_session()
+        try:
+            # Verify task exists
+            task = session.query(ScheduledTask).filter(ScheduledTask.task_id == task_id).first()
+            if not task:
+                raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
+
+            # Create the schedule
+            schedule = TaskSchedule(
+                task_id=task_id,
+                name=data.name,
+                enabled=data.enabled,
+                schedule_type=data.schedule_type,
+                interval_seconds=data.interval_seconds,
+                schedule_time=data.schedule_time,
+                timezone=data.timezone or "UTC",
+                day_of_month=data.day_of_month,
+            )
+
+            # Set days_of_week if provided
+            if data.days_of_week:
+                schedule.set_days_of_week_list(data.days_of_week)
+
+            # Calculate next run time
+            if data.enabled:
+                schedule.next_run_at = calculate_next_run(
+                    schedule_type=data.schedule_type,
+                    interval_seconds=data.interval_seconds,
+                    schedule_time=data.schedule_time,
+                    timezone=data.timezone or "UTC",
+                    days_of_week=data.days_of_week,
+                    day_of_month=data.day_of_month,
+                )
+
+            session.add(schedule)
+            session.commit()
+            session.refresh(schedule)
+
+            # Build response
+            result = schedule.to_dict()
+            result['description'] = describe_schedule(
+                schedule_type=schedule.schedule_type,
+                interval_seconds=schedule.interval_seconds,
+                schedule_time=schedule.schedule_time,
+                timezone=schedule.timezone,
+                days_of_week=schedule.get_days_of_week_list(),
+                day_of_month=schedule.day_of_month,
+            )
+
+            # Update the parent task's next_run_at to be the earliest of all schedules
+            _update_task_next_run(session, task_id)
+            session.commit()
+
+            return result
+        finally:
+            session.close()
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to create schedule for task {task_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.patch("/api/tasks/{task_id}/schedules/{schedule_id}")
+async def update_task_schedule(task_id: str, schedule_id: int, data: TaskScheduleUpdate):
+    """Update a task schedule."""
+    try:
+        from database import get_session
+        from models import TaskSchedule, ScheduledTask
+        from schedule_calculator import calculate_next_run, describe_schedule
+
+        session = get_session()
+        try:
+            # Verify schedule exists and belongs to task
+            schedule = session.query(TaskSchedule).filter(
+                TaskSchedule.id == schedule_id,
+                TaskSchedule.task_id == task_id
+            ).first()
+
+            if not schedule:
+                raise HTTPException(status_code=404, detail=f"Schedule {schedule_id} not found for task {task_id}")
+
+            # Update fields if provided
+            if data.name is not None:
+                schedule.name = data.name
+            if data.enabled is not None:
+                schedule.enabled = data.enabled
+            if data.schedule_type is not None:
+                schedule.schedule_type = data.schedule_type
+            if data.interval_seconds is not None:
+                schedule.interval_seconds = data.interval_seconds
+            if data.schedule_time is not None:
+                schedule.schedule_time = data.schedule_time
+            if data.timezone is not None:
+                schedule.timezone = data.timezone
+            if data.days_of_week is not None:
+                schedule.set_days_of_week_list(data.days_of_week)
+            if data.day_of_month is not None:
+                schedule.day_of_month = data.day_of_month
+
+            # Recalculate next run time
+            if schedule.enabled:
+                schedule.next_run_at = calculate_next_run(
+                    schedule_type=schedule.schedule_type,
+                    interval_seconds=schedule.interval_seconds,
+                    schedule_time=schedule.schedule_time,
+                    timezone=schedule.timezone,
+                    days_of_week=schedule.get_days_of_week_list(),
+                    day_of_month=schedule.day_of_month,
+                )
+            else:
+                schedule.next_run_at = None
+
+            session.commit()
+            session.refresh(schedule)
+
+            # Build response
+            result = schedule.to_dict()
+            result['description'] = describe_schedule(
+                schedule_type=schedule.schedule_type,
+                interval_seconds=schedule.interval_seconds,
+                schedule_time=schedule.schedule_time,
+                timezone=schedule.timezone,
+                days_of_week=schedule.get_days_of_week_list(),
+                day_of_month=schedule.day_of_month,
+            )
+
+            # Update the parent task's next_run_at
+            _update_task_next_run(session, task_id)
+            session.commit()
+
+            return result
+        finally:
+            session.close()
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to update schedule {schedule_id} for task {task_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/api/tasks/{task_id}/schedules/{schedule_id}")
+async def delete_task_schedule(task_id: str, schedule_id: int):
+    """Delete a task schedule."""
+    try:
+        from database import get_session
+        from models import TaskSchedule
+
+        session = get_session()
+        try:
+            # Verify schedule exists and belongs to task
+            schedule = session.query(TaskSchedule).filter(
+                TaskSchedule.id == schedule_id,
+                TaskSchedule.task_id == task_id
+            ).first()
+
+            if not schedule:
+                raise HTTPException(status_code=404, detail=f"Schedule {schedule_id} not found for task {task_id}")
+
+            session.delete(schedule)
+            session.commit()
+
+            # Update the parent task's next_run_at
+            _update_task_next_run(session, task_id)
+            session.commit()
+
+            return {"status": "deleted", "id": schedule_id}
+        finally:
+            session.close()
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to delete schedule {schedule_id} for task {task_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+def _update_task_next_run(session, task_id: str) -> None:
+    """Update a task's next_run_at based on its schedules."""
+    from models import TaskSchedule, ScheduledTask
+
+    # Get the earliest next_run_at from all enabled schedules
+    schedules = session.query(TaskSchedule).filter(
+        TaskSchedule.task_id == task_id,
+        TaskSchedule.enabled == True,
+        TaskSchedule.next_run_at != None
+    ).order_by(TaskSchedule.next_run_at).all()
+
+    task = session.query(ScheduledTask).filter(ScheduledTask.task_id == task_id).first()
+    if task:
+        if schedules:
+            task.next_run_at = schedules[0].next_run_at
+        else:
+            task.next_run_at = None
 
 
 # Serve static files in production

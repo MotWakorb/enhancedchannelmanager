@@ -1410,6 +1410,49 @@ export interface TaskScheduleConfig {
   timezone: string;
 }
 
+// New multi-schedule types
+export type TaskScheduleType = 'interval' | 'daily' | 'weekly' | 'biweekly' | 'monthly';
+
+export interface TaskSchedule {
+  id: number;
+  task_id: string;
+  name: string | null;
+  enabled: boolean;
+  schedule_type: TaskScheduleType;
+  interval_seconds: number | null;
+  schedule_time: string | null;
+  timezone: string | null;
+  days_of_week: number[] | null;  // 0=Sunday, 6=Saturday
+  day_of_month: number | null;  // 1-31, or -1 for last day
+  week_parity: number | null;  // For biweekly: 0 or 1
+  next_run_at: string | null;
+  description: string;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+export interface TaskScheduleCreate {
+  name?: string | null;
+  enabled?: boolean;
+  schedule_type: TaskScheduleType;
+  interval_seconds?: number | null;
+  schedule_time?: string | null;
+  timezone?: string | null;
+  days_of_week?: number[] | null;
+  day_of_month?: number | null;
+}
+
+export interface TaskScheduleUpdate {
+  name?: string | null;
+  enabled?: boolean;
+  schedule_type?: TaskScheduleType;
+  interval_seconds?: number | null;
+  schedule_time?: string | null;
+  timezone?: string | null;
+  days_of_week?: number[] | null;
+  day_of_month?: number | null;
+}
+
 export interface TaskProgress {
   total: number;
   current: number;
@@ -1429,7 +1472,8 @@ export interface TaskStatus {
   status: 'idle' | 'scheduled' | 'running' | 'paused' | 'cancelled' | 'completed' | 'failed';
   enabled: boolean;
   progress: TaskProgress;
-  schedule: TaskScheduleConfig;
+  schedule: TaskScheduleConfig;  // Legacy schedule config
+  schedules: TaskSchedule[];  // New multi-schedule support
   last_run: string | null;
   next_run: string | null;
   config: Record<string, unknown>;  // Task-specific configuration
@@ -1557,5 +1601,41 @@ export async function validateCronExpression(expression: string): Promise<CronVa
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ expression }),
+  });
+}
+
+// -------------------------------------------------------------------------
+// Task Schedule API (Multiple Schedules per Task)
+// -------------------------------------------------------------------------
+
+export async function getTaskSchedules(taskId: string): Promise<{ schedules: TaskSchedule[] }> {
+  return fetchJson(`${API_BASE}/tasks/${encodeURIComponent(taskId)}/schedules`, {
+    method: 'GET',
+  });
+}
+
+export async function createTaskSchedule(taskId: string, data: TaskScheduleCreate): Promise<TaskSchedule> {
+  return fetchJson(`${API_BASE}/tasks/${encodeURIComponent(taskId)}/schedules`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+}
+
+export async function updateTaskSchedule(
+  taskId: string,
+  scheduleId: number,
+  data: TaskScheduleUpdate
+): Promise<TaskSchedule> {
+  return fetchJson(`${API_BASE}/tasks/${encodeURIComponent(taskId)}/schedules/${scheduleId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+}
+
+export async function deleteTaskSchedule(taskId: string, scheduleId: number): Promise<{ status: string; id: number }> {
+  return fetchJson(`${API_BASE}/tasks/${encodeURIComponent(taskId)}/schedules/${scheduleId}`, {
+    method: 'DELETE',
   });
 }

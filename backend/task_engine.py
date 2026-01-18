@@ -128,31 +128,146 @@ class TaskEngine:
         logger.info("Scheduler loop stopped")
 
     async def _check_and_run_due_tasks(self) -> None:
-        """Check for tasks that are due and start them."""
+        """Check for tasks that are due and start them based on their schedules."""
         registry = get_registry()
         now = datetime.utcnow()
 
-        for task_id in registry.list_task_ids():
-            # Skip if at max concurrency
-            if len(self._active_tasks) >= self.max_concurrent:
-                logger.debug(f"Max concurrent tasks reached ({self.max_concurrent}), skipping check")
-                break
+        # Check schedules from the database
+        try:
+            from database import get_session
+            from models import TaskSchedule, ScheduledTask
+            from schedule_calculator import calculate_next_run
 
-            # Skip if already running
-            if task_id in self._active_tasks:
-                continue
+            session = get_session()
+            try:
+                # Get all enabled schedules that are due
+                due_schedules = session.query(TaskSchedule).filter(
+                    TaskSchedule.enabled == True,
+                    TaskSchedule.next_run_at != None,
+                    TaskSchedule.next_run_at <= now
+                ).all()
 
-            instance = registry.get_task_instance(task_id)
-            if not instance:
-                continue
+                # Group schedules by task_id
+                tasks_to_run = {}
+                for schedule in due_schedules:
+                    if schedule.task_id not in tasks_to_run:
+                        tasks_to_run[schedule.task_id] = []
+                    tasks_to_run[schedule.task_id].append(schedule)
 
-            # Check if task is enabled and due
-            if not instance._enabled:
-                continue
+                for task_id, triggered_schedules in tasks_to_run.items():
+                    # Skip if at max concurrency
+                    if len(self._active_tasks) >= self.max_concurrent:
+                        logger.debug(f"Max concurrent tasks reached ({self.max_concurrent}), skipping check")
+                        break
 
-            if instance._next_run and instance._next_run <= now:
-                logger.info(f"Task {task_id} is due, scheduling execution")
-                asyncio.create_task(self._execute_task(task_id, triggered_by="scheduled"))
+                    # Skip if already running
+                    if task_id in self._active_tasks:
+                        continue
+
+                    instance = registry.get_task_instance(task_id)
+                    if not instance:
+                        continue
+
+                    # Check if the parent task is enabled
+                    parent_task = session.query(ScheduledTask).filter(
+                        ScheduledTask.task_id == task_id
+                    ).first()
+                    if parent_task and not parent_task.enabled:
+                        continue
+
+                    # Found a due schedule - run the task
+                    logger.info(f"Task {task_id} is due (via schedule), scheduling execution")
+                    asyncio.create_task(self._execute_task_with_schedules(
+                        task_id, triggered_schedules, triggered_by="scheduled"
+                    ))
+            finally:
+                session.close()
+        except Exception as e:
+            logger.error(f"Error checking schedules from database: {e}")
+
+            # Fallback to legacy behavior (check instance._next_run)
+            for task_id in registry.list_task_ids():
+                if len(self._active_tasks) >= self.max_concurrent:
+                    break
+
+                if task_id in self._active_tasks:
+                    continue
+
+                instance = registry.get_task_instance(task_id)
+                if not instance:
+                    continue
+
+                if not instance._enabled:
+                    continue
+
+                if instance._next_run and instance._next_run <= now:
+                    logger.info(f"Task {task_id} is due (legacy), scheduling execution")
+                    asyncio.create_task(self._execute_task(task_id, triggered_by="scheduled"))
+
+    async def _execute_task_with_schedules(
+        self, task_id: str, triggered_schedules: list, triggered_by: str = "scheduled"
+    ) -> Optional[TaskResult]:
+        """
+        Execute a task and update the triggered schedules after completion.
+
+        Args:
+            task_id: ID of task to execute
+            triggered_schedules: List of TaskSchedule objects that triggered this execution
+            triggered_by: Who triggered the task ("scheduled", "manual", "api")
+
+        Returns:
+            TaskResult or None if task not found
+        """
+        # Execute the task
+        result = await self._execute_task(task_id, triggered_by)
+
+        # Update next_run_at for triggered schedules
+        if result:
+            try:
+                from database import get_session
+                from models import TaskSchedule, ScheduledTask
+                from schedule_calculator import calculate_next_run
+
+                session = get_session()
+                try:
+                    for schedule in triggered_schedules:
+                        # Recalculate next run time
+                        db_schedule = session.query(TaskSchedule).get(schedule.id)
+                        if db_schedule and db_schedule.enabled:
+                            db_schedule.next_run_at = calculate_next_run(
+                                schedule_type=db_schedule.schedule_type,
+                                interval_seconds=db_schedule.interval_seconds,
+                                schedule_time=db_schedule.schedule_time,
+                                timezone=db_schedule.timezone,
+                                days_of_week=db_schedule.get_days_of_week_list(),
+                                day_of_month=db_schedule.day_of_month,
+                                last_run=result.completed_at,
+                            )
+                            logger.debug(f"Updated schedule {db_schedule.id} next_run_at to {db_schedule.next_run_at}")
+
+                    # Update parent task's next_run_at (earliest of all enabled schedules)
+                    all_schedules = session.query(TaskSchedule).filter(
+                        TaskSchedule.task_id == task_id,
+                        TaskSchedule.enabled == True,
+                        TaskSchedule.next_run_at != None
+                    ).order_by(TaskSchedule.next_run_at).all()
+
+                    parent_task = session.query(ScheduledTask).filter(
+                        ScheduledTask.task_id == task_id
+                    ).first()
+                    if parent_task:
+                        if all_schedules:
+                            parent_task.next_run_at = all_schedules[0].next_run_at
+                        else:
+                            parent_task.next_run_at = None
+
+                    session.commit()
+                finally:
+                    session.close()
+            except Exception as e:
+                logger.error(f"Failed to update schedule next_run_at: {e}")
+
+        return result
 
     async def _execute_task(self, task_id: str, triggered_by: str = "manual") -> Optional[TaskResult]:
         """
