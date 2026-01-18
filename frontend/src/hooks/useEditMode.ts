@@ -10,7 +10,6 @@ import type {
   CommitProgress,
   UseEditModeReturn,
   ApiCallSpec,
-  Logo,
 } from '../types';
 import * as api from '../services/api';
 import { createSnapshot } from '../utils/channelSnapshot';
@@ -1011,10 +1010,8 @@ export function useEditMode({
     const tempIdMap = new Map<number, number>();
     // Map for new group names to their created IDs
     const newGroupIdMap = new Map<string, number>();
-    // Cache for logos to avoid creating duplicates
-    const logoCache = new Map<string, Logo>();
 
-    // Calculate total operations (groups + consolidated operations + fetch step)
+    // Collect new group names from createChannel operations
     const newGroupNames = new Set<string>();
     for (const operation of consolidatedOps) {
       if (operation.apiCall.type === 'createChannel') {
@@ -1023,7 +1020,9 @@ export function useEditMode({
         }
       }
     }
-    const totalOperations = newGroupNames.size + consolidatedOps.length + 1; // +1 for fetching updated channels
+
+    // With bulk commit, we have 2 main steps: bulk commit + fetch updated channels
+    const totalOperations = 2;
     let currentOperation = 0;
 
     const reportProgress = (description: string) => {
@@ -1036,126 +1035,120 @@ export function useEditMode({
     };
 
     try {
-      // Create all new groups first
-      for (const groupName of newGroupNames) {
-        try {
-          reportProgress(`Creating group "${groupName}"`);
-          const newGroup = await api.createChannelGroup(groupName);
-          newGroupIdMap.set(groupName, newGroup.id);
-          result.operationsApplied++;
-        } catch (err) {
-          console.error('Failed to create group:', groupName, err);
-          result.success = false;
-          result.operationsFailed++;
-          result.errors.push({
-            operationId: `create-group-${groupName}`,
-            error: err instanceof Error ? err.message : 'Unknown error',
-          });
-          // Stop on first failure
-          break;
-        }
-      }
+      // Convert consolidated operations to bulk format
+      const bulkOperations: api.BulkOperation[] = [];
 
-      // If group creation failed, don't proceed with other operations
-      if (!result.success) {
-        setIsCommitting(false);
-        return result;
-      }
-
-      // Execute consolidated operations sequentially
       for (const operation of consolidatedOps) {
-        try {
-          const { apiCall } = operation;
-          reportProgress(operation.description);
+        const { apiCall } = operation;
 
-          // Replace temp IDs with real IDs
-          const resolveId = (id: number): number => tempIdMap.get(id) ?? id;
+        switch (apiCall.type) {
+          case 'updateChannel':
+            bulkOperations.push({
+              type: 'updateChannel',
+              channelId: apiCall.channelId,
+              data: apiCall.data,
+            });
+            break;
 
-          switch (apiCall.type) {
-            case 'updateChannel':
-              await api.updateChannel(resolveId(apiCall.channelId), apiCall.data);
-              break;
+          case 'addStreamToChannel':
+            bulkOperations.push({
+              type: 'addStreamToChannel',
+              channelId: apiCall.channelId,
+              streamId: apiCall.streamId,
+            });
+            break;
 
-            case 'addStreamToChannel':
-              await api.addStreamToChannel(resolveId(apiCall.channelId), apiCall.streamId);
-              break;
+          case 'removeStreamFromChannel':
+            bulkOperations.push({
+              type: 'removeStreamFromChannel',
+              channelId: apiCall.channelId,
+              streamId: apiCall.streamId,
+            });
+            break;
 
-            case 'removeStreamFromChannel':
-              await api.removeStreamFromChannel(resolveId(apiCall.channelId), apiCall.streamId);
-              break;
+          case 'reorderChannelStreams':
+            bulkOperations.push({
+              type: 'reorderChannelStreams',
+              channelId: apiCall.channelId,
+              streamIds: apiCall.streamIds,
+            });
+            break;
 
-            case 'reorderChannelStreams':
-              await api.reorderChannelStreams(resolveId(apiCall.channelId), apiCall.streamIds);
-              break;
+          case 'bulkAssignChannelNumbers':
+            bulkOperations.push({
+              type: 'bulkAssignChannelNumbers',
+              channelIds: apiCall.channelIds,
+              startingNumber: apiCall.startingNumber,
+            });
+            break;
 
-            case 'bulkAssignChannelNumbers':
-              await api.bulkAssignChannelNumbers(
-                apiCall.channelIds.map(resolveId),
-                apiCall.startingNumber
-              );
-              break;
-
-            case 'createChannel': {
-              // Resolve group ID: use newGroupName mapping if present, otherwise use groupId
-              let groupId = apiCall.groupId;
-              if (apiCall.newGroupName && newGroupIdMap.has(apiCall.newGroupName)) {
-                groupId = newGroupIdMap.get(apiCall.newGroupName);
-              }
-
-              // Resolve logo ID: if logoUrl is provided, create or find the logo
-              let logoId = apiCall.logoId;
-              if (!logoId && apiCall.logoUrl) {
-                try {
-                  const logo = await api.getOrCreateLogo(apiCall.name, apiCall.logoUrl, logoCache);
-                  logoId = logo.id;
-                } catch (logoErr) {
-                  console.warn('Failed to create/find logo for channel:', apiCall.name, logoErr);
-                  // Continue without logo - don't fail the whole operation
-                }
-              }
-
-              const newChannel = await api.createChannel({
-                name: apiCall.name,
-                channel_number: apiCall.channelNumber,
-                channel_group_id: groupId,
-                logo_id: logoId,
-                tvg_id: apiCall.tvgId,
-              });
-              // Track the mapping from temp ID to real ID
-              const tempId = operation.afterSnapshot[0]?.id;
-              if (tempId && tempId < 0) {
-                tempIdMap.set(tempId, newChannel.id);
-              }
-              break;
-            }
-
-            case 'deleteChannel':
-              await api.deleteChannel(resolveId(apiCall.channelId));
-              break;
-
-            case 'createGroup':
-              await api.createChannelGroup(apiCall.name);
-              break;
-
-            case 'deleteChannelGroup':
-              await api.deleteChannelGroup(apiCall.groupId);
-              break;
+          case 'createChannel': {
+            // Get temp ID from the afterSnapshot
+            const tempId = operation.afterSnapshot[0]?.id ?? -1;
+            bulkOperations.push({
+              type: 'createChannel',
+              tempId: tempId,
+              name: apiCall.name,
+              channelNumber: apiCall.channelNumber,
+              groupId: apiCall.groupId,
+              newGroupName: apiCall.newGroupName,
+              logoId: apiCall.logoId,
+              logoUrl: apiCall.logoUrl,
+              tvgId: apiCall.tvgId,
+            });
+            break;
           }
 
-          result.operationsApplied++;
-        } catch (err) {
-          console.error('Failed to apply operation:', operation, err);
-          result.success = false;
-          result.operationsFailed++;
-          result.errors.push({
-            operationId: operation.id,
-            error: err instanceof Error ? err.message : 'Unknown error',
-          });
+          case 'deleteChannel':
+            bulkOperations.push({
+              type: 'deleteChannel',
+              channelId: apiCall.channelId,
+            });
+            break;
 
-          // Stop on first failure
-          break;
+          case 'createGroup':
+            bulkOperations.push({
+              type: 'createGroup',
+              name: apiCall.name,
+            });
+            break;
+
+          case 'deleteChannelGroup':
+            bulkOperations.push({
+              type: 'deleteChannelGroup',
+              groupId: apiCall.groupId,
+            });
+            break;
         }
       }
+
+      // Prepare groups to create
+      const groupsToCreate = Array.from(newGroupNames).map((name) => ({ name }));
+
+      // Report progress for bulk commit
+      reportProgress(`Applying ${bulkOperations.length} operations...`);
+
+      // Execute bulk commit
+      const bulkResponse = await api.bulkCommit({
+        operations: bulkOperations,
+        groupsToCreate: groupsToCreate.length > 0 ? groupsToCreate : undefined,
+      });
+
+      // Map response to result
+      result.success = bulkResponse.success;
+      result.operationsApplied = bulkResponse.operationsApplied;
+      result.operationsFailed = bulkResponse.operationsFailed;
+      result.errors = bulkResponse.errors;
+
+      // Populate tempIdMap and newGroupIdMap from response
+      for (const [tempIdStr, realId] of Object.entries(bulkResponse.tempIdMap)) {
+        tempIdMap.set(Number(tempIdStr), realId);
+      }
+      for (const [groupName, groupId] of Object.entries(bulkResponse.groupIdMap)) {
+        newGroupIdMap.set(groupName, groupId);
+      }
+
+      console.log(`[EditMode] Bulk commit completed: ${result.operationsApplied} applied, ${result.operationsFailed} failed`);
 
       // Fetch updated channels
       reportProgress('Fetching updated channels');

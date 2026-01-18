@@ -5,7 +5,7 @@ from fastapi.responses import FileResponse
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, Literal, Union
 import httpx
 import os
 import re
@@ -230,6 +230,95 @@ class DeleteOrphanedGroupsRequest(BaseModel):
     class Config:
         # Allow extra fields to be ignored (for future compatibility)
         extra = "ignore"
+
+
+# Bulk commit operation types
+class BulkUpdateChannelOp(BaseModel):
+    type: Literal["updateChannel"] = "updateChannel"
+    channelId: int
+    data: dict
+
+
+class BulkAddStreamOp(BaseModel):
+    type: Literal["addStreamToChannel"] = "addStreamToChannel"
+    channelId: int
+    streamId: int
+
+
+class BulkRemoveStreamOp(BaseModel):
+    type: Literal["removeStreamFromChannel"] = "removeStreamFromChannel"
+    channelId: int
+    streamId: int
+
+
+class BulkReorderStreamsOp(BaseModel):
+    type: Literal["reorderChannelStreams"] = "reorderChannelStreams"
+    channelId: int
+    streamIds: list[int]
+
+
+class BulkAssignNumbersOp(BaseModel):
+    type: Literal["bulkAssignChannelNumbers"] = "bulkAssignChannelNumbers"
+    channelIds: list[int]
+    startingNumber: Optional[float] = None
+
+
+class BulkCreateChannelOp(BaseModel):
+    type: Literal["createChannel"] = "createChannel"
+    tempId: int  # Negative temp ID from frontend
+    name: str
+    channelNumber: Optional[float] = None
+    groupId: Optional[int] = None
+    newGroupName: Optional[str] = None
+    logoId: Optional[int] = None
+    logoUrl: Optional[str] = None
+    tvgId: Optional[str] = None
+
+
+class BulkDeleteChannelOp(BaseModel):
+    type: Literal["deleteChannel"] = "deleteChannel"
+    channelId: int
+
+
+class BulkCreateGroupOp(BaseModel):
+    type: Literal["createGroup"] = "createGroup"
+    name: str
+
+
+class BulkDeleteGroupOp(BaseModel):
+    type: Literal["deleteChannelGroup"] = "deleteChannelGroup"
+    groupId: int
+
+
+# Union type for all bulk operations
+BulkOperation = Union[
+    BulkUpdateChannelOp,
+    BulkAddStreamOp,
+    BulkRemoveStreamOp,
+    BulkReorderStreamsOp,
+    BulkAssignNumbersOp,
+    BulkCreateChannelOp,
+    BulkDeleteChannelOp,
+    BulkCreateGroupOp,
+    BulkDeleteGroupOp,
+]
+
+
+class BulkCommitRequest(BaseModel):
+    operations: list[BulkOperation]
+    # Groups to create before processing operations (name -> temp group ID mapping)
+    groupsToCreate: Optional[list[dict]] = None
+
+
+class BulkCommitResponse(BaseModel):
+    success: bool
+    operationsApplied: int
+    operationsFailed: int
+    errors: list[dict]
+    # Map of temp channel IDs to real IDs
+    tempIdMap: dict[int, int]
+    # Map of group names to real IDs
+    groupIdMap: dict[str, int]
 
 
 # Health check
@@ -991,6 +1080,209 @@ async def assign_channel_numbers(request: AssignNumbersRequest):
         return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/channels/bulk-commit")
+async def bulk_commit_operations(request: BulkCommitRequest):
+    """
+    Process multiple channel operations in a single request.
+
+    This endpoint is optimized for bulk changes (1000+ operations) by:
+    - Processing all operations in a single HTTP request
+    - Tracking temp ID -> real ID mappings for newly created channels
+    - Creating groups before processing channel operations that reference them
+
+    Returns a response with success status and ID mappings.
+    """
+    import uuid
+
+    client = get_client()
+    batch_id = str(uuid.uuid4())[:8]
+
+    result = {
+        "success": True,
+        "operationsApplied": 0,
+        "operationsFailed": 0,
+        "errors": [],
+        "tempIdMap": {},  # temp channel ID -> real ID
+        "groupIdMap": {},  # group name -> real ID
+    }
+
+    # Helper to resolve temp IDs to real IDs
+    def resolve_id(channel_id: int) -> int:
+        return result["tempIdMap"].get(channel_id, channel_id)
+
+    # Helper to resolve group ID (could be temp or real, or from new group name)
+    def resolve_group_id(group_id: Optional[int], new_group_name: Optional[str]) -> Optional[int]:
+        if new_group_name and new_group_name in result["groupIdMap"]:
+            return result["groupIdMap"][new_group_name]
+        return group_id
+
+    try:
+        # Phase 1: Create groups first (if any)
+        if request.groupsToCreate:
+            for group_info in request.groupsToCreate:
+                group_name = group_info.get("name")
+                if not group_name:
+                    continue
+                try:
+                    # Try to create the group
+                    new_group = await client.create_channel_group(group_name)
+                    result["groupIdMap"][group_name] = new_group["id"]
+                    logger.info(f"Bulk commit: Created group '{group_name}' with id {new_group['id']}")
+                except Exception as e:
+                    error_str = str(e)
+                    # If group already exists, try to find it
+                    if "400" in error_str or "already exists" in error_str.lower():
+                        try:
+                            groups = await client.get_channel_groups()
+                            for g in groups:
+                                if g.get("name") == group_name:
+                                    result["groupIdMap"][group_name] = g["id"]
+                                    logger.info(f"Bulk commit: Found existing group '{group_name}' with id {g['id']}")
+                                    break
+                        except Exception:
+                            pass
+                    else:
+                        # Non-duplicate error - fail the whole operation
+                        result["success"] = False
+                        result["errors"].append({
+                            "operationId": f"create-group-{group_name}",
+                            "error": str(e)
+                        })
+                        return result
+
+        # Phase 2: Process operations sequentially
+        for idx, op in enumerate(request.operations):
+            op_id = f"op-{idx}-{op.type}"
+            try:
+                if op.type == "updateChannel":
+                    channel_id = resolve_id(op.channelId)
+                    await client.update_channel(channel_id, op.data)
+                    result["operationsApplied"] += 1
+
+                elif op.type == "addStreamToChannel":
+                    channel_id = resolve_id(op.channelId)
+                    channel = await client.get_channel(channel_id)
+                    current_streams = channel.get("streams", [])
+                    if op.streamId not in current_streams:
+                        current_streams.append(op.streamId)
+                        await client.update_channel(channel_id, {"streams": current_streams})
+                    result["operationsApplied"] += 1
+
+                elif op.type == "removeStreamFromChannel":
+                    channel_id = resolve_id(op.channelId)
+                    channel = await client.get_channel(channel_id)
+                    current_streams = channel.get("streams", [])
+                    if op.streamId in current_streams:
+                        current_streams.remove(op.streamId)
+                        await client.update_channel(channel_id, {"streams": current_streams})
+                    result["operationsApplied"] += 1
+
+                elif op.type == "reorderChannelStreams":
+                    channel_id = resolve_id(op.channelId)
+                    await client.update_channel(channel_id, {"streams": op.streamIds})
+                    result["operationsApplied"] += 1
+
+                elif op.type == "bulkAssignChannelNumbers":
+                    resolved_ids = [resolve_id(cid) for cid in op.channelIds]
+                    await client.assign_channel_numbers(resolved_ids, op.startingNumber)
+                    result["operationsApplied"] += 1
+
+                elif op.type == "createChannel":
+                    # Resolve group ID
+                    group_id = resolve_group_id(op.groupId, op.newGroupName)
+
+                    # Handle logo - if logoUrl provided but no logoId, try to find/create logo
+                    logo_id = op.logoId
+                    if not logo_id and op.logoUrl:
+                        try:
+                            # Try to find existing logo by URL
+                            existing_logo = await client.find_logo_by_url(op.logoUrl)
+                            if existing_logo:
+                                logo_id = existing_logo["id"]
+                            else:
+                                # Create new logo
+                                new_logo = await client.create_logo({"name": op.name, "url": op.logoUrl})
+                                logo_id = new_logo["id"]
+                        except Exception as logo_err:
+                            logger.warning(f"Failed to create/find logo for channel {op.name}: {logo_err}")
+                            # Continue without logo
+
+                    # Create the channel
+                    channel_data = {"name": op.name}
+                    if op.channelNumber is not None:
+                        channel_data["channel_number"] = op.channelNumber
+                    if group_id is not None:
+                        channel_data["channel_group_id"] = group_id
+                    if logo_id is not None:
+                        channel_data["logo_id"] = logo_id
+                    if op.tvgId is not None:
+                        channel_data["tvg_id"] = op.tvgId
+
+                    new_channel = await client.create_channel(channel_data)
+
+                    # Track temp ID -> real ID mapping
+                    if op.tempId < 0:
+                        result["tempIdMap"][op.tempId] = new_channel["id"]
+
+                    result["operationsApplied"] += 1
+                    logger.info(f"Bulk commit: Created channel '{op.name}' (temp: {op.tempId} -> real: {new_channel['id']})")
+
+                elif op.type == "deleteChannel":
+                    channel_id = resolve_id(op.channelId)
+                    await client.delete_channel(channel_id)
+                    result["operationsApplied"] += 1
+
+                elif op.type == "createGroup":
+                    # Groups should be created in Phase 1, but handle here if needed
+                    if op.name not in result["groupIdMap"]:
+                        new_group = await client.create_channel_group(op.name)
+                        result["groupIdMap"][op.name] = new_group["id"]
+                    result["operationsApplied"] += 1
+
+                elif op.type == "deleteChannelGroup":
+                    await client.delete_channel_group(op.groupId)
+                    result["operationsApplied"] += 1
+
+            except Exception as e:
+                logger.error(f"Bulk commit operation {op_id} failed: {e}")
+                result["success"] = False
+                result["operationsFailed"] += 1
+                result["errors"].append({
+                    "operationId": op_id,
+                    "error": str(e)
+                })
+                # Stop on first failure to maintain consistency
+                break
+
+        # Log summary to journal
+        journal.log_entry(
+            category="channel",
+            action_type="bulk_commit",
+            entity_id=None,
+            entity_name="Bulk Commit",
+            description=f"Applied {result['operationsApplied']} operations in bulk commit",
+            after_value={
+                "operations_applied": result["operationsApplied"],
+                "operations_failed": result["operationsFailed"],
+                "channels_created": len(result["tempIdMap"]),
+                "groups_created": len(result["groupIdMap"]),
+            },
+            batch_id=batch_id,
+        )
+
+        logger.info(f"Bulk commit completed: {result['operationsApplied']} applied, {result['operationsFailed']} failed")
+        return result
+
+    except Exception as e:
+        logger.exception(f"Bulk commit failed: {e}")
+        result["success"] = False
+        result["errors"].append({
+            "operationId": "bulk-commit",
+            "error": str(e)
+        })
+        return result
 
 
 # Channel Groups
