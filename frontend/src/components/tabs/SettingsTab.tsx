@@ -109,7 +109,7 @@ function SortablePriorityItem({
           height: '24px',
           borderRadius: '50%',
           backgroundColor: enabled ? 'var(--accent-primary, #3b82f6)' : 'var(--text-muted, #6b7280)',
-          color: '#ffffff',
+          color: 'var(--bg-primary, #1e1e23)',
           fontSize: '0.75rem',
           fontWeight: 600,
           flexShrink: 0,
