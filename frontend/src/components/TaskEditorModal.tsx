@@ -433,15 +433,6 @@ export function TaskEditorModal({ task, onClose, onSaved }: TaskEditorModalProps
                   </label>
                 ))}
               </div>
-              <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginTop: '0.75rem', cursor: 'pointer' }}>
-                <input
-                  type="checkbox"
-                  checked={taskConfig.skip_dummy !== false}
-                  onChange={(e) => setTaskConfig({ ...taskConfig, skip_dummy: e.target.checked })}
-                  style={{ accentColor: 'var(--accent-primary)' }}
-                />
-                <span>Skip dummy EPG sources</span>
-              </label>
             </div>
           )}
 
