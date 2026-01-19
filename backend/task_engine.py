@@ -144,6 +144,15 @@ class TaskEngine:
                     "failed_count": result.failed_count,
                     "skipped_count": result.skipped_count,
                 })
+                # Include failed item names if available in result details
+                if result.details and result.failed_count > 0:
+                    failed_streams = result.details.get("failed_streams", [])
+                    if failed_streams:
+                        # Extract just the names, limit to first 10 to avoid huge messages
+                        failed_names = [s.get("name", f"ID:{s.get('id', '?')}") for s in failed_streams[:10]]
+                        if len(failed_streams) > 10:
+                            failed_names.append(f"... and {len(failed_streams) - 10} more")
+                        metadata["failed_items"] = ", ".join(failed_names)
 
             await create_notification_internal(
                 notification_type=notification_type,
