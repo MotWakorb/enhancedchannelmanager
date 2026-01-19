@@ -1844,6 +1844,33 @@ export interface AlertMethodType {
   optional_fields: Record<string, unknown>;
 }
 
+// Granular alert source filtering types
+export type AlertFilterMode = 'all' | 'only_selected' | 'all_except';
+
+export interface AlertSourceEpgRefresh {
+  enabled: boolean;
+  filter_mode: AlertFilterMode;
+  source_ids: number[];
+}
+
+export interface AlertSourceM3uRefresh {
+  enabled: boolean;
+  filter_mode: AlertFilterMode;
+  account_ids: number[];
+}
+
+export interface AlertSourceProbeFailures {
+  enabled: boolean;
+  min_failures: number;
+}
+
+export interface AlertSources {
+  version?: number;
+  epg_refresh?: AlertSourceEpgRefresh;
+  m3u_refresh?: AlertSourceM3uRefresh;
+  probe_failures?: AlertSourceProbeFailures;
+}
+
 export interface AlertMethod {
   id: number;
   name: string;
@@ -1854,6 +1881,7 @@ export interface AlertMethod {
   notify_success: boolean;
   notify_warning: boolean;
   notify_error: boolean;
+  alert_sources: AlertSources | null;
   last_sent_at: string | null;
   created_at: string | null;
 }
@@ -1867,6 +1895,7 @@ export interface AlertMethodCreate {
   notify_success?: boolean;
   notify_warning?: boolean;
   notify_error?: boolean;
+  alert_sources?: AlertSources | null;
 }
 
 export interface AlertMethodUpdate {
@@ -1877,6 +1906,7 @@ export interface AlertMethodUpdate {
   notify_success?: boolean;
   notify_warning?: boolean;
   notify_error?: boolean;
+  alert_sources?: AlertSources | null;
 }
 
 export async function getAlertMethodTypes(): Promise<AlertMethodType[]> {

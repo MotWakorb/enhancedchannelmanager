@@ -470,6 +470,10 @@ class AlertMethod(Base):
     notify_success = Column(Boolean, default=True, nullable=False)
     notify_warning = Column(Boolean, default=True, nullable=False)
     notify_error = Column(Boolean, default=True, nullable=False)
+    # Granular source filtering (JSON) - controls which sources trigger alerts
+    # Schema: {"version": 1, "epg_refresh": {...}, "m3u_refresh": {...}, "probe_failures": {...}}
+    # NULL means "send all" (backwards compatible)
+    alert_sources = Column(Text, nullable=True)
     # Digest tracking
     last_sent_at = Column(DateTime, nullable=True)
     # Timestamps
@@ -500,6 +504,14 @@ class AlertMethod(Base):
                     masked_config[key] = value
             config = masked_config
 
+        # Parse alert_sources JSON, defaulting to None if not set
+        alert_sources = None
+        if self.alert_sources:
+            try:
+                alert_sources = json.loads(self.alert_sources)
+            except (json.JSONDecodeError, TypeError):
+                pass
+
         return {
             "id": self.id,
             "name": self.name,
@@ -510,6 +522,7 @@ class AlertMethod(Base):
             "notify_success": self.notify_success,
             "notify_warning": self.notify_warning,
             "notify_error": self.notify_error,
+            "alert_sources": alert_sources,
             "last_sent_at": self.last_sent_at.isoformat() + "Z" if self.last_sent_at else None,
             "created_at": self.created_at.isoformat() + "Z" if self.created_at else None,
             "updated_at": self.updated_at.isoformat() + "Z" if self.updated_at else None,

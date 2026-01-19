@@ -2346,18 +2346,20 @@ async def refresh_epg_source(source_id: int):
             description=f"Refreshed EPG source '{source_name}'",
         )
 
-        # Send success notification
+        # Send success notification with granular filtering
         await send_alert(
             title=f"EPG Refresh: {source_name}",
             message=f"Successfully refreshed EPG source '{source_name}'",
             notification_type="success",
             source="EPG Refresh",
             metadata={"source_id": source_id, "source_name": source_name},
+            alert_category="epg_refresh",
+            entity_id=source_id,
         )
 
         return result
     except Exception as e:
-        # Send error notification
+        # Send error notification with granular filtering
         try:
             await send_alert(
                 title="EPG Refresh Failed",
@@ -2365,6 +2367,8 @@ async def refresh_epg_source(source_id: int):
                 notification_type="error",
                 source="EPG Refresh",
                 metadata={"source_id": source_id, "error": str(e)},
+                alert_category="epg_refresh",
+                entity_id=source_id,
             )
         except Exception:
             pass  # Don't fail the request if notification fails
@@ -3078,18 +3082,20 @@ async def refresh_m3u_account(account_id: int):
             description=f"Refreshed M3U account '{account_name}'",
         )
 
-        # Send success notification
+        # Send success notification with granular filtering
         await send_alert(
             title=f"M3U Refresh: {account_name}",
             message=f"Successfully refreshed M3U account '{account_name}'",
             notification_type="success",
             source="M3U Refresh",
             metadata={"account_id": account_id, "account_name": account_name},
+            alert_category="m3u_refresh",
+            entity_id=account_id,
         )
 
         return result
     except Exception as e:
-        # Send error notification
+        # Send error notification with granular filtering
         try:
             await send_alert(
                 title="M3U Refresh Failed",
@@ -3097,6 +3103,8 @@ async def refresh_m3u_account(account_id: int):
                 notification_type="error",
                 source="M3U Refresh",
                 metadata={"account_id": account_id, "error": str(e)},
+                alert_category="m3u_refresh",
+                entity_id=account_id,
             )
         except Exception:
             pass  # Don't fail the request if notification fails
@@ -3570,6 +3578,8 @@ async def create_notification_internal(
     action_url: Optional[str] = None,
     metadata: Optional[dict] = None,
     send_alerts: bool = True,
+    alert_category: Optional[str] = None,
+    entity_id: Optional[int] = None,
 ) -> Optional[dict]:
     """Create a new notification (internal helper).
 
@@ -3585,6 +3595,8 @@ async def create_notification_internal(
         action_url: Optional action URL
         metadata: Optional additional data
         send_alerts: If True (default), also dispatch to configured alert channels.
+        alert_category: Category for granular filtering ("epg_refresh", "m3u_refresh", "probe_failures")
+        entity_id: Source/account ID for filtering (EPG source ID or M3U account ID)
 
     Returns:
         Notification dict or None if message is empty
@@ -3627,6 +3639,8 @@ async def create_notification_internal(
                     notification_type=notification_type,
                     source=source,
                     metadata=metadata,
+                    alert_category=alert_category,
+                    entity_id=entity_id,
                 )
             )
 
@@ -3686,6 +3700,8 @@ async def _dispatch_to_alert_channels(
     notification_type: str,
     source: Optional[str],
     metadata: Optional[dict],
+    alert_category: Optional[str] = None,
+    entity_id: Optional[int] = None,
 ):
     """Dispatch notification to all configured alert channels.
 
@@ -3701,6 +3717,8 @@ async def _dispatch_to_alert_channels(
             notification_type=notification_type,
             source=source,
             metadata=metadata,
+            alert_category=alert_category,
+            entity_id=entity_id,
         )
         if results:
             success_count = sum(1 for v in results.values() if v)
@@ -3806,6 +3824,7 @@ class AlertMethodCreate(BaseModel):
     notify_success: bool = True
     notify_warning: bool = True
     notify_error: bool = True
+    alert_sources: Optional[dict] = None  # Granular source filtering
 
 
 class AlertMethodUpdate(BaseModel):
@@ -3816,6 +3835,47 @@ class AlertMethodUpdate(BaseModel):
     notify_success: Optional[bool] = None
     notify_warning: Optional[bool] = None
     notify_error: Optional[bool] = None
+    alert_sources: Optional[dict] = None  # Granular source filtering
+
+
+def validate_alert_sources(alert_sources: Optional[dict]) -> Optional[str]:
+    """Validate alert_sources structure. Returns error message or None if valid."""
+    if alert_sources is None:
+        return None
+
+    valid_filter_modes = {"all", "only_selected", "all_except"}
+
+    # Validate EPG refresh section
+    if "epg_refresh" in alert_sources:
+        epg = alert_sources["epg_refresh"]
+        if not isinstance(epg, dict):
+            return "epg_refresh must be an object"
+        if "filter_mode" in epg and epg["filter_mode"] not in valid_filter_modes:
+            return f"epg_refresh.filter_mode must be one of: {valid_filter_modes}"
+        if "source_ids" in epg and not isinstance(epg["source_ids"], list):
+            return "epg_refresh.source_ids must be an array"
+
+    # Validate M3U refresh section
+    if "m3u_refresh" in alert_sources:
+        m3u = alert_sources["m3u_refresh"]
+        if not isinstance(m3u, dict):
+            return "m3u_refresh must be an object"
+        if "filter_mode" in m3u and m3u["filter_mode"] not in valid_filter_modes:
+            return f"m3u_refresh.filter_mode must be one of: {valid_filter_modes}"
+        if "account_ids" in m3u and not isinstance(m3u["account_ids"], list):
+            return "m3u_refresh.account_ids must be an array"
+
+    # Validate probe failures section
+    if "probe_failures" in alert_sources:
+        probe = alert_sources["probe_failures"]
+        if not isinstance(probe, dict):
+            return "probe_failures must be an object"
+        if "min_failures" in probe:
+            min_failures = probe["min_failures"]
+            if not isinstance(min_failures, int) or min_failures < 0:
+                return "probe_failures.min_failures must be a non-negative integer"
+
+    return None
 
 
 @app.get("/api/alert-methods/types")
@@ -3842,8 +3902,15 @@ async def list_alert_methods():
     try:
         methods = session.query(AlertMethodModel).all()
         logger.debug(f"Found {len(methods)} alert methods in database")
-        result = [
-            {
+        result = []
+        for m in methods:
+            alert_sources = None
+            if m.alert_sources:
+                try:
+                    alert_sources = json.loads(m.alert_sources)
+                except (json.JSONDecodeError, TypeError):
+                    pass
+            result.append({
                 "id": m.id,
                 "name": m.name,
                 "method_type": m.method_type,
@@ -3853,11 +3920,10 @@ async def list_alert_methods():
                 "notify_success": m.notify_success,
                 "notify_warning": m.notify_warning,
                 "notify_error": m.notify_error,
+                "alert_sources": alert_sources,
                 "last_sent_at": m.last_sent_at.isoformat() + "Z" if m.last_sent_at else None,
                 "created_at": m.created_at.isoformat() + "Z" if m.created_at else None,
-            }
-            for m in methods
-        ]
+            })
         return result
     except Exception as e:
         logger.exception(f"Error listing alert methods: {e}")
@@ -3890,6 +3956,13 @@ async def create_alert_method(data: AlertMethodCreate):
                 logger.warning(f"Invalid config for method {data.name}: {error}")
                 raise HTTPException(status_code=400, detail=error)
 
+        # Validate alert_sources if provided
+        if data.alert_sources is not None:
+            alert_sources_error = validate_alert_sources(data.alert_sources)
+            if alert_sources_error:
+                logger.warning(f"Invalid alert_sources for method {data.name}: {alert_sources_error}")
+                raise HTTPException(status_code=400, detail=alert_sources_error)
+
         session = get_session()
         method_model = AlertMethodModel(
             name=data.name,
@@ -3900,6 +3973,7 @@ async def create_alert_method(data: AlertMethodCreate):
             notify_success=data.notify_success,
             notify_warning=data.notify_warning,
             notify_error=data.notify_error,
+            alert_sources=json.dumps(data.alert_sources) if data.alert_sources else None,
         )
         session.add(method_model)
         session.commit()
@@ -3943,6 +4017,12 @@ async def get_alert_method(method_id: int):
             raise HTTPException(status_code=404, detail="Alert method not found")
 
         logger.debug(f"Found alert method: id={method.id}, name={method.name}")
+        alert_sources = None
+        if method.alert_sources:
+            try:
+                alert_sources = json.loads(method.alert_sources)
+            except (json.JSONDecodeError, TypeError):
+                pass
         return {
             "id": method.id,
             "name": method.name,
@@ -3953,6 +4033,7 @@ async def get_alert_method(method_id: int):
             "notify_success": method.notify_success,
             "notify_warning": method.notify_warning,
             "notify_error": method.notify_error,
+            "alert_sources": alert_sources,
             "last_sent_at": method.last_sent_at.isoformat() + "Z" if method.last_sent_at else None,
             "created_at": method.created_at.isoformat() + "Z" if method.created_at else None,
         }
@@ -4003,6 +4084,13 @@ async def update_alert_method(method_id: int, data: AlertMethodUpdate):
             method.notify_warning = data.notify_warning
         if data.notify_error is not None:
             method.notify_error = data.notify_error
+        if data.alert_sources is not None:
+            # Validate alert_sources
+            alert_sources_error = validate_alert_sources(data.alert_sources)
+            if alert_sources_error:
+                logger.warning(f"Invalid alert_sources for method {method_id}: {alert_sources_error}")
+                raise HTTPException(status_code=400, detail=alert_sources_error)
+            method.alert_sources = json.dumps(data.alert_sources) if data.alert_sources else None
 
         session.commit()
 

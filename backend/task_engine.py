@@ -111,6 +111,7 @@ class TaskEngine:
         title: str,
         message: str,
         result: Optional[TaskResult] = None,
+        alert_category: Optional[str] = None,
     ) -> None:
         """
         Send a notification about task execution result.
@@ -125,6 +126,7 @@ class TaskEngine:
             title: Notification title
             message: Notification message
             result: Optional TaskResult with execution details
+            alert_category: Category for granular filtering (e.g., "probe_failures")
         """
         try:
             # Import here to avoid circular imports
@@ -151,6 +153,7 @@ class TaskEngine:
                 source_id=task_id,
                 metadata=metadata,
                 send_alerts=True,
+                alert_category=alert_category,
             )
         except Exception as e:
             # Don't let notification failures affect task execution
@@ -432,6 +435,10 @@ class TaskEngine:
                     user_initiated=(triggered_by == "manual"),
                 )
 
+                # Determine alert category for granular filtering
+                # For stream_probe tasks, use "probe_failures" to allow min_failures threshold
+                alert_category = "probe_failures" if task_id == "stream_probe" else None
+
                 # Send notification - warning if partial failure, success if all ok
                 if result.failed_count > 0:
                     # Partial success - some items failed
@@ -443,6 +450,7 @@ class TaskEngine:
                         message=f"Completed with {result.failed_count} failures out of {result.total_items} items. "
                                 f"({result.success_count} succeeded, {result.skipped_count} skipped)",
                         result=result,
+                        alert_category=alert_category,
                     )
                 else:
                     # Full success
@@ -455,6 +463,7 @@ class TaskEngine:
                                 + (f", {result.skipped_count} skipped" if result.skipped_count else "")
                                 + f" in {result.duration_seconds:.1f}s",
                         result=result,
+                        alert_category=alert_category,
                     )
             else:
                 log_entry(
@@ -480,12 +489,16 @@ class TaskEngine:
                     title=f"Task Failed: {instance.task_name}",
                     message=result.error or result.message or "Unknown error",
                     result=result,
+                    alert_category=alert_category,
                 )
 
             return result
 
         except Exception as e:
             logger.exception(f"[{task_id}] Task execution failed: {e}")
+
+            # Determine alert category for granular filtering
+            alert_category = "probe_failures" if task_id == "stream_probe" else None
 
             # Log exception to journal
             log_entry(
@@ -510,6 +523,7 @@ class TaskEngine:
                 title=f"Task Error: {instance.task_name}",
                 message=f"Task failed with exception: {str(e)}",
                 result=None,
+                alert_category=alert_category,
             )
 
             # Update execution record with error

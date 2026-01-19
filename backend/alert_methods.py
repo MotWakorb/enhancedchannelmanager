@@ -320,6 +320,78 @@ class AlertMethodManager:
         finally:
             session.close()
 
+    def _should_alert_for_source(
+        self,
+        alert_sources_json: Optional[str],
+        alert_category: Optional[str],
+        entity_id: Optional[int],
+        failed_count: int = 0,
+    ) -> bool:
+        """
+        Check if an alert should be sent based on granular source filtering.
+
+        Args:
+            alert_sources_json: JSON string with filter config (or None for "send all")
+            alert_category: Category like "epg_refresh", "m3u_refresh", "probe_failures"
+            entity_id: Source ID (EPG source ID or M3U account ID)
+            failed_count: For probe_failures, the number of failures
+
+        Returns:
+            True if alert should be sent, False otherwise
+        """
+        # If no alert_sources configured, send all (backwards compatible)
+        if not alert_sources_json:
+            return True
+
+        # If no category specified, send the alert (general notification)
+        if not alert_category:
+            return True
+
+        try:
+            alert_sources = json.loads(alert_sources_json)
+        except (json.JSONDecodeError, TypeError):
+            # Invalid JSON, default to send all
+            return True
+
+        # Check category-specific filtering
+        if alert_category == "epg_refresh":
+            config = alert_sources.get("epg_refresh", {})
+            if not config.get("enabled", True):
+                return False
+            filter_mode = config.get("filter_mode", "all")
+            source_ids = config.get("source_ids", [])
+
+            if filter_mode == "all":
+                return True
+            elif filter_mode == "only_selected":
+                return entity_id in source_ids if entity_id else False
+            elif filter_mode == "all_except":
+                return entity_id not in source_ids if entity_id else True
+
+        elif alert_category == "m3u_refresh":
+            config = alert_sources.get("m3u_refresh", {})
+            if not config.get("enabled", True):
+                return False
+            filter_mode = config.get("filter_mode", "all")
+            account_ids = config.get("account_ids", [])
+
+            if filter_mode == "all":
+                return True
+            elif filter_mode == "only_selected":
+                return entity_id in account_ids if entity_id else False
+            elif filter_mode == "all_except":
+                return entity_id not in account_ids if entity_id else True
+
+        elif alert_category == "probe_failures":
+            config = alert_sources.get("probe_failures", {})
+            if not config.get("enabled", True):
+                return False
+            min_failures = config.get("min_failures", 1)
+            return failed_count >= min_failures
+
+        # Unknown category, send the alert
+        return True
+
     async def send_alert(
         self,
         title: str,
@@ -327,6 +399,8 @@ class AlertMethodManager:
         notification_type: str = "info",
         source: Optional[str] = None,
         metadata: Optional[Dict[str, Any]] = None,
+        alert_category: Optional[str] = None,
+        entity_id: Optional[int] = None,
     ) -> Dict[int, bool]:
         """
         Queue an alert to be sent to all applicable methods.
@@ -340,6 +414,8 @@ class AlertMethodManager:
             notification_type: One of info, success, warning, error
             source: Source of the notification
             metadata: Additional metadata
+            alert_category: Category for granular filtering ("epg_refresh", "m3u_refresh", "probe_failures")
+            entity_id: Source/account ID for filtering (EPG source ID or M3U account ID)
 
         Returns:
             Dict mapping method_id to queued status (True = queued successfully)
@@ -357,6 +433,11 @@ class AlertMethodManager:
 
         results = {}
         session = get_session()
+
+        # Extract failed_count from metadata for probe_failures
+        failed_count = 0
+        if metadata and "failed_count" in metadata:
+            failed_count = metadata.get("failed_count", 0)
 
         try:
             async with self._buffer_lock:
@@ -379,6 +460,16 @@ class AlertMethodManager:
 
                     if not type_enabled:
                         logger.debug(f"Method {method.name} skipped: {notification_type} not enabled")
+                        continue
+
+                    # Check granular source filtering
+                    if not self._should_alert_for_source(
+                        method_model.alert_sources,
+                        alert_category,
+                        entity_id,
+                        failed_count,
+                    ):
+                        logger.debug(f"Method {method.name} skipped: source filter ({alert_category}, entity_id={entity_id})")
                         continue
 
                     # Add to buffer instead of sending immediately
@@ -491,8 +582,20 @@ async def send_alert(
     notification_type: str = "info",
     source: Optional[str] = None,
     metadata: Optional[Dict[str, Any]] = None,
+    alert_category: Optional[str] = None,
+    entity_id: Optional[int] = None,
 ) -> Dict[int, bool]:
-    """Convenience function to send an alert via the global manager."""
+    """Convenience function to send an alert via the global manager.
+
+    Args:
+        title: Alert title
+        message: Alert message
+        notification_type: One of info, success, warning, error
+        source: Source of the notification
+        metadata: Additional metadata
+        alert_category: Category for granular filtering ("epg_refresh", "m3u_refresh", "probe_failures")
+        entity_id: Source/account ID for filtering (EPG source ID or M3U account ID)
+    """
     manager = get_alert_manager()
     return await manager.send_alert(
         title=title,
@@ -500,4 +603,6 @@ async def send_alert(
         notification_type=notification_type,
         source=source,
         metadata=metadata,
+        alert_category=alert_category,
+        entity_id=entity_id,
     )
