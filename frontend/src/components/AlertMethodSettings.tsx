@@ -44,6 +44,7 @@ export function AlertMethodSettings({ className }: AlertMethodSettingsProps) {
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
+  const [testingMethodId, setTestingMethodId] = useState<number | null>(null);
 
   const loadMethods = useCallback(async () => {
     try {
@@ -232,6 +233,22 @@ export function AlertMethodSettings({ className }: AlertMethodSettingsProps) {
     }
   };
 
+  const handleTestFromList = async (method: AlertMethod) => {
+    setTestingMethodId(method.id);
+    try {
+      const result = await api.testAlertMethod(method.id);
+      if (result.success) {
+        alert(`Test successful: ${result.message}`);
+      } else {
+        alert(`Test failed: ${result.message}`);
+      }
+    } catch (err) {
+      alert('Test failed: Could not connect to server');
+    } finally {
+      setTestingMethodId(null);
+    }
+  };
+
   const getMethodTypeIcon = (type: string): string => {
     switch (type) {
       case 'discord': return 'forum';
@@ -356,6 +373,16 @@ export function AlertMethodSettings({ className }: AlertMethodSettingsProps) {
                     </div>
                   </div>
                   <div className="method-actions">
+                    <button
+                      className="test-btn"
+                      onClick={() => handleTestFromList(method)}
+                      disabled={testingMethodId === method.id}
+                      title="Send Test"
+                    >
+                      <span className={`material-icons ${testingMethodId === method.id ? 'spinning' : ''}`}>
+                        {testingMethodId === method.id ? 'refresh' : 'send'}
+                      </span>
+                    </button>
                     <button
                       className={`toggle-btn ${method.enabled ? 'enabled' : ''}`}
                       onClick={() => handleToggleEnabled(method)}

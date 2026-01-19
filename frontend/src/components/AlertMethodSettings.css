@@ -160,6 +160,15 @@
   color: var(--error);
 }
 
+.alert-method-settings .test-btn:hover {
+  color: var(--accent-primary);
+}
+
+.alert-method-settings .test-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
 /* Add Method Button */
 .alert-method-settings .btn-add-method {
   display: flex;
