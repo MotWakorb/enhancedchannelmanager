@@ -11,7 +11,7 @@ A professional-grade web interface for managing IPTV configurations with Dispatc
 - **Logo Manager** - Logo management with search, upload, and URL import
 - **Journal** - Activity log tracking all changes to channels, EPG, and M3U accounts
 - **Stats** - Live streaming statistics, M3U connection counts, bandwidth tracking, and charts
-- **Settings** - Configure Dispatcharr connection, channel defaults, stream probing, and appearance
+- **Settings** - Configure Dispatcharr connection, channel defaults, stream probing, scheduled tasks, alert methods, and appearance
 
 ## Features
 
@@ -262,6 +262,7 @@ Automated stream health checking:
 - **Parallel Probing** - Streams from different M3U accounts probe concurrently
 - **M3U Connection Awareness** - Respects M3U max connection limits during probing
 - **Persistent History** - Probe results saved to `/config/probe_history.json` and persist across container restarts
+- **Failed Stream Indicators** - Visual error icons on channels and groups that contain failed/timeout streams
 
 #### Stream Sort Priority
 Configure how streams are automatically sorted within channels:
@@ -303,6 +304,39 @@ These defaults are pre-loaded when opening the bulk create modal, with a "(from 
   - **Overwrite** - Automatically replace all existing IDs with new ones
 - **Frontend Log Level** - Set console logging verbosity (Error, Warn, Info, Debug) for troubleshooting
 
+#### Scheduled Tasks
+Automated background tasks with flexible scheduling:
+
+- **Task Types** - EPG Refresh, M3U Refresh, Stream Probe, Database Cleanup
+- **Multiple Schedules** - Each task can have multiple independent schedules
+- **Schedule Types** - Interval, Daily, Weekly, Bi-weekly, or Monthly (no cron expressions needed)
+- **Timezone-Aware** - All schedules respect your configured timezone
+- **Real-Time Progress** - Live progress bars with success/failed/skipped counts during execution
+- **Task History** - View execution history with detailed results
+- **Manual Run** - Trigger any task immediately with one click
+- **Enable/Disable** - Toggle individual schedules or entire tasks
+
+#### Alert Methods
+Send notifications via external services when tasks complete or errors occur:
+
+- **Discord Webhooks** - Send alerts to Discord channels via webhook URL
+- **Telegram Bots** - Send alerts via Telegram bot API
+- **Email (SMTP)** - Send email alerts with configurable SMTP settings
+- **Multiple Methods** - Configure multiple alert methods simultaneously
+- **Source Filtering** - Control which notification types trigger each alert method
+- **Digest/Batching** - Batch multiple notifications to reduce alert noise
+- **Test Alerts** - Send test notifications to verify configuration
+- **Failed Stream Details** - Task completion alerts include names of failed streams
+
+#### Notification Center
+In-app notification system accessible from the header:
+
+- **Notification Bell** - Shows unread count badge
+- **Notification History** - View past notifications with timestamps
+- **Mark as Read** - Mark individual or all notifications as read
+- **Delete Notifications** - Clear individual or all notifications
+- **Notification Types** - Info, Success, Warning, Error with color coding
+
 ### Channel List Filters
 
 Fine-tune which groups appear in the channel list:
@@ -336,13 +370,17 @@ Automated background tasks with flexible multi-schedule support:
 - **Manual Run** - Trigger any task immediately with one click
 - **Enable/Disable** - Toggle individual schedules or entire tasks on/off
 
-### v0.8.2 - Notifications
+### ~~v0.8.2 - Notifications~~ ✅ Implemented
 In-app notifications and external alerts:
-- Toast notifications for actions and errors
-- Notification center with history
-- Email alerts (SMTP)
-- Discord webhook alerts
-- Telegram bot alerts
+- **Toast Notifications** - Real-time feedback for actions and errors
+- **Notification Center** - In-app notification history with mark read/delete
+- **Email Alerts (SMTP)** - Configurable SMTP email notifications
+- **Discord Webhooks** - Send alerts to Discord channels
+- **Telegram Bots** - Send alerts via Telegram
+- **Source Filtering** - Control which events trigger each alert method
+- **Digest/Batching** - Reduce notification noise with batching
+- **Failed Stream Details** - Task alerts include names of failed streams
+- **Failed Stream Indicators** - Visual markers on channels/groups with probe failures
 
 ### v0.8.6 - Tag-Based Channel Normalization
 Improved UI for managing stream name normalization:
@@ -475,6 +513,33 @@ uvicorn main:app --reload
 ### Journal
 - `GET /api/journal` - Get journal entries (paginated, filterable)
 - `GET /api/journal/stats` - Get journal statistics
+
+### Notifications
+- `GET /api/notifications` - Get notifications (paginated, filterable by read status)
+- `PATCH /api/notifications/{id}` - Update notification (mark as read)
+- `DELETE /api/notifications/{id}` - Delete notification
+- `POST /api/notifications/mark-all-read` - Mark all notifications as read
+- `DELETE /api/notifications/clear` - Clear notifications (read only or all)
+
+### Alert Methods
+- `GET /api/alert-methods` - List all alert methods
+- `POST /api/alert-methods` - Create alert method
+- `GET /api/alert-methods/{id}` - Get alert method details
+- `PATCH /api/alert-methods/{id}` - Update alert method
+- `DELETE /api/alert-methods/{id}` - Delete alert method
+- `POST /api/alert-methods/{id}/test` - Send test notification
+
+### Scheduled Tasks
+- `GET /api/tasks` - List all tasks with status
+- `GET /api/tasks/{id}` - Get task details with schedules
+- `PATCH /api/tasks/{id}` - Update task configuration
+- `POST /api/tasks/{id}/run` - Run task immediately
+- `POST /api/tasks/{id}/cancel` - Cancel running task
+- `GET /api/tasks/{id}/history` - Get task execution history
+- `GET /api/tasks/{id}/schedules` - Get task schedules
+- `POST /api/tasks/{id}/schedules` - Add schedule to task
+- `PATCH /api/tasks/{id}/schedules/{schedule_id}` - Update schedule
+- `DELETE /api/tasks/{id}/schedules/{schedule_id}` - Delete schedule
 
 ### Health
 - `GET /api/health` - Health check
