@@ -111,3 +111,17 @@ When doing work on this project, follow these steps in order:
 - NEVER say "ready to push when you are" - YOU must push
 - If push fails, resolve and retry until it succeeds
 - Always use `enhancedchannelmanager` as the repository name when creating beads
+
+## CSS/Styling Guidelines
+
+**Button Styling - IMPORTANT:**
+- NEVER use `--accent-primary` for button backgrounds with white/light text - it causes white-on-white in dark mode
+- ALWAYS use `--button-primary-bg` for primary button backgrounds
+- ALWAYS use `--button-primary-text` for primary button text color
+- Example of correct button styling:
+  ```css
+  .btn-primary {
+    background-color: var(--button-primary-bg);
+    color: var(--button-primary-text);
+  }
+  ```
