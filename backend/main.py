@@ -371,7 +371,18 @@ class BulkCommitResponse(BaseModel):
 # Health check
 @app.get("/api/health")
 async def health_check():
-    return {"status": "healthy", "service": "enhanced-channel-manager"}
+    # Get version info from environment (set at build time)
+    version = os.environ.get("ECM_VERSION", "unknown")
+    release_channel = os.environ.get("RELEASE_CHANNEL", "latest")
+    git_commit = os.environ.get("GIT_COMMIT", "unknown")
+
+    return {
+        "status": "healthy",
+        "service": "enhanced-channel-manager",
+        "version": version,
+        "release_channel": release_channel,
+        "git_commit": git_commit,
+    }
 
 
 # Settings

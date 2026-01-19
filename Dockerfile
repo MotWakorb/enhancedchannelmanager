@@ -14,9 +14,13 @@ RUN npm run build
 # Production image
 FROM python:3.12-slim
 
-# Cache busting - MUST be declared early in the stage to receive build arg
+# Build args - MUST be declared early in the stage to receive build arg
 ARG GIT_COMMIT=unknown
+ARG ECM_VERSION=unknown
+ARG RELEASE_CHANNEL=latest
 ENV GIT_COMMIT=$GIT_COMMIT
+ENV ECM_VERSION=$ECM_VERSION
+ENV RELEASE_CHANNEL=$RELEASE_CHANNEL
 
 WORKDIR /app
 

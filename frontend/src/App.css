@@ -220,6 +220,32 @@
   color: var(--text-secondary);
 }
 
+.footer .update-available {
+  margin-left: 0.75rem;
+  padding: 0.25rem 0.5rem;
+  background-color: var(--warning);
+  color: var(--bg-primary);
+  border-radius: 4px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-decoration: none;
+  animation: pulse-update 2s ease-in-out infinite;
+}
+
+.footer .update-available:hover {
+  background-color: var(--warning-hover, #e6a000);
+  text-decoration: none;
+}
+
+@keyframes pulse-update {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.7;
+  }
+}
+
 /* Tab Loading Styles */
 .tab-loading {
   display: flex;
