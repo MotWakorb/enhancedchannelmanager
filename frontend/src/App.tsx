@@ -13,6 +13,8 @@ import packageJson from '../package.json';
 import { logger } from './utils/logger';
 import { registerVLCModalCallback, downloadM3U } from './utils/vlc';
 import { VLCProtocolHelperModal } from './components/VLCProtocolHelperModal';
+import { NotificationCenter } from './components/NotificationCenter';
+import { NotificationProvider } from './contexts/NotificationContext';
 import ECMLogo from './assets/ECMLogo.png';
 import './App.css';
 
@@ -1581,6 +1583,7 @@ function App() {
     : channelGroups;
 
   return (
+    <NotificationProvider position="top-right">
     <div className="app">
       <header className={`header ${isEditMode ? 'edit-mode-active' : ''}`}>
         <h1>
@@ -1651,6 +1654,7 @@ function App() {
               )}
             </>
           )}
+          <NotificationCenter />
         </div>
       </header>
 
@@ -1872,6 +1876,7 @@ function App() {
         streamName={vlcModalStreamName || 'Stream'}
       />
     </div>
+    </NotificationProvider>
   );
 }
 
