@@ -8,6 +8,7 @@ import { copyToClipboard } from '../../utils/clipboard';
 import type { LogLevel as FrontendLogLevel } from '../../utils/logger';
 import { DeleteOrphanedGroupsModal } from '../DeleteOrphanedGroupsModal';
 import { ScheduledTasksSection } from '../ScheduledTasksSection';
+import { AlertChannelSettings } from '../AlertChannelSettings';
 import {
   DndContext,
   closestCenter,
@@ -136,7 +137,7 @@ interface SettingsTabProps {
   onProbeComplete?: () => void;
 }
 
-type SettingsPage = 'general' | 'channel-defaults' | 'appearance' | 'scheduled-tasks' | 'maintenance';
+type SettingsPage = 'general' | 'channel-defaults' | 'appearance' | 'scheduled-tasks' | 'alert-channels' | 'maintenance';
 
 export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onProbeComplete }: SettingsTabProps) {
   const [activePage, setActivePage] = useState<SettingsPage>('general');
@@ -1259,6 +1260,64 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         </div>
       </div>
 
+      <div className="settings-section">
+        <div className="settings-section-header">
+          <span className="material-icons">notifications</span>
+          <h3>Notifications</h3>
+        </div>
+
+        <p className="form-hint" style={{ marginBottom: '1rem' }}>
+          ECM displays toast notifications for important events like task completions,
+          errors, and system messages. Notification history is accessible via the bell
+          icon in the header. Configure alert channels in Settings → Alert Channels to
+          receive notifications via Discord, Telegram, or email.
+        </p>
+
+        <div className="form-group">
+          <label>Notification History</label>
+          <p className="form-hint">
+            Clear old notifications from the history. This removes notifications from the
+            dropdown but does not affect alert channels.
+          </p>
+          <div style={{ display: 'flex', gap: '0.75rem', marginTop: '0.75rem' }}>
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={async () => {
+                try {
+                  const result = await api.clearNotifications(true);
+                  alert(`Cleared ${result.deleted} read notification(s)`);
+                } catch (err) {
+                  logger.error('Failed to clear notifications', err);
+                  alert('Failed to clear notifications');
+                }
+              }}
+            >
+              <span className="material-icons" style={{ fontSize: '18px' }}>done_all</span>
+              Clear Read
+            </button>
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={async () => {
+                if (!confirm('Are you sure you want to clear ALL notifications?')) return;
+                try {
+                  const result = await api.clearNotifications(false);
+                  alert(`Cleared ${result.deleted} notification(s)`);
+                } catch (err) {
+                  logger.error('Failed to clear notifications', err);
+                  alert('Failed to clear notifications');
+                }
+              }}
+              style={{ color: 'var(--error)' }}
+            >
+              <span className="material-icons" style={{ fontSize: '18px' }}>delete_sweep</span>
+              Clear All
+            </button>
+          </div>
+        </div>
+      </div>
+
       {saveSuccess && (
         <div className="save-success">
           <span className="material-icons">check_circle</span>
@@ -2224,6 +2283,13 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
             Scheduled Tasks
           </li>
           <li
+            className={`settings-nav-item ${activePage === 'alert-channels' ? 'active' : ''}`}
+            onClick={() => setActivePage('alert-channels')}
+          >
+            <span className="material-icons">campaign</span>
+            Alert Channels
+          </li>
+          <li
             className={`settings-nav-item ${activePage === 'maintenance' ? 'active' : ''}`}
             onClick={() => setActivePage('maintenance')}
           >
@@ -2315,6 +2381,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         {activePage === 'channel-defaults' && renderChannelDefaultsPage()}
         {activePage === 'appearance' && renderAppearancePage()}
         {activePage === 'scheduled-tasks' && <ScheduledTasksSection userTimezone={userTimezone} />}
+        {activePage === 'alert-channels' && <AlertChannelSettings />}
         {activePage === 'maintenance' && renderMaintenancePage()}
       </div>
 

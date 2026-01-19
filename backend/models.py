@@ -446,3 +446,75 @@ class Notification(Base):
 
     def __repr__(self):
         return f"<Notification(id={self.id}, type={self.type}, read={self.read})>"
+
+
+class AlertChannel(Base):
+    """
+    Configuration for an external alert channel (Discord, Telegram, Email, etc.).
+    Stores credentials and settings for sending notifications to external services.
+    """
+    __tablename__ = "alert_channels"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String(100), nullable=False)  # User-friendly name
+    channel_type = Column(String(50), nullable=False)  # discord, telegram, smtp, etc.
+    enabled = Column(Boolean, default=True, nullable=False)
+    # Configuration (JSON) - contains type-specific settings
+    # Discord: webhook_url
+    # Telegram: bot_token, chat_id
+    # SMTP: host, port, username, password, from_address, to_addresses
+    config = Column(Text, nullable=False)
+    # Filter settings - which notification types to send
+    notify_info = Column(Boolean, default=False, nullable=False)
+    notify_success = Column(Boolean, default=True, nullable=False)
+    notify_warning = Column(Boolean, default=True, nullable=False)
+    notify_error = Column(Boolean, default=True, nullable=False)
+    # Rate limiting
+    min_interval_seconds = Column(Integer, default=60, nullable=False)  # Min time between alerts
+    last_sent_at = Column(DateTime, nullable=True)
+    # Timestamps
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        Index("idx_alert_channel_type", channel_type),
+        Index("idx_alert_channel_enabled", enabled),
+    )
+
+    def to_dict(self, include_sensitive: bool = False) -> dict:
+        """Convert to dictionary for API responses.
+
+        By default, sensitive config values are masked.
+        Set include_sensitive=True to include actual values.
+        """
+        import json
+        config = json.loads(self.config) if self.config else {}
+
+        # Mask sensitive fields unless explicitly requested
+        if not include_sensitive:
+            masked_config = {}
+            for key, value in config.items():
+                if key in ('password', 'bot_token', 'webhook_url', 'api_key'):
+                    masked_config[key] = '********' if value else None
+                else:
+                    masked_config[key] = value
+            config = masked_config
+
+        return {
+            "id": self.id,
+            "name": self.name,
+            "channel_type": self.channel_type,
+            "enabled": self.enabled,
+            "config": config,
+            "notify_info": self.notify_info,
+            "notify_success": self.notify_success,
+            "notify_warning": self.notify_warning,
+            "notify_error": self.notify_error,
+            "min_interval_seconds": self.min_interval_seconds,
+            "last_sent_at": self.last_sent_at.isoformat() + "Z" if self.last_sent_at else None,
+            "created_at": self.created_at.isoformat() + "Z" if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() + "Z" if self.updated_at else None,
+        }
+
+    def __repr__(self):
+        return f"<AlertChannel(id={self.id}, name={self.name}, type={self.channel_type})>"
