@@ -127,8 +127,8 @@ function App() {
   const [newlyCreatedGroupIds, setNewlyCreatedGroupIds] = useState<Set<number>>(new Set());
 
   // Pending profile assignments (to be applied after commit)
-  // Stores { startNumber, count, profileIds } for each bulk create
-  const pendingProfileAssignmentsRef = useRef<Array<{ startNumber: number; count: number; profileIds: number[] }>>([]);
+  // Stores { startNumber, count, profileIds, increment } for each bulk create
+  const pendingProfileAssignmentsRef = useRef<Array<{ startNumber: number; count: number; profileIds: number[]; increment: number }>>([]);
 
   // Track if baseline has been initialized
   const baselineInitialized = useRef(false);
@@ -215,26 +215,46 @@ function App() {
             }
           }
 
+          // Get all profile IDs for disabling channels in non-selected profiles
+          const freshProfiles = await api.getChannelProfiles();
+          const allProfileIds = freshProfiles.map(p => p.id);
+
           // Process each pending assignment
           for (const assignment of pendingProfileAssignmentsRef.current) {
-            const { startNumber, count, profileIds } = assignment;
+            const { startNumber, count, profileIds, increment } = assignment;
             const channelIds: number[] = [];
 
-            // Find channels by number range
+            // Find channels by number range using the correct increment (integer or decimal)
             for (let i = 0; i < count; i++) {
-              const channel = channelsByNumber.get(startNumber + i);
+              const rawNumber = startNumber + i * increment;
+              // Round to 1 decimal place to handle floating point precision
+              const channelNumber = increment < 1 ? Math.round(rawNumber * 10) / 10 : rawNumber;
+              const channel = channelsByNumber.get(channelNumber);
               if (channel) {
                 channelIds.push(channel.id);
               }
             }
 
-            // Add each channel to each profile
+            // Enable channels in selected profiles
             for (const profileId of profileIds) {
               for (const channelId of channelIds) {
                 try {
                   await api.updateProfileChannel(profileId, channelId, { enabled: true });
                 } catch (err) {
-                  logger.warn(`Failed to add channel ${channelId} to profile ${profileId}:`, err);
+                  logger.warn(`Failed to enable channel ${channelId} in profile ${profileId}:`, err);
+                }
+              }
+            }
+
+            // Disable channels in non-selected profiles
+            // (Dispatcharr may auto-enable new channels in all profiles)
+            const nonSelectedProfileIds = allProfileIds.filter(id => !profileIds.includes(id));
+            for (const profileId of nonSelectedProfileIds) {
+              for (const channelId of channelIds) {
+                try {
+                  await api.updateProfileChannel(profileId, channelId, { enabled: false });
+                } catch (err) {
+                  logger.warn(`Failed to disable channel ${channelId} in profile ${profileId}:`, err);
                 }
               }
             }
@@ -1103,6 +1123,7 @@ function App() {
               startNumber: channelNumber,
               count: 1,
               profileIds: profilesToAssign,
+              increment: 1, // Single channel, increment doesn't matter but include for type consistency
             });
           }
 
@@ -1410,6 +1431,7 @@ function App() {
             startNumber: startingNumber,
             count: streamsByNormalizedName.size,
             profileIds: profileIdsToApply,
+            increment, // Use the same increment calculated for channel creation
           });
         }
 

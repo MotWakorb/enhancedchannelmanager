@@ -651,9 +651,13 @@ export function StreamsPane({
   // Open bulk create modal for multiple selected groups
   const openBulkCreateModalForGroups = useCallback(() => {
     // Get all groups that have at least one stream selected
-    const selectedGroups = groupedStreams.filter(group =>
-      group.streams.some(s => selectedIds.has(s.id))
-    );
+    // AND filter each group to only include the streams that are actually selected
+    const selectedGroups = groupedStreams
+      .map(group => ({
+        ...group,
+        streams: group.streams.filter(s => selectedIds.has(s.id))
+      }))
+      .filter(group => group.streams.length > 0);
 
     setBulkCreateGroup(null);
     setBulkCreateGroups(selectedGroups);
@@ -1106,11 +1110,16 @@ export function StreamsPane({
                     // Multiple groups selected - use multi-group modal
                     openBulkCreateModalForGroups();
                   } else if (selectedGroupNames.size === 1) {
-                    // Single group selected - use the same modal as drag-and-drop
+                    // Single group selected - filter to only selected streams
                     const groupName = Array.from(selectedGroupNames)[0];
                     const group = groupedStreams.find(g => g.name === groupName);
                     if (group) {
-                      openBulkCreateModal(group);
+                      // Create a filtered group with only selected streams
+                      const filteredGroup = {
+                        ...group,
+                        streams: group.streams.filter(s => selectedIds.has(s.id))
+                      };
+                      openBulkCreateModal(filteredGroup);
                     } else {
                       openBulkCreateModalForSelection();
                     }
