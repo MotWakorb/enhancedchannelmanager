@@ -200,6 +200,67 @@ export async function createChannel(data: {
   });
 }
 
+// Bulk operation types for bulk commit
+export interface BulkOperation {
+  type: string;
+  [key: string]: unknown;
+}
+
+export interface BulkCommitRequest {
+  operations: BulkOperation[];
+  groupsToCreate?: { name: string }[];
+  /** If true, only validate without executing (returns validation issues) */
+  validateOnly?: boolean;
+  /** If true, continue processing even when individual operations fail */
+  continueOnError?: boolean;
+}
+
+export interface ValidationIssue {
+  type: 'missing_channel' | 'missing_stream' | 'invalid_operation';
+  severity: 'error' | 'warning';
+  message: string;
+  operationIndex?: number;
+  channelId?: number;
+  channelName?: string;
+  streamId?: number;
+  streamName?: string;
+}
+
+export interface BulkCommitError {
+  operationId: string;
+  operationType?: string;
+  error: string;
+  channelId?: number;
+  channelName?: string;
+  streamId?: number;
+  streamName?: string;
+  entityName?: string;
+}
+
+export interface BulkCommitResponse {
+  success: boolean;
+  operationsApplied: number;
+  operationsFailed: number;
+  errors: BulkCommitError[];
+  tempIdMap: Record<number, number>;
+  groupIdMap: Record<string, number>;
+  /** Validation issues found during pre-validation */
+  validationIssues?: ValidationIssue[];
+  /** Whether validation passed (no errors, may have warnings) */
+  validationPassed?: boolean;
+}
+
+/**
+ * Commit multiple channel operations in a single request.
+ * This is much more efficient than making individual API calls for 1000+ operations.
+ */
+export async function bulkCommit(request: BulkCommitRequest): Promise<BulkCommitResponse> {
+  return fetchJson(`${API_BASE}/channels/bulk-commit`, {
+    method: 'POST',
+    body: JSON.stringify(request),
+  });
+}
+
 // Channel Groups
 export async function getChannelGroups(): Promise<ChannelGroup[]> {
   return fetchJson(`${API_BASE}/channel-groups`);
@@ -518,6 +579,7 @@ export interface SettingsResponse {
   skip_recently_probed_hours: number;  // Skip streams probed within last N hours (0 = always probe)
   refresh_m3us_before_probe: boolean;  // Refresh all M3U accounts before starting probe
   auto_reorder_after_probe: boolean;  // Automatically reorder streams in channels after probe completes
+  stream_fetch_page_limit: number;  // Max pages when fetching streams (pages * 500 = max streams)
   stream_sort_priority: SortCriterion[];  // Priority order for Smart Sort (e.g., ['resolution', 'bitrate', 'framerate'])
   stream_sort_enabled: SortEnabledMap;  // Which sort criteria are enabled (e.g., { resolution: true, bitrate: true, framerate: false })
   deprioritize_failed_streams: boolean;  // When enabled, failed/timeout/pending streams sort to bottom
@@ -572,6 +634,7 @@ export async function saveSettings(settings: {
   skip_recently_probed_hours?: number;  // Optional - skip streams probed within last N hours, defaults to 0 (always probe)
   refresh_m3us_before_probe?: boolean;  // Optional - refresh all M3U accounts before starting probe, defaults to true
   auto_reorder_after_probe?: boolean;  // Optional - automatically reorder streams after probe, defaults to false
+  stream_fetch_page_limit?: number;  // Optional - max pages when fetching streams, defaults to 200 (100K streams)
   stream_sort_priority?: SortCriterion[];  // Optional - priority order for Smart Sort, defaults to ['resolution', 'bitrate', 'framerate']
   stream_sort_enabled?: SortEnabledMap;  // Optional - which sort criteria are enabled, defaults to all true
   deprioritize_failed_streams?: boolean;  // Optional - deprioritize failed/timeout/pending streams in sort, defaults to true
@@ -1333,4 +1396,246 @@ export async function resetProbeState(): Promise<{ status: string; message: stri
   return fetchJson(`${API_BASE}/stream-stats/probe/reset`, {
     method: 'POST',
   }) as Promise<{ status: string; message: string }>;
+}
+
+// -------------------------------------------------------------------------
+// Scheduled Tasks API
+// -------------------------------------------------------------------------
+
+export interface TaskScheduleConfig {
+  schedule_type: 'interval' | 'cron' | 'manual';
+  interval_seconds: number;
+  cron_expression: string;
+  schedule_time: string;
+  timezone: string;
+}
+
+// New multi-schedule types
+export type TaskScheduleType = 'interval' | 'daily' | 'weekly' | 'biweekly' | 'monthly';
+
+export interface TaskSchedule {
+  id: number;
+  task_id: string;
+  name: string | null;
+  enabled: boolean;
+  schedule_type: TaskScheduleType;
+  interval_seconds: number | null;
+  schedule_time: string | null;
+  timezone: string | null;
+  days_of_week: number[] | null;  // 0=Sunday, 6=Saturday
+  day_of_month: number | null;  // 1-31, or -1 for last day
+  week_parity: number | null;  // For biweekly: 0 or 1
+  next_run_at: string | null;
+  description: string;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+export interface TaskScheduleCreate {
+  name?: string | null;
+  enabled?: boolean;
+  schedule_type: TaskScheduleType;
+  interval_seconds?: number | null;
+  schedule_time?: string | null;
+  timezone?: string | null;
+  days_of_week?: number[] | null;
+  day_of_month?: number | null;
+}
+
+export interface TaskScheduleUpdate {
+  name?: string | null;
+  enabled?: boolean;
+  schedule_type?: TaskScheduleType;
+  interval_seconds?: number | null;
+  schedule_time?: string | null;
+  timezone?: string | null;
+  days_of_week?: number[] | null;
+  day_of_month?: number | null;
+}
+
+export interface TaskProgress {
+  total: number;
+  current: number;
+  percentage: number;
+  status: string;
+  current_item: string;
+  success_count: number;
+  failed_count: number;
+  skipped_count: number;
+  started_at: string | null;
+}
+
+export interface TaskStatus {
+  task_id: string;
+  task_name: string;
+  task_description: string;
+  status: 'idle' | 'scheduled' | 'running' | 'paused' | 'cancelled' | 'completed' | 'failed';
+  enabled: boolean;
+  progress: TaskProgress;
+  schedule: TaskScheduleConfig;  // Legacy schedule config
+  schedules: TaskSchedule[];  // New multi-schedule support
+  last_run: string | null;
+  next_run: string | null;
+  config: Record<string, unknown>;  // Task-specific configuration
+}
+
+export interface TaskExecution {
+  id: number;
+  task_id: string;
+  started_at: string;
+  completed_at: string | null;
+  duration_seconds: number | null;
+  status: 'running' | 'completed' | 'failed' | 'cancelled';
+  success: boolean | null;
+  message: string | null;
+  error: string | null;
+  total_items: number;
+  success_count: number;
+  failed_count: number;
+  skipped_count: number;
+  details: Record<string, unknown> | null;
+  triggered_by: 'scheduled' | 'manual' | 'api';
+}
+
+export interface TaskConfigUpdate {
+  enabled?: boolean;
+  schedule_type?: 'interval' | 'cron' | 'manual';
+  interval_seconds?: number;
+  cron_expression?: string;
+  schedule_time?: string;
+  timezone?: string;
+  config?: Record<string, unknown>;  // Task-specific configuration
+}
+
+export interface CronPreset {
+  name: string;
+  expression: string;
+  description: string;
+}
+
+export interface CronValidationResult {
+  valid: boolean;
+  error?: string;
+  description?: string;
+  next_runs?: string[];
+}
+
+export interface TaskEngineStatus {
+  running: boolean;
+  check_interval: number;
+  max_concurrent: number;
+  active_tasks: string[];
+  active_task_count: number;
+  registered_task_count: number;
+}
+
+export async function getTasks(): Promise<{ tasks: TaskStatus[] }> {
+  return fetchJson(`${API_BASE}/tasks`, {
+    method: 'GET',
+  });
+}
+
+export async function getTask(taskId: string): Promise<TaskStatus> {
+  return fetchJson(`${API_BASE}/tasks/${encodeURIComponent(taskId)}`, {
+    method: 'GET',
+  });
+}
+
+export async function updateTask(taskId: string, config: TaskConfigUpdate): Promise<TaskStatus> {
+  return fetchJson(`${API_BASE}/tasks/${encodeURIComponent(taskId)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(config),
+  });
+}
+
+export async function runTask(taskId: string): Promise<{
+  success: boolean;
+  message: string;
+  started_at: string;
+  completed_at: string;
+  total_items: number;
+  success_count: number;
+  failed_count: number;
+  skipped_count: number;
+}> {
+  return fetchJson(`${API_BASE}/tasks/${encodeURIComponent(taskId)}/run`, {
+    method: 'POST',
+  });
+}
+
+export async function cancelTask(taskId: string): Promise<{ status: string; message: string }> {
+  return fetchJson(`${API_BASE}/tasks/${encodeURIComponent(taskId)}/cancel`, {
+    method: 'POST',
+  });
+}
+
+export async function getTaskHistory(taskId: string, limit = 50, offset = 0): Promise<{ history: TaskExecution[] }> {
+  const query = buildQuery({ limit, offset });
+  return fetchJson(`${API_BASE}/tasks/${encodeURIComponent(taskId)}/history${query}`, {
+    method: 'GET',
+  });
+}
+
+export async function getAllTaskHistory(limit = 100, offset = 0): Promise<{ history: TaskExecution[] }> {
+  const query = buildQuery({ limit, offset });
+  return fetchJson(`${API_BASE}/tasks/history/all${query}`, {
+    method: 'GET',
+  });
+}
+
+export async function getTaskEngineStatus(): Promise<TaskEngineStatus> {
+  return fetchJson(`${API_BASE}/tasks/engine/status`, {
+    method: 'GET',
+  });
+}
+
+export async function getCronPresets(): Promise<{ presets: CronPreset[] }> {
+  return fetchJson(`${API_BASE}/cron/presets`, {
+    method: 'GET',
+  });
+}
+
+export async function validateCronExpression(expression: string): Promise<CronValidationResult> {
+  return fetchJson(`${API_BASE}/cron/validate`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ expression }),
+  });
+}
+
+// -------------------------------------------------------------------------
+// Task Schedule API (Multiple Schedules per Task)
+// -------------------------------------------------------------------------
+
+export async function getTaskSchedules(taskId: string): Promise<{ schedules: TaskSchedule[] }> {
+  return fetchJson(`${API_BASE}/tasks/${encodeURIComponent(taskId)}/schedules`, {
+    method: 'GET',
+  });
+}
+
+export async function createTaskSchedule(taskId: string, data: TaskScheduleCreate): Promise<TaskSchedule> {
+  return fetchJson(`${API_BASE}/tasks/${encodeURIComponent(taskId)}/schedules`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+}
+
+export async function updateTaskSchedule(
+  taskId: string,
+  scheduleId: number,
+  data: TaskScheduleUpdate
+): Promise<TaskSchedule> {
+  return fetchJson(`${API_BASE}/tasks/${encodeURIComponent(taskId)}/schedules/${scheduleId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+}
+
+export async function deleteTaskSchedule(taskId: string, scheduleId: number): Promise<{ status: string; id: number }> {
+  return fetchJson(`${API_BASE}/tasks/${encodeURIComponent(taskId)}/schedules/${scheduleId}`, {
+    method: 'DELETE',
+  });
 }

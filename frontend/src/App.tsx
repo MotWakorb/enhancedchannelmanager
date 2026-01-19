@@ -127,8 +127,8 @@ function App() {
   const [newlyCreatedGroupIds, setNewlyCreatedGroupIds] = useState<Set<number>>(new Set());
 
   // Pending profile assignments (to be applied after commit)
-  // Stores { startNumber, count, profileIds } for each bulk create
-  const pendingProfileAssignmentsRef = useRef<Array<{ startNumber: number; count: number; profileIds: number[] }>>([]);
+  // Stores { startNumber, count, profileIds, increment } for each bulk create
+  const pendingProfileAssignmentsRef = useRef<Array<{ startNumber: number; count: number; profileIds: number[]; increment: number }>>([]);
 
   // Track if baseline has been initialized
   const baselineInitialized = useRef(false);
@@ -215,26 +215,46 @@ function App() {
             }
           }
 
+          // Get all profile IDs for disabling channels in non-selected profiles
+          const freshProfiles = await api.getChannelProfiles();
+          const allProfileIds = freshProfiles.map(p => p.id);
+
           // Process each pending assignment
           for (const assignment of pendingProfileAssignmentsRef.current) {
-            const { startNumber, count, profileIds } = assignment;
+            const { startNumber, count, profileIds, increment } = assignment;
             const channelIds: number[] = [];
 
-            // Find channels by number range
+            // Find channels by number range using the correct increment (integer or decimal)
             for (let i = 0; i < count; i++) {
-              const channel = channelsByNumber.get(startNumber + i);
+              const rawNumber = startNumber + i * increment;
+              // Round to 1 decimal place to handle floating point precision
+              const channelNumber = increment < 1 ? Math.round(rawNumber * 10) / 10 : rawNumber;
+              const channel = channelsByNumber.get(channelNumber);
               if (channel) {
                 channelIds.push(channel.id);
               }
             }
 
-            // Add each channel to each profile
+            // Enable channels in selected profiles
             for (const profileId of profileIds) {
               for (const channelId of channelIds) {
                 try {
                   await api.updateProfileChannel(profileId, channelId, { enabled: true });
                 } catch (err) {
-                  logger.warn(`Failed to add channel ${channelId} to profile ${profileId}:`, err);
+                  logger.warn(`Failed to enable channel ${channelId} in profile ${profileId}:`, err);
+                }
+              }
+            }
+
+            // Disable channels in non-selected profiles
+            // (Dispatcharr may auto-enable new channels in all profiles)
+            const nonSelectedProfileIds = allProfileIds.filter(id => !profileIds.includes(id));
+            for (const profileId of nonSelectedProfileIds) {
+              for (const channelId of channelIds) {
+                try {
+                  await api.updateProfileChannel(profileId, channelId, { enabled: false });
+                } catch (err) {
+                  logger.warn(`Failed to disable channel ${channelId} in profile ${profileId}:`, err);
                 }
               }
             }
@@ -1103,6 +1123,7 @@ function App() {
               startNumber: channelNumber,
               count: 1,
               profileIds: profilesToAssign,
+              increment: 1, // Single channel, increment doesn't matter but include for type consistency
             });
           }
 
@@ -1251,17 +1272,33 @@ function App() {
 
         // Only push down channels if explicitly requested via pushDownOnConflict
         if (pushDownOnConflict) {
-          // Get ALL channels >= startingNumber
-          // This ensures we don't create gaps
+          // Calculate the decimal/integer mode for shifting
+          const hasDecimalShift = startingNumber % 1 !== 0;
+          const incrementShift = hasDecimalShift ? 0.1 : 1;
+
+          // Calculate the ending number of the new channel range
+          const rawEndingNumber = startingNumber + (channelCount - 1) * incrementShift;
+          const endingNumber = hasDecimalShift
+            ? Math.round(rawEndingNumber * 10) / 10
+            : rawEndingNumber;
+
+          // Only shift channels that actually conflict with the new channel range
+          // (not ALL channels >= startingNumber)
           const channelsToShift = displayChannels
-            .filter((ch) => ch.channel_number !== null && ch.channel_number >= startingNumber)
+            .filter((ch) => ch.channel_number !== null &&
+                    ch.channel_number >= startingNumber &&
+                    ch.channel_number <= endingNumber)
             .sort((a, b) => (b.channel_number ?? 0) - (a.channel_number ?? 0)); // Sort descending to avoid conflicts
 
-          // Shift each channel by the count of new channels (starting from highest to avoid conflicts)
+          // Shift amount is the total range taken by new channels
+          const shiftAmount = channelCount * incrementShift;
+
+          // Shift each conflicting channel to just after the new range
           for (const ch of channelsToShift) {
-            const newNum = ch.channel_number! + channelCount;
-            // Note: We don't auto-rename here because we're shifting by multiple positions
-            // and the original channel name relationship would be lost
+            const rawNewNum = ch.channel_number! + shiftAmount;
+            const newNum = hasDecimalShift
+              ? Math.round(rawNewNum * 10) / 10
+              : rawNewNum;
             stageUpdateChannel(ch.id, { channel_number: newNum }, `Shifted channel ${ch.channel_number} to ${newNum} to make room`);
           }
         }
@@ -1305,9 +1342,19 @@ function App() {
           channelIndex++;
 
           // Build channel name with proper prefixes
+          // First, strip any existing channel number prefix from the name
+          // Pattern: number (with optional decimal) followed by separator (|, -, :, space+letter)
+          // Examples: "123 | ESPN" -> "ESPN", "45.1 - CNN" -> "CNN", "7: ABC" -> "ABC"
+          const stripChannelNumber = (name: string): string => {
+            const match = name.match(/^\d+(?:\.\d+)?\s*[|\-:]\s*(.+)$/);
+            return match ? match[1] : name;
+          };
+
           let channelName = normalizedName;
           if (addChannelNumber && keepCountryPrefix) {
-            const countryMatch = normalizedName.match(new RegExp(`^([A-Z]{2,6})\\s*[${countrySeparator ?? '|'}]\\s*(.+)$`));
+            // Strip existing channel number before checking for country prefix
+            const nameWithoutNumber = stripChannelNumber(normalizedName);
+            const countryMatch = nameWithoutNumber.match(new RegExp(`^([A-Z]{2,6})\\s*[${countrySeparator ?? '|'}]\\s*(.+)$`));
             if (countryMatch) {
               const [, countryCode, baseName] = countryMatch;
               if (prefixOrder === 'country-first') {
@@ -1316,10 +1363,11 @@ function App() {
                 channelName = `${channelNumber} ${numberSeparator} ${countryCode} ${countrySeparator} ${baseName}`;
               }
             } else {
-              channelName = `${channelNumber} ${numberSeparator} ${normalizedName}`;
+              channelName = `${channelNumber} ${numberSeparator} ${nameWithoutNumber}`;
             }
           } else if (addChannelNumber) {
-            channelName = `${channelNumber} ${numberSeparator} ${normalizedName}`;
+            const nameWithoutNumber = stripChannelNumber(normalizedName);
+            channelName = `${channelNumber} ${numberSeparator} ${nameWithoutNumber}`;
           }
 
           // Find logo URL from the first stream that has one
@@ -1383,6 +1431,7 @@ function App() {
             startNumber: startingNumber,
             count: streamsByNormalizedName.size,
             profileIds: profileIdsToApply,
+            increment, // Use the same increment calculated for channel creation
           });
         }
 
@@ -1798,7 +1847,7 @@ function App() {
           {activeTab === 'logo-manager' && <LogoManagerTab />}
           {activeTab === 'journal' && <JournalTab />}
           {activeTab === 'stats' && <StatsTab />}
-          {activeTab === 'settings' && <SettingsTab onSaved={handleSettingsSaved} channelProfiles={channelProfiles} />}
+          {activeTab === 'settings' && <SettingsTab onSaved={handleSettingsSaved} channelProfiles={channelProfiles} onProbeComplete={loadChannels} />}
         </Suspense>
       </main>
 

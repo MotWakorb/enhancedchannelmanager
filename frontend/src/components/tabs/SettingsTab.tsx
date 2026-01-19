@@ -7,6 +7,7 @@ import { logger } from '../../utils/logger';
 import { copyToClipboard } from '../../utils/clipboard';
 import type { LogLevel as FrontendLogLevel } from '../../utils/logger';
 import { DeleteOrphanedGroupsModal } from '../DeleteOrphanedGroupsModal';
+import { ScheduledTasksSection } from '../ScheduledTasksSection';
 import {
   DndContext,
   closestCenter,
@@ -108,7 +109,7 @@ function SortablePriorityItem({
           height: '24px',
           borderRadius: '50%',
           backgroundColor: enabled ? 'var(--accent-primary, #3b82f6)' : 'var(--text-muted, #6b7280)',
-          color: '#ffffff',
+          color: 'var(--bg-primary, #1e1e23)',
           fontSize: '0.75rem',
           fontWeight: 600,
           flexShrink: 0,
@@ -132,11 +133,12 @@ interface SettingsTabProps {
   onSaved: () => void;
   onThemeChange?: (theme: Theme) => void;
   channelProfiles?: ChannelProfile[];
+  onProbeComplete?: () => void;
 }
 
-type SettingsPage = 'general' | 'channel-defaults' | 'appearance' | 'maintenance';
+type SettingsPage = 'general' | 'channel-defaults' | 'appearance' | 'scheduled-tasks' | 'maintenance';
 
-export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: SettingsTabProps) {
+export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onProbeComplete }: SettingsTabProps) {
   const [activePage, setActivePage] = useState<SettingsPage>('general');
 
   // Connection settings
@@ -191,6 +193,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
   const [skipRecentlyProbedHours, setSkipRecentlyProbedHours] = useState(0);
   const [refreshM3usBeforeProbe, setRefreshM3usBeforeProbe] = useState(true);
   const [autoReorderAfterProbe, setAutoReorderAfterProbe] = useState(false);
+  const [streamFetchPageLimit, setStreamFetchPageLimit] = useState(200);
   const [probingAll, setProbingAll] = useState(false);
   const [probeAllResult, setProbeAllResult] = useState<{ success: boolean; message: string } | null>(null);
   const [totalStreamCount, setTotalStreamCount] = useState(100); // Default to 100, will be updated on load
@@ -252,6 +255,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
   const [originalProbeEnabled, setOriginalProbeEnabled] = useState(true);
   const [originalProbeScheduleTime, setOriginalProbeScheduleTime] = useState('03:00');
   const [originalAutoReorder, setOriginalAutoReorder] = useState(false);
+  const [originalRefreshM3usBeforeProbe, setOriginalRefreshM3usBeforeProbe] = useState(true);
   const [needsRestart, setNeedsRestart] = useState(false);
   const [restarting, setRestarting] = useState(false);
   const [restartResult, setRestartResult] = useState<{ success: boolean; message: string } | null>(null);
@@ -299,13 +303,21 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
   };
 
   // Auto-populate probe channel groups with all groups if empty (default to all checked)
+  // Also filter out any stale groups that no longer exist
   useEffect(() => {
-    if (availableChannelGroups.length > 0 && probeChannelGroups.length === 0) {
-      // If no groups are selected, default to all groups
-      const allGroupNames = availableChannelGroups.map(g => g.name);
-      setProbeChannelGroups(allGroupNames);
+    if (availableChannelGroups.length > 0) {
+      const availableNames = new Set(availableChannelGroups.map(g => g.name));
+      const validGroups = probeChannelGroups.filter(name => availableNames.has(name));
+
+      if (validGroups.length === 0) {
+        // If no valid groups are selected, default to all groups
+        setProbeChannelGroups(availableChannelGroups.map(g => g.name));
+      } else if (validGroups.length !== probeChannelGroups.length) {
+        // Filter out stale groups that no longer exist
+        setProbeChannelGroups(validGroups);
+      }
     }
-  }, [availableChannelGroups, probeChannelGroups.length]);
+  }, [availableChannelGroups, probeChannelGroups]);
 
   // Periodically check for scheduled probes (runs even when probingAll is false)
   useEffect(() => {
@@ -352,6 +364,8 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
           setProbingAll(false);
           // Reload probe history when probe completes
           loadProbeHistory();
+          // Notify parent to reload channels (auto-reorder may have changed stream order)
+          onProbeComplete?.();
           if (progress.status === 'completed') {
             const skippedMsg = progress.skipped_count > 0 ? `, Skipped: ${progress.skipped_count}` : '';
             setProbeAllResult({
@@ -371,12 +385,12 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
       }
     };
 
-    // Wait a moment for the background task to start, then poll
-    const initialDelay = setTimeout(pollProgress, 300);
+    // Poll immediately, then continue every second
+    // Using immediate poll to catch fast probes that might complete quickly
+    pollProgress();
     const interval = setInterval(pollProgress, 1000);
 
     return () => {
-      clearTimeout(initialDelay);
       clearInterval(interval);
     };
   }, [probingAll]);
@@ -465,8 +479,10 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
       setParallelProbingEnabled(settings.parallel_probing_enabled ?? true);
       setSkipRecentlyProbedHours(settings.skip_recently_probed_hours ?? 0);
       setRefreshM3usBeforeProbe(settings.refresh_m3us_before_probe ?? true);
+      setOriginalRefreshM3usBeforeProbe(settings.refresh_m3us_before_probe ?? true);
       setAutoReorderAfterProbe(settings.auto_reorder_after_probe ?? false);
       setOriginalAutoReorder(settings.auto_reorder_after_probe ?? false);
+      setStreamFetchPageLimit(settings.stream_fetch_page_limit ?? 200);
       setStreamSortPriority(settings.stream_sort_priority ?? ['resolution', 'bitrate', 'framerate']);
       setStreamSortEnabled(settings.stream_sort_enabled ?? { resolution: true, bitrate: true, framerate: true });
       setDeprioritizeFailedStreams(settings.deprioritize_failed_streams ?? true);
@@ -570,6 +586,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
         skip_recently_probed_hours: skipRecentlyProbedHours,
         refresh_m3us_before_probe: refreshM3usBeforeProbe,
         auto_reorder_after_probe: autoReorderAfterProbe,
+        stream_fetch_page_limit: streamFetchPageLimit,
         stream_sort_priority: streamSortPriority,
         stream_sort_enabled: streamSortEnabled,
         deprioritize_failed_streams: deprioritizeFailedStreams,
@@ -591,7 +608,8 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
       const pollOrTimezoneChanged = statsPollInterval !== originalPollInterval || userTimezone !== originalTimezone;
       const probeSettingsChanged = streamProbeEnabled !== originalProbeEnabled ||
                                    streamProbeScheduleTime !== originalProbeScheduleTime ||
-                                   autoReorderAfterProbe !== originalAutoReorder;
+                                   autoReorderAfterProbe !== originalAutoReorder ||
+                                   refreshM3usBeforeProbe !== originalRefreshM3usBeforeProbe;
 
       // Debug logging for restart detection
       logger.info(`[RESTART-CHECK] Poll interval: ${statsPollInterval} vs original ${originalPollInterval}`);
@@ -599,6 +617,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
       logger.info(`[RESTART-CHECK] Probe enabled: ${streamProbeEnabled} vs original ${originalProbeEnabled}`);
       logger.info(`[RESTART-CHECK] Schedule time: "${streamProbeScheduleTime}" vs original "${originalProbeScheduleTime}"`);
       logger.info(`[RESTART-CHECK] Auto-reorder: ${autoReorderAfterProbe} vs original ${originalAutoReorder}`);
+      logger.info(`[RESTART-CHECK] Refresh M3Us: ${refreshM3usBeforeProbe} vs original ${originalRefreshM3usBeforeProbe}`);
       logger.info(`[RESTART-CHECK] pollOrTimezoneChanged=${pollOrTimezoneChanged}, probeSettingsChanged=${probeSettingsChanged}`);
 
       if (pollOrTimezoneChanged || probeSettingsChanged) {
@@ -637,6 +656,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
         setOriginalProbeEnabled(streamProbeEnabled);
         setOriginalProbeScheduleTime(streamProbeScheduleTime);
         setOriginalAutoReorder(autoReorderAfterProbe);
+        setOriginalRefreshM3usBeforeProbe(refreshM3usBeforeProbe);
         setNeedsRestart(false);
         // Clear result after 3 seconds
         setTimeout(() => setRestartResult(null), 3000);
@@ -840,8 +860,9 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
           <h3>Dispatcharr Connection</h3>
         </div>
 
-        <div className="form-group">
+        <div className="form-group-vertical">
           <label htmlFor="url">Server URL</label>
+          <span className="form-description">The URL of your Dispatcharr server (e.g., http://localhost:9191)</span>
           <input
             id="url"
             type="text"
@@ -851,32 +872,31 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
           />
         </div>
 
-        <div className="form-row">
-          <div className="form-group">
-            <label htmlFor="username">Username</label>
-            <input
-              id="username"
-              type="text"
-              placeholder="admin"
-              value={username}
-              onChange={(e) => setUsername(e.target.value)}
-            />
-          </div>
-
-          <div className="form-group">
-            <label htmlFor="password">Password</label>
-            <input
-              id="password"
-              type="password"
-              placeholder="Enter password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-            />
-            <p className="form-hint">Only required when changing URL or username</p>
-          </div>
+        <div className="form-group-vertical">
+          <label htmlFor="username">Username</label>
+          <span className="form-description">Your Dispatcharr admin username</span>
+          <input
+            id="username"
+            type="text"
+            placeholder="admin"
+            value={username}
+            onChange={(e) => setUsername(e.target.value)}
+          />
         </div>
 
-        <div className="test-connection-row">
+        <div className="form-group-vertical">
+          <label htmlFor="password">Password</label>
+          <span className="form-description">Only required when changing URL or username</span>
+          <input
+            id="password"
+            type="password"
+            placeholder="Enter password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+          />
+        </div>
+
+        <div className="form-group-vertical">
           <button className="btn-test" onClick={handleTest} disabled={testing || loading}>
             <span className="material-icons">wifi_tethering</span>
             {testing ? 'Testing...' : 'Test Connection'}
@@ -890,35 +910,33 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
           <h3>Stats Polling</h3>
         </div>
 
-        <div className="form-group">
-          <div className="threshold-label-row">
-            <label htmlFor="statsPollInterval">Poll interval (seconds)</label>
-            <div className="threshold-input-group">
-              <input
-                id="statsPollInterval"
-                type="number"
-                min="5"
-                max="300"
-                value={statsPollInterval}
-                onChange={(e) => {
-                  const value = Number(e.target.value);
-                  if (!isNaN(value)) {
-                    setStatsPollInterval(value);
-                  }
-                }}
-                onBlur={(e) => {
-                  const value = Math.max(5, Math.min(300, Number(e.target.value) || 10));
-                  setStatsPollInterval(value);
-                }}
-                className="threshold-input"
-              />
-              <span className="threshold-percent">sec</span>
-            </div>
-          </div>
-          <p className="form-hint">
+        <div className="form-group-vertical">
+          <label htmlFor="statsPollInterval">Poll interval (seconds)</label>
+          <span className="form-description">
             How often to poll Dispatcharr for channel statistics and bandwidth tracking.
             Lower values provide more frequent updates but use more resources.
-          </p>
+          </span>
+          <div className="threshold-input-group">
+            <input
+              id="statsPollInterval"
+              type="number"
+              min="5"
+              max="300"
+              value={statsPollInterval}
+              onChange={(e) => {
+                const value = Number(e.target.value);
+                if (!isNaN(value)) {
+                  setStatsPollInterval(value);
+                }
+              }}
+              onBlur={(e) => {
+                const value = Math.max(5, Math.min(300, Number(e.target.value) || 10));
+                setStatsPollInterval(value);
+              }}
+              className="threshold-input"
+            />
+            <span className="threshold-percent">sec</span>
+          </div>
 
           {needsRestart && (
             <div className="restart-notice">
@@ -947,47 +965,45 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
           )}
         </div>
 
-        <div className="form-group">
-          <div className="threshold-label-row">
-            <label htmlFor="userTimezone">Timezone</label>
-            <select
-              id="userTimezone"
-              value={userTimezone}
-              onChange={(e) => setUserTimezone(e.target.value)}
-              className="timezone-select"
-            >
-              <option value="">UTC (Default)</option>
-              <optgroup label="US & Canada">
-                <option value="America/New_York">Eastern Time (ET)</option>
-                <option value="America/Chicago">Central Time (CT)</option>
-                <option value="America/Denver">Mountain Time (MT)</option>
-                <option value="America/Los_Angeles">Pacific Time (PT)</option>
-                <option value="America/Anchorage">Alaska Time (AKT)</option>
-                <option value="Pacific/Honolulu">Hawaii Time (HT)</option>
-              </optgroup>
-              <optgroup label="Europe">
-                <option value="Europe/London">London (GMT/BST)</option>
-                <option value="Europe/Paris">Paris (CET/CEST)</option>
-                <option value="Europe/Berlin">Berlin (CET/CEST)</option>
-                <option value="Europe/Amsterdam">Amsterdam (CET/CEST)</option>
-                <option value="Europe/Rome">Rome (CET/CEST)</option>
-                <option value="Europe/Madrid">Madrid (CET/CEST)</option>
-              </optgroup>
-              <optgroup label="Asia & Pacific">
-                <option value="Asia/Tokyo">Tokyo (JST)</option>
-                <option value="Asia/Shanghai">Shanghai (CST)</option>
-                <option value="Asia/Hong_Kong">Hong Kong (HKT)</option>
-                <option value="Asia/Singapore">Singapore (SGT)</option>
-                <option value="Asia/Dubai">Dubai (GST)</option>
-                <option value="Australia/Sydney">Sydney (AEST/AEDT)</option>
-                <option value="Australia/Melbourne">Melbourne (AEST/AEDT)</option>
-                <option value="Pacific/Auckland">Auckland (NZST/NZDT)</option>
-              </optgroup>
-            </select>
-          </div>
-          <p className="form-hint">
+        <div className="form-group-vertical">
+          <label htmlFor="userTimezone">Timezone</label>
+          <span className="form-description">
             Timezone used for daily bandwidth statistics and scheduled probe times. "Today" will roll over at midnight in your selected timezone, and scheduled probes will run at the configured time in this timezone.
-          </p>
+          </span>
+          <select
+            id="userTimezone"
+            value={userTimezone}
+            onChange={(e) => setUserTimezone(e.target.value)}
+            className="timezone-select"
+          >
+            <option value="">UTC (Default)</option>
+            <optgroup label="US & Canada">
+              <option value="America/New_York">Eastern Time (ET)</option>
+              <option value="America/Chicago">Central Time (CT)</option>
+              <option value="America/Denver">Mountain Time (MT)</option>
+              <option value="America/Los_Angeles">Pacific Time (PT)</option>
+              <option value="America/Anchorage">Alaska Time (AKT)</option>
+              <option value="Pacific/Honolulu">Hawaii Time (HT)</option>
+            </optgroup>
+            <optgroup label="Europe">
+              <option value="Europe/London">London (GMT/BST)</option>
+              <option value="Europe/Paris">Paris (CET/CEST)</option>
+              <option value="Europe/Berlin">Berlin (CET/CEST)</option>
+              <option value="Europe/Amsterdam">Amsterdam (CET/CEST)</option>
+              <option value="Europe/Rome">Rome (CET/CEST)</option>
+              <option value="Europe/Madrid">Madrid (CET/CEST)</option>
+            </optgroup>
+            <optgroup label="Asia & Pacific">
+              <option value="Asia/Tokyo">Tokyo (JST)</option>
+              <option value="Asia/Shanghai">Shanghai (CST)</option>
+              <option value="Asia/Hong_Kong">Hong Kong (HKT)</option>
+              <option value="Asia/Singapore">Singapore (SGT)</option>
+              <option value="Asia/Dubai">Dubai (GST)</option>
+              <option value="Australia/Sydney">Sydney (AEST/AEDT)</option>
+              <option value="Australia/Melbourne">Melbourne (AEST/AEDT)</option>
+              <option value="Pacific/Auckland">Auckland (NZST/NZDT)</option>
+            </optgroup>
+          </select>
         </div>
       </div>
 
@@ -997,8 +1013,12 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
           <h3>Logging</h3>
         </div>
 
-        <div className="form-group">
+        <div className="form-group-vertical">
           <label htmlFor="backendLogLevel">Backend Log Level</label>
+          <span className="form-description">
+            Controls Python backend logging level. Changes apply immediately.
+            Check Docker logs to see backend messages.
+          </span>
           <select
             id="backendLogLevel"
             value={backendLogLevel}
@@ -1010,14 +1030,14 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
             <option value="ERROR">ERROR - Show errors only</option>
             <option value="CRITICAL">CRITICAL - Show only critical errors</option>
           </select>
-          <p className="form-hint">
-            Controls Python backend logging level. Changes apply immediately.
-            Check Docker logs to see backend messages.
-          </p>
         </div>
 
-        <div className="form-group">
+        <div className="form-group-vertical">
           <label htmlFor="frontendLogLevel">Frontend Log Level</label>
+          <span className="form-description">
+            Controls browser console logging level. Changes apply immediately.
+            Open browser DevTools (F12) to see frontend messages.
+          </span>
           <select
             id="frontendLogLevel"
             value={frontendLogLevel}
@@ -1028,10 +1048,6 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
             <option value="WARN">WARN - Show warnings and errors only</option>
             <option value="ERROR">ERROR - Show errors only</option>
           </select>
-          <p className="form-hint">
-            Controls browser console logging level. Changes apply immediately.
-            Open browser DevTools (F12) to see frontend messages.
-          </p>
         </div>
       </div>
 
@@ -1781,8 +1797,9 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
 
         {streamProbeEnabled && (
           <div className="settings-group" style={{ marginTop: '1rem' }}>
-            <div className="form-group">
+            <div className="form-group-vertical">
               <label htmlFor="probeInterval">Probe interval (hours)</label>
+              <span className="form-description">How often to run scheduled probes (1-168 hours)</span>
               <input
                 id="probeInterval"
                 type="number"
@@ -1790,13 +1807,12 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
                 max="168"
                 value={streamProbeIntervalHours}
                 onChange={(e) => setStreamProbeIntervalHours(Math.max(1, Math.min(168, parseInt(e.target.value) || 24)))}
-                style={{ width: '100px' }}
               />
-              <span className="form-hint">How often to run scheduled probes (1-168 hours)</span>
             </div>
 
-            <div className="form-group">
+            <div className="form-group-vertical">
               <label htmlFor="probeBatchSize">Batch size</label>
+              <span className="form-description">Streams to probe per scheduled cycle (1-{totalStreamCount})</span>
               <input
                 id="probeBatchSize"
                 type="number"
@@ -1804,13 +1820,12 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
                 max={totalStreamCount}
                 value={streamProbeBatchSize}
                 onChange={(e) => setStreamProbeBatchSize(Math.max(1, Math.min(totalStreamCount, parseInt(e.target.value) || 10)))}
-                style={{ width: '100px' }}
               />
-              <span className="form-hint">Streams to probe per scheduled cycle (1-{totalStreamCount})</span>
             </div>
 
-            <div className="form-group">
+            <div className="form-group-vertical">
               <label htmlFor="probeTimeout">Probe timeout (seconds)</label>
+              <span className="form-description">Timeout for each probe attempt (5-120 seconds)</span>
               <input
                 id="probeTimeout"
                 type="number"
@@ -1818,39 +1833,51 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
                 max="120"
                 value={streamProbeTimeout}
                 onChange={(e) => setStreamProbeTimeout(Math.max(5, Math.min(120, parseInt(e.target.value) || 30)))}
-                style={{ width: '100px' }}
               />
-              <span className="form-hint">Timeout for each probe attempt (5-120 seconds)</span>
             </div>
 
-            <div className="form-group">
+            <div className="form-group-vertical">
               <label htmlFor="probeScheduleTime">Schedule time (local)</label>
+              <span className="form-description">Time of day to start scheduled probes (your local time)</span>
               <input
                 id="probeScheduleTime"
                 type="time"
                 value={streamProbeScheduleTime}
                 onChange={(e) => setStreamProbeScheduleTime(e.target.value || '03:00')}
-                style={{ width: '120px' }}
               />
-              <span className="form-hint">Time of day to start scheduled probes (your local time)</span>
             </div>
 
-            <div className="form-group">
+            <div className="form-group-vertical">
               <label htmlFor="bitrateSampleDuration">Bitrate measurement duration</label>
+              <span className="form-description">How long to sample streams when measuring bitrate</span>
               <select
                 id="bitrateSampleDuration"
                 value={bitrateSampleDuration}
                 onChange={(e) => setBitrateSampleDuration(Number(e.target.value))}
-                style={{ width: '120px' }}
               >
                 <option value={10}>10 seconds</option>
                 <option value={20}>20 seconds</option>
                 <option value={30}>30 seconds</option>
               </select>
-              <span className="form-hint">How long to sample streams when measuring bitrate</span>
             </div>
 
-            <div className="form-group">
+            <div className="form-group-vertical">
+              <label htmlFor="streamFetchPageLimit">Stream fetch page limit</label>
+              <span className="form-description">
+                Max pages when fetching streams from Dispatcharr (×500 = max streams).
+                Default 200 = 100K streams. Increase if you have more streams.
+              </span>
+              <input
+                id="streamFetchPageLimit"
+                type="number"
+                min="50"
+                max="1000"
+                value={streamFetchPageLimit}
+                onChange={(e) => setStreamFetchPageLimit(Math.max(50, Math.min(1000, parseInt(e.target.value) || 200)))}
+              />
+            </div>
+
+            <div className="form-group-vertical">
               <label className="checkbox-label">
                 <input
                   type="checkbox"
@@ -1859,14 +1886,18 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
                 />
                 Enable parallel probing
               </label>
-              <span className="form-hint">
+              <span className="form-description">
                 When enabled, streams from different M3U accounts are probed simultaneously for faster completion.
                 Disable for sequential one-at-a-time probing.
               </span>
             </div>
 
-            <div className="form-group">
+            <div className="form-group-vertical">
               <label htmlFor="skipRecentlyProbedHours">Skip recently probed streams (hours)</label>
+              <span className="form-description">
+                Skip streams that were successfully probed within the last N hours. Set to 0 to always probe all streams.
+                This prevents excessive probing requests when running multiple checks in succession.
+              </span>
               <input
                 id="skipRecentlyProbedHours"
                 type="number"
@@ -1874,15 +1905,10 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
                 max="168"
                 value={skipRecentlyProbedHours}
                 onChange={(e) => setSkipRecentlyProbedHours(Math.max(0, Math.min(168, parseInt(e.target.value) || 0)))}
-                style={{ width: '100px' }}
               />
-              <span className="form-hint">
-                Skip streams that were successfully probed within the last N hours. Set to 0 to always probe all streams.
-                This prevents excessive probing requests when running multiple checks in succession.
-              </span>
             </div>
 
-            <div className="form-group">
+            <div className="form-group-vertical">
               <label className="checkbox-label">
                 <input
                   type="checkbox"
@@ -1891,12 +1917,12 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
                 />
                 Refresh M3Us before probing
               </label>
-              <span className="form-hint">
+              <span className="form-description">
                 When enabled, all M3U accounts will be refreshed before starting the probe to ensure latest stream information is used.
               </span>
             </div>
 
-            <div className="form-group">
+            <div className="form-group-vertical">
               <label className="checkbox-label">
                 <input
                   type="checkbox"
@@ -1905,7 +1931,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
                 />
                 Auto-reorder streams after probe
               </label>
-              <span className="form-hint">
+              <span className="form-description">
                 When enabled, streams within channels will be automatically reordered using smart sort after probe completes.
                 Failed streams are deprioritized, and working streams are sorted by resolution, bitrate, and framerate.
               </span>
@@ -1937,8 +1963,13 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
               </div>
             )}
 
-            <div className="form-group">
+            <div className="form-group-vertical">
               <label>Channel groups to probe</label>
+              <span className="form-description">
+                {availableChannelGroups.length === 0
+                  ? 'No groups with streams available.'
+                  : 'Select which groups to probe. All groups are selected by default.'}
+              </span>
               <button
                 type="button"
                 className="btn-secondary"
@@ -1947,55 +1978,16 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
                   setShowGroupSelectModal(true);
                 }}
                 disabled={availableChannelGroups.length === 0}
-                style={{ marginTop: '0.5rem' }}
               >
                 <span className="material-icons">filter_list</span>
                 {probeChannelGroups.length === availableChannelGroups.length
                   ? `All ${availableChannelGroups.length} group${availableChannelGroups.length !== 1 ? 's' : ''}`
                   : `${probeChannelGroups.length} of ${availableChannelGroups.length} group${availableChannelGroups.length !== 1 ? 's' : ''}`}
               </button>
-              <span className="form-hint" style={{ display: 'block', marginTop: '0.5rem' }}>
-                {availableChannelGroups.length === 0
-                  ? 'No groups with streams available.'
-                  : 'Select which groups to probe. All groups are selected by default.'}
-              </span>
             </div>
           </div>
         )}
 
-        <div className="settings-group" style={{ marginTop: '1rem' }}>
-          <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
-            <button
-              className="btn-secondary"
-              onClick={handleProbeAllStreams}
-              disabled={probingAll}
-            >
-              <span className={`material-icons ${probingAll ? 'spinning' : ''}`}>
-                {probingAll ? 'sync' : 'play_arrow'}
-              </span>
-              {probingAll ? (probeProgress && probeProgress.status === 'probing' ? 'Probing...' : 'Starting...') : 'Probe All Streams Now'}
-            </button>
-            <button
-              className="btn-secondary"
-              onClick={handleResetProbeState}
-              title="Reset probe state if it gets stuck"
-              style={{ minWidth: 'auto' }}
-            >
-              <span className="material-icons">restart_alt</span>
-              Reset
-            </button>
-            <span className="form-hint">
-              Start a background probe of all streams immediately
-            </span>
-          </div>
-
-          {probeAllResult && (
-            <div className={probeAllResult.success ? 'success-message' : 'error-message'} style={{ marginTop: '1rem' }}>
-              <span className="material-icons">{probeAllResult.success ? 'check_circle' : 'error'}</span>
-              {probeAllResult.message}
-            </div>
-          )}
-        </div>
       </div>
 
       {/* Probe History Section */}
@@ -2139,14 +2131,16 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
         </p>
 
         <div className="settings-group">
-          <button
-            className="btn-secondary"
-            onClick={handleLoadOrphanedGroups}
-            disabled={loadingOrphaned || cleaningOrphaned}
-          >
-            <span className="material-icons">search</span>
-            {loadingOrphaned ? 'Scanning...' : 'Scan for Orphaned Groups'}
-          </button>
+          <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+            <button
+              className="btn-secondary"
+              onClick={handleLoadOrphanedGroups}
+              disabled={loadingOrphaned || cleaningOrphaned}
+            >
+              <span className="material-icons">search</span>
+              {loadingOrphaned ? 'Scanning...' : 'Scan for Orphaned Groups'}
+            </button>
+          </div>
 
           {orphanedGroups.length > 0 && (
             <div style={{ marginTop: '1rem' }}>
@@ -2221,6 +2215,13 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
           >
             <span className="material-icons">palette</span>
             Appearance
+          </li>
+          <li
+            className={`settings-nav-item ${activePage === 'scheduled-tasks' ? 'active' : ''}`}
+            onClick={() => setActivePage('scheduled-tasks')}
+          >
+            <span className="material-icons">schedule</span>
+            Scheduled Tasks
           </li>
           <li
             className={`settings-nav-item ${activePage === 'maintenance' ? 'active' : ''}`}
@@ -2313,6 +2314,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
         {activePage === 'general' && renderGeneralPage()}
         {activePage === 'channel-defaults' && renderChannelDefaultsPage()}
         {activePage === 'appearance' && renderAppearancePage()}
+        {activePage === 'scheduled-tasks' && <ScheduledTasksSection userTimezone={userTimezone} />}
         {activePage === 'maintenance' && renderMaintenancePage()}
       </div>
 
@@ -2618,7 +2620,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [] }: Se
               <h3>Select Channel Groups to Probe</h3>
               <button
                 onClick={() => setShowGroupSelectModal(false)}
-                className="modal-close"
+                className="probe-results-modal-close"
               >
                 ×
               </button>

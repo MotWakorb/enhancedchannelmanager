@@ -433,7 +433,7 @@
 
 .channel-profiles-modal .toggle input:checked + .toggle-slider:before {
   transform: translateX(16px);
-  background-color: white;
+  background-color: var(--bg-primary);
 }
 
 /* Empty and Loading States */

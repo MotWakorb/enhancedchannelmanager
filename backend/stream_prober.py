@@ -60,6 +60,7 @@ class StreamProber:
         deprioritize_failed_streams: bool = True,  # Deprioritize failed streams in smart sort
         stream_sort_priority: list[str] = None,  # Priority order for Smart Sort criteria
         stream_sort_enabled: dict[str, bool] = None,  # Which criteria are enabled for Smart Sort
+        stream_fetch_page_limit: int = 200,  # Max pages when fetching streams (200 * 500 = 100K streams)
     ):
         self.client = client
         self.probe_timeout = probe_timeout
@@ -75,6 +76,8 @@ class StreamProber:
         self.refresh_m3us_before_probe = refresh_m3us_before_probe
         self.auto_reorder_after_probe = auto_reorder_after_probe
         self.deprioritize_failed_streams = deprioritize_failed_streams
+        self.stream_fetch_page_limit = stream_fetch_page_limit
+        logger.info(f"[PROBER-INIT] auto_reorder_after_probe={auto_reorder_after_probe}")
         # Smart Sort configuration
         self.stream_sort_priority = stream_sort_priority or ["resolution", "bitrate", "framerate"]
         self.stream_sort_enabled = stream_sort_enabled or {"resolution": True, "bitrate": True, "framerate": True}
@@ -719,6 +722,7 @@ class StreamProber:
         """Fetch all streams from Dispatcharr (paginated)."""
         all_streams = []
         page = 1
+        page_limit = self.stream_fetch_page_limit  # Configurable: pages * 500 = max streams
         while True:
             try:
                 result = await self.client.get_streams(page=page, page_size=500)
@@ -727,7 +731,11 @@ class StreamProber:
                 if not result.get("next"):
                     break
                 page += 1
-                if page > 50:  # Safety limit
+                if page > page_limit:
+                    logger.warning(
+                        f"[PROBE-MATCH] Pagination limit reached ({page_limit} pages, {len(all_streams)} streams). "
+                        f"Some streams may be missing. Increase 'Stream Fetch Page Limit' in settings if needed."
+                    )
                     break
             except Exception as e:
                 logger.error(f"Failed to fetch streams page {page}: {e}")
@@ -888,16 +896,19 @@ class StreamProber:
         try:
             # Determine which groups to filter by
             groups_to_filter = channel_groups_override if channel_groups_override is not None else self.probe_channel_groups
+            logger.info(f"[AUTO-REORDER] groups_to_filter={groups_to_filter}, channel_groups_override={channel_groups_override}, self.probe_channel_groups={self.probe_channel_groups}")
 
             # Get selected group IDs
             selected_group_ids = set()
             if groups_to_filter:
                 try:
                     all_groups = await self.client.get_channel_groups()
+                    available_group_names = [g.get("name") for g in all_groups]
+                    logger.info(f"[AUTO-REORDER] Available groups: {available_group_names[:10]}... (total: {len(all_groups)})")
                     for group in all_groups:
                         if group.get("name") in groups_to_filter:
                             selected_group_ids.add(group["id"])
-                    logger.info(f"Auto-reorder: filtering to {len(selected_group_ids)} selected groups")
+                    logger.info(f"[AUTO-REORDER] Filtering to {len(selected_group_ids)} selected groups (matched: {selected_group_ids})")
                 except Exception as e:
                     logger.error(f"Failed to fetch channel groups for auto-reorder: {e}")
                     return []
@@ -929,7 +940,7 @@ class StreamProber:
                     logger.error(f"Failed to fetch channels page {page} for auto-reorder: {e}")
                     break
 
-            logger.info(f"Found {len(channels_to_reorder)} channels to potentially reorder")
+            logger.info(f"[AUTO-REORDER] Found {len(channels_to_reorder)} channels to potentially reorder")
 
             # For each channel, fetch full details, get stream stats, and reorder
             for channel in channels_to_reorder:
@@ -942,21 +953,29 @@ class StreamProber:
                     stream_ids = full_channel.get("streams", [])
 
                     if len(stream_ids) <= 1:
+                        logger.debug(f"[AUTO-REORDER] Channel {channel_id} ({channel_name}) - Skipping, only {len(stream_ids)} streams")
                         continue  # Skip if 0 or 1 streams
 
-                    # Fetch stream stats for this channel's streams
-                    from .database import get_session
-                    from .models import StreamStats
+                    logger.info(f"[AUTO-REORDER] Processing channel {channel_id} ({channel_name}) with {len(stream_ids)} streams: {stream_ids}")
+
+                    # Fetch stream stats for this channel's streams (uses get_session and StreamStats imported at top of file)
+                    logger.info(f"[AUTO-REORDER] Channel {channel_id}: Opening database session...")
                     with get_session() as session:
+                        logger.info(f"[AUTO-REORDER] Channel {channel_id}: Querying stats for stream_ids: {stream_ids}")
                         stats_records = session.query(StreamStats).filter(
                             StreamStats.stream_id.in_(stream_ids)
                         ).all()
+                        logger.info(f"[AUTO-REORDER] Channel {channel_id}: Query returned {len(stats_records)} records")
 
                         # Build stats map
                         stats_map = {stat.stream_id: stat for stat in stats_records}
+                        logger.info(f"[AUTO-REORDER] Channel {channel_id}: Found stats for {len(stats_map)}/{len(stream_ids)} streams")
 
                         # Sort streams using smart sort logic (similar to frontend)
                         sorted_stream_ids = self._smart_sort_streams(stream_ids, stats_map, channel_name)
+                        logger.info(f"[AUTO-REORDER] Channel {channel_id}: Original order: {stream_ids}")
+                        logger.info(f"[AUTO-REORDER] Channel {channel_id}: Sorted order:   {sorted_stream_ids}")
+                        logger.info(f"[AUTO-REORDER] Channel {channel_id}: Order changed: {sorted_stream_ids != stream_ids}")
 
                         # Only update if order changed
                         if sorted_stream_ids != stream_ids:
@@ -1229,8 +1248,7 @@ class StreamProber:
                 skip_threshold = datetime.utcnow() - timedelta(hours=self.skip_recently_probed_hours)
 
                 # Query StreamStats for recently probed streams (only successful probes)
-                from .database import get_session
-                from .models import StreamStats
+                # get_session and StreamStats already imported at top of file
                 with get_session() as session:
                     recent_probes = session.query(StreamStats).filter(
                         StreamStats.stream_id.in_([s["id"] for s in streams_to_probe]),
@@ -1512,13 +1530,14 @@ class StreamProber:
 
             # Auto-reorder streams if configured
             reordered_channels = []
+            logger.info(f"[AUTO-REORDER] Checking auto_reorder_after_probe setting: {self.auto_reorder_after_probe}")
             if self.auto_reorder_after_probe:
                 logger.info("Auto-reorder is enabled, reordering streams in probed channels...")
                 self._probe_progress_status = "reordering"
                 self._probe_progress_current_stream = "Reordering streams..."
                 try:
                     reordered_channels = await self._auto_reorder_channels(channel_groups_override, stream_to_channels)
-                    logger.info(f"Auto-reordered {len(reordered_channels)} channels")
+                    logger.info(f"[AUTO-REORDER] Auto-reordered {len(reordered_channels)} channels")
                 except Exception as e:
                     logger.error(f"Auto-reorder failed: {e}")
 
@@ -1540,7 +1559,7 @@ class StreamProber:
 
     def get_probe_progress(self) -> dict:
         """Get current probe all streams progress."""
-        return {
+        progress = {
             "in_progress": self._probing_in_progress,
             "total": self._probe_progress_total,
             "current": self._probe_progress_current,
@@ -1551,6 +1570,10 @@ class StreamProber:
             "skipped_count": self._probe_progress_skipped_count,
             "percentage": round((self._probe_progress_current / self._probe_progress_total * 100) if self._probe_progress_total > 0 else 0, 1)
         }
+        # Log when probing is in progress for debugging
+        if self._probing_in_progress:
+            logger.debug(f"[PROBE-PROGRESS] in_progress=True, status={self._probe_progress_status}, {self._probe_progress_current}/{self._probe_progress_total}")
+        return progress
 
     def get_probe_results(self) -> dict:
         """Get detailed results of the last probe all streams operation."""
