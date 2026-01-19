@@ -725,19 +725,19 @@
   font-style: italic;
 }
 
-/* Radio group - for country prefix toggle */
-.radio-group {
+/* Radio group - for country prefix toggle in settings */
+.settings-section .radio-group {
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
   margin-top: 0.5rem;
 }
 
-.radio-option {
-  display: flex;
-  flex-direction: row;
-  flex-wrap: wrap;
-  align-items: center;
+.settings-section .radio-option {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  grid-template-rows: auto auto;
+  align-items: start;
   gap: 0.25rem 0.75rem;
   padding: 0.75rem 1rem;
   background-color: var(--input-bg);
@@ -747,38 +747,40 @@
   transition: border-color 0.15s, background-color 0.15s;
 }
 
-.radio-option:hover {
+.settings-section .radio-option:hover {
   border-color: var(--border-secondary);
 }
 
-.radio-option:has(input:checked) {
+.settings-section .radio-option:has(input:checked) {
   border-color: var(--accent-primary);
   background-color: rgba(100, 108, 255, 0.08);
 }
 
-.radio-option input[type="radio"] {
+.settings-section .radio-option input[type="radio"] {
+  grid-row: 1;
+  grid-column: 1;
   width: 18px;
   height: 18px;
   margin: 0;
-  margin-right: 0.5rem;
+  margin-top: 2px;
   accent-color: var(--accent-primary);
   cursor: pointer;
-  flex-shrink: 0;
 }
 
-.radio-label {
+.settings-section .radio-option .radio-label {
+  grid-row: 1;
+  grid-column: 2;
   font-size: 0.9rem;
   font-weight: 500;
   color: var(--text-primary);
-  min-width: 80px;
-  margin-right: 0.5rem;
 }
 
-.radio-description {
+.settings-section .radio-option .radio-description {
+  grid-row: 2;
+  grid-column: 2;
   font-size: 0.8rem;
   color: var(--text-secondary);
-  width: 100%;
-  margin-left: calc(18px + 0.5rem + 0.75rem);
+  margin-top: 0.125rem;
 }
 
 /* Profile checkbox list */

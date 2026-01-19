@@ -105,8 +105,18 @@ async function fetchJson<T>(url: string, options?: RequestInit): Promise<T> {
     });
 
     if (!response.ok) {
-      logger.error(`API error: ${method} ${url} - ${response.status} ${response.statusText}`);
-      throw new Error(`API error: ${response.status} ${response.statusText}`);
+      // Try to extract error detail from response body
+      let errorDetail = response.statusText;
+      try {
+        const errorBody = await response.json();
+        if (errorBody.detail) {
+          errorDetail = errorBody.detail;
+        }
+      } catch {
+        // Response body isn't JSON or couldn't be parsed
+      }
+      logger.error(`API error: ${method} ${url} - ${response.status} ${errorDetail}`);
+      throw new Error(errorDetail);
     }
 
     const data = await response.json();
@@ -524,8 +534,89 @@ export async function deleteServerGroup(id: number): Promise<{ status: string }>
 }
 
 // Health check
-export async function getHealth(): Promise<{ status: string; service: string }> {
+export interface HealthResponse {
+  status: string;
+  service: string;
+  version: string;
+  release_channel: string;
+  git_commit: string;
+}
+
+export async function getHealth(): Promise<HealthResponse> {
   return fetchJson(`${API_BASE}/health`);
+}
+
+// Version check types
+export interface UpdateInfo {
+  updateAvailable: boolean;
+  latestVersion?: string;
+  latestCommit?: string;
+  releaseUrl?: string;
+  releaseNotes?: string;
+}
+
+const GITHUB_REPO = 'MotWakorb/enhancedchannelmanager';
+
+// Check for updates based on release channel
+export async function checkForUpdates(
+  currentVersion: string,
+  releaseChannel: string
+): Promise<UpdateInfo> {
+  try {
+    if (releaseChannel === 'dev') {
+      // For dev channel, check package.json version on dev branch
+      const response = await fetch(
+        `https://raw.githubusercontent.com/${GITHUB_REPO}/dev/frontend/package.json`,
+        { cache: 'no-store' }  // Always fetch fresh
+      );
+      if (!response.ok) {
+        throw new Error(`GitHub fetch error: ${response.status}`);
+      }
+      const packageJson = await response.json();
+      const latestVersion = packageJson.version || 'unknown';
+
+      // Compare versions
+      const updateAvailable = latestVersion !== currentVersion &&
+        currentVersion !== 'unknown' &&
+        latestVersion !== 'unknown';
+
+      return {
+        updateAvailable,
+        latestVersion,
+        releaseUrl: `https://github.com/${GITHUB_REPO}/tree/dev`,
+      };
+    } else {
+      // For latest/stable channel, check GitHub releases
+      const response = await fetch(
+        `https://api.github.com/repos/${GITHUB_REPO}/releases/latest`,
+        { headers: { 'Accept': 'application/vnd.github.v3+json' } }
+      );
+      if (!response.ok) {
+        if (response.status === 404) {
+          // No releases yet
+          return { updateAvailable: false };
+        }
+        throw new Error(`GitHub API error: ${response.status}`);
+      }
+      const data = await response.json();
+      const latestVersion = data.tag_name?.replace(/^v/, '') || 'unknown';
+
+      // Compare versions
+      const updateAvailable = latestVersion !== currentVersion &&
+        currentVersion !== 'unknown' &&
+        latestVersion !== 'unknown';
+
+      return {
+        updateAvailable,
+        latestVersion,
+        releaseUrl: data.html_url,
+        releaseNotes: data.body,
+      };
+    }
+  } catch (error) {
+    console.warn('Failed to check for updates:', error);
+    return { updateAvailable: false };
+  }
 }
 
 // Settings
@@ -567,8 +658,7 @@ export interface SettingsResponse {
   backend_log_level: string;  // Backend log level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
   frontend_log_level: string;  // Frontend log level (DEBUG, INFO, WARN, ERROR)
   vlc_open_behavior: string;  // VLC open behavior: "protocol_only", "m3u_fallback", "m3u_only"
-  // Stream probe settings
-  stream_probe_enabled: boolean;  // Enable scheduled background probing
+  // Stream probe settings (scheduled probing is controlled by Task Engine)
   stream_probe_interval_hours: number;  // Hours between auto-probe cycles
   stream_probe_batch_size: number;  // Streams to probe per scheduled cycle
   stream_probe_timeout: number;  // Timeout in seconds for each probe
@@ -622,8 +712,7 @@ export async function saveSettings(settings: {
   backend_log_level?: string;  // Optional - Backend log level, defaults to INFO
   frontend_log_level?: string;  // Optional - Frontend log level, defaults to INFO
   vlc_open_behavior?: string;  // Optional - VLC open behavior: "protocol_only", "m3u_fallback", "m3u_only"
-  // Stream probe settings
-  stream_probe_enabled?: boolean;  // Optional - enable scheduled probing, defaults to true
+  // Stream probe settings (scheduled probing is controlled by Task Engine)
   stream_probe_interval_hours?: number;  // Optional - hours between auto-probe cycles, defaults to 24
   stream_probe_batch_size?: number;  // Optional - streams per scheduled cycle, defaults to 10
   stream_probe_timeout?: number;  // Optional - timeout in seconds, defaults to 30
@@ -1637,5 +1726,221 @@ export async function updateTaskSchedule(
 export async function deleteTaskSchedule(taskId: string, scheduleId: number): Promise<{ status: string; id: number }> {
   return fetchJson(`${API_BASE}/tasks/${encodeURIComponent(taskId)}/schedules/${scheduleId}`, {
     method: 'DELETE',
+  });
+}
+
+// -------------------------------------------------------------------------
+// Notifications API
+// -------------------------------------------------------------------------
+
+export interface Notification {
+  id: number;
+  type: 'info' | 'success' | 'warning' | 'error';
+  title: string | null;
+  message: string;
+  read: boolean;
+  source: string | null;
+  source_id: string | null;
+  action_label: string | null;
+  action_url: string | null;
+  metadata: Record<string, unknown> | null;
+  created_at: string;
+  read_at: string | null;
+  expires_at: string | null;
+}
+
+export interface NotificationsResponse {
+  notifications: Notification[];
+  total: number;
+  unread_count: number;
+  page: number;
+  page_size: number;
+}
+
+export interface CreateNotificationData {
+  notification_type?: 'info' | 'success' | 'warning' | 'error';
+  title?: string;
+  message: string;
+  source?: string;
+  source_id?: string;
+  action_label?: string;
+  action_url?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export async function getNotifications(params?: {
+  page?: number;
+  page_size?: number;
+  unread_only?: boolean;
+  notification_type?: string;
+}): Promise<NotificationsResponse> {
+  const searchParams = new URLSearchParams();
+  if (params?.page) searchParams.set('page', String(params.page));
+  if (params?.page_size) searchParams.set('page_size', String(params.page_size));
+  if (params?.unread_only) searchParams.set('unread_only', 'true');
+  if (params?.notification_type) searchParams.set('notification_type', params.notification_type);
+
+  const query = searchParams.toString();
+  return fetchJson(`${API_BASE}/notifications${query ? `?${query}` : ''}`);
+}
+
+export async function createNotification(data: CreateNotificationData): Promise<Notification> {
+  const searchParams = new URLSearchParams();
+  searchParams.set('message', data.message);
+  if (data.notification_type) searchParams.set('notification_type', data.notification_type);
+  if (data.title) searchParams.set('title', data.title);
+  if (data.source) searchParams.set('source', data.source);
+  if (data.source_id) searchParams.set('source_id', data.source_id);
+  if (data.action_label) searchParams.set('action_label', data.action_label);
+  if (data.action_url) searchParams.set('action_url', data.action_url);
+
+  return fetchJson(`${API_BASE}/notifications?${searchParams.toString()}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: data.metadata ? JSON.stringify({ metadata: data.metadata }) : undefined,
+  });
+}
+
+export async function markNotificationRead(notificationId: number, read: boolean = true): Promise<Notification> {
+  const searchParams = new URLSearchParams();
+  searchParams.set('read', String(read));
+
+  return fetchJson(`${API_BASE}/notifications/${notificationId}?${searchParams.toString()}`, {
+    method: 'PATCH',
+  });
+}
+
+export async function markAllNotificationsRead(): Promise<{ marked_read: number }> {
+  return fetchJson(`${API_BASE}/notifications/mark-all-read`, {
+    method: 'PATCH',
+  });
+}
+
+export async function deleteNotification(notificationId: number): Promise<{ deleted: boolean }> {
+  return fetchJson(`${API_BASE}/notifications/${notificationId}`, {
+    method: 'DELETE',
+  });
+}
+
+export async function clearNotifications(readOnly: boolean = true): Promise<{ deleted: number; read_only: boolean }> {
+  const searchParams = new URLSearchParams();
+  searchParams.set('read_only', String(readOnly));
+
+  return fetchJson(`${API_BASE}/notifications?${searchParams.toString()}`, {
+    method: 'DELETE',
+  });
+}
+
+// =============================================================================
+// Alert Methods
+// =============================================================================
+
+export interface AlertMethodType {
+  type: string;
+  display_name: string;
+  required_fields: string[];
+  optional_fields: Record<string, unknown>;
+}
+
+// Granular alert source filtering types
+export type AlertFilterMode = 'all' | 'only_selected' | 'all_except';
+
+export interface AlertSourceEpgRefresh {
+  enabled: boolean;
+  filter_mode: AlertFilterMode;
+  source_ids: number[];
+}
+
+export interface AlertSourceM3uRefresh {
+  enabled: boolean;
+  filter_mode: AlertFilterMode;
+  account_ids: number[];
+}
+
+export interface AlertSourceProbeFailures {
+  enabled: boolean;
+  min_failures: number;
+}
+
+export interface AlertSources {
+  version?: number;
+  epg_refresh?: AlertSourceEpgRefresh;
+  m3u_refresh?: AlertSourceM3uRefresh;
+  probe_failures?: AlertSourceProbeFailures;
+}
+
+export interface AlertMethod {
+  id: number;
+  name: string;
+  method_type: string;
+  enabled: boolean;
+  config: Record<string, unknown>;
+  notify_info: boolean;
+  notify_success: boolean;
+  notify_warning: boolean;
+  notify_error: boolean;
+  alert_sources: AlertSources | null;
+  last_sent_at: string | null;
+  created_at: string | null;
+}
+
+export interface AlertMethodCreate {
+  name: string;
+  method_type: string;
+  config: Record<string, unknown>;
+  enabled?: boolean;
+  notify_info?: boolean;
+  notify_success?: boolean;
+  notify_warning?: boolean;
+  notify_error?: boolean;
+  alert_sources?: AlertSources | null;
+}
+
+export interface AlertMethodUpdate {
+  name?: string;
+  config?: Record<string, unknown>;
+  enabled?: boolean;
+  notify_info?: boolean;
+  notify_success?: boolean;
+  notify_warning?: boolean;
+  notify_error?: boolean;
+  alert_sources?: AlertSources | null;
+}
+
+export async function getAlertMethodTypes(): Promise<AlertMethodType[]> {
+  return fetchJson(`${API_BASE}/alert-methods/types`);
+}
+
+export async function getAlertMethods(): Promise<AlertMethod[]> {
+  return fetchJson(`${API_BASE}/alert-methods`);
+}
+
+export async function getAlertMethod(methodId: number): Promise<AlertMethod> {
+  return fetchJson(`${API_BASE}/alert-methods/${methodId}`);
+}
+
+export async function createAlertMethod(data: AlertMethodCreate): Promise<{ id: number; name: string; method_type: string; enabled: boolean }> {
+  return fetchJson(`${API_BASE}/alert-methods`, {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
+export async function updateAlertMethod(methodId: number, data: AlertMethodUpdate): Promise<{ success: boolean }> {
+  return fetchJson(`${API_BASE}/alert-methods/${methodId}`, {
+    method: 'PATCH',
+    body: JSON.stringify(data),
+  });
+}
+
+export async function deleteAlertMethod(methodId: number): Promise<{ success: boolean }> {
+  return fetchJson(`${API_BASE}/alert-methods/${methodId}`, {
+    method: 'DELETE',
+  });
+}
+
+export async function testAlertMethod(methodId: number): Promise<{ success: boolean; message: string }> {
+  return fetchJson(`${API_BASE}/alert-methods/${methodId}/test`, {
+    method: 'POST',
   });
 }

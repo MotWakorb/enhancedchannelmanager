@@ -26,7 +26,9 @@ class EPGRefreshTask(TaskScheduler):
 
     Configuration options (stored in task config JSON):
     - source_ids: List of EPG source IDs to refresh (empty = all active sources)
-    - skip_dummy: Skip dummy EPG sources (default: True)
+
+    Note: Dummy EPG sources are always skipped since they are automatically
+    refreshed during M3U refresh.
     """
 
     task_id = "epg_refresh"
@@ -44,21 +46,17 @@ class EPGRefreshTask(TaskScheduler):
 
         # Task-specific config
         self.source_ids: list[int] = []  # Empty = all sources
-        self.skip_dummy: bool = True
 
     def get_config(self) -> dict:
         """Get EPG refresh configuration."""
         return {
             "source_ids": self.source_ids,
-            "skip_dummy": self.skip_dummy,
         }
 
     def update_config(self, config: dict) -> None:
         """Update EPG refresh configuration."""
         if "source_ids" in config:
             self.source_ids = config["source_ids"] or []
-        if "skip_dummy" in config:
-            self.skip_dummy = config["skip_dummy"]
 
     async def execute(self) -> TaskResult:
         """Execute the EPG refresh."""
@@ -79,8 +77,8 @@ class EPGRefreshTask(TaskScheduler):
                 if not source.get("is_active", True):
                     continue
 
-                # Skip dummy sources if configured
-                if self.skip_dummy and source.get("source_type") == "dummy":
+                # Always skip dummy sources (they refresh automatically with M3U refresh)
+                if source.get("source_type") == "dummy":
                     continue
 
                 # Filter by source IDs if specified
@@ -158,10 +156,12 @@ class EPGRefreshTask(TaskScheduler):
 
                     success_count += 1
                     refreshed.append(source_name)
+                    self._increment_progress(success_count=1)
                 except Exception as e:
                     logger.error(f"[{self.task_id}] Failed to refresh {source_name}: {e}")
                     failed_count += 1
                     errors.append(f"{source_name}: {str(e)}")
+                    self._increment_progress(failed_count=1)
 
             self._set_progress(
                 success_count=success_count,

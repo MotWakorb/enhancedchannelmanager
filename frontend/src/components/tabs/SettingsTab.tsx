@@ -8,6 +8,7 @@ import { copyToClipboard } from '../../utils/clipboard';
 import type { LogLevel as FrontendLogLevel } from '../../utils/logger';
 import { DeleteOrphanedGroupsModal } from '../DeleteOrphanedGroupsModal';
 import { ScheduledTasksSection } from '../ScheduledTasksSection';
+import { AlertMethodSettings } from '../AlertMethodSettings';
 import {
   DndContext,
   closestCenter,
@@ -136,7 +137,7 @@ interface SettingsTabProps {
   onProbeComplete?: () => void;
 }
 
-type SettingsPage = 'general' | 'channel-defaults' | 'appearance' | 'scheduled-tasks' | 'maintenance';
+type SettingsPage = 'general' | 'channel-defaults' | 'appearance' | 'scheduled-tasks' | 'alert-methods' | 'maintenance';
 
 export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onProbeComplete }: SettingsTabProps) {
   const [activePage, setActivePage] = useState<SettingsPage>('general');
@@ -182,12 +183,10 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   const [backendLogLevel, setBackendLogLevel] = useState('INFO');
   const [frontendLogLevel, setFrontendLogLevel] = useState('INFO');
 
-  // Stream probe settings
-  const [streamProbeEnabled, setStreamProbeEnabled] = useState(true);
+  // Stream probe settings (scheduled probing is controlled by Task Engine)
   const [streamProbeIntervalHours, setStreamProbeIntervalHours] = useState(24);
   const [streamProbeBatchSize, setStreamProbeBatchSize] = useState(10);
   const [streamProbeTimeout, setStreamProbeTimeout] = useState(30);
-  const [streamProbeScheduleTime, setStreamProbeScheduleTime] = useState('03:00');
   const [bitrateSampleDuration, setBitrateSampleDuration] = useState(10);
   const [parallelProbingEnabled, setParallelProbingEnabled] = useState(true);
   const [skipRecentlyProbedHours, setSkipRecentlyProbedHours] = useState(0);
@@ -252,8 +251,6 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   // Track original settings to detect if restart is needed
   const [originalPollInterval, setOriginalPollInterval] = useState(10);
   const [originalTimezone, setOriginalTimezone] = useState('');
-  const [originalProbeEnabled, setOriginalProbeEnabled] = useState(true);
-  const [originalProbeScheduleTime, setOriginalProbeScheduleTime] = useState('03:00');
   const [originalAutoReorder, setOriginalAutoReorder] = useState(false);
   const [originalRefreshM3usBeforeProbe, setOriginalRefreshM3usBeforeProbe] = useState(true);
   const [needsRestart, setNeedsRestart] = useState(false);
@@ -466,14 +463,10 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         logger.setLevel(frontendLogLevel as FrontendLogLevel);
       }
       setLinkedM3UAccounts(settings.linked_m3u_accounts ?? []);
-      // Stream probe settings
-      setStreamProbeEnabled(settings.stream_probe_enabled ?? true);
-      setOriginalProbeEnabled(settings.stream_probe_enabled ?? true);
+      // Stream probe settings (scheduled probing is controlled by Task Engine)
       setStreamProbeIntervalHours(settings.stream_probe_interval_hours ?? 24);
       setStreamProbeBatchSize(settings.stream_probe_batch_size ?? 10);
       setStreamProbeTimeout(settings.stream_probe_timeout ?? 30);
-      setStreamProbeScheduleTime(settings.stream_probe_schedule_time ?? '03:00');
-      setOriginalProbeScheduleTime(settings.stream_probe_schedule_time ?? '03:00');
       setProbeChannelGroups(settings.probe_channel_groups ?? []);
       setBitrateSampleDuration(settings.bitrate_sample_duration ?? 10);
       setParallelProbingEnabled(settings.parallel_probing_enabled ?? true);
@@ -574,12 +567,10 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         frontend_log_level: frontendLogLevel,
         vlc_open_behavior: vlcOpenBehavior,
         linked_m3u_accounts: linkedM3UAccounts,
-        // Stream probe settings
-        stream_probe_enabled: streamProbeEnabled,
+        // Stream probe settings (scheduled probing is controlled by Task Engine)
         stream_probe_interval_hours: streamProbeIntervalHours,
         stream_probe_batch_size: streamProbeBatchSize,
         stream_probe_timeout: streamProbeTimeout,
-        stream_probe_schedule_time: streamProbeScheduleTime,
         probe_channel_groups: probeChannelGroups,
         bitrate_sample_duration: bitrateSampleDuration,
         parallel_probing_enabled: parallelProbingEnabled,
@@ -606,16 +597,12 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       logger.info('Settings saved successfully');
       // Check if any settings that require a restart have changed
       const pollOrTimezoneChanged = statsPollInterval !== originalPollInterval || userTimezone !== originalTimezone;
-      const probeSettingsChanged = streamProbeEnabled !== originalProbeEnabled ||
-                                   streamProbeScheduleTime !== originalProbeScheduleTime ||
-                                   autoReorderAfterProbe !== originalAutoReorder ||
+      const probeSettingsChanged = autoReorderAfterProbe !== originalAutoReorder ||
                                    refreshM3usBeforeProbe !== originalRefreshM3usBeforeProbe;
 
       // Debug logging for restart detection
       logger.info(`[RESTART-CHECK] Poll interval: ${statsPollInterval} vs original ${originalPollInterval}`);
       logger.info(`[RESTART-CHECK] Timezone: "${userTimezone}" vs original "${originalTimezone}"`);
-      logger.info(`[RESTART-CHECK] Probe enabled: ${streamProbeEnabled} vs original ${originalProbeEnabled}`);
-      logger.info(`[RESTART-CHECK] Schedule time: "${streamProbeScheduleTime}" vs original "${originalProbeScheduleTime}"`);
       logger.info(`[RESTART-CHECK] Auto-reorder: ${autoReorderAfterProbe} vs original ${originalAutoReorder}`);
       logger.info(`[RESTART-CHECK] Refresh M3Us: ${refreshM3usBeforeProbe} vs original ${originalRefreshM3usBeforeProbe}`);
       logger.info(`[RESTART-CHECK] pollOrTimezoneChanged=${pollOrTimezoneChanged}, probeSettingsChanged=${probeSettingsChanged}`);
@@ -653,8 +640,6 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       if (result.success) {
         setOriginalPollInterval(statsPollInterval);
         setOriginalTimezone(userTimezone);
-        setOriginalProbeEnabled(streamProbeEnabled);
-        setOriginalProbeScheduleTime(streamProbeScheduleTime);
         setOriginalAutoReorder(autoReorderAfterProbe);
         setOriginalRefreshM3usBeforeProbe(refreshM3usBeforeProbe);
         setNeedsRestart(false);
@@ -1259,6 +1244,64 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         </div>
       </div>
 
+      <div className="settings-section">
+        <div className="settings-section-header">
+          <span className="material-icons">notifications</span>
+          <h3>Notifications</h3>
+        </div>
+
+        <p className="form-hint" style={{ marginBottom: '1rem' }}>
+          ECM displays toast notifications for important events like task completions,
+          errors, and system messages. Notification history is accessible via the bell
+          icon in the header. Configure alert methods in Settings → Alert Methods to
+          receive notifications via Discord, Telegram, or email.
+        </p>
+
+        <div className="form-group">
+          <label>Notification History</label>
+          <p className="form-hint">
+            Clear old notifications from the history. This removes notifications from the
+            dropdown but does not affect alert methods.
+          </p>
+          <div style={{ display: 'flex', gap: '0.75rem', marginTop: '0.75rem' }}>
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={async () => {
+                try {
+                  const result = await api.clearNotifications(true);
+                  alert(`Cleared ${result.deleted} read notification(s)`);
+                } catch (err) {
+                  logger.error('Failed to clear notifications', err);
+                  alert('Failed to clear notifications');
+                }
+              }}
+            >
+              <span className="material-icons" style={{ fontSize: '18px' }}>done_all</span>
+              Clear Read
+            </button>
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={async () => {
+                if (!confirm('Are you sure you want to clear ALL notifications?')) return;
+                try {
+                  const result = await api.clearNotifications(false);
+                  alert(`Cleared ${result.deleted} notification(s)`);
+                } catch (err) {
+                  logger.error('Failed to clear notifications', err);
+                  alert('Failed to clear notifications');
+                }
+              }}
+              style={{ color: 'var(--error)' }}
+            >
+              <span className="material-icons" style={{ fontSize: '18px' }}>delete_sweep</span>
+              Clear All
+            </button>
+          </div>
+        </div>
+      </div>
+
       {saveSuccess && (
         <div className="save-success">
           <span className="material-icons">check_circle</span>
@@ -1777,26 +1820,10 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         </div>
         <p className="form-hint" style={{ marginBottom: '1rem' }}>
           Use ffprobe to gather stream metadata (resolution, FPS, codec, audio channels).
-          Scheduled probing runs automatically in the background.
+          Scheduled probing is controlled via the Scheduled Tasks section.
         </p>
 
-        <div className="checkbox-group">
-          <input
-            id="streamProbeEnabled"
-            type="checkbox"
-            checked={streamProbeEnabled}
-            onChange={(e) => setStreamProbeEnabled(e.target.checked)}
-          />
-          <div className="checkbox-content">
-            <label htmlFor="streamProbeEnabled">Enable scheduled probing</label>
-            <p>
-              Automatically probe streams on a schedule to keep metadata up to date.
-            </p>
-          </div>
-        </div>
-
-        {streamProbeEnabled && (
-          <div className="settings-group" style={{ marginTop: '1rem' }}>
+        <div className="settings-group" style={{ marginTop: '1rem' }}>
             <div className="form-group-vertical">
               <label htmlFor="probeInterval">Probe interval (hours)</label>
               <span className="form-description">How often to run scheduled probes (1-168 hours)</span>
@@ -1833,17 +1860,6 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                 max="120"
                 value={streamProbeTimeout}
                 onChange={(e) => setStreamProbeTimeout(Math.max(5, Math.min(120, parseInt(e.target.value) || 30)))}
-              />
-            </div>
-
-            <div className="form-group-vertical">
-              <label htmlFor="probeScheduleTime">Schedule time (local)</label>
-              <span className="form-description">Time of day to start scheduled probes (your local time)</span>
-              <input
-                id="probeScheduleTime"
-                type="time"
-                value={streamProbeScheduleTime}
-                onChange={(e) => setStreamProbeScheduleTime(e.target.value || '03:00')}
               />
             </div>
 
@@ -1986,9 +2002,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
               </button>
             </div>
           </div>
-        )}
-
-      </div>
+        </div>
 
       {/* Probe History Section */}
       {probeHistory.length > 0 && (
@@ -2224,6 +2238,13 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
             Scheduled Tasks
           </li>
           <li
+            className={`settings-nav-item ${activePage === 'alert-methods' ? 'active' : ''}`}
+            onClick={() => setActivePage('alert-methods')}
+          >
+            <span className="material-icons">campaign</span>
+            Alert Methods
+          </li>
+          <li
             className={`settings-nav-item ${activePage === 'maintenance' ? 'active' : ''}`}
             onClick={() => setActivePage('maintenance')}
           >
@@ -2234,87 +2255,11 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       </nav>
 
       <div className="settings-content">
-        {/* Global probe progress indicator - shows on all pages when probing */}
-        {probingAll && probeProgress && (
-          <div className="probe-global-progress" style={{
-            marginBottom: '1rem',
-            padding: '1rem',
-            backgroundColor: 'var(--bg-tertiary)',
-            borderRadius: '8px',
-            border: '1px solid var(--border-color)'
-          }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                <span className="material-icons" style={{ color: '#3498db', animation: 'spin 1s linear infinite' }}>
-                  sync
-                </span>
-                <span style={{ fontWeight: '600' }}>Probing Streams...</span>
-              </div>
-              <span style={{ fontWeight: '700', color: '#3498db' }}>
-                {probeProgress.current} / {probeProgress.total} ({probeProgress.percentage}%)
-              </span>
-            </div>
-            {probeProgress.current_stream && (
-              <div style={{ fontSize: '13px', color: 'var(--text-secondary)', marginBottom: '0.5rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                {probeProgress.current_stream}
-              </div>
-            )}
-            <div style={{
-              width: '100%',
-              height: '8px',
-              backgroundColor: '#34495e',
-              borderRadius: '4px',
-              overflow: 'hidden'
-            }}>
-              <div style={{
-                width: `${probeProgress.percentage}%`,
-                height: '100%',
-                background: 'linear-gradient(90deg, #3498db 0%, #2ecc71 100%)',
-                transition: 'width 0.3s ease',
-              }}></div>
-            </div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '0.5rem' }}>
-              <div style={{ display: 'flex', gap: '1rem', fontSize: '12px' }}>
-                <span style={{ color: '#2ecc71' }}>✓ {probeProgress.success_count} success</span>
-                <span style={{ color: '#e74c3c' }}>✗ {probeProgress.failed_count} failed</span>
-                {probeProgress.skipped_count > 0 && (
-                  <span style={{ color: '#f39c12' }}>⊘ {probeProgress.skipped_count} skipped</span>
-                )}
-              </div>
-              <button
-                onClick={async () => {
-                  try {
-                    await api.cancelProbe();
-                    logger.info('Probe cancellation requested');
-                  } catch (err) {
-                    logger.error('Failed to cancel probe', err);
-                  }
-                }}
-                style={{
-                  padding: '0.25rem 0.75rem',
-                  fontSize: '12px',
-                  backgroundColor: 'rgba(231, 76, 60, 0.15)',
-                  color: '#e74c3c',
-                  border: '1px solid rgba(231, 76, 60, 0.3)',
-                  borderRadius: '4px',
-                  cursor: 'pointer',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '0.25rem'
-                }}
-                title="Cancel the current probe operation"
-              >
-                <span className="material-icons" style={{ fontSize: '14px' }}>cancel</span>
-                Cancel
-              </button>
-            </div>
-          </div>
-        )}
-
         {activePage === 'general' && renderGeneralPage()}
         {activePage === 'channel-defaults' && renderChannelDefaultsPage()}
         {activePage === 'appearance' && renderAppearancePage()}
         {activePage === 'scheduled-tasks' && <ScheduledTasksSection userTimezone={userTimezone} />}
+        {activePage === 'alert-methods' && <AlertMethodSettings />}
         {activePage === 'maintenance' && renderMaintenancePage()}
       </div>
 
@@ -2721,11 +2666,9 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                       frontend_log_level: frontendLogLevel,
                       vlc_open_behavior: vlcOpenBehavior,
                       linked_m3u_accounts: linkedM3UAccounts,
-                      stream_probe_enabled: streamProbeEnabled,
                       stream_probe_interval_hours: streamProbeIntervalHours,
                       stream_probe_batch_size: streamProbeBatchSize,
                       stream_probe_timeout: streamProbeTimeout,
-                      stream_probe_schedule_time: streamProbeScheduleTime,
                       probe_channel_groups: tempProbeChannelGroups,
                       bitrate_sample_duration: bitrateSampleDuration,
                       parallel_probing_enabled: parallelProbingEnabled,

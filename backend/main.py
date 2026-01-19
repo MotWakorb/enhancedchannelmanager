@@ -24,10 +24,21 @@ from config import (
     set_log_level,
 )
 from cache import get_cache
-from database import init_db
+from database import init_db, get_session
 import journal
 from bandwidth_tracker import BandwidthTracker, set_tracker, get_tracker
 from stream_prober import StreamProber, set_prober, get_prober
+from alert_methods import get_alert_manager, get_method_types, create_method, send_alert
+# Import method implementations to register them
+import alert_methods_discord  # noqa: F401
+import alert_methods_smtp  # noqa: F401
+import alert_methods_telegram  # noqa: F401
+
+# Polling configuration for manual refresh endpoints
+# These control background polling to detect when Dispatcharr completes refresh operations
+REFRESH_POLL_INTERVAL_SECONDS = 5
+M3U_REFRESH_MAX_WAIT_SECONDS = 300   # 5 minutes for M3U
+EPG_REFRESH_MAX_WAIT_SECONDS = 900   # 15 minutes for EPG (larger files)
 
 # Configure logging
 # Start with environment variable, will be updated from settings in startup
@@ -123,12 +134,10 @@ async def startup_event():
             logger.error(f"Failed to start bandwidth tracker: {e}", exc_info=True)
 
         # Always create stream prober for on-demand probing support
-        # Scheduled probing is controlled by probe_enabled flag
+        # Note: Scheduled probing is now controlled by the Task Engine (StreamProbeTask)
         try:
             logger.debug(
-                f"Initializing stream prober (scheduled: {settings.stream_probe_enabled}, "
-                f"schedule: {settings.stream_probe_schedule_time}, "
-                f"interval: {settings.stream_probe_interval_hours}h, "
+                f"Initializing stream prober (interval: {settings.stream_probe_interval_hours}h, "
                 f"batch: {settings.stream_probe_batch_size}, timeout: {settings.stream_probe_timeout}s)"
             )
             prober = StreamProber(
@@ -136,8 +145,6 @@ async def startup_event():
                 probe_timeout=settings.stream_probe_timeout,
                 probe_batch_size=settings.stream_probe_batch_size,
                 probe_interval_hours=settings.stream_probe_interval_hours,
-                probe_enabled=settings.stream_probe_enabled,
-                schedule_time=settings.stream_probe_schedule_time,
                 user_timezone=settings.user_timezone,
                 probe_channel_groups=settings.probe_channel_groups,
                 bitrate_sample_duration=settings.bitrate_sample_duration,
@@ -155,19 +162,6 @@ async def startup_event():
             set_prober(prober)
             logger.info("set_prober() called successfully")
 
-            # Connect the prober to the StreamProbeTask in the task registry
-            try:
-                from task_registry import get_registry
-                registry = get_registry()
-                stream_probe_task = registry.get_task_instance("stream_probe")
-                if stream_probe_task:
-                    stream_probe_task.set_prober(prober)
-                    logger.info("Connected StreamProber to StreamProbeTask")
-                else:
-                    logger.warning("StreamProbeTask not found in registry")
-            except Exception as e:
-                logger.warning(f"Failed to connect prober to task: {e}")
-
             await prober.start()
             logger.info("prober.start() completed")
 
@@ -175,10 +169,7 @@ async def startup_event():
             test_prober = get_prober()
             logger.info(f"Verification: get_prober() returns: {test_prober is not None}")
 
-            if settings.stream_probe_enabled:
-                logger.info("Stream prober initialized with scheduled probing enabled")
-            else:
-                logger.info("Stream prober initialized (scheduled probing disabled, on-demand available)")
+            logger.info("Stream prober initialized (scheduled probing via Task Engine)")
         except Exception as e:
             logger.error(f"Failed to initialize stream prober: {e}", exc_info=True)
             logger.error("Stream probing will not be available!")
@@ -193,6 +184,21 @@ async def startup_event():
         from task_engine import start_engine
         await start_engine()
         logger.info("Task execution engine started")
+
+        # Connect the prober to the StreamProbeTask AFTER tasks are registered
+        prober = get_prober()
+        if prober:
+            try:
+                from task_registry import get_registry
+                registry = get_registry()
+                stream_probe_task = registry.get_task_instance("stream_probe")
+                if stream_probe_task:
+                    stream_probe_task.set_prober(prober)
+                    logger.info("Connected StreamProber to StreamProbeTask")
+                else:
+                    logger.warning("StreamProbeTask not found in registry")
+            except Exception as e:
+                logger.warning(f"Failed to connect prober to task: {e}")
     except Exception as e:
         logger.error(f"Failed to start task engine: {e}", exc_info=True)
         logger.error("Scheduled tasks will not be available!")
@@ -366,7 +372,18 @@ class BulkCommitResponse(BaseModel):
 # Health check
 @app.get("/api/health")
 async def health_check():
-    return {"status": "healthy", "service": "enhanced-channel-manager"}
+    # Get version info from environment (set at build time)
+    version = os.environ.get("ECM_VERSION", "unknown")
+    release_channel = os.environ.get("RELEASE_CHANNEL", "latest")
+    git_commit = os.environ.get("GIT_COMMIT", "unknown")
+
+    return {
+        "status": "healthy",
+        "service": "enhanced-channel-manager",
+        "version": version,
+        "release_channel": release_channel,
+        "git_commit": git_commit,
+    }
 
 
 # Settings
@@ -398,8 +415,7 @@ class SettingsRequest(BaseModel):
     backend_log_level: str = "INFO"
     frontend_log_level: str = "INFO"
     vlc_open_behavior: str = "m3u_fallback"
-    # Stream probe settings
-    stream_probe_enabled: bool = True
+    # Stream probe settings (scheduled probing is controlled by Task Engine)
     stream_probe_interval_hours: int = 24
     stream_probe_batch_size: int = 10
     stream_probe_timeout: int = 30
@@ -444,8 +460,7 @@ class SettingsResponse(BaseModel):
     backend_log_level: str
     frontend_log_level: str
     vlc_open_behavior: str
-    # Stream probe settings
-    stream_probe_enabled: bool
+    # Stream probe settings (scheduled probing is controlled by Task Engine)
     stream_probe_interval_hours: int
     stream_probe_batch_size: int
     stream_probe_timeout: int
@@ -502,7 +517,6 @@ async def get_current_settings():
         backend_log_level=settings.backend_log_level,
         frontend_log_level=settings.frontend_log_level,
         vlc_open_behavior=settings.vlc_open_behavior,
-        stream_probe_enabled=settings.stream_probe_enabled,
         stream_probe_interval_hours=settings.stream_probe_interval_hours,
         stream_probe_batch_size=settings.stream_probe_batch_size,
         stream_probe_timeout=settings.stream_probe_timeout,
@@ -570,7 +584,6 @@ async def update_settings(request: SettingsRequest):
         backend_log_level=request.backend_log_level,
         frontend_log_level=request.frontend_log_level,
         vlc_open_behavior=request.vlc_open_behavior,
-        stream_probe_enabled=request.stream_probe_enabled,
         stream_probe_interval_hours=request.stream_probe_interval_hours,
         stream_probe_batch_size=request.stream_probe_batch_size,
         stream_probe_timeout=request.stream_probe_timeout,
@@ -660,14 +673,12 @@ async def restart_services():
             await new_tracker.start()
             logger.info(f"Restarted bandwidth tracker with {settings.stats_poll_interval}s poll interval, timezone: {settings.user_timezone or 'UTC'}")
 
-            # Restart stream prober
+            # Restart stream prober (scheduled probing is controlled by Task Engine)
             new_prober = StreamProber(
                 get_client(),
                 probe_timeout=settings.stream_probe_timeout,
                 probe_batch_size=settings.stream_probe_batch_size,
                 probe_interval_hours=settings.stream_probe_interval_hours,
-                probe_enabled=settings.stream_probe_enabled,
-                schedule_time=settings.stream_probe_schedule_time,
                 user_timezone=settings.user_timezone,
                 probe_channel_groups=settings.probe_channel_groups,
                 bitrate_sample_duration=settings.bitrate_sample_duration,
@@ -1605,7 +1616,6 @@ async def get_channel_groups():
         groups = await client.get_channel_groups()
 
         # Filter out hidden groups
-        from database import get_session
         from models import HiddenChannelGroup
 
         with get_session() as db:
@@ -1836,7 +1846,6 @@ async def delete_channel_group(group_id: int):
 
         if has_m3u_sync:
             # Hide the group instead of deleting to preserve M3U sync
-            from database import get_session
             from models import HiddenChannelGroup
 
             # Get the group name before hiding
@@ -1867,7 +1876,6 @@ async def delete_channel_group(group_id: int):
 async def restore_channel_group(group_id: int):
     """Restore a hidden channel group back to the visible list."""
     try:
-        from database import get_session
         from models import HiddenChannelGroup
 
         with get_session() as db:
@@ -1890,7 +1898,6 @@ async def restore_channel_group(group_id: int):
 async def get_hidden_channel_groups():
     """Get list of all hidden channel groups."""
     try:
-        from database import get_session
         from models import HiddenChannelGroup
 
         with get_session() as db:
@@ -2315,27 +2322,137 @@ async def delete_epg_source(source_id: int):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+async def _poll_epg_refresh_completion(source_id: int, source_name: str, initial_updated):
+    """
+    Background task to poll Dispatcharr until EPG refresh completes.
+
+    Polls every REFRESH_POLL_INTERVAL_SECONDS for up to EPG_REFRESH_MAX_WAIT_SECONDS.
+    Sends success notification when updated_at changes, warning on timeout.
+    Uses longer timeout than M3U since EPG files can be very large.
+    """
+    import asyncio
+    from datetime import datetime
+
+    client = get_client()
+    wait_start = datetime.utcnow()
+
+    try:
+        while True:
+            elapsed = (datetime.utcnow() - wait_start).total_seconds()
+            if elapsed >= EPG_REFRESH_MAX_WAIT_SECONDS:
+                logger.warning(f"[EPG-REFRESH] Timeout waiting for '{source_name}' refresh after {elapsed:.0f}s")
+                await send_alert(
+                    title=f"EPG Refresh: {source_name}",
+                    message=f"EPG refresh for '{source_name}' timed out after {int(elapsed)}s - refresh may still be in progress",
+                    notification_type="warning",
+                    source="EPG Refresh",
+                    metadata={"source_id": source_id, "source_name": source_name, "timeout": True},
+                    alert_category="epg_refresh",
+                    entity_id=source_id,
+                )
+                return
+
+            await asyncio.sleep(REFRESH_POLL_INTERVAL_SECONDS)
+
+            try:
+                current_source = await client.get_epg_source(source_id)
+            except Exception as e:
+                # Source may have been deleted during refresh
+                logger.warning(f"[EPG-REFRESH] Could not fetch source {source_id} during polling: {e}")
+                return
+
+            current_updated = current_source.get("updated_at") or current_source.get("last_updated")
+
+            if current_updated and current_updated != initial_updated:
+                wait_duration = (datetime.utcnow() - wait_start).total_seconds()
+                logger.info(f"[EPG-REFRESH] '{source_name}' refresh complete in {wait_duration:.1f}s")
+
+                journal.log_entry(
+                    category="epg",
+                    action_type="refresh",
+                    entity_id=source_id,
+                    entity_name=source_name,
+                    description=f"Refreshed EPG source '{source_name}' in {wait_duration:.1f}s",
+                )
+
+                await send_alert(
+                    title=f"EPG Refresh: {source_name}",
+                    message=f"Successfully refreshed EPG source '{source_name}' in {wait_duration:.1f}s",
+                    notification_type="success",
+                    source="EPG Refresh",
+                    metadata={"source_id": source_id, "source_name": source_name, "duration": wait_duration},
+                    alert_category="epg_refresh",
+                    entity_id=source_id,
+                )
+                return
+            elif elapsed > 30 and not initial_updated:
+                # After 30 seconds, assume complete if no timestamp field available
+                wait_duration = (datetime.utcnow() - wait_start).total_seconds()
+                logger.info(f"[EPG-REFRESH] '{source_name}' - assuming complete after {wait_duration:.0f}s (no timestamp field)")
+
+                journal.log_entry(
+                    category="epg",
+                    action_type="refresh",
+                    entity_id=source_id,
+                    entity_name=source_name,
+                    description=f"Refreshed EPG source '{source_name}'",
+                )
+
+                await send_alert(
+                    title=f"EPG Refresh: {source_name}",
+                    message=f"EPG source '{source_name}' refresh completed",
+                    notification_type="success",
+                    source="EPG Refresh",
+                    metadata={"source_id": source_id, "source_name": source_name},
+                    alert_category="epg_refresh",
+                    entity_id=source_id,
+                )
+                return
+
+    except Exception as e:
+        logger.error(f"[EPG-REFRESH] Error polling for '{source_name}' completion: {e}")
+
+
 @app.post("/api/epg/sources/{source_id}/refresh")
 async def refresh_epg_source(source_id: int):
+    """Trigger refresh for a single EPG source.
+
+    Triggers the refresh and spawns a background task to poll for completion.
+    Success notification is sent only when refresh actually completes.
+    """
+    import asyncio
+
     client = get_client()
     try:
-        # Get source info
+        # Get source info and capture initial state for polling
         source = await client.get_epg_source(source_id)
         source_name = source.get("name", "Unknown")
+        initial_updated = source.get("updated_at") or source.get("last_updated")
 
+        # Trigger the refresh (returns immediately, refresh happens in background)
         result = await client.refresh_epg_source(source_id)
 
-        # Log to journal
-        journal.log_entry(
-            category="epg",
-            action_type="refresh",
-            entity_id=source_id,
-            entity_name=source_name,
-            description=f"Refreshed EPG source '{source_name}'",
+        # Spawn background task to poll for completion and send notification
+        asyncio.create_task(
+            _poll_epg_refresh_completion(source_id, source_name, initial_updated)
         )
 
+        logger.info(f"[EPG-REFRESH] Triggered refresh for '{source_name}', polling for completion in background")
         return result
     except Exception as e:
+        # Send error notification for trigger failure
+        try:
+            await send_alert(
+                title="EPG Refresh Failed",
+                message=f"Failed to trigger EPG refresh for source (ID: {source_id}): {str(e)}",
+                notification_type="error",
+                source="EPG Refresh",
+                metadata={"source_id": source_id, "error": str(e)},
+                alert_category="epg_refresh",
+                entity_id=source_id,
+            )
+        except Exception:
+            pass  # Don't fail the request if notification fails
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -3016,6 +3133,97 @@ async def delete_m3u_account(account_id: int, delete_groups: bool = True):
 # M3U Refresh
 # -------------------------------------------------------------------------
 
+
+async def _poll_m3u_refresh_completion(account_id: int, account_name: str, initial_updated):
+    """
+    Background task to poll Dispatcharr until M3U refresh completes.
+
+    Polls every REFRESH_POLL_INTERVAL_SECONDS for up to M3U_REFRESH_MAX_WAIT_SECONDS.
+    Sends success notification when updated_at changes, warning on timeout.
+    """
+    import asyncio
+    from datetime import datetime
+
+    client = get_client()
+    wait_start = datetime.utcnow()
+
+    try:
+        while True:
+            elapsed = (datetime.utcnow() - wait_start).total_seconds()
+            if elapsed >= M3U_REFRESH_MAX_WAIT_SECONDS:
+                logger.warning(f"[M3U-REFRESH] Timeout waiting for '{account_name}' refresh after {elapsed:.0f}s")
+                await send_alert(
+                    title=f"M3U Refresh: {account_name}",
+                    message=f"M3U refresh for '{account_name}' timed out after {int(elapsed)}s - refresh may still be in progress",
+                    notification_type="warning",
+                    source="M3U Refresh",
+                    metadata={"account_id": account_id, "account_name": account_name, "timeout": True},
+                    alert_category="m3u_refresh",
+                    entity_id=account_id,
+                )
+                return
+
+            await asyncio.sleep(REFRESH_POLL_INTERVAL_SECONDS)
+
+            try:
+                current_account = await client.get_m3u_account(account_id)
+            except Exception as e:
+                # Account may have been deleted during refresh
+                logger.warning(f"[M3U-REFRESH] Could not fetch account {account_id} during polling: {e}")
+                return
+
+            current_updated = current_account.get("updated_at") or current_account.get("last_refresh")
+
+            if current_updated and current_updated != initial_updated:
+                wait_duration = (datetime.utcnow() - wait_start).total_seconds()
+                logger.info(f"[M3U-REFRESH] '{account_name}' refresh complete in {wait_duration:.1f}s")
+
+                journal.log_entry(
+                    category="m3u",
+                    action_type="refresh",
+                    entity_id=account_id,
+                    entity_name=account_name,
+                    description=f"Refreshed M3U account '{account_name}' in {wait_duration:.1f}s",
+                )
+
+                await send_alert(
+                    title=f"M3U Refresh: {account_name}",
+                    message=f"Successfully refreshed M3U account '{account_name}' in {wait_duration:.1f}s",
+                    notification_type="success",
+                    source="M3U Refresh",
+                    metadata={"account_id": account_id, "account_name": account_name, "duration": wait_duration},
+                    alert_category="m3u_refresh",
+                    entity_id=account_id,
+                )
+                return
+            elif elapsed > 30 and not initial_updated:
+                # After 30 seconds, assume complete if no timestamp field available
+                wait_duration = (datetime.utcnow() - wait_start).total_seconds()
+                logger.info(f"[M3U-REFRESH] '{account_name}' - assuming complete after {wait_duration:.0f}s (no timestamp field)")
+
+                journal.log_entry(
+                    category="m3u",
+                    action_type="refresh",
+                    entity_id=account_id,
+                    entity_name=account_name,
+                    description=f"Refreshed M3U account '{account_name}'",
+                )
+
+                await send_alert(
+                    title=f"M3U Refresh: {account_name}",
+                    message=f"M3U account '{account_name}' refresh completed",
+                    notification_type="success",
+                    source="M3U Refresh",
+                    metadata={"account_id": account_id, "account_name": account_name},
+                    alert_category="m3u_refresh",
+                    entity_id=account_id,
+                )
+                return
+
+    except Exception as e:
+        logger.error(f"[M3U-REFRESH] Error polling for '{account_name}' completion: {e}")
+
+
 @app.post("/api/m3u/refresh")
 async def refresh_all_m3u_accounts():
     """Trigger refresh for all active M3U accounts."""
@@ -3028,26 +3236,44 @@ async def refresh_all_m3u_accounts():
 
 @app.post("/api/m3u/refresh/{account_id}")
 async def refresh_m3u_account(account_id: int):
-    """Trigger refresh for a single M3U account."""
+    """Trigger refresh for a single M3U account.
+
+    Triggers the refresh and spawns a background task to poll for completion.
+    Success notification is sent only when refresh actually completes.
+    """
+    import asyncio
+
     client = get_client()
     try:
-        # Get account info
+        # Get account info and capture initial state for polling
         account = await client.get_m3u_account(account_id)
         account_name = account.get("name", "Unknown")
+        initial_updated = account.get("updated_at") or account.get("last_refresh")
 
+        # Trigger the refresh (returns immediately, refresh happens in background)
         result = await client.refresh_m3u_account(account_id)
 
-        # Log to journal
-        journal.log_entry(
-            category="m3u",
-            action_type="refresh",
-            entity_id=account_id,
-            entity_name=account_name,
-            description=f"Refreshed M3U account '{account_name}'",
+        # Spawn background task to poll for completion and send notification
+        asyncio.create_task(
+            _poll_m3u_refresh_completion(account_id, account_name, initial_updated)
         )
 
+        logger.info(f"[M3U-REFRESH] Triggered refresh for '{account_name}', polling for completion in background")
         return result
     except Exception as e:
+        # Send error notification for trigger failure
+        try:
+            await send_alert(
+                title="M3U Refresh Failed",
+                message=f"Failed to trigger M3U refresh for account (ID: {account_id}): {str(e)}",
+                notification_type="error",
+                source="M3U Refresh",
+                metadata={"account_id": account_id, "error": str(e)},
+                alert_category="m3u_refresh",
+                entity_id=account_id,
+            )
+        except Exception:
+            pass  # Don't fail the request if notification fails
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -3458,6 +3684,673 @@ async def purge_journal_entries(days: int = 90):
 
 
 # =============================================================================
+# Notifications API
+# =============================================================================
+
+
+@app.get("/api/notifications")
+async def get_notifications(
+    page: int = 1,
+    page_size: int = 50,
+    unread_only: bool = False,
+    notification_type: Optional[str] = None,
+):
+    """Get notifications with pagination and filtering."""
+    from models import Notification
+
+    session = get_session()
+    try:
+        query = session.query(Notification)
+
+        # Filter by read status
+        if unread_only:
+            query = query.filter(Notification.read == False)
+
+        # Filter by type
+        if notification_type:
+            query = query.filter(Notification.type == notification_type)
+
+        # Order by most recent first
+        query = query.order_by(Notification.created_at.desc())
+
+        # Get total count
+        total = query.count()
+
+        # Apply pagination
+        offset = (page - 1) * page_size
+        notifications = query.offset(offset).limit(page_size).all()
+
+        # Get unread count
+        unread_count = session.query(Notification).filter(Notification.read == False).count()
+
+        return {
+            "notifications": [n.to_dict() for n in notifications],
+            "total": total,
+            "unread_count": unread_count,
+            "page": page,
+            "page_size": page_size,
+        }
+    finally:
+        session.close()
+
+
+async def create_notification_internal(
+    notification_type: str = "info",
+    title: Optional[str] = None,
+    message: str = "",
+    source: Optional[str] = None,
+    source_id: Optional[str] = None,
+    action_label: Optional[str] = None,
+    action_url: Optional[str] = None,
+    metadata: Optional[dict] = None,
+    send_alerts: bool = True,
+    alert_category: Optional[str] = None,
+    entity_id: Optional[int] = None,
+) -> Optional[dict]:
+    """Create a new notification (internal helper).
+
+    Can be called from anywhere in the backend (task_engine, etc.)
+
+    Args:
+        notification_type: One of "info", "success", "warning", "error"
+        title: Optional notification title
+        message: Notification message (required)
+        source: Source identifier (e.g., "task", "system")
+        source_id: Source-specific ID (e.g., task_id)
+        action_label: Optional action button label
+        action_url: Optional action URL
+        metadata: Optional additional data
+        send_alerts: If True (default), also dispatch to configured alert channels.
+        alert_category: Category for granular filtering ("epg_refresh", "m3u_refresh", "probe_failures")
+        entity_id: Source/account ID for filtering (EPG source ID or M3U account ID)
+
+    Returns:
+        Notification dict or None if message is empty
+    """
+    import json
+    import asyncio
+    from models import Notification
+
+    if not message:
+        logger.warning("create_notification_internal called with empty message")
+        return None
+
+    if notification_type not in ("info", "success", "warning", "error"):
+        logger.warning(f"Invalid notification type: {notification_type}, defaulting to info")
+        notification_type = "info"
+
+    session = get_session()
+    try:
+        notification = Notification(
+            type=notification_type,
+            title=title,
+            message=message,
+            source=source,
+            source_id=source_id,
+            action_label=action_label,
+            action_url=action_url,
+            extra_data=json.dumps(metadata) if metadata else None,
+        )
+        session.add(notification)
+        session.commit()
+        session.refresh(notification)
+        result = notification.to_dict()
+
+        # Dispatch to alert channels asynchronously (non-blocking)
+        if send_alerts:
+            asyncio.create_task(
+                _dispatch_to_alert_channels(
+                    title=title,
+                    message=message,
+                    notification_type=notification_type,
+                    source=source,
+                    metadata=metadata,
+                    alert_category=alert_category,
+                    entity_id=entity_id,
+                )
+            )
+
+        logger.debug(f"Created notification: {notification_type} - {title or message[:50]}")
+        return result
+    except Exception as e:
+        logger.error(f"Failed to create notification: {e}")
+        return None
+    finally:
+        session.close()
+
+
+@app.post("/api/notifications")
+async def create_notification(
+    notification_type: str = "info",
+    title: Optional[str] = None,
+    message: str = "",
+    source: Optional[str] = None,
+    source_id: Optional[str] = None,
+    action_label: Optional[str] = None,
+    action_url: Optional[str] = None,
+    metadata: Optional[dict] = None,
+    send_alerts: bool = True,
+):
+    """Create a new notification (API endpoint).
+
+    Args:
+        send_alerts: If True (default), also dispatch to configured alert channels.
+    """
+    if not message:
+        raise HTTPException(status_code=400, detail="Message is required")
+
+    if notification_type not in ("info", "success", "warning", "error"):
+        raise HTTPException(status_code=400, detail="Invalid notification type")
+
+    result = await create_notification_internal(
+        notification_type=notification_type,
+        title=title,
+        message=message,
+        source=source,
+        source_id=source_id,
+        action_label=action_label,
+        action_url=action_url,
+        metadata=metadata,
+        send_alerts=send_alerts,
+    )
+
+    if result is None:
+        raise HTTPException(status_code=500, detail="Failed to create notification")
+
+    return result
+
+
+async def _dispatch_to_alert_channels(
+    title: Optional[str],
+    message: str,
+    notification_type: str,
+    source: Optional[str],
+    metadata: Optional[dict],
+    alert_category: Optional[str] = None,
+    entity_id: Optional[int] = None,
+):
+    """Dispatch notification to all configured alert channels.
+
+    This runs asynchronously and won't block the notification creation.
+    Failures are logged but don't affect the original notification.
+    """
+    from alert_methods import send_alert
+
+    try:
+        results = await send_alert(
+            title=title or "Notification",
+            message=message,
+            notification_type=notification_type,
+            source=source,
+            metadata=metadata,
+            alert_category=alert_category,
+            entity_id=entity_id,
+        )
+        if results:
+            success_count = sum(1 for v in results.values() if v)
+            fail_count = sum(1 for v in results.values() if not v)
+            if fail_count > 0:
+                logger.warning(
+                    f"Alert dispatch: {success_count} succeeded, {fail_count} failed"
+                )
+            else:
+                logger.debug(f"Alert dispatch: sent to {success_count} channel(s)")
+    except Exception as e:
+        logger.error(f"Failed to dispatch alerts: {e}")
+
+
+@app.patch("/api/notifications/mark-all-read")
+async def mark_all_notifications_read():
+    """Mark all notifications as read."""
+    from datetime import datetime
+    from models import Notification
+
+    session = get_session()
+    try:
+        count = session.query(Notification).filter(Notification.read == False).update(
+            {"read": True, "read_at": datetime.utcnow()},
+            synchronize_session=False
+        )
+        session.commit()
+        return {"marked_read": count}
+    finally:
+        session.close()
+
+
+@app.patch("/api/notifications/{notification_id}")
+async def update_notification(notification_id: int, read: Optional[bool] = None):
+    """Update a notification (mark as read/unread)."""
+    from datetime import datetime
+    from models import Notification
+
+    session = get_session()
+    try:
+        notification = session.query(Notification).filter(Notification.id == notification_id).first()
+        if not notification:
+            raise HTTPException(status_code=404, detail="Notification not found")
+
+        if read is not None:
+            notification.read = read
+            notification.read_at = datetime.utcnow() if read else None
+
+        session.commit()
+        session.refresh(notification)
+        return notification.to_dict()
+    finally:
+        session.close()
+
+
+@app.delete("/api/notifications/{notification_id}")
+async def delete_notification(notification_id: int):
+    """Delete a specific notification."""
+    from models import Notification
+
+    session = get_session()
+    try:
+        notification = session.query(Notification).filter(Notification.id == notification_id).first()
+        if not notification:
+            raise HTTPException(status_code=404, detail="Notification not found")
+
+        session.delete(notification)
+        session.commit()
+        return {"deleted": True}
+    finally:
+        session.close()
+
+
+@app.delete("/api/notifications")
+async def clear_all_notifications(read_only: bool = True):
+    """Clear notifications. By default only clears read notifications."""
+    from models import Notification
+
+    session = get_session()
+    try:
+        query = session.query(Notification)
+        if read_only:
+            query = query.filter(Notification.read == True)
+
+        count = query.delete(synchronize_session=False)
+        session.commit()
+        return {"deleted": count, "read_only": read_only}
+    finally:
+        session.close()
+
+
+# =============================================================================
+# Alert Methods
+# =============================================================================
+
+
+class AlertMethodCreate(BaseModel):
+    name: str
+    method_type: str
+    config: dict
+    enabled: bool = True
+    notify_info: bool = False
+    notify_success: bool = True
+    notify_warning: bool = True
+    notify_error: bool = True
+    alert_sources: Optional[dict] = None  # Granular source filtering
+
+
+class AlertMethodUpdate(BaseModel):
+    name: Optional[str] = None
+    config: Optional[dict] = None
+    enabled: Optional[bool] = None
+    notify_info: Optional[bool] = None
+    notify_success: Optional[bool] = None
+    notify_warning: Optional[bool] = None
+    notify_error: Optional[bool] = None
+    alert_sources: Optional[dict] = None  # Granular source filtering
+
+
+def validate_alert_sources(alert_sources: Optional[dict]) -> Optional[str]:
+    """Validate alert_sources structure. Returns error message or None if valid."""
+    if alert_sources is None:
+        return None
+
+    valid_filter_modes = {"all", "only_selected", "all_except"}
+
+    # Validate EPG refresh section
+    if "epg_refresh" in alert_sources:
+        epg = alert_sources["epg_refresh"]
+        if not isinstance(epg, dict):
+            return "epg_refresh must be an object"
+        if "filter_mode" in epg and epg["filter_mode"] not in valid_filter_modes:
+            return f"epg_refresh.filter_mode must be one of: {valid_filter_modes}"
+        if "source_ids" in epg and not isinstance(epg["source_ids"], list):
+            return "epg_refresh.source_ids must be an array"
+
+    # Validate M3U refresh section
+    if "m3u_refresh" in alert_sources:
+        m3u = alert_sources["m3u_refresh"]
+        if not isinstance(m3u, dict):
+            return "m3u_refresh must be an object"
+        if "filter_mode" in m3u and m3u["filter_mode"] not in valid_filter_modes:
+            return f"m3u_refresh.filter_mode must be one of: {valid_filter_modes}"
+        if "account_ids" in m3u and not isinstance(m3u["account_ids"], list):
+            return "m3u_refresh.account_ids must be an array"
+
+    # Validate probe failures section
+    if "probe_failures" in alert_sources:
+        probe = alert_sources["probe_failures"]
+        if not isinstance(probe, dict):
+            return "probe_failures must be an object"
+        if "min_failures" in probe:
+            min_failures = probe["min_failures"]
+            if not isinstance(min_failures, int) or min_failures < 0:
+                return "probe_failures.min_failures must be a non-negative integer"
+
+    return None
+
+
+@app.get("/api/alert-methods/types")
+async def get_alert_method_types():
+    """Get available alert method types and their configuration fields."""
+    logger.debug("Fetching alert method types")
+    try:
+        types = get_method_types()
+        logger.debug(f"Found {len(types)} alert method types: {[t['type'] for t in types]}")
+        return types
+    except Exception as e:
+        logger.exception(f"Error fetching alert method types: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/alert-methods")
+async def list_alert_methods():
+    """List all configured alert methods."""
+    from models import AlertMethod as AlertMethodModel
+    import json
+
+    logger.debug("Listing alert methods")
+    session = get_session()
+    try:
+        methods = session.query(AlertMethodModel).all()
+        logger.debug(f"Found {len(methods)} alert methods in database")
+        result = []
+        for m in methods:
+            alert_sources = None
+            if m.alert_sources:
+                try:
+                    alert_sources = json.loads(m.alert_sources)
+                except (json.JSONDecodeError, TypeError):
+                    pass
+            result.append({
+                "id": m.id,
+                "name": m.name,
+                "method_type": m.method_type,
+                "enabled": m.enabled,
+                "config": json.loads(m.config) if m.config else {},
+                "notify_info": m.notify_info,
+                "notify_success": m.notify_success,
+                "notify_warning": m.notify_warning,
+                "notify_error": m.notify_error,
+                "alert_sources": alert_sources,
+                "last_sent_at": m.last_sent_at.isoformat() + "Z" if m.last_sent_at else None,
+                "created_at": m.created_at.isoformat() + "Z" if m.created_at else None,
+            })
+        return result
+    except Exception as e:
+        logger.exception(f"Error listing alert methods: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        session.close()
+
+
+@app.post("/api/alert-methods")
+async def create_alert_method(data: AlertMethodCreate):
+    """Create a new alert method."""
+    from models import AlertMethod as AlertMethodModel
+    import json
+
+    logger.debug(f"Creating alert method: name={data.name}, type={data.method_type}")
+
+    session = None
+    try:
+        # Validate method type
+        method_types = {mt["type"] for mt in get_method_types()}
+        if data.method_type not in method_types:
+            logger.warning(f"Unknown method type attempted: {data.method_type}")
+            raise HTTPException(status_code=400, detail=f"Unknown method type: {data.method_type}")
+
+        # Validate config
+        method = create_method(data.method_type, 0, data.name, data.config)
+        if method:
+            is_valid, error = method.validate_config(data.config)
+            if not is_valid:
+                logger.warning(f"Invalid config for method {data.name}: {error}")
+                raise HTTPException(status_code=400, detail=error)
+
+        # Validate alert_sources if provided
+        if data.alert_sources is not None:
+            alert_sources_error = validate_alert_sources(data.alert_sources)
+            if alert_sources_error:
+                logger.warning(f"Invalid alert_sources for method {data.name}: {alert_sources_error}")
+                raise HTTPException(status_code=400, detail=alert_sources_error)
+
+        session = get_session()
+        method_model = AlertMethodModel(
+            name=data.name,
+            method_type=data.method_type,
+            config=json.dumps(data.config),
+            enabled=data.enabled,
+            notify_info=data.notify_info,
+            notify_success=data.notify_success,
+            notify_warning=data.notify_warning,
+            notify_error=data.notify_error,
+            alert_sources=json.dumps(data.alert_sources) if data.alert_sources else None,
+        )
+        session.add(method_model)
+        session.commit()
+        session.refresh(method_model)
+
+        # Reload the manager to pick up the new method
+        get_alert_manager().reload_method(method_model.id)
+
+        logger.info(f"Created alert method: id={method_model.id}, name={method_model.name}, type={method_model.method_type}")
+        return {
+            "id": method_model.id,
+            "name": method_model.name,
+            "method_type": method_model.method_type,
+            "enabled": method_model.enabled,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(f"Error creating alert method: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        if session:
+            session.close()
+
+
+@app.get("/api/alert-methods/{method_id}")
+async def get_alert_method(method_id: int):
+    """Get a specific alert method."""
+    from models import AlertMethod as AlertMethodModel
+    import json
+
+    logger.debug(f"Getting alert method: id={method_id}")
+    session = get_session()
+    try:
+        method = session.query(AlertMethodModel).filter(
+            AlertMethodModel.id == method_id
+        ).first()
+
+        if not method:
+            logger.debug(f"Alert method not found: id={method_id}")
+            raise HTTPException(status_code=404, detail="Alert method not found")
+
+        logger.debug(f"Found alert method: id={method.id}, name={method.name}")
+        alert_sources = None
+        if method.alert_sources:
+            try:
+                alert_sources = json.loads(method.alert_sources)
+            except (json.JSONDecodeError, TypeError):
+                pass
+        return {
+            "id": method.id,
+            "name": method.name,
+            "method_type": method.method_type,
+            "enabled": method.enabled,
+            "config": json.loads(method.config) if method.config else {},
+            "notify_info": method.notify_info,
+            "notify_success": method.notify_success,
+            "notify_warning": method.notify_warning,
+            "notify_error": method.notify_error,
+            "alert_sources": alert_sources,
+            "last_sent_at": method.last_sent_at.isoformat() + "Z" if method.last_sent_at else None,
+            "created_at": method.created_at.isoformat() + "Z" if method.created_at else None,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(f"Error getting alert method {method_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        session.close()
+
+
+@app.patch("/api/alert-methods/{method_id}")
+async def update_alert_method(method_id: int, data: AlertMethodUpdate):
+    """Update an alert method."""
+    from models import AlertMethod as AlertMethodModel
+    import json
+
+    logger.debug(f"Updating alert method: id={method_id}")
+    session = get_session()
+    try:
+        method = session.query(AlertMethodModel).filter(
+            AlertMethodModel.id == method_id
+        ).first()
+
+        if not method:
+            logger.debug(f"Alert method not found for update: id={method_id}")
+            raise HTTPException(status_code=404, detail="Alert method not found")
+
+        if data.name is not None:
+            method.name = data.name
+        if data.config is not None:
+            # Validate new config
+            method_instance = create_method(method.method_type, method.id, method.name, data.config)
+            if method_instance:
+                is_valid, error = method_instance.validate_config(data.config)
+                if not is_valid:
+                    logger.warning(f"Invalid config for method {method_id}: {error}")
+                    raise HTTPException(status_code=400, detail=error)
+            method.config = json.dumps(data.config)
+        if data.enabled is not None:
+            method.enabled = data.enabled
+        if data.notify_info is not None:
+            method.notify_info = data.notify_info
+        if data.notify_success is not None:
+            method.notify_success = data.notify_success
+        if data.notify_warning is not None:
+            method.notify_warning = data.notify_warning
+        if data.notify_error is not None:
+            method.notify_error = data.notify_error
+        if data.alert_sources is not None:
+            # Validate alert_sources
+            alert_sources_error = validate_alert_sources(data.alert_sources)
+            if alert_sources_error:
+                logger.warning(f"Invalid alert_sources for method {method_id}: {alert_sources_error}")
+                raise HTTPException(status_code=400, detail=alert_sources_error)
+            method.alert_sources = json.dumps(data.alert_sources) if data.alert_sources else None
+
+        session.commit()
+
+        # Reload the manager to pick up the changes
+        get_alert_manager().reload_method(method_id)
+
+        logger.info(f"Updated alert method: id={method_id}, name={method.name}")
+        return {"success": True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(f"Error updating alert method {method_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        session.close()
+
+
+@app.delete("/api/alert-methods/{method_id}")
+async def delete_alert_method(method_id: int):
+    """Delete an alert method."""
+    from models import AlertMethod as AlertMethodModel
+
+    logger.debug(f"Deleting alert method: id={method_id}")
+    session = get_session()
+    try:
+        method = session.query(AlertMethodModel).filter(
+            AlertMethodModel.id == method_id
+        ).first()
+
+        if not method:
+            logger.debug(f"Alert method not found for deletion: id={method_id}")
+            raise HTTPException(status_code=404, detail="Alert method not found")
+
+        method_name = method.name
+        session.delete(method)
+        session.commit()
+
+        # Remove from manager
+        get_alert_manager().reload_method(method_id)
+
+        logger.info(f"Deleted alert method: id={method_id}, name={method_name}")
+        return {"success": True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(f"Error deleting alert method {method_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        session.close()
+
+
+@app.post("/api/alert-methods/{method_id}/test")
+async def test_alert_method(method_id: int):
+    """Test an alert method by sending a test message."""
+    from models import AlertMethod as AlertMethodModel
+    import json
+
+    logger.debug(f"Testing alert method: id={method_id}")
+    session = get_session()
+    try:
+        method_model = session.query(AlertMethodModel).filter(
+            AlertMethodModel.id == method_id
+        ).first()
+
+        if not method_model:
+            logger.debug(f"Alert method not found for test: id={method_id}")
+            raise HTTPException(status_code=404, detail="Alert method not found")
+
+        config = json.loads(method_model.config) if method_model.config else {}
+        method = create_method(
+            method_model.method_type,
+            method_model.id,
+            method_model.name,
+            config
+        )
+
+        if not method:
+            logger.warning(f"Unknown method type for test: {method_model.method_type}")
+            raise HTTPException(status_code=400, detail=f"Unknown method type: {method_model.method_type}")
+
+        logger.debug(f"Sending test message to method: {method_model.name} ({method_model.method_type})")
+        success, message = await method.test_connection()
+        logger.info(f"Test result for method {method_model.name}: success={success}, message={message}")
+        return {"success": success, "message": message}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(f"Error testing alert method {method_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        session.close()
+
+
+# =============================================================================
 # Stats & Monitoring
 # =============================================================================
 
@@ -3822,7 +4715,6 @@ async def get_task(task_id: str):
     """Get status for a specific task, including all schedules."""
     try:
         from task_registry import get_registry
-        from database import get_session
         from models import TaskSchedule
         from schedule_calculator import describe_schedule
 
@@ -4031,7 +4923,6 @@ class TaskScheduleUpdate(BaseModel):
 async def list_task_schedules(task_id: str):
     """Get all schedules for a task."""
     try:
-        from database import get_session
         from models import TaskSchedule, ScheduledTask
         from schedule_calculator import describe_schedule
 
@@ -4073,7 +4964,6 @@ async def list_task_schedules(task_id: str):
 async def create_task_schedule(task_id: str, data: TaskScheduleCreate):
     """Create a new schedule for a task."""
     try:
-        from database import get_session
         from models import TaskSchedule, ScheduledTask
         from schedule_calculator import calculate_next_run, describe_schedule
 
@@ -4144,7 +5034,6 @@ async def create_task_schedule(task_id: str, data: TaskScheduleCreate):
 async def update_task_schedule(task_id: str, schedule_id: int, data: TaskScheduleUpdate):
     """Update a task schedule."""
     try:
-        from database import get_session
         from models import TaskSchedule, ScheduledTask
         from schedule_calculator import calculate_next_run, describe_schedule
 
@@ -4222,7 +5111,6 @@ async def update_task_schedule(task_id: str, schedule_id: int, data: TaskSchedul
 async def delete_task_schedule(task_id: str, schedule_id: int):
     """Delete a task schedule."""
     try:
-        from database import get_session
         from models import TaskSchedule
 
         session = get_session()

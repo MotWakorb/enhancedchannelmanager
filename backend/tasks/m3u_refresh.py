@@ -75,6 +75,10 @@ class M3URefreshTask(TaskScheduler):
             # Filter accounts to refresh
             accounts_to_refresh = []
             for account in all_accounts:
+                # Skip the "Custom" account - it has no URL to refresh
+                if account.get("name", "").lower() == "custom":
+                    continue
+
                 # Skip inactive accounts if configured
                 if self.skip_inactive and not account.get("is_active", True):
                     continue
@@ -154,10 +158,12 @@ class M3URefreshTask(TaskScheduler):
 
                     success_count += 1
                     refreshed.append(account_name)
+                    self._increment_progress(success_count=1)
                 except Exception as e:
                     logger.error(f"[{self.task_id}] Failed to refresh {account_name}: {e}")
                     failed_count += 1
                     errors.append(f"{account_name}: {str(e)}")
+                    self._increment_progress(failed_count=1)
 
             self._set_progress(
                 success_count=success_count,

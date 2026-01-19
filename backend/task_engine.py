@@ -103,6 +103,71 @@ class TaskEngine:
         """Get list of currently running task IDs."""
         return list(self._active_tasks)
 
+    async def _notify_task_result(
+        self,
+        task_name: str,
+        task_id: str,
+        notification_type: str,
+        title: str,
+        message: str,
+        result: Optional[TaskResult] = None,
+        alert_category: Optional[str] = None,
+    ) -> None:
+        """
+        Send a notification about task execution result.
+
+        This creates a notification in the database and dispatches
+        to configured alert channels (Discord, Telegram, etc.)
+
+        Args:
+            task_name: Human-readable task name
+            task_id: Task identifier
+            notification_type: One of "success", "warning", "error"
+            title: Notification title
+            message: Notification message
+            result: Optional TaskResult with execution details
+            alert_category: Category for granular filtering (e.g., "probe_failures")
+        """
+        try:
+            # Import here to avoid circular imports
+            from main import create_notification_internal
+
+            metadata = {
+                "task_id": task_id,
+                "task_name": task_name,
+            }
+            if result:
+                metadata.update({
+                    "duration_seconds": result.duration_seconds,
+                    "total_items": result.total_items,
+                    "success_count": result.success_count,
+                    "failed_count": result.failed_count,
+                    "skipped_count": result.skipped_count,
+                })
+                # Include failed item names if available in result details
+                if result.details and result.failed_count > 0:
+                    failed_streams = result.details.get("failed_streams", [])
+                    if failed_streams:
+                        # Extract just the names, limit to first 10 to avoid huge messages
+                        failed_names = [s.get("name", f"ID:{s.get('id', '?')}") for s in failed_streams[:10]]
+                        if len(failed_streams) > 10:
+                            failed_names.append(f"... and {len(failed_streams) - 10} more")
+                        metadata["failed_items"] = ", ".join(failed_names)
+
+            await create_notification_internal(
+                notification_type=notification_type,
+                title=title,
+                message=message,
+                source="task",
+                source_id=task_id,
+                metadata=metadata,
+                send_alerts=True,
+                alert_category=alert_category,
+            )
+        except Exception as e:
+            # Don't let notification failures affect task execution
+            logger.error(f"Failed to send task notification: {e}")
+
     async def _scheduler_loop(self) -> None:
         """Main scheduler loop - checks for due tasks and executes them."""
         logger.info("Scheduler loop started")
@@ -359,7 +424,11 @@ class TaskEngine:
             # Update registry
             registry.sync_to_database(task_id)
 
-            # Log task completion to journal
+            # Determine alert category for granular filtering
+            # For stream_probe tasks, use "probe_failures" to allow min_failures threshold
+            alert_category = "probe_failures" if task_id == "stream_probe" else None
+
+            # Log task completion to journal and send notifications
             if result.success:
                 log_entry(
                     category="task",
@@ -378,6 +447,33 @@ class TaskEngine:
                     },
                     user_initiated=(triggered_by == "manual"),
                 )
+
+                # Send notification - warning if partial failure, success if all ok
+                if result.failed_count > 0:
+                    # Partial success - some items failed
+                    await self._notify_task_result(
+                        task_name=instance.task_name,
+                        task_id=task_id,
+                        notification_type="warning",
+                        title=f"Task Completed with Warnings: {instance.task_name}",
+                        message=f"Completed with {result.failed_count} failures out of {result.total_items} items. "
+                                f"({result.success_count} succeeded, {result.skipped_count} skipped)",
+                        result=result,
+                        alert_category=alert_category,
+                    )
+                else:
+                    # Full success
+                    await self._notify_task_result(
+                        task_name=instance.task_name,
+                        task_id=task_id,
+                        notification_type="success",
+                        title=f"Task Completed: {instance.task_name}",
+                        message=f"Successfully completed. {result.success_count} items processed"
+                                + (f", {result.skipped_count} skipped" if result.skipped_count else "")
+                                + f" in {result.duration_seconds:.1f}s",
+                        result=result,
+                        alert_category=alert_category,
+                    )
             else:
                 log_entry(
                     category="task",
@@ -394,10 +490,24 @@ class TaskEngine:
                     user_initiated=(triggered_by == "manual"),
                 )
 
+                # Send error notification
+                await self._notify_task_result(
+                    task_name=instance.task_name,
+                    task_id=task_id,
+                    notification_type="error",
+                    title=f"Task Failed: {instance.task_name}",
+                    message=result.error or result.message or "Unknown error",
+                    result=result,
+                    alert_category=alert_category,
+                )
+
             return result
 
         except Exception as e:
             logger.exception(f"[{task_id}] Task execution failed: {e}")
+
+            # Determine alert category for granular filtering
+            alert_category = "probe_failures" if task_id == "stream_probe" else None
 
             # Log exception to journal
             log_entry(
@@ -412,6 +522,17 @@ class TaskEngine:
                     "triggered_by": triggered_by,
                 },
                 user_initiated=(triggered_by == "manual"),
+            )
+
+            # Send error notification for exception
+            await self._notify_task_result(
+                task_name=instance.task_name,
+                task_id=task_id,
+                notification_type="error",
+                title=f"Task Error: {instance.task_name}",
+                message=f"Task failed with exception: {str(e)}",
+                result=None,
+                alert_category=alert_category,
             )
 
             # Update execution record with error

@@ -941,6 +941,17 @@
   border-radius: 10px;
 }
 
+.group-failed-indicator {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 0.5rem;
+}
+
+.group-failed-indicator .material-icons {
+  font-size: 1rem;
+  color: var(--error, #e74c3c);
+}
+
 .group-range {
   font-size: 0.75rem;
   color: var(--text-secondary);
@@ -1138,6 +1149,16 @@
 
 .channel-streams-count .warning-icon {
   font-size: 0.9rem;
+}
+
+.channel-streams-count.has-failed {
+  color: var(--error, #e74c3c);
+}
+
+.channel-streams-count .failed-stream-icon {
+  font-size: 0.9rem;
+  color: var(--error, #e74c3c);
+  margin-right: 0.25rem;
 }
 
 /* Highlight channels without streams */

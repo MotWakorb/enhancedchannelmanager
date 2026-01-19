@@ -298,6 +298,7 @@ interface DroppableGroupHeaderProps {
   onSortStreamsByMode?: (mode: 'smart' | 'resolution' | 'bitrate' | 'framerate') => void;
   isSortingByQuality?: boolean;
   enabledCriteria?: Record<'resolution' | 'bitrate' | 'framerate', boolean>;
+  hasFailedStreams?: boolean;
 }
 
 const DroppableGroupHeader = memo(function DroppableGroupHeader({
@@ -324,6 +325,7 @@ const DroppableGroupHeader = memo(function DroppableGroupHeader({
   onSortStreamsByMode,
   isSortingByQuality = false,
   enabledCriteria = { resolution: true, bitrate: true, framerate: true },
+  hasFailedStreams = false,
 }: DroppableGroupHeaderProps) {
   const droppableId = `group-${groupId}`;
   const { isOver, setNodeRef } = useDroppable({
@@ -463,6 +465,11 @@ const DroppableGroupHeader = memo(function DroppableGroupHeader({
         </span>
       )}
       <span className="group-count">{channelCount}</span>
+      {hasFailedStreams && (
+        <span className="group-failed-indicator" title="One or more channels have failed streams">
+          <span className="material-icons">error</span>
+        </span>
+      )}
       {channelRange && channelRange.min !== null && channelRange.max !== null && (
         <span className="group-range" title="Channel number range">
           {channelRange.min === channelRange.max
@@ -999,6 +1006,36 @@ export function ChannelsPane({
     };
     fetchStreamStats();
   }, [channelStreams]);
+
+  // Pre-load stream stats for all streams assigned to channels (for hasFailedStreams indicator)
+  useEffect(() => {
+    const preloadAllStreamStats = async () => {
+      // Collect all unique stream IDs from all channels
+      const allStreamIds = new Set<number>();
+      for (const channel of channels) {
+        for (const streamId of channel.streams) {
+          allStreamIds.add(streamId);
+        }
+      }
+
+      if (allStreamIds.size === 0) return;
+
+      try {
+        const stats = await api.getStreamStatsByIds(Array.from(allStreamIds));
+        setStreamStatsMap((prev) => {
+          const next = new Map(prev);
+          for (const [idStr, stat] of Object.entries(stats)) {
+            next.set(parseInt(idStr, 10), stat);
+          }
+          return next;
+        });
+      } catch (err) {
+        // Stats not available is OK - they may not have been probed yet
+        console.debug('Failed to pre-load stream stats:', err);
+      }
+    };
+    preloadAllStreamStats();
+  }, [channels]);
 
   // Handle probe channel request - probes all streams in a channel
   const handleProbeChannel = useCallback(async (channel: Channel) => {
@@ -4225,6 +4262,14 @@ export function ChannelsPane({
       onSelectGroupChannels(allGroupChannelIds, !allSelected);
     };
 
+    // Check if any channel in this group has failed streams
+    const groupHasFailedStreams = groupChannels.some(channel =>
+      channel.streams.some(streamId => {
+        const stats = streamStatsMap.get(streamId);
+        return stats && (stats.probe_status === 'failed' || stats.probe_status === 'timeout');
+      })
+    );
+
     return (
       <div key={groupId} className={`channel-group ${isEmpty ? 'empty-group' : ''}`}>
         <SortableGroupHeader
@@ -4250,6 +4295,7 @@ export function ChannelsPane({
           onSortStreamsByMode={(mode) => handleSortGroupStreamsByMode(groupId, mode)}
           isSortingByQuality={bulkSortingByQuality}
           enabledCriteria={channelDefaults?.streamSortEnabled}
+          hasFailedStreams={groupHasFailedStreams}
         />
         {isExpanded && isEmpty && (
           <div className="group-channels empty-group-placeholder">
@@ -4387,6 +4433,10 @@ export function ChannelsPane({
                       showStreamUrls={showStreamUrls}
                       onProbeChannel={() => handleProbeChannel(channel)}
                       isProbing={probingChannels.has(channel.id)}
+                      hasFailedStreams={channel.streams.some(streamId => {
+                        const stats = streamStatsMap.get(streamId);
+                        return stats && (stats.probe_status === 'failed' || stats.probe_status === 'timeout');
+                      })}
                     />
                     {selectedChannelId === channel.id && (
                       <div className="inline-streams">

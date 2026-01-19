@@ -111,3 +111,22 @@ When doing work on this project, follow these steps in order:
 - NEVER say "ready to push when you are" - YOU must push
 - If push fails, resolve and retry until it succeeds
 - Always use `enhancedchannelmanager` as the repository name when creating beads
+- **NEVER chain `bd create` and `bd close` in one command** - The `bd list` output format doesn't work with shell parsing. Always run them as separate commands:
+  ```bash
+  bd create enhancedchannelmanager "Description"  # Note the ID it prints
+  bd close <id>                                    # Use the exact ID from above
+  ```
+
+## CSS/Styling Guidelines
+
+**Button Styling - IMPORTANT:**
+- NEVER use `--accent-primary` for button backgrounds with white/light text - it causes white-on-white in dark mode
+- ALWAYS use `--button-primary-bg` for primary button backgrounds
+- ALWAYS use `--button-primary-text` for primary button text color
+- Example of correct button styling:
+  ```css
+  .btn-primary {
+    background-color: var(--button-primary-bg);
+    color: var(--button-primary-text);
+  }
+  ```

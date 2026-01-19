@@ -13,6 +13,8 @@ import packageJson from '../package.json';
 import { logger } from './utils/logger';
 import { registerVLCModalCallback, downloadM3U } from './utils/vlc';
 import { VLCProtocolHelperModal } from './components/VLCProtocolHelperModal';
+import { NotificationCenter } from './components/NotificationCenter';
+import { NotificationProvider } from './contexts/NotificationContext';
 import ECMLogo from './assets/ECMLogo.png';
 import './App.css';
 
@@ -26,9 +28,10 @@ const StatsTab = lazy(() => import('./components/tabs/StatsTab').then(m => ({ de
 const SettingsTab = lazy(() => import('./components/tabs/SettingsTab').then(m => ({ default: m.SettingsTab })));
 
 function App() {
-  // Health check
-  const [health, setHealth] = useState<{ status: string; service: string } | null>(null);
+  // Health check and version info
+  const [health, setHealth] = useState<api.HealthResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [updateInfo, setUpdateInfo] = useState<api.UpdateInfo | null>(null);
 
   // Channels state
   const [channels, setChannels] = useState<Channel[]>([]);
@@ -446,9 +449,20 @@ function App() {
 
         logger.debug('Loading initial data...');
         api.getHealth()
-          .then(health => {
-            setHealth(health);
-            logger.info('Health check passed', health);
+          .then(healthData => {
+            setHealth(healthData);
+            logger.info('Health check passed', healthData);
+            // Check for updates after health check succeeds
+            if (healthData.version && healthData.release_channel) {
+              api.checkForUpdates(healthData.version, healthData.release_channel)
+                .then(update => {
+                  setUpdateInfo(update);
+                  if (update.updateAvailable) {
+                    logger.info('Update available', update);
+                  }
+                })
+                .catch(err => logger.warn('Update check failed', err));
+            }
           })
           .catch((err) => {
             setError(err.message);
@@ -1581,6 +1595,7 @@ function App() {
     : channelGroups;
 
   return (
+    <NotificationProvider position="top-right">
     <div className="app">
       <header className={`header ${isEditMode ? 'edit-mode-active' : ''}`}>
         <h1>
@@ -1651,6 +1666,7 @@ function App() {
               )}
             </>
           )}
+          <NotificationCenter />
         </div>
       </header>
 
@@ -1862,6 +1878,17 @@ function App() {
         </div>
         <div className="footer-right">
           <span className="version">v{packageJson.version}</span>
+          {updateInfo?.updateAvailable && (
+            <a
+              href={updateInfo.releaseUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="update-available"
+              title={updateInfo.latestVersion ? `Version ${updateInfo.latestVersion} available` : 'Update available'}
+            >
+              New Update Available!
+            </a>
+          )}
         </div>
       </footer>
 
@@ -1872,6 +1899,7 @@ function App() {
         streamName={vlcModalStreamName || 'Stream'}
       />
     </div>
+    </NotificationProvider>
   );
 }
 

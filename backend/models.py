@@ -391,3 +391,142 @@ class TaskExecution(Base):
 
     def __repr__(self):
         return f"<TaskExecution(id={self.id}, task_id={self.task_id}, status={self.status})>"
+
+
+class Notification(Base):
+    """
+    Persistent notification storage.
+    Notifications appear in the notification center and can be marked as read.
+    """
+    __tablename__ = "notifications"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    type = Column(String(20), nullable=False, default="info")  # info, success, warning, error
+    title = Column(String(255), nullable=True)  # Optional title
+    message = Column(Text, nullable=False)  # Notification message
+    read = Column(Boolean, default=False, nullable=False)  # Has user seen this
+    # Source tracking
+    source = Column(String(50), nullable=True)  # e.g., "task", "api", "system"
+    source_id = Column(String(100), nullable=True)  # e.g., task_id, endpoint name
+    # Optional action
+    action_label = Column(String(50), nullable=True)  # Button label
+    action_url = Column(String(500), nullable=True)  # URL or route to navigate
+    # Extra data (JSON) for additional context
+    # Note: 'metadata' is reserved by SQLAlchemy, so we use 'extra_data'
+    extra_data = Column(Text, nullable=True)
+    # Timestamps
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    read_at = Column(DateTime, nullable=True)  # When marked as read
+    expires_at = Column(DateTime, nullable=True)  # Auto-delete after this time
+
+    __table_args__ = (
+        Index("idx_notification_read", read),
+        Index("idx_notification_created_at", created_at.desc()),
+        Index("idx_notification_type", type),
+        Index("idx_notification_source", source),
+    )
+
+    def to_dict(self) -> dict:
+        """Convert to dictionary for API responses."""
+        import json
+        return {
+            "id": self.id,
+            "type": self.type,
+            "title": self.title,
+            "message": self.message,
+            "read": self.read,
+            "source": self.source,
+            "source_id": self.source_id,
+            "action_label": self.action_label,
+            "action_url": self.action_url,
+            "metadata": json.loads(self.extra_data) if self.extra_data else None,
+            "created_at": self.created_at.isoformat() + "Z" if self.created_at else None,
+            "read_at": self.read_at.isoformat() + "Z" if self.read_at else None,
+            "expires_at": self.expires_at.isoformat() + "Z" if self.expires_at else None,
+        }
+
+    def __repr__(self):
+        return f"<Notification(id={self.id}, type={self.type}, read={self.read})>"
+
+
+class AlertMethod(Base):
+    """
+    Configuration for an external alert method (Discord, Telegram, Email, etc.).
+    Stores credentials and settings for sending notifications to external services.
+    """
+    __tablename__ = "alert_methods"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String(100), nullable=False)  # User-friendly name
+    method_type = Column(String(50), nullable=False)  # discord, telegram, smtp, etc.
+    enabled = Column(Boolean, default=True, nullable=False)
+    # Configuration (JSON) - contains type-specific settings
+    # Discord: webhook_url
+    # Telegram: bot_token, chat_id
+    # SMTP: host, port, username, password, from_address, to_addresses
+    config = Column(Text, nullable=False)
+    # Filter settings - which notification types to send
+    notify_info = Column(Boolean, default=False, nullable=False)
+    notify_success = Column(Boolean, default=True, nullable=False)
+    notify_warning = Column(Boolean, default=True, nullable=False)
+    notify_error = Column(Boolean, default=True, nullable=False)
+    # Granular source filtering (JSON) - controls which sources trigger alerts
+    # Schema: {"version": 1, "epg_refresh": {...}, "m3u_refresh": {...}, "probe_failures": {...}}
+    # NULL means "send all" (backwards compatible)
+    alert_sources = Column(Text, nullable=True)
+    # Digest tracking
+    last_sent_at = Column(DateTime, nullable=True)
+    # Timestamps
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        Index("idx_alert_method_type", method_type),
+        Index("idx_alert_method_enabled", enabled),
+    )
+
+    def to_dict(self, include_sensitive: bool = False) -> dict:
+        """Convert to dictionary for API responses.
+
+        By default, sensitive config values are masked.
+        Set include_sensitive=True to include actual values.
+        """
+        import json
+        config = json.loads(self.config) if self.config else {}
+
+        # Mask sensitive fields unless explicitly requested
+        if not include_sensitive:
+            masked_config = {}
+            for key, value in config.items():
+                if key in ('password', 'bot_token', 'webhook_url', 'api_key'):
+                    masked_config[key] = '********' if value else None
+                else:
+                    masked_config[key] = value
+            config = masked_config
+
+        # Parse alert_sources JSON, defaulting to None if not set
+        alert_sources = None
+        if self.alert_sources:
+            try:
+                alert_sources = json.loads(self.alert_sources)
+            except (json.JSONDecodeError, TypeError):
+                pass
+
+        return {
+            "id": self.id,
+            "name": self.name,
+            "method_type": self.method_type,
+            "enabled": self.enabled,
+            "config": config,
+            "notify_info": self.notify_info,
+            "notify_success": self.notify_success,
+            "notify_warning": self.notify_warning,
+            "notify_error": self.notify_error,
+            "alert_sources": alert_sources,
+            "last_sent_at": self.last_sent_at.isoformat() + "Z" if self.last_sent_at else None,
+            "created_at": self.created_at.isoformat() + "Z" if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() + "Z" if self.updated_at else None,
+        }
+
+    def __repr__(self):
+        return f"<AlertMethod(id={self.id}, name={self.name}, type={self.method_type})>"
