@@ -58,6 +58,11 @@ export function TaskEditorModal({ task, onClose, onSaved }: TaskEditorModalProps
     }
   }, [task.task_id]);
 
+  // Load schedules when modal opens (component mounts)
+  useEffect(() => {
+    refreshSchedules();
+  }, [refreshSchedules]);
+
   // Save task-level settings (enabled, config)
   const handleSaveTask = async () => {
     setError(null);
