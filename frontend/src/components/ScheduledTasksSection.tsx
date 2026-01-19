@@ -4,6 +4,7 @@ import type { TaskStatus } from '../services/api';
 import { logger } from '../utils/logger';
 import { TaskEditorModal } from './TaskEditorModal';
 import { TaskHistoryPanel } from './TaskHistoryPanel';
+import { useNotifications } from '../contexts/NotificationContext';
 
 interface ScheduledTasksSectionProps {
   userTimezone?: string;
@@ -283,6 +284,7 @@ export function ScheduledTasksSection({ userTimezone: _userTimezone }: Scheduled
   const [runningTasks, setRunningTasks] = useState<Set<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
   const [editingTask, setEditingTask] = useState<TaskStatus | null>(null);
+  const notifications = useNotifications();
 
   const loadTasks = useCallback(async () => {
     try {
@@ -305,14 +307,38 @@ export function ScheduledTasksSection({ userTimezone: _userTimezone }: Scheduled
   }, [loadTasks]);
 
   const handleRunNow = async (taskId: string) => {
+    // Find task name for better feedback
+    const task = tasks.find(t => t.task_id === taskId);
+    const taskName = task?.task_name || taskId;
+
     setRunningTasks((prev) => new Set(prev).add(taskId));
+    notifications.info(`Starting ${taskName}...`, 'Task Started');
+
     try {
       const result = await api.runTask(taskId);
       logger.info(`Task ${taskId} completed`, result);
+
+      // Show result notification
+      if (result.success) {
+        notifications.success(
+          `${taskName} completed: ${result.success_count} succeeded, ${result.failed_count} failed`,
+          'Task Completed'
+        );
+      } else {
+        notifications.error(
+          result.message || `${taskName} failed`,
+          'Task Failed'
+        );
+      }
+
       // Reload tasks to get updated status
       await loadTasks();
     } catch (err) {
       logger.error(`Failed to run task ${taskId}`, err);
+      notifications.error(
+        `Failed to run ${taskName}: ${err instanceof Error ? err.message : 'Unknown error'}`,
+        'Task Error'
+      );
     } finally {
       setRunningTasks((prev) => {
         const next = new Set(prev);
