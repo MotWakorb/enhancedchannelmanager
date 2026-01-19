@@ -3899,6 +3899,24 @@ async def _dispatch_to_alert_channels(
         logger.error(f"Failed to dispatch alerts: {e}")
 
 
+@app.patch("/api/notifications/mark-all-read")
+async def mark_all_notifications_read():
+    """Mark all notifications as read."""
+    from datetime import datetime
+    from models import Notification
+
+    session = get_session()
+    try:
+        count = session.query(Notification).filter(Notification.read == False).update(
+            {"read": True, "read_at": datetime.utcnow()},
+            synchronize_session=False
+        )
+        session.commit()
+        return {"marked_read": count}
+    finally:
+        session.close()
+
+
 @app.patch("/api/notifications/{notification_id}")
 async def update_notification(notification_id: int, read: Optional[bool] = None):
     """Update a notification (mark as read/unread)."""
@@ -3918,24 +3936,6 @@ async def update_notification(notification_id: int, read: Optional[bool] = None)
         session.commit()
         session.refresh(notification)
         return notification.to_dict()
-    finally:
-        session.close()
-
-
-@app.patch("/api/notifications/mark-all-read")
-async def mark_all_notifications_read():
-    """Mark all notifications as read."""
-    from datetime import datetime
-    from models import Notification
-
-    session = get_session()
-    try:
-        count = session.query(Notification).filter(Notification.read == False).update(
-            {"read": True, "read_at": datetime.utcnow()},
-            synchronize_session=False
-        )
-        session.commit()
-        return {"marked_read": count}
     finally:
         session.close()
 
