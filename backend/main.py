@@ -134,12 +134,10 @@ async def startup_event():
             logger.error(f"Failed to start bandwidth tracker: {e}", exc_info=True)
 
         # Always create stream prober for on-demand probing support
-        # Scheduled probing is controlled by probe_enabled flag
+        # Note: Scheduled probing is now controlled by the Task Engine (StreamProbeTask)
         try:
             logger.debug(
-                f"Initializing stream prober (scheduled: {settings.stream_probe_enabled}, "
-                f"schedule: {settings.stream_probe_schedule_time}, "
-                f"interval: {settings.stream_probe_interval_hours}h, "
+                f"Initializing stream prober (interval: {settings.stream_probe_interval_hours}h, "
                 f"batch: {settings.stream_probe_batch_size}, timeout: {settings.stream_probe_timeout}s)"
             )
             prober = StreamProber(
@@ -147,8 +145,6 @@ async def startup_event():
                 probe_timeout=settings.stream_probe_timeout,
                 probe_batch_size=settings.stream_probe_batch_size,
                 probe_interval_hours=settings.stream_probe_interval_hours,
-                probe_enabled=settings.stream_probe_enabled,
-                schedule_time=settings.stream_probe_schedule_time,
                 user_timezone=settings.user_timezone,
                 probe_channel_groups=settings.probe_channel_groups,
                 bitrate_sample_duration=settings.bitrate_sample_duration,
@@ -186,10 +182,7 @@ async def startup_event():
             test_prober = get_prober()
             logger.info(f"Verification: get_prober() returns: {test_prober is not None}")
 
-            if settings.stream_probe_enabled:
-                logger.info("Stream prober initialized with scheduled probing enabled")
-            else:
-                logger.info("Stream prober initialized (scheduled probing disabled, on-demand available)")
+            logger.info("Stream prober initialized (scheduled probing via Task Engine)")
         except Exception as e:
             logger.error(f"Failed to initialize stream prober: {e}", exc_info=True)
             logger.error("Stream probing will not be available!")
@@ -420,8 +413,7 @@ class SettingsRequest(BaseModel):
     backend_log_level: str = "INFO"
     frontend_log_level: str = "INFO"
     vlc_open_behavior: str = "m3u_fallback"
-    # Stream probe settings
-    stream_probe_enabled: bool = True
+    # Stream probe settings (scheduled probing is controlled by Task Engine)
     stream_probe_interval_hours: int = 24
     stream_probe_batch_size: int = 10
     stream_probe_timeout: int = 30
@@ -466,8 +458,7 @@ class SettingsResponse(BaseModel):
     backend_log_level: str
     frontend_log_level: str
     vlc_open_behavior: str
-    # Stream probe settings
-    stream_probe_enabled: bool
+    # Stream probe settings (scheduled probing is controlled by Task Engine)
     stream_probe_interval_hours: int
     stream_probe_batch_size: int
     stream_probe_timeout: int
@@ -524,7 +515,6 @@ async def get_current_settings():
         backend_log_level=settings.backend_log_level,
         frontend_log_level=settings.frontend_log_level,
         vlc_open_behavior=settings.vlc_open_behavior,
-        stream_probe_enabled=settings.stream_probe_enabled,
         stream_probe_interval_hours=settings.stream_probe_interval_hours,
         stream_probe_batch_size=settings.stream_probe_batch_size,
         stream_probe_timeout=settings.stream_probe_timeout,
@@ -592,7 +582,6 @@ async def update_settings(request: SettingsRequest):
         backend_log_level=request.backend_log_level,
         frontend_log_level=request.frontend_log_level,
         vlc_open_behavior=request.vlc_open_behavior,
-        stream_probe_enabled=request.stream_probe_enabled,
         stream_probe_interval_hours=request.stream_probe_interval_hours,
         stream_probe_batch_size=request.stream_probe_batch_size,
         stream_probe_timeout=request.stream_probe_timeout,
@@ -682,14 +671,12 @@ async def restart_services():
             await new_tracker.start()
             logger.info(f"Restarted bandwidth tracker with {settings.stats_poll_interval}s poll interval, timezone: {settings.user_timezone or 'UTC'}")
 
-            # Restart stream prober
+            # Restart stream prober (scheduled probing is controlled by Task Engine)
             new_prober = StreamProber(
                 get_client(),
                 probe_timeout=settings.stream_probe_timeout,
                 probe_batch_size=settings.stream_probe_batch_size,
                 probe_interval_hours=settings.stream_probe_interval_hours,
-                probe_enabled=settings.stream_probe_enabled,
-                schedule_time=settings.stream_probe_schedule_time,
                 user_timezone=settings.user_timezone,
                 probe_channel_groups=settings.probe_channel_groups,
                 bitrate_sample_duration=settings.bitrate_sample_duration,

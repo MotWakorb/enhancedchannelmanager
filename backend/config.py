@@ -66,7 +66,7 @@ class DispatcharrSettings(BaseModel):
     # m3u_only: Always download M3U file without trying protocol
     vlc_open_behavior: str = "m3u_fallback"
     # Stream probe settings - uses ffprobe to gather stream metadata
-    stream_probe_enabled: bool = True  # Enable scheduled background probing
+    # Note: Scheduled probing is now controlled by the Task Engine (StreamProbeTask)
     stream_probe_interval_hours: int = 24  # How often to auto-probe (hours)
     stream_probe_batch_size: int = 10  # Streams to probe per scheduled cycle
     stream_probe_timeout: int = 30  # Timeout in seconds for each probe
