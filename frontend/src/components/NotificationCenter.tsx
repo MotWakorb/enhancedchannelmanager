@@ -98,6 +98,15 @@ export function NotificationCenter({ onNotificationClick }: NotificationCenterPr
     }
   };
 
+  const handleDeleteAll = async () => {
+    try {
+      await api.clearNotifications(false); // Delete ALL notifications
+      loadNotifications();
+    } catch (err) {
+      console.error('Failed to delete all notifications:', err);
+    }
+  };
+
   const handleNotificationClick = (notification: Notification) => {
     if (onNotificationClick) {
       onNotificationClick(notification);
@@ -169,6 +178,15 @@ export function NotificationCenter({ onNotificationClick }: NotificationCenterPr
                   title="Clear read notifications"
                 >
                   <span className="material-icons">delete_sweep</span>
+                </button>
+              )}
+              {notifications.length > 0 && (
+                <button
+                  className="notification-action-btn delete-all"
+                  onClick={handleDeleteAll}
+                  title="Delete all notifications"
+                >
+                  <span className="material-icons">delete_forever</span>
                 </button>
               )}
             </div>
