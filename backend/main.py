@@ -3551,7 +3551,7 @@ async def create_notification(
             source_id=source_id,
             action_label=action_label,
             action_url=action_url,
-            metadata=json.dumps(metadata) if metadata else None,
+            extra_data=json.dumps(metadata) if metadata else None,
         )
         session.add(notification)
         session.commit()

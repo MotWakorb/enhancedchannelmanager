@@ -411,8 +411,9 @@ class Notification(Base):
     # Optional action
     action_label = Column(String(50), nullable=True)  # Button label
     action_url = Column(String(500), nullable=True)  # URL or route to navigate
-    # Metadata (JSON) for additional context
-    metadata = Column(Text, nullable=True)
+    # Extra data (JSON) for additional context
+    # Note: 'metadata' is reserved by SQLAlchemy, so we use 'extra_data'
+    extra_data = Column(Text, nullable=True)
     # Timestamps
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     read_at = Column(DateTime, nullable=True)  # When marked as read
@@ -438,7 +439,7 @@ class Notification(Base):
             "source_id": self.source_id,
             "action_label": self.action_label,
             "action_url": self.action_url,
-            "metadata": json.loads(self.metadata) if self.metadata else None,
+            "metadata": json.loads(self.extra_data) if self.extra_data else None,
             "created_at": self.created_at.isoformat() + "Z" if self.created_at else None,
             "read_at": self.read_at.isoformat() + "Z" if self.read_at else None,
             "expires_at": self.expires_at.isoformat() + "Z" if self.expires_at else None,
