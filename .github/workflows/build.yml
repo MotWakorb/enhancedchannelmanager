@@ -127,6 +127,17 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
+      - name: Extract version and set release channel
+        id: version
+        run: |
+          VERSION=$(jq -r '.version' frontend/package.json)
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          if [[ "${{ github.ref }}" == "refs/heads/dev" ]]; then
+            echo "channel=dev" >> $GITHUB_OUTPUT
+          else
+            echo "channel=latest" >> $GITHUB_OUTPUT
+          fi
+
       - name: Build Docker image for DAST
         uses: docker/build-push-action@v5
         with:
@@ -135,6 +146,8 @@ jobs:
           tags: ecm:dast-test
           build-args: |
             GIT_COMMIT=${{ github.sha }}
+            ECM_VERSION=${{ steps.version.outputs.version }}
+            RELEASE_CHANNEL=${{ steps.version.outputs.channel }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -236,6 +249,17 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ steps.image.outputs.name }}
 
+      - name: Extract version and set release channel
+        id: version
+        run: |
+          VERSION=$(jq -r '.version' frontend/package.json)
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          if [[ "${{ github.ref }}" == "refs/heads/dev" ]]; then
+            echo "channel=dev" >> $GITHUB_OUTPUT
+          else
+            echo "channel=latest" >> $GITHUB_OUTPUT
+          fi
+
       - name: Build Docker image for Trivy scan
         uses: docker/build-push-action@v5
         with:
@@ -245,6 +269,8 @@ jobs:
           platforms: linux/amd64
           build-args: |
             GIT_COMMIT=${{ github.sha }}
+            ECM_VERSION=${{ steps.version.outputs.version }}
+            RELEASE_CHANNEL=${{ steps.version.outputs.channel }}
           cache-from: type=gha,scope=amd64
           cache-to: type=gha,mode=max,scope=amd64
 
@@ -268,6 +294,8 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
             GIT_COMMIT=${{ github.sha }}
+            ECM_VERSION=${{ steps.version.outputs.version }}
+            RELEASE_CHANNEL=${{ steps.version.outputs.channel }}
           outputs: type=image,name=${{ env.REGISTRY }}/${{ steps.image.outputs.name }},push-by-digest=true,name-canonical=true,push=${{ github.event_name != 'pull_request' }}
           cache-from: type=gha,scope=amd64
           cache-to: type=gha,mode=max,scope=amd64
@@ -310,6 +338,17 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ steps.image.outputs.name }}
 
+      - name: Extract version and set release channel
+        id: version
+        run: |
+          VERSION=$(jq -r '.version' frontend/package.json)
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          if [[ "${{ github.ref }}" == "refs/heads/dev" ]]; then
+            echo "channel=dev" >> $GITHUB_OUTPUT
+          else
+            echo "channel=latest" >> $GITHUB_OUTPUT
+          fi
+
       - name: Build and push (ARM64)
         id: build
         uses: docker/build-push-action@v5
@@ -320,6 +359,8 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
             GIT_COMMIT=${{ github.sha }}
+            ECM_VERSION=${{ steps.version.outputs.version }}
+            RELEASE_CHANNEL=${{ steps.version.outputs.channel }}
           outputs: type=image,name=${{ env.REGISTRY }}/${{ steps.image.outputs.name }},push-by-digest=true,name-canonical=true,push=${{ github.event_name != 'pull_request' }}
           cache-from: type=gha,scope=arm64
           cache-to: type=gha,mode=max,scope=arm64
