@@ -2255,8 +2255,8 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       </nav>
 
       <div className="settings-content">
-        {/* Global probe progress indicator - shows on all pages when probing */}
-        {probingAll && probeProgress && (
+        {/* Global probe progress indicator - shows on all pages when probing (except Scheduled Tasks which has its own) */}
+        {probingAll && probeProgress && activePage !== 'scheduled-tasks' && (
           <div className="probe-global-progress" style={{
             marginBottom: '1rem',
             padding: '1rem',
