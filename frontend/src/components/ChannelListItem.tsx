@@ -40,6 +40,7 @@ export interface ChannelListItemProps {
   showStreamUrls?: boolean;
   onProbeChannel?: () => void;
   isProbing?: boolean;
+  hasFailedStreams?: boolean;
 }
 
 export const ChannelListItem = memo(function ChannelListItem({
@@ -78,6 +79,7 @@ export const ChannelListItem = memo(function ChannelListItem({
   showStreamUrls = true,
   onProbeChannel,
   isProbing = false,
+  hasFailedStreams = false,
 }: ChannelListItemProps) {
   const {
     attributes,
@@ -221,8 +223,11 @@ export const ChannelListItem = memo(function ChannelListItem({
           {channelUrl}
         </span>
       )}
-      <span className={`channel-streams-count ${channel.streams.length === 0 ? 'no-streams' : ''}`}>
+      <span className={`channel-streams-count ${channel.streams.length === 0 ? 'no-streams' : ''} ${hasFailedStreams ? 'has-failed' : ''}`}>
         {channel.streams.length === 0 && <span className="material-icons warning-icon">warning</span>}
+        {hasFailedStreams && channel.streams.length > 0 && (
+          <span className="material-icons failed-stream-icon" title="One or more streams failed probe">error</span>
+        )}
         {channel.streams.length} stream{channel.streams.length !== 1 ? 's' : ''}
       </span>
       {/* Probe channel button - probes all streams in this channel */}

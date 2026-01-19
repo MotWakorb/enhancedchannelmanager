@@ -4387,6 +4387,10 @@ export function ChannelsPane({
                       showStreamUrls={showStreamUrls}
                       onProbeChannel={() => handleProbeChannel(channel)}
                       isProbing={probingChannels.has(channel.id)}
+                      hasFailedStreams={channel.streams.some(s => {
+                        const stats = streamStatsMap.get(s.id);
+                        return stats && (stats.probe_status === 'failed' || stats.probe_status === 'timeout');
+                      })}
                     />
                     {selectedChannelId === channel.id && (
                       <div className="inline-streams">

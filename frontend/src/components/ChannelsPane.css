@@ -1140,6 +1140,16 @@
   font-size: 0.9rem;
 }
 
+.channel-streams-count.has-failed {
+  color: var(--error, #e74c3c);
+}
+
+.channel-streams-count .failed-stream-icon {
+  font-size: 0.9rem;
+  color: var(--error, #e74c3c);
+  margin-right: 0.25rem;
+}
+
 /* Highlight channels without streams */
 .channel-item.no-streams {
   border-left: 3px solid var(--warning);
