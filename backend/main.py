@@ -3520,8 +3520,7 @@ async def get_notifications(
         session.close()
 
 
-@app.post("/api/notifications")
-async def create_notification(
+async def create_notification_internal(
     notification_type: str = "info",
     title: Optional[str] = None,
     message: str = "",
@@ -3531,22 +3530,36 @@ async def create_notification(
     action_url: Optional[str] = None,
     metadata: Optional[dict] = None,
     send_alerts: bool = True,
-):
-    """Create a new notification.
+) -> Optional[dict]:
+    """Create a new notification (internal helper).
+
+    Can be called from anywhere in the backend (task_engine, etc.)
 
     Args:
+        notification_type: One of "info", "success", "warning", "error"
+        title: Optional notification title
+        message: Notification message (required)
+        source: Source identifier (e.g., "task", "system")
+        source_id: Source-specific ID (e.g., task_id)
+        action_label: Optional action button label
+        action_url: Optional action URL
+        metadata: Optional additional data
         send_alerts: If True (default), also dispatch to configured alert channels.
+
+    Returns:
+        Notification dict or None if message is empty
     """
     import json
     import asyncio
     from models import Notification
-    from alert_methods import send_alert
 
     if not message:
-        raise HTTPException(status_code=400, detail="Message is required")
+        logger.warning("create_notification_internal called with empty message")
+        return None
 
     if notification_type not in ("info", "success", "warning", "error"):
-        raise HTTPException(status_code=400, detail="Invalid notification type")
+        logger.warning(f"Invalid notification type: {notification_type}, defaulting to info")
+        notification_type = "info"
 
     session = get_session()
     try:
@@ -3577,9 +3590,54 @@ async def create_notification(
                 )
             )
 
+        logger.debug(f"Created notification: {notification_type} - {title or message[:50]}")
         return result
+    except Exception as e:
+        logger.error(f"Failed to create notification: {e}")
+        return None
     finally:
         session.close()
+
+
+@app.post("/api/notifications")
+async def create_notification(
+    notification_type: str = "info",
+    title: Optional[str] = None,
+    message: str = "",
+    source: Optional[str] = None,
+    source_id: Optional[str] = None,
+    action_label: Optional[str] = None,
+    action_url: Optional[str] = None,
+    metadata: Optional[dict] = None,
+    send_alerts: bool = True,
+):
+    """Create a new notification (API endpoint).
+
+    Args:
+        send_alerts: If True (default), also dispatch to configured alert channels.
+    """
+    if not message:
+        raise HTTPException(status_code=400, detail="Message is required")
+
+    if notification_type not in ("info", "success", "warning", "error"):
+        raise HTTPException(status_code=400, detail="Invalid notification type")
+
+    result = await create_notification_internal(
+        notification_type=notification_type,
+        title=title,
+        message=message,
+        source=source,
+        source_id=source_id,
+        action_label=action_label,
+        action_url=action_url,
+        metadata=metadata,
+        send_alerts=send_alerts,
+    )
+
+    if result is None:
+        raise HTTPException(status_code=500, detail="Failed to create notification")
+
+    return result
 
 
 async def _dispatch_to_alert_channels(
