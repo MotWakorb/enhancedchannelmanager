@@ -15,7 +15,6 @@ interface MethodFormData {
   notify_success: boolean;
   notify_warning: boolean;
   notify_error: boolean;
-  min_interval_seconds: number;
   config: Record<string, string>;
 }
 
@@ -27,7 +26,6 @@ const EMPTY_FORM: MethodFormData = {
   notify_success: true,
   notify_warning: true,
   notify_error: true,
-  min_interval_seconds: 60,
   config: {},
 };
 
@@ -85,7 +83,6 @@ export function AlertMethodSettings({ className }: AlertMethodSettingsProps) {
       notify_success: method.notify_success,
       notify_warning: method.notify_warning,
       notify_error: method.notify_error,
-      min_interval_seconds: method.min_interval_seconds,
       config: Object.fromEntries(
         Object.entries(method.config).map(([k, v]) => [k, String(v)])
       ),
@@ -185,7 +182,6 @@ export function AlertMethodSettings({ className }: AlertMethodSettingsProps) {
           notify_success: formData.notify_success,
           notify_warning: formData.notify_warning,
           notify_error: formData.notify_error,
-          min_interval_seconds: formData.min_interval_seconds,
         };
         await api.updateAlertMethod(editingMethod.id, update);
       } else {
@@ -198,7 +194,6 @@ export function AlertMethodSettings({ className }: AlertMethodSettingsProps) {
           notify_success: formData.notify_success,
           notify_warning: formData.notify_warning,
           notify_error: formData.notify_error,
-          min_interval_seconds: formData.min_interval_seconds,
         };
         await api.createAlertMethod(create);
       }
@@ -499,20 +494,6 @@ export function AlertMethodSettings({ className }: AlertMethodSettingsProps) {
                     </div>
                   </div>
 
-                  <div className="rate-limit-section">
-                    <h4>Rate Limiting</h4>
-                    <div className="form-group">
-                      <label>Minimum interval between notifications (seconds)</label>
-                      <input
-                        type="number"
-                        min="0"
-                        max="86400"
-                        value={formData.min_interval_seconds}
-                        onChange={(e) => setFormData(prev => ({ ...prev, min_interval_seconds: parseInt(e.target.value) || 0 }))}
-                      />
-                      <p className="form-hint">Prevents flooding. Set to 0 for no limit.</p>
-                    </div>
-                  </div>
                 </>
               )}
 

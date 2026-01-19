@@ -335,7 +335,6 @@ def _ensure_alert_methods_table(conn) -> None:
             notify_success BOOLEAN NOT NULL DEFAULT 1,
             notify_warning BOOLEAN NOT NULL DEFAULT 1,
             notify_error BOOLEAN NOT NULL DEFAULT 1,
-            min_interval_seconds INTEGER NOT NULL DEFAULT 60,
             last_sent_at DATETIME,
             created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
             updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
