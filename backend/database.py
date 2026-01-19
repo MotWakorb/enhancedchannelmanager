@@ -111,6 +111,9 @@ def _run_migrations(engine) -> None:
             # Add alert_sources column to alert_methods (v0.8.2-0026)
             _add_alert_sources_column(conn)
 
+            # Remove min_interval_seconds column from alert_methods (v0.8.2-0028)
+            _remove_min_interval_seconds_column(conn)
+
             logger.debug("All migrations complete - schema is up to date")
     except Exception as e:
         logger.exception(f"Migration failed: {e}")
@@ -367,6 +370,72 @@ def _add_alert_sources_column(conn) -> None:
     ))
     conn.commit()
     logger.info("Migration complete: added alert_sources column to alert_methods")
+
+
+def _remove_min_interval_seconds_column(conn) -> None:
+    """Remove min_interval_seconds column from alert_methods table (v0.8.2-0028).
+
+    This column was removed in v0.8.2-0025 but existing databases still have it
+    with a NOT NULL constraint, causing inserts to fail.
+    SQLite requires table recreation to drop columns in older versions.
+    """
+    from sqlalchemy import text
+
+    # Check if min_interval_seconds column exists
+    result = conn.execute(text("PRAGMA table_info(alert_methods)"))
+    columns = {row[1]: row for row in result.fetchall()}
+
+    if "min_interval_seconds" not in columns:
+        logger.debug("min_interval_seconds column already removed from alert_methods")
+        return
+
+    logger.info("Removing min_interval_seconds column from alert_methods table")
+
+    # SQLite table recreation to drop the column
+    # 1. Create new table without the column
+    conn.execute(text("""
+        CREATE TABLE alert_methods_new (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name VARCHAR(100) NOT NULL,
+            method_type VARCHAR(50) NOT NULL,
+            enabled BOOLEAN NOT NULL DEFAULT 1,
+            config TEXT NOT NULL,
+            notify_info BOOLEAN NOT NULL DEFAULT 0,
+            notify_success BOOLEAN NOT NULL DEFAULT 1,
+            notify_warning BOOLEAN NOT NULL DEFAULT 1,
+            notify_error BOOLEAN NOT NULL DEFAULT 1,
+            alert_sources TEXT,
+            last_sent_at DATETIME,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+    """))
+
+    # 2. Copy data from old table (excluding min_interval_seconds)
+    # Build column list dynamically based on what exists in both tables
+    new_columns = ["id", "name", "method_type", "enabled", "config",
+                   "notify_info", "notify_success", "notify_warning", "notify_error",
+                   "last_sent_at", "created_at", "updated_at"]
+
+    # Add alert_sources if it exists in old table
+    if "alert_sources" in columns:
+        new_columns.append("alert_sources")
+
+    cols_str = ", ".join(new_columns)
+    conn.execute(text(f"INSERT INTO alert_methods_new ({cols_str}) SELECT {cols_str} FROM alert_methods"))
+
+    # 3. Drop old table
+    conn.execute(text("DROP TABLE alert_methods"))
+
+    # 4. Rename new table
+    conn.execute(text("ALTER TABLE alert_methods_new RENAME TO alert_methods"))
+
+    # 5. Recreate indexes
+    conn.execute(text("CREATE INDEX idx_alert_method_type ON alert_methods (method_type)"))
+    conn.execute(text("CREATE INDEX idx_alert_method_enabled ON alert_methods (enabled)"))
+
+    conn.commit()
+    logger.info("Migration complete: removed min_interval_seconds column from alert_methods")
 
 
 def _perform_maintenance(engine) -> None:
