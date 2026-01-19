@@ -28,11 +28,11 @@ from database import init_db, get_session
 import journal
 from bandwidth_tracker import BandwidthTracker, set_tracker, get_tracker
 from stream_prober import StreamProber, set_prober, get_prober
-from alert_channels import get_alert_manager, get_channel_types, create_channel as create_alert_channel_instance
-# Import channel implementations to register them
-import alert_channels_discord  # noqa: F401
-import alert_channels_smtp  # noqa: F401
-import alert_channels_telegram  # noqa: F401
+from alert_methods import get_alert_manager, get_method_types, create_method
+# Import method implementations to register them
+import alert_methods_discord  # noqa: F401
+import alert_methods_smtp  # noqa: F401
+import alert_methods_telegram  # noqa: F401
 
 # Configure logging
 # Start with environment variable, will be updated from settings in startup
@@ -3529,7 +3529,7 @@ async def create_notification(
     import json
     import asyncio
     from models import Notification
-    from alert_channels import send_alert
+    from alert_methods import send_alert
 
     if not message:
         raise HTTPException(status_code=400, detail="Message is required")
@@ -3583,7 +3583,7 @@ async def _dispatch_to_alert_channels(
     This runs asynchronously and won't block the notification creation.
     Failures are logged but don't affect the original notification.
     """
-    from alert_channels import send_alert
+    from alert_methods import send_alert
 
     try:
         results = await send_alert(
@@ -3684,13 +3684,13 @@ async def clear_all_notifications(read_only: bool = True):
 
 
 # =============================================================================
-# Alert Channels
+# Alert Methods
 # =============================================================================
 
 
-class AlertChannelCreate(BaseModel):
+class AlertMethodCreate(BaseModel):
     name: str
-    channel_type: str
+    method_type: str
     config: dict
     enabled: bool = True
     notify_info: bool = False
@@ -3700,7 +3700,7 @@ class AlertChannelCreate(BaseModel):
     min_interval_seconds: int = 60
 
 
-class AlertChannelUpdate(BaseModel):
+class AlertMethodUpdate(BaseModel):
     name: Optional[str] = None
     config: Optional[dict] = None
     enabled: Optional[bool] = None
@@ -3711,83 +3711,83 @@ class AlertChannelUpdate(BaseModel):
     min_interval_seconds: Optional[int] = None
 
 
-@app.get("/api/alert-channels/types")
-async def get_alert_channel_types():
-    """Get available alert channel types and their configuration fields."""
-    logger.debug("Fetching alert channel types")
+@app.get("/api/alert-methods/types")
+async def get_alert_method_types():
+    """Get available alert method types and their configuration fields."""
+    logger.debug("Fetching alert method types")
     try:
-        types = get_channel_types()
-        logger.debug(f"Found {len(types)} alert channel types: {[t['type'] for t in types]}")
+        types = get_method_types()
+        logger.debug(f"Found {len(types)} alert method types: {[t['type'] for t in types]}")
         return types
     except Exception as e:
-        logger.exception(f"Error fetching alert channel types: {e}")
+        logger.exception(f"Error fetching alert method types: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/alert-channels")
-async def list_alert_channels():
-    """List all configured alert channels."""
-    from models import AlertChannel as AlertChannelModel
+@app.get("/api/alert-methods")
+async def list_alert_methods():
+    """List all configured alert methods."""
+    from models import AlertMethod as AlertMethodModel
     import json
 
-    logger.debug("Listing alert channels")
+    logger.debug("Listing alert methods")
     session = get_session()
     try:
-        channels = session.query(AlertChannelModel).all()
-        logger.debug(f"Found {len(channels)} alert channels in database")
+        methods = session.query(AlertMethodModel).all()
+        logger.debug(f"Found {len(methods)} alert methods in database")
         result = [
             {
-                "id": ch.id,
-                "name": ch.name,
-                "channel_type": ch.channel_type,
-                "enabled": ch.enabled,
-                "config": json.loads(ch.config) if ch.config else {},
-                "notify_info": ch.notify_info,
-                "notify_success": ch.notify_success,
-                "notify_warning": ch.notify_warning,
-                "notify_error": ch.notify_error,
-                "min_interval_seconds": ch.min_interval_seconds,
-                "last_sent_at": ch.last_sent_at.isoformat() + "Z" if ch.last_sent_at else None,
-                "created_at": ch.created_at.isoformat() + "Z" if ch.created_at else None,
+                "id": m.id,
+                "name": m.name,
+                "method_type": m.method_type,
+                "enabled": m.enabled,
+                "config": json.loads(m.config) if m.config else {},
+                "notify_info": m.notify_info,
+                "notify_success": m.notify_success,
+                "notify_warning": m.notify_warning,
+                "notify_error": m.notify_error,
+                "min_interval_seconds": m.min_interval_seconds,
+                "last_sent_at": m.last_sent_at.isoformat() + "Z" if m.last_sent_at else None,
+                "created_at": m.created_at.isoformat() + "Z" if m.created_at else None,
             }
-            for ch in channels
+            for m in methods
         ]
         return result
     except Exception as e:
-        logger.exception(f"Error listing alert channels: {e}")
+        logger.exception(f"Error listing alert methods: {e}")
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         session.close()
 
 
-@app.post("/api/alert-channels")
-async def create_alert_channel(data: AlertChannelCreate):
-    """Create a new alert channel."""
-    from models import AlertChannel as AlertChannelModel
+@app.post("/api/alert-methods")
+async def create_alert_method(data: AlertMethodCreate):
+    """Create a new alert method."""
+    from models import AlertMethod as AlertMethodModel
     import json
 
-    logger.debug(f"Creating alert channel: name={data.name}, type={data.channel_type}")
+    logger.debug(f"Creating alert method: name={data.name}, type={data.method_type}")
 
     session = None
     try:
-        # Validate channel type
-        channel_types = {ct["type"] for ct in get_channel_types()}
-        if data.channel_type not in channel_types:
-            logger.warning(f"Unknown channel type attempted: {data.channel_type}")
-            raise HTTPException(status_code=400, detail=f"Unknown channel type: {data.channel_type}")
+        # Validate method type
+        method_types = {mt["type"] for mt in get_method_types()}
+        if data.method_type not in method_types:
+            logger.warning(f"Unknown method type attempted: {data.method_type}")
+            raise HTTPException(status_code=400, detail=f"Unknown method type: {data.method_type}")
 
         # Validate config
-        channel = create_alert_channel_instance(data.channel_type, 0, data.name, data.config)
-        if channel:
-            is_valid, error = channel.validate_config(data.config)
+        method = create_method(data.method_type, 0, data.name, data.config)
+        if method:
+            is_valid, error = method.validate_config(data.config)
             if not is_valid:
-                logger.warning(f"Invalid config for channel {data.name}: {error}")
+                logger.warning(f"Invalid config for method {data.name}: {error}")
                 raise HTTPException(status_code=400, detail=error)
 
         session = get_session()
-        channel_model = AlertChannelModel(
+        method_model = AlertMethodModel(
             name=data.name,
-            channel_type=data.channel_type,
+            method_type=data.method_type,
             config=json.dumps(data.config),
             enabled=data.enabled,
             notify_info=data.notify_info,
@@ -3796,199 +3796,199 @@ async def create_alert_channel(data: AlertChannelCreate):
             notify_error=data.notify_error,
             min_interval_seconds=data.min_interval_seconds,
         )
-        session.add(channel_model)
+        session.add(method_model)
         session.commit()
-        session.refresh(channel_model)
+        session.refresh(method_model)
 
-        # Reload the manager to pick up the new channel
-        get_alert_manager().reload_channel(channel_model.id)
+        # Reload the manager to pick up the new method
+        get_alert_manager().reload_method(method_model.id)
 
-        logger.info(f"Created alert channel: id={channel_model.id}, name={channel_model.name}, type={channel_model.channel_type}")
+        logger.info(f"Created alert method: id={method_model.id}, name={method_model.name}, type={method_model.method_type}")
         return {
-            "id": channel_model.id,
-            "name": channel_model.name,
-            "channel_type": channel_model.channel_type,
-            "enabled": channel_model.enabled,
+            "id": method_model.id,
+            "name": method_model.name,
+            "method_type": method_model.method_type,
+            "enabled": method_model.enabled,
         }
     except HTTPException:
         raise
     except Exception as e:
-        logger.exception(f"Error creating alert channel: {e}")
+        logger.exception(f"Error creating alert method: {e}")
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         if session:
             session.close()
 
 
-@app.get("/api/alert-channels/{channel_id}")
-async def get_alert_channel(channel_id: int):
-    """Get a specific alert channel."""
-    from models import AlertChannel as AlertChannelModel
+@app.get("/api/alert-methods/{method_id}")
+async def get_alert_method(method_id: int):
+    """Get a specific alert method."""
+    from models import AlertMethod as AlertMethodModel
     import json
 
-    logger.debug(f"Getting alert channel: id={channel_id}")
+    logger.debug(f"Getting alert method: id={method_id}")
     session = get_session()
     try:
-        channel = session.query(AlertChannelModel).filter(
-            AlertChannelModel.id == channel_id
+        method = session.query(AlertMethodModel).filter(
+            AlertMethodModel.id == method_id
         ).first()
 
-        if not channel:
-            logger.debug(f"Alert channel not found: id={channel_id}")
-            raise HTTPException(status_code=404, detail="Alert channel not found")
+        if not method:
+            logger.debug(f"Alert method not found: id={method_id}")
+            raise HTTPException(status_code=404, detail="Alert method not found")
 
-        logger.debug(f"Found alert channel: id={channel.id}, name={channel.name}")
+        logger.debug(f"Found alert method: id={method.id}, name={method.name}")
         return {
-            "id": channel.id,
-            "name": channel.name,
-            "channel_type": channel.channel_type,
-            "enabled": channel.enabled,
-            "config": json.loads(channel.config) if channel.config else {},
-            "notify_info": channel.notify_info,
-            "notify_success": channel.notify_success,
-            "notify_warning": channel.notify_warning,
-            "notify_error": channel.notify_error,
-            "min_interval_seconds": channel.min_interval_seconds,
-            "last_sent_at": channel.last_sent_at.isoformat() + "Z" if channel.last_sent_at else None,
-            "created_at": channel.created_at.isoformat() + "Z" if channel.created_at else None,
+            "id": method.id,
+            "name": method.name,
+            "method_type": method.method_type,
+            "enabled": method.enabled,
+            "config": json.loads(method.config) if method.config else {},
+            "notify_info": method.notify_info,
+            "notify_success": method.notify_success,
+            "notify_warning": method.notify_warning,
+            "notify_error": method.notify_error,
+            "min_interval_seconds": method.min_interval_seconds,
+            "last_sent_at": method.last_sent_at.isoformat() + "Z" if method.last_sent_at else None,
+            "created_at": method.created_at.isoformat() + "Z" if method.created_at else None,
         }
     except HTTPException:
         raise
     except Exception as e:
-        logger.exception(f"Error getting alert channel {channel_id}: {e}")
+        logger.exception(f"Error getting alert method {method_id}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         session.close()
 
 
-@app.patch("/api/alert-channels/{channel_id}")
-async def update_alert_channel(channel_id: int, data: AlertChannelUpdate):
-    """Update an alert channel."""
-    from models import AlertChannel as AlertChannelModel
+@app.patch("/api/alert-methods/{method_id}")
+async def update_alert_method(method_id: int, data: AlertMethodUpdate):
+    """Update an alert method."""
+    from models import AlertMethod as AlertMethodModel
     import json
 
-    logger.debug(f"Updating alert channel: id={channel_id}")
+    logger.debug(f"Updating alert method: id={method_id}")
     session = get_session()
     try:
-        channel = session.query(AlertChannelModel).filter(
-            AlertChannelModel.id == channel_id
+        method = session.query(AlertMethodModel).filter(
+            AlertMethodModel.id == method_id
         ).first()
 
-        if not channel:
-            logger.debug(f"Alert channel not found for update: id={channel_id}")
-            raise HTTPException(status_code=404, detail="Alert channel not found")
+        if not method:
+            logger.debug(f"Alert method not found for update: id={method_id}")
+            raise HTTPException(status_code=404, detail="Alert method not found")
 
         if data.name is not None:
-            channel.name = data.name
+            method.name = data.name
         if data.config is not None:
             # Validate new config
-            channel_instance = create_channel(channel.channel_type, channel.id, channel.name, data.config)
-            if channel_instance:
-                is_valid, error = channel_instance.validate_config(data.config)
+            method_instance = create_method(method.method_type, method.id, method.name, data.config)
+            if method_instance:
+                is_valid, error = method_instance.validate_config(data.config)
                 if not is_valid:
-                    logger.warning(f"Invalid config for channel {channel_id}: {error}")
+                    logger.warning(f"Invalid config for method {method_id}: {error}")
                     raise HTTPException(status_code=400, detail=error)
-            channel.config = json.dumps(data.config)
+            method.config = json.dumps(data.config)
         if data.enabled is not None:
-            channel.enabled = data.enabled
+            method.enabled = data.enabled
         if data.notify_info is not None:
-            channel.notify_info = data.notify_info
+            method.notify_info = data.notify_info
         if data.notify_success is not None:
-            channel.notify_success = data.notify_success
+            method.notify_success = data.notify_success
         if data.notify_warning is not None:
-            channel.notify_warning = data.notify_warning
+            method.notify_warning = data.notify_warning
         if data.notify_error is not None:
-            channel.notify_error = data.notify_error
+            method.notify_error = data.notify_error
         if data.min_interval_seconds is not None:
-            channel.min_interval_seconds = data.min_interval_seconds
+            method.min_interval_seconds = data.min_interval_seconds
 
         session.commit()
 
         # Reload the manager to pick up the changes
-        get_alert_manager().reload_channel(channel_id)
+        get_alert_manager().reload_method(method_id)
 
-        logger.info(f"Updated alert channel: id={channel_id}, name={channel.name}")
+        logger.info(f"Updated alert method: id={method_id}, name={method.name}")
         return {"success": True}
     except HTTPException:
         raise
     except Exception as e:
-        logger.exception(f"Error updating alert channel {channel_id}: {e}")
+        logger.exception(f"Error updating alert method {method_id}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         session.close()
 
 
-@app.delete("/api/alert-channels/{channel_id}")
-async def delete_alert_channel(channel_id: int):
-    """Delete an alert channel."""
-    from models import AlertChannel as AlertChannelModel
+@app.delete("/api/alert-methods/{method_id}")
+async def delete_alert_method(method_id: int):
+    """Delete an alert method."""
+    from models import AlertMethod as AlertMethodModel
 
-    logger.debug(f"Deleting alert channel: id={channel_id}")
+    logger.debug(f"Deleting alert method: id={method_id}")
     session = get_session()
     try:
-        channel = session.query(AlertChannelModel).filter(
-            AlertChannelModel.id == channel_id
+        method = session.query(AlertMethodModel).filter(
+            AlertMethodModel.id == method_id
         ).first()
 
-        if not channel:
-            logger.debug(f"Alert channel not found for deletion: id={channel_id}")
-            raise HTTPException(status_code=404, detail="Alert channel not found")
+        if not method:
+            logger.debug(f"Alert method not found for deletion: id={method_id}")
+            raise HTTPException(status_code=404, detail="Alert method not found")
 
-        channel_name = channel.name
-        session.delete(channel)
+        method_name = method.name
+        session.delete(method)
         session.commit()
 
         # Remove from manager
-        get_alert_manager().reload_channel(channel_id)
+        get_alert_manager().reload_method(method_id)
 
-        logger.info(f"Deleted alert channel: id={channel_id}, name={channel_name}")
+        logger.info(f"Deleted alert method: id={method_id}, name={method_name}")
         return {"success": True}
     except HTTPException:
         raise
     except Exception as e:
-        logger.exception(f"Error deleting alert channel {channel_id}: {e}")
+        logger.exception(f"Error deleting alert method {method_id}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         session.close()
 
 
-@app.post("/api/alert-channels/{channel_id}/test")
-async def test_alert_channel(channel_id: int):
-    """Test an alert channel by sending a test message."""
-    from models import AlertChannel as AlertChannelModel
+@app.post("/api/alert-methods/{method_id}/test")
+async def test_alert_method(method_id: int):
+    """Test an alert method by sending a test message."""
+    from models import AlertMethod as AlertMethodModel
     import json
 
-    logger.debug(f"Testing alert channel: id={channel_id}")
+    logger.debug(f"Testing alert method: id={method_id}")
     session = get_session()
     try:
-        channel_model = session.query(AlertChannelModel).filter(
-            AlertChannelModel.id == channel_id
+        method_model = session.query(AlertMethodModel).filter(
+            AlertMethodModel.id == method_id
         ).first()
 
-        if not channel_model:
-            logger.debug(f"Alert channel not found for test: id={channel_id}")
-            raise HTTPException(status_code=404, detail="Alert channel not found")
+        if not method_model:
+            logger.debug(f"Alert method not found for test: id={method_id}")
+            raise HTTPException(status_code=404, detail="Alert method not found")
 
-        config = json.loads(channel_model.config) if channel_model.config else {}
-        channel = create_channel(
-            channel_model.channel_type,
-            channel_model.id,
-            channel_model.name,
+        config = json.loads(method_model.config) if method_model.config else {}
+        method = create_method(
+            method_model.method_type,
+            method_model.id,
+            method_model.name,
             config
         )
 
-        if not channel:
-            logger.warning(f"Unknown channel type for test: {channel_model.channel_type}")
-            raise HTTPException(status_code=400, detail=f"Unknown channel type: {channel_model.channel_type}")
+        if not method:
+            logger.warning(f"Unknown method type for test: {method_model.method_type}")
+            raise HTTPException(status_code=400, detail=f"Unknown method type: {method_model.method_type}")
 
-        logger.debug(f"Sending test message to channel: {channel_model.name} ({channel_model.channel_type})")
-        success, message = await channel.test_connection()
-        logger.info(f"Test result for channel {channel_model.name}: success={success}, message={message}")
+        logger.debug(f"Sending test message to method: {method_model.name} ({method_model.method_type})")
+        success, message = await method.test_connection()
+        logger.info(f"Test result for method {method_model.name}: success={success}, message={message}")
         return {"success": success, "message": message}
     except HTTPException:
         raise
     except Exception as e:
-        logger.exception(f"Error testing alert channel {channel_id}: {e}")
+        logger.exception(f"Error testing alert method {method_id}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         session.close()

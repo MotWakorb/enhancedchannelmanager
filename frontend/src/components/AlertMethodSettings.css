@@ -1,12 +1,12 @@
-/* Alert Channel Settings */
+/* Alert Method Settings */
 
-.alert-channel-settings .loading {
+.alert-method-settings .loading {
   padding: 2rem;
   text-align: center;
   color: var(--text-muted);
 }
 
-.alert-channel-settings .error-message {
+.alert-method-settings .error-message {
   background-color: rgba(239, 68, 68, 0.1);
   border: 1px solid rgba(239, 68, 68, 0.3);
   color: var(--error);
@@ -15,15 +15,15 @@
   margin-bottom: 1rem;
 }
 
-/* Channel List */
-.alert-channel-settings .channel-list {
+/* Method List */
+.alert-method-settings .method-list {
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
   margin-top: 1rem;
 }
 
-.alert-channel-settings .no-channels {
+.alert-method-settings .no-methods {
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -34,13 +34,13 @@
   color: var(--text-muted);
 }
 
-.alert-channel-settings .no-channels .material-icons {
+.alert-method-settings .no-methods .material-icons {
   font-size: 48px;
   opacity: 0.5;
 }
 
-/* Channel Item */
-.alert-channel-settings .channel-item {
+/* Method Item */
+.alert-method-settings .method-item {
   display: flex;
   align-items: center;
   gap: 1rem;
@@ -51,15 +51,15 @@
   transition: background-color 0.15s;
 }
 
-.alert-channel-settings .channel-item:hover {
+.alert-method-settings .method-item:hover {
   background-color: var(--bg-hover);
 }
 
-.alert-channel-settings .channel-item.disabled {
+.alert-method-settings .method-item.disabled {
   opacity: 0.6;
 }
 
-.alert-channel-settings .channel-icon {
+.alert-method-settings .method-icon {
   width: 40px;
   height: 40px;
   display: flex;
@@ -70,35 +70,35 @@
   color: var(--text-secondary);
 }
 
-.alert-channel-settings .channel-icon .material-icons {
+.alert-method-settings .method-icon .material-icons {
   font-size: 24px;
 }
 
-.alert-channel-settings .channel-info {
+.alert-method-settings .method-info {
   flex: 1;
   min-width: 0;
 }
 
-.alert-channel-settings .channel-name {
+.alert-method-settings .method-name {
   font-weight: 600;
   color: var(--text-primary);
   margin-bottom: 0.25rem;
 }
 
-.alert-channel-settings .channel-type {
+.alert-method-settings .method-type {
   font-size: 0.85rem;
   color: var(--text-secondary);
   margin-bottom: 0.5rem;
 }
 
-.alert-channel-settings .channel-notifications {
+.alert-method-settings .method-notifications {
   display: flex;
   flex-wrap: wrap;
   gap: 0.375rem;
 }
 
 /* Notification Badges */
-.alert-channel-settings .notif-badge {
+.alert-method-settings .notif-badge {
   display: inline-flex;
   padding: 0.125rem 0.5rem;
   font-size: 0.7rem;
@@ -107,33 +107,33 @@
   text-transform: uppercase;
 }
 
-.alert-channel-settings .notif-badge.error {
+.alert-method-settings .notif-badge.error {
   background-color: rgba(239, 68, 68, 0.15);
   color: #ef4444;
 }
 
-.alert-channel-settings .notif-badge.warning {
+.alert-method-settings .notif-badge.warning {
   background-color: rgba(245, 158, 11, 0.15);
   color: #f59e0b;
 }
 
-.alert-channel-settings .notif-badge.success {
+.alert-method-settings .notif-badge.success {
   background-color: rgba(34, 197, 94, 0.15);
   color: #22c55e;
 }
 
-.alert-channel-settings .notif-badge.info {
+.alert-method-settings .notif-badge.info {
   background-color: rgba(59, 130, 246, 0.15);
   color: #3b82f6;
 }
 
-/* Channel Actions */
-.alert-channel-settings .channel-actions {
+/* Method Actions */
+.alert-method-settings .method-actions {
   display: flex;
   gap: 0.5rem;
 }
 
-.alert-channel-settings .channel-actions button {
+.alert-method-settings .method-actions button {
   background: none;
   border: none;
   padding: 0.5rem;
@@ -143,25 +143,25 @@
   transition: background-color 0.15s, color 0.15s;
 }
 
-.alert-channel-settings .channel-actions button:hover {
+.alert-method-settings .method-actions button:hover {
   background-color: var(--bg-secondary);
   color: var(--text-primary);
 }
 
-.alert-channel-settings .toggle-btn.enabled {
+.alert-method-settings .toggle-btn.enabled {
   color: var(--success);
 }
 
-.alert-channel-settings .toggle-btn .material-icons {
+.alert-method-settings .toggle-btn .material-icons {
   font-size: 28px;
 }
 
-.alert-channel-settings .delete-btn:hover {
+.alert-method-settings .delete-btn:hover {
   color: var(--error);
 }
 
-/* Add Channel Button */
-.alert-channel-settings .btn-add-channel {
+/* Add Method Button */
+.alert-method-settings .btn-add-method {
   display: flex;
   align-items: center;
   justify-content: center;
@@ -175,13 +175,13 @@
   transition: border-color 0.15s, color 0.15s;
 }
 
-.alert-channel-settings .btn-add-channel:hover {
+.alert-method-settings .btn-add-method:hover {
   border-color: var(--accent-primary);
   color: var(--accent-primary);
 }
 
 /* Modal */
-.alert-channel-settings .modal-overlay {
+.alert-method-settings .modal-overlay {
   position: fixed;
   top: 0;
   left: 0;
@@ -195,7 +195,7 @@
   padding: 1rem;
 }
 
-.alert-channel-settings .channel-editor-modal {
+.alert-method-settings .method-editor-modal {
   background-color: var(--bg-secondary);
   border-radius: 12px;
   width: 100%;
@@ -206,7 +206,7 @@
   box-shadow: 0 20px 40px rgba(0, 0, 0, 0.3);
 }
 
-.alert-channel-settings .modal-header {
+.alert-method-settings .modal-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -214,13 +214,13 @@
   border-bottom: 1px solid var(--border-primary);
 }
 
-.alert-channel-settings .modal-header h2 {
+.alert-method-settings .modal-header h2 {
   margin: 0;
   font-size: 1.125rem;
   font-weight: 600;
 }
 
-.alert-channel-settings .close-btn {
+.alert-method-settings .close-btn {
   background: none;
   border: none;
   padding: 0.375rem;
@@ -229,22 +229,22 @@
   color: var(--text-muted);
 }
 
-.alert-channel-settings .close-btn:hover {
+.alert-method-settings .close-btn:hover {
   background-color: var(--bg-hover);
   color: var(--text-primary);
 }
 
-.alert-channel-settings .modal-body {
+.alert-method-settings .modal-body {
   flex: 1;
   overflow-y: auto;
   padding: 1.5rem;
 }
 
-.alert-channel-settings .modal-body .form-group {
+.alert-method-settings .modal-body .form-group {
   margin-bottom: 1rem;
 }
 
-.alert-channel-settings .modal-body label {
+.alert-method-settings .modal-body label {
   display: block;
   font-size: 0.875rem;
   font-weight: 500;
@@ -252,15 +252,15 @@
   color: var(--text-primary);
 }
 
-.alert-channel-settings .modal-body .required {
+.alert-method-settings .modal-body .required {
   color: var(--error);
   margin-left: 0.25rem;
 }
 
-.alert-channel-settings .modal-body input[type="text"],
-.alert-channel-settings .modal-body input[type="password"],
-.alert-channel-settings .modal-body input[type="number"],
-.alert-channel-settings .modal-body select {
+.alert-method-settings .modal-body input[type="text"],
+.alert-method-settings .modal-body input[type="password"],
+.alert-method-settings .modal-body input[type="number"],
+.alert-method-settings .modal-body select {
   width: 100%;
   padding: 0.625rem 0.75rem;
   background-color: var(--input-bg);
@@ -270,27 +270,27 @@
   font-size: 0.9rem;
 }
 
-.alert-channel-settings .modal-body input:focus,
-.alert-channel-settings .modal-body select:focus {
+.alert-method-settings .modal-body input:focus,
+.alert-method-settings .modal-body select:focus {
   outline: none;
   border-color: var(--accent-primary);
 }
 
-.alert-channel-settings .modal-body select:disabled {
+.alert-method-settings .modal-body select:disabled {
   opacity: 0.6;
   cursor: not-allowed;
 }
 
 /* Config Section */
-.alert-channel-settings .config-section {
+.alert-method-settings .config-section {
   margin-top: 1.5rem;
   padding-top: 1rem;
   border-top: 1px solid var(--border-primary);
 }
 
-.alert-channel-settings .config-section h4,
-.alert-channel-settings .notification-types-section h4,
-.alert-channel-settings .rate-limit-section h4 {
+.alert-method-settings .config-section h4,
+.alert-method-settings .notification-types-section h4,
+.alert-method-settings .rate-limit-section h4 {
   margin: 0 0 1rem 0;
   font-size: 0.9rem;
   font-weight: 600;
@@ -298,26 +298,26 @@
 }
 
 /* Notification Types */
-.alert-channel-settings .notification-types-section {
+.alert-method-settings .notification-types-section {
   margin-top: 1.5rem;
   padding-top: 1rem;
   border-top: 1px solid var(--border-primary);
 }
 
-.alert-channel-settings .notification-checkboxes {
+.alert-method-settings .notification-checkboxes {
   display: flex;
   flex-wrap: wrap;
   gap: 0.75rem;
 }
 
-.alert-channel-settings .checkbox-label {
+.alert-method-settings .checkbox-label {
   display: flex;
   align-items: center;
   gap: 0.5rem;
   cursor: pointer;
 }
 
-.alert-channel-settings .checkbox-label input[type="checkbox"] {
+.alert-method-settings .checkbox-label input[type="checkbox"] {
   width: 16px;
   height: 16px;
   cursor: pointer;
@@ -325,18 +325,18 @@
 }
 
 /* Rate Limit */
-.alert-channel-settings .rate-limit-section {
+.alert-method-settings .rate-limit-section {
   margin-top: 1.5rem;
   padding-top: 1rem;
   border-top: 1px solid var(--border-primary);
 }
 
-.alert-channel-settings .rate-limit-section input[type="number"] {
+.alert-method-settings .rate-limit-section input[type="number"] {
   max-width: 150px;
 }
 
 /* Test Result */
-.alert-channel-settings .test-result {
+.alert-method-settings .test-result {
   display: flex;
   align-items: center;
   gap: 0.5rem;
@@ -346,20 +346,20 @@
   font-size: 0.9rem;
 }
 
-.alert-channel-settings .test-result.success {
+.alert-method-settings .test-result.success {
   background-color: rgba(34, 197, 94, 0.1);
   border: 1px solid rgba(34, 197, 94, 0.3);
   color: var(--success);
 }
 
-.alert-channel-settings .test-result.error {
+.alert-method-settings .test-result.error {
   background-color: rgba(239, 68, 68, 0.1);
   border: 1px solid rgba(239, 68, 68, 0.3);
   color: var(--error);
 }
 
 /* Modal Footer */
-.alert-channel-settings .modal-footer {
+.alert-method-settings .modal-footer {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -368,13 +368,13 @@
   gap: 0.75rem;
 }
 
-.alert-channel-settings .footer-right {
+.alert-method-settings .footer-right {
   display: flex;
   gap: 0.75rem;
   margin-left: auto;
 }
 
-.alert-channel-settings .btn-secondary {
+.alert-method-settings .btn-secondary {
   display: flex;
   align-items: center;
   gap: 0.375rem;
@@ -387,16 +387,16 @@
   font-size: 0.875rem;
 }
 
-.alert-channel-settings .btn-secondary:hover {
+.alert-method-settings .btn-secondary:hover {
   background-color: var(--bg-hover);
 }
 
-.alert-channel-settings .btn-secondary:disabled {
+.alert-method-settings .btn-secondary:disabled {
   opacity: 0.6;
   cursor: not-allowed;
 }
 
-.alert-channel-settings .btn-cancel {
+.alert-method-settings .btn-cancel {
   padding: 0.625rem 1rem;
   background: none;
   border: 1px solid var(--border-primary);
@@ -406,12 +406,12 @@
   font-size: 0.875rem;
 }
 
-.alert-channel-settings .btn-cancel:hover {
+.alert-method-settings .btn-cancel:hover {
   background-color: var(--bg-hover);
   color: var(--text-primary);
 }
 
-.alert-channel-settings .btn-primary {
+.alert-method-settings .btn-primary {
   padding: 0.625rem 1.25rem;
   background-color: var(--button-primary-bg);
   border: none;
@@ -422,17 +422,17 @@
   font-weight: 500;
 }
 
-.alert-channel-settings .btn-primary:hover {
+.alert-method-settings .btn-primary:hover {
   filter: brightness(1.1);
 }
 
-.alert-channel-settings .btn-primary:disabled {
+.alert-method-settings .btn-primary:disabled {
   opacity: 0.6;
   cursor: not-allowed;
 }
 
 /* Spinning animation */
-.alert-channel-settings .spinning {
+.alert-method-settings .spinning {
   animation: spin 1s linear infinite;
 }
 
@@ -442,7 +442,7 @@
 }
 
 /* Form Hint */
-.alert-channel-settings .form-hint {
+.alert-method-settings .form-hint {
   font-size: 0.8rem;
   color: var(--text-muted);
   margin-top: 0.375rem;
@@ -450,11 +450,11 @@
 
 /* Responsive */
 @media (max-width: 640px) {
-  .alert-channel-settings .channel-item {
+  .alert-method-settings .method-item {
     flex-wrap: wrap;
   }
 
-  .alert-channel-settings .channel-actions {
+  .alert-method-settings .method-actions {
     width: 100%;
     justify-content: flex-end;
     margin-top: 0.5rem;
@@ -462,11 +462,11 @@
     border-top: 1px solid var(--border-primary);
   }
 
-  .alert-channel-settings .modal-footer {
+  .alert-method-settings .modal-footer {
     flex-direction: column;
   }
 
-  .alert-channel-settings .footer-right {
+  .alert-method-settings .footer-right {
     width: 100%;
     justify-content: flex-end;
   }

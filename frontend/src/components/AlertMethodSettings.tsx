@@ -1,15 +1,15 @@
 import { useState, useEffect, useCallback } from 'react';
 import * as api from '../services/api';
-import type { AlertChannel, AlertChannelType, AlertChannelCreate, AlertChannelUpdate } from '../services/api';
-import './AlertChannelSettings.css';
+import type { AlertMethod, AlertMethodType, AlertMethodCreate, AlertMethodUpdate } from '../services/api';
+import './AlertMethodSettings.css';
 
-interface AlertChannelSettingsProps {
+interface AlertMethodSettingsProps {
   className?: string;
 }
 
-interface ChannelFormData {
+interface MethodFormData {
   name: string;
-  channel_type: string;
+  method_type: string;
   enabled: boolean;
   notify_info: boolean;
   notify_success: boolean;
@@ -19,9 +19,9 @@ interface ChannelFormData {
   config: Record<string, string>;
 }
 
-const EMPTY_FORM: ChannelFormData = {
+const EMPTY_FORM: MethodFormData = {
   name: '',
-  channel_type: '',
+  method_type: '',
   enabled: true,
   notify_info: false,
   notify_success: true,
@@ -31,32 +31,32 @@ const EMPTY_FORM: ChannelFormData = {
   config: {},
 };
 
-export function AlertChannelSettings({ className }: AlertChannelSettingsProps) {
-  const [channels, setChannels] = useState<AlertChannel[]>([]);
-  const [channelTypes, setChannelTypes] = useState<AlertChannelType[]>([]);
+export function AlertMethodSettings({ className }: AlertMethodSettingsProps) {
+  const [methods, setMethods] = useState<AlertMethod[]>([]);
+  const [methodTypes, setMethodTypes] = useState<AlertMethodType[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   // Modal state
   const [showModal, setShowModal] = useState(false);
-  const [editingChannel, setEditingChannel] = useState<AlertChannel | null>(null);
-  const [formData, setFormData] = useState<ChannelFormData>(EMPTY_FORM);
+  const [editingMethod, setEditingMethod] = useState<AlertMethod | null>(null);
+  const [formData, setFormData] = useState<MethodFormData>(EMPTY_FORM);
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
 
-  const loadChannels = useCallback(async () => {
+  const loadMethods = useCallback(async () => {
     try {
       setLoading(true);
-      const [channelsData, typesData] = await Promise.all([
-        api.getAlertChannels(),
-        api.getAlertChannelTypes(),
+      const [methodsData, typesData] = await Promise.all([
+        api.getAlertMethods(),
+        api.getAlertMethodTypes(),
       ]);
-      setChannels(channelsData);
-      setChannelTypes(typesData);
+      setMethods(methodsData);
+      setMethodTypes(typesData);
       setError(null);
     } catch (err) {
-      setError('Failed to load alert channels');
+      setError('Failed to load alert methods');
       console.error(err);
     } finally {
       setLoading(false);
@@ -64,59 +64,59 @@ export function AlertChannelSettings({ className }: AlertChannelSettingsProps) {
   }, []);
 
   useEffect(() => {
-    loadChannels();
-  }, [loadChannels]);
+    loadMethods();
+  }, [loadMethods]);
 
   const handleAdd = () => {
-    setEditingChannel(null);
+    setEditingMethod(null);
     setFormData(EMPTY_FORM);
     setTestResult(null);
     setShowModal(true);
   };
 
-  const handleEdit = (channel: AlertChannel) => {
-    setEditingChannel(channel);
+  const handleEdit = (method: AlertMethod) => {
+    setEditingMethod(method);
     setFormData({
-      name: channel.name,
-      channel_type: channel.channel_type,
-      enabled: channel.enabled,
-      notify_info: channel.notify_info,
-      notify_success: channel.notify_success,
-      notify_warning: channel.notify_warning,
-      notify_error: channel.notify_error,
-      min_interval_seconds: channel.min_interval_seconds,
+      name: method.name,
+      method_type: method.method_type,
+      enabled: method.enabled,
+      notify_info: method.notify_info,
+      notify_success: method.notify_success,
+      notify_warning: method.notify_warning,
+      notify_error: method.notify_error,
+      min_interval_seconds: method.min_interval_seconds,
       config: Object.fromEntries(
-        Object.entries(channel.config).map(([k, v]) => [k, String(v)])
+        Object.entries(method.config).map(([k, v]) => [k, String(v)])
       ),
     });
     setTestResult(null);
     setShowModal(true);
   };
 
-  const handleDelete = async (channel: AlertChannel) => {
-    if (!confirm(`Are you sure you want to delete "${channel.name}"?`)) {
+  const handleDelete = async (method: AlertMethod) => {
+    if (!confirm(`Are you sure you want to delete "${method.name}"?`)) {
       return;
     }
     try {
-      await api.deleteAlertChannel(channel.id);
-      await loadChannels();
+      await api.deleteAlertMethod(method.id);
+      await loadMethods();
     } catch (err) {
-      console.error('Failed to delete channel:', err);
-      alert('Failed to delete channel');
+      console.error('Failed to delete method:', err);
+      alert('Failed to delete method');
     }
   };
 
-  const handleToggleEnabled = async (channel: AlertChannel) => {
+  const handleToggleEnabled = async (method: AlertMethod) => {
     try {
-      await api.updateAlertChannel(channel.id, { enabled: !channel.enabled });
-      await loadChannels();
+      await api.updateAlertMethod(method.id, { enabled: !method.enabled });
+      await loadMethods();
     } catch (err) {
-      console.error('Failed to toggle channel:', err);
+      console.error('Failed to toggle method:', err);
     }
   };
 
   const handleTypeChange = (newType: string) => {
-    const type = channelTypes.find(t => t.type === newType);
+    const type = methodTypes.find(t => t.type === newType);
     const defaultConfig: Record<string, string> = {};
 
     if (type) {
@@ -132,7 +132,7 @@ export function AlertChannelSettings({ className }: AlertChannelSettingsProps) {
 
     setFormData(prev => ({
       ...prev,
-      channel_type: newType,
+      method_type: newType,
       config: defaultConfig,
     }));
   };
@@ -152,8 +152,8 @@ export function AlertChannelSettings({ className }: AlertChannelSettingsProps) {
       alert('Please enter a name');
       return;
     }
-    if (!formData.channel_type) {
-      alert('Please select a channel type');
+    if (!formData.method_type) {
+      alert('Please select a method type');
       return;
     }
 
@@ -161,7 +161,7 @@ export function AlertChannelSettings({ className }: AlertChannelSettingsProps) {
     try {
       // Convert config values to appropriate types
       const config: Record<string, unknown> = {};
-      const type = channelTypes.find(t => t.type === formData.channel_type);
+      const type = methodTypes.find(t => t.type === formData.method_type);
 
       Object.entries(formData.config).forEach(([key, value]) => {
         // Check if it's a boolean field in optional_fields
@@ -175,8 +175,8 @@ export function AlertChannelSettings({ className }: AlertChannelSettingsProps) {
         }
       });
 
-      if (editingChannel) {
-        const update: AlertChannelUpdate = {
+      if (editingMethod) {
+        const update: AlertMethodUpdate = {
           name: formData.name,
           config,
           enabled: formData.enabled,
@@ -186,11 +186,11 @@ export function AlertChannelSettings({ className }: AlertChannelSettingsProps) {
           notify_error: formData.notify_error,
           min_interval_seconds: formData.min_interval_seconds,
         };
-        await api.updateAlertChannel(editingChannel.id, update);
+        await api.updateAlertMethod(editingMethod.id, update);
       } else {
-        const create: AlertChannelCreate = {
+        const create: AlertMethodCreate = {
           name: formData.name,
-          channel_type: formData.channel_type,
+          method_type: formData.method_type,
           config,
           enabled: formData.enabled,
           notify_info: formData.notify_info,
@@ -199,14 +199,14 @@ export function AlertChannelSettings({ className }: AlertChannelSettingsProps) {
           notify_error: formData.notify_error,
           min_interval_seconds: formData.min_interval_seconds,
         };
-        await api.createAlertChannel(create);
+        await api.createAlertMethod(create);
       }
 
       setShowModal(false);
-      await loadChannels();
+      await loadMethods();
     } catch (err) {
-      console.error('Failed to save channel:', err);
-      const message = err instanceof Error ? err.message : 'Failed to save channel';
+      console.error('Failed to save method:', err);
+      const message = err instanceof Error ? err.message : 'Failed to save method';
       alert(message);
     } finally {
       setSaving(false);
@@ -214,25 +214,25 @@ export function AlertChannelSettings({ className }: AlertChannelSettingsProps) {
   };
 
   const handleTest = async () => {
-    if (!editingChannel) {
-      // Need to save first for new channels
-      alert('Please save the channel first before testing');
+    if (!editingMethod) {
+      // Need to save first for new methods
+      alert('Please save the method first before testing');
       return;
     }
 
     setTesting(true);
     setTestResult(null);
     try {
-      const result = await api.testAlertChannel(editingChannel.id);
+      const result = await api.testAlertMethod(editingMethod.id);
       setTestResult(result);
     } catch (err) {
-      setTestResult({ success: false, message: 'Failed to test channel' });
+      setTestResult({ success: false, message: 'Failed to test method' });
     } finally {
       setTesting(false);
     }
   };
 
-  const getChannelTypeIcon = (type: string): string => {
+  const getMethodTypeIcon = (type: string): string => {
     switch (type) {
       case 'discord': return 'forum';
       case 'telegram': return 'send';
@@ -301,22 +301,22 @@ export function AlertChannelSettings({ className }: AlertChannelSettingsProps) {
     );
   };
 
-  const selectedType = channelTypes.find(t => t.type === formData.channel_type);
+  const selectedType = methodTypes.find(t => t.type === formData.method_type);
 
   if (loading) {
     return (
-      <div className={`alert-channel-settings ${className || ''}`}>
-        <div className="loading">Loading alert channels...</div>
+      <div className={`alert-method-settings ${className || ''}`}>
+        <div className="loading">Loading alert methods...</div>
       </div>
     );
   }
 
   return (
-    <div className={`alert-channel-settings ${className || ''}`}>
+    <div className={`alert-method-settings ${className || ''}`}>
       <div className="settings-section">
         <div className="settings-section-header">
           <span className="material-icons">campaign</span>
-          <h3>Alert Channels</h3>
+          <h3>Alert Methods</h3>
         </div>
 
         {error && <div className="error-message">{error}</div>}
@@ -326,69 +326,69 @@ export function AlertChannelSettings({ className }: AlertChannelSettingsProps) {
           Supports Discord webhooks, Telegram bots, and email via SMTP.
         </p>
 
-        <div className="channel-list">
-          {channels.length === 0 ? (
-            <div className="no-channels">
+        <div className="method-list">
+          {methods.length === 0 ? (
+            <div className="no-methods">
               <span className="material-icons">notifications_off</span>
-              <p>No alert channels configured</p>
+              <p>No alert methods configured</p>
               <button className="btn-primary" onClick={handleAdd}>
                 <span className="material-icons">add</span>
-                Add Channel
+                Add Method
               </button>
             </div>
           ) : (
             <>
-              {channels.map(channel => (
-                <div key={channel.id} className={`channel-item ${channel.enabled ? '' : 'disabled'}`}>
-                  <div className="channel-icon">
-                    <span className="material-icons">{getChannelTypeIcon(channel.channel_type)}</span>
+              {methods.map(method => (
+                <div key={method.id} className={`method-item ${method.enabled ? '' : 'disabled'}`}>
+                  <div className="method-icon">
+                    <span className="material-icons">{getMethodTypeIcon(method.method_type)}</span>
                   </div>
-                  <div className="channel-info">
-                    <div className="channel-name">{channel.name}</div>
-                    <div className="channel-type">
-                      {channelTypes.find(t => t.type === channel.channel_type)?.display_name || channel.channel_type}
+                  <div className="method-info">
+                    <div className="method-name">{method.name}</div>
+                    <div className="method-type">
+                      {methodTypes.find(t => t.type === method.method_type)?.display_name || method.method_type}
                     </div>
-                    <div className="channel-notifications">
-                      {channel.notify_error && <span className="notif-badge error">Errors</span>}
-                      {channel.notify_warning && <span className="notif-badge warning">Warnings</span>}
-                      {channel.notify_success && <span className="notif-badge success">Success</span>}
-                      {channel.notify_info && <span className="notif-badge info">Info</span>}
+                    <div className="method-notifications">
+                      {method.notify_error && <span className="notif-badge error">Errors</span>}
+                      {method.notify_warning && <span className="notif-badge warning">Warnings</span>}
+                      {method.notify_success && <span className="notif-badge success">Success</span>}
+                      {method.notify_info && <span className="notif-badge info">Info</span>}
                     </div>
                   </div>
-                  <div className="channel-actions">
+                  <div className="method-actions">
                     <button
-                      className={`toggle-btn ${channel.enabled ? 'enabled' : ''}`}
-                      onClick={() => handleToggleEnabled(channel)}
-                      title={channel.enabled ? 'Disable' : 'Enable'}
+                      className={`toggle-btn ${method.enabled ? 'enabled' : ''}`}
+                      onClick={() => handleToggleEnabled(method)}
+                      title={method.enabled ? 'Disable' : 'Enable'}
                     >
                       <span className="material-icons">
-                        {channel.enabled ? 'toggle_on' : 'toggle_off'}
+                        {method.enabled ? 'toggle_on' : 'toggle_off'}
                       </span>
                     </button>
-                    <button className="edit-btn" onClick={() => handleEdit(channel)} title="Edit">
+                    <button className="edit-btn" onClick={() => handleEdit(method)} title="Edit">
                       <span className="material-icons">edit</span>
                     </button>
-                    <button className="delete-btn" onClick={() => handleDelete(channel)} title="Delete">
+                    <button className="delete-btn" onClick={() => handleDelete(method)} title="Delete">
                       <span className="material-icons">delete</span>
                     </button>
                   </div>
                 </div>
               ))}
-              <button className="btn-add-channel" onClick={handleAdd}>
+              <button className="btn-add-method" onClick={handleAdd}>
                 <span className="material-icons">add</span>
-                Add Channel
+                Add Method
               </button>
             </>
           )}
         </div>
       </div>
 
-      {/* Channel Editor Modal */}
+      {/* Method Editor Modal */}
       {showModal && (
         <div className="modal-overlay" onClick={() => setShowModal(false)}>
-          <div className="modal-content channel-editor-modal" onClick={e => e.stopPropagation()}>
+          <div className="modal-content method-editor-modal" onClick={e => e.stopPropagation()}>
             <div className="modal-header">
-              <h2>{editingChannel ? 'Edit Alert Channel' : 'Add Alert Channel'}</h2>
+              <h2>{editingMethod ? 'Edit Alert Method' : 'Add Alert Method'}</h2>
               <button className="close-btn" onClick={() => setShowModal(false)}>
                 <span className="material-icons">close</span>
               </button>
@@ -406,14 +406,14 @@ export function AlertChannelSettings({ className }: AlertChannelSettingsProps) {
               </div>
 
               <div className="form-group">
-                <label>Channel Type <span className="required">*</span></label>
+                <label>Method Type <span className="required">*</span></label>
                 <select
-                  value={formData.channel_type}
+                  value={formData.method_type}
                   onChange={(e) => handleTypeChange(e.target.value)}
-                  disabled={!!editingChannel}
+                  disabled={!!editingMethod}
                 >
-                  <option value="">Select a channel type...</option>
-                  {channelTypes.map(type => (
+                  <option value="">Select a method type...</option>
+                  {methodTypes.map(type => (
                     <option key={type.type} value={type.type}>
                       {type.display_name}
                     </option>
@@ -435,7 +435,7 @@ export function AlertChannelSettings({ className }: AlertChannelSettingsProps) {
 
                   <div className="notification-types-section">
                     <h4>Notification Types</h4>
-                    <p className="form-hint">Select which notification types this channel should receive.</p>
+                    <p className="form-hint">Select which notification types this method should receive.</p>
                     <div className="notification-checkboxes">
                       <label className="checkbox-label">
                         <input
@@ -500,7 +500,7 @@ export function AlertChannelSettings({ className }: AlertChannelSettingsProps) {
             </div>
 
             <div className="modal-footer">
-              {editingChannel && (
+              {editingMethod && (
                 <button
                   className="btn-secondary"
                   onClick={handleTest}

@@ -449,16 +449,16 @@ class Notification(Base):
         return f"<Notification(id={self.id}, type={self.type}, read={self.read})>"
 
 
-class AlertChannel(Base):
+class AlertMethod(Base):
     """
-    Configuration for an external alert channel (Discord, Telegram, Email, etc.).
+    Configuration for an external alert method (Discord, Telegram, Email, etc.).
     Stores credentials and settings for sending notifications to external services.
     """
-    __tablename__ = "alert_channels"
+    __tablename__ = "alert_methods"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     name = Column(String(100), nullable=False)  # User-friendly name
-    channel_type = Column(String(50), nullable=False)  # discord, telegram, smtp, etc.
+    method_type = Column(String(50), nullable=False)  # discord, telegram, smtp, etc.
     enabled = Column(Boolean, default=True, nullable=False)
     # Configuration (JSON) - contains type-specific settings
     # Discord: webhook_url
@@ -478,8 +478,8 @@ class AlertChannel(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
     __table_args__ = (
-        Index("idx_alert_channel_type", channel_type),
-        Index("idx_alert_channel_enabled", enabled),
+        Index("idx_alert_method_type", method_type),
+        Index("idx_alert_method_enabled", enabled),
     )
 
     def to_dict(self, include_sensitive: bool = False) -> dict:
@@ -504,7 +504,7 @@ class AlertChannel(Base):
         return {
             "id": self.id,
             "name": self.name,
-            "channel_type": self.channel_type,
+            "method_type": self.method_type,
             "enabled": self.enabled,
             "config": config,
             "notify_info": self.notify_info,
@@ -518,4 +518,4 @@ class AlertChannel(Base):
         }
 
     def __repr__(self):
-        return f"<AlertChannel(id={self.id}, name={self.name}, type={self.channel_type})>"
+        return f"<AlertMethod(id={self.id}, name={self.name}, type={self.method_type})>"
