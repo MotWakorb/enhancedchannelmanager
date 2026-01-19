@@ -9,11 +9,23 @@ bd ready              # Find available work
 bd show <id>          # View issue details
 bd update <id> --status in_progress  # Claim work
 bd close <id>         # Complete work
-bd sync               # Sync with git
+bd sync               # Sync beads data only (NOT for code commits)
 bd list --status closed  # View closed beads for historical context
 ```
 
 ## Development Workflow
+
+**IMPORTANT: Always work from the `dev` branch, never from `main`.**
+
+The `dev` branch is checked out in a beads worktree at:
+```
+/home/lecaptainc/ecm/enhancedchannelmanager/.git/beads-worktrees/dev
+```
+
+At the start of any session, ensure you're working in the dev worktree or switch to it:
+```bash
+cd /home/lecaptainc/ecm/enhancedchannelmanager/.git/beads-worktrees/dev
+```
 
 When doing work on this project, follow these steps in order:
 
@@ -85,10 +97,10 @@ When doing work on this project, follow these steps in order:
 4. **PUSH TO REMOTE** - This is MANDATORY:
    ```bash
    git pull --rebase
-   bd sync
-   git push
+   git push origin dev
    git status  # MUST show "up to date with origin"
    ```
+   **NOTE:** Do NOT run `bd sync` as part of code commits. `bd sync` is ONLY for syncing beads issue tracking data and creates its own separate commit. Run it independently if needed to sync issue status.
 5. **Clean up** - Clear stashes, prune remote branches
 6. **Verify** - All changes committed AND pushed
 7. **Hand off** - Provide context for next session

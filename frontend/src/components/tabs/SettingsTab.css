@@ -71,7 +71,7 @@
 
 .settings-page-header h2 {
   font-size: 1.5rem;
-  font-weight: 500;
+  font-weight: 600;
   color: var(--text-primary);
   margin: 0 0 0.5rem 0;
 }
@@ -194,6 +194,67 @@
   font-size: 0.75rem;
   color: var(--text-muted);
   margin-top: 0.25rem;
+}
+
+/* Vertical form layout: label → description → input */
+.form-group-vertical {
+  margin-bottom: 1.25rem;
+}
+
+.form-group-vertical label {
+  display: block;
+  font-size: 0.875rem;
+  color: var(--button-text);
+  font-weight: 500;
+  margin-bottom: 0.25rem;
+}
+
+.form-group-vertical .form-description {
+  display: block;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  margin-bottom: 0.5rem;
+  line-height: 1.4;
+}
+
+.form-group-vertical input,
+.form-group-vertical select {
+  display: block;
+  min-width: 280px;
+  max-width: 400px;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--border-secondary);
+  border-radius: 6px;
+  background-color: var(--input-bg);
+  color: var(--text-primary);
+  font-size: 0.875rem;
+}
+
+.form-group-vertical input:focus,
+.form-group-vertical select:focus {
+  outline: none;
+  border-color: var(--accent-primary);
+  box-shadow: 0 0 0 2px rgba(100, 108, 255, 0.2);
+}
+
+.form-group-vertical input[type="time"] {
+  min-width: 140px;
+  max-width: 160px;
+}
+
+.form-group-vertical input[type="number"] {
+  min-width: 100px;
+  max-width: 140px;
+}
+
+.form-group-vertical input[type="checkbox"] {
+  min-width: auto;
+  max-width: auto;
+}
+
+.form-group-vertical button {
+  display: block;
+  margin-left: auto;
 }
 
 .checkbox-group {
@@ -675,9 +736,9 @@
 .radio-option {
   display: flex;
   flex-direction: row;
-  flex-wrap: nowrap;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 0.75rem;
+  gap: 0.25rem 0.75rem;
   padding: 0.75rem 1rem;
   background-color: var(--input-bg);
   border: 1px solid var(--border-primary);
@@ -716,8 +777,8 @@
 .radio-description {
   font-size: 0.8rem;
   color: var(--text-secondary);
-  flex: 1;
-  margin-left: 0.25rem;
+  width: 100%;
+  margin-left: calc(18px + 0.5rem + 0.75rem);
 }
 
 /* Profile checkbox list */
@@ -1225,8 +1286,8 @@
   width: 24px;
   height: 24px;
   border-radius: 50%;
-  background-color: var(--accent-primary);
-  color: white;
+  background-color: var(--button-primary-bg);
+  color: var(--button-primary-text);
   font-size: 0.75rem;
   font-weight: 600;
   flex-shrink: 0;

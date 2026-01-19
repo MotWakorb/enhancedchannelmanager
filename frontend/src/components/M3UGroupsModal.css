@@ -362,7 +362,7 @@
 
 .toggle input:checked + .toggle-slider:before {
   transform: translateX(18px);
-  background-color: white;
+  background-color: var(--bg-primary);
 }
 
 .toggle input:disabled + .toggle-slider {

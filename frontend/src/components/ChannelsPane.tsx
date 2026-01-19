@@ -763,6 +763,7 @@ export function ChannelsPane({
   const createGroupModal = useModal();
   const [newGroupName, setNewGroupName] = useState('');
   const [creatingGroup, setCreatingGroup] = useState(false);
+  const [createGroupShouldMoveChannels, setCreateGroupShouldMoveChannels] = useState(false);
 
   // Delete group state
   const deleteGroupConfirmModal = useModal();
@@ -828,15 +829,31 @@ export function ChannelsPane({
   const [sortRenumberStartingNumber, setSortRenumberStartingNumber] = useState<string>('');
   const [sortStripNumbers, setSortStripNumbers] = useState<boolean>(true);
   const [sortIgnoreCountry, setSortIgnoreCountry] = useState<boolean>(false);
+  const [sortRenumberUpdateNames, setSortRenumberUpdateNames] = useState<boolean>(true);
 
   // Mass Renumber modal state
   const massRenumberModal = useModal();
   const [massRenumberStartingNumber, setMassRenumberStartingNumber] = useState<string>('');
   const [massRenumberChannels, setMassRenumberChannels] = useState<Channel[]>([]);
+  const [massRenumberUpdateNames, setMassRenumberUpdateNames] = useState<boolean>(true);
 
   // Hidden groups state
   const hiddenGroupsModal = useModal();
   const [hiddenGroups, setHiddenGroups] = useState<{ id: number; name: string; hidden_at: string }[]>([]);
+
+  // Group reorder modal state
+  const groupReorderModal = useModal();
+  const [groupReorderData, setGroupReorderData] = useState<{
+    groupId: number;
+    groupName: string;
+    channels: Channel[];
+    newPosition: number;  // Index in the group order
+    suggestedStartingNumber: number | null;
+    precedingGroupName: string | null;
+    precedingGroupMaxChannel: number | null;
+  } | null>(null);
+  const [groupReorderNumberingOption, setGroupReorderNumberingOption] = useState<'keep' | 'suggested' | 'custom'>('suggested');
+  const [groupReorderCustomNumber, setGroupReorderCustomNumber] = useState<string>('');
 
   // Drag overlay state
   const [activeDragId, setActiveDragId] = useState<number | null>(null);
@@ -1248,6 +1265,7 @@ export function ChannelsPane({
   const handleCreateGroupAndMove = () => {
     if (!contextMenu) return;
     hideContextMenu();
+    setCreateGroupShouldMoveChannels(true);  // Flag to move channels after creating group
     createGroupModal.open();
     setNewGroupName('');
   };
@@ -1365,7 +1383,7 @@ export function ChannelsPane({
         // Renumber each subsequent channel (move up by 1)
         for (const ch of subsequentChannels) {
           const newNumber = ch.channel_number! - 1;
-          const newName = computeAutoRename(ch.name, ch.channel_number, newNumber);
+          const newName = autoRenameChannelNumber ? computeAutoRename(ch.name, ch.channel_number, newNumber) : undefined;
           const description = newName
             ? `Changed "${ch.name}" to "${newName}"`
             : `Changed channel number from ${ch.channel_number} to ${newNumber}`;
@@ -1381,7 +1399,7 @@ export function ChannelsPane({
             const subsequent = subsequentChannels.find((s) => s.id === ch.id);
             if (subsequent) {
               const newNumber = ch.channel_number! - 1;
-              const newName = computeAutoRename(ch.name, ch.channel_number, newNumber);
+              const newName = autoRenameChannelNumber ? computeAutoRename(ch.name, ch.channel_number, newNumber) : undefined;
               return {
                 ...ch,
                 channel_number: newNumber,
@@ -1979,6 +1997,7 @@ export function ChannelsPane({
   const handleCloseCreateGroupModal = () => {
     createGroupModal.close();
     setNewGroupName('');
+    setCreateGroupShouldMoveChannels(false);  // Reset the flag
   };
 
   // Handle creating a new channel group
@@ -2000,8 +2019,8 @@ export function ChannelsPane({
         onSelectedGroupsChange([...selectedGroups, newGroup.id]);
       }
 
-      // If we have selected channels (from context menu), move them to the new group
-      if (selectedChannelIds.size > 0) {
+      // If we have selected channels AND this was triggered from context menu, move them to the new group
+      if (createGroupShouldMoveChannels && selectedChannelIds.size > 0) {
         const channelsToMove = localChannels
           .filter(ch => selectedChannelIds.has(ch.id))
           .sort((a, b) => naturalCompare(a.name, b.name));
@@ -2420,7 +2439,7 @@ export function ChannelsPane({
         // Shift each channel down by 1 (starting from highest to avoid conflicts)
         for (const ch of channelsToShift) {
           const newNum = ch.channel_number! + 1;
-          const newName = computeAutoRename(ch.name, ch.channel_number, newNum);
+          const newName = autoRenameChannelNumber ? computeAutoRename(ch.name, ch.channel_number, newNum) : undefined;
           const description = newName
             ? `Changed "${ch.name}" to "${newName}"`
             : `Changed channel number from ${ch.channel_number} to ${newNum}`;
@@ -2436,7 +2455,7 @@ export function ChannelsPane({
             const shift = channelsToShift.find((s) => s.id === ch.id);
             if (shift) {
               const newNum = ch.channel_number! + 1;
-              const newName = computeAutoRename(ch.name, ch.channel_number, newNum);
+              const newName = autoRenameChannelNumber ? computeAutoRename(ch.name, ch.channel_number, newNum) : undefined;
               return { ...ch, channel_number: newNum, ...(newName ? { name: newName } : {}) };
             }
             return ch;
@@ -2473,14 +2492,15 @@ export function ChannelsPane({
   };
 
   // Helper function to compute auto-rename for a channel number change
-  // Returns the new name if auto-rename should apply, undefined otherwise
+  // Returns the new name if a channel number is detected in the name, undefined otherwise
+  // The caller is responsible for checking whether auto-rename is enabled
   // Memoized with useCallback to avoid recreating regex functions on every render
   const computeAutoRename = useCallback((
     channelName: string,
     _oldNumber: number | null,
     newNumber: number | null
   ): string | undefined => {
-    if (!autoRenameChannelNumber || newNumber === null) {
+    if (newNumber === null) {
       return undefined;
     }
 
@@ -2530,7 +2550,7 @@ export function ChannelsPane({
     }
 
     return undefined;
-  }, [autoRenameChannelNumber]);
+  }, []);
 
   // Helper function to strip leading/trailing/middle channel numbers from a name for sorting purposes
   // Matches same patterns as computeAutoRename: "123 | Name", "123-Name", "US | 5034 - Name", "Name | 123"
@@ -2593,7 +2613,7 @@ export function ChannelsPane({
     let nameChanged = false;
 
     // If auto-rename is enabled, check if we should update the channel name
-    if (channel) {
+    if (channel && autoRenameChannelNumber) {
       const newName = computeAutoRename(channel.name, channel.channel_number, newNumber);
       if (newName) {
         updateData.name = newName;
@@ -3059,10 +3079,59 @@ export function ChannelsPane({
       const oldIndex = currentOrder.indexOf(activeGroupNumId);
       const newIndex = currentOrder.indexOf(overGroupNumId);
 
-      if (oldIndex !== -1 && newIndex !== -1) {
-        // Reorder the groups
+      if (oldIndex !== -1 && newIndex !== -1 && oldIndex !== newIndex) {
+        // Calculate the new order to find the preceding group
         const newOrder = arrayMove(currentOrder, oldIndex, newIndex);
-        setGroupOrder(newOrder);
+        const newPositionInOrder = newOrder.indexOf(activeGroupNumId);
+
+        // Get the group being moved and its channels
+        const movedGroup = channelGroups.find(g => g.id === activeGroupNumId);
+        const movedGroupChannels = channelsByGroup[activeGroupNumId] || [];
+
+        // Find the preceding group (if any) to calculate suggested starting number
+        let precedingGroupName: string | null = null;
+        let precedingGroupMaxChannel: number | null = null;
+        let suggestedStartingNumber: number | null = null;
+
+        if (newPositionInOrder > 0) {
+          const precedingGroupId = newOrder[newPositionInOrder - 1];
+          const precedingGroup = channelGroups.find(g => g.id === precedingGroupId);
+          const precedingGroupChannels = channelsByGroup[precedingGroupId] || [];
+
+          if (precedingGroup) {
+            precedingGroupName = precedingGroup.name;
+
+            // Find the max channel number in the preceding group
+            const precedingChannelNumbers = precedingGroupChannels
+              .map(ch => ch.channel_number)
+              .filter((n): n is number => n !== null);
+
+            if (precedingChannelNumbers.length > 0) {
+              precedingGroupMaxChannel = Math.max(...precedingChannelNumbers);
+              suggestedStartingNumber = precedingGroupMaxChannel + 1;
+            }
+          }
+        } else {
+          // First position - suggest starting at 1
+          suggestedStartingNumber = 1;
+        }
+
+        // Show the group reorder modal
+        setGroupReorderData({
+          groupId: activeGroupNumId,
+          groupName: movedGroup?.name ?? 'Unknown Group',
+          channels: movedGroupChannels,
+          newPosition: newPositionInOrder,
+          suggestedStartingNumber,
+          precedingGroupName,
+          precedingGroupMaxChannel,
+        });
+        setGroupReorderNumberingOption('suggested');
+        setGroupReorderCustomNumber(suggestedStartingNumber?.toString() ?? '');
+        groupReorderModal.open();
+
+        // Store the pending new order to apply when confirmed
+        // We'll use the modal data to track this
       }
       return;
     }
@@ -3122,14 +3191,33 @@ export function ChannelsPane({
       insertAtChannelNumber = overChannel.channel_number;
     }
 
+    // Additional check: if this is a multi-selection and some selected channels are in different groups
+    // than the target, treat this as a cross-group move even if the dragged channel is in the target group
+    if (!isCrossGroupMove && selectedChannelIds.has(activeChannel.id) && selectedChannelIds.size > 1) {
+      // Determine the effective target group (either from overChannel or group-end target)
+      const effectiveTargetGroupId = overChannel?.channel_group_id ?? activeChannel.channel_group_id;
+      // Check if any selected channel is in a different group than the target
+      const hasChannelsFromOtherGroups = localChannels.some(
+        (ch) => selectedChannelIds.has(ch.id) && ch.channel_group_id !== effectiveTargetGroupId
+      );
+      if (hasChannelsFromOtherGroups) {
+        isCrossGroupMove = true;
+        newGroupId = effectiveTargetGroupId;
+        if (overChannel) {
+          insertAtChannelNumber = overChannel.channel_number;
+        }
+      }
+    }
+
     if (isCrossGroupMove) {
       // Collect channels to move: if the dragged channel is part of multi-selection, move all selected
       // Otherwise, just move the single dragged channel
       let channelsToMove: Channel[] = [];
       if (selectedChannelIds.has(activeChannel.id) && selectedChannelIds.size > 1) {
-        // Multi-selection: collect all selected channels from the same source group
+        // Multi-selection: collect ALL selected channels (from any group, not just the dragged channel's group)
+        // Exclude channels that are already in the target group
         channelsToMove = localChannels.filter(
-          (ch) => selectedChannelIds.has(ch.id) && ch.channel_group_id === activeChannel.channel_group_id
+          (ch) => selectedChannelIds.has(ch.id) && ch.channel_group_id !== newGroupId
         );
         // Sort by channel number for consistent ordering
         channelsToMove.sort((a, b) => (a.channel_number ?? 0) - (b.channel_number ?? 0));
@@ -3141,9 +3229,19 @@ export function ChannelsPane({
       const targetGroupName = newGroupId === null
         ? 'Uncategorized'
         : channelGroups.find((g) => g.id === newGroupId)?.name ?? 'Unknown Group';
-      const sourceGroupName = activeChannel.channel_group_id === null
-        ? 'Uncategorized'
-        : channelGroups.find((g) => g.id === activeChannel.channel_group_id)?.name ?? 'Unknown Group';
+
+      // Determine source group(s) - could be multiple groups in multi-select
+      const sourceGroupIds = new Set(channelsToMove.map(ch => ch.channel_group_id));
+      const isMultiSourceGroup = sourceGroupIds.size > 1;
+      let sourceGroupName: string;
+      if (isMultiSourceGroup) {
+        sourceGroupName = 'multiple groups';
+      } else {
+        const singleSourceGroupId = channelsToMove[0]?.channel_group_id;
+        sourceGroupName = singleSourceGroupId === null
+          ? 'Uncategorized'
+          : channelGroups.find((g) => g.id === singleSourceGroupId)?.name ?? 'Unknown Group';
+      }
 
       // Check if target group is an auto-sync group
       const isTargetAutoSync = newGroupId !== null && autoSyncRelatedGroups.has(newGroupId);
@@ -3178,29 +3276,33 @@ export function ChannelsPane({
       }
 
       // Calculate source group info for renumbering option
-      const sourceGroupId = activeChannel.channel_group_id;
-      const sourceGroupChannels = sourceGroupId === null
-        ? channelsByGroup.ungrouped || []
-        : channelsByGroup[sourceGroupId] || [];
-
-      // Get channel numbers from source group (excluding channels being moved)
-      const movedChannelIds = new Set(channelsToMove.map(ch => ch.id));
-      const remainingSourceChannelNumbers = sourceGroupChannels
-        .filter(ch => !movedChannelIds.has(ch.id))
-        .map(ch => ch.channel_number)
-        .filter((n): n is number => n !== null)
-        .sort((a, b) => a - b);
-
-      // Check if there will be gaps after the move
+      // For multi-source-group moves, source renumbering is disabled (too complex)
       let sourceGroupHasGaps = false;
       let sourceGroupMinChannel: number | null = null;
-      if (remainingSourceChannelNumbers.length > 1) {
-        sourceGroupMinChannel = remainingSourceChannelNumbers[0];
-        // Check for gaps in the remaining channels
-        for (let i = 1; i < remainingSourceChannelNumbers.length; i++) {
-          if (remainingSourceChannelNumbers[i] - remainingSourceChannelNumbers[i - 1] > 1) {
-            sourceGroupHasGaps = true;
-            break;
+      const sourceGroupId = isMultiSourceGroup ? null : (channelsToMove[0]?.channel_group_id ?? null);
+
+      if (!isMultiSourceGroup) {
+        const sourceGroupChannels = sourceGroupId === null
+          ? channelsByGroup.ungrouped || []
+          : channelsByGroup[sourceGroupId] || [];
+
+        // Get channel numbers from source group (excluding channels being moved)
+        const movedChannelIds = new Set(channelsToMove.map(ch => ch.id));
+        const remainingSourceChannelNumbers = sourceGroupChannels
+          .filter(ch => !movedChannelIds.has(ch.id))
+          .map(ch => ch.channel_number)
+          .filter((n): n is number => n !== null)
+          .sort((a, b) => a - b);
+
+        // Check if there will be gaps after the move
+        if (remainingSourceChannelNumbers.length > 1) {
+          sourceGroupMinChannel = remainingSourceChannelNumbers[0];
+          // Check for gaps in the remaining channels
+          for (let i = 1; i < remainingSourceChannelNumbers.length; i++) {
+            if (remainingSourceChannelNumbers[i] - remainingSourceChannelNumbers[i - 1] > 1) {
+              sourceGroupHasGaps = true;
+              break;
+            }
           }
         }
       }
@@ -3272,7 +3374,7 @@ export function ChannelsPane({
       const channelUpdates: Array<{ id: number; newNumber: number; newName?: string; oldName: string }> = [];
       reorderedGroup.forEach((ch, index) => {
         const newNumber = startingNumber + index;
-        const newName = computeAutoRename(ch.name, ch.channel_number, newNumber);
+        const newName = autoRenameChannelNumber ? computeAutoRename(ch.name, ch.channel_number, newNumber) : undefined;
         channelUpdates.push({ id: ch.id, newNumber, newName, oldName: ch.name });
       });
 
@@ -3369,7 +3471,7 @@ export function ChannelsPane({
           newNumber = chNum + 1;
         }
 
-        const newName = computeAutoRename(ch.name, chNum, newNumber);
+        const newName = autoRenameChannelNumber ? computeAutoRename(ch.name, chNum, newNumber) : undefined;
         channelUpdates.push({
           id: ch.id,
           oldNumber: chNum,
@@ -3433,6 +3535,82 @@ export function ChannelsPane({
         }
       }
     }
+  };
+
+  // Handle group reorder confirmation
+  const handleGroupReorderConfirm = () => {
+    if (!groupReorderData) return;
+
+    const { groupId, channels, newPosition } = groupReorderData;
+
+    // First, apply the group reorder
+    let currentOrder = groupOrder;
+    if (currentOrder.length === 0) {
+      currentOrder = sortedChannelGroups.map(g => g.id);
+    }
+
+    const oldIndex = currentOrder.indexOf(groupId);
+    if (oldIndex !== -1) {
+      // We need to calculate the new order based on newPosition
+      // Remove from old position
+      const withoutGroup = currentOrder.filter(id => id !== groupId);
+      // Insert at new position
+      const newOrder = [
+        ...withoutGroup.slice(0, newPosition),
+        groupId,
+        ...withoutGroup.slice(newPosition),
+      ];
+      setGroupOrder(newOrder);
+    }
+
+    // Then, renumber channels if requested
+    if (groupReorderNumberingOption !== 'keep' && channels.length > 0) {
+      let startingNumber: number;
+
+      if (groupReorderNumberingOption === 'custom') {
+        startingNumber = parseInt(groupReorderCustomNumber, 10);
+        if (isNaN(startingNumber)) {
+          startingNumber = groupReorderData.suggestedStartingNumber ?? 1;
+        }
+      } else {
+        startingNumber = groupReorderData.suggestedStartingNumber ?? 1;
+      }
+
+      // Sort channels by current channel number to maintain relative order
+      const sortedChannels = [...channels].sort((a, b) =>
+        (a.channel_number ?? 0) - (b.channel_number ?? 0)
+      );
+
+      // Use batch operation for renumbering
+      startBatch(`Renumber "${groupReorderData.groupName}" starting at ${startingNumber}`);
+
+      sortedChannels.forEach((channel, index) => {
+        const newNumber = startingNumber + index;
+        if (channel.channel_number !== newNumber) {
+          stageUpdateChannel(
+            channel.id,
+            { channel_number: newNumber },
+            `Renumber "${channel.name}" to ${newNumber}`
+          );
+        }
+      });
+
+      endBatch();
+    }
+
+    // Close modal and reset state
+    groupReorderModal.close();
+    setGroupReorderData(null);
+    setGroupReorderNumberingOption('suggested');
+    setGroupReorderCustomNumber('');
+  };
+
+  // Handle group reorder cancel
+  const handleGroupReorderCancel = () => {
+    groupReorderModal.close();
+    setGroupReorderData(null);
+    setGroupReorderNumberingOption('suggested');
+    setGroupReorderCustomNumber('');
   };
 
   // Handle cross-group move confirmation (supports multiple channels)
@@ -3502,9 +3680,11 @@ export function ChannelsPane({
           let finalName = channel.name;
 
           // Apply auto-rename if enabled
-          const newName = computeAutoRename(channel.name, channel.channel_number, newNumber);
-          if (newName) {
-            finalName = newName;
+          if (autoRenameChannelNumber) {
+            const newName = computeAutoRename(channel.name, channel.channel_number, newNumber);
+            if (newName) {
+              finalName = newName;
+            }
           }
 
           shiftUpdates.push({ channel, finalChannelNumber: newNumber, finalName });
@@ -3531,9 +3711,11 @@ export function ChannelsPane({
         const newNumber = sourceGroupMinChannel + index;
         if (newNumber !== channel.channel_number) {
           let finalName = channel.name;
-          const newName = computeAutoRename(channel.name, channel.channel_number, newNumber);
-          if (newName) {
-            finalName = newName;
+          if (autoRenameChannelNumber) {
+            const newName = computeAutoRename(channel.name, channel.channel_number, newNumber);
+            if (newName) {
+              finalName = newName;
+            }
           }
           sourceRenumberUpdates.push({ channel, finalChannelNumber: newNumber, finalName });
         }
@@ -3550,7 +3732,7 @@ export function ChannelsPane({
 
       // Check if auto-rename applies when changing channel number
       let finalName = channel.name;
-      if (!keepChannelNumber && finalChannelNumber !== null && finalChannelNumber !== channel.channel_number) {
+      if (autoRenameChannelNumber && !keepChannelNumber && finalChannelNumber !== null && finalChannelNumber !== channel.channel_number) {
         const newName = computeAutoRename(channel.name, channel.channel_number, finalChannelNumber);
         if (newName) {
           finalName = newName;
@@ -3847,9 +4029,9 @@ export function ChannelsPane({
     sortedChannels.forEach((channel, index) => {
       const newNumber = startingNumber + index;
       if (channel.channel_number !== newNumber) {
-        // Apply auto-rename if enabled
+        // Apply auto-rename if enabled in dialog
         let updates: Partial<Channel> = { channel_number: newNumber };
-        if (autoRenameChannelNumber && channel.channel_number !== null) {
+        if (sortRenumberUpdateNames && channel.channel_number !== null) {
           const newName = computeAutoRename(channel.name, channel.channel_number, newNumber);
           if (newName && newName !== channel.name) {
             updates.name = newName;
@@ -3872,6 +4054,7 @@ export function ChannelsPane({
     setSortRenumberStartingNumber('');
     setSortStripNumbers(true);
     setSortIgnoreCountry(false);
+    setSortRenumberUpdateNames(true);
   };
 
   // Mass Renumber handlers
@@ -3947,8 +4130,8 @@ export function ChannelsPane({
         const newNumber = endNum + 1 + (sortedConflicts.length - 1 - index);
         let updates: Partial<Channel> = { channel_number: newNumber };
 
-        // Apply auto-rename if enabled
-        if (autoRenameChannelNumber && channel.channel_number !== null) {
+        // Apply auto-rename if enabled in the dialog
+        if (massRenumberUpdateNames && channel.channel_number !== null) {
           const newName = computeAutoRename(channel.name, channel.channel_number, newNumber);
           if (newName && newName !== channel.name) {
             updates.name = newName;
@@ -3956,7 +4139,7 @@ export function ChannelsPane({
         }
 
         const description = updates.name
-          ? `Shift "${channel.name}" to ch.${newNumber} (was ${channel.channel_number})`
+          ? `Shift "${channel.name}" → "${updates.name}" to ch.${newNumber}`
           : `Shift ch.${channel.channel_number} → ${newNumber}`;
         onStageUpdateChannel(channel.id, updates, description);
       });
@@ -3968,8 +4151,8 @@ export function ChannelsPane({
       if (channel.channel_number !== newNumber) {
         let updates: Partial<Channel> = { channel_number: newNumber };
 
-        // Apply auto-rename if enabled
-        if (autoRenameChannelNumber && channel.channel_number !== null) {
+        // Apply auto-rename if enabled in the dialog
+        if (massRenumberUpdateNames && channel.channel_number !== null) {
           const newName = computeAutoRename(channel.name, channel.channel_number, newNumber);
           if (newName && newName !== channel.name) {
             updates.name = newName;
@@ -3977,7 +4160,7 @@ export function ChannelsPane({
         }
 
         const description = updates.name
-          ? `Renumber "${channel.name}" to ch.${newNumber}`
+          ? `Renumber "${channel.name}" → "${updates.name}" to ch.${newNumber}`
           : `Renumber ch.${channel.channel_number ?? '?'} → ${newNumber}`;
         onStageUpdateChannel(channel.id, updates, description);
       }
@@ -4001,6 +4184,7 @@ export function ChannelsPane({
     massRenumberModal.close();
     setMassRenumberChannels([]);
     setMassRenumberStartingNumber('');
+    setMassRenumberUpdateNames(true); // Reset to default
   };
 
   const renderGroup = (groupId: number | 'ungrouped', groupName: string, groupChannels: Channel[], isEmpty: boolean = false) => {
@@ -4890,7 +5074,7 @@ export function ChannelsPane({
                   <div className="renumber-preview">
                     {subsequentChannels.slice(0, 3).map((ch) => {
                       const newNumber = ch.channel_number! - 1;
-                      const newName = computeAutoRename(ch.name, ch.channel_number, newNumber);
+                      const newName = autoRenameChannelNumber ? computeAutoRename(ch.name, ch.channel_number, newNumber) : undefined;
                       return (
                         <div key={ch.id} className="renumber-preview-item">
                           <span className="renumber-old">{ch.channel_number}</span>
@@ -5402,6 +5586,132 @@ export function ChannelsPane({
         </div>
       )}
 
+      {/* Group Reorder Modal */}
+      {groupReorderModal.isOpen && groupReorderData && (
+        <div className="modal-overlay">
+          <div className="modal-content cross-group-move-dialog" onClick={(e) => e.stopPropagation()}>
+            <h3>Reorder Group</h3>
+
+            <div className="cross-group-move-info">
+              <p>
+                Moving <strong>{groupReorderData.groupName}</strong> with{' '}
+                <strong>{groupReorderData.channels.length} channel{groupReorderData.channels.length !== 1 ? 's' : ''}</strong>
+                {groupReorderData.precedingGroupName && (
+                  <> to after <span className="group-tag">{groupReorderData.precedingGroupName}</span></>
+                )}
+                {!groupReorderData.precedingGroupName && groupReorderData.newPosition === 0 && (
+                  <> to the <strong>first position</strong></>
+                )}
+              </p>
+              {groupReorderData.precedingGroupMaxChannel !== null && (
+                <p className="group-range-info">
+                  Preceding group ends at channel {groupReorderData.precedingGroupMaxChannel}
+                </p>
+              )}
+            </div>
+
+            <div className="cross-group-move-options">
+              <div className="channel-number-section">
+                <label>Channel Numbers</label>
+              </div>
+
+              <div className="move-option-radio-group">
+                {/* Keep current numbers option */}
+                <label className={`move-option-radio ${groupReorderNumberingOption === 'keep' ? 'selected' : ''}`}>
+                  <input
+                    type="radio"
+                    name="groupReorderNumberingOption"
+                    checked={groupReorderNumberingOption === 'keep'}
+                    onChange={() => setGroupReorderNumberingOption('keep')}
+                  />
+                  <span className="material-icons">numbers</span>
+                  <div className="move-option-text">
+                    <strong>Keep current numbers</strong>
+                    <span>Don't change channel numbers</span>
+                  </div>
+                </label>
+
+                {/* Suggested number option */}
+                {groupReorderData.suggestedStartingNumber !== null && (
+                  <label className={`move-option-radio ${groupReorderNumberingOption === 'suggested' ? 'selected' : ''}`}>
+                    <input
+                      type="radio"
+                      name="groupReorderNumberingOption"
+                      checked={groupReorderNumberingOption === 'suggested'}
+                      onChange={() => setGroupReorderNumberingOption('suggested')}
+                    />
+                    <span className="material-icons">auto_fix_high</span>
+                    <div className="move-option-text">
+                      <strong>Renumber sequentially</strong>
+                      <span>
+                        Starting at {groupReorderData.suggestedStartingNumber}
+                        {groupReorderData.channels.length > 1 && (
+                          <> ({groupReorderData.suggestedStartingNumber}–{groupReorderData.suggestedStartingNumber + groupReorderData.channels.length - 1})</>
+                        )}
+                      </span>
+                    </div>
+                  </label>
+                )}
+
+                {/* Custom number option */}
+                <label className={`move-option-radio ${groupReorderNumberingOption === 'custom' ? 'selected' : ''}`}>
+                  <input
+                    type="radio"
+                    name="groupReorderNumberingOption"
+                    checked={groupReorderNumberingOption === 'custom'}
+                    onChange={() => setGroupReorderNumberingOption('custom')}
+                  />
+                  <span className="material-icons">edit</span>
+                  <div className="move-option-text">
+                    <strong>Custom starting number</strong>
+                    {groupReorderNumberingOption === 'custom' ? (
+                      <div className="custom-number-inline">
+                        <input
+                          type="number"
+                          className="custom-number-input-inline"
+                          placeholder="Enter starting number"
+                          value={groupReorderCustomNumber}
+                          onChange={(e) => setGroupReorderCustomNumber(e.target.value)}
+                          onClick={(e) => e.stopPropagation()}
+                          min="1"
+                          autoFocus
+                        />
+                        {groupReorderCustomNumber && !isNaN(parseInt(groupReorderCustomNumber, 10)) && parseInt(groupReorderCustomNumber, 10) >= 1 && groupReorderData.channels.length > 1 && (
+                          <span className="custom-number-range-inline">
+                            → {parseInt(groupReorderCustomNumber, 10)}–{parseInt(groupReorderCustomNumber, 10) + groupReorderData.channels.length - 1}
+                          </span>
+                        )}
+                      </div>
+                    ) : (
+                      <span>Enter a specific starting number</span>
+                    )}
+                  </div>
+                </label>
+              </div>
+            </div>
+
+            <div className="modal-actions">
+              <button
+                className="modal-btn cancel"
+                onClick={handleGroupReorderCancel}
+              >
+                Cancel
+              </button>
+              <button
+                className="modal-btn primary"
+                onClick={handleGroupReorderConfirm}
+                disabled={
+                  groupReorderNumberingOption === 'custom' &&
+                  (!groupReorderCustomNumber || isNaN(parseInt(groupReorderCustomNumber, 10)) || parseInt(groupReorderCustomNumber, 10) < 1)
+                }
+              >
+                Confirm
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Sort & Renumber Modal */}
       {sortRenumberModal.isOpen && sortRenumberData && (
         <div className="modal-overlay">
@@ -5449,6 +5759,14 @@ export function ChannelsPane({
                 />
                 <span>Ignore country prefix when sorting (e.g., "US | ", "UK: ")</span>
               </label>
+              <label className="sort-renumber-checkbox">
+                <input
+                  type="checkbox"
+                  checked={sortRenumberUpdateNames}
+                  onChange={(e) => setSortRenumberUpdateNames(e.target.checked)}
+                />
+                <span>Update channel numbers in names (e.g., "209 | A&E" → "200 | A&E")</span>
+              </label>
             </div>
 
             {/* Preview of sorted order */}
@@ -5473,12 +5791,23 @@ export function ChannelsPane({
                   .map((ch, index) => {
                     const startNum = parseInt(sortRenumberStartingNumber, 10) || 1;
                     const newNumber = startNum + index;
+                    const newName = sortRenumberUpdateNames && ch.channel_number !== null
+                      ? computeAutoRename(ch.name, ch.channel_number, newNumber)
+                      : undefined;
                     return (
                       <li key={ch.id}>
                         <span className="preview-old-number">{ch.channel_number ?? '-'}</span>
                         <span className="preview-arrow">→</span>
                         <span className="preview-new-number">{newNumber}</span>
-                        <span className="preview-name">{ch.name}</span>
+                        {newName ? (
+                          <>
+                            <span className="preview-name preview-name-old">{ch.name}</span>
+                            <span className="preview-arrow">→</span>
+                            <span className="preview-name preview-name-new">{newName}</span>
+                          </>
+                        ) : (
+                          <span className="preview-name">{ch.name}</span>
+                        )}
                       </li>
                     );
                   })}
@@ -5537,6 +5866,14 @@ export function ChannelsPane({
                   </span>
                 )}
               </div>
+              <label className="mass-renumber-checkbox">
+                <input
+                  type="checkbox"
+                  checked={massRenumberUpdateNames}
+                  onChange={(e) => setMassRenumberUpdateNames(e.target.checked)}
+                />
+                Update channel numbers in names (e.g., "209 | A&E" → "200 | A&E")
+              </label>
             </div>
 
             {/* Conflict Warning */}
@@ -5571,12 +5908,23 @@ export function ChannelsPane({
                   const startNum = parseInt(massRenumberStartingNumber, 10) || 1;
                   const newNumber = startNum + index;
                   const hasChange = ch.channel_number !== newNumber;
+                  const newName = massRenumberUpdateNames && ch.channel_number !== null
+                    ? computeAutoRename(ch.name, ch.channel_number, newNumber)
+                    : undefined;
                   return (
                     <li key={ch.id} className={hasChange ? 'has-change' : ''}>
                       <span className="preview-old-number">{ch.channel_number ?? '-'}</span>
                       <span className="preview-arrow">→</span>
                       <span className="preview-new-number">{newNumber}</span>
-                      <span className="preview-name">{ch.name}</span>
+                      {newName ? (
+                        <>
+                          <span className="preview-name preview-name-old">{ch.name}</span>
+                          <span className="preview-arrow">→</span>
+                          <span className="preview-name preview-name-new">{newName}</span>
+                        </>
+                      ) : (
+                        <span className="preview-name">{ch.name}</span>
+                      )}
                     </li>
                   );
                 })}
