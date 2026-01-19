@@ -108,6 +108,9 @@ def _run_migrations(engine) -> None:
             # Ensure alert_methods table exists (for databases created before v0.8.2)
             _ensure_alert_methods_table(conn)
 
+            # Add alert_sources column to alert_methods (v0.8.2-0026)
+            _add_alert_sources_column(conn)
+
             logger.debug("All migrations complete - schema is up to date")
     except Exception as e:
         logger.exception(f"Migration failed: {e}")
@@ -344,6 +347,26 @@ def _ensure_alert_methods_table(conn) -> None:
     conn.execute(text("CREATE INDEX idx_alert_method_enabled ON alert_methods (enabled)"))
     conn.commit()
     logger.info("Created alert_methods table successfully")
+
+
+def _add_alert_sources_column(conn) -> None:
+    """Add alert_sources column to alert_methods table (v0.8.2-0026)."""
+    from sqlalchemy import text
+
+    # Check if alert_sources column already exists
+    result = conn.execute(text("PRAGMA table_info(alert_methods)"))
+    columns = [row[1] for row in result.fetchall()]
+
+    if "alert_sources" in columns:
+        logger.debug("alert_sources column already exists in alert_methods")
+        return
+
+    logger.info("Adding alert_sources column to alert_methods table")
+    conn.execute(text(
+        "ALTER TABLE alert_methods ADD COLUMN alert_sources TEXT"
+    ))
+    conn.commit()
+    logger.info("Migration complete: added alert_sources column to alert_methods")
 
 
 def _perform_maintenance(engine) -> None:
