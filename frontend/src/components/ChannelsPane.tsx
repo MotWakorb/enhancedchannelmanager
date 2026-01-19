@@ -1000,6 +1000,36 @@ export function ChannelsPane({
     fetchStreamStats();
   }, [channelStreams]);
 
+  // Pre-load stream stats for all streams assigned to channels (for hasFailedStreams indicator)
+  useEffect(() => {
+    const preloadAllStreamStats = async () => {
+      // Collect all unique stream IDs from all channels
+      const allStreamIds = new Set<number>();
+      for (const channel of channels) {
+        for (const streamId of channel.streams) {
+          allStreamIds.add(streamId);
+        }
+      }
+
+      if (allStreamIds.size === 0) return;
+
+      try {
+        const stats = await api.getStreamStatsByIds(Array.from(allStreamIds));
+        setStreamStatsMap((prev) => {
+          const next = new Map(prev);
+          for (const [idStr, stat] of Object.entries(stats)) {
+            next.set(parseInt(idStr, 10), stat);
+          }
+          return next;
+        });
+      } catch (err) {
+        // Stats not available is OK - they may not have been probed yet
+        console.debug('Failed to pre-load stream stats:', err);
+      }
+    };
+    preloadAllStreamStats();
+  }, [channels]);
+
   // Handle probe channel request - probes all streams in a channel
   const handleProbeChannel = useCallback(async (channel: Channel) => {
     // channel.streams is an array of stream IDs (numbers)
@@ -4387,8 +4417,8 @@ export function ChannelsPane({
                       showStreamUrls={showStreamUrls}
                       onProbeChannel={() => handleProbeChannel(channel)}
                       isProbing={probingChannels.has(channel.id)}
-                      hasFailedStreams={channel.streams.some(s => {
-                        const stats = streamStatsMap.get(s.id);
+                      hasFailedStreams={channel.streams.some(streamId => {
+                        const stats = streamStatsMap.get(streamId);
                         return stats && (stats.probe_status === 'failed' || stats.probe_status === 'timeout');
                       })}
                     />
