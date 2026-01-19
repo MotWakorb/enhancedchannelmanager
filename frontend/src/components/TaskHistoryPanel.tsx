@@ -233,6 +233,9 @@ export function TaskHistoryPanel({ taskId, visible }: TaskHistoryPanelProps) {
   useEffect(() => {
     if (visible) {
       loadHistory();
+      // Poll for updates every 5 seconds while visible
+      const interval = setInterval(() => loadHistory(), 5000);
+      return () => clearInterval(interval);
     }
   }, [visible, loadHistory]);
 
