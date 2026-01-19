@@ -154,10 +154,12 @@ class M3URefreshTask(TaskScheduler):
 
                     success_count += 1
                     refreshed.append(account_name)
+                    self._increment_progress(success_count=1)
                 except Exception as e:
                     logger.error(f"[{self.task_id}] Failed to refresh {account_name}: {e}")
                     failed_count += 1
                     errors.append(f"{account_name}: {str(e)}")
+                    self._increment_progress(failed_count=1)
 
             self._set_progress(
                 success_count=success_count,

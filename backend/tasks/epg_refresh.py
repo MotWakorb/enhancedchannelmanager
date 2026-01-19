@@ -156,10 +156,12 @@ class EPGRefreshTask(TaskScheduler):
 
                     success_count += 1
                     refreshed.append(source_name)
+                    self._increment_progress(success_count=1)
                 except Exception as e:
                     logger.error(f"[{self.task_id}] Failed to refresh {source_name}: {e}")
                     failed_count += 1
                     errors.append(f"{source_name}: {str(e)}")
+                    self._increment_progress(failed_count=1)
 
             self._set_progress(
                 success_count=success_count,
