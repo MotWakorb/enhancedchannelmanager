@@ -28,7 +28,7 @@ from database import init_db, get_session
 import journal
 from bandwidth_tracker import BandwidthTracker, set_tracker, get_tracker
 from stream_prober import StreamProber, set_prober, get_prober
-from alert_channels import get_alert_manager, get_channel_types, create_channel
+from alert_channels import get_alert_manager, get_channel_types, create_channel as create_alert_channel_instance
 # Import channel implementations to register them
 import alert_channels_discord  # noqa: F401
 import alert_channels_smtp  # noqa: F401
@@ -3777,7 +3777,7 @@ async def create_alert_channel(data: AlertChannelCreate):
             raise HTTPException(status_code=400, detail=f"Unknown channel type: {data.channel_type}")
 
         # Validate config
-        channel = create_channel(data.channel_type, 0, data.name, data.config)
+        channel = create_alert_channel_instance(data.channel_type, 0, data.name, data.config)
         if channel:
             is_valid, error = channel.validate_config(data.config)
             if not is_valid:
