@@ -3475,6 +3475,7 @@ async def get_notifications(
     notification_type: Optional[str] = None,
 ):
     """Get notifications with pagination and filtering."""
+    from database import get_session
     from models import Notification
 
     session = get_session()
@@ -3530,6 +3531,7 @@ async def create_notification(
     Args:
         send_alerts: If True (default), also dispatch to configured alert channels.
     """
+    from database import get_session
     import json
     import asyncio
     from models import Notification
@@ -3613,6 +3615,7 @@ async def _dispatch_to_alert_channels(
 @app.patch("/api/notifications/{notification_id}")
 async def update_notification(notification_id: int, read: Optional[bool] = None):
     """Update a notification (mark as read/unread)."""
+    from database import get_session
     from datetime import datetime
     from models import Notification
 
@@ -3636,6 +3639,7 @@ async def update_notification(notification_id: int, read: Optional[bool] = None)
 @app.patch("/api/notifications/mark-all-read")
 async def mark_all_notifications_read():
     """Mark all notifications as read."""
+    from database import get_session
     from datetime import datetime
     from models import Notification
 
@@ -3654,6 +3658,7 @@ async def mark_all_notifications_read():
 @app.delete("/api/notifications/{notification_id}")
 async def delete_notification(notification_id: int):
     """Delete a specific notification."""
+    from database import get_session
     from models import Notification
 
     session = get_session()
@@ -3672,6 +3677,7 @@ async def delete_notification(notification_id: int):
 @app.delete("/api/notifications")
 async def clear_all_notifications(read_only: bool = True):
     """Clear notifications. By default only clears read notifications."""
+    from database import get_session
     from models import Notification
 
     session = get_session()
@@ -3731,6 +3737,7 @@ async def get_alert_channel_types():
 @app.get("/api/alert-channels")
 async def list_alert_channels():
     """List all configured alert channels."""
+    from database import get_session
     from models import AlertChannel as AlertChannelModel
     import json
 
@@ -3767,6 +3774,7 @@ async def list_alert_channels():
 @app.post("/api/alert-channels")
 async def create_alert_channel(data: AlertChannelCreate):
     """Create a new alert channel."""
+    from database import get_session
     from models import AlertChannel as AlertChannelModel
     import json
 
@@ -3823,6 +3831,7 @@ async def create_alert_channel(data: AlertChannelCreate):
 @app.get("/api/alert-channels/{channel_id}")
 async def get_alert_channel(channel_id: int):
     """Get a specific alert channel."""
+    from database import get_session
     from models import AlertChannel as AlertChannelModel
     import json
 
@@ -3864,6 +3873,7 @@ async def get_alert_channel(channel_id: int):
 @app.patch("/api/alert-channels/{channel_id}")
 async def update_alert_channel(channel_id: int, data: AlertChannelUpdate):
     """Update an alert channel."""
+    from database import get_session
     from models import AlertChannel as AlertChannelModel
     import json
 
@@ -3921,6 +3931,7 @@ async def update_alert_channel(channel_id: int, data: AlertChannelUpdate):
 @app.delete("/api/alert-channels/{channel_id}")
 async def delete_alert_channel(channel_id: int):
     """Delete an alert channel."""
+    from database import get_session
     from models import AlertChannel as AlertChannelModel
 
     logger.debug(f"Deleting alert channel: id={channel_id}")
@@ -3955,6 +3966,7 @@ async def delete_alert_channel(channel_id: int):
 @app.post("/api/alert-channels/{channel_id}/test")
 async def test_alert_channel(channel_id: int):
     """Test an alert channel by sending a test message."""
+    from database import get_session
     from models import AlertChannel as AlertChannelModel
     import json
 
