@@ -34,6 +34,12 @@ import alert_methods_discord  # noqa: F401
 import alert_methods_smtp  # noqa: F401
 import alert_methods_telegram  # noqa: F401
 
+# Polling configuration for manual refresh endpoints
+# These control background polling to detect when Dispatcharr completes refresh operations
+REFRESH_POLL_INTERVAL_SECONDS = 5
+M3U_REFRESH_MAX_WAIT_SECONDS = 300   # 5 minutes for M3U
+EPG_REFRESH_MAX_WAIT_SECONDS = 900   # 15 minutes for EPG (larger files)
+
 # Configure logging
 # Start with environment variable, will be updated from settings in startup
 initial_log_level = get_log_level_from_env()
@@ -2327,43 +2333,129 @@ async def delete_epg_source(source_id: int):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+async def _poll_epg_refresh_completion(source_id: int, source_name: str, initial_updated):
+    """
+    Background task to poll Dispatcharr until EPG refresh completes.
+
+    Polls every REFRESH_POLL_INTERVAL_SECONDS for up to EPG_REFRESH_MAX_WAIT_SECONDS.
+    Sends success notification when updated_at changes, warning on timeout.
+    Uses longer timeout than M3U since EPG files can be very large.
+    """
+    import asyncio
+    from datetime import datetime
+
+    client = get_client()
+    wait_start = datetime.utcnow()
+
+    try:
+        while True:
+            elapsed = (datetime.utcnow() - wait_start).total_seconds()
+            if elapsed >= EPG_REFRESH_MAX_WAIT_SECONDS:
+                logger.warning(f"[EPG-REFRESH] Timeout waiting for '{source_name}' refresh after {elapsed:.0f}s")
+                await send_alert(
+                    title=f"EPG Refresh: {source_name}",
+                    message=f"EPG refresh for '{source_name}' timed out after {int(elapsed)}s - refresh may still be in progress",
+                    notification_type="warning",
+                    source="EPG Refresh",
+                    metadata={"source_id": source_id, "source_name": source_name, "timeout": True},
+                    alert_category="epg_refresh",
+                    entity_id=source_id,
+                )
+                return
+
+            await asyncio.sleep(REFRESH_POLL_INTERVAL_SECONDS)
+
+            try:
+                current_source = await client.get_epg_source(source_id)
+            except Exception as e:
+                # Source may have been deleted during refresh
+                logger.warning(f"[EPG-REFRESH] Could not fetch source {source_id} during polling: {e}")
+                return
+
+            current_updated = current_source.get("updated_at") or current_source.get("last_updated")
+
+            if current_updated and current_updated != initial_updated:
+                wait_duration = (datetime.utcnow() - wait_start).total_seconds()
+                logger.info(f"[EPG-REFRESH] '{source_name}' refresh complete in {wait_duration:.1f}s")
+
+                journal.log_entry(
+                    category="epg",
+                    action_type="refresh",
+                    entity_id=source_id,
+                    entity_name=source_name,
+                    description=f"Refreshed EPG source '{source_name}' in {wait_duration:.1f}s",
+                )
+
+                await send_alert(
+                    title=f"EPG Refresh: {source_name}",
+                    message=f"Successfully refreshed EPG source '{source_name}' in {wait_duration:.1f}s",
+                    notification_type="success",
+                    source="EPG Refresh",
+                    metadata={"source_id": source_id, "source_name": source_name, "duration": wait_duration},
+                    alert_category="epg_refresh",
+                    entity_id=source_id,
+                )
+                return
+            elif elapsed > 30 and not initial_updated:
+                # After 30 seconds, assume complete if no timestamp field available
+                wait_duration = (datetime.utcnow() - wait_start).total_seconds()
+                logger.info(f"[EPG-REFRESH] '{source_name}' - assuming complete after {wait_duration:.0f}s (no timestamp field)")
+
+                journal.log_entry(
+                    category="epg",
+                    action_type="refresh",
+                    entity_id=source_id,
+                    entity_name=source_name,
+                    description=f"Refreshed EPG source '{source_name}'",
+                )
+
+                await send_alert(
+                    title=f"EPG Refresh: {source_name}",
+                    message=f"EPG source '{source_name}' refresh completed",
+                    notification_type="success",
+                    source="EPG Refresh",
+                    metadata={"source_id": source_id, "source_name": source_name},
+                    alert_category="epg_refresh",
+                    entity_id=source_id,
+                )
+                return
+
+    except Exception as e:
+        logger.error(f"[EPG-REFRESH] Error polling for '{source_name}' completion: {e}")
+
+
 @app.post("/api/epg/sources/{source_id}/refresh")
 async def refresh_epg_source(source_id: int):
+    """Trigger refresh for a single EPG source.
+
+    Triggers the refresh and spawns a background task to poll for completion.
+    Success notification is sent only when refresh actually completes.
+    """
+    import asyncio
+
     client = get_client()
     try:
-        # Get source info
+        # Get source info and capture initial state for polling
         source = await client.get_epg_source(source_id)
         source_name = source.get("name", "Unknown")
+        initial_updated = source.get("updated_at") or source.get("last_updated")
 
+        # Trigger the refresh (returns immediately, refresh happens in background)
         result = await client.refresh_epg_source(source_id)
 
-        # Log to journal
-        journal.log_entry(
-            category="epg",
-            action_type="refresh",
-            entity_id=source_id,
-            entity_name=source_name,
-            description=f"Refreshed EPG source '{source_name}'",
+        # Spawn background task to poll for completion and send notification
+        asyncio.create_task(
+            _poll_epg_refresh_completion(source_id, source_name, initial_updated)
         )
 
-        # Send success notification with granular filtering
-        await send_alert(
-            title=f"EPG Refresh: {source_name}",
-            message=f"Successfully refreshed EPG source '{source_name}'",
-            notification_type="success",
-            source="EPG Refresh",
-            metadata={"source_id": source_id, "source_name": source_name},
-            alert_category="epg_refresh",
-            entity_id=source_id,
-        )
-
+        logger.info(f"[EPG-REFRESH] Triggered refresh for '{source_name}', polling for completion in background")
         return result
     except Exception as e:
-        # Send error notification with granular filtering
+        # Send error notification for trigger failure
         try:
             await send_alert(
                 title="EPG Refresh Failed",
-                message=f"Failed to refresh EPG source (ID: {source_id}): {str(e)}",
+                message=f"Failed to trigger EPG refresh for source (ID: {source_id}): {str(e)}",
                 notification_type="error",
                 source="EPG Refresh",
                 metadata={"source_id": source_id, "error": str(e)},
@@ -3052,6 +3144,97 @@ async def delete_m3u_account(account_id: int, delete_groups: bool = True):
 # M3U Refresh
 # -------------------------------------------------------------------------
 
+
+async def _poll_m3u_refresh_completion(account_id: int, account_name: str, initial_updated):
+    """
+    Background task to poll Dispatcharr until M3U refresh completes.
+
+    Polls every REFRESH_POLL_INTERVAL_SECONDS for up to M3U_REFRESH_MAX_WAIT_SECONDS.
+    Sends success notification when updated_at changes, warning on timeout.
+    """
+    import asyncio
+    from datetime import datetime
+
+    client = get_client()
+    wait_start = datetime.utcnow()
+
+    try:
+        while True:
+            elapsed = (datetime.utcnow() - wait_start).total_seconds()
+            if elapsed >= M3U_REFRESH_MAX_WAIT_SECONDS:
+                logger.warning(f"[M3U-REFRESH] Timeout waiting for '{account_name}' refresh after {elapsed:.0f}s")
+                await send_alert(
+                    title=f"M3U Refresh: {account_name}",
+                    message=f"M3U refresh for '{account_name}' timed out after {int(elapsed)}s - refresh may still be in progress",
+                    notification_type="warning",
+                    source="M3U Refresh",
+                    metadata={"account_id": account_id, "account_name": account_name, "timeout": True},
+                    alert_category="m3u_refresh",
+                    entity_id=account_id,
+                )
+                return
+
+            await asyncio.sleep(REFRESH_POLL_INTERVAL_SECONDS)
+
+            try:
+                current_account = await client.get_m3u_account(account_id)
+            except Exception as e:
+                # Account may have been deleted during refresh
+                logger.warning(f"[M3U-REFRESH] Could not fetch account {account_id} during polling: {e}")
+                return
+
+            current_updated = current_account.get("updated_at") or current_account.get("last_refresh")
+
+            if current_updated and current_updated != initial_updated:
+                wait_duration = (datetime.utcnow() - wait_start).total_seconds()
+                logger.info(f"[M3U-REFRESH] '{account_name}' refresh complete in {wait_duration:.1f}s")
+
+                journal.log_entry(
+                    category="m3u",
+                    action_type="refresh",
+                    entity_id=account_id,
+                    entity_name=account_name,
+                    description=f"Refreshed M3U account '{account_name}' in {wait_duration:.1f}s",
+                )
+
+                await send_alert(
+                    title=f"M3U Refresh: {account_name}",
+                    message=f"Successfully refreshed M3U account '{account_name}' in {wait_duration:.1f}s",
+                    notification_type="success",
+                    source="M3U Refresh",
+                    metadata={"account_id": account_id, "account_name": account_name, "duration": wait_duration},
+                    alert_category="m3u_refresh",
+                    entity_id=account_id,
+                )
+                return
+            elif elapsed > 30 and not initial_updated:
+                # After 30 seconds, assume complete if no timestamp field available
+                wait_duration = (datetime.utcnow() - wait_start).total_seconds()
+                logger.info(f"[M3U-REFRESH] '{account_name}' - assuming complete after {wait_duration:.0f}s (no timestamp field)")
+
+                journal.log_entry(
+                    category="m3u",
+                    action_type="refresh",
+                    entity_id=account_id,
+                    entity_name=account_name,
+                    description=f"Refreshed M3U account '{account_name}'",
+                )
+
+                await send_alert(
+                    title=f"M3U Refresh: {account_name}",
+                    message=f"M3U account '{account_name}' refresh completed",
+                    notification_type="success",
+                    source="M3U Refresh",
+                    metadata={"account_id": account_id, "account_name": account_name},
+                    alert_category="m3u_refresh",
+                    entity_id=account_id,
+                )
+                return
+
+    except Exception as e:
+        logger.error(f"[M3U-REFRESH] Error polling for '{account_name}' completion: {e}")
+
+
 @app.post("/api/m3u/refresh")
 async def refresh_all_m3u_accounts():
     """Trigger refresh for all active M3U accounts."""
@@ -3064,42 +3247,36 @@ async def refresh_all_m3u_accounts():
 
 @app.post("/api/m3u/refresh/{account_id}")
 async def refresh_m3u_account(account_id: int):
-    """Trigger refresh for a single M3U account."""
+    """Trigger refresh for a single M3U account.
+
+    Triggers the refresh and spawns a background task to poll for completion.
+    Success notification is sent only when refresh actually completes.
+    """
+    import asyncio
+
     client = get_client()
     try:
-        # Get account info
+        # Get account info and capture initial state for polling
         account = await client.get_m3u_account(account_id)
         account_name = account.get("name", "Unknown")
+        initial_updated = account.get("updated_at") or account.get("last_refresh")
 
+        # Trigger the refresh (returns immediately, refresh happens in background)
         result = await client.refresh_m3u_account(account_id)
 
-        # Log to journal
-        journal.log_entry(
-            category="m3u",
-            action_type="refresh",
-            entity_id=account_id,
-            entity_name=account_name,
-            description=f"Refreshed M3U account '{account_name}'",
+        # Spawn background task to poll for completion and send notification
+        asyncio.create_task(
+            _poll_m3u_refresh_completion(account_id, account_name, initial_updated)
         )
 
-        # Send success notification with granular filtering
-        await send_alert(
-            title=f"M3U Refresh: {account_name}",
-            message=f"Successfully refreshed M3U account '{account_name}'",
-            notification_type="success",
-            source="M3U Refresh",
-            metadata={"account_id": account_id, "account_name": account_name},
-            alert_category="m3u_refresh",
-            entity_id=account_id,
-        )
-
+        logger.info(f"[M3U-REFRESH] Triggered refresh for '{account_name}', polling for completion in background")
         return result
     except Exception as e:
-        # Send error notification with granular filtering
+        # Send error notification for trigger failure
         try:
             await send_alert(
                 title="M3U Refresh Failed",
-                message=f"Failed to refresh M3U account (ID: {account_id}): {str(e)}",
+                message=f"Failed to trigger M3U refresh for account (ID: {account_id}): {str(e)}",
                 notification_type="error",
                 source="M3U Refresh",
                 metadata={"account_id": account_id, "error": str(e)},
