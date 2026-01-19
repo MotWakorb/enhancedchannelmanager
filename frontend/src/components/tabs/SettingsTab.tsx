@@ -183,8 +183,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   const [backendLogLevel, setBackendLogLevel] = useState('INFO');
   const [frontendLogLevel, setFrontendLogLevel] = useState('INFO');
 
-  // Stream probe settings
-  const [streamProbeEnabled, setStreamProbeEnabled] = useState(true);
+  // Stream probe settings (scheduled probing is controlled by Task Engine)
   const [streamProbeIntervalHours, setStreamProbeIntervalHours] = useState(24);
   const [streamProbeBatchSize, setStreamProbeBatchSize] = useState(10);
   const [streamProbeTimeout, setStreamProbeTimeout] = useState(30);
@@ -252,7 +251,6 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   // Track original settings to detect if restart is needed
   const [originalPollInterval, setOriginalPollInterval] = useState(10);
   const [originalTimezone, setOriginalTimezone] = useState('');
-  const [originalProbeEnabled, setOriginalProbeEnabled] = useState(true);
   const [originalAutoReorder, setOriginalAutoReorder] = useState(false);
   const [originalRefreshM3usBeforeProbe, setOriginalRefreshM3usBeforeProbe] = useState(true);
   const [needsRestart, setNeedsRestart] = useState(false);
@@ -465,9 +463,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         logger.setLevel(frontendLogLevel as FrontendLogLevel);
       }
       setLinkedM3UAccounts(settings.linked_m3u_accounts ?? []);
-      // Stream probe settings
-      setStreamProbeEnabled(settings.stream_probe_enabled ?? true);
-      setOriginalProbeEnabled(settings.stream_probe_enabled ?? true);
+      // Stream probe settings (scheduled probing is controlled by Task Engine)
       setStreamProbeIntervalHours(settings.stream_probe_interval_hours ?? 24);
       setStreamProbeBatchSize(settings.stream_probe_batch_size ?? 10);
       setStreamProbeTimeout(settings.stream_probe_timeout ?? 30);
@@ -571,8 +567,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         frontend_log_level: frontendLogLevel,
         vlc_open_behavior: vlcOpenBehavior,
         linked_m3u_accounts: linkedM3UAccounts,
-        // Stream probe settings
-        stream_probe_enabled: streamProbeEnabled,
+        // Stream probe settings (scheduled probing is controlled by Task Engine)
         stream_probe_interval_hours: streamProbeIntervalHours,
         stream_probe_batch_size: streamProbeBatchSize,
         stream_probe_timeout: streamProbeTimeout,
@@ -602,14 +597,12 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       logger.info('Settings saved successfully');
       // Check if any settings that require a restart have changed
       const pollOrTimezoneChanged = statsPollInterval !== originalPollInterval || userTimezone !== originalTimezone;
-      const probeSettingsChanged = streamProbeEnabled !== originalProbeEnabled ||
-                                   autoReorderAfterProbe !== originalAutoReorder ||
+      const probeSettingsChanged = autoReorderAfterProbe !== originalAutoReorder ||
                                    refreshM3usBeforeProbe !== originalRefreshM3usBeforeProbe;
 
       // Debug logging for restart detection
       logger.info(`[RESTART-CHECK] Poll interval: ${statsPollInterval} vs original ${originalPollInterval}`);
       logger.info(`[RESTART-CHECK] Timezone: "${userTimezone}" vs original "${originalTimezone}"`);
-      logger.info(`[RESTART-CHECK] Probe enabled: ${streamProbeEnabled} vs original ${originalProbeEnabled}`);
       logger.info(`[RESTART-CHECK] Auto-reorder: ${autoReorderAfterProbe} vs original ${originalAutoReorder}`);
       logger.info(`[RESTART-CHECK] Refresh M3Us: ${refreshM3usBeforeProbe} vs original ${originalRefreshM3usBeforeProbe}`);
       logger.info(`[RESTART-CHECK] pollOrTimezoneChanged=${pollOrTimezoneChanged}, probeSettingsChanged=${probeSettingsChanged}`);
@@ -647,7 +640,6 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       if (result.success) {
         setOriginalPollInterval(statsPollInterval);
         setOriginalTimezone(userTimezone);
-        setOriginalProbeEnabled(streamProbeEnabled);
         setOriginalAutoReorder(autoReorderAfterProbe);
         setOriginalRefreshM3usBeforeProbe(refreshM3usBeforeProbe);
         setNeedsRestart(false);
@@ -1828,26 +1820,10 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         </div>
         <p className="form-hint" style={{ marginBottom: '1rem' }}>
           Use ffprobe to gather stream metadata (resolution, FPS, codec, audio channels).
-          Scheduled probing runs automatically in the background.
+          Scheduled probing is controlled via the Scheduled Tasks section.
         </p>
 
-        <div className="checkbox-group">
-          <input
-            id="streamProbeEnabled"
-            type="checkbox"
-            checked={streamProbeEnabled}
-            onChange={(e) => setStreamProbeEnabled(e.target.checked)}
-          />
-          <div className="checkbox-content">
-            <label htmlFor="streamProbeEnabled">Enable scheduled probing</label>
-            <p>
-              Automatically probe streams on a schedule to keep metadata up to date.
-            </p>
-          </div>
-        </div>
-
-        {streamProbeEnabled && (
-          <div className="settings-group" style={{ marginTop: '1rem' }}>
+        <div className="settings-group" style={{ marginTop: '1rem' }}>
             <div className="form-group-vertical">
               <label htmlFor="probeInterval">Probe interval (hours)</label>
               <span className="form-description">How often to run scheduled probes (1-168 hours)</span>
@@ -2026,9 +2002,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
               </button>
             </div>
           </div>
-        )}
-
-      </div>
+        </div>
 
       {/* Probe History Section */}
       {probeHistory.length > 0 && (
@@ -2769,7 +2743,6 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                       frontend_log_level: frontendLogLevel,
                       vlc_open_behavior: vlcOpenBehavior,
                       linked_m3u_accounts: linkedM3UAccounts,
-                      stream_probe_enabled: streamProbeEnabled,
                       stream_probe_interval_hours: streamProbeIntervalHours,
                       stream_probe_batch_size: streamProbeBatchSize,
                       stream_probe_timeout: streamProbeTimeout,

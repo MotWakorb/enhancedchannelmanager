@@ -48,8 +48,6 @@ class StreamProber:
         probe_timeout: int = DEFAULT_PROBE_TIMEOUT,
         probe_batch_size: int = DEFAULT_PROBE_BATCH_SIZE,
         probe_interval_hours: int = DEFAULT_PROBE_INTERVAL_HOURS,
-        probe_enabled: bool = True,
-        schedule_time: str = "03:00",  # HH:MM format, 24h
         user_timezone: str = "",  # IANA timezone name
         probe_channel_groups: list[str] = None,  # List of group names to probe (empty/None = all groups)
         bitrate_sample_duration: int = 10,  # Duration in seconds to sample stream for bitrate (10, 20, or 30)
@@ -66,8 +64,6 @@ class StreamProber:
         self.probe_timeout = probe_timeout
         self.probe_batch_size = probe_batch_size
         self.probe_interval_hours = probe_interval_hours
-        self.probe_enabled = probe_enabled
-        self.schedule_time = schedule_time
         self.user_timezone = user_timezone
         self.probe_channel_groups = probe_channel_groups or []
         self.bitrate_sample_duration = bitrate_sample_duration
@@ -81,8 +77,6 @@ class StreamProber:
         # Smart Sort configuration
         self.stream_sort_priority = stream_sort_priority or ["resolution", "bitrate", "framerate"]
         self.stream_sort_enabled = stream_sort_enabled or {"resolution": True, "bitrate": True, "framerate": True}
-        self._task: Optional[asyncio.Task] = None
-        self._running = False  # Controls the scheduler loop
         self._probe_cancelled = False  # Controls cancellation of in-progress probe
         self._probing_in_progress = False
         # Progress tracking for probe all streams
@@ -128,39 +122,30 @@ class StreamProber:
             logger.error(f"Failed to persist probe history to {PROBE_HISTORY_FILE}: {e}")
 
     async def start(self):
-        """Start the background scheduled probing task."""
-        logger.info("StreamProber.start() called")
+        """Initialize the stream prober (check ffprobe availability).
 
-        if self._running:
-            logger.warning("StreamProber already running")
-            return
+        Note: Scheduled probing is now handled by the task engine (StreamProbeTask).
+        This method only validates that ffprobe is available for on-demand probing.
+        """
+        logger.info("StreamProber.start() called")
 
         # Check ffprobe availability
         ffprobe_available = check_ffprobe_available()
         logger.info(f"ffprobe availability check: {ffprobe_available}")
 
         if not ffprobe_available:
-            logger.error("ffprobe not found - stream probing disabled (scheduled probing will not start)")
-            logger.warning("On-demand probing will fail without ffprobe")
+            logger.error("ffprobe not found - stream probing will not be available")
+            logger.warning("Install ffprobe (part of ffmpeg) to enable stream probing")
             return
 
-        self._running = True
-        self._task = asyncio.create_task(self._scheduled_probe_loop())
         logger.info(
-            f"StreamProber started successfully (schedule: {self.schedule_time}, interval: {self.probe_interval_hours}h, "
-            f"batch: {self.probe_batch_size}, timeout: {self.probe_timeout}s)"
+            f"StreamProber initialized (batch: {self.probe_batch_size}, timeout: {self.probe_timeout}s)"
         )
 
     async def stop(self):
-        """Stop the background probing task."""
-        self._running = False
-        if self._task:
-            self._task.cancel()
-            try:
-                await self._task
-            except asyncio.CancelledError:
-                pass
-            self._task = None
+        """Stop the stream prober and cancel any in-progress probes."""
+        logger.info("StreamProber stopping...")
+        self._probe_cancelled = True
         logger.info("StreamProber stopped")
 
     def cancel_probe(self) -> dict:
@@ -195,98 +180,6 @@ class StreamProber:
             "status": "reset",
             "message": f"Probe state forcibly reset (was_in_progress={was_in_progress})"
         }
-
-    def _get_seconds_until_next_schedule(self) -> int:
-        """Calculate seconds until the next scheduled probe time."""
-        try:
-            # Parse schedule time
-            hour, minute = map(int, self.schedule_time.split(":"))
-        except (ValueError, AttributeError):
-            hour, minute = 3, 0  # Default to 3:00 AM
-
-        now = datetime.utcnow()
-
-        # If user has a timezone set, calculate in their local time
-        if self.user_timezone:
-            try:
-                import zoneinfo
-                tz = zoneinfo.ZoneInfo(self.user_timezone)
-                now_local = datetime.now(tz)
-                # Create next scheduled time in user's timezone
-                next_run_local = now_local.replace(hour=hour, minute=minute, second=0, microsecond=0)
-                if next_run_local <= now_local:
-                    # Already passed today, schedule for tomorrow
-                    next_run_local += timedelta(days=1)
-                # Convert to UTC for sleep calculation
-                next_run_utc = next_run_local.astimezone(zoneinfo.ZoneInfo("UTC")).replace(tzinfo=None)
-                seconds_until = (next_run_utc - now).total_seconds()
-            except Exception as e:
-                logger.warning(f"Failed to use timezone {self.user_timezone}, using UTC: {e}")
-                # Fall back to UTC
-                next_run = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
-                if next_run <= now:
-                    next_run += timedelta(days=1)
-                seconds_until = (next_run - now).total_seconds()
-        else:
-            # No timezone set, use UTC
-            next_run = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
-            if next_run <= now:
-                next_run += timedelta(days=1)
-            seconds_until = (next_run - now).total_seconds()
-
-        return max(60, int(seconds_until))  # At least 60 seconds
-
-    async def _scheduled_probe_loop(self):
-        """Main loop for scheduled probing."""
-        logger.info(f"_scheduled_probe_loop started (probe_enabled={self.probe_enabled}, _running={self._running})")
-
-        # Wait a bit before first probe to let system stabilize
-        try:
-            logger.info("Waiting 60 seconds for system to stabilize...")
-            await asyncio.sleep(60)
-            logger.info("Initial wait completed, entering scheduler loop")
-        except asyncio.CancelledError:
-            logger.info("_scheduled_probe_loop cancelled during initial wait")
-            return
-
-        if not self._running:
-            logger.warning("Scheduler loop not starting: _running is False")
-            return
-        if not self.probe_enabled:
-            logger.warning("Scheduler loop not starting: probe_enabled is False")
-            return
-
-        while self._running and self.probe_enabled:
-            # Calculate time until next scheduled probe
-            seconds_until = self._get_seconds_until_next_schedule()
-            hours_until = seconds_until / 3600
-            logger.info(f"StreamProber: Next scheduled probe in {hours_until:.1f} hours (at {self.schedule_time})")
-
-            # Sleep until scheduled time
-            try:
-                await asyncio.sleep(seconds_until)
-            except asyncio.CancelledError:
-                break
-
-            # Run the probe using probe_all_streams (same as manual probe)
-            # This ensures scheduled probes use channel group filtering, parallel probing,
-            # HDHomeRun limits, M3U connection tracking, etc.
-            try:
-                logger.info("Starting scheduled probe using probe_all_streams...")
-                # Use configured channel groups (None means use self.probe_channel_groups)
-                # Don't skip M3U refresh for scheduled probes (that's the default behavior)
-                await self.probe_all_streams(channel_groups_override=None, skip_m3u_refresh=False)
-                logger.info("Scheduled probe completed")
-            except asyncio.CancelledError:
-                break
-            except Exception as e:
-                logger.error(f"StreamProber scheduled probe error: {e}")
-
-            # Small delay before calculating next schedule (to avoid immediate re-triggering)
-            try:
-                await asyncio.sleep(60)
-            except asyncio.CancelledError:
-                break
 
     async def _probe_stale_streams(self):
         """Find and probe streams that haven't been probed recently."""
