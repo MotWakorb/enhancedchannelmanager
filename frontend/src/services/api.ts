@@ -1854,7 +1854,6 @@ export interface AlertMethod {
   notify_success: boolean;
   notify_warning: boolean;
   notify_error: boolean;
-  min_interval_seconds: number;
   last_sent_at: string | null;
   created_at: string | null;
 }
@@ -1868,7 +1867,6 @@ export interface AlertMethodCreate {
   notify_success?: boolean;
   notify_warning?: boolean;
   notify_error?: boolean;
-  min_interval_seconds?: number;
 }
 
 export interface AlertMethodUpdate {
@@ -1879,7 +1877,6 @@ export interface AlertMethodUpdate {
   notify_success?: boolean;
   notify_warning?: boolean;
   notify_error?: boolean;
-  min_interval_seconds?: number;
 }
 
 export async function getAlertMethodTypes(): Promise<AlertMethodType[]> {
