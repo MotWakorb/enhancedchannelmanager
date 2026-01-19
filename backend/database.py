@@ -105,6 +105,9 @@ def _run_migrations(engine) -> None:
             # Migrate existing schedules from scheduled_tasks to task_schedules
             _migrate_task_schedules(conn)
 
+            # Ensure alert_channels table exists (for databases created before v0.8.2)
+            _ensure_alert_channels_table(conn)
+
             logger.debug("All migrations complete - schema is up to date")
     except Exception as e:
         logger.exception(f"Migration failed: {e}")
@@ -306,6 +309,42 @@ def _convert_cron_to_schedule(cron_expr: str, timezone: str) -> dict:
 
     # Can't convert this cron expression
     return None
+
+
+def _ensure_alert_channels_table(conn) -> None:
+    """Ensure alert_channels table exists for databases created before v0.8.2."""
+    from sqlalchemy import text
+
+    # Check if alert_channels table exists
+    result = conn.execute(text(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='alert_channels'"
+    ))
+    if result.fetchone():
+        logger.debug("alert_channels table already exists")
+        return
+
+    logger.info("Creating alert_channels table (database predates v0.8.2)")
+    conn.execute(text("""
+        CREATE TABLE alert_channels (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name VARCHAR(100) NOT NULL,
+            channel_type VARCHAR(50) NOT NULL,
+            enabled BOOLEAN NOT NULL DEFAULT 1,
+            config TEXT NOT NULL,
+            notify_info BOOLEAN NOT NULL DEFAULT 0,
+            notify_success BOOLEAN NOT NULL DEFAULT 1,
+            notify_warning BOOLEAN NOT NULL DEFAULT 1,
+            notify_error BOOLEAN NOT NULL DEFAULT 1,
+            min_interval_seconds INTEGER NOT NULL DEFAULT 60,
+            last_sent_at DATETIME,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+    """))
+    conn.execute(text("CREATE INDEX idx_alert_channel_type ON alert_channels (channel_type)"))
+    conn.execute(text("CREATE INDEX idx_alert_channel_enabled ON alert_channels (enabled)"))
+    conn.commit()
+    logger.info("Created alert_channels table successfully")
 
 
 def _perform_maintenance(engine) -> None:
