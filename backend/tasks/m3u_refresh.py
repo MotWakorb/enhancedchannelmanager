@@ -75,6 +75,10 @@ class M3URefreshTask(TaskScheduler):
             # Filter accounts to refresh
             accounts_to_refresh = []
             for account in all_accounts:
+                # Skip the "Custom" account - it has no URL to refresh
+                if account.get("name", "").lower() == "custom":
+                    continue
+
                 # Skip inactive accounts if configured
                 if self.skip_inactive and not account.get("is_active", True):
                     continue
