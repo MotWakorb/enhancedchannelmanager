@@ -1,0 +1,16 @@
+{
+  "name": "enhanced-channel-manager-root",
+  "private": true,
+  "version": "0.8.3-0001",
+  "description": "Enhanced Channel Manager - Root workspace for E2E tests",
+  "scripts": {
+    "test:e2e": "playwright test",
+    "test:e2e:ui": "playwright test --ui",
+    "test:e2e:headed": "playwright test --headed",
+    "test:e2e:debug": "playwright test --debug",
+    "test:e2e:report": "playwright show-report"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.57.0"
+  }
+}
