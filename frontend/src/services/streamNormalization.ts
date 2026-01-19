@@ -17,6 +17,26 @@ import {
 // Separator types for channel number prefix and country prefix
 export type NumberSeparator = '-' | ':' | '|';
 
+/**
+ * Strip quality/resolution suffixes from a name.
+ * Handles both named suffixes (FHD, UHD, 4K, HD, SD) and arbitrary resolutions (1080p, 720p, 476p, etc.)
+ */
+function stripQualitySuffixes(name: string): string {
+  let result = name;
+
+  // First strip named quality suffixes from the constant list
+  for (const suffix of QUALITY_SUFFIXES) {
+    const pattern = new RegExp(`[\\s\\-_|:]*${suffix}\\s*$`, 'i');
+    result = result.replace(pattern, '');
+  }
+
+  // Then strip any arbitrary resolution pattern (e.g., 476p, 540p, 1440p)
+  // Match number followed by 'p' or 'i' at end of string with optional separator before
+  result = result.replace(/[\s\-_|:]*\d+[pPiI]\s*$/, '');
+
+  return result.trim();
+}
+
 // Prefix order when both country and number are enabled
 export type PrefixOrder = 'number-first' | 'country-first';
 
@@ -39,16 +59,41 @@ export interface NormalizeOptions {
  * Get the quality priority score for a stream name.
  * Lower score = higher quality (should appear first in the list).
  * Streams without quality indicators get DEFAULT_QUALITY_PRIORITY (HD level).
+ *
+ * Handles:
+ * - Named quality indicators: 4K, UHD, FHD, HD, SD
+ * - Any resolution ending in 'p' or 'i': 2160p, 1440p, 1080p, 720p, 576p, 540p, 480p, 476p, etc.
+ * - Higher resolution numbers = higher quality = lower priority value
  */
 export function getStreamQualityPriority(streamName: string): number {
   const upperName = streamName.toUpperCase();
 
-  // Check for each quality indicator in the name
+  // First check for named quality indicators (4K, UHD, FHD, HD, SD)
+  // These take precedence over numeric resolution parsing
   for (const [quality, priority] of Object.entries(QUALITY_PRIORITY)) {
+    // Skip numeric resolutions in the map - we'll handle those dynamically
+    if (/^\d+[PI]$/.test(quality)) continue;
+
     // Match quality at word boundary or with common separators
     const pattern = new RegExp(`(?:^|[\\s\\-_|:])${quality}(?:$|[\\s\\-_|:])`, 'i');
     if (pattern.test(upperName)) {
       return priority;
+    }
+  }
+
+  // Look for any resolution pattern ending in 'p' or 'i' (e.g., 1080p, 720p, 476p, 1080i)
+  // Match at word boundary or with common separators
+  const resolutionMatch = upperName.match(/(?:^|[\s\-_|:])(\d+)[PI](?:$|[\s\-_|:])/);
+  if (resolutionMatch) {
+    const resolution = parseInt(resolutionMatch[1], 10);
+    if (resolution > 0) {
+      // Calculate priority: higher resolution = lower priority value (sorts first)
+      // Formula: ~10 for 2160p, ~20 for 1080p, ~30 for 720p, ~40 for 480p
+      // Using 20000/resolution gives good spread across common resolutions
+      const calculatedPriority = Math.round(20000 / resolution);
+
+      // Clamp to reasonable range (5-60) to avoid extreme values
+      return Math.max(5, Math.min(60, calculatedPriority));
     }
   }
 
@@ -359,11 +404,7 @@ export function detectRegionalVariants(streams: { name: string }[]): boolean {
 
   for (const stream of streams) {
     // First strip quality suffixes to get consistent base comparison
-    let nameWithoutQuality = stream.name.trim();
-    for (const suffix of QUALITY_SUFFIXES) {
-      const pattern = new RegExp(`[\\s\\-_|:]*${suffix}\\s*$`, 'i');
-      nameWithoutQuality = nameWithoutQuality.replace(pattern, '');
-    }
+    let nameWithoutQuality = stripQualitySuffixes(stream.name);
     nameWithoutQuality = nameWithoutQuality.replace(/\s+/g, ' ').trim();
 
     const regional = getRegionalSuffix(nameWithoutQuality);
@@ -452,14 +493,8 @@ export function normalizeStreamName(name: string, timezonePreferenceOrOptions: T
     normalized = stripCountryPrefix(normalized);
   }
 
-  // Build a regex that matches quality suffixes at the end of the name
-  // Handle various separators: space, dash, underscore, pipe, colon
-  for (const suffix of QUALITY_SUFFIXES) {
-    // Match suffix at end with optional separator before it
-    // Case insensitive
-    const pattern = new RegExp(`[\\s\\-_|:]*${suffix}\\s*$`, 'i');
-    normalized = normalized.replace(pattern, '');
-  }
+  // Strip quality/resolution suffixes (FHD, UHD, 4K, HD, SD, and any numeric resolution like 1080p, 720p, 476p)
+  normalized = stripQualitySuffixes(normalized);
 
   // Handle regional suffixes based on timezone preference
   if (timezonePreference !== 'both') {
@@ -510,11 +545,7 @@ export function filterStreamsByTimezone<T extends { name: string }>(
 
   return streams.filter((stream) => {
     // First normalize quality to check regional suffix properly
-    let nameWithoutQuality = stream.name.trim();
-    for (const suffix of QUALITY_SUFFIXES) {
-      const pattern = new RegExp(`[\\s\\-_|:]*${suffix}\\s*$`, 'i');
-      nameWithoutQuality = nameWithoutQuality.replace(pattern, '');
-    }
+    const nameWithoutQuality = stripQualitySuffixes(stream.name);
 
     const regional = getRegionalSuffix(nameWithoutQuality);
 

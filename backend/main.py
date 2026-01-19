@@ -5,7 +5,7 @@ from fastapi.responses import FileResponse
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, Literal, Union
 import httpx
 import os
 import re
@@ -148,11 +148,25 @@ async def startup_event():
                 deprioritize_failed_streams=settings.deprioritize_failed_streams,
                 stream_sort_priority=settings.stream_sort_priority,
                 stream_sort_enabled=settings.stream_sort_enabled,
+                stream_fetch_page_limit=settings.stream_fetch_page_limit,
             )
             logger.info(f"StreamProber instance created: {prober is not None}")
 
             set_prober(prober)
             logger.info("set_prober() called successfully")
+
+            # Connect the prober to the StreamProbeTask in the task registry
+            try:
+                from task_registry import get_registry
+                registry = get_registry()
+                stream_probe_task = registry.get_task_instance("stream_probe")
+                if stream_probe_task:
+                    stream_probe_task.set_prober(prober)
+                    logger.info("Connected StreamProber to StreamProbeTask")
+                else:
+                    logger.warning("StreamProbeTask not found in registry")
+            except Exception as e:
+                logger.warning(f"Failed to connect prober to task: {e}")
 
             await prober.start()
             logger.info("prober.start() completed")
@@ -169,6 +183,20 @@ async def startup_event():
             logger.error(f"Failed to initialize stream prober: {e}", exc_info=True)
             logger.error("Stream probing will not be available!")
 
+    # Start the task execution engine
+    try:
+        # Import tasks module to trigger @register_task decorators
+        import tasks  # noqa: F401 - imported for side effects
+        logger.info("Task modules loaded and registered")
+
+        # Start the task engine
+        from task_engine import start_engine
+        await start_engine()
+        logger.info("Task execution engine started")
+    except Exception as e:
+        logger.error(f"Failed to start task engine: {e}", exc_info=True)
+        logger.error("Scheduled tasks will not be available!")
+
     logger.info("=" * 60)
 
 
@@ -176,6 +204,14 @@ async def startup_event():
 async def shutdown_event():
     """Clean up on shutdown."""
     logger.info("Enhanced Channel Manager shutting down")
+
+    # Stop task engine
+    try:
+        from task_engine import stop_engine
+        await stop_engine()
+        logger.info("Task execution engine stopped")
+    except Exception as e:
+        logger.error(f"Error stopping task engine: {e}")
 
     # Stop bandwidth tracker
     tracker = get_tracker()
@@ -216,6 +252,115 @@ class DeleteOrphanedGroupsRequest(BaseModel):
     class Config:
         # Allow extra fields to be ignored (for future compatibility)
         extra = "ignore"
+
+
+# Bulk commit operation types
+class BulkUpdateChannelOp(BaseModel):
+    type: Literal["updateChannel"] = "updateChannel"
+    channelId: int
+    data: dict
+
+
+class BulkAddStreamOp(BaseModel):
+    type: Literal["addStreamToChannel"] = "addStreamToChannel"
+    channelId: int
+    streamId: int
+
+
+class BulkRemoveStreamOp(BaseModel):
+    type: Literal["removeStreamFromChannel"] = "removeStreamFromChannel"
+    channelId: int
+    streamId: int
+
+
+class BulkReorderStreamsOp(BaseModel):
+    type: Literal["reorderChannelStreams"] = "reorderChannelStreams"
+    channelId: int
+    streamIds: list[int]
+
+
+class BulkAssignNumbersOp(BaseModel):
+    type: Literal["bulkAssignChannelNumbers"] = "bulkAssignChannelNumbers"
+    channelIds: list[int]
+    startingNumber: Optional[float] = None
+
+
+class BulkCreateChannelOp(BaseModel):
+    type: Literal["createChannel"] = "createChannel"
+    tempId: int  # Negative temp ID from frontend
+    name: str
+    channelNumber: Optional[float] = None
+    groupId: Optional[int] = None
+    newGroupName: Optional[str] = None
+    logoId: Optional[int] = None
+    logoUrl: Optional[str] = None
+    tvgId: Optional[str] = None
+
+
+class BulkDeleteChannelOp(BaseModel):
+    type: Literal["deleteChannel"] = "deleteChannel"
+    channelId: int
+
+
+class BulkCreateGroupOp(BaseModel):
+    type: Literal["createGroup"] = "createGroup"
+    name: str
+
+
+class BulkDeleteGroupOp(BaseModel):
+    type: Literal["deleteChannelGroup"] = "deleteChannelGroup"
+    groupId: int
+
+
+# Union type for all bulk operations
+BulkOperation = Union[
+    BulkUpdateChannelOp,
+    BulkAddStreamOp,
+    BulkRemoveStreamOp,
+    BulkReorderStreamsOp,
+    BulkAssignNumbersOp,
+    BulkCreateChannelOp,
+    BulkDeleteChannelOp,
+    BulkCreateGroupOp,
+    BulkDeleteGroupOp,
+]
+
+
+class BulkCommitRequest(BaseModel):
+    operations: list[BulkOperation]
+    # Groups to create before processing operations (name -> temp group ID mapping)
+    groupsToCreate: Optional[list[dict]] = None
+    # If true, only validate without executing (returns validation issues)
+    validateOnly: Optional[bool] = False
+    # If true, continue processing even when individual operations fail
+    continueOnError: Optional[bool] = False
+
+
+class ValidationIssue(BaseModel):
+    """Represents a validation issue found during pre-validation"""
+    type: str  # 'missing_channel', 'missing_stream', 'invalid_operation', etc.
+    severity: str  # 'error', 'warning'
+    message: str
+    operationIndex: Optional[int] = None
+    channelId: Optional[int] = None
+    channelName: Optional[str] = None
+    streamId: Optional[int] = None
+    streamName: Optional[str] = None
+
+
+class BulkCommitResponse(BaseModel):
+    success: bool
+    operationsApplied: int
+    operationsFailed: int
+    errors: list[dict]
+    # Map of temp channel IDs to real IDs
+    tempIdMap: dict[int, int]
+    # Map of group names to real IDs
+    groupIdMap: dict[str, int]
+    # Validation issues found during pre-validation
+    validationIssues: Optional[list[dict]] = None
+    # Whether validation passed (no errors, may have warnings)
+    validationPassed: Optional[bool] = None
 
 
 # Health check
@@ -265,6 +410,7 @@ class SettingsRequest(BaseModel):
     skip_recently_probed_hours: int = 0  # Skip streams successfully probed within last N hours (0 = always probe)
     refresh_m3us_before_probe: bool = True  # Refresh all M3U accounts before starting probe
     auto_reorder_after_probe: bool = False  # Automatically reorder streams in channels after probe completes
+    stream_fetch_page_limit: int = 200  # Max pages when fetching streams (200 pages * 500 = 100K streams)
     stream_sort_priority: list[str] = ["resolution", "bitrate", "framerate"]  # Priority order for Smart Sort
     stream_sort_enabled: dict[str, bool] = {"resolution": True, "bitrate": True, "framerate": True}  # Which criteria are enabled
     deprioritize_failed_streams: bool = True  # When enabled, failed/timeout/pending streams sort to bottom
@@ -310,6 +456,7 @@ class SettingsResponse(BaseModel):
     skip_recently_probed_hours: int  # Skip streams successfully probed within last N hours (0 = always probe)
     refresh_m3us_before_probe: bool  # Refresh all M3U accounts before starting probe
     auto_reorder_after_probe: bool  # Automatically reorder streams in channels after probe completes
+    stream_fetch_page_limit: int  # Max pages when fetching streams (200 pages * 500 = 100K streams)
     stream_sort_priority: list[str]  # Priority order for Smart Sort
     stream_sort_enabled: dict[str, bool]  # Which criteria are enabled
     deprioritize_failed_streams: bool  # When enabled, failed/timeout/pending streams sort to bottom
@@ -366,6 +513,7 @@ async def get_current_settings():
         skip_recently_probed_hours=settings.skip_recently_probed_hours,
         refresh_m3us_before_probe=settings.refresh_m3us_before_probe,
         auto_reorder_after_probe=settings.auto_reorder_after_probe,
+        stream_fetch_page_limit=settings.stream_fetch_page_limit,
         stream_sort_priority=settings.stream_sort_priority,
         stream_sort_enabled=settings.stream_sort_enabled,
         deprioritize_failed_streams=settings.deprioritize_failed_streams,
@@ -530,8 +678,21 @@ async def restart_services():
                 deprioritize_failed_streams=settings.deprioritize_failed_streams,
                 stream_sort_priority=settings.stream_sort_priority,
                 stream_sort_enabled=settings.stream_sort_enabled,
+                stream_fetch_page_limit=settings.stream_fetch_page_limit,
             )
             set_prober(new_prober)
+
+            # Connect the new prober to the StreamProbeTask
+            try:
+                from task_registry import get_registry
+                registry = get_registry()
+                stream_probe_task = registry.get_task_instance("stream_probe")
+                if stream_probe_task:
+                    stream_probe_task.set_prober(new_prober)
+                    logger.info("Connected new StreamProber to StreamProbeTask")
+            except Exception as e:
+                logger.warning(f"Failed to connect prober to task: {e}")
+
             await new_prober.start()
             logger.info(f"Restarted stream prober with updated settings (groups: {len(settings.probe_channel_groups)} selected)")
 
@@ -961,6 +1122,479 @@ async def assign_channel_numbers(request: AssignNumbersRequest):
         return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/channels/bulk-commit")
+async def bulk_commit_operations(request: BulkCommitRequest):
+    """
+    Process multiple channel operations in a single request.
+
+    This endpoint is optimized for bulk changes (1000+ operations) by:
+    - Processing all operations in a single HTTP request
+    - Tracking temp ID -> real ID mappings for newly created channels
+    - Creating groups before processing channel operations that reference them
+    - Pre-validating that referenced channels/streams exist
+
+    Options:
+    - validateOnly: If true, only validate without executing
+    - continueOnError: If true, continue processing even when operations fail
+
+    Returns a response with success status, ID mappings, and validation issues.
+    """
+    import uuid
+
+    client = get_client()
+    batch_id = str(uuid.uuid4())[:8]
+
+    # Count operation types for logging
+    op_counts = {}
+    for op in request.operations:
+        op_counts[op.type] = op_counts.get(op.type, 0) + 1
+    op_summary = ", ".join(f"{count} {op_type}" for op_type, count in sorted(op_counts.items()))
+
+    logger.debug(f"[BULK-COMMIT] Starting bulk commit (batch={batch_id}): {len(request.operations)} operations ({op_summary})")
+    logger.debug(f"[BULK-COMMIT] Options: validateOnly={request.validateOnly}, continueOnError={request.continueOnError}")
+    if request.groupsToCreate:
+        logger.debug(f"[BULK-COMMIT] Groups to create: {[g.get('name') for g in request.groupsToCreate]}")
+
+    result = {
+        "success": True,
+        "operationsApplied": 0,
+        "operationsFailed": 0,
+        "errors": [],
+        "tempIdMap": {},  # temp channel ID -> real ID
+        "groupIdMap": {},  # group name -> real ID
+        "validationIssues": [],
+        "validationPassed": True,
+    }
+
+    # Helper to resolve temp IDs to real IDs
+    def resolve_id(channel_id: int) -> int:
+        return result["tempIdMap"].get(channel_id, channel_id)
+
+    # Helper to resolve group ID (could be temp or real, or from new group name)
+    def resolve_group_id(group_id: Optional[int], new_group_name: Optional[str]) -> Optional[int]:
+        if new_group_name and new_group_name in result["groupIdMap"]:
+            return result["groupIdMap"][new_group_name]
+        return group_id
+
+    try:
+        # Phase 0: Pre-validation - check that referenced entities exist
+        logger.debug(f"[BULK-VALIDATE] Phase 0: Starting pre-validation")
+
+        # Collect all channel IDs that are referenced (not created) in operations
+        referenced_channel_ids = set()
+        referenced_stream_ids = set()
+        channels_to_create = set()  # Temp IDs that will be created
+
+        for idx, op in enumerate(request.operations):
+            if op.type == "createChannel":
+                # This creates a channel, track its temp ID
+                channels_to_create.add(op.tempId)
+            elif op.type in ("updateChannel", "deleteChannel"):
+                if op.channelId >= 0:  # Only real IDs need validation
+                    referenced_channel_ids.add(op.channelId)
+            elif op.type == "addStreamToChannel":
+                if op.channelId >= 0:
+                    referenced_channel_ids.add(op.channelId)
+                referenced_stream_ids.add(op.streamId)
+            elif op.type == "removeStreamFromChannel":
+                if op.channelId >= 0:
+                    referenced_channel_ids.add(op.channelId)
+                referenced_stream_ids.add(op.streamId)
+            elif op.type == "reorderChannelStreams":
+                if op.channelId >= 0:
+                    referenced_channel_ids.add(op.channelId)
+                for sid in op.streamIds:
+                    referenced_stream_ids.add(sid)
+            elif op.type == "bulkAssignChannelNumbers":
+                for cid in op.channelIds:
+                    if cid >= 0:
+                        referenced_channel_ids.add(cid)
+
+        # Fetch existing channels and streams to validate
+        existing_channels = {}  # id -> channel dict
+        existing_streams = {}   # id -> stream dict
+
+        logger.debug(f"[BULK-VALIDATE] Referenced entities: {len(referenced_channel_ids)} channels, {len(referenced_stream_ids)} streams")
+        logger.debug(f"[BULK-VALIDATE] Channels to create: {len(channels_to_create)} (temp IDs: {sorted(channels_to_create)})")
+
+        if referenced_channel_ids:
+            try:
+                logger.debug(f"[BULK-VALIDATE] Fetching existing channels for validation...")
+                # Fetch all pages of channels to build lookup
+                page = 1
+                while True:
+                    response = await client.get_channels(page=page, page_size=500)
+                    for ch in response.get("results", []):
+                        existing_channels[ch["id"]] = ch
+                    if not response.get("next"):
+                        break
+                    page += 1
+                logger.debug(f"[BULK-VALIDATE] Loaded {len(existing_channels)} existing channels")
+            except Exception as e:
+                logger.warning(f"[BULK-VALIDATE] Failed to fetch channels for validation: {e}")
+
+        if referenced_stream_ids:
+            try:
+                logger.debug(f"[BULK-VALIDATE] Fetching existing streams for validation...")
+                # Fetch all pages of streams to build lookup
+                page = 1
+                while True:
+                    response = await client.get_streams(page=page, page_size=500)
+                    for s in response.get("results", []):
+                        existing_streams[s["id"]] = s
+                    if not response.get("next"):
+                        break
+                    page += 1
+                logger.debug(f"[BULK-VALIDATE] Loaded {len(existing_streams)} existing streams")
+            except Exception as e:
+                logger.warning(f"[BULK-VALIDATE] Failed to fetch streams for validation: {e}")
+
+        # Validate each operation
+        for idx, op in enumerate(request.operations):
+            if op.type in ("updateChannel", "deleteChannel"):
+                if op.channelId >= 0 and op.channelId not in existing_channels:
+                    ch_name = f"Channel {op.channelId}"
+                    result["validationIssues"].append({
+                        "type": "missing_channel",
+                        "severity": "error",
+                        "message": f"Channel {op.channelId} does not exist in Dispatcharr",
+                        "operationIndex": idx,
+                        "channelId": op.channelId,
+                        "channelName": ch_name,
+                    })
+                    result["validationPassed"] = False
+
+            elif op.type == "addStreamToChannel":
+                if op.channelId >= 0 and op.channelId not in existing_channels:
+                    ch_name = f"Channel {op.channelId}"
+                    result["validationIssues"].append({
+                        "type": "missing_channel",
+                        "severity": "error",
+                        "message": f"Cannot add stream to channel {op.channelId}: channel does not exist",
+                        "operationIndex": idx,
+                        "channelId": op.channelId,
+                        "channelName": ch_name,
+                        "streamId": op.streamId,
+                    })
+                    result["validationPassed"] = False
+                elif op.channelId >= 0:
+                    ch_name = existing_channels[op.channelId].get("name", f"Channel {op.channelId}")
+                    # Check stream exists
+                    if op.streamId not in existing_streams:
+                        result["validationIssues"].append({
+                            "type": "missing_stream",
+                            "severity": "error",
+                            "message": f"Stream {op.streamId} does not exist",
+                            "operationIndex": idx,
+                            "channelId": op.channelId,
+                            "channelName": ch_name,
+                            "streamId": op.streamId,
+                        })
+                        result["validationPassed"] = False
+
+            elif op.type == "removeStreamFromChannel":
+                if op.channelId >= 0 and op.channelId not in existing_channels:
+                    result["validationIssues"].append({
+                        "type": "missing_channel",
+                        "severity": "error",
+                        "message": f"Cannot remove stream from channel {op.channelId}: channel does not exist",
+                        "operationIndex": idx,
+                        "channelId": op.channelId,
+                        "streamId": op.streamId,
+                    })
+                    result["validationPassed"] = False
+
+            elif op.type == "reorderChannelStreams":
+                if op.channelId >= 0 and op.channelId not in existing_channels:
+                    result["validationIssues"].append({
+                        "type": "missing_channel",
+                        "severity": "error",
+                        "message": f"Cannot reorder streams for channel {op.channelId}: channel does not exist",
+                        "operationIndex": idx,
+                        "channelId": op.channelId,
+                    })
+                    result["validationPassed"] = False
+
+            elif op.type == "bulkAssignChannelNumbers":
+                for cid in op.channelIds:
+                    if cid >= 0 and cid not in existing_channels:
+                        result["validationIssues"].append({
+                            "type": "missing_channel",
+                            "severity": "error",
+                            "message": f"Cannot assign number to channel {cid}: channel does not exist",
+                            "operationIndex": idx,
+                            "channelId": cid,
+                        })
+                        result["validationPassed"] = False
+
+        # Log validation summary
+        logger.debug(f"[BULK-VALIDATE] Validation complete: passed={result['validationPassed']}, issues={len(result['validationIssues'])}")
+        for issue in result['validationIssues']:
+            logger.debug(f"[BULK-VALIDATE] Issue: {issue['type']} - {issue['message']}")
+
+        # If validateOnly, return now without executing
+        if request.validateOnly:
+            logger.info(f"[BULK-COMMIT] Validation only mode: {len(result['validationIssues'])} issues found, returning without executing")
+            result["success"] = result["validationPassed"]
+            return result
+
+        # If validation failed and continueOnError is false, return without executing
+        if not result["validationPassed"] and not request.continueOnError:
+            logger.warning(f"[BULK-COMMIT] Validation failed with {len(result['validationIssues'])} issues, aborting (continueOnError=false)")
+            result["success"] = False
+            return result
+
+        # Log if continuing despite validation issues
+        if not result["validationPassed"] and request.continueOnError:
+            logger.warning(f"[BULK-COMMIT] Continuing despite {len(result['validationIssues'])} validation issues (continueOnError=true)")
+
+        # Phase 1: Create groups first (if any)
+        if request.groupsToCreate:
+            logger.debug(f"[BULK-GROUP] Phase 1: Creating {len(request.groupsToCreate)} groups")
+            for group_info in request.groupsToCreate:
+                group_name = group_info.get("name")
+                if not group_name:
+                    logger.debug(f"[BULK-GROUP] Skipping group with no name")
+                    continue
+                try:
+                    logger.debug(f"[BULK-GROUP] Creating group: '{group_name}'")
+                    # Try to create the group
+                    new_group = await client.create_channel_group(group_name)
+                    result["groupIdMap"][group_name] = new_group["id"]
+                    logger.debug(f"[BULK-GROUP] Created group '{group_name}' -> ID {new_group['id']}")
+                except Exception as e:
+                    error_str = str(e)
+                    # If group already exists, try to find it
+                    if "400" in error_str or "already exists" in error_str.lower():
+                        logger.debug(f"[BULK-GROUP] Group '{group_name}' may already exist, searching...")
+                        try:
+                            groups = await client.get_channel_groups()
+                            for g in groups:
+                                if g.get("name") == group_name:
+                                    result["groupIdMap"][group_name] = g["id"]
+                                    logger.debug(f"[BULK-GROUP] Found existing group '{group_name}' -> ID {g['id']}")
+                                    break
+                        except Exception as find_err:
+                            logger.debug(f"[BULK-GROUP] Failed to search for existing group: {find_err}")
+                    else:
+                        # Non-duplicate error - fail the whole operation
+                        logger.error(f"[BULK-GROUP] Failed to create group '{group_name}': {e}")
+                        result["success"] = False
+                        result["errors"].append({
+                            "operationId": f"create-group-{group_name}",
+                            "error": str(e)
+                        })
+                        return result
+            logger.debug(f"[BULK-GROUP] Group creation complete: {len(result['groupIdMap'])} groups mapped")
+
+        # Phase 2: Process operations sequentially
+        logger.debug(f"[BULK-APPLY] Phase 2: Processing {len(request.operations)} operations")
+        for idx, op in enumerate(request.operations):
+            op_id = f"op-{idx}-{op.type}"
+            try:
+                if op.type == "updateChannel":
+                    channel_id = resolve_id(op.channelId)
+                    logger.debug(f"[BULK-APPLY] [{idx+1}/{len(request.operations)}] updateChannel: channel_id={channel_id}, data={op.data}")
+                    await client.update_channel(channel_id, op.data)
+                    result["operationsApplied"] += 1
+
+                elif op.type == "addStreamToChannel":
+                    channel_id = resolve_id(op.channelId)
+                    logger.debug(f"[BULK-APPLY] [{idx+1}/{len(request.operations)}] addStreamToChannel: channel_id={channel_id}, stream_id={op.streamId}")
+                    channel = await client.get_channel(channel_id)
+                    current_streams = channel.get("streams", [])
+                    if op.streamId not in current_streams:
+                        current_streams.append(op.streamId)
+                        await client.update_channel(channel_id, {"streams": current_streams})
+                        logger.debug(f"[BULK-APPLY] Added stream {op.streamId} to channel {channel_id}")
+                    else:
+                        logger.debug(f"[BULK-APPLY] Stream {op.streamId} already in channel {channel_id}, skipping")
+                    result["operationsApplied"] += 1
+
+                elif op.type == "removeStreamFromChannel":
+                    channel_id = resolve_id(op.channelId)
+                    logger.debug(f"[BULK-APPLY] [{idx+1}/{len(request.operations)}] removeStreamFromChannel: channel_id={channel_id}, stream_id={op.streamId}")
+                    channel = await client.get_channel(channel_id)
+                    current_streams = channel.get("streams", [])
+                    if op.streamId in current_streams:
+                        current_streams.remove(op.streamId)
+                        await client.update_channel(channel_id, {"streams": current_streams})
+                        logger.debug(f"[BULK-APPLY] Removed stream {op.streamId} from channel {channel_id}")
+                    else:
+                        logger.debug(f"[BULK-APPLY] Stream {op.streamId} not in channel {channel_id}, skipping")
+                    result["operationsApplied"] += 1
+
+                elif op.type == "reorderChannelStreams":
+                    channel_id = resolve_id(op.channelId)
+                    logger.debug(f"[BULK-APPLY] [{idx+1}/{len(request.operations)}] reorderChannelStreams: channel_id={channel_id}, streams={op.streamIds}")
+                    await client.update_channel(channel_id, {"streams": op.streamIds})
+                    result["operationsApplied"] += 1
+
+                elif op.type == "bulkAssignChannelNumbers":
+                    resolved_ids = [resolve_id(cid) for cid in op.channelIds]
+                    logger.debug(f"[BULK-APPLY] [{idx+1}/{len(request.operations)}] bulkAssignChannelNumbers: {len(resolved_ids)} channels starting at {op.startingNumber}")
+                    await client.assign_channel_numbers(resolved_ids, op.startingNumber)
+                    result["operationsApplied"] += 1
+
+                elif op.type == "createChannel":
+                    logger.debug(f"[BULK-APPLY] [{idx+1}/{len(request.operations)}] createChannel: name='{op.name}', tempId={op.tempId}, groupId={op.groupId}, newGroupName={op.newGroupName}")
+                    # Resolve group ID
+                    group_id = resolve_group_id(op.groupId, op.newGroupName)
+
+                    # Handle logo - if logoUrl provided but no logoId, try to find/create logo
+                    logo_id = op.logoId
+                    if not logo_id and op.logoUrl:
+                        try:
+                            logger.debug(f"[BULK-APPLY] Looking for logo by URL for channel '{op.name}'")
+                            # Try to find existing logo by URL
+                            existing_logo = await client.find_logo_by_url(op.logoUrl)
+                            if existing_logo:
+                                logo_id = existing_logo["id"]
+                                logger.debug(f"[BULK-APPLY] Found existing logo ID {logo_id}")
+                            else:
+                                # Create new logo
+                                new_logo = await client.create_logo({"name": op.name, "url": op.logoUrl})
+                                logo_id = new_logo["id"]
+                                logger.debug(f"[BULK-APPLY] Created new logo ID {logo_id}")
+                        except Exception as logo_err:
+                            logger.warning(f"[BULK-APPLY] Failed to create/find logo for channel '{op.name}': {logo_err}")
+                            # Continue without logo
+
+                    # Create the channel
+                    channel_data = {"name": op.name}
+                    if op.channelNumber is not None:
+                        channel_data["channel_number"] = op.channelNumber
+                    if group_id is not None:
+                        channel_data["channel_group_id"] = group_id
+                    if logo_id is not None:
+                        channel_data["logo_id"] = logo_id
+                    if op.tvgId is not None:
+                        channel_data["tvg_id"] = op.tvgId
+
+                    logger.debug(f"[BULK-APPLY] Creating channel with data: {channel_data}")
+                    new_channel = await client.create_channel(channel_data)
+
+                    # Track temp ID -> real ID mapping
+                    if op.tempId < 0:
+                        result["tempIdMap"][op.tempId] = new_channel["id"]
+
+                    result["operationsApplied"] += 1
+                    logger.debug(f"[BULK-APPLY] Created channel '{op.name}' (temp: {op.tempId} -> real: {new_channel['id']})")
+
+                elif op.type == "deleteChannel":
+                    channel_id = resolve_id(op.channelId)
+                    logger.debug(f"[BULK-APPLY] [{idx+1}/{len(request.operations)}] deleteChannel: channel_id={channel_id}")
+                    await client.delete_channel(channel_id)
+                    result["operationsApplied"] += 1
+                    logger.debug(f"[BULK-APPLY] Deleted channel {channel_id}")
+
+                elif op.type == "createGroup":
+                    logger.debug(f"[BULK-APPLY] [{idx+1}/{len(request.operations)}] createGroup: name='{op.name}'")
+                    # Groups should be created in Phase 1, but handle here if needed
+                    if op.name not in result["groupIdMap"]:
+                        new_group = await client.create_channel_group(op.name)
+                        result["groupIdMap"][op.name] = new_group["id"]
+                        logger.debug(f"[BULK-APPLY] Created group '{op.name}' -> ID {new_group['id']}")
+                    else:
+                        logger.debug(f"[BULK-APPLY] Group '{op.name}' already exists with ID {result['groupIdMap'][op.name]}")
+                    result["operationsApplied"] += 1
+
+                elif op.type == "deleteChannelGroup":
+                    logger.debug(f"[BULK-APPLY] [{idx+1}/{len(request.operations)}] deleteChannelGroup: groupId={op.groupId}")
+                    await client.delete_channel_group(op.groupId)
+                    result["operationsApplied"] += 1
+                    logger.debug(f"[BULK-APPLY] Deleted group {op.groupId}")
+
+            except Exception as e:
+                # Build detailed error info with channel/stream names
+                error_details = {
+                    "operationId": op_id,
+                    "operationType": op.type,
+                    "error": str(e),
+                }
+
+                # Add context based on operation type
+                if hasattr(op, 'channelId'):
+                    error_details["channelId"] = op.channelId
+                    # Try to get channel name from our lookup
+                    if op.channelId in existing_channels:
+                        error_details["channelName"] = existing_channels[op.channelId].get("name", f"Channel {op.channelId}")
+                    else:
+                        error_details["channelName"] = f"Channel {op.channelId}"
+
+                if hasattr(op, 'streamId'):
+                    error_details["streamId"] = op.streamId
+                    # Try to get stream name from our lookup
+                    if op.streamId in existing_streams:
+                        error_details["streamName"] = existing_streams[op.streamId].get("name", f"Stream {op.streamId}")
+                    else:
+                        error_details["streamName"] = f"Stream {op.streamId}"
+
+                if hasattr(op, 'name'):
+                    error_details["entityName"] = op.name
+
+                # Log with detailed context
+                channel_info = f" (channel: {error_details.get('channelName', 'N/A')})" if 'channelName' in error_details else ""
+                stream_info = f" (stream: {error_details.get('streamName', 'N/A')})" if 'streamName' in error_details else ""
+                logger.error(f"[BULK-APPLY] Operation {op_id} failed{channel_info}{stream_info}: {e}")
+
+                result["operationsFailed"] += 1
+                result["errors"].append(error_details)
+
+                # If continueOnError, keep processing; otherwise stop
+                if not request.continueOnError:
+                    logger.debug(f"[BULK-APPLY] Stopping due to error (continueOnError=false)")
+                    result["success"] = False
+                    break
+                else:
+                    logger.debug(f"[BULK-APPLY] Continuing despite error (continueOnError=true)")
+                # If continuing, mark as partial failure but keep going
+                # success will be determined at the end based on whether any ops succeeded
+
+        # Determine final success status
+        # If continueOnError was used, success means at least some operations succeeded
+        if request.continueOnError:
+            result["success"] = result["operationsFailed"] == 0 or result["operationsApplied"] > 0
+        else:
+            result["success"] = result["operationsFailed"] == 0
+
+        # Log summary
+        logger.debug(f"[BULK-COMMIT] Phase 2 complete: {result['operationsApplied']} applied, {result['operationsFailed']} failed")
+        logger.debug(f"[BULK-COMMIT] ID mappings: {len(result['tempIdMap'])} channels, {len(result['groupIdMap'])} groups")
+
+        # Log summary to journal
+        journal.log_entry(
+            category="channel",
+            action_type="bulk_commit",
+            entity_id=None,
+            entity_name="Bulk Commit",
+            description=f"Applied {result['operationsApplied']} operations in bulk commit" +
+                        (f" ({result['operationsFailed']} failed)" if result["operationsFailed"] > 0 else ""),
+            after_value={
+                "operations_applied": result["operationsApplied"],
+                "operations_failed": result["operationsFailed"],
+                "channels_created": len(result["tempIdMap"]),
+                "groups_created": len(result["groupIdMap"]),
+                "validation_issues": len(result["validationIssues"]),
+                "continue_on_error": request.continueOnError,
+            },
+            batch_id=batch_id,
+        )
+
+        logger.info(f"[BULK-COMMIT] Completed (batch={batch_id}): success={result['success']}, applied={result['operationsApplied']}, failed={result['operationsFailed']}" +
+                   (f", validation_issues={len(result['validationIssues'])}" if result["validationIssues"] else ""))
+        return result
+
+    except Exception as e:
+        logger.exception(f"[BULK-COMMIT] Unexpected error (batch={batch_id}): {e}")
+        result["success"] = False
+        result["errors"].append({
+            "operationId": "bulk-commit",
+            "error": str(e)
+        })
+        return result
 
 
 # Channel Groups
@@ -3154,6 +3788,488 @@ async def probe_single_stream(stream_id: int):
     except Exception as e:
         logger.error(f"Failed to probe stream {stream_id}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# -------------------------------------------------------------------------
+# Scheduled Tasks API
+# -------------------------------------------------------------------------
+
+class TaskConfigUpdate(BaseModel):
+    """Request model for updating task configuration."""
+    enabled: Optional[bool] = None
+    schedule_type: Optional[str] = None
+    interval_seconds: Optional[int] = None
+    cron_expression: Optional[str] = None
+    schedule_time: Optional[str] = None
+    timezone: Optional[str] = None
+    config: Optional[dict] = None  # Task-specific configuration (source_ids, account_ids, etc.)
+
+
+@app.get("/api/tasks")
+async def list_tasks():
+    """Get all registered tasks with their status."""
+    try:
+        from task_registry import get_registry
+        registry = get_registry()
+        return {"tasks": registry.get_all_task_statuses()}
+    except Exception as e:
+        logger.error(f"Failed to list tasks: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/tasks/{task_id}")
+async def get_task(task_id: str):
+    """Get status for a specific task, including all schedules."""
+    try:
+        from task_registry import get_registry
+        from database import get_session
+        from models import TaskSchedule
+        from schedule_calculator import describe_schedule
+
+        registry = get_registry()
+        status = registry.get_task_status(task_id)
+        if status is None:
+            raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
+
+        # Include schedules in the response
+        session = get_session()
+        try:
+            schedules = session.query(TaskSchedule).filter(TaskSchedule.task_id == task_id).all()
+            status['schedules'] = []
+            for schedule in schedules:
+                schedule_dict = schedule.to_dict()
+                schedule_dict['description'] = describe_schedule(
+                    schedule_type=schedule.schedule_type,
+                    interval_seconds=schedule.interval_seconds,
+                    schedule_time=schedule.schedule_time,
+                    timezone=schedule.timezone,
+                    days_of_week=schedule.get_days_of_week_list(),
+                    day_of_month=schedule.day_of_month,
+                )
+                status['schedules'].append(schedule_dict)
+        finally:
+            session.close()
+
+        return status
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get task {task_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.patch("/api/tasks/{task_id}")
+async def update_task(task_id: str, config: TaskConfigUpdate):
+    """Update task configuration."""
+    try:
+        from task_registry import get_registry
+        registry = get_registry()
+
+        result = registry.update_task_config(
+            task_id=task_id,
+            enabled=config.enabled,
+            schedule_type=config.schedule_type,
+            interval_seconds=config.interval_seconds,
+            cron_expression=config.cron_expression,
+            schedule_time=config.schedule_time,
+            timezone=config.timezone,
+            task_config=config.config,
+        )
+
+        if result is None:
+            raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
+
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to update task {task_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/tasks/{task_id}/run")
+async def run_task(task_id: str):
+    """Manually trigger a task execution."""
+    try:
+        from task_engine import get_engine
+        engine = get_engine()
+        result = await engine.run_task(task_id)
+
+        if result is None:
+            raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
+
+        return result.to_dict()
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to run task {task_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/tasks/{task_id}/cancel")
+async def cancel_task(task_id: str):
+    """Cancel a running task."""
+    try:
+        from task_engine import get_engine
+        engine = get_engine()
+        return engine.cancel_task(task_id)
+    except Exception as e:
+        logger.error(f"Failed to cancel task {task_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/tasks/{task_id}/history")
+async def get_task_history(task_id: str, limit: int = 50, offset: int = 0):
+    """Get execution history for a task."""
+    try:
+        from task_engine import get_engine
+        engine = get_engine()
+        history = engine.get_task_history(task_id=task_id, limit=limit, offset=offset)
+        return {"history": history}
+    except Exception as e:
+        logger.error(f"Failed to get history for task {task_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/tasks/engine/status")
+async def get_engine_status():
+    """Get task engine status."""
+    try:
+        from task_engine import get_engine
+        engine = get_engine()
+        return engine.get_status()
+    except Exception as e:
+        logger.error(f"Failed to get engine status: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/tasks/history/all")
+async def get_all_task_history(limit: int = 100, offset: int = 0):
+    """Get execution history for all tasks."""
+    try:
+        from task_engine import get_engine
+        engine = get_engine()
+        history = engine.get_task_history(task_id=None, limit=limit, offset=offset)
+        return {"history": history}
+    except Exception as e:
+        logger.error(f"Failed to get all task history: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/cron/presets")
+async def get_cron_presets():
+    """Get available cron presets for task scheduling."""
+    try:
+        from cron_parser import get_preset_list
+        return {"presets": get_preset_list()}
+    except Exception as e:
+        logger.error(f"Failed to get cron presets: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class CronValidateRequest(BaseModel):
+    """Request to validate a cron expression."""
+    expression: str
+
+
+@app.post("/api/cron/validate")
+async def validate_cron(request: CronValidateRequest):
+    """Validate a cron expression."""
+    try:
+        from cron_parser import validate_cron_expression, describe_cron_expression, get_next_n_run_times
+
+        is_valid, error = validate_cron_expression(request.expression)
+
+        if not is_valid:
+            return {
+                "valid": False,
+                "error": error,
+            }
+
+        # Get next run times for valid expressions
+        next_times = get_next_n_run_times(request.expression, n=5)
+
+        return {
+            "valid": True,
+            "description": describe_cron_expression(request.expression),
+            "next_runs": [t.isoformat() + "Z" for t in next_times],
+        }
+    except Exception as e:
+        logger.error(f"Failed to validate cron expression: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# =========================================================================
+# Task Schedule API - Multiple schedules per task
+# =========================================================================
+
+class TaskScheduleCreate(BaseModel):
+    """Request body for creating a task schedule."""
+    name: Optional[str] = None
+    enabled: bool = True
+    schedule_type: Literal['interval', 'daily', 'weekly', 'biweekly', 'monthly']
+    interval_seconds: Optional[int] = None
+    schedule_time: Optional[str] = None  # HH:MM format
+    timezone: Optional[str] = None
+    days_of_week: Optional[list] = None  # List of day numbers (0=Sunday, 6=Saturday)
+    day_of_month: Optional[int] = None  # 1-31, or -1 for last day
+
+
+class TaskScheduleUpdate(BaseModel):
+    """Request body for updating a task schedule."""
+    name: Optional[str] = None
+    enabled: Optional[bool] = None
+    schedule_type: Optional[Literal['interval', 'daily', 'weekly', 'biweekly', 'monthly']] = None
+    interval_seconds: Optional[int] = None
+    schedule_time: Optional[str] = None
+    timezone: Optional[str] = None
+    days_of_week: Optional[list] = None
+    day_of_month: Optional[int] = None
+
+
+@app.get("/api/tasks/{task_id}/schedules")
+async def list_task_schedules(task_id: str):
+    """Get all schedules for a task."""
+    try:
+        from database import get_session
+        from models import TaskSchedule, ScheduledTask
+        from schedule_calculator import describe_schedule
+
+        session = get_session()
+        try:
+            # Verify task exists
+            task = session.query(ScheduledTask).filter(ScheduledTask.task_id == task_id).first()
+            if not task:
+                raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
+
+            # Get all schedules for this task
+            schedules = session.query(TaskSchedule).filter(TaskSchedule.task_id == task_id).all()
+
+            result = []
+            for schedule in schedules:
+                schedule_dict = schedule.to_dict()
+                # Add human-readable description
+                schedule_dict['description'] = describe_schedule(
+                    schedule_type=schedule.schedule_type,
+                    interval_seconds=schedule.interval_seconds,
+                    schedule_time=schedule.schedule_time,
+                    timezone=schedule.timezone,
+                    days_of_week=schedule.get_days_of_week_list(),
+                    day_of_month=schedule.day_of_month,
+                )
+                result.append(schedule_dict)
+
+            return {"schedules": result}
+        finally:
+            session.close()
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to list schedules for task {task_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/tasks/{task_id}/schedules")
+async def create_task_schedule(task_id: str, data: TaskScheduleCreate):
+    """Create a new schedule for a task."""
+    try:
+        from database import get_session
+        from models import TaskSchedule, ScheduledTask
+        from schedule_calculator import calculate_next_run, describe_schedule
+
+        session = get_session()
+        try:
+            # Verify task exists
+            task = session.query(ScheduledTask).filter(ScheduledTask.task_id == task_id).first()
+            if not task:
+                raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
+
+            # Create the schedule
+            schedule = TaskSchedule(
+                task_id=task_id,
+                name=data.name,
+                enabled=data.enabled,
+                schedule_type=data.schedule_type,
+                interval_seconds=data.interval_seconds,
+                schedule_time=data.schedule_time,
+                timezone=data.timezone or "UTC",
+                day_of_month=data.day_of_month,
+            )
+
+            # Set days_of_week if provided
+            if data.days_of_week:
+                schedule.set_days_of_week_list(data.days_of_week)
+
+            # Calculate next run time
+            if data.enabled:
+                schedule.next_run_at = calculate_next_run(
+                    schedule_type=data.schedule_type,
+                    interval_seconds=data.interval_seconds,
+                    schedule_time=data.schedule_time,
+                    timezone=data.timezone or "UTC",
+                    days_of_week=data.days_of_week,
+                    day_of_month=data.day_of_month,
+                )
+
+            session.add(schedule)
+            session.commit()
+            session.refresh(schedule)
+
+            # Build response
+            result = schedule.to_dict()
+            result['description'] = describe_schedule(
+                schedule_type=schedule.schedule_type,
+                interval_seconds=schedule.interval_seconds,
+                schedule_time=schedule.schedule_time,
+                timezone=schedule.timezone,
+                days_of_week=schedule.get_days_of_week_list(),
+                day_of_month=schedule.day_of_month,
+            )
+
+            # Update the parent task's next_run_at to be the earliest of all schedules
+            _update_task_next_run(session, task_id)
+            session.commit()
+
+            return result
+        finally:
+            session.close()
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to create schedule for task {task_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.patch("/api/tasks/{task_id}/schedules/{schedule_id}")
+async def update_task_schedule(task_id: str, schedule_id: int, data: TaskScheduleUpdate):
+    """Update a task schedule."""
+    try:
+        from database import get_session
+        from models import TaskSchedule, ScheduledTask
+        from schedule_calculator import calculate_next_run, describe_schedule
+
+        session = get_session()
+        try:
+            # Verify schedule exists and belongs to task
+            schedule = session.query(TaskSchedule).filter(
+                TaskSchedule.id == schedule_id,
+                TaskSchedule.task_id == task_id
+            ).first()
+
+            if not schedule:
+                raise HTTPException(status_code=404, detail=f"Schedule {schedule_id} not found for task {task_id}")
+
+            # Update fields if provided
+            if data.name is not None:
+                schedule.name = data.name
+            if data.enabled is not None:
+                schedule.enabled = data.enabled
+            if data.schedule_type is not None:
+                schedule.schedule_type = data.schedule_type
+            if data.interval_seconds is not None:
+                schedule.interval_seconds = data.interval_seconds
+            if data.schedule_time is not None:
+                schedule.schedule_time = data.schedule_time
+            if data.timezone is not None:
+                schedule.timezone = data.timezone
+            if data.days_of_week is not None:
+                schedule.set_days_of_week_list(data.days_of_week)
+            if data.day_of_month is not None:
+                schedule.day_of_month = data.day_of_month
+
+            # Recalculate next run time
+            if schedule.enabled:
+                schedule.next_run_at = calculate_next_run(
+                    schedule_type=schedule.schedule_type,
+                    interval_seconds=schedule.interval_seconds,
+                    schedule_time=schedule.schedule_time,
+                    timezone=schedule.timezone,
+                    days_of_week=schedule.get_days_of_week_list(),
+                    day_of_month=schedule.day_of_month,
+                )
+            else:
+                schedule.next_run_at = None
+
+            session.commit()
+            session.refresh(schedule)
+
+            # Build response
+            result = schedule.to_dict()
+            result['description'] = describe_schedule(
+                schedule_type=schedule.schedule_type,
+                interval_seconds=schedule.interval_seconds,
+                schedule_time=schedule.schedule_time,
+                timezone=schedule.timezone,
+                days_of_week=schedule.get_days_of_week_list(),
+                day_of_month=schedule.day_of_month,
+            )
+
+            # Update the parent task's next_run_at
+            _update_task_next_run(session, task_id)
+            session.commit()
+
+            return result
+        finally:
+            session.close()
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to update schedule {schedule_id} for task {task_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/api/tasks/{task_id}/schedules/{schedule_id}")
+async def delete_task_schedule(task_id: str, schedule_id: int):
+    """Delete a task schedule."""
+    try:
+        from database import get_session
+        from models import TaskSchedule
+
+        session = get_session()
+        try:
+            # Verify schedule exists and belongs to task
+            schedule = session.query(TaskSchedule).filter(
+                TaskSchedule.id == schedule_id,
+                TaskSchedule.task_id == task_id
+            ).first()
+
+            if not schedule:
+                raise HTTPException(status_code=404, detail=f"Schedule {schedule_id} not found for task {task_id}")
+
+            session.delete(schedule)
+            session.commit()
+
+            # Update the parent task's next_run_at
+            _update_task_next_run(session, task_id)
+            session.commit()
+
+            return {"status": "deleted", "id": schedule_id}
+        finally:
+            session.close()
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to delete schedule {schedule_id} for task {task_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+def _update_task_next_run(session, task_id: str) -> None:
+    """Update a task's next_run_at based on its schedules."""
+    from models import TaskSchedule, ScheduledTask
+
+    # Get the earliest next_run_at from all enabled schedules
+    schedules = session.query(TaskSchedule).filter(
+        TaskSchedule.task_id == task_id,
+        TaskSchedule.enabled == True,
+        TaskSchedule.next_run_at != None
+    ).order_by(TaskSchedule.next_run_at).all()
+
+    task = session.query(ScheduledTask).filter(ScheduledTask.task_id == task_id).first()
+    if task:
+        if schedules:
+            task.next_run_at = schedules[0].next_run_at
+        else:
+            task.next_run_at = None
 
 
 # Serve static files in production
