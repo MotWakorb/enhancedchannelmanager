@@ -28,6 +28,11 @@ from database import init_db
 import journal
 from bandwidth_tracker import BandwidthTracker, set_tracker, get_tracker
 from stream_prober import StreamProber, set_prober, get_prober
+from alert_channels import get_alert_manager, get_channel_types, create_channel
+# Import channel implementations to register them
+import alert_channels_discord  # noqa: F401
+import alert_channels_smtp  # noqa: F401
+import alert_channels_telegram  # noqa: F401
 
 # Configure logging
 # Start with environment variable, will be updated from settings in startup
@@ -3518,10 +3523,17 @@ async def create_notification(
     action_label: Optional[str] = None,
     action_url: Optional[str] = None,
     metadata: Optional[dict] = None,
+    send_alerts: bool = True,
 ):
-    """Create a new notification."""
+    """Create a new notification.
+
+    Args:
+        send_alerts: If True (default), also dispatch to configured alert channels.
+    """
     import json
+    import asyncio
     from models import Notification
+    from alert_channels import send_alert
 
     if not message:
         raise HTTPException(status_code=400, detail="Message is required")
@@ -3544,9 +3556,58 @@ async def create_notification(
         session.add(notification)
         session.commit()
         session.refresh(notification)
-        return notification.to_dict()
+        result = notification.to_dict()
+
+        # Dispatch to alert channels asynchronously (non-blocking)
+        if send_alerts:
+            asyncio.create_task(
+                _dispatch_to_alert_channels(
+                    title=title,
+                    message=message,
+                    notification_type=notification_type,
+                    source=source,
+                    metadata=metadata,
+                )
+            )
+
+        return result
     finally:
         session.close()
+
+
+async def _dispatch_to_alert_channels(
+    title: Optional[str],
+    message: str,
+    notification_type: str,
+    source: Optional[str],
+    metadata: Optional[dict],
+):
+    """Dispatch notification to all configured alert channels.
+
+    This runs asynchronously and won't block the notification creation.
+    Failures are logged but don't affect the original notification.
+    """
+    from alert_channels import send_alert
+
+    try:
+        results = await send_alert(
+            title=title or "Notification",
+            message=message,
+            notification_type=notification_type,
+            source=source,
+            metadata=metadata,
+        )
+        if results:
+            success_count = sum(1 for v in results.values() if v)
+            fail_count = sum(1 for v in results.values() if not v)
+            if fail_count > 0:
+                logger.warning(
+                    f"Alert dispatch: {success_count} succeeded, {fail_count} failed"
+                )
+            else:
+                logger.debug(f"Alert dispatch: sent to {success_count} channel(s)")
+    except Exception as e:
+        logger.error(f"Failed to dispatch alerts: {e}")
 
 
 @app.patch("/api/notifications/{notification_id}")
@@ -3622,6 +3683,256 @@ async def clear_all_notifications(read_only: bool = True):
         count = query.delete(synchronize_session=False)
         session.commit()
         return {"deleted": count, "read_only": read_only}
+    finally:
+        session.close()
+
+
+# =============================================================================
+# Alert Channels
+# =============================================================================
+
+
+class AlertChannelCreate(BaseModel):
+    name: str
+    channel_type: str
+    config: dict
+    enabled: bool = True
+    notify_info: bool = False
+    notify_success: bool = True
+    notify_warning: bool = True
+    notify_error: bool = True
+    min_interval_seconds: int = 60
+
+
+class AlertChannelUpdate(BaseModel):
+    name: Optional[str] = None
+    config: Optional[dict] = None
+    enabled: Optional[bool] = None
+    notify_info: Optional[bool] = None
+    notify_success: Optional[bool] = None
+    notify_warning: Optional[bool] = None
+    notify_error: Optional[bool] = None
+    min_interval_seconds: Optional[int] = None
+
+
+@app.get("/api/alert-channels/types")
+async def get_alert_channel_types():
+    """Get available alert channel types and their configuration fields."""
+    return get_channel_types()
+
+
+@app.get("/api/alert-channels")
+async def list_alert_channels():
+    """List all configured alert channels."""
+    from models import AlertChannel as AlertChannelModel
+    import json
+
+    session = get_session()
+    try:
+        channels = session.query(AlertChannelModel).all()
+        return [
+            {
+                "id": ch.id,
+                "name": ch.name,
+                "channel_type": ch.channel_type,
+                "enabled": ch.enabled,
+                "config": json.loads(ch.config) if ch.config else {},
+                "notify_info": ch.notify_info,
+                "notify_success": ch.notify_success,
+                "notify_warning": ch.notify_warning,
+                "notify_error": ch.notify_error,
+                "min_interval_seconds": ch.min_interval_seconds,
+                "last_sent_at": ch.last_sent_at.isoformat() + "Z" if ch.last_sent_at else None,
+                "created_at": ch.created_at.isoformat() + "Z" if ch.created_at else None,
+            }
+            for ch in channels
+        ]
+    finally:
+        session.close()
+
+
+@app.post("/api/alert-channels")
+async def create_alert_channel(data: AlertChannelCreate):
+    """Create a new alert channel."""
+    from models import AlertChannel as AlertChannelModel
+    import json
+
+    # Validate channel type
+    channel_types = {ct["type"] for ct in get_channel_types()}
+    if data.channel_type not in channel_types:
+        raise HTTPException(status_code=400, detail=f"Unknown channel type: {data.channel_type}")
+
+    # Validate config
+    channel = create_channel(data.channel_type, 0, data.name, data.config)
+    if channel:
+        is_valid, error = channel.validate_config(data.config)
+        if not is_valid:
+            raise HTTPException(status_code=400, detail=error)
+
+    session = get_session()
+    try:
+        channel_model = AlertChannelModel(
+            name=data.name,
+            channel_type=data.channel_type,
+            config=json.dumps(data.config),
+            enabled=data.enabled,
+            notify_info=data.notify_info,
+            notify_success=data.notify_success,
+            notify_warning=data.notify_warning,
+            notify_error=data.notify_error,
+            min_interval_seconds=data.min_interval_seconds,
+        )
+        session.add(channel_model)
+        session.commit()
+        session.refresh(channel_model)
+
+        # Reload the manager to pick up the new channel
+        get_alert_manager().reload_channel(channel_model.id)
+
+        return {
+            "id": channel_model.id,
+            "name": channel_model.name,
+            "channel_type": channel_model.channel_type,
+            "enabled": channel_model.enabled,
+        }
+    finally:
+        session.close()
+
+
+@app.get("/api/alert-channels/{channel_id}")
+async def get_alert_channel(channel_id: int):
+    """Get a specific alert channel."""
+    from models import AlertChannel as AlertChannelModel
+    import json
+
+    session = get_session()
+    try:
+        channel = session.query(AlertChannelModel).filter(
+            AlertChannelModel.id == channel_id
+        ).first()
+
+        if not channel:
+            raise HTTPException(status_code=404, detail="Alert channel not found")
+
+        return {
+            "id": channel.id,
+            "name": channel.name,
+            "channel_type": channel.channel_type,
+            "enabled": channel.enabled,
+            "config": json.loads(channel.config) if channel.config else {},
+            "notify_info": channel.notify_info,
+            "notify_success": channel.notify_success,
+            "notify_warning": channel.notify_warning,
+            "notify_error": channel.notify_error,
+            "min_interval_seconds": channel.min_interval_seconds,
+            "last_sent_at": channel.last_sent_at.isoformat() + "Z" if channel.last_sent_at else None,
+            "created_at": channel.created_at.isoformat() + "Z" if channel.created_at else None,
+        }
+    finally:
+        session.close()
+
+
+@app.patch("/api/alert-channels/{channel_id}")
+async def update_alert_channel(channel_id: int, data: AlertChannelUpdate):
+    """Update an alert channel."""
+    from models import AlertChannel as AlertChannelModel
+    import json
+
+    session = get_session()
+    try:
+        channel = session.query(AlertChannelModel).filter(
+            AlertChannelModel.id == channel_id
+        ).first()
+
+        if not channel:
+            raise HTTPException(status_code=404, detail="Alert channel not found")
+
+        if data.name is not None:
+            channel.name = data.name
+        if data.config is not None:
+            # Validate new config
+            channel_instance = create_channel(channel.channel_type, channel.id, channel.name, data.config)
+            if channel_instance:
+                is_valid, error = channel_instance.validate_config(data.config)
+                if not is_valid:
+                    raise HTTPException(status_code=400, detail=error)
+            channel.config = json.dumps(data.config)
+        if data.enabled is not None:
+            channel.enabled = data.enabled
+        if data.notify_info is not None:
+            channel.notify_info = data.notify_info
+        if data.notify_success is not None:
+            channel.notify_success = data.notify_success
+        if data.notify_warning is not None:
+            channel.notify_warning = data.notify_warning
+        if data.notify_error is not None:
+            channel.notify_error = data.notify_error
+        if data.min_interval_seconds is not None:
+            channel.min_interval_seconds = data.min_interval_seconds
+
+        session.commit()
+
+        # Reload the manager to pick up the changes
+        get_alert_manager().reload_channel(channel_id)
+
+        return {"success": True}
+    finally:
+        session.close()
+
+
+@app.delete("/api/alert-channels/{channel_id}")
+async def delete_alert_channel(channel_id: int):
+    """Delete an alert channel."""
+    from models import AlertChannel as AlertChannelModel
+
+    session = get_session()
+    try:
+        channel = session.query(AlertChannelModel).filter(
+            AlertChannelModel.id == channel_id
+        ).first()
+
+        if not channel:
+            raise HTTPException(status_code=404, detail="Alert channel not found")
+
+        session.delete(channel)
+        session.commit()
+
+        # Remove from manager
+        get_alert_manager().reload_channel(channel_id)
+
+        return {"success": True}
+    finally:
+        session.close()
+
+
+@app.post("/api/alert-channels/{channel_id}/test")
+async def test_alert_channel(channel_id: int):
+    """Test an alert channel by sending a test message."""
+    from models import AlertChannel as AlertChannelModel
+    import json
+
+    session = get_session()
+    try:
+        channel_model = session.query(AlertChannelModel).filter(
+            AlertChannelModel.id == channel_id
+        ).first()
+
+        if not channel_model:
+            raise HTTPException(status_code=404, detail="Alert channel not found")
+
+        config = json.loads(channel_model.config) if channel_model.config else {}
+        channel = create_channel(
+            channel_model.channel_type,
+            channel_model.id,
+            channel_model.name,
+            config
+        )
+
+        if not channel:
+            raise HTTPException(status_code=400, detail=f"Unknown channel type: {channel_model.channel_type}")
+
+        success, message = await channel.test_connection()
+        return {"success": success, "message": message}
     finally:
         session.close()
 
