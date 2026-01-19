@@ -534,8 +534,89 @@ export async function deleteServerGroup(id: number): Promise<{ status: string }>
 }
 
 // Health check
-export async function getHealth(): Promise<{ status: string; service: string }> {
+export interface HealthResponse {
+  status: string;
+  service: string;
+  version: string;
+  release_channel: string;
+  git_commit: string;
+}
+
+export async function getHealth(): Promise<HealthResponse> {
   return fetchJson(`${API_BASE}/health`);
+}
+
+// Version check types
+export interface UpdateInfo {
+  updateAvailable: boolean;
+  latestVersion?: string;
+  latestCommit?: string;
+  releaseUrl?: string;
+  releaseNotes?: string;
+}
+
+const GITHUB_REPO = 'MotWakorb/enhancedchannelmanager';
+
+// Check for updates based on release channel
+export async function checkForUpdates(
+  currentVersion: string,
+  releaseChannel: string
+): Promise<UpdateInfo> {
+  try {
+    if (releaseChannel === 'dev') {
+      // For dev channel, check package.json version on dev branch
+      const response = await fetch(
+        `https://raw.githubusercontent.com/${GITHUB_REPO}/dev/frontend/package.json`,
+        { cache: 'no-store' }  // Always fetch fresh
+      );
+      if (!response.ok) {
+        throw new Error(`GitHub fetch error: ${response.status}`);
+      }
+      const packageJson = await response.json();
+      const latestVersion = packageJson.version || 'unknown';
+
+      // Compare versions
+      const updateAvailable = latestVersion !== currentVersion &&
+        currentVersion !== 'unknown' &&
+        latestVersion !== 'unknown';
+
+      return {
+        updateAvailable,
+        latestVersion,
+        releaseUrl: `https://github.com/${GITHUB_REPO}/tree/dev`,
+      };
+    } else {
+      // For latest/stable channel, check GitHub releases
+      const response = await fetch(
+        `https://api.github.com/repos/${GITHUB_REPO}/releases/latest`,
+        { headers: { 'Accept': 'application/vnd.github.v3+json' } }
+      );
+      if (!response.ok) {
+        if (response.status === 404) {
+          // No releases yet
+          return { updateAvailable: false };
+        }
+        throw new Error(`GitHub API error: ${response.status}`);
+      }
+      const data = await response.json();
+      const latestVersion = data.tag_name?.replace(/^v/, '') || 'unknown';
+
+      // Compare versions
+      const updateAvailable = latestVersion !== currentVersion &&
+        currentVersion !== 'unknown' &&
+        latestVersion !== 'unknown';
+
+      return {
+        updateAvailable,
+        latestVersion,
+        releaseUrl: data.html_url,
+        releaseNotes: data.body,
+      };
+    }
+  } catch (error) {
+    console.warn('Failed to check for updates:', error);
+    return { updateAvailable: false };
+  }
 }
 
 // Settings
