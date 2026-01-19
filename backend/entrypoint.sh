@@ -128,7 +128,10 @@ check_application() {
         print_success "Application module loads successfully"
     else
         print_error "Application module failed to load"
-        python3 -c "import main" 2>&1 | head -n 5
+        echo ""
+        echo "${RED}Full traceback:${NC}"
+        python3 -c "import main" 2>&1
+        echo ""
         return 1
     fi
 
