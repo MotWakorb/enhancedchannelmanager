@@ -462,7 +462,7 @@ export function TaskEditorModal({ task, onClose, onSaved }: TaskEditorModalProps
               </div>
               <div style={{ maxHeight: '200px', overflowY: 'auto' }}>
                 {m3uAccounts
-                  .filter((account) => account.name !== 'Custom')
+                  .filter((account) => account.name.toLowerCase() !== 'custom')
                   .map((account) => (
                     <label
                       key={account.id}
