@@ -298,6 +298,7 @@ interface DroppableGroupHeaderProps {
   onSortStreamsByMode?: (mode: 'smart' | 'resolution' | 'bitrate' | 'framerate') => void;
   isSortingByQuality?: boolean;
   enabledCriteria?: Record<'resolution' | 'bitrate' | 'framerate', boolean>;
+  hasFailedStreams?: boolean;
 }
 
 const DroppableGroupHeader = memo(function DroppableGroupHeader({
@@ -324,6 +325,7 @@ const DroppableGroupHeader = memo(function DroppableGroupHeader({
   onSortStreamsByMode,
   isSortingByQuality = false,
   enabledCriteria = { resolution: true, bitrate: true, framerate: true },
+  hasFailedStreams = false,
 }: DroppableGroupHeaderProps) {
   const droppableId = `group-${groupId}`;
   const { isOver, setNodeRef } = useDroppable({
@@ -463,6 +465,11 @@ const DroppableGroupHeader = memo(function DroppableGroupHeader({
         </span>
       )}
       <span className="group-count">{channelCount}</span>
+      {hasFailedStreams && (
+        <span className="group-failed-indicator" title="One or more channels have failed streams">
+          <span className="material-icons">error</span>
+        </span>
+      )}
       {channelRange && channelRange.min !== null && channelRange.max !== null && (
         <span className="group-range" title="Channel number range">
           {channelRange.min === channelRange.max
@@ -4255,6 +4262,14 @@ export function ChannelsPane({
       onSelectGroupChannels(allGroupChannelIds, !allSelected);
     };
 
+    // Check if any channel in this group has failed streams
+    const groupHasFailedStreams = groupChannels.some(channel =>
+      channel.streams.some(streamId => {
+        const stats = streamStatsMap.get(streamId);
+        return stats && (stats.probe_status === 'failed' || stats.probe_status === 'timeout');
+      })
+    );
+
     return (
       <div key={groupId} className={`channel-group ${isEmpty ? 'empty-group' : ''}`}>
         <SortableGroupHeader
@@ -4280,6 +4295,7 @@ export function ChannelsPane({
           onSortStreamsByMode={(mode) => handleSortGroupStreamsByMode(groupId, mode)}
           isSortingByQuality={bulkSortingByQuality}
           enabledCriteria={channelDefaults?.streamSortEnabled}
+          hasFailedStreams={groupHasFailedStreams}
         />
         {isExpanded && isEmpty && (
           <div className="group-channels empty-group-placeholder">
