@@ -3806,7 +3806,6 @@ class AlertMethodCreate(BaseModel):
     notify_success: bool = True
     notify_warning: bool = True
     notify_error: bool = True
-    min_interval_seconds: int = 60
 
 
 class AlertMethodUpdate(BaseModel):
@@ -3817,7 +3816,6 @@ class AlertMethodUpdate(BaseModel):
     notify_success: Optional[bool] = None
     notify_warning: Optional[bool] = None
     notify_error: Optional[bool] = None
-    min_interval_seconds: Optional[int] = None
 
 
 @app.get("/api/alert-methods/types")
@@ -3855,7 +3853,6 @@ async def list_alert_methods():
                 "notify_success": m.notify_success,
                 "notify_warning": m.notify_warning,
                 "notify_error": m.notify_error,
-                "min_interval_seconds": m.min_interval_seconds,
                 "last_sent_at": m.last_sent_at.isoformat() + "Z" if m.last_sent_at else None,
                 "created_at": m.created_at.isoformat() + "Z" if m.created_at else None,
             }
@@ -3903,7 +3900,6 @@ async def create_alert_method(data: AlertMethodCreate):
             notify_success=data.notify_success,
             notify_warning=data.notify_warning,
             notify_error=data.notify_error,
-            min_interval_seconds=data.min_interval_seconds,
         )
         session.add(method_model)
         session.commit()
@@ -3957,7 +3953,6 @@ async def get_alert_method(method_id: int):
             "notify_success": method.notify_success,
             "notify_warning": method.notify_warning,
             "notify_error": method.notify_error,
-            "min_interval_seconds": method.min_interval_seconds,
             "last_sent_at": method.last_sent_at.isoformat() + "Z" if method.last_sent_at else None,
             "created_at": method.created_at.isoformat() + "Z" if method.created_at else None,
         }
@@ -4008,8 +4003,6 @@ async def update_alert_method(method_id: int, data: AlertMethodUpdate):
             method.notify_warning = data.notify_warning
         if data.notify_error is not None:
             method.notify_error = data.notify_error
-        if data.min_interval_seconds is not None:
-            method.min_interval_seconds = data.min_interval_seconds
 
         session.commit()
 

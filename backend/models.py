@@ -470,8 +470,7 @@ class AlertMethod(Base):
     notify_success = Column(Boolean, default=True, nullable=False)
     notify_warning = Column(Boolean, default=True, nullable=False)
     notify_error = Column(Boolean, default=True, nullable=False)
-    # Rate limiting
-    min_interval_seconds = Column(Integer, default=60, nullable=False)  # Min time between alerts
+    # Digest tracking
     last_sent_at = Column(DateTime, nullable=True)
     # Timestamps
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
@@ -511,7 +510,6 @@ class AlertMethod(Base):
             "notify_success": self.notify_success,
             "notify_warning": self.notify_warning,
             "notify_error": self.notify_error,
-            "min_interval_seconds": self.min_interval_seconds,
             "last_sent_at": self.last_sent_at.isoformat() + "Z" if self.last_sent_at else None,
             "created_at": self.created_at.isoformat() + "Z" if self.created_at else None,
             "updated_at": self.updated_at.isoformat() + "Z" if self.updated_at else None,
