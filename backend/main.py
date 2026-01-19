@@ -28,7 +28,7 @@ from database import init_db, get_session
 import journal
 from bandwidth_tracker import BandwidthTracker, set_tracker, get_tracker
 from stream_prober import StreamProber, set_prober, get_prober
-from alert_methods import get_alert_manager, get_method_types, create_method
+from alert_methods import get_alert_manager, get_method_types, create_method, send_alert
 # Import method implementations to register them
 import alert_methods_discord  # noqa: F401
 import alert_methods_smtp  # noqa: F401
@@ -2346,8 +2346,28 @@ async def refresh_epg_source(source_id: int):
             description=f"Refreshed EPG source '{source_name}'",
         )
 
+        # Send success notification
+        await send_alert(
+            title=f"EPG Refresh: {source_name}",
+            message=f"Successfully refreshed EPG source '{source_name}'",
+            notification_type="success",
+            source="EPG Refresh",
+            metadata={"source_id": source_id, "source_name": source_name},
+        )
+
         return result
     except Exception as e:
+        # Send error notification
+        try:
+            await send_alert(
+                title="EPG Refresh Failed",
+                message=f"Failed to refresh EPG source (ID: {source_id}): {str(e)}",
+                notification_type="error",
+                source="EPG Refresh",
+                metadata={"source_id": source_id, "error": str(e)},
+            )
+        except Exception:
+            pass  # Don't fail the request if notification fails
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -3058,8 +3078,28 @@ async def refresh_m3u_account(account_id: int):
             description=f"Refreshed M3U account '{account_name}'",
         )
 
+        # Send success notification
+        await send_alert(
+            title=f"M3U Refresh: {account_name}",
+            message=f"Successfully refreshed M3U account '{account_name}'",
+            notification_type="success",
+            source="M3U Refresh",
+            metadata={"account_id": account_id, "account_name": account_name},
+        )
+
         return result
     except Exception as e:
+        # Send error notification
+        try:
+            await send_alert(
+                title="M3U Refresh Failed",
+                message=f"Failed to refresh M3U account (ID: {account_id}): {str(e)}",
+                notification_type="error",
+                source="M3U Refresh",
+                metadata={"account_id": account_id, "error": str(e)},
+            )
+        except Exception:
+            pass  # Don't fail the request if notification fails
         raise HTTPException(status_code=500, detail=str(e))
 
 
