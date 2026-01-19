@@ -725,15 +725,15 @@
   font-style: italic;
 }
 
-/* Radio group - for country prefix toggle */
-.radio-group {
+/* Radio group - for country prefix toggle in settings */
+.settings-section .radio-group {
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
   margin-top: 0.5rem;
 }
 
-.radio-option {
+.settings-section .radio-option {
   display: grid;
   grid-template-columns: auto 1fr;
   grid-template-rows: auto auto;
@@ -747,16 +747,16 @@
   transition: border-color 0.15s, background-color 0.15s;
 }
 
-.radio-option:hover {
+.settings-section .radio-option:hover {
   border-color: var(--border-secondary);
 }
 
-.radio-option:has(input:checked) {
+.settings-section .radio-option:has(input:checked) {
   border-color: var(--accent-primary);
   background-color: rgba(100, 108, 255, 0.08);
 }
 
-.radio-option input[type="radio"] {
+.settings-section .radio-option input[type="radio"] {
   grid-row: 1;
   grid-column: 1;
   width: 18px;
@@ -767,7 +767,7 @@
   cursor: pointer;
 }
 
-.radio-label {
+.settings-section .radio-option .radio-label {
   grid-row: 1;
   grid-column: 2;
   font-size: 0.9rem;
@@ -775,7 +775,7 @@
   color: var(--text-primary);
 }
 
-.radio-description {
+.settings-section .radio-option .radio-description {
   grid-row: 2;
   grid-column: 2;
   font-size: 0.8rem;
