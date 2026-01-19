@@ -111,6 +111,11 @@ When doing work on this project, follow these steps in order:
 - NEVER say "ready to push when you are" - YOU must push
 - If push fails, resolve and retry until it succeeds
 - Always use `enhancedchannelmanager` as the repository name when creating beads
+- **NEVER chain `bd create` and `bd close` in one command** - The `bd list` output format doesn't work with shell parsing. Always run them as separate commands:
+  ```bash
+  bd create enhancedchannelmanager "Description"  # Note the ID it prints
+  bd close <id>                                    # Use the exact ID from above
+  ```
 
 ## CSS/Styling Guidelines
 
