@@ -162,19 +162,6 @@ async def startup_event():
             set_prober(prober)
             logger.info("set_prober() called successfully")
 
-            # Connect the prober to the StreamProbeTask in the task registry
-            try:
-                from task_registry import get_registry
-                registry = get_registry()
-                stream_probe_task = registry.get_task_instance("stream_probe")
-                if stream_probe_task:
-                    stream_probe_task.set_prober(prober)
-                    logger.info("Connected StreamProber to StreamProbeTask")
-                else:
-                    logger.warning("StreamProbeTask not found in registry")
-            except Exception as e:
-                logger.warning(f"Failed to connect prober to task: {e}")
-
             await prober.start()
             logger.info("prober.start() completed")
 
@@ -197,6 +184,21 @@ async def startup_event():
         from task_engine import start_engine
         await start_engine()
         logger.info("Task execution engine started")
+
+        # Connect the prober to the StreamProbeTask AFTER tasks are registered
+        prober = get_prober()
+        if prober:
+            try:
+                from task_registry import get_registry
+                registry = get_registry()
+                stream_probe_task = registry.get_task_instance("stream_probe")
+                if stream_probe_task:
+                    stream_probe_task.set_prober(prober)
+                    logger.info("Connected StreamProber to StreamProbeTask")
+                else:
+                    logger.warning("StreamProbeTask not found in registry")
+            except Exception as e:
+                logger.warning(f"Failed to connect prober to task: {e}")
     except Exception as e:
         logger.error(f"Failed to start task engine: {e}", exc_info=True)
         logger.error("Scheduled tasks will not be available!")
