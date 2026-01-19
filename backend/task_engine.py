@@ -415,6 +415,10 @@ class TaskEngine:
             # Update registry
             registry.sync_to_database(task_id)
 
+            # Determine alert category for granular filtering
+            # For stream_probe tasks, use "probe_failures" to allow min_failures threshold
+            alert_category = "probe_failures" if task_id == "stream_probe" else None
+
             # Log task completion to journal and send notifications
             if result.success:
                 log_entry(
@@ -434,10 +438,6 @@ class TaskEngine:
                     },
                     user_initiated=(triggered_by == "manual"),
                 )
-
-                # Determine alert category for granular filtering
-                # For stream_probe tasks, use "probe_failures" to allow min_failures threshold
-                alert_category = "probe_failures" if task_id == "stream_probe" else None
 
                 # Send notification - warning if partial failure, success if all ok
                 if result.failed_count > 0:
