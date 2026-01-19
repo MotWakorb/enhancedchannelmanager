@@ -1,5 +1,5 @@
 """
-SMTP Email Alert Channel.
+SMTP Email Alert Method.
 
 Sends notifications via email using SMTP.
 """
@@ -10,16 +10,16 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from typing import Optional
 
-from alert_channels import AlertChannel, AlertMessage, register_channel
+from alert_methods import AlertMethod, AlertMessage, register_method
 
 logger = logging.getLogger(__name__)
 
 
-@register_channel
-class SMTPChannel(AlertChannel):
+@register_method
+class SMTPMethod(AlertMethod):
     """Sends alerts via SMTP email."""
 
-    channel_type = "smtp"
+    method_type = "smtp"
     display_name = "Email (SMTP)"
     required_config_fields = ["smtp_host", "smtp_port", "from_email", "to_emails"]
     optional_config_fields = {
@@ -122,7 +122,7 @@ class SMTPChannel(AlertChannel):
         to_emails = self.config.get("to_emails")
 
         if not all([smtp_host, from_email, to_emails]):
-            logger.error(f"SMTP channel {self.name}: Missing required configuration")
+            logger.error(f"SMTP method {self.name}: Missing required configuration")
             return False
 
         # Parse to_emails if it's a string
@@ -130,7 +130,7 @@ class SMTPChannel(AlertChannel):
             to_emails = [e.strip() for e in to_emails.split(",") if e.strip()]
 
         if not to_emails:
-            logger.error(f"SMTP channel {self.name}: No recipients configured")
+            logger.error(f"SMTP method {self.name}: No recipients configured")
             return False
 
         # Build the email
@@ -168,20 +168,20 @@ class SMTPChannel(AlertChannel):
                     server.login(smtp_user, smtp_password)
 
                 server.sendmail(from_email, to_emails, msg.as_string())
-                logger.info(f"SMTP channel {self.name}: Email sent to {len(to_emails)} recipient(s)")
+                logger.info(f"SMTP method {self.name}: Email sent to {len(to_emails)} recipient(s)")
                 return True
 
             finally:
                 server.quit()
 
         except smtplib.SMTPAuthenticationError as e:
-            logger.error(f"SMTP channel {self.name}: Authentication failed: {e}")
+            logger.error(f"SMTP method {self.name}: Authentication failed: {e}")
             return False
         except smtplib.SMTPException as e:
-            logger.error(f"SMTP channel {self.name}: SMTP error: {e}")
+            logger.error(f"SMTP method {self.name}: SMTP error: {e}")
             return False
         except Exception as e:
-            logger.error(f"SMTP channel {self.name}: Unexpected error: {e}")
+            logger.error(f"SMTP method {self.name}: Unexpected error: {e}")
             return False
 
     async def test_connection(self) -> tuple[bool, str]:

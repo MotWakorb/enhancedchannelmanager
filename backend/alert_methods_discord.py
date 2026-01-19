@@ -1,5 +1,5 @@
 """
-Discord Webhook Alert Channel.
+Discord Webhook Alert Method.
 
 Sends notifications to Discord via webhooks.
 """
@@ -7,16 +7,16 @@ import aiohttp
 import logging
 from typing import Dict, Any
 
-from alert_channels import AlertChannel, AlertMessage, register_channel
+from alert_methods import AlertMethod, AlertMessage, register_method
 
 logger = logging.getLogger(__name__)
 
 
-@register_channel
-class DiscordWebhookChannel(AlertChannel):
+@register_method
+class DiscordWebhookMethod(AlertMethod):
     """Sends alerts to Discord via webhook."""
 
-    channel_type = "discord"
+    method_type = "discord"
     display_name = "Discord Webhook"
     required_config_fields = ["webhook_url"]
     optional_config_fields = {
@@ -37,7 +37,7 @@ class DiscordWebhookChannel(AlertChannel):
         """Send a message to Discord via webhook."""
         webhook_url = self.config.get("webhook_url")
         if not webhook_url:
-            logger.error(f"Discord channel {self.name}: No webhook URL configured")
+            logger.error(f"Discord method {self.name}: No webhook URL configured")
             return False
 
         # Build Discord embed
@@ -97,21 +97,21 @@ class DiscordWebhookChannel(AlertChannel):
                         # Rate limited
                         retry_after = response.headers.get("Retry-After", "unknown")
                         logger.warning(
-                            f"Discord channel {self.name}: Rate limited, retry after {retry_after}s"
+                            f"Discord method {self.name}: Rate limited, retry after {retry_after}s"
                         )
                         return False
                     else:
                         text = await response.text()
                         logger.error(
-                            f"Discord channel {self.name}: Failed with status {response.status}: {text}"
+                            f"Discord method {self.name}: Failed with status {response.status}: {text}"
                         )
                         return False
 
         except aiohttp.ClientError as e:
-            logger.error(f"Discord channel {self.name}: Connection error: {e}")
+            logger.error(f"Discord method {self.name}: Connection error: {e}")
             return False
         except Exception as e:
-            logger.error(f"Discord channel {self.name}: Unexpected error: {e}")
+            logger.error(f"Discord method {self.name}: Unexpected error: {e}")
             return False
 
     async def test_connection(self) -> tuple[bool, str]:

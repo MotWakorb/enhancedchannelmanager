@@ -53,7 +53,7 @@ def init_db() -> None:
         _SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=_engine)
 
         # Import models to register them with Base
-        from models import JournalEntry, BandwidthDaily, ChannelWatchStats, HiddenChannelGroup, StreamStats, ScheduledTask, TaskSchedule, TaskExecution, Notification, AlertChannel  # noqa: F401
+        from models import JournalEntry, BandwidthDaily, ChannelWatchStats, HiddenChannelGroup, StreamStats, ScheduledTask, TaskSchedule, TaskExecution, Notification, AlertMethod  # noqa: F401
 
         # Create all tables
         Base.metadata.create_all(bind=_engine)
@@ -105,8 +105,8 @@ def _run_migrations(engine) -> None:
             # Migrate existing schedules from scheduled_tasks to task_schedules
             _migrate_task_schedules(conn)
 
-            # Ensure alert_channels table exists (for databases created before v0.8.2)
-            _ensure_alert_channels_table(conn)
+            # Ensure alert_methods table exists (for databases created before v0.8.2)
+            _ensure_alert_methods_table(conn)
 
             logger.debug("All migrations complete - schema is up to date")
     except Exception as e:
@@ -311,24 +311,24 @@ def _convert_cron_to_schedule(cron_expr: str, timezone: str) -> dict:
     return None
 
 
-def _ensure_alert_channels_table(conn) -> None:
-    """Ensure alert_channels table exists for databases created before v0.8.2."""
+def _ensure_alert_methods_table(conn) -> None:
+    """Ensure alert_methods table exists for databases created before v0.8.2."""
     from sqlalchemy import text
 
-    # Check if alert_channels table exists
+    # Check if alert_methods table exists
     result = conn.execute(text(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name='alert_channels'"
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='alert_methods'"
     ))
     if result.fetchone():
-        logger.debug("alert_channels table already exists")
+        logger.debug("alert_methods table already exists")
         return
 
-    logger.info("Creating alert_channels table (database predates v0.8.2)")
+    logger.info("Creating alert_methods table (database predates v0.8.2)")
     conn.execute(text("""
-        CREATE TABLE alert_channels (
+        CREATE TABLE alert_methods (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name VARCHAR(100) NOT NULL,
-            channel_type VARCHAR(50) NOT NULL,
+            method_type VARCHAR(50) NOT NULL,
             enabled BOOLEAN NOT NULL DEFAULT 1,
             config TEXT NOT NULL,
             notify_info BOOLEAN NOT NULL DEFAULT 0,
@@ -341,10 +341,10 @@ def _ensure_alert_channels_table(conn) -> None:
             updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
         )
     """))
-    conn.execute(text("CREATE INDEX idx_alert_channel_type ON alert_channels (channel_type)"))
-    conn.execute(text("CREATE INDEX idx_alert_channel_enabled ON alert_channels (enabled)"))
+    conn.execute(text("CREATE INDEX idx_alert_method_type ON alert_methods (method_type)"))
+    conn.execute(text("CREATE INDEX idx_alert_method_enabled ON alert_methods (enabled)"))
     conn.commit()
-    logger.info("Created alert_channels table successfully")
+    logger.info("Created alert_methods table successfully")
 
 
 def _perform_maintenance(engine) -> None:

@@ -1,5 +1,5 @@
 """
-Telegram Bot Alert Channel.
+Telegram Bot Alert Method.
 
 Sends notifications to Telegram via Bot API.
 """
@@ -7,16 +7,16 @@ import aiohttp
 import logging
 from typing import Optional
 
-from alert_channels import AlertChannel, AlertMessage, register_channel
+from alert_methods import AlertMethod, AlertMessage, register_method
 
 logger = logging.getLogger(__name__)
 
 
-@register_channel
-class TelegramBotChannel(AlertChannel):
+@register_method
+class TelegramBotMethod(AlertMethod):
     """Sends alerts to Telegram via Bot API."""
 
-    channel_type = "telegram"
+    method_type = "telegram"
     display_name = "Telegram Bot"
     required_config_fields = ["bot_token", "chat_id"]
     optional_config_fields = {
@@ -124,7 +124,7 @@ class TelegramBotChannel(AlertChannel):
         chat_id = self.config.get("chat_id")
 
         if not bot_token or not chat_id:
-            logger.error(f"Telegram channel {self.name}: Missing bot_token or chat_id")
+            logger.error(f"Telegram method {self.name}: Missing bot_token or chat_id")
             return False
 
         parse_mode = self.config.get("parse_mode", "HTML")
@@ -163,21 +163,21 @@ class TelegramBotChannel(AlertChannel):
                         # Rate limited
                         retry_after = result.get("parameters", {}).get("retry_after", "unknown")
                         logger.warning(
-                            f"Telegram channel {self.name}: Rate limited, retry after {retry_after}s"
+                            f"Telegram method {self.name}: Rate limited, retry after {retry_after}s"
                         )
                         return False
                     else:
                         error_desc = result.get("description", "Unknown error")
                         logger.error(
-                            f"Telegram channel {self.name}: Failed with status {response.status}: {error_desc}"
+                            f"Telegram method {self.name}: Failed with status {response.status}: {error_desc}"
                         )
                         return False
 
         except aiohttp.ClientError as e:
-            logger.error(f"Telegram channel {self.name}: Connection error: {e}")
+            logger.error(f"Telegram method {self.name}: Connection error: {e}")
             return False
         except Exception as e:
-            logger.error(f"Telegram channel {self.name}: Unexpected error: {e}")
+            logger.error(f"Telegram method {self.name}: Unexpected error: {e}")
             return False
 
     async def test_connection(self) -> tuple[bool, str]:

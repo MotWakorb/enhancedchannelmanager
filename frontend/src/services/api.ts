@@ -1753,20 +1753,20 @@ export async function clearNotifications(readOnly: boolean = true): Promise<{ de
 }
 
 // =============================================================================
-// Alert Channels
+// Alert Methods
 // =============================================================================
 
-export interface AlertChannelType {
+export interface AlertMethodType {
   type: string;
   display_name: string;
   required_fields: string[];
   optional_fields: Record<string, unknown>;
 }
 
-export interface AlertChannel {
+export interface AlertMethod {
   id: number;
   name: string;
-  channel_type: string;
+  method_type: string;
   enabled: boolean;
   config: Record<string, unknown>;
   notify_info: boolean;
@@ -1778,9 +1778,9 @@ export interface AlertChannel {
   created_at: string | null;
 }
 
-export interface AlertChannelCreate {
+export interface AlertMethodCreate {
   name: string;
-  channel_type: string;
+  method_type: string;
   config: Record<string, unknown>;
   enabled?: boolean;
   notify_info?: boolean;
@@ -1790,7 +1790,7 @@ export interface AlertChannelCreate {
   min_interval_seconds?: number;
 }
 
-export interface AlertChannelUpdate {
+export interface AlertMethodUpdate {
   name?: string;
   config?: Record<string, unknown>;
   enabled?: boolean;
@@ -1801,40 +1801,40 @@ export interface AlertChannelUpdate {
   min_interval_seconds?: number;
 }
 
-export async function getAlertChannelTypes(): Promise<AlertChannelType[]> {
-  return fetchJson(`${API_BASE}/alert-channels/types`);
+export async function getAlertMethodTypes(): Promise<AlertMethodType[]> {
+  return fetchJson(`${API_BASE}/alert-methods/types`);
 }
 
-export async function getAlertChannels(): Promise<AlertChannel[]> {
-  return fetchJson(`${API_BASE}/alert-channels`);
+export async function getAlertMethods(): Promise<AlertMethod[]> {
+  return fetchJson(`${API_BASE}/alert-methods`);
 }
 
-export async function getAlertChannel(channelId: number): Promise<AlertChannel> {
-  return fetchJson(`${API_BASE}/alert-channels/${channelId}`);
+export async function getAlertMethod(methodId: number): Promise<AlertMethod> {
+  return fetchJson(`${API_BASE}/alert-methods/${methodId}`);
 }
 
-export async function createAlertChannel(data: AlertChannelCreate): Promise<{ id: number; name: string; channel_type: string; enabled: boolean }> {
-  return fetchJson(`${API_BASE}/alert-channels`, {
+export async function createAlertMethod(data: AlertMethodCreate): Promise<{ id: number; name: string; method_type: string; enabled: boolean }> {
+  return fetchJson(`${API_BASE}/alert-methods`, {
     method: 'POST',
     body: JSON.stringify(data),
   });
 }
 
-export async function updateAlertChannel(channelId: number, data: AlertChannelUpdate): Promise<{ success: boolean }> {
-  return fetchJson(`${API_BASE}/alert-channels/${channelId}`, {
+export async function updateAlertMethod(methodId: number, data: AlertMethodUpdate): Promise<{ success: boolean }> {
+  return fetchJson(`${API_BASE}/alert-methods/${methodId}`, {
     method: 'PATCH',
     body: JSON.stringify(data),
   });
 }
 
-export async function deleteAlertChannel(channelId: number): Promise<{ success: boolean }> {
-  return fetchJson(`${API_BASE}/alert-channels/${channelId}`, {
+export async function deleteAlertMethod(methodId: number): Promise<{ success: boolean }> {
+  return fetchJson(`${API_BASE}/alert-methods/${methodId}`, {
     method: 'DELETE',
   });
 }
 
-export async function testAlertChannel(channelId: number): Promise<{ success: boolean; message: string }> {
-  return fetchJson(`${API_BASE}/alert-channels/${channelId}/test`, {
+export async function testAlertMethod(methodId: number): Promise<{ success: boolean; message: string }> {
+  return fetchJson(`${API_BASE}/alert-methods/${methodId}/test`, {
     method: 'POST',
   });
 }
