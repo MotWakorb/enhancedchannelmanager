@@ -24,7 +24,7 @@ from config import (
     set_log_level,
 )
 from cache import get_cache
-from database import init_db
+from database import init_db, get_session
 import journal
 from bandwidth_tracker import BandwidthTracker, set_tracker, get_tracker
 from stream_prober import StreamProber, set_prober, get_prober
@@ -1610,7 +1610,6 @@ async def get_channel_groups():
         groups = await client.get_channel_groups()
 
         # Filter out hidden groups
-        from database import get_session
         from models import HiddenChannelGroup
 
         with get_session() as db:
@@ -1841,7 +1840,6 @@ async def delete_channel_group(group_id: int):
 
         if has_m3u_sync:
             # Hide the group instead of deleting to preserve M3U sync
-            from database import get_session
             from models import HiddenChannelGroup
 
             # Get the group name before hiding
@@ -1872,7 +1870,6 @@ async def delete_channel_group(group_id: int):
 async def restore_channel_group(group_id: int):
     """Restore a hidden channel group back to the visible list."""
     try:
-        from database import get_session
         from models import HiddenChannelGroup
 
         with get_session() as db:
@@ -1895,7 +1892,6 @@ async def restore_channel_group(group_id: int):
 async def get_hidden_channel_groups():
     """Get list of all hidden channel groups."""
     try:
-        from database import get_session
         from models import HiddenChannelGroup
 
         with get_session() as db:
@@ -3475,7 +3471,6 @@ async def get_notifications(
     notification_type: Optional[str] = None,
 ):
     """Get notifications with pagination and filtering."""
-    from database import get_session
     from models import Notification
 
     session = get_session()
@@ -3531,7 +3526,6 @@ async def create_notification(
     Args:
         send_alerts: If True (default), also dispatch to configured alert channels.
     """
-    from database import get_session
     import json
     import asyncio
     from models import Notification
@@ -3615,7 +3609,6 @@ async def _dispatch_to_alert_channels(
 @app.patch("/api/notifications/{notification_id}")
 async def update_notification(notification_id: int, read: Optional[bool] = None):
     """Update a notification (mark as read/unread)."""
-    from database import get_session
     from datetime import datetime
     from models import Notification
 
@@ -3639,7 +3632,6 @@ async def update_notification(notification_id: int, read: Optional[bool] = None)
 @app.patch("/api/notifications/mark-all-read")
 async def mark_all_notifications_read():
     """Mark all notifications as read."""
-    from database import get_session
     from datetime import datetime
     from models import Notification
 
@@ -3658,7 +3650,6 @@ async def mark_all_notifications_read():
 @app.delete("/api/notifications/{notification_id}")
 async def delete_notification(notification_id: int):
     """Delete a specific notification."""
-    from database import get_session
     from models import Notification
 
     session = get_session()
@@ -3677,7 +3668,6 @@ async def delete_notification(notification_id: int):
 @app.delete("/api/notifications")
 async def clear_all_notifications(read_only: bool = True):
     """Clear notifications. By default only clears read notifications."""
-    from database import get_session
     from models import Notification
 
     session = get_session()
@@ -3737,7 +3727,6 @@ async def get_alert_channel_types():
 @app.get("/api/alert-channels")
 async def list_alert_channels():
     """List all configured alert channels."""
-    from database import get_session
     from models import AlertChannel as AlertChannelModel
     import json
 
@@ -3774,7 +3763,6 @@ async def list_alert_channels():
 @app.post("/api/alert-channels")
 async def create_alert_channel(data: AlertChannelCreate):
     """Create a new alert channel."""
-    from database import get_session
     from models import AlertChannel as AlertChannelModel
     import json
 
@@ -3831,7 +3819,6 @@ async def create_alert_channel(data: AlertChannelCreate):
 @app.get("/api/alert-channels/{channel_id}")
 async def get_alert_channel(channel_id: int):
     """Get a specific alert channel."""
-    from database import get_session
     from models import AlertChannel as AlertChannelModel
     import json
 
@@ -3873,7 +3860,6 @@ async def get_alert_channel(channel_id: int):
 @app.patch("/api/alert-channels/{channel_id}")
 async def update_alert_channel(channel_id: int, data: AlertChannelUpdate):
     """Update an alert channel."""
-    from database import get_session
     from models import AlertChannel as AlertChannelModel
     import json
 
@@ -3931,7 +3917,6 @@ async def update_alert_channel(channel_id: int, data: AlertChannelUpdate):
 @app.delete("/api/alert-channels/{channel_id}")
 async def delete_alert_channel(channel_id: int):
     """Delete an alert channel."""
-    from database import get_session
     from models import AlertChannel as AlertChannelModel
 
     logger.debug(f"Deleting alert channel: id={channel_id}")
@@ -3966,7 +3951,6 @@ async def delete_alert_channel(channel_id: int):
 @app.post("/api/alert-channels/{channel_id}/test")
 async def test_alert_channel(channel_id: int):
     """Test an alert channel by sending a test message."""
-    from database import get_session
     from models import AlertChannel as AlertChannelModel
     import json
 
@@ -4371,7 +4355,6 @@ async def get_task(task_id: str):
     """Get status for a specific task, including all schedules."""
     try:
         from task_registry import get_registry
-        from database import get_session
         from models import TaskSchedule
         from schedule_calculator import describe_schedule
 
@@ -4580,7 +4563,6 @@ class TaskScheduleUpdate(BaseModel):
 async def list_task_schedules(task_id: str):
     """Get all schedules for a task."""
     try:
-        from database import get_session
         from models import TaskSchedule, ScheduledTask
         from schedule_calculator import describe_schedule
 
@@ -4622,7 +4604,6 @@ async def list_task_schedules(task_id: str):
 async def create_task_schedule(task_id: str, data: TaskScheduleCreate):
     """Create a new schedule for a task."""
     try:
-        from database import get_session
         from models import TaskSchedule, ScheduledTask
         from schedule_calculator import calculate_next_run, describe_schedule
 
@@ -4693,7 +4674,6 @@ async def create_task_schedule(task_id: str, data: TaskScheduleCreate):
 async def update_task_schedule(task_id: str, schedule_id: int, data: TaskScheduleUpdate):
     """Update a task schedule."""
     try:
-        from database import get_session
         from models import TaskSchedule, ScheduledTask
         from schedule_calculator import calculate_next_run, describe_schedule
 
@@ -4771,7 +4751,6 @@ async def update_task_schedule(task_id: str, schedule_id: int, data: TaskSchedul
 async def delete_task_schedule(task_id: str, schedule_id: int):
     """Delete a task schedule."""
     try:
-        from database import get_session
         from models import TaskSchedule
 
         session = get_session()
