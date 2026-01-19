@@ -3718,7 +3718,14 @@ class AlertChannelUpdate(BaseModel):
 @app.get("/api/alert-channels/types")
 async def get_alert_channel_types():
     """Get available alert channel types and their configuration fields."""
-    return get_channel_types()
+    logger.debug("Fetching alert channel types")
+    try:
+        types = get_channel_types()
+        logger.debug(f"Found {len(types)} alert channel types: {[t['type'] for t in types]}")
+        return types
+    except Exception as e:
+        logger.exception(f"Error fetching alert channel types: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.get("/api/alert-channels")
@@ -3727,10 +3734,12 @@ async def list_alert_channels():
     from models import AlertChannel as AlertChannelModel
     import json
 
+    logger.debug("Listing alert channels")
     session = get_session()
     try:
         channels = session.query(AlertChannelModel).all()
-        return [
+        logger.debug(f"Found {len(channels)} alert channels in database")
+        result = [
             {
                 "id": ch.id,
                 "name": ch.name,
@@ -3747,6 +3756,10 @@ async def list_alert_channels():
             }
             for ch in channels
         ]
+        return result
+    except Exception as e:
+        logger.exception(f"Error listing alert channels: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
     finally:
         session.close()
 
@@ -3757,9 +3770,12 @@ async def create_alert_channel(data: AlertChannelCreate):
     from models import AlertChannel as AlertChannelModel
     import json
 
+    logger.debug(f"Creating alert channel: name={data.name}, type={data.channel_type}")
+
     # Validate channel type
     channel_types = {ct["type"] for ct in get_channel_types()}
     if data.channel_type not in channel_types:
+        logger.warning(f"Unknown channel type attempted: {data.channel_type}")
         raise HTTPException(status_code=400, detail=f"Unknown channel type: {data.channel_type}")
 
     # Validate config
@@ -3767,6 +3783,7 @@ async def create_alert_channel(data: AlertChannelCreate):
     if channel:
         is_valid, error = channel.validate_config(data.config)
         if not is_valid:
+            logger.warning(f"Invalid config for channel {data.name}: {error}")
             raise HTTPException(status_code=400, detail=error)
 
     session = get_session()
@@ -3789,12 +3806,16 @@ async def create_alert_channel(data: AlertChannelCreate):
         # Reload the manager to pick up the new channel
         get_alert_manager().reload_channel(channel_model.id)
 
+        logger.info(f"Created alert channel: id={channel_model.id}, name={channel_model.name}, type={channel_model.channel_type}")
         return {
             "id": channel_model.id,
             "name": channel_model.name,
             "channel_type": channel_model.channel_type,
             "enabled": channel_model.enabled,
         }
+    except Exception as e:
+        logger.exception(f"Error creating alert channel: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
     finally:
         session.close()
 
@@ -3805,6 +3826,7 @@ async def get_alert_channel(channel_id: int):
     from models import AlertChannel as AlertChannelModel
     import json
 
+    logger.debug(f"Getting alert channel: id={channel_id}")
     session = get_session()
     try:
         channel = session.query(AlertChannelModel).filter(
@@ -3812,8 +3834,10 @@ async def get_alert_channel(channel_id: int):
         ).first()
 
         if not channel:
+            logger.debug(f"Alert channel not found: id={channel_id}")
             raise HTTPException(status_code=404, detail="Alert channel not found")
 
+        logger.debug(f"Found alert channel: id={channel.id}, name={channel.name}")
         return {
             "id": channel.id,
             "name": channel.name,
@@ -3828,6 +3852,11 @@ async def get_alert_channel(channel_id: int):
             "last_sent_at": channel.last_sent_at.isoformat() + "Z" if channel.last_sent_at else None,
             "created_at": channel.created_at.isoformat() + "Z" if channel.created_at else None,
         }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(f"Error getting alert channel {channel_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
     finally:
         session.close()
 
@@ -3838,6 +3867,7 @@ async def update_alert_channel(channel_id: int, data: AlertChannelUpdate):
     from models import AlertChannel as AlertChannelModel
     import json
 
+    logger.debug(f"Updating alert channel: id={channel_id}")
     session = get_session()
     try:
         channel = session.query(AlertChannelModel).filter(
@@ -3845,6 +3875,7 @@ async def update_alert_channel(channel_id: int, data: AlertChannelUpdate):
         ).first()
 
         if not channel:
+            logger.debug(f"Alert channel not found for update: id={channel_id}")
             raise HTTPException(status_code=404, detail="Alert channel not found")
 
         if data.name is not None:
@@ -3855,6 +3886,7 @@ async def update_alert_channel(channel_id: int, data: AlertChannelUpdate):
             if channel_instance:
                 is_valid, error = channel_instance.validate_config(data.config)
                 if not is_valid:
+                    logger.warning(f"Invalid config for channel {channel_id}: {error}")
                     raise HTTPException(status_code=400, detail=error)
             channel.config = json.dumps(data.config)
         if data.enabled is not None:
@@ -3875,7 +3907,13 @@ async def update_alert_channel(channel_id: int, data: AlertChannelUpdate):
         # Reload the manager to pick up the changes
         get_alert_manager().reload_channel(channel_id)
 
+        logger.info(f"Updated alert channel: id={channel_id}, name={channel.name}")
         return {"success": True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(f"Error updating alert channel {channel_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
     finally:
         session.close()
 
@@ -3885,6 +3923,7 @@ async def delete_alert_channel(channel_id: int):
     """Delete an alert channel."""
     from models import AlertChannel as AlertChannelModel
 
+    logger.debug(f"Deleting alert channel: id={channel_id}")
     session = get_session()
     try:
         channel = session.query(AlertChannelModel).filter(
@@ -3892,15 +3931,23 @@ async def delete_alert_channel(channel_id: int):
         ).first()
 
         if not channel:
+            logger.debug(f"Alert channel not found for deletion: id={channel_id}")
             raise HTTPException(status_code=404, detail="Alert channel not found")
 
+        channel_name = channel.name
         session.delete(channel)
         session.commit()
 
         # Remove from manager
         get_alert_manager().reload_channel(channel_id)
 
+        logger.info(f"Deleted alert channel: id={channel_id}, name={channel_name}")
         return {"success": True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(f"Error deleting alert channel {channel_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
     finally:
         session.close()
 
@@ -3911,6 +3958,7 @@ async def test_alert_channel(channel_id: int):
     from models import AlertChannel as AlertChannelModel
     import json
 
+    logger.debug(f"Testing alert channel: id={channel_id}")
     session = get_session()
     try:
         channel_model = session.query(AlertChannelModel).filter(
@@ -3918,6 +3966,7 @@ async def test_alert_channel(channel_id: int):
         ).first()
 
         if not channel_model:
+            logger.debug(f"Alert channel not found for test: id={channel_id}")
             raise HTTPException(status_code=404, detail="Alert channel not found")
 
         config = json.loads(channel_model.config) if channel_model.config else {}
@@ -3929,10 +3978,18 @@ async def test_alert_channel(channel_id: int):
         )
 
         if not channel:
+            logger.warning(f"Unknown channel type for test: {channel_model.channel_type}")
             raise HTTPException(status_code=400, detail=f"Unknown channel type: {channel_model.channel_type}")
 
+        logger.debug(f"Sending test message to channel: {channel_model.name} ({channel_model.channel_type})")
         success, message = await channel.test_connection()
+        logger.info(f"Test result for channel {channel_model.name}: success={success}, message={message}")
         return {"success": success, "message": message}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(f"Error testing alert channel {channel_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
     finally:
         session.close()
 

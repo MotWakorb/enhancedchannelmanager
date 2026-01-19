@@ -142,6 +142,7 @@ def register_channel(channel_class: Type[AlertChannel]) -> Type[AlertChannel]:
 
 def get_channel_types() -> List[Dict[str, Any]]:
     """Get list of available channel types with their metadata."""
+    logger.debug(f"Getting channel types, registry has {len(_channel_registry)} types: {list(_channel_registry.keys())}")
     return [
         {
             "type": cls.channel_type,
@@ -155,11 +156,13 @@ def get_channel_types() -> List[Dict[str, Any]]:
 
 def create_channel(channel_type: str, channel_id: int, name: str, config: Dict[str, Any]) -> Optional[AlertChannel]:
     """Create an alert channel instance from type and config."""
+    logger.debug(f"Creating channel instance: type={channel_type}, id={channel_id}, name={name}")
     channel_class = _channel_registry.get(channel_type)
     if not channel_class:
-        logger.error(f"Unknown alert channel type: {channel_type}")
+        logger.error(f"Unknown alert channel type: {channel_type}. Available types: {list(_channel_registry.keys())}")
         return None
 
+    logger.debug(f"Created channel instance: {name} ({channel_type})")
     return channel_class(channel_id, name, config)
 
 
@@ -174,26 +177,35 @@ class AlertChannelManager:
         from database import get_session
         from models import AlertChannel as AlertChannelModel
 
+        logger.debug("Loading alert channels from database")
         session = get_session()
         try:
             channels = session.query(AlertChannelModel).filter(
                 AlertChannelModel.enabled == True
             ).all()
+            logger.debug(f"Found {len(channels)} enabled channels in database")
 
             self._channels.clear()
             for channel_model in channels:
-                config = json.loads(channel_model.config) if channel_model.config else {}
-                channel = create_channel(
-                    channel_model.channel_type,
-                    channel_model.id,
-                    channel_model.name,
-                    config
-                )
-                if channel:
-                    self._channels[channel_model.id] = channel
-                    logger.debug(f"Loaded alert channel: {channel_model.name} ({channel_model.channel_type})")
+                try:
+                    config = json.loads(channel_model.config) if channel_model.config else {}
+                    channel = create_channel(
+                        channel_model.channel_type,
+                        channel_model.id,
+                        channel_model.name,
+                        config
+                    )
+                    if channel:
+                        self._channels[channel_model.id] = channel
+                        logger.debug(f"Loaded alert channel: {channel_model.name} ({channel_model.channel_type})")
+                    else:
+                        logger.warning(f"Failed to create channel instance for: {channel_model.name} ({channel_model.channel_type})")
+                except Exception as e:
+                    logger.exception(f"Error loading channel {channel_model.name}: {e}")
 
             logger.info(f"Loaded {len(self._channels)} alert channels")
+        except Exception as e:
+            logger.exception(f"Error loading alert channels: {e}")
         finally:
             session.close()
 
@@ -323,8 +335,10 @@ def get_alert_manager() -> AlertChannelManager:
     """Get the global alert channel manager."""
     global _manager
     if _manager is None:
+        logger.debug("Initializing global AlertChannelManager")
         _manager = AlertChannelManager()
         _manager.load_channels()
+        logger.debug(f"AlertChannelManager initialized with {len(_manager._channels)} channels")
     return _manager
 
 
