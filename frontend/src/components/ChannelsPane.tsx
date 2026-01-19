@@ -763,6 +763,7 @@ export function ChannelsPane({
   const createGroupModal = useModal();
   const [newGroupName, setNewGroupName] = useState('');
   const [creatingGroup, setCreatingGroup] = useState(false);
+  const [createGroupShouldMoveChannels, setCreateGroupShouldMoveChannels] = useState(false);
 
   // Delete group state
   const deleteGroupConfirmModal = useModal();
@@ -1264,6 +1265,7 @@ export function ChannelsPane({
   const handleCreateGroupAndMove = () => {
     if (!contextMenu) return;
     hideContextMenu();
+    setCreateGroupShouldMoveChannels(true);  // Flag to move channels after creating group
     createGroupModal.open();
     setNewGroupName('');
   };
@@ -1995,6 +1997,7 @@ export function ChannelsPane({
   const handleCloseCreateGroupModal = () => {
     createGroupModal.close();
     setNewGroupName('');
+    setCreateGroupShouldMoveChannels(false);  // Reset the flag
   };
 
   // Handle creating a new channel group
@@ -2016,8 +2019,8 @@ export function ChannelsPane({
         onSelectedGroupsChange([...selectedGroups, newGroup.id]);
       }
 
-      // If we have selected channels (from context menu), move them to the new group
-      if (selectedChannelIds.size > 0) {
+      // If we have selected channels AND this was triggered from context menu, move them to the new group
+      if (createGroupShouldMoveChannels && selectedChannelIds.size > 0) {
         const channelsToMove = localChannels
           .filter(ch => selectedChannelIds.has(ch.id))
           .sort((a, b) => naturalCompare(a.name, b.name));
