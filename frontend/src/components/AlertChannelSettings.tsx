@@ -206,7 +206,8 @@ export function AlertChannelSettings({ className }: AlertChannelSettingsProps) {
       await loadChannels();
     } catch (err) {
       console.error('Failed to save channel:', err);
-      alert('Failed to save channel');
+      const message = err instanceof Error ? err.message : 'Failed to save channel';
+      alert(message);
     } finally {
       setSaving(false);
     }

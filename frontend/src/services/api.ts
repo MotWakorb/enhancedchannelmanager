@@ -105,8 +105,18 @@ async function fetchJson<T>(url: string, options?: RequestInit): Promise<T> {
     });
 
     if (!response.ok) {
-      logger.error(`API error: ${method} ${url} - ${response.status} ${response.statusText}`);
-      throw new Error(`API error: ${response.status} ${response.statusText}`);
+      // Try to extract error detail from response body
+      let errorDetail = response.statusText;
+      try {
+        const errorBody = await response.json();
+        if (errorBody.detail) {
+          errorDetail = errorBody.detail;
+        }
+      } catch {
+        // Response body isn't JSON or couldn't be parsed
+      }
+      logger.error(`API error: ${method} ${url} - ${response.status} ${errorDetail}`);
+      throw new Error(errorDetail);
     }
 
     const data = await response.json();
