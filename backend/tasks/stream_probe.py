@@ -104,19 +104,20 @@ class StreamProbeTask(TaskScheduler):
             # Determine channel groups to use
             channel_groups = self._channel_groups if self._channel_groups else None
 
-            # Start the probe (this is async and runs in background)
+            # Start the probe in background so we can poll for progress
             logger.info(f"[{self.task_id}] Starting stream probe (groups: {channel_groups})")
 
-            # The probe_all_streams method runs synchronously in this context
-            # and updates the prober's progress tracking
-            await self._prober.probe_all_streams(
-                channel_groups_override=channel_groups,
-                skip_m3u_refresh=False,  # Scheduled probes should refresh
+            import asyncio
+            # Run probe_all_streams as a background task
+            probe_task = asyncio.create_task(
+                self._prober.probe_all_streams(
+                    channel_groups_override=channel_groups,
+                    skip_m3u_refresh=False,  # Scheduled probes should refresh
+                )
             )
 
-            # Wait for the probe to complete by monitoring progress
-            # The probe runs as a background operation and updates _probing_in_progress
-            while self._prober._probing_in_progress:
+            # Poll for progress while the probe runs
+            while not probe_task.done():
                 # Check for cancellation
                 if self._cancel_requested:
                     self._prober.cancel_probe()
@@ -133,8 +134,13 @@ class StreamProbeTask(TaskScheduler):
                     skipped_count=self._prober._probe_progress_skipped_count,
                 )
 
-                import asyncio
                 await asyncio.sleep(1)  # Poll every second
+
+            # Wait for the task to complete (in case of cancellation, this ensures cleanup)
+            try:
+                await probe_task
+            except Exception:
+                pass  # Any exception is handled below via prober state
 
             # Get final results from prober
             success_count = self._prober._probe_progress_success_count
