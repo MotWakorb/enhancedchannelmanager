@@ -3,8 +3,21 @@ import { defineConfig, devices } from '@playwright/test'
 /**
  * Playwright E2E test configuration.
  *
+ * Environment variables:
+ *   E2E_BASE_URL - Base URL for tests (default: http://localhost:6100)
+ *   E2E_START_SERVER - Set to 'true' to auto-start dev server (default: false)
+ *
+ * Usage:
+ *   npx playwright test                              # Test against running app at :6100
+ *   E2E_BASE_URL=http://localhost:5173 npx playwright test  # Test against dev server
+ *   E2E_START_SERVER=true npx playwright test        # Auto-start dev server
+ *
  * @see https://playwright.dev/docs/test-configuration
  */
+
+const baseURL = process.env.E2E_BASE_URL || 'http://localhost:6100'
+const startServer = process.env.E2E_START_SERVER === 'true'
+
 export default defineConfig({
   // Test directory
   testDir: './e2e',
@@ -40,7 +53,7 @@ export default defineConfig({
   // Shared settings for all tests
   use: {
     // Base URL for actions like page.goto('/')
-    baseURL: 'http://localhost:5173',
+    baseURL,
 
     // Collect trace when retrying failed tests
     trace: 'on-first-retry',
@@ -70,14 +83,16 @@ export default defineConfig({
     // },
   ],
 
-  // Web server configuration - starts frontend dev server before tests
-  webServer: {
-    command: 'npm run dev',
-    cwd: './frontend',
-    url: 'http://localhost:5173',
-    reuseExistingServer: !process.env.CI,
-    timeout: 120 * 1000,
-  },
+  // Web server configuration - only starts if E2E_START_SERVER=true
+  ...(startServer && {
+    webServer: {
+      command: 'npm run dev',
+      cwd: './frontend',
+      url: 'http://localhost:5173',
+      reuseExistingServer: !process.env.CI,
+      timeout: 120 * 1000,
+    },
+  }),
 
   // Output directory for test artifacts
   outputDir: './test-results',
