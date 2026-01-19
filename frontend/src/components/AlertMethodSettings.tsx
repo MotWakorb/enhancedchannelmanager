@@ -1,10 +1,27 @@
 import { useState, useEffect, useCallback } from 'react';
 import * as api from '../services/api';
-import type { AlertMethod, AlertMethodType, AlertMethodCreate, AlertMethodUpdate } from '../services/api';
+import type {
+  AlertMethod,
+  AlertMethodType,
+  AlertMethodCreate,
+  AlertMethodUpdate,
+  AlertSources,
+  AlertFilterMode,
+} from '../services/api';
 import './AlertMethodSettings.css';
 
 interface AlertMethodSettingsProps {
   className?: string;
+}
+
+interface EpgSourceBasic {
+  id: number;
+  name: string;
+}
+
+interface M3uAccountBasic {
+  id: number;
+  name: string;
 }
 
 interface MethodFormData {
@@ -16,7 +33,15 @@ interface MethodFormData {
   notify_warning: boolean;
   notify_error: boolean;
   config: Record<string, string>;
+  alert_sources: AlertSources | null;
 }
+
+const DEFAULT_ALERT_SOURCES: AlertSources = {
+  version: 1,
+  epg_refresh: { enabled: true, filter_mode: 'all', source_ids: [] },
+  m3u_refresh: { enabled: true, filter_mode: 'all', account_ids: [] },
+  probe_failures: { enabled: true, min_failures: 1 },
+};
 
 const EMPTY_FORM: MethodFormData = {
   name: '',
@@ -27,6 +52,7 @@ const EMPTY_FORM: MethodFormData = {
   notify_warning: true,
   notify_error: true,
   config: {},
+  alert_sources: null,
 };
 
 export function AlertMethodSettings({ className }: AlertMethodSettingsProps) {
@@ -34,6 +60,11 @@ export function AlertMethodSettings({ className }: AlertMethodSettingsProps) {
   const [methodTypes, setMethodTypes] = useState<AlertMethodType[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  // EPG and M3U data for granular filtering
+  const [epgSources, setEpgSources] = useState<EpgSourceBasic[]>([]);
+  const [m3uAccounts, setM3uAccounts] = useState<M3uAccountBasic[]>([]);
+  const [showSourceFilters, setShowSourceFilters] = useState(false);
 
   // Modal state
   const [showModal, setShowModal] = useState(false);
@@ -47,12 +78,16 @@ export function AlertMethodSettings({ className }: AlertMethodSettingsProps) {
   const loadMethods = useCallback(async () => {
     try {
       setLoading(true);
-      const [methodsData, typesData] = await Promise.all([
+      const [methodsData, typesData, epgData, m3uData] = await Promise.all([
         api.getAlertMethods(),
         api.getAlertMethodTypes(),
+        api.getEPGSources().catch(() => []),
+        api.getM3UAccounts().catch(() => []),
       ]);
       setMethods(methodsData);
       setMethodTypes(typesData);
+      setEpgSources(epgData.map((s: { id: number; name: string }) => ({ id: s.id, name: s.name })));
+      setM3uAccounts(m3uData.map((a: { id: number; name: string }) => ({ id: a.id, name: a.name })));
       setError(null);
     } catch (err) {
       setError('Failed to load alert methods');
@@ -70,6 +105,7 @@ export function AlertMethodSettings({ className }: AlertMethodSettingsProps) {
     setEditingMethod(null);
     setFormData(EMPTY_FORM);
     setTestResult(null);
+    setShowSourceFilters(false);
     setShowModal(true);
   };
 
@@ -86,8 +122,10 @@ export function AlertMethodSettings({ className }: AlertMethodSettingsProps) {
       config: Object.fromEntries(
         Object.entries(method.config).map(([k, v]) => [k, String(v)])
       ),
+      alert_sources: method.alert_sources || null,
     });
     setTestResult(null);
+    setShowSourceFilters(!!method.alert_sources);
     setShowModal(true);
   };
 
@@ -182,6 +220,7 @@ export function AlertMethodSettings({ className }: AlertMethodSettingsProps) {
           notify_success: formData.notify_success,
           notify_warning: formData.notify_warning,
           notify_error: formData.notify_error,
+          alert_sources: showSourceFilters ? formData.alert_sources : null,
         };
         await api.updateAlertMethod(editingMethod.id, update);
       } else {
@@ -194,6 +233,7 @@ export function AlertMethodSettings({ className }: AlertMethodSettingsProps) {
           notify_success: formData.notify_success,
           notify_warning: formData.notify_warning,
           notify_error: formData.notify_error,
+          alert_sources: showSourceFilters ? formData.alert_sources : null,
         };
         await api.createAlertMethod(create);
       }
@@ -492,6 +532,249 @@ export function AlertMethodSettings({ className }: AlertMethodSettingsProps) {
                         <span className="notif-badge info">Info</span>
                       </label>
                     </div>
+                  </div>
+
+                  {/* Source Filtering Section */}
+                  <div className="source-filters-section">
+                    <div
+                      className="section-toggle"
+                      onClick={() => {
+                        const newShow = !showSourceFilters;
+                        setShowSourceFilters(newShow);
+                        if (newShow && !formData.alert_sources) {
+                          setFormData(prev => ({ ...prev, alert_sources: { ...DEFAULT_ALERT_SOURCES } }));
+                        }
+                      }}
+                    >
+                      <span className="material-icons">
+                        {showSourceFilters ? 'expand_less' : 'expand_more'}
+                      </span>
+                      <h4>Source Filters (Advanced)</h4>
+                    </div>
+
+                    {showSourceFilters && (
+                      <div className="source-filters-content">
+                        <p className="form-hint">
+                          Configure which specific sources trigger alerts for this method.
+                          Leave disabled to receive alerts from all sources.
+                        </p>
+
+                        {/* EPG Refresh Filtering */}
+                        <div className="filter-group">
+                          <label className="checkbox-label filter-header">
+                            <input
+                              type="checkbox"
+                              checked={formData.alert_sources?.epg_refresh?.enabled ?? true}
+                              onChange={(e) => {
+                                const sources = formData.alert_sources || { ...DEFAULT_ALERT_SOURCES };
+                                setFormData(prev => ({
+                                  ...prev,
+                                  alert_sources: {
+                                    ...sources,
+                                    epg_refresh: {
+                                      ...sources.epg_refresh!,
+                                      enabled: e.target.checked,
+                                    },
+                                  },
+                                }));
+                              }}
+                            />
+                            EPG Refresh Alerts
+                          </label>
+                          {formData.alert_sources?.epg_refresh?.enabled && (
+                            <div className="filter-options">
+                              <select
+                                value={formData.alert_sources?.epg_refresh?.filter_mode || 'all'}
+                                onChange={(e) => {
+                                  const sources = formData.alert_sources || { ...DEFAULT_ALERT_SOURCES };
+                                  setFormData(prev => ({
+                                    ...prev,
+                                    alert_sources: {
+                                      ...sources,
+                                      epg_refresh: {
+                                        ...sources.epg_refresh!,
+                                        filter_mode: e.target.value as AlertFilterMode,
+                                      },
+                                    },
+                                  }));
+                                }}
+                              >
+                                <option value="all">All Sources</option>
+                                <option value="only_selected">Only Selected Sources</option>
+                                <option value="all_except">All Except Selected</option>
+                              </select>
+                              {formData.alert_sources?.epg_refresh?.filter_mode !== 'all' && (
+                                <div className="source-select">
+                                  {epgSources.map(source => (
+                                    <label key={source.id} className="checkbox-label small">
+                                      <input
+                                        type="checkbox"
+                                        checked={(formData.alert_sources?.epg_refresh?.source_ids || []).includes(source.id)}
+                                        onChange={(e) => {
+                                          const sources = formData.alert_sources || { ...DEFAULT_ALERT_SOURCES };
+                                          const currentIds = sources.epg_refresh?.source_ids || [];
+                                          const newIds = e.target.checked
+                                            ? [...currentIds, source.id]
+                                            : currentIds.filter(id => id !== source.id);
+                                          setFormData(prev => ({
+                                            ...prev,
+                                            alert_sources: {
+                                              ...sources,
+                                              epg_refresh: {
+                                                ...sources.epg_refresh!,
+                                                source_ids: newIds,
+                                              },
+                                            },
+                                          }));
+                                        }}
+                                      />
+                                      {source.name}
+                                    </label>
+                                  ))}
+                                  {epgSources.length === 0 && (
+                                    <p className="no-sources">No EPG sources configured</p>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </div>
+
+                        {/* M3U Refresh Filtering */}
+                        <div className="filter-group">
+                          <label className="checkbox-label filter-header">
+                            <input
+                              type="checkbox"
+                              checked={formData.alert_sources?.m3u_refresh?.enabled ?? true}
+                              onChange={(e) => {
+                                const sources = formData.alert_sources || { ...DEFAULT_ALERT_SOURCES };
+                                setFormData(prev => ({
+                                  ...prev,
+                                  alert_sources: {
+                                    ...sources,
+                                    m3u_refresh: {
+                                      ...sources.m3u_refresh!,
+                                      enabled: e.target.checked,
+                                    },
+                                  },
+                                }));
+                              }}
+                            />
+                            M3U Refresh Alerts
+                          </label>
+                          {formData.alert_sources?.m3u_refresh?.enabled && (
+                            <div className="filter-options">
+                              <select
+                                value={formData.alert_sources?.m3u_refresh?.filter_mode || 'all'}
+                                onChange={(e) => {
+                                  const sources = formData.alert_sources || { ...DEFAULT_ALERT_SOURCES };
+                                  setFormData(prev => ({
+                                    ...prev,
+                                    alert_sources: {
+                                      ...sources,
+                                      m3u_refresh: {
+                                        ...sources.m3u_refresh!,
+                                        filter_mode: e.target.value as AlertFilterMode,
+                                      },
+                                    },
+                                  }));
+                                }}
+                              >
+                                <option value="all">All Accounts</option>
+                                <option value="only_selected">Only Selected Accounts</option>
+                                <option value="all_except">All Except Selected</option>
+                              </select>
+                              {formData.alert_sources?.m3u_refresh?.filter_mode !== 'all' && (
+                                <div className="source-select">
+                                  {m3uAccounts.map(account => (
+                                    <label key={account.id} className="checkbox-label small">
+                                      <input
+                                        type="checkbox"
+                                        checked={(formData.alert_sources?.m3u_refresh?.account_ids || []).includes(account.id)}
+                                        onChange={(e) => {
+                                          const sources = formData.alert_sources || { ...DEFAULT_ALERT_SOURCES };
+                                          const currentIds = sources.m3u_refresh?.account_ids || [];
+                                          const newIds = e.target.checked
+                                            ? [...currentIds, account.id]
+                                            : currentIds.filter(id => id !== account.id);
+                                          setFormData(prev => ({
+                                            ...prev,
+                                            alert_sources: {
+                                              ...sources,
+                                              m3u_refresh: {
+                                                ...sources.m3u_refresh!,
+                                                account_ids: newIds,
+                                              },
+                                            },
+                                          }));
+                                        }}
+                                      />
+                                      {account.name}
+                                    </label>
+                                  ))}
+                                  {m3uAccounts.length === 0 && (
+                                    <p className="no-sources">No M3U accounts configured</p>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Probe Failures Filtering */}
+                        <div className="filter-group">
+                          <label className="checkbox-label filter-header">
+                            <input
+                              type="checkbox"
+                              checked={formData.alert_sources?.probe_failures?.enabled ?? true}
+                              onChange={(e) => {
+                                const sources = formData.alert_sources || { ...DEFAULT_ALERT_SOURCES };
+                                setFormData(prev => ({
+                                  ...prev,
+                                  alert_sources: {
+                                    ...sources,
+                                    probe_failures: {
+                                      ...sources.probe_failures!,
+                                      enabled: e.target.checked,
+                                    },
+                                  },
+                                }));
+                              }}
+                            />
+                            Stream Probe Alerts
+                          </label>
+                          {formData.alert_sources?.probe_failures?.enabled && (
+                            <div className="filter-options">
+                              <div className="form-group inline">
+                                <label>Minimum failures to trigger:</label>
+                                <input
+                                  type="number"
+                                  min="1"
+                                  value={formData.alert_sources?.probe_failures?.min_failures ?? 1}
+                                  onChange={(e) => {
+                                    const sources = formData.alert_sources || { ...DEFAULT_ALERT_SOURCES };
+                                    setFormData(prev => ({
+                                      ...prev,
+                                      alert_sources: {
+                                        ...sources,
+                                        probe_failures: {
+                                          ...sources.probe_failures!,
+                                          min_failures: Math.max(1, parseInt(e.target.value) || 1),
+                                        },
+                                      },
+                                    }));
+                                  }}
+                                  style={{ width: '80px' }}
+                                />
+                              </div>
+                              <p className="form-hint small">
+                                Only alert when at least this many streams fail during a probe.
+                              </p>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    )}
                   </div>
 
                 </>
