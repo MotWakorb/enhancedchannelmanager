@@ -3768,22 +3768,23 @@ async def create_alert_channel(data: AlertChannelCreate):
 
     logger.debug(f"Creating alert channel: name={data.name}, type={data.channel_type}")
 
-    # Validate channel type
-    channel_types = {ct["type"] for ct in get_channel_types()}
-    if data.channel_type not in channel_types:
-        logger.warning(f"Unknown channel type attempted: {data.channel_type}")
-        raise HTTPException(status_code=400, detail=f"Unknown channel type: {data.channel_type}")
-
-    # Validate config
-    channel = create_channel(data.channel_type, 0, data.name, data.config)
-    if channel:
-        is_valid, error = channel.validate_config(data.config)
-        if not is_valid:
-            logger.warning(f"Invalid config for channel {data.name}: {error}")
-            raise HTTPException(status_code=400, detail=error)
-
-    session = get_session()
+    session = None
     try:
+        # Validate channel type
+        channel_types = {ct["type"] for ct in get_channel_types()}
+        if data.channel_type not in channel_types:
+            logger.warning(f"Unknown channel type attempted: {data.channel_type}")
+            raise HTTPException(status_code=400, detail=f"Unknown channel type: {data.channel_type}")
+
+        # Validate config
+        channel = create_channel(data.channel_type, 0, data.name, data.config)
+        if channel:
+            is_valid, error = channel.validate_config(data.config)
+            if not is_valid:
+                logger.warning(f"Invalid config for channel {data.name}: {error}")
+                raise HTTPException(status_code=400, detail=error)
+
+        session = get_session()
         channel_model = AlertChannelModel(
             name=data.name,
             channel_type=data.channel_type,
@@ -3809,11 +3810,14 @@ async def create_alert_channel(data: AlertChannelCreate):
             "channel_type": channel_model.channel_type,
             "enabled": channel_model.enabled,
         }
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception(f"Error creating alert channel: {e}")
         raise HTTPException(status_code=500, detail=str(e))
     finally:
-        session.close()
+        if session:
+            session.close()
 
 
 @app.get("/api/alert-channels/{channel_id}")
