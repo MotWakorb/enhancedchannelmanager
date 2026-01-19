@@ -391,3 +391,58 @@ class TaskExecution(Base):
 
     def __repr__(self):
         return f"<TaskExecution(id={self.id}, task_id={self.task_id}, status={self.status})>"
+
+
+class Notification(Base):
+    """
+    Persistent notification storage.
+    Notifications appear in the notification center and can be marked as read.
+    """
+    __tablename__ = "notifications"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    type = Column(String(20), nullable=False, default="info")  # info, success, warning, error
+    title = Column(String(255), nullable=True)  # Optional title
+    message = Column(Text, nullable=False)  # Notification message
+    read = Column(Boolean, default=False, nullable=False)  # Has user seen this
+    # Source tracking
+    source = Column(String(50), nullable=True)  # e.g., "task", "api", "system"
+    source_id = Column(String(100), nullable=True)  # e.g., task_id, endpoint name
+    # Optional action
+    action_label = Column(String(50), nullable=True)  # Button label
+    action_url = Column(String(500), nullable=True)  # URL or route to navigate
+    # Metadata (JSON) for additional context
+    metadata = Column(Text, nullable=True)
+    # Timestamps
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    read_at = Column(DateTime, nullable=True)  # When marked as read
+    expires_at = Column(DateTime, nullable=True)  # Auto-delete after this time
+
+    __table_args__ = (
+        Index("idx_notification_read", read),
+        Index("idx_notification_created_at", created_at.desc()),
+        Index("idx_notification_type", type),
+        Index("idx_notification_source", source),
+    )
+
+    def to_dict(self) -> dict:
+        """Convert to dictionary for API responses."""
+        import json
+        return {
+            "id": self.id,
+            "type": self.type,
+            "title": self.title,
+            "message": self.message,
+            "read": self.read,
+            "source": self.source,
+            "source_id": self.source_id,
+            "action_label": self.action_label,
+            "action_url": self.action_url,
+            "metadata": json.loads(self.metadata) if self.metadata else None,
+            "created_at": self.created_at.isoformat() + "Z" if self.created_at else None,
+            "read_at": self.read_at.isoformat() + "Z" if self.read_at else None,
+            "expires_at": self.expires_at.isoformat() + "Z" if self.expires_at else None,
+        }
+
+    def __repr__(self):
+        return f"<Notification(id={self.id}, type={self.type}, read={self.read})>"

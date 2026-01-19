@@ -1639,3 +1639,105 @@ export async function deleteTaskSchedule(taskId: string, scheduleId: number): Pr
     method: 'DELETE',
   });
 }
+
+// -------------------------------------------------------------------------
+// Notifications API
+// -------------------------------------------------------------------------
+
+export interface Notification {
+  id: number;
+  type: 'info' | 'success' | 'warning' | 'error';
+  title: string | null;
+  message: string;
+  read: boolean;
+  source: string | null;
+  source_id: string | null;
+  action_label: string | null;
+  action_url: string | null;
+  metadata: Record<string, unknown> | null;
+  created_at: string;
+  read_at: string | null;
+  expires_at: string | null;
+}
+
+export interface NotificationsResponse {
+  notifications: Notification[];
+  total: number;
+  unread_count: number;
+  page: number;
+  page_size: number;
+}
+
+export interface CreateNotificationData {
+  notification_type?: 'info' | 'success' | 'warning' | 'error';
+  title?: string;
+  message: string;
+  source?: string;
+  source_id?: string;
+  action_label?: string;
+  action_url?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export async function getNotifications(params?: {
+  page?: number;
+  page_size?: number;
+  unread_only?: boolean;
+  notification_type?: string;
+}): Promise<NotificationsResponse> {
+  const searchParams = new URLSearchParams();
+  if (params?.page) searchParams.set('page', String(params.page));
+  if (params?.page_size) searchParams.set('page_size', String(params.page_size));
+  if (params?.unread_only) searchParams.set('unread_only', 'true');
+  if (params?.notification_type) searchParams.set('notification_type', params.notification_type);
+
+  const query = searchParams.toString();
+  return fetchJson(`${API_BASE}/notifications${query ? `?${query}` : ''}`);
+}
+
+export async function createNotification(data: CreateNotificationData): Promise<Notification> {
+  const searchParams = new URLSearchParams();
+  searchParams.set('message', data.message);
+  if (data.notification_type) searchParams.set('notification_type', data.notification_type);
+  if (data.title) searchParams.set('title', data.title);
+  if (data.source) searchParams.set('source', data.source);
+  if (data.source_id) searchParams.set('source_id', data.source_id);
+  if (data.action_label) searchParams.set('action_label', data.action_label);
+  if (data.action_url) searchParams.set('action_url', data.action_url);
+
+  return fetchJson(`${API_BASE}/notifications?${searchParams.toString()}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: data.metadata ? JSON.stringify({ metadata: data.metadata }) : undefined,
+  });
+}
+
+export async function markNotificationRead(notificationId: number, read: boolean = true): Promise<Notification> {
+  const searchParams = new URLSearchParams();
+  searchParams.set('read', String(read));
+
+  return fetchJson(`${API_BASE}/notifications/${notificationId}?${searchParams.toString()}`, {
+    method: 'PATCH',
+  });
+}
+
+export async function markAllNotificationsRead(): Promise<{ marked_read: number }> {
+  return fetchJson(`${API_BASE}/notifications/mark-all-read`, {
+    method: 'PATCH',
+  });
+}
+
+export async function deleteNotification(notificationId: number): Promise<{ deleted: boolean }> {
+  return fetchJson(`${API_BASE}/notifications/${notificationId}`, {
+    method: 'DELETE',
+  });
+}
+
+export async function clearNotifications(readOnly: boolean = true): Promise<{ deleted: number; read_only: boolean }> {
+  const searchParams = new URLSearchParams();
+  searchParams.set('read_only', String(readOnly));
+
+  return fetchJson(`${API_BASE}/notifications?${searchParams.toString()}`, {
+    method: 'DELETE',
+  });
+}
