@@ -188,7 +188,6 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   const [streamProbeIntervalHours, setStreamProbeIntervalHours] = useState(24);
   const [streamProbeBatchSize, setStreamProbeBatchSize] = useState(10);
   const [streamProbeTimeout, setStreamProbeTimeout] = useState(30);
-  const [streamProbeScheduleTime, setStreamProbeScheduleTime] = useState('03:00');
   const [bitrateSampleDuration, setBitrateSampleDuration] = useState(10);
   const [parallelProbingEnabled, setParallelProbingEnabled] = useState(true);
   const [skipRecentlyProbedHours, setSkipRecentlyProbedHours] = useState(0);
@@ -254,7 +253,6 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   const [originalPollInterval, setOriginalPollInterval] = useState(10);
   const [originalTimezone, setOriginalTimezone] = useState('');
   const [originalProbeEnabled, setOriginalProbeEnabled] = useState(true);
-  const [originalProbeScheduleTime, setOriginalProbeScheduleTime] = useState('03:00');
   const [originalAutoReorder, setOriginalAutoReorder] = useState(false);
   const [originalRefreshM3usBeforeProbe, setOriginalRefreshM3usBeforeProbe] = useState(true);
   const [needsRestart, setNeedsRestart] = useState(false);
@@ -473,8 +471,6 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       setStreamProbeIntervalHours(settings.stream_probe_interval_hours ?? 24);
       setStreamProbeBatchSize(settings.stream_probe_batch_size ?? 10);
       setStreamProbeTimeout(settings.stream_probe_timeout ?? 30);
-      setStreamProbeScheduleTime(settings.stream_probe_schedule_time ?? '03:00');
-      setOriginalProbeScheduleTime(settings.stream_probe_schedule_time ?? '03:00');
       setProbeChannelGroups(settings.probe_channel_groups ?? []);
       setBitrateSampleDuration(settings.bitrate_sample_duration ?? 10);
       setParallelProbingEnabled(settings.parallel_probing_enabled ?? true);
@@ -580,7 +576,6 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         stream_probe_interval_hours: streamProbeIntervalHours,
         stream_probe_batch_size: streamProbeBatchSize,
         stream_probe_timeout: streamProbeTimeout,
-        stream_probe_schedule_time: streamProbeScheduleTime,
         probe_channel_groups: probeChannelGroups,
         bitrate_sample_duration: bitrateSampleDuration,
         parallel_probing_enabled: parallelProbingEnabled,
@@ -608,7 +603,6 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       // Check if any settings that require a restart have changed
       const pollOrTimezoneChanged = statsPollInterval !== originalPollInterval || userTimezone !== originalTimezone;
       const probeSettingsChanged = streamProbeEnabled !== originalProbeEnabled ||
-                                   streamProbeScheduleTime !== originalProbeScheduleTime ||
                                    autoReorderAfterProbe !== originalAutoReorder ||
                                    refreshM3usBeforeProbe !== originalRefreshM3usBeforeProbe;
 
@@ -616,7 +610,6 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       logger.info(`[RESTART-CHECK] Poll interval: ${statsPollInterval} vs original ${originalPollInterval}`);
       logger.info(`[RESTART-CHECK] Timezone: "${userTimezone}" vs original "${originalTimezone}"`);
       logger.info(`[RESTART-CHECK] Probe enabled: ${streamProbeEnabled} vs original ${originalProbeEnabled}`);
-      logger.info(`[RESTART-CHECK] Schedule time: "${streamProbeScheduleTime}" vs original "${originalProbeScheduleTime}"`);
       logger.info(`[RESTART-CHECK] Auto-reorder: ${autoReorderAfterProbe} vs original ${originalAutoReorder}`);
       logger.info(`[RESTART-CHECK] Refresh M3Us: ${refreshM3usBeforeProbe} vs original ${originalRefreshM3usBeforeProbe}`);
       logger.info(`[RESTART-CHECK] pollOrTimezoneChanged=${pollOrTimezoneChanged}, probeSettingsChanged=${probeSettingsChanged}`);
@@ -655,7 +648,6 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         setOriginalPollInterval(statsPollInterval);
         setOriginalTimezone(userTimezone);
         setOriginalProbeEnabled(streamProbeEnabled);
-        setOriginalProbeScheduleTime(streamProbeScheduleTime);
         setOriginalAutoReorder(autoReorderAfterProbe);
         setOriginalRefreshM3usBeforeProbe(refreshM3usBeforeProbe);
         setNeedsRestart(false);
@@ -1896,17 +1888,6 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
             </div>
 
             <div className="form-group-vertical">
-              <label htmlFor="probeScheduleTime">Schedule time (local)</label>
-              <span className="form-description">Time of day to start scheduled probes (your local time)</span>
-              <input
-                id="probeScheduleTime"
-                type="time"
-                value={streamProbeScheduleTime}
-                onChange={(e) => setStreamProbeScheduleTime(e.target.value || '03:00')}
-              />
-            </div>
-
-            <div className="form-group-vertical">
               <label htmlFor="bitrateSampleDuration">Bitrate measurement duration</label>
               <span className="form-description">How long to sample streams when measuring bitrate</span>
               <select
@@ -2792,7 +2773,6 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                       stream_probe_interval_hours: streamProbeIntervalHours,
                       stream_probe_batch_size: streamProbeBatchSize,
                       stream_probe_timeout: streamProbeTimeout,
-                      stream_probe_schedule_time: streamProbeScheduleTime,
                       probe_channel_groups: tempProbeChannelGroups,
                       bitrate_sample_duration: bitrateSampleDuration,
                       parallel_probing_enabled: parallelProbingEnabled,
