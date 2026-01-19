@@ -121,6 +121,8 @@ class SMTPMethod(AlertMethod):
         from_email = self.config.get("from_email")
         to_emails = self.config.get("to_emails")
 
+        logger.debug(f"SMTP method {self.name}: config keys={list(self.config.keys())}, from_email={from_email}, to_emails={to_emails}")
+
         if not all([smtp_host, from_email, to_emails]):
             logger.error(f"SMTP method {self.name}: Missing required configuration")
             return False
@@ -167,6 +169,7 @@ class SMTPMethod(AlertMethod):
                 if smtp_user and smtp_password:
                     server.login(smtp_user, smtp_password)
 
+                logger.debug(f"SMTP method {self.name}: Sending from={from_email}, to={to_emails}, From header={msg['From']}")
                 server.sendmail(from_email, to_emails, msg.as_string())
                 logger.info(f"SMTP method {self.name}: Email sent to {len(to_emails)} recipient(s)")
                 return True
