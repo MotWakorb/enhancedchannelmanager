@@ -3188,14 +3188,33 @@ export function ChannelsPane({
       insertAtChannelNumber = overChannel.channel_number;
     }
 
+    // Additional check: if this is a multi-selection and some selected channels are in different groups
+    // than the target, treat this as a cross-group move even if the dragged channel is in the target group
+    if (!isCrossGroupMove && selectedChannelIds.has(activeChannel.id) && selectedChannelIds.size > 1) {
+      // Determine the effective target group (either from overChannel or group-end target)
+      const effectiveTargetGroupId = overChannel?.channel_group_id ?? activeChannel.channel_group_id;
+      // Check if any selected channel is in a different group than the target
+      const hasChannelsFromOtherGroups = localChannels.some(
+        (ch) => selectedChannelIds.has(ch.id) && ch.channel_group_id !== effectiveTargetGroupId
+      );
+      if (hasChannelsFromOtherGroups) {
+        isCrossGroupMove = true;
+        newGroupId = effectiveTargetGroupId;
+        if (overChannel) {
+          insertAtChannelNumber = overChannel.channel_number;
+        }
+      }
+    }
+
     if (isCrossGroupMove) {
       // Collect channels to move: if the dragged channel is part of multi-selection, move all selected
       // Otherwise, just move the single dragged channel
       let channelsToMove: Channel[] = [];
       if (selectedChannelIds.has(activeChannel.id) && selectedChannelIds.size > 1) {
-        // Multi-selection: collect all selected channels from the same source group
+        // Multi-selection: collect ALL selected channels (from any group, not just the dragged channel's group)
+        // Exclude channels that are already in the target group
         channelsToMove = localChannels.filter(
-          (ch) => selectedChannelIds.has(ch.id) && ch.channel_group_id === activeChannel.channel_group_id
+          (ch) => selectedChannelIds.has(ch.id) && ch.channel_group_id !== newGroupId
         );
         // Sort by channel number for consistent ordering
         channelsToMove.sort((a, b) => (a.channel_number ?? 0) - (b.channel_number ?? 0));
@@ -3207,9 +3226,19 @@ export function ChannelsPane({
       const targetGroupName = newGroupId === null
         ? 'Uncategorized'
         : channelGroups.find((g) => g.id === newGroupId)?.name ?? 'Unknown Group';
-      const sourceGroupName = activeChannel.channel_group_id === null
-        ? 'Uncategorized'
-        : channelGroups.find((g) => g.id === activeChannel.channel_group_id)?.name ?? 'Unknown Group';
+
+      // Determine source group(s) - could be multiple groups in multi-select
+      const sourceGroupIds = new Set(channelsToMove.map(ch => ch.channel_group_id));
+      const isMultiSourceGroup = sourceGroupIds.size > 1;
+      let sourceGroupName: string;
+      if (isMultiSourceGroup) {
+        sourceGroupName = 'multiple groups';
+      } else {
+        const singleSourceGroupId = channelsToMove[0]?.channel_group_id;
+        sourceGroupName = singleSourceGroupId === null
+          ? 'Uncategorized'
+          : channelGroups.find((g) => g.id === singleSourceGroupId)?.name ?? 'Unknown Group';
+      }
 
       // Check if target group is an auto-sync group
       const isTargetAutoSync = newGroupId !== null && autoSyncRelatedGroups.has(newGroupId);
@@ -3244,29 +3273,33 @@ export function ChannelsPane({
       }
 
       // Calculate source group info for renumbering option
-      const sourceGroupId = activeChannel.channel_group_id;
-      const sourceGroupChannels = sourceGroupId === null
-        ? channelsByGroup.ungrouped || []
-        : channelsByGroup[sourceGroupId] || [];
-
-      // Get channel numbers from source group (excluding channels being moved)
-      const movedChannelIds = new Set(channelsToMove.map(ch => ch.id));
-      const remainingSourceChannelNumbers = sourceGroupChannels
-        .filter(ch => !movedChannelIds.has(ch.id))
-        .map(ch => ch.channel_number)
-        .filter((n): n is number => n !== null)
-        .sort((a, b) => a - b);
-
-      // Check if there will be gaps after the move
+      // For multi-source-group moves, source renumbering is disabled (too complex)
       let sourceGroupHasGaps = false;
       let sourceGroupMinChannel: number | null = null;
-      if (remainingSourceChannelNumbers.length > 1) {
-        sourceGroupMinChannel = remainingSourceChannelNumbers[0];
-        // Check for gaps in the remaining channels
-        for (let i = 1; i < remainingSourceChannelNumbers.length; i++) {
-          if (remainingSourceChannelNumbers[i] - remainingSourceChannelNumbers[i - 1] > 1) {
-            sourceGroupHasGaps = true;
-            break;
+      const sourceGroupId = isMultiSourceGroup ? null : (channelsToMove[0]?.channel_group_id ?? null);
+
+      if (!isMultiSourceGroup) {
+        const sourceGroupChannels = sourceGroupId === null
+          ? channelsByGroup.ungrouped || []
+          : channelsByGroup[sourceGroupId] || [];
+
+        // Get channel numbers from source group (excluding channels being moved)
+        const movedChannelIds = new Set(channelsToMove.map(ch => ch.id));
+        const remainingSourceChannelNumbers = sourceGroupChannels
+          .filter(ch => !movedChannelIds.has(ch.id))
+          .map(ch => ch.channel_number)
+          .filter((n): n is number => n !== null)
+          .sort((a, b) => a - b);
+
+        // Check if there will be gaps after the move
+        if (remainingSourceChannelNumbers.length > 1) {
+          sourceGroupMinChannel = remainingSourceChannelNumbers[0];
+          // Check for gaps in the remaining channels
+          for (let i = 1; i < remainingSourceChannelNumbers.length; i++) {
+            if (remainingSourceChannelNumbers[i] - remainingSourceChannelNumbers[i - 1] > 1) {
+              sourceGroupHasGaps = true;
+              break;
+            }
           }
         }
       }
