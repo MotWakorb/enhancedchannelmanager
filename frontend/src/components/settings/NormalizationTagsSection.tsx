@@ -154,7 +154,7 @@ export function NormalizationTagsSection({
   return (
     <div className="normalization-tags-section">
       <div className="normalization-tags-header">
-        <h3 className="normalization-tags-title">Stream Name Normalization Tags</h3>
+        <h3 className="normalization-tags-title">Channel Name Normalization Tags</h3>
         <button
           className="normalization-tags-reset"
           onClick={handleReset}
@@ -167,7 +167,7 @@ export function NormalizationTagsSection({
       </div>
 
       <p className="normalization-tags-subtitle">
-        Configure which patterns are stripped from stream names during bulk channel
+        Configure which patterns are stripped from channel names during bulk channel
         creation. Disable tags you want to keep, or add custom tags for your specific
         provider naming conventions.
       </p>
