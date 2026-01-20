@@ -44,7 +44,10 @@ def test_engine():
 @pytest.fixture(scope="function")
 def test_session(test_engine):
     """Create a test database session."""
-    TestSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=test_engine)
+    # expire_on_commit=False allows accessing object attributes after commit/close
+    # This is needed because production code commits and closes the session,
+    # but tests need to verify attributes on returned objects
+    TestSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=test_engine, expire_on_commit=False)
     session = TestSessionLocal()
     yield session
     session.close()
@@ -62,24 +65,23 @@ def override_get_session(test_session):
 
 
 @pytest.fixture(scope="function")
-async def async_client(test_session, override_get_session):
+async def async_client(test_session):
     """
     Create an async test client for the FastAPI app.
-    Overrides the database session with the test session.
+    Patches database.get_session to return the test session.
     """
+    from unittest.mock import patch
     from httpx import AsyncClient, ASGITransport
     from main import app
-    from database import get_session
 
-    # Override the get_session dependency
-    app.dependency_overrides[get_session] = override_get_session
-
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
-        yield client
-
-    # Clean up overrides
-    app.dependency_overrides.clear()
+    # Patch get_session at the module level where it's called
+    # This intercepts direct calls to get_session() in endpoint code
+    with patch('database.get_session', return_value=test_session):
+        # Also patch in main.py in case it imports get_session directly
+        with patch('main.get_session', return_value=test_session, create=True):
+            transport = ASGITransport(app=app)
+            async with AsyncClient(transport=transport, base_url="http://test") as client:
+                yield client
 
 
 @pytest.fixture
