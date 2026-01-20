@@ -138,7 +138,7 @@ interface SettingsTabProps {
   onProbeComplete?: () => void;
 }
 
-type SettingsPage = 'general' | 'channel-defaults' | 'appearance' | 'scheduled-tasks' | 'alert-methods' | 'maintenance';
+type SettingsPage = 'general' | 'channel-defaults' | 'normalization' | 'appearance' | 'scheduled-tasks' | 'alert-methods' | 'maintenance';
 
 export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onProbeComplete }: SettingsTabProps) {
   const [activePage, setActivePage] = useState<SettingsPage>('general');
@@ -1629,16 +1629,34 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         </div>
       </div>
 
-      <div className="settings-section">
-        <div className="settings-section-header">
-          <span className="material-icons">label</span>
-          <h3>Stream Name Normalization</h3>
+      {saveSuccess && (
+        <div className="save-success">
+          <span className="material-icons">check_circle</span>
+          Settings saved successfully
         </div>
-        <NormalizationTagsSection
-          settings={normalizationSettings}
-          onChange={setNormalizationSettings}
-        />
+      )}
+
+      <div className="settings-actions">
+        <div className="settings-actions-left" />
+        <button className="btn-primary" onClick={handleSave} disabled={loading}>
+          <span className="material-icons">save</span>
+          {loading ? 'Saving...' : 'Save Settings'}
+        </button>
       </div>
+    </div>
+  );
+
+  const renderNormalizationPage = () => (
+    <div className="settings-page">
+      <div className="settings-page-header">
+        <h2>Stream Normalization</h2>
+        <p>Configure tag-based patterns for cleaning up stream names during bulk channel creation.</p>
+      </div>
+
+      <NormalizationTagsSection
+        settings={normalizationSettings}
+        onChange={setNormalizationSettings}
+      />
 
       {saveSuccess && (
         <div className="save-success">
@@ -2076,6 +2094,13 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
             Channel Defaults
           </li>
           <li
+            className={`settings-nav-item ${activePage === 'normalization' ? 'active' : ''}`}
+            onClick={() => setActivePage('normalization')}
+          >
+            <span className="material-icons">label</span>
+            Stream Normalization
+          </li>
+          <li
             className={`settings-nav-item ${activePage === 'appearance' ? 'active' : ''}`}
             onClick={() => setActivePage('appearance')}
           >
@@ -2109,6 +2134,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       <div className="settings-content">
         {activePage === 'general' && renderGeneralPage()}
         {activePage === 'channel-defaults' && renderChannelDefaultsPage()}
+        {activePage === 'normalization' && renderNormalizationPage()}
         {activePage === 'appearance' && renderAppearancePage()}
         {activePage === 'scheduled-tasks' && <ScheduledTasksSection userTimezone={userTimezone} />}
         {activePage === 'alert-methods' && <AlertMethodSettings />}
