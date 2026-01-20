@@ -24,7 +24,6 @@ class StreamProbeTask(TaskScheduler):
     all the complex probing logic. This task simply delegates to it.
 
     Configuration is managed via the existing settings in DispatcharrSettings:
-    - stream_probe_interval_hours
     - stream_probe_schedule_time
     - probe_channel_groups
     - etc.
