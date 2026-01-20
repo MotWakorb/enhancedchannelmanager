@@ -207,7 +207,6 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   const [frontendLogLevel, setFrontendLogLevel] = useState('INFO');
 
   // Stream probe settings (scheduled probing is controlled by Task Engine)
-  const [streamProbeIntervalHours, setStreamProbeIntervalHours] = useState(24);
   const [streamProbeBatchSize, setStreamProbeBatchSize] = useState(10);
   const [streamProbeTimeout, setStreamProbeTimeout] = useState(30);
   const [bitrateSampleDuration, setBitrateSampleDuration] = useState(10);
@@ -322,7 +321,6 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         frontend_log_level: frontendLogLevel,
         vlc_open_behavior: vlcOpenBehavior,
         linked_m3u_accounts: linkedM3UAccounts,
-        stream_probe_interval_hours: streamProbeIntervalHours,
         stream_probe_batch_size: streamProbeBatchSize,
         stream_probe_timeout: streamProbeTimeout,
         probe_channel_groups: probeChannelGroups,
@@ -350,7 +348,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
     theme, defaultChannelProfileIds, epgAutoMatchThreshold,
     customNetworkPrefixes, customNetworkSuffixes, statsPollInterval,
     userTimezone, backendLogLevel, frontendLogLevel, vlcOpenBehavior,
-    linkedM3UAccounts, streamProbeIntervalHours, streamProbeBatchSize,
+    linkedM3UAccounts, streamProbeBatchSize,
     streamProbeTimeout, probeChannelGroups, bitrateSampleDuration,
     parallelProbingEnabled, maxConcurrentProbes, skipRecentlyProbedHours, refreshM3usBeforeProbe,
     autoReorderAfterProbe, streamFetchPageLimit, streamSortPriority,
@@ -582,7 +580,6 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       }
       setLinkedM3UAccounts(settings.linked_m3u_accounts ?? []);
       // Stream probe settings (scheduled probing is controlled by Task Engine)
-      setStreamProbeIntervalHours(settings.stream_probe_interval_hours ?? 24);
       setStreamProbeBatchSize(settings.stream_probe_batch_size ?? 10);
       setStreamProbeTimeout(settings.stream_probe_timeout ?? 30);
       setProbeChannelGroups(settings.probe_channel_groups ?? []);
@@ -688,7 +685,6 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         vlc_open_behavior: vlcOpenBehavior,
         linked_m3u_accounts: linkedM3UAccounts,
         // Stream probe settings (scheduled probing is controlled by Task Engine)
-        stream_probe_interval_hours: streamProbeIntervalHours,
         stream_probe_batch_size: streamProbeBatchSize,
         stream_probe_timeout: streamProbeTimeout,
         probe_channel_groups: probeChannelGroups,
@@ -1823,19 +1819,6 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
 
         <div className="settings-group" style={{ marginTop: '1rem' }}>
             <div className="form-group-vertical">
-              <label htmlFor="probeInterval">Probe interval (hours)</label>
-              <span className="form-description">How often to run scheduled probes (1-168 hours)</span>
-              <input
-                id="probeInterval"
-                type="number"
-                min="1"
-                max="168"
-                value={streamProbeIntervalHours}
-                onChange={(e) => setStreamProbeIntervalHours(Math.max(1, Math.min(168, parseInt(e.target.value) || 24)))}
-              />
-            </div>
-
-            <div className="form-group-vertical">
               <label htmlFor="probeBatchSize">Batch size</label>
               <span className="form-description">Streams to probe per scheduled cycle (1-{totalStreamCount})</span>
               <input
@@ -2797,7 +2780,6 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                       frontend_log_level: frontendLogLevel,
                       vlc_open_behavior: vlcOpenBehavior,
                       linked_m3u_accounts: linkedM3UAccounts,
-                      stream_probe_interval_hours: streamProbeIntervalHours,
                       stream_probe_batch_size: streamProbeBatchSize,
                       stream_probe_timeout: streamProbeTimeout,
                       probe_channel_groups: tempProbeChannelGroups,

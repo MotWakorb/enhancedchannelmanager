@@ -23,7 +23,6 @@ logger = logging.getLogger(__name__)
 # Default configuration
 DEFAULT_PROBE_TIMEOUT = 30  # seconds
 DEFAULT_PROBE_BATCH_SIZE = 10  # streams per cycle
-DEFAULT_PROBE_INTERVAL_HOURS = 24  # daily
 BITRATE_SAMPLE_DURATION = 8  # seconds to sample stream for bitrate measurement
 
 # Probe history persistence
@@ -47,7 +46,6 @@ class StreamProber:
         client,
         probe_timeout: int = DEFAULT_PROBE_TIMEOUT,
         probe_batch_size: int = DEFAULT_PROBE_BATCH_SIZE,
-        probe_interval_hours: int = DEFAULT_PROBE_INTERVAL_HOURS,
         user_timezone: str = "",  # IANA timezone name
         probe_channel_groups: list[str] = None,  # List of group names to probe (empty/None = all groups)
         bitrate_sample_duration: int = 10,  # Duration in seconds to sample stream for bitrate (10, 20, or 30)
@@ -64,7 +62,6 @@ class StreamProber:
         self.client = client
         self.probe_timeout = probe_timeout
         self.probe_batch_size = probe_batch_size
-        self.probe_interval_hours = probe_interval_hours
         self.user_timezone = user_timezone
         self.probe_channel_groups = probe_channel_groups or []
         self.bitrate_sample_duration = bitrate_sample_duration
@@ -274,156 +271,6 @@ class StreamProber:
             "status": "reset",
             "message": f"Probe state forcibly reset (was_in_progress={was_in_progress})"
         }
-
-    async def _probe_stale_streams(self):
-        """Find and probe streams that haven't been probed recently."""
-        if self._probing_in_progress:
-            logger.debug("Probe already in progress, skipping")
-            return
-
-        self._probing_in_progress = True
-        self._probe_cancelled = False  # Reset cancellation flag
-        start_time = datetime.utcnow()
-        probed_count = 0
-
-        # Reset tracking variables
-        self._probe_success_streams = []
-        self._probe_failed_streams = []
-        self._probe_skipped_streams = []
-        self._probe_progress_total = 0
-        self._probe_progress_current = 0
-        self._probe_progress_success_count = 0
-        self._probe_progress_failed_count = 0
-        self._probe_progress_skipped_count = 0
-        self._probe_progress_status = "probing"
-        self._probe_progress_current_stream = ""
-
-        try:
-            cutoff = datetime.utcnow() - timedelta(hours=self.probe_interval_hours)
-
-            # Get all streams from Dispatcharr
-            streams = await self._fetch_all_streams()
-            if not streams:
-                logger.debug("No streams found to probe")
-                return
-
-            # Find streams needing probe (never probed or stale)
-            session = get_session()
-            try:
-                probed_recently = {
-                    stat.stream_id
-                    for stat in session.query(StreamStats).filter(
-                        StreamStats.last_probed > cutoff
-                    ).all()
-                }
-
-                to_probe = [s for s in streams if s["id"] not in probed_recently]
-                to_probe = to_probe[: self.probe_batch_size]  # Limit batch size
-
-                if not to_probe:
-                    logger.debug("No streams need probing")
-                    return
-
-                logger.info(f"Scheduled probe: {len(to_probe)} streams to probe")
-
-                # Set progress tracking
-                self._probe_progress_total = len(to_probe)
-
-                # Build stream_id -> channel mapping for auto-reorder
-                stream_to_channels = {}
-                for stream in streams:
-                    stream_id = stream["id"]
-                    channel_id = stream.get("channel")
-                    if channel_id:
-                        if stream_id not in stream_to_channels:
-                            stream_to_channels[stream_id] = []
-                        stream_to_channels[stream_id].append(channel_id)
-
-                for stream in to_probe:
-                    if self._probe_cancelled:
-                        break
-
-                    stream_id = stream["id"]
-                    stream_url = stream.get("url")
-                    stream_name = stream.get("name")
-
-                    self._probe_progress_current = probed_count + 1
-                    self._probe_progress_current_stream = stream_name or f"Stream {stream_id}"
-
-                    # Check if host is rate-limited and wait for backoff (scheduled probe)
-                    host = self._extract_host_from_url(stream_url)
-                    if host:
-                        backoff_delay = await self._get_host_backoff_delay(host)
-                        if backoff_delay > 0:
-                            logger.debug(f"[RATE-LIMIT] Waiting {backoff_delay:.1f}s before probing {host}")
-                            await asyncio.sleep(backoff_delay)
-
-                    result = await self.probe_stream(stream_id, stream_url, stream_name)
-
-                    # Track success/failure
-                    probe_status = result.get("probe_status", "failed")
-                    error_message = result.get("error_message", "")
-                    stream_info = {"id": stream_id, "name": stream_name, "url": stream_url}
-                    if probe_status == "success":
-                        self._probe_progress_success_count += 1
-                        self._probe_success_streams.append(stream_info)
-                        # Record success to help host recover from rate limiting
-                        await self._record_successful_probe(stream_url)
-                    else:
-                        self._probe_progress_failed_count += 1
-                        # Include error message for failed streams
-                        stream_info["error"] = error_message or "Unknown error"
-                        self._probe_failed_streams.append(stream_info)
-                        # Check for rate limit errors and record them
-                        if self._is_rate_limit_error(error_message):
-                            await self._record_rate_limit_error(stream_url)
-
-                    probed_count += 1
-                    await asyncio.sleep(1)  # Base rate limiting delay
-
-                logger.info(f"Scheduled probe completed: {probed_count} streams probed")
-                self._probe_progress_status = "completed"
-                self._probe_progress_current_stream = ""
-
-                # Auto-reorder streams if configured
-                reordered_channels = []
-                if self.auto_reorder_after_probe:
-                    logger.info("=" * 60)
-                    logger.info("[AUTO-REORDER] Starting automatic stream reorder after probe")
-                    logger.info(f"[AUTO-REORDER] Configuration:")
-                    logger.info(f"[AUTO-REORDER]   Sort priority: {self.stream_sort_priority}")
-                    logger.info(f"[AUTO-REORDER]   Sort enabled: {self.stream_sort_enabled}")
-                    logger.info(f"[AUTO-REORDER]   Deprioritize failed: {self.deprioritize_failed_streams}")
-                    logger.info(f"[AUTO-REORDER]   Channel groups filter: {self.probe_channel_groups or 'ALL GROUPS'}")
-                    logger.info("=" * 60)
-                    self._probe_progress_status = "reordering"
-                    self._probe_progress_current_stream = "Reordering streams..."
-                    try:
-                        # Use the same channel groups filter as configured
-                        channel_groups_override = self.probe_channel_groups if self.probe_channel_groups else None
-                        reordered_channels = await self._auto_reorder_channels(channel_groups_override, stream_to_channels)
-                        logger.info("=" * 60)
-                        logger.info(f"[AUTO-REORDER] Completed: {len(reordered_channels)} channels reordered")
-                        for ch in reordered_channels:
-                            logger.info(f"[AUTO-REORDER]   - {ch['channel_name']} (id={ch['channel_id']}): {ch['stream_count']} streams")
-                        logger.info("=" * 60)
-                    except Exception as e:
-                        logger.error(f"[AUTO-REORDER] Failed: {e}")
-
-                # Save to probe history
-                self._save_probe_history(start_time, probed_count, reordered_channels=reordered_channels)
-
-            finally:
-                session.close()
-        except Exception as e:
-            logger.error(f"Scheduled probe failed: {e}")
-            self._probe_progress_status = "failed"
-            self._probe_progress_current_stream = ""
-
-            # Save failed run to history
-            self._save_probe_history(start_time, probed_count, error=str(e))
-        finally:
-            self._probing_in_progress = False
 
     async def probe_stream(
         self, stream_id: int, url: Optional[str], name: Optional[str] = None
