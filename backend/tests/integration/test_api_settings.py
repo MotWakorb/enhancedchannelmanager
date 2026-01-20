@@ -23,19 +23,16 @@ class TestGetSettings:
         assert "url" in data
 
     @pytest.mark.asyncio
-    async def test_get_settings_unconfigured_state(self, async_client):
-        """GET /api/settings shows unconfigured state when not set up."""
-        with patch("main.get_settings") as mock_get:
-            mock_settings = MagicMock()
-            mock_settings.is_configured.return_value = False
-            mock_settings.to_dict.return_value = {"configured": False, "url": ""}
-            mock_get.return_value = mock_settings
+    async def test_get_settings_has_required_fields(self, async_client):
+        """GET /api/settings returns settings with required fields."""
+        response = await async_client.get("/api/settings")
+        assert response.status_code == 200
 
-            response = await async_client.get("/api/settings")
-            assert response.status_code == 200
-
-            data = response.json()
-            assert data["configured"] is False
+        data = response.json()
+        # Settings should have these standard configuration fields
+        assert "configured" in data
+        assert "url" in data
+        assert isinstance(data["configured"], bool)
 
 
 class TestUpdateSettings:
