@@ -975,7 +975,11 @@ export function normalizeChannelDisplayName(name: string, separator: string = ':
   if (leagueInfo) {
     const titleCasedName = toTitleCase(leagueInfo.name);
     const league = leagueInfo.league.toUpperCase();
-    return `${numberPrefix}${league}${separator} ${titleCasedName}`;
+    // Normalize separator: ensure single space around non-space characters
+    // ':' -> ': ', ' - ' -> ' - ', '-' -> ' - ', etc.
+    const trimmedSeparator = separator.trim();
+    const normalizedSeparator = trimmedSeparator === ':' ? ': ' : ` ${trimmedSeparator} `;
+    return `${numberPrefix}${league}${normalizedSeparator}${titleCasedName}`;
   }
 
   // No league prefix - just apply title case

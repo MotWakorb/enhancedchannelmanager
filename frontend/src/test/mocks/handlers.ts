@@ -321,9 +321,13 @@ export const handlers = [
 
     const start = (page - 1) * pageSize
     const paginatedResults = results.slice(start, start + pageSize)
+    const totalPages = Math.ceil(results.length / pageSize) || 1
 
     return HttpResponse.json({
       count: results.length,
+      page,
+      page_size: pageSize,
+      total_pages: totalPages,
       next: start + pageSize < results.length ? `${API_BASE}/channels?page=${page + 1}` : null,
       previous: page > 1 ? `${API_BASE}/channels?page=${page - 1}` : null,
       results: paginatedResults,

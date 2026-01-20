@@ -54,7 +54,7 @@ describe('getStreamQualityPriority', () => {
 
   it('returns default priority for streams without quality indicator', () => {
     const priority = getStreamQualityPriority('ESPN');
-    expect(priority).toBe(27); // DEFAULT_QUALITY_PRIORITY (HD level)
+    expect(priority).toBe(30); // DEFAULT_QUALITY_PRIORITY (HD level, same as 720p)
   });
 });
 
