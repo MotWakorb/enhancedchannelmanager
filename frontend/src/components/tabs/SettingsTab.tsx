@@ -170,6 +170,75 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   });
   const [normalizationPreviewInput, setNormalizationPreviewInput] = useState('');
 
+  // Handler to save normalization settings immediately when tags change
+  const handleNormalizationSettingsChange = useCallback(async (newSettings: NormalizationSettings) => {
+    // Update local state first for immediate UI response
+    setNormalizationSettings(newSettings);
+
+    // Save to backend immediately (with all current settings)
+    try {
+      await api.saveSettings({
+        url,
+        username,
+        auto_rename_channel_number: autoRenameChannelNumber,
+        include_channel_number_in_name: includeChannelNumberInName,
+        channel_number_separator: channelNumberSeparator,
+        remove_country_prefix: removeCountryPrefix,
+        include_country_in_name: includeCountryInName,
+        country_separator: countrySeparator,
+        timezone_preference: timezonePreference,
+        show_stream_urls: showStreamUrls,
+        hide_auto_sync_groups: hideAutoSyncGroups,
+        hide_ungrouped_streams: hideUngroupedStreams,
+        hide_epg_urls: hideEpgUrls,
+        hide_m3u_urls: hideM3uUrls,
+        gracenote_conflict_mode: gracenoteConflictMode,
+        theme: theme,
+        default_channel_profile_ids: defaultChannelProfileIds,
+        epg_auto_match_threshold: epgAutoMatchThreshold,
+        custom_network_prefixes: customNetworkPrefixes,
+        custom_network_suffixes: customNetworkSuffixes,
+        normalization_settings: newSettings, // Use the new settings
+        stats_poll_interval: statsPollInterval,
+        user_timezone: userTimezone,
+        backend_log_level: backendLogLevel,
+        frontend_log_level: frontendLogLevel,
+        vlc_open_behavior: vlcOpenBehavior,
+        linked_m3u_accounts: linkedM3UAccounts,
+        stream_probe_interval_hours: streamProbeIntervalHours,
+        stream_probe_batch_size: streamProbeBatchSize,
+        stream_probe_timeout: streamProbeTimeout,
+        probe_channel_groups: probeChannelGroups,
+        bitrate_sample_duration: bitrateSampleDuration,
+        parallel_probing_enabled: parallelProbingEnabled,
+        skip_recently_probed_hours: skipRecentlyProbedHours,
+        refresh_m3us_before_probe: refreshM3usBeforeProbe,
+        auto_reorder_after_probe: autoReorderAfterProbe,
+        stream_fetch_page_limit: streamFetchPageLimit,
+        stream_sort_priority: streamSortPriority,
+        stream_sort_enabled: streamSortEnabled,
+        deprioritize_failed_streams: deprioritizeFailedStreams,
+      });
+      logger.debug('Normalization settings saved automatically');
+    } catch (err) {
+      logger.error('Failed to auto-save normalization settings:', err);
+      // Don't show error to user for auto-save, just log it
+    }
+  }, [
+    url, username, autoRenameChannelNumber, includeChannelNumberInName,
+    channelNumberSeparator, removeCountryPrefix, includeCountryInName,
+    countrySeparator, timezonePreference, showStreamUrls, hideAutoSyncGroups,
+    hideUngroupedStreams, hideEpgUrls, hideM3uUrls, gracenoteConflictMode,
+    theme, defaultChannelProfileIds, epgAutoMatchThreshold,
+    customNetworkPrefixes, customNetworkSuffixes, statsPollInterval,
+    userTimezone, backendLogLevel, frontendLogLevel, vlcOpenBehavior,
+    linkedM3UAccounts, streamProbeIntervalHours, streamProbeBatchSize,
+    streamProbeTimeout, probeChannelGroups, bitrateSampleDuration,
+    parallelProbingEnabled, skipRecentlyProbedHours, refreshM3usBeforeProbe,
+    autoReorderAfterProbe, streamFetchPageLimit, streamSortPriority,
+    streamSortEnabled, deprioritizeFailedStreams
+  ]);
+
   // Compute normalized preview based on current settings
   const normalizedPreviewResult = useMemo(() => {
     if (!normalizationPreviewInput.trim()) return '';
@@ -1654,7 +1723,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
 
       <NormalizationTagsSection
         settings={normalizationSettings}
-        onChange={setNormalizationSettings}
+        onChange={handleNormalizationSettingsChange}
       />
 
       {/* Preview Section */}
