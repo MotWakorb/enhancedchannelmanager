@@ -1979,6 +1979,57 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
           </div>
         </div>
 
+      {/* Probe Status Indicator - shows when re-probing failed streams */}
+      {(probingAll || probeAllResult) && (
+        <div className="settings-section" style={{ padding: '1rem' }}>
+          {probingAll && (
+            <div style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.75rem',
+              padding: '0.75rem 1rem',
+              backgroundColor: 'var(--bg-tertiary)',
+              borderRadius: '6px',
+              border: '1px solid var(--accent-primary)'
+            }}>
+              <span className="material-icons spinning" style={{ color: 'var(--accent-primary)' }}>sync</span>
+              <span>Re-probing failed streams...</span>
+            </div>
+          )}
+          {!probingAll && probeAllResult && (
+            <div style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.75rem',
+              padding: '0.75rem 1rem',
+              backgroundColor: 'var(--bg-tertiary)',
+              borderRadius: '6px',
+              border: `1px solid ${probeAllResult.success ? '#2ecc71' : '#e74c3c'}`
+            }}>
+              <span className="material-icons" style={{ color: probeAllResult.success ? '#2ecc71' : '#e74c3c' }}>
+                {probeAllResult.success ? 'check_circle' : 'error'}
+              </span>
+              <span>{probeAllResult.message}</span>
+              <button
+                onClick={() => setProbeAllResult(null)}
+                style={{
+                  marginLeft: 'auto',
+                  background: 'none',
+                  border: 'none',
+                  cursor: 'pointer',
+                  color: 'var(--text-secondary)',
+                  fontSize: '1.2rem',
+                  padding: '0.25rem'
+                }}
+                title="Dismiss"
+              >
+                ×
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Probe History Section */}
       {probeHistory.length > 0 && (
         <div className="settings-section">
@@ -2350,8 +2401,9 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                 <button
                   onClick={handleRerunFailed}
                   className="probe-results-rerun-btn"
+                  disabled={probingAll}
                 >
-                  Re-probe Failed Streams
+                  {probingAll ? 'Re-probing...' : 'Re-probe Failed Streams'}
                 </button>
               )}
               <button
