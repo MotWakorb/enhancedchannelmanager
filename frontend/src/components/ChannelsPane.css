@@ -113,6 +113,30 @@
   font-size: 14px;
 }
 
+.failed-streams-alert {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.2rem 0.5rem;
+  background-color: rgba(231, 76, 60, 0.15);
+  border: 1px solid rgba(231, 76, 60, 0.4);
+  border-radius: 4px;
+  color: var(--error, #e74c3c);
+  font-size: 0.75rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 0.15s, border-color 0.15s;
+}
+
+.failed-streams-alert:hover {
+  background-color: rgba(231, 76, 60, 0.25);
+  border-color: rgba(231, 76, 60, 0.6);
+}
+
+.failed-streams-alert .material-icons {
+  font-size: 14px;
+}
+
 /* Selection info in header */
 .selection-info {
   display: flex;
@@ -944,11 +968,23 @@
 .group-failed-indicator {
   display: inline-flex;
   align-items: center;
+  gap: 0.2rem;
   margin-left: 0.5rem;
+  padding: 0.1rem 0.4rem;
+  background-color: rgba(231, 76, 60, 0.15);
+  border: 1px solid rgba(231, 76, 60, 0.4);
+  border-radius: 4px;
+  color: var(--error, #e74c3c);
+  font-size: 0.75rem;
+  font-weight: 600;
 }
 
 .group-failed-indicator .material-icons {
-  font-size: 1rem;
+  font-size: 0.875rem;
+  color: var(--error, #e74c3c);
+}
+
+.group-failed-indicator .failed-count {
   color: var(--error, #e74c3c);
 }
 
