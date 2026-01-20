@@ -1790,6 +1790,7 @@ function App() {
               onTrackNewlyCreatedGroup={trackNewlyCreatedGroup}
 
               // Streams
+              allStreams={streams}
               streams={filteredStreams}
               providers={providers}
               streamGroups={streamGroups}
