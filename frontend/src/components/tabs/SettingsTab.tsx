@@ -212,6 +212,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   const [streamProbeTimeout, setStreamProbeTimeout] = useState(30);
   const [bitrateSampleDuration, setBitrateSampleDuration] = useState(10);
   const [parallelProbingEnabled, setParallelProbingEnabled] = useState(true);
+  const [maxConcurrentProbes, setMaxConcurrentProbes] = useState(8);
   const [skipRecentlyProbedHours, setSkipRecentlyProbedHours] = useState(0);
   const [refreshM3usBeforeProbe, setRefreshM3usBeforeProbe] = useState(true);
   const [autoReorderAfterProbe, setAutoReorderAfterProbe] = useState(false);
@@ -229,6 +230,9 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
     failed_count: number;
     skipped_count: number;
     percentage: number;
+    rate_limited?: boolean;
+    rate_limited_hosts?: Array<{ host: string; backoff_remaining: number; consecutive_429s: number }>;
+    max_backoff_remaining?: number;
   } | null>(null);
   const [showProbeResultsModal, setShowProbeResultsModal] = useState(false);
   const [probeResultsType, setProbeResultsType] = useState<'success' | 'failed' | 'skipped'>('success');
@@ -249,6 +253,8 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   const [probeChannelGroups, setProbeChannelGroups] = useState<string[]>([]);
   const [showGroupSelectModal, setShowGroupSelectModal] = useState(false);
   const [tempProbeChannelGroups, setTempProbeChannelGroups] = useState<string[]>([]);
+  // M3U accounts for guidance on max concurrent probes
+  const [m3uAccountsMaxStreams, setM3uAccountsMaxStreams] = useState<{ name: string; max_streams: number }[]>([]);
 
   // Preserve settings not managed by this tab (to avoid overwriting them on save)
   const [linkedM3UAccounts, setLinkedM3UAccounts] = useState<number[][]>([]);
@@ -322,6 +328,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         probe_channel_groups: probeChannelGroups,
         bitrate_sample_duration: bitrateSampleDuration,
         parallel_probing_enabled: parallelProbingEnabled,
+        max_concurrent_probes: maxConcurrentProbes,
         skip_recently_probed_hours: skipRecentlyProbedHours,
         refresh_m3us_before_probe: refreshM3usBeforeProbe,
         auto_reorder_after_probe: autoReorderAfterProbe,
@@ -345,7 +352,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
     userTimezone, backendLogLevel, frontendLogLevel, vlcOpenBehavior,
     linkedM3UAccounts, streamProbeIntervalHours, streamProbeBatchSize,
     streamProbeTimeout, probeChannelGroups, bitrateSampleDuration,
-    parallelProbingEnabled, skipRecentlyProbedHours, refreshM3usBeforeProbe,
+    parallelProbingEnabled, maxConcurrentProbes, skipRecentlyProbedHours, refreshM3usBeforeProbe,
     autoReorderAfterProbe, streamFetchPageLimit, streamSortPriority,
     streamSortEnabled, deprioritizeFailedStreams
   ]);
@@ -375,7 +382,21 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
     loadAvailableChannelGroups();
     loadProbeHistory();
     checkForOngoingProbe();
+    loadM3UAccountsMaxStreams();
   }, []);
+
+  // Load M3U accounts to show guidance for max concurrent probes
+  const loadM3UAccountsMaxStreams = async () => {
+    try {
+      const accounts = await api.getM3UAccounts();
+      const maxStreamsList = accounts
+        .filter(a => a.is_active && a.max_streams > 0)
+        .map(a => ({ name: a.name, max_streams: a.max_streams }));
+      setM3uAccountsMaxStreams(maxStreamsList);
+    } catch (err) {
+      logger.warn('Failed to load M3U accounts for max streams guidance', err);
+    }
+  };
 
   // Check if a probe is already in progress (e.g., when returning to Settings tab)
   const checkForOngoingProbe = async () => {
@@ -567,6 +588,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       setProbeChannelGroups(settings.probe_channel_groups ?? []);
       setBitrateSampleDuration(settings.bitrate_sample_duration ?? 10);
       setParallelProbingEnabled(settings.parallel_probing_enabled ?? true);
+      setMaxConcurrentProbes(settings.max_concurrent_probes ?? 8);
       setSkipRecentlyProbedHours(settings.skip_recently_probed_hours ?? 0);
       setRefreshM3usBeforeProbe(settings.refresh_m3us_before_probe ?? true);
       setOriginalRefreshM3usBeforeProbe(settings.refresh_m3us_before_probe ?? true);
@@ -672,6 +694,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         probe_channel_groups: probeChannelGroups,
         bitrate_sample_duration: bitrateSampleDuration,
         parallel_probing_enabled: parallelProbingEnabled,
+        max_concurrent_probes: maxConcurrentProbes,
         skip_recently_probed_hours: skipRecentlyProbedHours,
         refresh_m3us_before_probe: refreshM3usBeforeProbe,
         auto_reorder_after_probe: autoReorderAfterProbe,
@@ -1883,6 +1906,40 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
               </span>
             </div>
 
+            {parallelProbingEnabled && (
+              <div className="form-group-vertical">
+                <label htmlFor="maxConcurrentProbes">Max concurrent probes</label>
+                <span className="form-description">
+                  Maximum number of streams to probe simultaneously (1-16).
+                  {m3uAccountsMaxStreams.length > 0 && (
+                    <>
+                      {' '}Based on your M3U providers:{' '}
+                      {m3uAccountsMaxStreams.map((a, i) => (
+                        <span key={a.name}>
+                          {i > 0 && ', '}
+                          <strong>{a.name}</strong>: {a.max_streams} streams
+                        </span>
+                      ))}
+                      . Set this to the lowest max_streams value to avoid rate limiting.
+                    </>
+                  )}
+                </span>
+                <input
+                  id="maxConcurrentProbes"
+                  type="number"
+                  min="1"
+                  max="16"
+                  value={maxConcurrentProbes}
+                  onChange={(e) => setMaxConcurrentProbes(Math.max(1, Math.min(16, parseInt(e.target.value) || 8)))}
+                />
+                {m3uAccountsMaxStreams.length > 0 && (
+                  <span className="form-hint">
+                    Recommended: {Math.min(...m3uAccountsMaxStreams.map(a => a.max_streams), 8)} (lowest provider limit)
+                  </span>
+                )}
+              </div>
+            )}
+
             <div className="form-group-vertical">
               <label htmlFor="skipRecentlyProbedHours">Skip recently probed streams (hours)</label>
               <span className="form-description">
@@ -1979,21 +2036,59 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
           </div>
         </div>
 
-      {/* Probe Status Indicator - shows when re-probing failed streams */}
+      {/* Probe Status Indicator - shows when probing or has result */}
       {(probingAll || probeAllResult) && (
         <div className="settings-section" style={{ padding: '1rem' }}>
           {probingAll && (
             <div style={{
               display: 'flex',
-              alignItems: 'center',
-              gap: '0.75rem',
+              flexDirection: 'column',
+              gap: '0.5rem',
               padding: '0.75rem 1rem',
               backgroundColor: 'var(--bg-tertiary)',
               borderRadius: '6px',
               border: '1px solid var(--accent-primary)'
             }}>
-              <span className="material-icons spinning" style={{ color: 'var(--accent-primary)' }}>sync</span>
-              <span>Re-probing failed streams...</span>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                <span className="material-icons spinning" style={{ color: 'var(--accent-primary)' }}>sync</span>
+                <span>
+                  {probeProgress
+                    ? `Probing streams... ${probeProgress.current}/${probeProgress.total} (${probeProgress.percentage}%)`
+                    : 'Starting probe...'}
+                </span>
+              </div>
+              {probeProgress && (
+                <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginLeft: '2rem' }}>
+                  Success: {probeProgress.success_count} | Failed: {probeProgress.failed_count}
+                  {probeProgress.skipped_count > 0 && ` | Skipped: ${probeProgress.skipped_count}`}
+                </div>
+              )}
+              {probeProgress?.rate_limited && probeProgress.rate_limited_hosts && probeProgress.rate_limited_hosts.length > 0 && (
+                <div style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.5rem',
+                  marginTop: '0.25rem',
+                  padding: '0.5rem 0.75rem',
+                  backgroundColor: 'rgba(243, 156, 18, 0.1)',
+                  borderRadius: '4px',
+                  border: '1px solid rgba(243, 156, 18, 0.3)',
+                  fontSize: '0.85rem',
+                  color: '#f39c12'
+                }}>
+                  <span className="material-icons" style={{ fontSize: '1rem' }}>warning</span>
+                  <span>
+                    Rate limited by provider{probeProgress.rate_limited_hosts.length > 1 ? 's' : ''}: {' '}
+                    {probeProgress.rate_limited_hosts.map((h, i) => (
+                      <span key={h.host}>
+                        {i > 0 && ', '}
+                        {h.host} (waiting {Math.ceil(h.backoff_remaining)}s)
+                      </span>
+                    ))}
+                    {' '}— Consider reducing max concurrent probes
+                  </span>
+                </div>
+              )}
             </div>
           )}
           {!probingAll && probeAllResult && (
@@ -2708,6 +2803,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                       probe_channel_groups: tempProbeChannelGroups,
                       bitrate_sample_duration: bitrateSampleDuration,
                       parallel_probing_enabled: parallelProbingEnabled,
+                      max_concurrent_probes: maxConcurrentProbes,
                       stream_sort_priority: streamSortPriority,
                       stream_sort_enabled: streamSortEnabled,
                     });
