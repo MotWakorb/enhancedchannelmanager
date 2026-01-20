@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react';
 import * as api from '../../services/api';
 import { NETWORK_PREFIXES, NETWORK_SUFFIXES } from '../../constants/streamNormalization';
-import type { Theme, ProbeHistoryEntry, SortCriterion, SortEnabledMap, GracenoteConflictMode } from '../../services/api';
+import type { Theme, ProbeHistoryEntry, SortCriterion, SortEnabledMap, GracenoteConflictMode, NormalizationSettings } from '../../services/api';
+import { NormalizationTagsSection } from '../settings/NormalizationTagsSection';
 import type { ChannelProfile } from '../../types';
 import { logger } from '../../utils/logger';
 import { copyToClipboard } from '../../utils/clipboard';
@@ -161,6 +162,11 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   const [newPrefixInput, setNewPrefixInput] = useState('');
   const [customNetworkSuffixes, setCustomNetworkSuffixes] = useState<string[]>([]);
   const [newSuffixInput, setNewSuffixInput] = useState('');
+  // New tag-based normalization settings
+  const [normalizationSettings, setNormalizationSettings] = useState<NormalizationSettings>({
+    disabledBuiltinTags: [],
+    customTags: [],
+  });
   const [streamSortPriority, setStreamSortPriority] = useState<SortCriterion[]>(['resolution', 'bitrate', 'framerate']);
   const [streamSortEnabled, setStreamSortEnabled] = useState<SortEnabledMap>({ resolution: true, bitrate: true, framerate: true });
   const [deprioritizeFailedStreams, setDeprioritizeFailedStreams] = useState(true);
@@ -450,6 +456,10 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       setEpgAutoMatchThreshold(settings.epg_auto_match_threshold ?? 80);
       setCustomNetworkPrefixes(settings.custom_network_prefixes ?? []);
       setCustomNetworkSuffixes(settings.custom_network_suffixes ?? []);
+      setNormalizationSettings(settings.normalization_settings ?? {
+        disabledBuiltinTags: [],
+        customTags: [],
+      });
       setStatsPollInterval(settings.stats_poll_interval ?? 10);
       setOriginalPollInterval(settings.stats_poll_interval ?? 10);
       setUserTimezone(settings.user_timezone ?? '');
@@ -561,6 +571,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         epg_auto_match_threshold: epgAutoMatchThreshold,
         custom_network_prefixes: customNetworkPrefixes,
         custom_network_suffixes: customNetworkSuffixes,
+        normalization_settings: normalizationSettings,
         stats_poll_interval: statsPollInterval,
         user_timezone: userTimezone,
         backend_log_level: backendLogLevel,
@@ -1621,171 +1632,12 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       <div className="settings-section">
         <div className="settings-section-header">
           <span className="material-icons">label</span>
-          <h3>Custom Network Prefixes</h3>
+          <h3>Stream Name Normalization</h3>
         </div>
-
-        <div className="form-group">
-          <p className="form-hint" style={{ marginTop: 0, marginBottom: '0.75rem' }}>
-            Add custom prefixes to strip during bulk channel creation. These are merged with the built-in
-            list (CHAMP, PPV, NFL, NBA, etc.) when "Strip network prefixes" is enabled.
-          </p>
-
-          <div className="custom-prefix-input-row">
-            <input
-              type="text"
-              placeholder="Enter prefix (e.g., MARQUEE)"
-              value={newPrefixInput}
-              onChange={(e) => setNewPrefixInput(e.target.value.toUpperCase())}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && newPrefixInput.trim()) {
-                  e.preventDefault();
-                  const prefix = newPrefixInput.trim();
-                  // Check if prefix already exists in custom list or built-in list
-                  if (!customNetworkPrefixes.includes(prefix) && !NETWORK_PREFIXES.includes(prefix)) {
-                    setCustomNetworkPrefixes([...customNetworkPrefixes, prefix]);
-                  }
-                  setNewPrefixInput('');
-                }
-              }}
-              className="custom-prefix-input"
-            />
-            <button
-              type="button"
-              className="btn-secondary custom-prefix-add-btn"
-              onClick={() => {
-                const prefix = newPrefixInput.trim();
-                // Check if prefix already exists in custom list or built-in list
-                if (prefix && !customNetworkPrefixes.includes(prefix) && !NETWORK_PREFIXES.includes(prefix)) {
-                  setCustomNetworkPrefixes([...customNetworkPrefixes, prefix]);
-                }
-                setNewPrefixInput('');
-              }}
-              disabled={!newPrefixInput.trim() || NETWORK_PREFIXES.includes(newPrefixInput.trim()) || customNetworkPrefixes.includes(newPrefixInput.trim())}
-            >
-              <span className="material-icons">add</span>
-              Add
-            </button>
-          </div>
-
-          {newPrefixInput.trim() && NETWORK_PREFIXES.includes(newPrefixInput.trim()) && (
-            <p className="custom-prefix-warning">
-              "{newPrefixInput.trim()}" is already a built-in prefix
-            </p>
-          )}
-
-          {newPrefixInput.trim() && !NETWORK_PREFIXES.includes(newPrefixInput.trim()) && customNetworkPrefixes.includes(newPrefixInput.trim()) && (
-            <p className="custom-prefix-warning">
-              "{newPrefixInput.trim()}" is already in your custom list
-            </p>
-          )}
-
-          {customNetworkPrefixes.length > 0 && (
-            <div className="custom-prefix-list">
-              {customNetworkPrefixes.map((prefix) => (
-                <div key={prefix} className="custom-prefix-tag">
-                  <span>{prefix}</span>
-                  <button
-                    type="button"
-                    className="custom-prefix-remove"
-                    onClick={() => setCustomNetworkPrefixes(customNetworkPrefixes.filter(p => p !== prefix))}
-                    title="Remove prefix"
-                  >
-                    <span className="material-icons">close</span>
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
-
-          {customNetworkPrefixes.length === 0 && (
-            <p className="custom-prefix-empty">No custom prefixes defined. Built-in prefixes will be used.</p>
-          )}
-        </div>
-      </div>
-
-      <div className="settings-section">
-        <div className="settings-section-header">
-          <span className="material-icons">label_off</span>
-          <h3>Custom Network Suffixes</h3>
-        </div>
-
-        <div className="form-group">
-          <p className="form-hint" style={{ marginTop: 0, marginBottom: '0.75rem' }}>
-            Add custom suffixes to strip during bulk channel creation. These are merged with the built-in
-            list (ENGLISH, LIVE, BACKUP, etc.) when "Strip network suffixes" is enabled.
-          </p>
-
-          <div className="custom-prefix-input-row">
-            <input
-              type="text"
-              placeholder="Enter suffix (e.g., SIMULCAST)"
-              value={newSuffixInput}
-              onChange={(e) => setNewSuffixInput(e.target.value.toUpperCase())}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && newSuffixInput.trim()) {
-                  e.preventDefault();
-                  const suffix = newSuffixInput.trim();
-                  // Check if suffix already exists in custom list or built-in list
-                  if (!customNetworkSuffixes.includes(suffix) && !NETWORK_SUFFIXES.includes(suffix)) {
-                    setCustomNetworkSuffixes([...customNetworkSuffixes, suffix]);
-                  }
-                  setNewSuffixInput('');
-                }
-              }}
-              className="custom-prefix-input"
-            />
-            <button
-              type="button"
-              className="btn-secondary custom-prefix-add-btn"
-              onClick={() => {
-                const suffix = newSuffixInput.trim();
-                // Check if suffix already exists in custom list or built-in list
-                if (suffix && !customNetworkSuffixes.includes(suffix) && !NETWORK_SUFFIXES.includes(suffix)) {
-                  setCustomNetworkSuffixes([...customNetworkSuffixes, suffix]);
-                }
-                setNewSuffixInput('');
-              }}
-              disabled={!newSuffixInput.trim() || NETWORK_SUFFIXES.includes(newSuffixInput.trim()) || customNetworkSuffixes.includes(newSuffixInput.trim())}
-            >
-              <span className="material-icons">add</span>
-              Add
-            </button>
-          </div>
-
-          {newSuffixInput.trim() && NETWORK_SUFFIXES.includes(newSuffixInput.trim()) && (
-            <p className="custom-prefix-warning">
-              "{newSuffixInput.trim()}" is already a built-in suffix
-            </p>
-          )}
-
-          {newSuffixInput.trim() && !NETWORK_SUFFIXES.includes(newSuffixInput.trim()) && customNetworkSuffixes.includes(newSuffixInput.trim()) && (
-            <p className="custom-prefix-warning">
-              "{newSuffixInput.trim()}" is already in your custom list
-            </p>
-          )}
-
-          {customNetworkSuffixes.length > 0 && (
-            <div className="custom-prefix-list">
-              {customNetworkSuffixes.map((suffix) => (
-                <div key={suffix} className="custom-prefix-tag">
-                  <span>{suffix}</span>
-                  <button
-                    type="button"
-                    className="custom-prefix-remove"
-                    onClick={() => setCustomNetworkSuffixes(customNetworkSuffixes.filter(s => s !== suffix))}
-                    title="Remove suffix"
-                  >
-                    <span className="material-icons">close</span>
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
-
-          {customNetworkSuffixes.length === 0 && (
-            <p className="custom-prefix-empty">No custom suffixes defined. Built-in suffixes will be used.</p>
-          )}
-        </div>
+        <NormalizationTagsSection
+          settings={normalizationSettings}
+          onChange={setNormalizationSettings}
+        />
       </div>
 
       {saveSuccess && (
@@ -2660,6 +2512,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                       epg_auto_match_threshold: epgAutoMatchThreshold,
                       custom_network_prefixes: customNetworkPrefixes,
                       custom_network_suffixes: customNetworkSuffixes,
+                      normalization_settings: normalizationSettings,
                       stats_poll_interval: statsPollInterval,
                       user_timezone: userTimezone,
                       backend_log_level: backendLogLevel,

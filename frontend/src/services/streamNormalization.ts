@@ -12,7 +12,12 @@ import {
   QUALITY_PRIORITY,
   DEFAULT_QUALITY_PRIORITY,
   COUNTRY_PREFIXES,
+  TIMEZONE_SUFFIXES,
+  LEAGUE_PREFIXES,
+  TAG_GROUPS,
+  TagGroupName,
 } from '../constants/streamNormalization';
+import { NormalizationSettings, NormalizationTag, NormalizationTagMode } from './api';
 
 // Separator types for channel number prefix and country prefix
 export type NumberSeparator = '-' | ':' | '|';
@@ -53,6 +58,7 @@ export interface NormalizeOptions {
   customNetworkPrefixes?: string[];  // Additional user-defined prefixes to strip
   stripNetworkSuffix?: boolean;      // Strip network suffixes like "(ENGLISH)", "[LIVE]", "BACKUP" etc.
   customNetworkSuffixes?: string[];  // Additional user-defined suffixes to strip
+  normalizationSettings?: NormalizationSettings;  // Tag-based normalization settings
 }
 
 /**
@@ -436,6 +442,70 @@ export function detectRegionalVariants(streams: { name: string }[]): boolean {
 }
 
 /**
+ * Get enabled tags for a specific group based on normalization settings.
+ * If no settings provided, returns all tags enabled.
+ */
+function getEnabledTagsForGroup(
+  group: TagGroupName,
+  normalizationSettings?: NormalizationSettings
+): string[] {
+  const groupTags = TAG_GROUPS[group].tags;
+
+  if (!normalizationSettings) {
+    return groupTags;
+  }
+
+  // Filter out disabled tags
+  return groupTags.filter((tag) => {
+    const key = `${group}:${tag}`;
+    return !normalizationSettings.disabledBuiltinTags.includes(key);
+  });
+}
+
+/**
+ * Strip a tag from a name based on its mode (prefix, suffix, or both).
+ * Returns the modified name.
+ */
+function stripTagByMode(name: string, tag: string, mode: NormalizationTagMode): string {
+  let result = name;
+
+  if (mode === 'prefix' || mode === 'both') {
+    // Try to strip as prefix with separator
+    const prefixPattern = new RegExp(`^${tag}\\s*[|:\\-/]+\\s*`, 'i');
+    result = result.replace(prefixPattern, '');
+  }
+
+  if (mode === 'suffix' || mode === 'both') {
+    // Try to strip as suffix (with various patterns)
+    // Pattern 1: In parentheses
+    const parenPattern = new RegExp(`\\s*\\(\\s*${tag}\\s*\\)\\s*$`, 'i');
+    result = result.replace(parenPattern, '');
+    // Pattern 2: In brackets
+    const bracketPattern = new RegExp(`\\s*\\[\\s*${tag}\\s*\\]\\s*$`, 'i');
+    result = result.replace(bracketPattern, '');
+    // Pattern 3: With separator
+    const sepPattern = new RegExp(`[\\s\\-|:]+${tag}\\s*$`, 'i');
+    result = result.replace(sepPattern, '');
+    // Pattern 4: Just space
+    const spacePattern = new RegExp(`\\s+${tag}\\s*$`, 'i');
+    result = result.replace(spacePattern, '');
+  }
+
+  return result.trim();
+}
+
+/**
+ * Apply custom tags from normalization settings.
+ */
+function applyCustomTags(name: string, customTags: NormalizationTag[]): string {
+  let result = name;
+  for (const tag of customTags) {
+    result = stripTagByMode(result, tag.value, tag.mode);
+  }
+  return result;
+}
+
+/**
  * Normalize a stream name for matching purposes.
  * Strips quality suffixes and normalizes whitespace.
  * timezonePreference controls how regional variants are handled:
@@ -455,6 +525,7 @@ export function normalizeStreamName(name: string, timezonePreferenceOrOptions: T
   let customNetworkPrefixes: string[] | undefined;
   let stripSuffix = false;
   let customNetworkSuffixes: string[] | undefined;
+  let normalizationSettings: NormalizationSettings | undefined;
 
   if (typeof timezonePreferenceOrOptions === 'object') {
     timezonePreference = timezonePreferenceOrOptions.timezonePreference ?? 'both';
@@ -465,52 +536,113 @@ export function normalizeStreamName(name: string, timezonePreferenceOrOptions: T
     customNetworkPrefixes = timezonePreferenceOrOptions.customNetworkPrefixes;
     stripSuffix = timezonePreferenceOrOptions.stripNetworkSuffix ?? false;
     customNetworkSuffixes = timezonePreferenceOrOptions.customNetworkSuffixes;
+    normalizationSettings = timezonePreferenceOrOptions.normalizationSettings;
   } else {
     timezonePreference = timezonePreferenceOrOptions;
   }
 
+  // If normalizationSettings provided, use tag-based filtering
+  // Otherwise fall back to the stripNetwork/stripSuffix boolean flags
+  const useTagBasedNormalization = !!normalizationSettings;
+
   let normalized = name.trim();
 
-  // Strip network prefix first (before country prefix, as network prefix may come before country)
-  // e.g., "CHAMP | US: Queens Park Rangers" → "US: Queens Park Rangers" → then handle country
-  if (stripNetwork) {
-    normalized = stripNetworkPrefix(normalized, customNetworkPrefixes);
-  }
+  // Tag-based normalization (new system) vs. legacy boolean flags
+  if (useTagBasedNormalization && normalizationSettings) {
+    // Apply tag-based normalization using enabled tags from each group
 
-  // Strip network suffix (after prefix, before country handling)
-  // e.g., "ESPN (ENGLISH)" → "ESPN"
-  if (stripSuffix) {
-    normalized = stripNetworkSuffix(normalized, customNetworkSuffixes);
-  }
-
-  // Handle country prefix based on options
-  // keepCountryPrefix takes precedence over stripCountryPrefix if both are set
-  if (keepCountry) {
-    // Keep the country prefix but normalize its format
-    const countryCode = getCountryPrefix(normalized);
-    if (countryCode) {
-      // Strip the existing prefix (with whatever separator it had)
-      const nameWithoutPrefix = stripCountryPrefix(normalized);
-      // Re-add it with the chosen separator
-      normalized = `${countryCode} ${countrySeparator} ${nameWithoutPrefix}`;
+    // 1. Strip league prefixes (e.g., "NFL: Cardinals" → "Cardinals")
+    const enabledLeagueTags = getEnabledTagsForGroup('league', normalizationSettings);
+    for (const tag of enabledLeagueTags) {
+      normalized = stripTagByMode(normalized, tag, 'prefix');
     }
-  } else if (stripCountry) {
-    normalized = stripCountryPrefix(normalized);
-  }
 
-  // Strip quality/resolution suffixes (FHD, UHD, 4K, HD, SD, and any numeric resolution like 1080p, 720p, 476p)
-  normalized = stripQualitySuffixes(normalized);
-
-  // Handle regional suffixes based on timezone preference
-  if (timezonePreference !== 'both') {
-    const regional = getRegionalSuffix(normalized);
-
-    // For either preference, we merge by stripping the regional suffix
-    // The difference is which streams get included (handled by caller filtering)
-    if (regional === 'east' || regional === 'west') {
-      normalized = stripRegionalSuffix(normalized);
+    // 2. Strip network prefixes and suffixes
+    const enabledNetworkTags = getEnabledTagsForGroup('network', normalizationSettings);
+    for (const tag of enabledNetworkTags) {
+      // Network tags can be both prefix and suffix
+      normalized = stripTagByMode(normalized, tag, 'both');
     }
-    // Non-suffixed names stay as-is (they represent the base channel)
+
+    // 3. Strip country prefixes (e.g., "US: ESPN" → "ESPN")
+    if (stripCountry && !keepCountry) {
+      const enabledCountryTags = getEnabledTagsForGroup('country', normalizationSettings);
+      for (const tag of enabledCountryTags) {
+        normalized = stripTagByMode(normalized, tag, 'prefix');
+      }
+    } else if (keepCountry) {
+      // Keep the country prefix but normalize its format
+      const countryCode = getCountryPrefix(normalized);
+      if (countryCode) {
+        const nameWithoutPrefix = stripCountryPrefix(normalized);
+        normalized = `${countryCode} ${countrySeparator} ${nameWithoutPrefix}`;
+      }
+    }
+
+    // 4. Strip quality suffixes (e.g., "ESPN HD" → "ESPN")
+    const enabledQualityTags = getEnabledTagsForGroup('quality', normalizationSettings);
+    for (const tag of enabledQualityTags) {
+      normalized = stripTagByMode(normalized, tag, 'suffix');
+    }
+    // Also strip numeric resolution patterns (e.g., 1080p, 720p)
+    normalized = normalized.replace(/[\s\-_|:]*\d+[pPiI]\s*$/, '').trim();
+
+    // 5. Strip timezone suffixes (e.g., "ESPN EAST" → "ESPN")
+    if (timezonePreference !== 'both') {
+      const enabledTimezoneTags = getEnabledTagsForGroup('timezone', normalizationSettings);
+      for (const tag of enabledTimezoneTags) {
+        normalized = stripTagByMode(normalized, tag, 'suffix');
+      }
+    }
+
+    // 6. Apply custom tags
+    if (normalizationSettings.customTags.length > 0) {
+      normalized = applyCustomTags(normalized, normalizationSettings.customTags);
+    }
+  } else {
+    // Legacy boolean-based normalization
+
+    // Strip network prefix first (before country prefix, as network prefix may come before country)
+    // e.g., "CHAMP | US: Queens Park Rangers" → "US: Queens Park Rangers" → then handle country
+    if (stripNetwork) {
+      normalized = stripNetworkPrefix(normalized, customNetworkPrefixes);
+    }
+
+    // Strip network suffix (after prefix, before country handling)
+    // e.g., "ESPN (ENGLISH)" → "ESPN"
+    if (stripSuffix) {
+      normalized = stripNetworkSuffix(normalized, customNetworkSuffixes);
+    }
+
+    // Handle country prefix based on options
+    // keepCountryPrefix takes precedence over stripCountryPrefix if both are set
+    if (keepCountry) {
+      // Keep the country prefix but normalize its format
+      const countryCode = getCountryPrefix(normalized);
+      if (countryCode) {
+        // Strip the existing prefix (with whatever separator it had)
+        const nameWithoutPrefix = stripCountryPrefix(normalized);
+        // Re-add it with the chosen separator
+        normalized = `${countryCode} ${countrySeparator} ${nameWithoutPrefix}`;
+      }
+    } else if (stripCountry) {
+      normalized = stripCountryPrefix(normalized);
+    }
+
+    // Strip quality/resolution suffixes (FHD, UHD, 4K, HD, SD, and any numeric resolution like 1080p, 720p, 476p)
+    normalized = stripQualitySuffixes(normalized);
+
+    // Handle regional suffixes based on timezone preference
+    if (timezonePreference !== 'both') {
+      const regional = getRegionalSuffix(normalized);
+
+      // For either preference, we merge by stripping the regional suffix
+      // The difference is which streams get included (handled by caller filtering)
+      if (regional === 'east' || regional === 'west') {
+        normalized = stripRegionalSuffix(normalized);
+      }
+      // Non-suffixed names stay as-is (they represent the base channel)
+    }
   }
 
   // Normalize multiple spaces to single space and trim
