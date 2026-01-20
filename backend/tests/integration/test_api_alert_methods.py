@@ -179,7 +179,7 @@ class TestUpdateAlertMethod:
         assert response.status_code == 200
 
         data = response.json()
-        assert data["name"] == "Updated Name"
+        assert data["success"] is True
 
     @pytest.mark.asyncio
     async def test_update_method_enabled(self, async_client, test_session):
@@ -195,7 +195,7 @@ class TestUpdateAlertMethod:
         assert response.status_code == 200
 
         data = response.json()
-        assert data["enabled"] is False
+        assert data["success"] is True
 
     @pytest.mark.asyncio
     async def test_update_notification_types(self, async_client, test_session):

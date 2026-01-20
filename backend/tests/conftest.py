@@ -15,7 +15,10 @@ backend_dir = Path(__file__).parent.parent
 sys.path.insert(0, str(backend_dir))
 
 # Set test config directory before importing modules
-os.environ["ECM_CONFIG_DIR"] = "/tmp/ecm_test_config"
+os.environ["CONFIG_DIR"] = "/tmp/ecm_test_config"
+
+# Ensure test config directory exists
+Path("/tmp/ecm_test_config").mkdir(parents=True, exist_ok=True)
 
 from database import Base
 from models import (

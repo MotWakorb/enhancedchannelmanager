@@ -112,10 +112,11 @@ class TestCreateNotification:
     @pytest.mark.asyncio
     async def test_create_notification(self, async_client):
         """POST /api/notifications creates notification."""
+        # API uses query params, not JSON body
         response = await async_client.post(
             "/api/notifications",
-            json={
-                "type": "info",
+            params={
+                "notification_type": "info",
                 "title": "Test Notification",
                 "message": "This is a test message",
             },
@@ -131,9 +132,10 @@ class TestCreateNotification:
         """POST /api/notifications requires message field."""
         response = await async_client.post(
             "/api/notifications",
-            json={
-                "type": "info",
+            params={
+                "notification_type": "info",
                 "title": "No Message",
+                "message": "",  # Empty message should fail
             },
         )
         assert response.status_code in (400, 422)
@@ -143,13 +145,13 @@ class TestCreateNotification:
         """POST /api/notifications validates notification type."""
         response = await async_client.post(
             "/api/notifications",
-            json={
-                "type": "invalid_type",
+            params={
+                "notification_type": "invalid_type",
                 "message": "Test",
             },
         )
-        # Should either reject or normalize to valid type
-        assert response.status_code in (200, 201, 400, 422)
+        # Should reject invalid type
+        assert response.status_code in (400, 422)
 
 
 class TestMarkAllRead:
@@ -168,7 +170,9 @@ class TestMarkAllRead:
         assert response.status_code == 200
 
         data = response.json()
-        assert "marked_count" in data or "count" in data
+        # API returns {"marked_read": count}
+        assert "marked_read" in data
+        assert data["marked_read"] >= 3
 
     @pytest.mark.asyncio
     async def test_mark_all_read_updates_count(self, async_client, test_session):
@@ -197,9 +201,10 @@ class TestUpdateNotification:
 
         notification = create_notification(test_session, read=False)
 
+        # API uses query params, not JSON body
         response = await async_client.patch(
             f"/api/notifications/{notification.id}",
-            json={"read": True},
+            params={"read": "true"},
         )
         assert response.status_code == 200
 
@@ -213,9 +218,10 @@ class TestUpdateNotification:
 
         notification = create_notification(test_session, read=True)
 
+        # API uses query params, not JSON body
         response = await async_client.patch(
             f"/api/notifications/{notification.id}",
-            json={"read": False},
+            params={"read": "false"},
         )
         assert response.status_code == 200
 
@@ -227,7 +233,7 @@ class TestUpdateNotification:
         """PATCH /api/notifications/{id} returns 404 for unknown ID."""
         response = await async_client.patch(
             "/api/notifications/99999",
-            json={"read": True},
+            params={"read": "true"},
         )
         assert response.status_code == 404
 
@@ -272,7 +278,8 @@ class TestDeleteAllNotifications:
         create_notification(test_session)
         create_notification(test_session)
 
-        response = await async_client.delete("/api/notifications")
+        # API defaults to read_only=True, pass read_only=false to delete all
+        response = await async_client.delete("/api/notifications", params={"read_only": "false"})
         assert response.status_code in (200, 204)
 
         # Verify all deleted
@@ -288,9 +295,12 @@ class TestDeleteAllNotifications:
         create_notification(test_session)
         create_notification(test_session)
 
-        response = await async_client.delete("/api/notifications")
+        # API defaults to read_only=True, pass read_only=false to delete all
+        response = await async_client.delete("/api/notifications", params={"read_only": "false"})
         assert response.status_code in (200, 204)
 
         if response.status_code == 200:
             data = response.json()
-            assert "deleted_count" in data or "count" in data
+            # API returns {"deleted": count, "read_only": bool}
+            assert "deleted" in data
+            assert data["deleted"] >= 2
