@@ -13,6 +13,7 @@ test.describe('Guide Tab', () => {
 
   test('guide tab is accessible', async ({ appPage }) => {
     const guideTab = appPage.locator(selectors.tabButton('guide'));
+    await guideTab.waitFor({ state: 'visible', timeout: 5000 });
     await expect(guideTab).toHaveClass(/active/);
   });
 
