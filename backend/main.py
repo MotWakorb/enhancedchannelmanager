@@ -4734,11 +4734,38 @@ class TaskConfigUpdate(BaseModel):
 
 @app.get("/api/tasks")
 async def list_tasks():
-    """Get all registered tasks with their status."""
+    """Get all registered tasks with their status, including schedules."""
     try:
         from task_registry import get_registry
+        from models import TaskSchedule
+        from schedule_calculator import describe_schedule
+
         registry = get_registry()
-        return {"tasks": registry.get_all_task_statuses()}
+        tasks = registry.get_all_task_statuses()
+
+        # Include schedules for each task
+        session = get_session()
+        try:
+            for task in tasks:
+                task_id = task.get('task_id')
+                if task_id:
+                    schedules = session.query(TaskSchedule).filter(TaskSchedule.task_id == task_id).all()
+                    task['schedules'] = []
+                    for schedule in schedules:
+                        schedule_dict = schedule.to_dict()
+                        schedule_dict['description'] = describe_schedule(
+                            schedule_type=schedule.schedule_type,
+                            interval_seconds=schedule.interval_seconds,
+                            schedule_time=schedule.schedule_time,
+                            timezone=schedule.timezone,
+                            days_of_week=schedule.get_days_of_week_list(),
+                            day_of_month=schedule.day_of_month,
+                        )
+                        task['schedules'].append(schedule_dict)
+        finally:
+            session.close()
+
+        return {"tasks": tasks}
     except Exception as e:
         logger.error(f"Failed to list tasks: {e}")
         raise HTTPException(status_code=500, detail=str(e))
