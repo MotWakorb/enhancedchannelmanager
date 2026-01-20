@@ -3397,10 +3397,49 @@ export function ChannelsPane({
       return currNum - prevNum === 1;
     });
 
+    // Check if this is a multi-selection move within the same group
+    const isMultiSelectMove = selectedChannelIds.has(activeChannel.id) && selectedChannelIds.size > 1;
+
+    // Get the selected channels that are in this group, sorted by their current position
+    const selectedInGroup = isMultiSelectMove
+      ? groupChannels.filter((ch) => selectedChannelIds.has(ch.id))
+      : [activeChannel];
+
     // Reorder locally for immediate feedback
     const reorderedGroup = [...groupChannels];
-    const [removed] = reorderedGroup.splice(oldIndex, 1);
-    reorderedGroup.splice(newIndex, 0, removed);
+
+    if (isMultiSelectMove && selectedInGroup.length > 1) {
+      // Multi-select: remove all selected channels first, then insert them at target position
+      // Get indices of all selected channels (in reverse order to splice correctly)
+      const selectedIndices = selectedInGroup
+        .map((ch) => reorderedGroup.findIndex((c) => c.id === ch.id))
+        .filter((idx) => idx !== -1)
+        .sort((a, b) => b - a); // Sort descending to remove from end first
+
+      // Remove all selected channels
+      const removedChannels: Channel[] = [];
+      for (const idx of selectedIndices) {
+        const [removed] = reorderedGroup.splice(idx, 1);
+        removedChannels.unshift(removed); // unshift to maintain original order
+      }
+
+      // Calculate the insertion index after removals
+      // Count how many selected channels were before the target position
+      const selectedBeforeTarget = selectedInGroup.filter((ch) => {
+        const chIdx = groupChannels.findIndex((c) => c.id === ch.id);
+        return chIdx < newIndex;
+      }).length;
+
+      // Adjust target index: subtract the number of selected channels that were before it
+      const adjustedNewIndex = Math.min(newIndex - selectedBeforeTarget, reorderedGroup.length);
+
+      // Insert all removed channels at the target position
+      reorderedGroup.splice(adjustedNewIndex, 0, ...removedChannels);
+    } else {
+      // Single channel move
+      const [removed] = reorderedGroup.splice(oldIndex, 1);
+      reorderedGroup.splice(newIndex, 0, removed);
+    }
 
     if (isContiguous) {
       // Channels are contiguous - renumber them sequentially
@@ -3462,8 +3501,86 @@ export function ChannelsPane({
       }
     } else {
       // Channels are NOT contiguous - insert and shift channel numbers
-      // The dragged channel takes the target position, and channels in between shift
+      // The dragged channel(s) take the target position, and channels in between shift
       // All channels must have a number, so we can safely use them
+
+      // For multi-select, use the reorderedGroup which already has the correct order
+      // and assign new channel numbers based on the new positions while preserving gaps
+      if (isMultiSelectMove && selectedInGroup.length > 1) {
+        // Multi-select non-contiguous: assign numbers based on new position in reorderedGroup
+        // We'll use the existing channel numbers and shift as needed
+
+        // Get channel numbers from reorderedGroup to determine new assignments
+        // Find where the selected channels ended up and what numbers they should get
+        const selectedIds = new Set(selectedInGroup.map(ch => ch.id));
+
+        // Calculate updates based on new positions
+        const channelUpdates: Array<{ id: number; oldNumber: number; newNumber: number; oldName: string; newName?: string }> = [];
+
+        // Get the existing channel numbers and their positions
+        const existingNumbers = groupChannels
+          .map(ch => ch.channel_number!)
+          .sort((a, b) => a - b);
+
+        // Assign numbers based on the new order in reorderedGroup
+        reorderedGroup.forEach((ch, index) => {
+          const oldNumber = ch.channel_number!;
+          const newNumber = existingNumbers[index];
+
+          if (oldNumber !== newNumber) {
+            const newName = autoRenameChannelNumber ? computeAutoRename(ch.name, oldNumber, newNumber) : undefined;
+            channelUpdates.push({
+              id: ch.id,
+              oldNumber,
+              newNumber,
+              oldName: ch.name,
+              newName,
+            });
+          }
+        });
+
+        // Update local state with new numbers and names
+        const updatedChannels = localChannels.map((ch) => {
+          const update = channelUpdates.find((u) => u.id === ch.id);
+          if (update) {
+            return {
+              ...ch,
+              channel_number: update.newNumber,
+              ...(update.newName ? { name: update.newName } : {}),
+            };
+          }
+          return ch;
+        });
+        setLocalChannels(updatedChannels);
+
+        // Stage updates for all affected channels
+        if (isEditMode && onStageUpdateChannel) {
+          if (channelUpdates.length > 1 && onStartBatch) {
+            onStartBatch(`Move ${selectedInGroup.length} channels`);
+          }
+
+          for (const update of channelUpdates) {
+            const updateData: { channel_number: number; name?: string } = { channel_number: update.newNumber };
+            let description: string;
+
+            if (update.newName) {
+              updateData.name = update.newName;
+              description = `Changed "${update.oldName}" to "${update.newName}"`;
+            } else {
+              description = `Changed channel number from ${update.oldNumber} to ${update.newNumber}`;
+            }
+
+            onStageUpdateChannel(update.id, updateData, description);
+          }
+
+          if (channelUpdates.length > 1 && onEndBatch) {
+            onEndBatch();
+          }
+        }
+        return;
+      }
+
+      // Single channel move in non-contiguous group
       const activeNum = activeChannel.channel_number!;
 
       // For group end drop, use the last channel's number + 1
