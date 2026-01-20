@@ -13,6 +13,7 @@ test.describe('Logo Manager Tab', () => {
 
   test('logo manager tab is accessible', async ({ appPage }) => {
     const logoTab = appPage.locator(selectors.tabButton('logo-manager'));
+    await logoTab.waitFor({ state: 'visible', timeout: 5000 });
     await expect(logoTab).toHaveClass(/active/);
   });
 
