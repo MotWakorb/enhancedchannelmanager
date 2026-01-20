@@ -175,14 +175,14 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
     if (!normalizationPreviewInput.trim()) return '';
     return normalizeStreamName(normalizationPreviewInput, {
       timezonePreference: 'both',
-      stripCountryPrefix: removeCountryPrefix,
+      stripCountryPrefix: false, // Handled by normalization tags
       keepCountryPrefix: includeCountryInName,
       countrySeparator: countrySeparator as '-' | ':' | '|',
       stripNetworkPrefix: true,
       stripNetworkSuffix: true,
       normalizationSettings,
     });
-  }, [normalizationPreviewInput, removeCountryPrefix, includeCountryInName, countrySeparator, normalizationSettings]);
+  }, [normalizationPreviewInput, includeCountryInName, countrySeparator, normalizationSettings]);
 
   const [streamSortPriority, setStreamSortPriority] = useState<SortCriterion[]>(['resolution', 'bitrate', 'framerate']);
   const [streamSortEnabled, setStreamSortEnabled] = useState<SortEnabledMap>({ resolution: true, bitrate: true, framerate: true });
@@ -1598,52 +1598,27 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       <div className="settings-section">
         <div className="settings-section-header">
           <span className="material-icons">public</span>
-          <h3>Country Prefix Handling</h3>
+          <h3>Country Prefix Format</h3>
         </div>
+        <p className="form-hint" style={{ marginBottom: '1rem' }}>
+          Use the Country tag group below to strip country prefixes. Enable this option to instead
+          keep them with a consistent separator format.
+        </p>
 
         <div className="form-group">
-          <label>How to handle country prefixes (US, UK, CA, etc.)</label>
-          <div className="radio-group">
-            <label className="radio-option">
-              <input
-                type="radio"
-                name="countryPrefix"
-                checked={removeCountryPrefix}
-                onChange={() => {
-                  setRemoveCountryPrefix(true);
-                  setIncludeCountryInName(false);
-                }}
-              />
-              <span className="radio-label">Remove</span>
-              <span className="radio-description">Strip country codes from names</span>
-            </label>
-            <label className="radio-option">
-              <input
-                type="radio"
-                name="countryPrefix"
-                checked={!removeCountryPrefix && !includeCountryInName}
-                onChange={() => {
+          <label className="checkbox-label">
+            <input
+              type="checkbox"
+              checked={includeCountryInName}
+              onChange={(e) => {
+                setIncludeCountryInName(e.target.checked);
+                if (e.target.checked) {
                   setRemoveCountryPrefix(false);
-                  setIncludeCountryInName(false);
-                }}
-              />
-              <span className="radio-label">Keep as-is</span>
-              <span className="radio-description">Leave country prefixes unchanged</span>
-            </label>
-            <label className="radio-option">
-              <input
-                type="radio"
-                name="countryPrefix"
-                checked={includeCountryInName}
-                onChange={() => {
-                  setRemoveCountryPrefix(false);
-                  setIncludeCountryInName(true);
-                }}
-              />
-              <span className="radio-label">Normalize</span>
-              <span className="radio-description">Keep with consistent separator</span>
-            </label>
-          </div>
+                }
+              }}
+            />
+            <span>Normalize country prefix format</span>
+          </label>
         </div>
 
         {includeCountryInName && (
