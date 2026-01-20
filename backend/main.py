@@ -4804,7 +4804,12 @@ async def cancel_task(task_id: str):
     try:
         from task_engine import get_engine
         engine = get_engine()
-        return engine.cancel_task(task_id)
+        result = await engine.cancel_task(task_id)
+        if result.get("status") == "not_found":
+            raise HTTPException(status_code=404, detail=result.get("message", f"Task {task_id} not found"))
+        return result
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to cancel task {task_id}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
