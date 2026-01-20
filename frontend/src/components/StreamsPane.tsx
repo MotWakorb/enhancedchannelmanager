@@ -1,13 +1,14 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import type { Stream, M3UAccount, ChannelGroup, ChannelProfile } from '../types';
 import { useSelection, useExpandCollapse } from '../hooks';
-import { normalizeStreamName, detectRegionalVariants, filterStreamsByTimezone, detectCountryPrefixes, getUniqueCountryPrefixes, detectNetworkPrefixes, detectNetworkSuffixes, type TimezonePreference, type NormalizeOptions, type NumberSeparator, type PrefixOrder } from '../services/api';
+import { normalizeStreamName, detectRegionalVariants, filterStreamsByTimezone, detectCountryPrefixes, getUniqueCountryPrefixes, detectNetworkPrefixes, detectNetworkSuffixes, type TimezonePreference, type NormalizeOptions, type NumberSeparator, type PrefixOrder, type NormalizationSettings } from '../services/api';
 import { naturalCompare } from '../utils/naturalSort';
 import { openInVLC } from '../utils/vlc';
 import { useCopyFeedback } from '../hooks/useCopyFeedback';
 import { useDropdown } from '../hooks/useDropdown';
 import { useContextMenu } from '../hooks/useContextMenu';
 import { useKeyboardShortcuts } from '../hooks/useKeyboardShortcuts';
+import { QuickTagManager } from './QuickTagManager';
 import './StreamsPane.css';
 
 interface StreamGroup {
@@ -30,6 +31,7 @@ export interface ChannelDefaults {
   streamSortPriority?: ('resolution' | 'bitrate' | 'framerate')[];
   streamSortEnabled?: Record<'resolution' | 'bitrate' | 'framerate', boolean>;
   deprioritizeFailedStreams?: boolean;
+  normalizationSettings?: NormalizationSettings;
 }
 
 interface StreamsPaneProps {
@@ -240,6 +242,10 @@ export function StreamsPane({
   const [bulkCreateSelectedProfiles, setBulkCreateSelectedProfiles] = useState<Set<number>>(new Set());
   const [bulkCreateGroupSearch, setBulkCreateGroupSearch] = useState('');
   const [profilesExpanded, setProfilesExpanded] = useState(false);
+  const [bulkCreateNormalizationSettings, setBulkCreateNormalizationSettings] = useState<NormalizationSettings>({
+    disabledBuiltinTags: [],
+    customTags: [],
+  });
 
   // Bulk create group dropdown management
   const {
@@ -457,6 +463,7 @@ export function StreamsPane({
     setNamingOptionsExpanded(false); // Collapse naming options
     setChannelGroupExpanded(false); // Collapse channel group options
     setTimezoneExpanded(false); // Collapse timezone options
+    setBulkCreateNormalizationSettings(channelDefaults?.normalizationSettings ?? { disabledBuiltinTags: [], customTags: [] });
     setBulkCreateModalOpen(true);
   }, [channelDefaults]);
 
@@ -485,6 +492,7 @@ export function StreamsPane({
     setNamingOptionsExpanded(false); // Collapse naming options
     setChannelGroupExpanded(false); // Collapse channel group options
     setTimezoneExpanded(false); // Collapse timezone options
+    setBulkCreateNormalizationSettings(channelDefaults?.normalizationSettings ?? { disabledBuiltinTags: [], customTags: [] });
     setBulkCreateModalOpen(true);
   }, [streams, selectedIds, channelDefaults]);
 
@@ -527,6 +535,7 @@ export function StreamsPane({
     setNamingOptionsExpanded(false);
     setChannelGroupExpanded(false);
     setTimezoneExpanded(false);
+    setBulkCreateNormalizationSettings(channelDefaults?.normalizationSettings ?? { disabledBuiltinTags: [], customTags: [] });
     setBulkCreateModalOpen(true);
   }, [streams, channelDefaults]);
 
@@ -595,6 +604,7 @@ export function StreamsPane({
     setNamingOptionsExpanded(false);
     setChannelGroupExpanded(true); // Expand channel group section so user sees the "new group" option
     setTimezoneExpanded(false);
+    setBulkCreateNormalizationSettings(channelDefaults?.normalizationSettings ?? { disabledBuiltinTags: [], customTags: [] });
     setBulkCreateModalOpen(true);
     closeContextMenu();
   }, [contextMenu, streams, channelDefaults, closeContextMenu]);
@@ -689,6 +699,7 @@ export function StreamsPane({
     setNamingOptionsExpanded(false);
     setChannelGroupExpanded(false);
     setTimezoneExpanded(false);
+    setBulkCreateNormalizationSettings(channelDefaults?.normalizationSettings ?? { disabledBuiltinTags: [], customTags: [] });
     setBulkCreateModalOpen(true);
   }, [groupedStreams, selectedIds, channelDefaults]);
 
@@ -724,6 +735,7 @@ export function StreamsPane({
     setNamingOptionsExpanded(false);
     setChannelGroupExpanded(false);
     setTimezoneExpanded(false);
+    setBulkCreateNormalizationSettings(channelDefaults?.normalizationSettings ?? { disabledBuiltinTags: [], customTags: [] });
     setBulkCreateModalOpen(true);
   }, [channelDefaults]);
 
@@ -819,6 +831,7 @@ export function StreamsPane({
       customNetworkPrefixes: channelDefaults?.customNetworkPrefixes,
       stripNetworkSuffix: bulkCreateStripSuffix,
       customNetworkSuffixes: channelDefaults?.customNetworkSuffixes,
+      normalizationSettings: bulkCreateNormalizationSettings,
     };
 
     const unsortedStreamsByNormalizedName = new Map<string, Stream[]>();
@@ -863,7 +876,7 @@ export function StreamsPane({
     const hasDuplicates = duplicateCount > 0;
     const excludedCount = streamsToCreate.length - filteredStreams.length;
     return { uniqueCount, duplicateCount, hasDuplicates, streamsByNormalizedName, excludedCount };
-  }, [streamsToCreate, bulkCreateTimezone, bulkCreateStripCountry, bulkCreateKeepCountry, bulkCreateCountrySeparator, bulkCreateStripNetwork, bulkCreateStripSuffix]);
+  }, [streamsToCreate, bulkCreateTimezone, bulkCreateStripCountry, bulkCreateKeepCountry, bulkCreateCountrySeparator, bulkCreateStripNetwork, bulkCreateStripSuffix, bulkCreateNormalizationSettings]);
 
   // Actually perform the bulk create with the specified pushDown option
   // startingNumberOverride: optionally override the starting number (used by "insert at end" option)
@@ -2214,6 +2227,14 @@ export function StreamsPane({
                     )}
                   </div>
                 )}
+              </div>
+
+              {/* Tag-Based Normalization */}
+              <div className="form-group">
+                <QuickTagManager
+                  settings={bulkCreateNormalizationSettings}
+                  onChange={setBulkCreateNormalizationSettings}
+                />
               </div>
 
               {/* Channel Profiles - Collapsible Section */}

@@ -106,6 +106,7 @@ function App() {
     streamSortPriority: ['resolution', 'bitrate', 'framerate'] as ('resolution' | 'bitrate' | 'framerate')[],
     streamSortEnabled: { resolution: true, bitrate: true, framerate: true } as Record<'resolution' | 'bitrate' | 'framerate', boolean>,
     deprioritizeFailedStreams: true,
+    normalizationSettings: { disabledBuiltinTags: [], customTags: [] } as api.NormalizationSettings,
   });
   // Also keep separate state for use in callbacks (to avoid stale closure issues)
   const [defaultChannelProfileIds, setDefaultChannelProfileIds] = useState<number[]>([]);
@@ -419,6 +420,7 @@ function App() {
           streamSortPriority: settings.stream_sort_priority ?? ['resolution', 'bitrate', 'framerate'],
           streamSortEnabled: settings.stream_sort_enabled ?? { resolution: true, bitrate: true, framerate: true },
           deprioritizeFailedStreams: settings.deprioritize_failed_streams ?? true,
+          normalizationSettings: settings.normalization_settings ?? { disabledBuiltinTags: [], customTags: [] },
         });
         setDefaultChannelProfileIds(settings.default_channel_profile_ids);
 
@@ -628,6 +630,7 @@ function App() {
         streamSortPriority: settings.stream_sort_priority ?? ['resolution', 'bitrate', 'framerate'],
         streamSortEnabled: settings.stream_sort_enabled ?? { resolution: true, bitrate: true, framerate: true },
         deprioritizeFailedStreams: settings.deprioritize_failed_streams ?? true,
+        normalizationSettings: settings.normalization_settings ?? { disabledBuiltinTags: [], customTags: [] },
       });
       setDefaultChannelProfileIds(settings.default_channel_profile_ids);
 

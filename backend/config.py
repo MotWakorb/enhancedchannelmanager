@@ -93,6 +93,12 @@ class DispatcharrSettings(BaseModel):
     stream_sort_enabled: dict[str, bool] = {"resolution": True, "bitrate": True, "framerate": True}
     # Deprioritize failed streams - when enabled, failed/timeout/pending streams sort to bottom
     deprioritize_failed_streams: bool = True
+    # Normalization settings - user-configurable tags for stream name normalization
+    # disabled_builtin_tags: Tags to exclude from normalization (format: "group:value", e.g., "country:US")
+    disabled_builtin_tags: list[str] = []
+    # custom_normalization_tags: User-added custom tags
+    # Each dict has "value" (str) and "mode" (prefix/suffix/both)
+    custom_normalization_tags: list[dict] = []
 
     def is_configured(self) -> bool:
         return bool(self.url and self.username and self.password)
@@ -117,6 +123,38 @@ def ensure_config_dir():
     logger.info(f"Ensured config directory exists: {CONFIG_DIR}")
 
 
+def _migrate_normalization_settings(data: dict) -> dict:
+    """Migrate old custom_network_prefixes/suffixes to new normalization format.
+
+    If custom_network_prefixes or custom_network_suffixes exist but
+    custom_normalization_tags is empty, convert them to the new format.
+    """
+    # Only migrate if we have old settings but no new ones
+    old_prefixes = data.get("custom_network_prefixes", [])
+    old_suffixes = data.get("custom_network_suffixes", [])
+    new_tags = data.get("custom_normalization_tags", [])
+
+    if (old_prefixes or old_suffixes) and not new_tags:
+        logger.info(f"Migrating {len(old_prefixes)} prefixes and {len(old_suffixes)} suffixes to normalization_tags")
+        migrated_tags = []
+
+        # Convert prefixes to new format
+        for prefix in old_prefixes:
+            if prefix and isinstance(prefix, str):
+                migrated_tags.append({"value": prefix.strip().upper(), "mode": "prefix"})
+
+        # Convert suffixes to new format
+        for suffix in old_suffixes:
+            if suffix and isinstance(suffix, str):
+                migrated_tags.append({"value": suffix.strip().upper(), "mode": "suffix"})
+
+        if migrated_tags:
+            data["custom_normalization_tags"] = migrated_tags
+            logger.info(f"Migrated {len(migrated_tags)} tags to custom_normalization_tags")
+
+    return data
+
+
 def load_settings() -> DispatcharrSettings:
     """Load settings from file or return defaults."""
     global _cached_settings
@@ -130,6 +168,8 @@ def load_settings() -> DispatcharrSettings:
     if CONFIG_FILE.exists():
         try:
             data = json.loads(CONFIG_FILE.read_text())
+            # Apply migrations
+            data = _migrate_normalization_settings(data)
             _cached_settings = DispatcharrSettings(**data)
             logger.info(f"Loaded settings successfully, configured: {_cached_settings.is_configured()}")
             return _cached_settings

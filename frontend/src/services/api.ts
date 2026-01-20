@@ -630,6 +630,23 @@ export type SortEnabledMap = Record<SortCriterion, boolean>;
 
 export type GracenoteConflictMode = 'ask' | 'skip' | 'overwrite';
 
+// Normalization tag mode - where the tag should be matched
+export type NormalizationTagMode = 'prefix' | 'suffix' | 'both';
+
+// A single normalization tag with its matching mode
+export interface NormalizationTag {
+  value: string;
+  mode: NormalizationTagMode;
+}
+
+// User-configurable normalization settings
+export interface NormalizationSettings {
+  // Built-in tags that user has disabled (by group:value key, e.g., "country:US")
+  disabledBuiltinTags: string[];
+  // User-added custom tags
+  customTags: NormalizationTag[];
+}
+
 export interface SettingsResponse {
   url: string;
   username: string;
@@ -673,6 +690,7 @@ export interface SettingsResponse {
   stream_sort_priority: SortCriterion[];  // Priority order for Smart Sort (e.g., ['resolution', 'bitrate', 'framerate'])
   stream_sort_enabled: SortEnabledMap;  // Which sort criteria are enabled (e.g., { resolution: true, bitrate: true, framerate: false })
   deprioritize_failed_streams: boolean;  // When enabled, failed/timeout/pending streams sort to bottom
+  normalization_settings: NormalizationSettings;  // User-configurable normalization tag settings
 }
 
 export interface TestConnectionResult {
@@ -727,6 +745,7 @@ export async function saveSettings(settings: {
   stream_sort_priority?: SortCriterion[];  // Optional - priority order for Smart Sort, defaults to ['resolution', 'bitrate', 'framerate']
   stream_sort_enabled?: SortEnabledMap;  // Optional - which sort criteria are enabled, defaults to all true
   deprioritize_failed_streams?: boolean;  // Optional - deprioritize failed/timeout/pending streams in sort, defaults to true
+  normalization_settings?: NormalizationSettings;  // Optional - user-configurable normalization tags
 }): Promise<{ status: string; configured: boolean }> {
   return fetchJson(`${API_BASE}/settings`, {
     method: 'POST',

@@ -387,6 +387,20 @@ async def health_check():
 
 
 # Settings
+class NormalizationTag(BaseModel):
+    """A normalization tag with its matching mode."""
+    value: str
+    mode: str = "both"  # "prefix", "suffix", or "both"
+
+
+class NormalizationSettings(BaseModel):
+    """User-configurable normalization settings."""
+    # Built-in tags that user has disabled (format: "group:value", e.g., "country:US")
+    disabledBuiltinTags: list[str] = []
+    # User-added custom tags
+    customTags: list[NormalizationTag] = []
+
+
 class SettingsRequest(BaseModel):
     url: str
     username: str
@@ -430,6 +444,7 @@ class SettingsRequest(BaseModel):
     stream_sort_priority: list[str] = ["resolution", "bitrate", "framerate"]  # Priority order for Smart Sort
     stream_sort_enabled: dict[str, bool] = {"resolution": True, "bitrate": True, "framerate": True}  # Which criteria are enabled
     deprioritize_failed_streams: bool = True  # When enabled, failed/timeout/pending streams sort to bottom
+    normalization_settings: Optional[NormalizationSettings] = None  # User-configurable normalization tags
 
 
 class SettingsResponse(BaseModel):
@@ -475,6 +490,7 @@ class SettingsResponse(BaseModel):
     stream_sort_priority: list[str]  # Priority order for Smart Sort
     stream_sort_enabled: dict[str, bool]  # Which criteria are enabled
     deprioritize_failed_streams: bool  # When enabled, failed/timeout/pending streams sort to bottom
+    normalization_settings: NormalizationSettings  # User-configurable normalization tags
 
 
 class TestConnectionRequest(BaseModel):
@@ -531,6 +547,13 @@ async def get_current_settings():
         stream_sort_priority=settings.stream_sort_priority,
         stream_sort_enabled=settings.stream_sort_enabled,
         deprioritize_failed_streams=settings.deprioritize_failed_streams,
+        normalization_settings=NormalizationSettings(
+            disabledBuiltinTags=settings.disabled_builtin_tags,
+            customTags=[
+                NormalizationTag(value=tag["value"], mode=tag.get("mode", "both"))
+                for tag in settings.custom_normalization_tags
+            ]
+        ),
     )
 
 
@@ -597,6 +620,15 @@ async def update_settings(request: SettingsRequest):
         stream_sort_priority=request.stream_sort_priority,
         stream_sort_enabled=request.stream_sort_enabled,
         deprioritize_failed_streams=request.deprioritize_failed_streams,
+        # Convert normalization_settings from API format to backend format
+        disabled_builtin_tags=(
+            request.normalization_settings.disabledBuiltinTags
+            if request.normalization_settings else current_settings.disabled_builtin_tags
+        ),
+        custom_normalization_tags=(
+            [{"value": tag.value, "mode": tag.mode} for tag in request.normalization_settings.customTags]
+            if request.normalization_settings else current_settings.custom_normalization_tags
+        ),
     )
     save_settings(new_settings)
     clear_settings_cache()
