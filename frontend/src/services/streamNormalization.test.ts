@@ -265,6 +265,43 @@ describe('normalizeStreamName', () => {
     expect(normalizeStreamName('HBO West', 'west')).toBe('HBO');
     expect(normalizeStreamName('HBO East', 'both')).toBe('HBO East');
   });
+
+  it('applies custom tags before quality suffixes', () => {
+    // Bug fix: custom suffixes should be removed before quality suffix detection
+    // Example: "PL| CANAL+ 1 HD (NA)" with custom suffix "NA" should result in "CANAL+ 1"
+    const normalizationSettings = {
+      disabledBuiltinTags: [],
+      customTags: [
+        { value: 'NA', mode: 'suffix' as const },
+      ],
+    };
+
+    const result = normalizeStreamName('PL| CANAL+ 1 HD (NA)', {
+      stripCountryPrefix: true,
+      normalizationSettings,
+    });
+
+    // Should strip: PL| (country), (NA) (custom suffix), HD (quality suffix)
+    expect(result).toBe('CANAL+ 1');
+  });
+
+  it('applies custom tags with various formats before quality suffixes', () => {
+    const normalizationSettings = {
+      disabledBuiltinTags: [],
+      customTags: [
+        { value: 'CUSTOM', mode: 'suffix' as const },
+      ],
+    };
+
+    // Parenthesized custom suffix
+    expect(normalizeStreamName('ESPN HD (CUSTOM)', { normalizationSettings })).toBe('ESPN');
+
+    // Bracketed custom suffix
+    expect(normalizeStreamName('ESPN FHD [CUSTOM]', { normalizationSettings })).toBe('ESPN');
+
+    // Bare custom suffix
+    expect(normalizeStreamName('ESPN 1080p CUSTOM', { normalizationSettings })).toBe('ESPN');
+  });
 });
 
 describe('filterStreamsByTimezone', () => {
