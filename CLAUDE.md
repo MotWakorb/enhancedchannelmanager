@@ -59,14 +59,10 @@ When doing work on this project, follow these steps in order:
    # Frontend: Unit tests + TypeScript compilation (REQUIRED for frontend changes)
    cd frontend && npm test && npm run build
 
-   # E2E: End-to-end tests (optional, run before major releases)
-   npm run test:e2e              # Run all E2E tests
-   npm run test:e2e:ui           # Run with UI mode
-   npm run test:e2e:headed       # Run in headed browser
-
-   # Include E2E in quality gates:
-   RUN_E2E=1 ./scripts/quality-gates.sh        # Linux/Mac
-   set RUN_E2E=1 && .scripts\quality-gates.bat # Windows
+   # E2E: End-to-end tests (REQUIRED for all changes)
+   npm run test:e2e              # Run all E2E tests (headless)
+   npm run test:e2e:ui           # Run with UI mode (for debugging)
+   npm run test:e2e:headed       # Run in headed browser (for debugging)
    ```
    **CRITICAL**: If syntax checks or tests fail, fix errors before proceeding. Never commit broken code.
 
@@ -195,11 +191,7 @@ npm run test:e2e:report    # View test report
 **When to Run Tests:**
 - **Backend tests**: MANDATORY for any backend code changes
 - **Frontend tests**: MANDATORY for any frontend code changes
-- **E2E tests**: Optional for regular development, RECOMMENDED before:
-  - Major releases
-  - Significant feature changes
-  - Merging to main branch
-  - When making cross-cutting changes
+- **E2E tests**: MANDATORY for all code changes - ensures full user workflow integrity
 
 **Quality Gates Script:**
 The `quality-gates.bat` (Windows) or `quality-gates.sh` (Linux/Mac) runs:
@@ -207,7 +199,7 @@ The `quality-gates.bat` (Windows) or `quality-gates.sh` (Linux/Mac) runs:
 2. Backend unit + integration tests
 3. Frontend unit tests
 4. Frontend TypeScript build
-5. E2E tests (if `RUN_E2E=1` is set)
+5. E2E tests (always run)
 
 ## CSS/Styling Guidelines
 
