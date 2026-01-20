@@ -204,11 +204,16 @@ export function stripNetworkPrefix(name: string, customPrefixes?: string[]): str
 
   for (const prefix of sortedPrefixes) {
     // Pattern: prefix at start, followed by separator (|, :, -, /)
-    // The content after must be at least 3 characters (to avoid stripping too much)
-    const pattern = new RegExp(`^${prefix}\\s*[|:\\-/]\\s*(.{3,})$`, 'i');
+    // Capture everything after the separator
+    const pattern = new RegExp(`^${prefix}\\s*[|:\\-/]\\s*(.+)$`, 'i');
     const match = trimmedName.match(pattern);
     if (match) {
-      return match[1].trim();
+      const content = match[1].trim();
+      // Only strip if the trimmed content is at least 3 characters
+      // This avoids stripping when content is too short (e.g., "PPV | AB" stays unchanged)
+      if (content.length >= 3) {
+        return content;
+      }
     }
   }
 
