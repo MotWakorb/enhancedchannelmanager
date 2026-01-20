@@ -4715,7 +4715,7 @@ export function ChannelsPane({
               </button>
             );
           })()}
-          {(() => {
+          {!isEditMode && (() => {
             // Count channels with failed streams
             const channelsWithFailedStreams = channels.filter(ch =>
               ch.streams.some(streamId => {
