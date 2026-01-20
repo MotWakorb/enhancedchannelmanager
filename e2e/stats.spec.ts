@@ -13,6 +13,7 @@ test.describe('Stats Tab', () => {
 
   test('stats tab is accessible', async ({ appPage }) => {
     const statsTab = appPage.locator(selectors.tabButton('stats'));
+    await statsTab.waitFor({ state: 'visible', timeout: 5000 });
     await expect(statsTab).toHaveClass(/active/);
   });
 

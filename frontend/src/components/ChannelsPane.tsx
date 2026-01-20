@@ -2226,9 +2226,22 @@ export function ChannelsPane({
       .filter((s): s is Stream => s !== undefined);
     if (droppedStreams.length === 0) return;
 
+    // Build normalization options from settings
+    const normalizeOptions: api.NormalizeOptions = {
+      timezonePreference: (channelDefaults?.timezonePreference as api.TimezonePreference) ?? 'both',
+      stripCountryPrefix: false,
+      keepCountryPrefix: channelDefaults?.includeCountryInName ?? false,
+      countrySeparator: (channelDefaults?.countrySeparator as '-' | ':' | '|') ?? '|',
+      stripNetworkPrefix: true,
+      stripNetworkSuffix: true,
+      customNetworkPrefixes: channelDefaults?.customNetworkPrefixes,
+      customNetworkSuffixes: channelDefaults?.customNetworkSuffixes,
+      normalizationSettings: channelDefaults?.normalizationSettings,
+    };
+
     // Check if there are multiple unique stream names (would create multiple channels)
     const uniqueNormalizedNames = new Set(
-      droppedStreams.map(s => api.normalizeStreamName(s.name, 'both'))
+      droppedStreams.map(s => api.normalizeStreamName(s.name, normalizeOptions))
     );
 
     // Calculate the starting channel number for this group
@@ -2245,8 +2258,9 @@ export function ChannelsPane({
     // Use the first stream's info for the channel details
     const firstStream = droppedStreams[0];
 
-    // Use stream name as the channel name
-    setNewChannelName(firstStream.name);
+    // Normalize the stream name using settings (includes disabled/custom tags)
+    const normalizedName = api.normalizeStreamName(firstStream.name, normalizeOptions);
+    setNewChannelName(normalizedName);
 
     // Find matching logo by URL if stream has a logo_url
     // Always capture the logo_url for fallback during commit
@@ -2307,9 +2321,22 @@ export function ChannelsPane({
       .filter((s): s is Stream => s !== undefined);
     if (droppedStreams.length === 0) return;
 
+    // Build normalization options from settings
+    const normalizeOptions: api.NormalizeOptions = {
+      timezonePreference: (channelDefaults?.timezonePreference as api.TimezonePreference) ?? 'both',
+      stripCountryPrefix: false,
+      keepCountryPrefix: channelDefaults?.includeCountryInName ?? false,
+      countrySeparator: (channelDefaults?.countrySeparator as '-' | ':' | '|') ?? '|',
+      stripNetworkPrefix: true,
+      stripNetworkSuffix: true,
+      customNetworkPrefixes: channelDefaults?.customNetworkPrefixes,
+      customNetworkSuffixes: channelDefaults?.customNetworkSuffixes,
+      normalizationSettings: channelDefaults?.normalizationSettings,
+    };
+
     // Check if there are multiple unique stream names (would create multiple channels)
     const uniqueNormalizedNames = new Set(
-      droppedStreams.map(s => api.normalizeStreamName(s.name, 'both'))
+      droppedStreams.map(s => api.normalizeStreamName(s.name, normalizeOptions))
     );
 
     const targetGroupId = groupId === 'ungrouped' ? null : groupId;
@@ -2323,8 +2350,9 @@ export function ChannelsPane({
     // Use the first stream's info for the channel details
     const firstStream = droppedStreams[0];
 
-    // Use stream name as the channel name
-    setNewChannelName(firstStream.name);
+    // Normalize the stream name using settings (includes disabled/custom tags)
+    const normalizedName = api.normalizeStreamName(firstStream.name, normalizeOptions);
+    setNewChannelName(normalizedName);
 
     // Find matching logo by URL if stream has a logo_url
     setNewChannelLogoUrl(firstStream.logo_url ?? null);
