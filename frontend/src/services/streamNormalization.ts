@@ -579,7 +579,14 @@ export function normalizeStreamName(name: string, timezonePreferenceOrOptions: T
       }
     }
 
-    // 4. Strip quality suffixes (e.g., "ESPN HD" → "ESPN")
+    // 4. Apply custom tags FIRST (before quality/timezone)
+    // This ensures custom suffixes like "(NA)" are removed before quality suffix detection
+    // Example: "CANAL+ 1 HD (NA)" → remove "(NA)" → "CANAL+ 1 HD" → then remove "HD"
+    if (normalizationSettings.customTags.length > 0) {
+      normalized = applyCustomTags(normalized, normalizationSettings.customTags);
+    }
+
+    // 5. Strip quality suffixes (e.g., "ESPN HD" → "ESPN")
     const enabledQualityTags = getEnabledTagsForGroup('quality', normalizationSettings);
     for (const tag of enabledQualityTags) {
       normalized = stripTagByMode(normalized, tag, 'suffix');
@@ -587,17 +594,12 @@ export function normalizeStreamName(name: string, timezonePreferenceOrOptions: T
     // Also strip numeric resolution patterns (e.g., 1080p, 720p)
     normalized = normalized.replace(/[\s\-_|:]*\d+[pPiI]\s*$/, '').trim();
 
-    // 5. Strip timezone suffixes (e.g., "ESPN EAST" → "ESPN")
+    // 6. Strip timezone suffixes (e.g., "ESPN EAST" → "ESPN")
     if (timezonePreference !== 'both') {
       const enabledTimezoneTags = getEnabledTagsForGroup('timezone', normalizationSettings);
       for (const tag of enabledTimezoneTags) {
         normalized = stripTagByMode(normalized, tag, 'suffix');
       }
-    }
-
-    // 6. Apply custom tags
-    if (normalizationSettings.customTags.length > 0) {
-      normalized = applyCustomTags(normalized, normalizationSettings.customTags);
     }
   } else {
     // Legacy boolean-based normalization

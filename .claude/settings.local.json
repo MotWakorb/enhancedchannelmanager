@@ -27,7 +27,8 @@
       "Bash(cmd /c scriptsquality-gates.bat)",
       "Bash(python -m pytest:*)",
       "Bash(npm test:*)",
-      "Bash(test:*)"
+      "Bash(test:*)",
+      "Bash(npx vitest:*)"
     ],
     "deny": [],
     "ask": [],
