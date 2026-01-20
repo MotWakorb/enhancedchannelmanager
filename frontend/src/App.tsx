@@ -340,6 +340,8 @@ function App() {
     });
     setCommitProgress(null);
     setShowExitDialog(false);
+    // Clear selection when exiting edit mode
+    setSelectedChannelIds(new Set());
     // Clear checkpoints when exiting edit mode
     clearHistory();
     // Switch to pending tab if there was one
@@ -1641,9 +1643,11 @@ function App() {
                         if (stagedOperationCount > 0) {
                           if (confirm(`You have ${stagedOperationCount} pending change${stagedOperationCount !== 1 ? 's' : ''} that will be lost. Are you sure you want to cancel?`)) {
                             discard();
+                            setSelectedChannelIds(new Set());
                           }
                         } else {
                           discard();
+                          setSelectedChannelIds(new Set());
                         }
                       }}
                       disabled={isCommitting}
