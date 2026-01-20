@@ -1367,3 +1367,41 @@
 .sort-priority-rank.disabled {
   background-color: var(--text-muted);
 }
+
+/* ========================================
+   Normalization Preview Section
+   ======================================== */
+
+.normalization-preview-result {
+  background-color: var(--input-bg);
+  border: 1px solid var(--border-primary);
+  border-radius: 8px;
+  padding: 1rem;
+  margin-top: 1rem;
+}
+
+.normalization-preview-label {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 0.5rem;
+}
+
+.normalization-preview-value {
+  font-size: 1.1rem;
+  font-weight: 500;
+  color: var(--text-primary);
+  padding: 0.75rem;
+  background-color: var(--bg-secondary);
+  border-radius: 4px;
+  word-break: break-word;
+}
+
+.normalization-preview-comparison {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+  font-size: 0.85rem;
+}
