@@ -298,7 +298,7 @@ interface DroppableGroupHeaderProps {
   onSortStreamsByMode?: (mode: 'smart' | 'resolution' | 'bitrate' | 'framerate') => void;
   isSortingByQuality?: boolean;
   enabledCriteria?: Record<'resolution' | 'bitrate' | 'framerate', boolean>;
-  hasFailedStreams?: boolean;
+  failedChannelCount?: number;
 }
 
 const DroppableGroupHeader = memo(function DroppableGroupHeader({
@@ -325,7 +325,7 @@ const DroppableGroupHeader = memo(function DroppableGroupHeader({
   onSortStreamsByMode,
   isSortingByQuality = false,
   enabledCriteria = { resolution: true, bitrate: true, framerate: true },
-  hasFailedStreams = false,
+  failedChannelCount = 0,
 }: DroppableGroupHeaderProps) {
   const droppableId = `group-${groupId}`;
   const { isOver, setNodeRef } = useDroppable({
@@ -465,9 +465,10 @@ const DroppableGroupHeader = memo(function DroppableGroupHeader({
         </span>
       )}
       <span className="group-count">{channelCount}</span>
-      {hasFailedStreams && (
-        <span className="group-failed-indicator" title="One or more channels have failed streams">
+      {failedChannelCount > 0 && (
+        <span className="group-failed-indicator" title={`${failedChannelCount} channel${failedChannelCount !== 1 ? 's' : ''} with failed streams`}>
           <span className="material-icons">error</span>
+          <span className="failed-count">{failedChannelCount}</span>
         </span>
       )}
       {channelRange && channelRange.min !== null && channelRange.max !== null && (
@@ -1007,7 +1008,7 @@ export function ChannelsPane({
     fetchStreamStats();
   }, [channelStreams]);
 
-  // Pre-load stream stats for all streams assigned to channels (for hasFailedStreams indicator)
+  // Pre-load stream stats for all streams assigned to channels (for failed streams indicators)
   useEffect(() => {
     const preloadAllStreamStats = async () => {
       // Collect all unique stream IDs from all channels
@@ -4407,13 +4408,13 @@ export function ChannelsPane({
       onSelectGroupChannels(allGroupChannelIds, !allSelected);
     };
 
-    // Check if any channel in this group has failed streams
-    const groupHasFailedStreams = groupChannels.some(channel =>
+    // Count channels in this group that have failed streams
+    const groupFailedChannelCount = groupChannels.filter(channel =>
       channel.streams.some(streamId => {
         const stats = streamStatsMap.get(streamId);
         return stats && (stats.probe_status === 'failed' || stats.probe_status === 'timeout');
       })
-    );
+    ).length;
 
     return (
       <div key={groupId} className={`channel-group ${isEmpty ? 'empty-group' : ''}`}>
@@ -4440,7 +4441,7 @@ export function ChannelsPane({
           onSortStreamsByMode={(mode) => handleSortGroupStreamsByMode(groupId, mode)}
           isSortingByQuality={bulkSortingByQuality}
           enabledCriteria={channelDefaults?.streamSortEnabled}
-          hasFailedStreams={groupHasFailedStreams}
+          failedChannelCount={groupFailedChannelCount}
         />
         {isExpanded && isEmpty && (
           <div className="group-channels empty-group-placeholder">
@@ -4711,6 +4712,48 @@ export function ChannelsPane({
               >
                 <span className="material-icons">warning</span>
                 {missingStreamsCount}
+              </button>
+            );
+          })()}
+          {(() => {
+            // Count channels with failed streams
+            const channelsWithFailedStreams = channels.filter(ch =>
+              ch.streams.some(streamId => {
+                const stats = streamStatsMap.get(streamId);
+                return stats && (stats.probe_status === 'failed' || stats.probe_status === 'timeout');
+              })
+            );
+            const failedStreamsCount = channelsWithFailedStreams.length;
+            if (failedStreamsCount === 0) return null;
+
+            // Get unique group IDs that have channels with failed streams
+            const groupsWithFailedStreams = new Set(
+              channelsWithFailedStreams.map(ch => ch.channel_group_id).filter((id): id is number => id !== null)
+            );
+            // Include ungrouped (null group) as group ID 0 for expansion
+            const hasUngrouped = channelsWithFailedStreams.some(ch => ch.channel_group_id === null);
+
+            const handleExpandFailedGroups = () => {
+              setExpandedGroups(prev => {
+                const newState = { ...prev };
+                groupsWithFailedStreams.forEach(groupId => {
+                  newState[groupId] = true;
+                });
+                if (hasUngrouped) {
+                  newState[0] = true; // 0 represents ungrouped
+                }
+                return newState;
+              });
+            };
+
+            return (
+              <button
+                className="failed-streams-alert"
+                title={`${failedStreamsCount} channel${failedStreamsCount !== 1 ? 's' : ''} with failed streams - click to expand affected groups`}
+                onClick={handleExpandFailedGroups}
+              >
+                <span className="material-icons">error</span>
+                {failedStreamsCount}
               </button>
             );
           })()}
