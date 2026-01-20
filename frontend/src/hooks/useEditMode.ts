@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef, useEffect } from 'react';
+import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import type {
   Channel,
   ChannelSnapshot,
@@ -985,6 +985,9 @@ export function useEditMode({
     return summary;
   }, [state.stagedOperations, state.modifiedChannelIds]);
 
+  // Memoized summary - computed once per state change, not on every render call
+  const summary = useMemo(() => getSummary(), [getSummary]);
+
   // Check for conflicts with server
   const checkForConflicts = useCallback(async (): Promise<boolean> => {
     // Compare baseline snapshot with current server state
@@ -1446,6 +1449,7 @@ export function useEditMode({
     endBatch,
 
     // Commit/Discard
+    summary,
     getSummary,
     validate,
     commit,

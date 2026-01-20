@@ -178,7 +178,7 @@ function App() {
     stageCreateChannel,
     stageDeleteChannel,
     stageDeleteChannelGroup,
-    getSummary,
+    summary,
     commit,
     discard,
     localUndo,
@@ -1687,7 +1687,7 @@ function App() {
 
       <EditModeExitDialog
         isOpen={showExitDialog}
-        summary={getSummary()}
+        summary={summary}
         onApply={handleApplyChanges}
         onDiscard={handleDiscardChanges}
         onKeepEditing={handleKeepEditing}

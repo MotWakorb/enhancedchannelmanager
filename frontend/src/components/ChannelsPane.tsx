@@ -944,6 +944,15 @@ export function ChannelsPane({
     );
   }, [channelGroups, groupSearchText]);
 
+  // Create a Map for O(1) logo lookups instead of O(n) array.find()
+  const logoMap = useMemo(() => {
+    const map = new Map<number, Logo>();
+    for (const logo of logos) {
+      map.set(logo.id, logo);
+    }
+    return map;
+  }, [logos]);
+
   // Load streams when a channel is selected
   useEffect(() => {
     const loadStreams = async () => {
@@ -1399,16 +1408,16 @@ export function ChannelsPane({
     editChannelModal.open();
   };
 
-  // Helper to get logo URL for a channel
-  const getChannelLogoUrl = (channel: Channel): string | null => {
+  // Helper to get logo URL for a channel - uses logoMap for O(1) lookup
+  const getChannelLogoUrl = useCallback((channel: Channel): string | null => {
     // For staged channels (during edit mode), use the temporary logo URL
     if (channel._stagedLogoUrl) {
       return channel._stagedLogoUrl;
     }
     if (!channel.logo_id) return null;
-    const logo = logos.find((l) => l.id === channel.logo_id);
+    const logo = logoMap.get(channel.logo_id);
     return logo?.cache_url || logo?.url || null;
-  };
+  }, [logoMap]);
 
   // Handle confirming channel deletion
   const handleConfirmDelete = async () => {
@@ -5553,7 +5562,7 @@ export function ChannelsPane({
               changeDescriptions.push(`name to "${changes.name}"`);
             }
             if (changes.logo_id !== undefined) {
-              const logoName = changes.logo_id ? logos.find((l) => l.id === changes.logo_id)?.name : null;
+              const logoName = changes.logo_id ? logoMap.get(changes.logo_id)?.name : null;
               changeDescriptions.push(logoName ? `logo to "${logoName}"` : 'removed logo');
             }
             if (changes.tvg_id !== undefined) {

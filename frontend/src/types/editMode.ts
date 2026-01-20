@@ -230,7 +230,8 @@ export interface UseEditModeReturn {
   endBatch: () => void;
 
   // Commit/Discard
-  getSummary: () => EditModeSummary;
+  summary: EditModeSummary; // Memoized summary - use this instead of getSummary() for better performance
+  getSummary: () => EditModeSummary; // Deprecated: use summary property instead
   /** Validate operations without executing - returns validation issues */
   validate: () => Promise<ValidationResult>;
   /** Commit with optional progress callback and options (continueOnError, skipValidation) */
