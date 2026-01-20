@@ -107,7 +107,6 @@ class TestRunTask:
 class TestCancelTask:
     """Tests for POST /api/tasks/{task_id}/cancel endpoint."""
 
-    @pytest.mark.skip(reason="Cancel endpoint has async serialization issue - needs task engine fix")
     @pytest.mark.asyncio
     async def test_cancel_task_stops_execution(self, async_client):
         """POST /api/tasks/{task_id}/cancel stops running task."""
@@ -116,7 +115,6 @@ class TestCancelTask:
         # May return 200 (cancelled), 404 (not found), or other status
         assert response.status_code in (200, 404, 409, 500)
 
-    @pytest.mark.skip(reason="Cancel endpoint has async serialization issue - needs task engine fix")
     @pytest.mark.asyncio
     async def test_cancel_task_not_found(self, async_client):
         """POST /api/tasks/{task_id}/cancel returns 404 for unknown task."""
