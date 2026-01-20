@@ -13,7 +13,7 @@ test.describe('Alert Methods', () => {
   test('alert methods section is visible', async ({ appPage }) => {
     const alertSection = appPage.locator(
       selectors.alertMethodList +
-        ', [data-testid="alert-methods"], .alert-methods, text=Alert Methods, text=Notifications'
+        ', [data-testid="alert-methods"], .alert-methods, :has-text("Alert Methods"), :has-text("Notifications")'
     );
 
     const exists = await alertSection.count();
@@ -46,19 +46,19 @@ test.describe('Alert Method Types', () => {
 
   test('Discord type is available', async ({ appPage }) => {
     // Look for Discord in the UI
-    const discord = appPage.locator('text=Discord, [data-testid*="discord"]');
+    const discord = appPage.locator(':has-text("Discord"), [data-testid*="discord"]');
     const count = await discord.count();
     expect(count).toBeGreaterThanOrEqual(0);
   });
 
   test('Telegram type is available', async ({ appPage }) => {
-    const telegram = appPage.locator('text=Telegram, [data-testid*="telegram"]');
+    const telegram = appPage.locator(':has-text("Telegram"), [data-testid*="telegram"]');
     const count = await telegram.count();
     expect(count).toBeGreaterThanOrEqual(0);
   });
 
   test('Email/SMTP type is available', async ({ appPage }) => {
-    const email = appPage.locator('text=Email, text=SMTP, [data-testid*="email"], [data-testid*="smtp"]');
+    const email = appPage.locator(':has-text("Email"), :has-text("SMTP"), [data-testid*="email"], [data-testid*="smtp"]');
     const count = await email.count();
     expect(count).toBeGreaterThanOrEqual(0);
   });
@@ -80,7 +80,7 @@ test.describe('Alert Method Configuration', () => {
   test('alert methods show notification type filters', async ({ appPage }) => {
     // Look for notification type filters (info, success, warning, error)
     const typeFilters = appPage.locator(
-      'text=Info, text=Success, text=Warning, text=Error, [data-testid*="notify"]'
+      ':has-text("Info"), :has-text("Success"), :has-text("Warning"), :has-text("Error"), [data-testid*="notify"]'
     );
     const count = await typeFilters.count();
     expect(count).toBeGreaterThanOrEqual(0);

@@ -5,11 +5,11 @@
 # Runs all quality checks before committing code:
 # - Backend: Python syntax check and pytest with coverage
 # - Frontend: TypeScript compilation and vitest
-# - E2E: Playwright tests (optional, requires RUN_E2E=1)
+# - E2E: Playwright tests (always run)
 #
 # Usage:
-#   ./scripts/quality-gates.sh          # Run all checks except E2E
-#   RUN_E2E=1 ./scripts/quality-gates.sh  # Include E2E tests
+#   ./scripts/quality-gates.sh          # Run all checks including E2E
+#   SKIP_E2E=1 ./scripts/quality-gates.sh  # Skip E2E tests (use sparingly)
 #
 # Exit codes:
 #   0 - All checks passed
@@ -155,13 +155,15 @@ fi
 echo ""
 
 # -----------------------------------------------------------------------------
-# E2E Tests (Optional)
+# E2E Tests
 # -----------------------------------------------------------------------------
 
 echo -e "${BLUE}E2E Tests${NC}"
 echo "--------------------------------------------"
 
-if [ "${RUN_E2E:-0}" = "1" ]; then
+if [ "${SKIP_E2E:-0}" = "1" ]; then
+    echo -e "${YELLOW}○${NC} E2E tests skipped (SKIP_E2E=1 set)"
+else
     if [ -f "playwright.config.ts" ]; then
         if [ -n "$(find e2e -name '*.spec.ts' -type f 2>/dev/null)" ]; then
             print_status "E2E tests (Playwright)" "running"
@@ -177,8 +179,6 @@ if [ "${RUN_E2E:-0}" = "1" ]; then
     else
         print_status "E2E tests (Playwright)" "skip"
     fi
-else
-    echo -e "${YELLOW}○${NC} E2E tests skipped (set RUN_E2E=1 to enable)"
 fi
 
 echo ""

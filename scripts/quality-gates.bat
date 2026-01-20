@@ -7,11 +7,11 @@ REM
 REM Runs all quality checks before committing code:
 REM - Backend: Python syntax check and pytest
 REM - Frontend: Vitest unit tests and TypeScript compilation
-REM - E2E: Playwright tests (optional, requires RUN_E2E=1)
+REM - E2E: Playwright tests (always run)
 REM
 REM Usage:
-REM   .scripts\quality-gates.bat          # Run all checks except E2E
-REM   set RUN_E2E=1 && .scripts\quality-gates.bat  # Include E2E tests
+REM   .scripts\quality-gates.bat          # Run all checks including E2E
+REM   set SKIP_E2E=1 && .scripts\quality-gates.bat  # Skip E2E tests (use sparingly)
 REM
 REM Exit codes:
 REM   0 - All checks passed
@@ -99,13 +99,15 @@ if %ERRORLEVEL% EQU 0 (
 cd ..
 
 REM ----------------------------------------------------------------
-REM E2E Tests (Optional)
+REM E2E Tests
 REM ----------------------------------------------------------------
 echo.
 echo [E2E Tests]
 echo ------------------------------------------------------------
 
-if "%RUN_E2E%"=="1" (
+if "%SKIP_E2E%"=="1" (
+    echo [SKIP] E2E tests (SKIP_E2E=1 set^)
+) else (
     if exist e2e (
         echo [*] E2E tests (Playwright^)...
         call npm run test:e2e >nul 2>&1
@@ -119,8 +121,6 @@ if "%RUN_E2E%"=="1" (
     ) else (
         echo [SKIP] E2E tests (no e2e directory^)
     )
-) else (
-    echo [SKIP] E2E tests (set RUN_E2E=1 to enable^)
 )
 
 echo.
