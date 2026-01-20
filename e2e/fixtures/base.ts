@@ -42,8 +42,18 @@ export { expect }
  * Navigate to a specific tab
  */
 export async function navigateToTab(page: Page, tabId: string): Promise<void> {
+  // Wait for tab navigation to be ready
+  await page.waitForSelector('.tab-navigation', { timeout: 10000 })
+
   const tabSelector = selectors.tabButton(tabId)
-  await page.click(tabSelector)
+  const tabButton = page.locator(tabSelector)
+
+  // Wait for the specific tab button to be visible
+  await tabButton.waitFor({ state: 'visible', timeout: 5000 })
+
+  // Click the tab
+  await tabButton.click()
+
   // Wait for tab content to load
   await page.waitForTimeout(500)
 }

@@ -12,7 +12,11 @@ test.describe('EPG Manager Tab', () => {
   });
 
   test('EPG manager tab is accessible', async ({ appPage }) => {
+    // Wait for tab navigation to be visible
+    await appPage.waitForSelector('.tab-navigation', { timeout: 10000 });
+
     const epgTab = appPage.locator(selectors.tabButton('epg-manager'));
+    await epgTab.waitFor({ state: 'visible', timeout: 5000 });
     await expect(epgTab).toHaveClass(/active/);
   });
 
