@@ -44,16 +44,17 @@ When doing work on this project, follow these steps in order:
 
 4. **Run quality gates** (if code changed) - **MANDATORY** before committing:
    ```bash
-   # Backend Python syntax check (REQUIRED for any backend changes)
+   # Backend: Python syntax check + tests (REQUIRED for any backend changes)
    python -m py_compile backend/main.py
+   cd backend && python -m pytest tests/ -q
 
-   # Frontend TypeScript compilation and build (REQUIRED for any frontend changes)
-   cd frontend && npm run build
+   # Frontend: Tests + TypeScript compilation and build (REQUIRED for any frontend changes)
+   cd frontend && npm test && npm run build
 
    # Or run all quality gates at once:
    ./scripts/quality-gates.sh
    ```
-   **CRITICAL**: If syntax checks fail, fix errors before proceeding. Never commit broken code.
+   **CRITICAL**: If syntax checks or tests fail, fix errors before proceeding. Never commit broken code.
 
 5. **Update the bead with work done** - Document what was changed:
    ```bash
