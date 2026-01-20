@@ -39,6 +39,20 @@ export { expect }
 // =============================================================================
 
 /**
+ * Content selectors to wait for after navigating to each tab
+ */
+const tabContentSelectors: Record<string, string> = {
+  'channel-manager': '.channels-pane',
+  'settings': '.settings-tab',
+  'stats': '.stats-tab',
+  'm3u-manager': '.m3u-manager-tab, [class*="m3u"]',
+  'epg-manager': '.epg-manager-tab, [class*="epg"]',
+  'logo-manager': '.logo-manager-tab, [class*="logo"]',
+  'guide': '.guide-tab',
+  'journal': '.journal-tab',
+}
+
+/**
  * Navigate to a specific tab
  */
 export async function navigateToTab(page: Page, tabId: string): Promise<void> {
@@ -54,8 +68,19 @@ export async function navigateToTab(page: Page, tabId: string): Promise<void> {
   // Click the tab
   await tabButton.click()
 
-  // Wait for tab content to load
-  await page.waitForTimeout(500)
+  // Wait for tab-specific content to load (more reliable than fixed timeout)
+  const contentSelector = tabContentSelectors[tabId]
+  if (contentSelector) {
+    try {
+      await page.waitForSelector(contentSelector, { timeout: 10000 })
+    } catch {
+      // Fallback to timeout if selector not found (tab may have different structure)
+      await page.waitForTimeout(1000)
+    }
+  } else {
+    // Fallback for unknown tabs
+    await page.waitForTimeout(1000)
+  }
 }
 
 /**
