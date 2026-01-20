@@ -438,6 +438,7 @@ class SettingsRequest(BaseModel):
     probe_channel_groups: list[str] = []  # Channel groups to probe
     bitrate_sample_duration: int = 10  # Duration in seconds to sample stream for bitrate (10, 20, or 30)
     parallel_probing_enabled: bool = True  # Probe multiple streams from different M3Us simultaneously
+    max_concurrent_probes: int = 8  # Max simultaneous probes when parallel probing is enabled (1-16)
     skip_recently_probed_hours: int = 0  # Skip streams successfully probed within last N hours (0 = always probe)
     refresh_m3us_before_probe: bool = True  # Refresh all M3U accounts before starting probe
     auto_reorder_after_probe: bool = False  # Automatically reorder streams in channels after probe completes
@@ -484,6 +485,7 @@ class SettingsResponse(BaseModel):
     probe_channel_groups: list[str]
     bitrate_sample_duration: int
     parallel_probing_enabled: bool  # Probe multiple streams from different M3Us simultaneously
+    max_concurrent_probes: int  # Max simultaneous probes when parallel probing is enabled (1-16)
     skip_recently_probed_hours: int  # Skip streams successfully probed within last N hours (0 = always probe)
     refresh_m3us_before_probe: bool  # Refresh all M3U accounts before starting probe
     auto_reorder_after_probe: bool  # Automatically reorder streams in channels after probe completes
@@ -541,6 +543,7 @@ async def get_current_settings():
         probe_channel_groups=settings.probe_channel_groups,
         bitrate_sample_duration=settings.bitrate_sample_duration,
         parallel_probing_enabled=settings.parallel_probing_enabled,
+        max_concurrent_probes=settings.max_concurrent_probes,
         skip_recently_probed_hours=settings.skip_recently_probed_hours,
         refresh_m3us_before_probe=settings.refresh_m3us_before_probe,
         auto_reorder_after_probe=settings.auto_reorder_after_probe,
@@ -615,9 +618,11 @@ async def update_settings(request: SettingsRequest):
         probe_channel_groups=request.probe_channel_groups,
         bitrate_sample_duration=request.bitrate_sample_duration,
         parallel_probing_enabled=request.parallel_probing_enabled,
+        max_concurrent_probes=request.max_concurrent_probes,
         skip_recently_probed_hours=request.skip_recently_probed_hours,
         refresh_m3us_before_probe=request.refresh_m3us_before_probe,
         auto_reorder_after_probe=request.auto_reorder_after_probe,
+        stream_fetch_page_limit=request.stream_fetch_page_limit,
         stream_sort_priority=request.stream_sort_priority,
         stream_sort_enabled=request.stream_sort_enabled,
         deprioritize_failed_streams=request.deprioritize_failed_streams,
