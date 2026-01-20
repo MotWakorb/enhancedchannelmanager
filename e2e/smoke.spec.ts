@@ -79,16 +79,20 @@ test.describe('Navigation', () => {
 
   for (const tab of tabs) {
     test(`can navigate to ${tab.name} tab`, async ({ appPage }) => {
+      // Wait for tab navigation to be visible
+      await appPage.waitForSelector(selectors.tabNavigation, { timeout: 10000 });
+
       const tabButton = appPage.locator(selectors.tabButton(tab.id));
 
-      // Check if tab exists
-      const exists = await tabButton.count();
-      if (exists > 0) {
-        await tabButton.click();
-        await appPage.waitForTimeout(500);
+      // Wait for specific tab button to be visible
+      await tabButton.waitFor({ state: 'visible', timeout: 5000 });
 
-        await expect(tabButton).toHaveClass(/active/);
-      }
+      await tabButton.click();
+      await appPage.waitForTimeout(500);
+
+      // Re-query the tab button to check active state
+      const activeTab = appPage.locator(selectors.tabButton(tab.id));
+      await expect(activeTab).toHaveClass(/active/);
     });
   }
 });
