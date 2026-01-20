@@ -38,21 +38,21 @@ test.describe('Stats Overview', () => {
 
   test('shows channel count', async ({ appPage }) => {
     // Look for text containing channel count
-    const channelStat = appPage.locator('text=/channel/i, [data-stat="channels"]');
+    const channelStat = appPage.getByText(/channel/i).or(appPage.locator('[data-stat="channels"]'));
     const count = await channelStat.count();
     expect(count).toBeGreaterThanOrEqual(0);
   });
 
   test('shows stream count', async ({ appPage }) => {
     // Look for text containing stream count
-    const streamStat = appPage.locator('text=/stream/i, [data-stat="streams"]');
+    const streamStat = appPage.getByText(/stream/i).or(appPage.locator('[data-stat="streams"]'));
     const count = await streamStat.count();
     expect(count).toBeGreaterThanOrEqual(0);
   });
 
   test('shows EPG source count', async ({ appPage }) => {
     // Look for text containing EPG count
-    const epgStat = appPage.locator('text=/epg/i, [data-stat="epg"]');
+    const epgStat = appPage.getByText(/epg/i).or(appPage.locator('[data-stat="epg"]'));
     const count = await epgStat.count();
     expect(count).toBeGreaterThanOrEqual(0);
   });
