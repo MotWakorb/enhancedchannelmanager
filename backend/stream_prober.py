@@ -1168,6 +1168,12 @@ class StreamProber:
                 # ========== PARALLEL PROBING MODE ==========
                 logger.info(f"Starting parallel probe of {len(streams_to_probe)} streams (filtered from {len(all_streams)} total)")
 
+                # Global concurrency limit - max simultaneous probes regardless of M3U account
+                # This prevents system resource exhaustion when probing many streams
+                MAX_CONCURRENT_PROBES = 8  # Conservative limit to avoid timeouts
+                global_probe_semaphore = asyncio.Semaphore(MAX_CONCURRENT_PROBES)
+                logger.info(f"Using global concurrency limit: {MAX_CONCURRENT_PROBES} simultaneous probes")
+
                 # Track our own probe connections per M3U (separate from Dispatcharr's active connections)
                 # This lets us know how many streams WE are currently probing per M3U
                 probe_connections_lock = asyncio.Lock()
@@ -1183,20 +1189,22 @@ class StreamProber:
                     stream_url = stream.get("url", "")
                     m3u_account_id = stream.get("m3u_account")
 
-                    try:
-                        result = await self.probe_stream(stream_id, stream_url, stream_name)
-                        probe_status = result.get("probe_status", "failed")
-                        stream_info = {"id": stream_id, "name": stream_name, "url": stream_url}
-                        # Include error message for failed streams
-                        if probe_status != "success":
-                            stream_info["error"] = result.get("error_message", "Unknown error")
-                        return (probe_status, stream_info)
-                    finally:
-                        # Release our probe connection for this M3U
-                        if m3u_account_id:
-                            async with probe_connections_lock:
-                                if m3u_account_id in probe_connections:
-                                    probe_connections[m3u_account_id] = max(0, probe_connections[m3u_account_id] - 1)
+                    # Acquire global semaphore to limit total concurrent probes
+                    async with global_probe_semaphore:
+                        try:
+                            result = await self.probe_stream(stream_id, stream_url, stream_name)
+                            probe_status = result.get("probe_status", "failed")
+                            stream_info = {"id": stream_id, "name": stream_name, "url": stream_url}
+                            # Include error message for failed streams
+                            if probe_status != "success":
+                                stream_info["error"] = result.get("error_message", "Unknown error")
+                            return (probe_status, stream_info)
+                        finally:
+                            # Release our probe connection for this M3U
+                            if m3u_account_id:
+                                async with probe_connections_lock:
+                                    if m3u_account_id in probe_connections:
+                                        probe_connections[m3u_account_id] = max(0, probe_connections[m3u_account_id] - 1)
 
                 # Process streams with parallel probing
                 pending_streams = list(streams_to_probe)  # Streams waiting to be probed
