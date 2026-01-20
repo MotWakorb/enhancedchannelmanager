@@ -90,7 +90,8 @@ export interface ChannelManagerTabProps {
   onTrackNewlyCreatedGroup: (groupId: number) => void;
 
   // Streams
-  streams: Stream[];
+  allStreams: Stream[];  // All streams (unfiltered) - for ChannelsPane lookups
+  streams: Stream[];     // Filtered streams - for StreamsPane display
   providers: M3UAccount[];
   streamGroups: string[];
   streamsLoading: boolean;
@@ -253,6 +254,7 @@ export function ChannelManagerTab({
   onTrackNewlyCreatedGroup,
 
   // Streams
+  allStreams,
   streams,
   providers,
   streamGroups,
@@ -319,7 +321,7 @@ export function ChannelManagerTab({
         <ChannelsPane
           channelGroups={channelGroups}
           channels={channels}
-          streams={streams}
+          streams={allStreams}
           providers={providers}
           selectedChannelId={selectedChannelId}
           onChannelSelect={onChannelSelect}
