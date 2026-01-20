@@ -93,6 +93,10 @@ class StreamProber:
         # Probe history - list of last 5 probe runs
         self._probe_history = []  # List of {timestamp, total, success_count, failed_count, status, success_streams, failed_streams}
 
+        # Rate limit tracking for adaptive backoff
+        self._rate_limited_hosts = {}  # host -> {"last_429_time": timestamp, "backoff_until": timestamp, "consecutive_429s": count}
+        self._rate_limit_lock = None  # Will be initialized as asyncio.Lock() when needed
+
         # Load probe history from disk on initialization
         self._load_probe_history()
 
@@ -120,6 +124,94 @@ class StreamProber:
             logger.debug(f"Persisted {len(self._probe_history)} probe history entries to {PROBE_HISTORY_FILE}")
         except Exception as e:
             logger.error(f"Failed to persist probe history to {PROBE_HISTORY_FILE}: {e}")
+
+    def _extract_host_from_url(self, url: str) -> Optional[str]:
+        """Extract the host/domain from a URL."""
+        if not url:
+            return None
+        try:
+            from urllib.parse import urlparse
+            parsed = urlparse(url)
+            return parsed.netloc or parsed.hostname
+        except Exception:
+            return None
+
+    async def _is_host_rate_limited(self, host: str) -> bool:
+        """Check if a host is currently rate-limited."""
+        if not host or host not in self._rate_limited_hosts:
+            return False
+
+        host_info = self._rate_limited_hosts[host]
+        current_time = time.time()
+
+        # Check if backoff period has expired
+        if current_time >= host_info.get("backoff_until", 0):
+            return False
+
+        return True
+
+    async def _get_host_backoff_delay(self, host: str) -> float:
+        """Get the remaining backoff delay for a rate-limited host."""
+        if not host or host not in self._rate_limited_hosts:
+            return 0
+
+        host_info = self._rate_limited_hosts[host]
+        current_time = time.time()
+        backoff_until = host_info.get("backoff_until", 0)
+
+        if current_time >= backoff_until:
+            return 0
+
+        return backoff_until - current_time
+
+    async def _record_rate_limit_error(self, url: str):
+        """Record a 429 rate limit error for adaptive backoff."""
+        host = self._extract_host_from_url(url)
+        if not host:
+            return
+
+        current_time = time.time()
+
+        if host not in self._rate_limited_hosts:
+            self._rate_limited_hosts[host] = {
+                "last_429_time": current_time,
+                "backoff_until": current_time + 5.0,  # Initial 5 second backoff
+                "consecutive_429s": 1
+            }
+            logger.warning(f"[RATE-LIMIT] Host {host} rate-limited, initial backoff 5s")
+        else:
+            host_info = self._rate_limited_hosts[host]
+            consecutive = host_info.get("consecutive_429s", 0) + 1
+
+            # Exponential backoff: 5s, 10s, 20s, 40s, max 60s
+            backoff_seconds = min(5.0 * (2 ** (consecutive - 1)), 60.0)
+            host_info["last_429_time"] = current_time
+            host_info["backoff_until"] = current_time + backoff_seconds
+            host_info["consecutive_429s"] = consecutive
+
+            logger.warning(f"[RATE-LIMIT] Host {host} rate-limited again ({consecutive} consecutive), backoff {backoff_seconds}s")
+
+    async def _record_successful_probe(self, url: str):
+        """Record a successful probe to reset rate limit tracking for a host."""
+        host = self._extract_host_from_url(url)
+        if not host or host not in self._rate_limited_hosts:
+            return
+
+        # Reset consecutive count on success, but keep backoff active until it expires
+        host_info = self._rate_limited_hosts[host]
+        if host_info.get("consecutive_429s", 0) > 0:
+            # Reduce consecutive count on success
+            host_info["consecutive_429s"] = max(0, host_info["consecutive_429s"] - 1)
+            if host_info["consecutive_429s"] == 0:
+                # Remove from rate-limited hosts when fully recovered
+                del self._rate_limited_hosts[host]
+                logger.info(f"[RATE-LIMIT] Host {host} recovered from rate limiting")
+
+    def _is_rate_limit_error(self, error_message: str) -> bool:
+        """Check if an error message indicates a 429 rate limit error."""
+        if not error_message:
+            return False
+        return "429" in error_message or "Too Many Requests" in error_message
 
     async def start(self):
         """Initialize the stream prober (check ffprobe availability).
@@ -256,22 +348,36 @@ class StreamProber:
                     self._probe_progress_current = probed_count + 1
                     self._probe_progress_current_stream = stream_name or f"Stream {stream_id}"
 
+                    # Check if host is rate-limited and wait for backoff (scheduled probe)
+                    host = self._extract_host_from_url(stream_url)
+                    if host:
+                        backoff_delay = await self._get_host_backoff_delay(host)
+                        if backoff_delay > 0:
+                            logger.debug(f"[RATE-LIMIT] Waiting {backoff_delay:.1f}s before probing {host}")
+                            await asyncio.sleep(backoff_delay)
+
                     result = await self.probe_stream(stream_id, stream_url, stream_name)
 
                     # Track success/failure
                     probe_status = result.get("probe_status", "failed")
+                    error_message = result.get("error_message", "")
                     stream_info = {"id": stream_id, "name": stream_name, "url": stream_url}
                     if probe_status == "success":
                         self._probe_progress_success_count += 1
                         self._probe_success_streams.append(stream_info)
+                        # Record success to help host recover from rate limiting
+                        await self._record_successful_probe(stream_url)
                     else:
                         self._probe_progress_failed_count += 1
                         # Include error message for failed streams
-                        stream_info["error"] = result.get("error_message", "Unknown error")
+                        stream_info["error"] = error_message or "Unknown error"
                         self._probe_failed_streams.append(stream_info)
+                        # Check for rate limit errors and record them
+                        if self._is_rate_limit_error(error_message):
+                            await self._record_rate_limit_error(stream_url)
 
                     probed_count += 1
-                    await asyncio.sleep(1)  # Rate limiting
+                    await asyncio.sleep(1)  # Base rate limiting delay
 
                 logger.info(f"Scheduled probe completed: {probed_count} streams probed")
                 self._probe_progress_status = "completed"
@@ -1189,15 +1295,31 @@ class StreamProber:
                     stream_url = stream.get("url", "")
                     m3u_account_id = stream.get("m3u_account")
 
+                    # Check if host is rate-limited and wait for backoff
+                    host = self._extract_host_from_url(stream_url)
+                    if host:
+                        backoff_delay = await self._get_host_backoff_delay(host)
+                        if backoff_delay > 0:
+                            logger.debug(f"[RATE-LIMIT] Waiting {backoff_delay:.1f}s before probing {host}")
+                            await asyncio.sleep(backoff_delay)
+
                     # Acquire global semaphore to limit total concurrent probes
                     async with global_probe_semaphore:
                         try:
                             result = await self.probe_stream(stream_id, stream_url, stream_name)
                             probe_status = result.get("probe_status", "failed")
+                            error_message = result.get("error_message", "")
                             stream_info = {"id": stream_id, "name": stream_name, "url": stream_url}
-                            # Include error message for failed streams
+
+                            # Check for rate limit errors and record them
                             if probe_status != "success":
-                                stream_info["error"] = result.get("error_message", "Unknown error")
+                                stream_info["error"] = error_message or "Unknown error"
+                                if self._is_rate_limit_error(error_message):
+                                    await self._record_rate_limit_error(stream_url)
+                            else:
+                                # Record success to help host recover from rate limiting
+                                await self._record_successful_probe(stream_url)
+
                             return (probe_status, stream_info)
                         finally:
                             # Release our probe connection for this M3U
@@ -1408,22 +1530,36 @@ class StreamProber:
                         probed_count += 1
                         continue
 
+                    # Check if host is rate-limited and wait for backoff (sequential mode)
+                    host = self._extract_host_from_url(stream_url)
+                    if host:
+                        backoff_delay = await self._get_host_backoff_delay(host)
+                        if backoff_delay > 0:
+                            logger.debug(f"[RATE-LIMIT] Waiting {backoff_delay:.1f}s before probing {host}")
+                            await asyncio.sleep(backoff_delay)
+
                     result = await self.probe_stream(stream_id, stream_url, stream_name)
 
                     # Track success/failure
                     probe_status = result.get("probe_status", "failed")
+                    error_message = result.get("error_message", "")
                     stream_info = {"id": stream_id, "name": stream_name, "url": stream_url}
                     if probe_status == "success":
                         self._probe_progress_success_count += 1
                         self._probe_success_streams.append(stream_info)
+                        # Record success to help host recover from rate limiting
+                        await self._record_successful_probe(stream_url)
                     else:
                         self._probe_progress_failed_count += 1
                         # Include error message for failed streams
-                        stream_info["error"] = result.get("error_message", "Unknown error")
+                        stream_info["error"] = error_message or "Unknown error"
                         self._probe_failed_streams.append(stream_info)
+                        # Check for rate limit errors and record them
+                        if self._is_rate_limit_error(error_message):
+                            await self._record_rate_limit_error(stream_url)
 
                     probed_count += 1
-                    await asyncio.sleep(0.5)  # Rate limiting
+                    await asyncio.sleep(0.5)  # Base rate limiting delay
 
             logger.info(f"Completed probing {probed_count} streams")
             self._probe_progress_status = "completed"
