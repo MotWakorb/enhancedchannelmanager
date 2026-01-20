@@ -154,7 +154,10 @@ export function NormalizationTagsSection({
   return (
     <div className="normalization-tags-section">
       <div className="normalization-tags-header">
-        <h3 className="normalization-tags-title">Channel Name Normalization Tags</h3>
+        <div className="normalization-tags-title-wrapper">
+          <span className="material-icons normalization-tags-icon">sell</span>
+          <h3 className="normalization-tags-title">Channel Name Normalization Tags</h3>
+        </div>
         <button
           className="normalization-tags-reset"
           onClick={handleReset}
