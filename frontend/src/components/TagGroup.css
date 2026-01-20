@@ -30,8 +30,8 @@
   width: 28px;
   height: 28px;
   border-radius: 6px;
-  background-color: var(--accent-secondary);
-  color: var(--accent-primary);
+  background-color: var(--button-primary-bg);
+  color: var(--button-primary-text);
   flex-shrink: 0;
 }
 

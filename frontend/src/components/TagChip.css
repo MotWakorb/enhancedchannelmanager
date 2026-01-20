@@ -18,9 +18,9 @@
 
 /* Enabled state (default for built-in tags) */
 .tag-chip.tag-chip-enabled {
-  background-color: var(--accent-secondary);
-  border-color: var(--accent-primary);
-  color: var(--text-primary);
+  background-color: var(--button-primary-bg);
+  border-color: var(--button-primary-bg);
+  color: var(--button-primary-text);
 }
 
 /* Disabled state (built-in tag turned off) */
@@ -37,11 +37,11 @@
 }
 
 .tag-chip.tag-chip-toggleable:hover {
-  border-color: var(--accent-primary);
+  border-color: var(--button-primary-bg);
 }
 
 .tag-chip.tag-chip-toggleable.tag-chip-enabled:hover {
-  background-color: var(--accent-primary);
+  opacity: 0.85;
 }
 
 .tag-chip.tag-chip-toggleable.tag-chip-disabled:hover {
@@ -96,13 +96,13 @@
 }
 
 .tag-chip.tag-chip-enabled .tag-chip-toggle {
-  background-color: var(--accent-primary);
-  border-color: var(--accent-primary);
+  background-color: var(--button-primary-text);
+  border-color: var(--button-primary-text);
 }
 
 .tag-chip-toggle .material-icons {
   font-size: 12px;
-  color: white;
+  color: var(--button-primary-bg);
   opacity: 0;
   transform: scale(0.5);
   transition: all 0.15s ease;
