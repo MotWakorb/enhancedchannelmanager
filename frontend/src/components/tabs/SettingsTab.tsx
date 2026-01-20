@@ -1410,81 +1410,6 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
             <span className="separator-preview">e.g., "101 {channelNumberSeparator} Sports Channel"</span>
           </div>
         )}
-
-        <div className="form-group">
-          <label>Country prefix handling</label>
-          <div className="radio-group">
-            <label className="radio-option">
-              <input
-                type="radio"
-                name="countryPrefix"
-                checked={removeCountryPrefix}
-                onChange={() => {
-                  setRemoveCountryPrefix(true);
-                  setIncludeCountryInName(false);
-                }}
-              />
-              <span className="radio-label">Remove</span>
-              <span className="radio-description">Strip country codes (US, UK, CA) from names</span>
-            </label>
-            <label className="radio-option">
-              <input
-                type="radio"
-                name="countryPrefix"
-                checked={!removeCountryPrefix && !includeCountryInName}
-                onChange={() => {
-                  setRemoveCountryPrefix(false);
-                  setIncludeCountryInName(false);
-                }}
-              />
-              <span className="radio-label">Keep as-is</span>
-              <span className="radio-description">Leave country prefixes unchanged</span>
-            </label>
-            <label className="radio-option">
-              <input
-                type="radio"
-                name="countryPrefix"
-                checked={includeCountryInName}
-                onChange={() => {
-                  setRemoveCountryPrefix(false);
-                  setIncludeCountryInName(true);
-                }}
-              />
-              <span className="radio-label">Normalize</span>
-              <span className="radio-description">Keep with consistent separator</span>
-            </label>
-          </div>
-        </div>
-
-        {includeCountryInName && (
-          <div className="separator-row indent">
-            <span className="separator-row-label">Separator:</span>
-            <div className="separator-buttons">
-              <button
-                type="button"
-                className={`separator-btn ${countrySeparator === '-' ? 'active' : ''}`}
-                onClick={() => setCountrySeparator('-')}
-              >
-                -
-              </button>
-              <button
-                type="button"
-                className={`separator-btn ${countrySeparator === ':' ? 'active' : ''}`}
-                onClick={() => setCountrySeparator(':')}
-              >
-                :
-              </button>
-              <button
-                type="button"
-                className={`separator-btn ${countrySeparator === '|' ? 'active' : ''}`}
-                onClick={() => setCountrySeparator('|')}
-              >
-                |
-              </button>
-            </div>
-            <span className="separator-preview">e.g., "US {countrySeparator} Sports Channel"</span>
-          </div>
-        )}
       </div>
 
       <div className="settings-section">
@@ -1649,8 +1574,90 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   const renderNormalizationPage = () => (
     <div className="settings-page">
       <div className="settings-page-header">
-        <h2>Stream Normalization</h2>
-        <p>Configure tag-based patterns for cleaning up stream names during bulk channel creation.</p>
+        <h2>Channel Normalization</h2>
+        <p>Configure tag-based patterns for cleaning up channel names during bulk channel creation.</p>
+      </div>
+
+      <div className="settings-section">
+        <div className="settings-section-header">
+          <span className="material-icons">public</span>
+          <h3>Country Prefix Handling</h3>
+        </div>
+
+        <div className="form-group">
+          <label>How to handle country prefixes (US, UK, CA, etc.)</label>
+          <div className="radio-group">
+            <label className="radio-option">
+              <input
+                type="radio"
+                name="countryPrefix"
+                checked={removeCountryPrefix}
+                onChange={() => {
+                  setRemoveCountryPrefix(true);
+                  setIncludeCountryInName(false);
+                }}
+              />
+              <span className="radio-label">Remove</span>
+              <span className="radio-description">Strip country codes from names</span>
+            </label>
+            <label className="radio-option">
+              <input
+                type="radio"
+                name="countryPrefix"
+                checked={!removeCountryPrefix && !includeCountryInName}
+                onChange={() => {
+                  setRemoveCountryPrefix(false);
+                  setIncludeCountryInName(false);
+                }}
+              />
+              <span className="radio-label">Keep as-is</span>
+              <span className="radio-description">Leave country prefixes unchanged</span>
+            </label>
+            <label className="radio-option">
+              <input
+                type="radio"
+                name="countryPrefix"
+                checked={includeCountryInName}
+                onChange={() => {
+                  setRemoveCountryPrefix(false);
+                  setIncludeCountryInName(true);
+                }}
+              />
+              <span className="radio-label">Normalize</span>
+              <span className="radio-description">Keep with consistent separator</span>
+            </label>
+          </div>
+        </div>
+
+        {includeCountryInName && (
+          <div className="separator-row indent">
+            <span className="separator-row-label">Separator:</span>
+            <div className="separator-buttons">
+              <button
+                type="button"
+                className={`separator-btn ${countrySeparator === '-' ? 'active' : ''}`}
+                onClick={() => setCountrySeparator('-')}
+              >
+                -
+              </button>
+              <button
+                type="button"
+                className={`separator-btn ${countrySeparator === ':' ? 'active' : ''}`}
+                onClick={() => setCountrySeparator(':')}
+              >
+                :
+              </button>
+              <button
+                type="button"
+                className={`separator-btn ${countrySeparator === '|' ? 'active' : ''}`}
+                onClick={() => setCountrySeparator('|')}
+              >
+                |
+              </button>
+            </div>
+            <span className="separator-preview">e.g., "US {countrySeparator} Sports Channel"</span>
+          </div>
+        )}
       </div>
 
       <NormalizationTagsSection
@@ -2098,7 +2105,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
             onClick={() => setActivePage('normalization')}
           >
             <span className="material-icons">label</span>
-            Stream Normalization
+            Channel Normalization
           </li>
           <li
             className={`settings-nav-item ${activePage === 'appearance' ? 'active' : ''}`}
