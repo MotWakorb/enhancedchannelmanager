@@ -75,6 +75,8 @@ class DispatcharrSettings(BaseModel):
     bitrate_sample_duration: int = 10  # Duration in seconds to sample stream for bitrate measurement (10, 20, or 30)
     # Parallel probing - probe streams from different M3U accounts simultaneously
     parallel_probing_enabled: bool = True
+    # Max simultaneous probes when parallel probing is enabled (1-16)
+    max_concurrent_probes: int = 8
     # Skip streams that were successfully probed within the last N hours (0 = always probe)
     skip_recently_probed_hours: int = 0
     # Refresh all M3U accounts before starting probe

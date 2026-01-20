@@ -52,6 +52,7 @@ class StreamProber:
         probe_channel_groups: list[str] = None,  # List of group names to probe (empty/None = all groups)
         bitrate_sample_duration: int = 10,  # Duration in seconds to sample stream for bitrate (10, 20, or 30)
         parallel_probing_enabled: bool = True,  # Probe streams from different M3Us simultaneously
+        max_concurrent_probes: int = 8,  # Max simultaneous probes when parallel probing is enabled (1-16)
         skip_recently_probed_hours: int = 0,  # Skip streams probed within last N hours (0 = always probe)
         refresh_m3us_before_probe: bool = True,  # Refresh all M3U accounts before starting probe
         auto_reorder_after_probe: bool = False,  # Automatically reorder streams in channels after probe completes
@@ -68,6 +69,7 @@ class StreamProber:
         self.probe_channel_groups = probe_channel_groups or []
         self.bitrate_sample_duration = bitrate_sample_duration
         self.parallel_probing_enabled = parallel_probing_enabled
+        self.max_concurrent_probes = max(1, min(16, max_concurrent_probes))  # Clamp to 1-16
         self.skip_recently_probed_hours = skip_recently_probed_hours
         self.refresh_m3us_before_probe = refresh_m3us_before_probe
         self.auto_reorder_after_probe = auto_reorder_after_probe
@@ -1276,9 +1278,8 @@ class StreamProber:
 
                 # Global concurrency limit - max simultaneous probes regardless of M3U account
                 # This prevents system resource exhaustion when probing many streams
-                MAX_CONCURRENT_PROBES = 8  # Conservative limit to avoid timeouts
-                global_probe_semaphore = asyncio.Semaphore(MAX_CONCURRENT_PROBES)
-                logger.info(f"Using global concurrency limit: {MAX_CONCURRENT_PROBES} simultaneous probes")
+                global_probe_semaphore = asyncio.Semaphore(self.max_concurrent_probes)
+                logger.info(f"Using global concurrency limit: {self.max_concurrent_probes} simultaneous probes")
 
                 # Track our own probe connections per M3U (separate from Dispatcharr's active connections)
                 # This lets us know how many streams WE are currently probing per M3U
@@ -1596,6 +1597,9 @@ class StreamProber:
 
     def get_probe_progress(self) -> dict:
         """Get current probe all streams progress."""
+        # Get rate limit summary
+        rate_limit_info = self._get_rate_limit_summary()
+
         progress = {
             "in_progress": self._probing_in_progress,
             "total": self._probe_progress_total,
@@ -1605,12 +1609,39 @@ class StreamProber:
             "success_count": self._probe_progress_success_count,
             "failed_count": self._probe_progress_failed_count,
             "skipped_count": self._probe_progress_skipped_count,
-            "percentage": round((self._probe_progress_current / self._probe_progress_total * 100) if self._probe_progress_total > 0 else 0, 1)
+            "percentage": round((self._probe_progress_current / self._probe_progress_total * 100) if self._probe_progress_total > 0 else 0, 1),
+            "rate_limited": rate_limit_info["is_rate_limited"],
+            "rate_limited_hosts": rate_limit_info["hosts"],
+            "max_backoff_remaining": rate_limit_info["max_backoff_remaining"]
         }
         # Log when probing is in progress for debugging
         if self._probing_in_progress:
             logger.debug(f"[PROBE-PROGRESS] in_progress=True, status={self._probe_progress_status}, {self._probe_progress_current}/{self._probe_progress_total}")
         return progress
+
+    def _get_rate_limit_summary(self) -> dict:
+        """Get a summary of current rate limit status for all hosts."""
+        current_time = time.time()
+        rate_limited_hosts = []
+        max_backoff = 0
+
+        for host, info in self._rate_limited_hosts.items():
+            backoff_until = info.get("backoff_until", 0)
+            remaining = backoff_until - current_time
+
+            if remaining > 0:
+                rate_limited_hosts.append({
+                    "host": host,
+                    "backoff_remaining": round(remaining, 1),
+                    "consecutive_429s": info.get("consecutive_429s", 0)
+                })
+                max_backoff = max(max_backoff, remaining)
+
+        return {
+            "is_rate_limited": len(rate_limited_hosts) > 0,
+            "hosts": rate_limited_hosts,
+            "max_backoff_remaining": round(max_backoff, 1) if max_backoff > 0 else 0
+        }
 
     def get_probe_results(self) -> dict:
         """Get detailed results of the last probe all streams operation."""
