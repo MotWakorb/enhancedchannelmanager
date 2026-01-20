@@ -237,6 +237,13 @@ export function NormalizationTagsSection({
           onAdd={handleAddCustomTag}
           placeholder="Add custom tag (e.g., MY_PROVIDER)..."
         />
+
+        <div className="normalization-tags-custom-help">
+          <span className="material-icons normalization-tags-custom-help-icon">info</span>
+          <span className="normalization-tags-custom-help-text">
+            Add tag text only. Special characters like ( ) [ ] | - : will be handled automatically.
+          </span>
+        </div>
       </div>
     </div>
   );
