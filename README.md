@@ -260,6 +260,8 @@ Automated stream health checking:
 - **Probe History** - View past probe results with timestamps and statistics
 - **Auto-Reorder After Probe** - Automatically reorder streams by quality and status after scheduled probes complete
 - **Parallel Probing** - Streams from different M3U accounts probe concurrently
+- **Max Concurrent Probes** - Configure simultaneous probe limit (1-16) with guidance based on provider limits
+- **Rate Limit Detection** - Automatic backoff when providers return 429 errors, with UI notification
 - **M3U Connection Awareness** - Respects M3U max connection limits during probing
 - **Persistent History** - Probe results saved to `/config/probe_history.json` and persist across container restarts
 - **Failed Stream Indicators** - Visual error icons on channels and groups that contain failed/timeout streams
