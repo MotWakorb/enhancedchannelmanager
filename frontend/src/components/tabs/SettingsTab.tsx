@@ -1,6 +1,7 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import * as api from '../../services/api';
 import { NETWORK_PREFIXES, NETWORK_SUFFIXES } from '../../constants/streamNormalization';
+import { normalizeStreamName } from '../../services/streamNormalization';
 import type { Theme, ProbeHistoryEntry, SortCriterion, SortEnabledMap, GracenoteConflictMode, NormalizationSettings } from '../../services/api';
 import { NormalizationTagsSection } from '../settings/NormalizationTagsSection';
 import type { ChannelProfile } from '../../types';
@@ -167,6 +168,22 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
     disabledBuiltinTags: [],
     customTags: [],
   });
+  const [normalizationPreviewInput, setNormalizationPreviewInput] = useState('');
+
+  // Compute normalized preview based on current settings
+  const normalizedPreviewResult = useMemo(() => {
+    if (!normalizationPreviewInput.trim()) return '';
+    return normalizeStreamName(normalizationPreviewInput, {
+      timezonePreference: 'both',
+      stripCountryPrefix: removeCountryPrefix,
+      keepCountryPrefix: includeCountryInName,
+      countrySeparator: countrySeparator as '-' | ':' | '|',
+      stripNetworkPrefix: true,
+      stripNetworkSuffix: true,
+      normalizationSettings,
+    });
+  }, [normalizationPreviewInput, removeCountryPrefix, includeCountryInName, countrySeparator, normalizationSettings]);
+
   const [streamSortPriority, setStreamSortPriority] = useState<SortCriterion[]>(['resolution', 'bitrate', 'framerate']);
   const [streamSortEnabled, setStreamSortEnabled] = useState<SortEnabledMap>({ resolution: true, bitrate: true, framerate: true });
   const [deprioritizeFailedStreams, setDeprioritizeFailedStreams] = useState(true);
@@ -1664,6 +1681,42 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         settings={normalizationSettings}
         onChange={setNormalizationSettings}
       />
+
+      {/* Preview Section */}
+      <div className="settings-section">
+        <div className="settings-section-header">
+          <span className="material-icons">preview</span>
+          <h3>Preview Normalization</h3>
+        </div>
+        <p className="form-hint" style={{ marginBottom: '1rem' }}>
+          Test how a stream name will be normalized with the current settings.
+        </p>
+        <div className="form-group">
+          <label htmlFor="normalization-preview-input">Stream Name</label>
+          <input
+            id="normalization-preview-input"
+            type="text"
+            value={normalizationPreviewInput}
+            onChange={(e) => setNormalizationPreviewInput(e.target.value)}
+            placeholder="Enter a stream name to preview (e.g., US: ESPN HD 1080p)"
+            style={{ width: '100%' }}
+          />
+        </div>
+        {normalizationPreviewInput.trim() && (
+          <div className="normalization-preview-result">
+            <div className="normalization-preview-label">Result:</div>
+            <div className="normalization-preview-value">
+              {normalizedPreviewResult || <span className="text-muted">(empty result)</span>}
+            </div>
+            {normalizedPreviewResult !== normalizationPreviewInput && (
+              <div className="normalization-preview-comparison">
+                <span className="material-icons" style={{ fontSize: '16px', color: 'var(--success-color)' }}>check_circle</span>
+                <span className="text-muted">Name was normalized</span>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
 
       {saveSuccess && (
         <div className="save-success">
