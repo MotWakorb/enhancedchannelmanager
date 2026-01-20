@@ -2804,8 +2804,13 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                       bitrate_sample_duration: bitrateSampleDuration,
                       parallel_probing_enabled: parallelProbingEnabled,
                       max_concurrent_probes: maxConcurrentProbes,
+                      skip_recently_probed_hours: skipRecentlyProbedHours,
+                      refresh_m3us_before_probe: refreshM3usBeforeProbe,
+                      auto_reorder_after_probe: autoReorderAfterProbe,
+                      stream_fetch_page_limit: streamFetchPageLimit,
                       stream_sort_priority: streamSortPriority,
                       stream_sort_enabled: streamSortEnabled,
+                      deprioritize_failed_streams: deprioritizeFailedStreams,
                     });
                     logger.info('Probe channel groups saved');
                   } catch (err) {
