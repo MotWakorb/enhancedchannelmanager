@@ -10,6 +10,7 @@ export interface StreamListItemProps {
   isEditMode: boolean;
   onRemove: (streamId: number) => void;
   onCopyUrl?: () => void;
+  onClearStats?: (streamId: number) => void;
   showStreamUrls?: boolean;
   streamStats?: StreamStats | null;
 }
@@ -20,6 +21,7 @@ export const StreamListItem = memo(function StreamListItem({
   isEditMode,
   onRemove,
   onCopyUrl,
+  onClearStats,
   showStreamUrls = true,
   streamStats
 }: StreamListItemProps) {
@@ -156,6 +158,18 @@ export const StreamListItem = memo(function StreamListItem({
           title="Open in VLC"
         >
           <span className="material-icons">play_circle</span>
+        </button>
+      )}
+      {onClearStats && streamStats && (streamStats.probe_status === 'failed' || streamStats.probe_status === 'timeout') && (
+        <button
+          className="clear-stats-btn"
+          onClick={(e) => {
+            e.stopPropagation();
+            onClearStats(stream.id);
+          }}
+          title="Clear probe stats"
+        >
+          <span className="material-icons">clear</span>
         </button>
       )}
       {onCopyUrl && (

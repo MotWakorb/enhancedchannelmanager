@@ -1320,6 +1320,21 @@ export function ChannelsPane({
     setChannelStreams((prev) => prev.filter((s) => s.id !== streamId));
   };
 
+  // Handle clearing probe stats for a stream
+  const handleClearStreamStats = async (streamId: number) => {
+    try {
+      await api.clearStreamStats([streamId]);
+      // Remove from local stats map so UI updates immediately
+      setStreamStatsMap((prev) => {
+        const next = new Map(prev);
+        next.delete(streamId);
+        return next;
+      });
+    } catch (err) {
+      console.error('Failed to clear stream stats', err);
+    }
+  };
+
   // Handle initiating channel deletion
   const handleDeleteChannelClick = (channel: Channel) => {
     setChannelToDelete(channel);
@@ -4259,6 +4274,7 @@ export function ChannelsPane({
                                         isEditMode={isEditMode}
                                         onRemove={handleRemoveStream}
                                         onCopyUrl={stream.url ? () => handleCopyStreamUrl(stream.url!, stream.name) : undefined}
+                                        onClearStats={handleClearStreamStats}
                                         showStreamUrls={showStreamUrls}
                                         streamStats={streamStatsMap.get(stream.id) ?? null}
                                       />

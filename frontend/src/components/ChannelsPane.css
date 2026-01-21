@@ -1478,6 +1478,29 @@
   opacity: 1;
 }
 
+/* Clear stats button - always visible when present (indicates error state) */
+.clear-stats-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.25rem;
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  border-radius: 4px;
+  transition: color 0.15s, background 0.15s;
+}
+
+.clear-stats-btn:hover {
+  color: var(--error-color, #e74c3c);
+  background: rgba(231, 76, 60, 0.1);
+}
+
+.clear-stats-btn .material-icons {
+  font-size: 1rem;
+}
+
 /* Stream Metadata Tags */
 .stream-metadata {
   display: inline-flex;
