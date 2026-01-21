@@ -1870,6 +1870,9 @@ function App() {
               // External trigger to open edit modal from Guide tab
               externalChannelToEdit={channelToEditFromGuide}
               onExternalChannelEditHandled={handleExternalChannelEditHandled}
+
+              // Lazy loading - trigger stream load when group expanded
+              onStreamGroupExpand={requestStreamsLoad}
             />
           )}
           {activeTab === 'm3u-manager' && (

@@ -166,6 +166,9 @@ export interface ChannelManagerTabProps {
   // External trigger to open edit modal from Guide tab
   externalChannelToEdit?: Channel | null;
   onExternalChannelEditHandled?: () => void;
+
+  // Lazy loading - callback when a stream group is expanded
+  onStreamGroupExpand?: () => void;
 }
 
 export function ChannelManagerTab({
@@ -305,6 +308,9 @@ export function ChannelManagerTab({
   // External trigger to open edit modal from Guide tab
   externalChannelToEdit,
   onExternalChannelEditHandled,
+
+  // Lazy loading
+  onStreamGroupExpand,
 }: ChannelManagerTabProps) {
   // Compute set of stream IDs that are already mapped to channels
   const mappedStreamIds = useMemo(() => {
@@ -428,6 +434,7 @@ export function ChannelManagerTab({
           hideUngroupedStreams={hideUngroupedStreams}
           onRefreshStreams={onRefreshStreams}
           mappedStreamIds={mappedStreamIds}
+          onGroupExpand={onStreamGroupExpand}
         />
       }
     />

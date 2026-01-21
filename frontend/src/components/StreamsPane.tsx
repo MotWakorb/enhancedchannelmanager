@@ -98,6 +98,8 @@ interface StreamsPaneProps {
   onRefreshStreams?: () => void;
   // Set of stream IDs that are already mapped to channels (for "hide mapped" filter)
   mappedStreamIds?: Set<number>;
+  // Callback when a group is expanded (for lazy loading streams)
+  onGroupExpand?: () => void;
 }
 
 export function StreamsPane({
@@ -133,6 +135,7 @@ export function StreamsPane({
   hideUngroupedStreams = true,
   onRefreshStreams,
   mappedStreamIds,
+  onGroupExpand,
 }: StreamsPaneProps) {
   // Expand/collapse groups with useExpandCollapse hook
   const {
@@ -159,22 +162,34 @@ export function StreamsPane({
 
   // Shared memoized grouping logic to avoid duplication
   // Groups and sorts streams, then returns sorted entries
+  // If no streams are loaded yet but we have group names, show empty groups
   const sortedStreamGroups = useMemo((): [string, Stream[]][] => {
     const groups = new Map<string, Stream[]>();
 
-    // Group streams by channel_group_name
-    filteredStreams.forEach((stream) => {
-      const groupName = stream.channel_group_name || 'Ungrouped';
-      if (!groups.has(groupName)) {
-        groups.set(groupName, []);
-      }
-      groups.get(groupName)!.push(stream);
-    });
+    // If no streams loaded but we have group names from the API, show empty groups
+    // This enables lazy loading: groups are visible immediately, streams load on expand
+    if (filteredStreams.length === 0 && streamGroups.length > 0) {
+      // Create empty groups from the streamGroups list
+      streamGroups.forEach((groupName) => {
+        if (!hideUngroupedStreams || groupName !== 'Ungrouped') {
+          groups.set(groupName, []);
+        }
+      });
+    } else {
+      // Normal grouping: group streams by channel_group_name
+      filteredStreams.forEach((stream) => {
+        const groupName = stream.channel_group_name || 'Ungrouped';
+        if (!groups.has(groupName)) {
+          groups.set(groupName, []);
+        }
+        groups.get(groupName)!.push(stream);
+      });
 
-    // Sort streams within each group alphabetically with natural sort
-    groups.forEach((groupStreams) => {
-      groupStreams.sort((a, b) => naturalCompare(a.name, b.name));
-    });
+      // Sort streams within each group alphabetically with natural sort
+      groups.forEach((groupStreams) => {
+        groupStreams.sort((a, b) => naturalCompare(a.name, b.name));
+      });
+    }
 
     // Convert to sorted array of [name, streams] tuples
     // Filter out Ungrouped if hideUngroupedStreams is true
@@ -185,7 +200,7 @@ export function StreamsPane({
         if (b === 'Ungrouped') return -1;
         return naturalCompare(a, b);
       });
-  }, [filteredStreams, hideUngroupedStreams]);
+  }, [filteredStreams, hideUngroupedStreams, streamGroups]);
 
   // Compute streams in display order (flattened array for selection)
   // This must be computed before useSelection so shift-click works correctly
@@ -1412,7 +1427,13 @@ export function StreamsPane({
                 <div key={group.name} className={`stream-group ${isGroupFullySelected(group) && isEditMode ? 'group-selected' : ''}`}>
                   <div
                     className="stream-group-header"
-                    onClick={() => toggleGroup(group.name)}
+                    onClick={() => {
+                      // If group is being expanded (not currently expanded) and we have a callback, trigger lazy load
+                      if (!isGroupExpanded(group.name) && onGroupExpand) {
+                        onGroupExpand();
+                      }
+                      toggleGroup(group.name);
+                    }}
                     onContextMenu={(e) => handleGroupContextMenu(group, e)}
                     draggable={isEditMode && !!onBulkCreateFromGroup}
                     onDragStart={(e) => {
