@@ -1445,6 +1445,39 @@ export async function getProbeResults(): Promise<{
   }>;
 }
 
+/**
+ * Dismiss probe failures for the specified streams.
+ * Dismissed streams won't appear in failed lists until re-probed.
+ */
+export async function dismissStreamStats(streamIds: number[]): Promise<{ dismissed: number; stream_ids: number[] }> {
+  return fetchJson(`${API_BASE}/stream-stats/dismiss`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ stream_ids: streamIds }),
+  }) as Promise<{ dismissed: number; stream_ids: number[] }>;
+}
+
+/**
+ * Clear (delete) probe stats for the specified streams.
+ * Streams will appear as 'pending' (never probed) until re-probed.
+ */
+export async function clearStreamStats(streamIds: number[]): Promise<{ cleared: number; stream_ids: number[] }> {
+  return fetchJson(`${API_BASE}/stream-stats/clear`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ stream_ids: streamIds }),
+  }) as Promise<{ cleared: number; stream_ids: number[] }>;
+}
+
+/**
+ * Get list of dismissed stream IDs.
+ */
+export async function getDismissedStreamIds(): Promise<{ dismissed_stream_ids: number[]; count: number }> {
+  return fetchJson(`${API_BASE}/stream-stats/dismissed`, {
+    method: 'GET',
+  }) as Promise<{ dismissed_stream_ids: number[]; count: number }>;
+}
+
 export interface SortConfig {
   priority: string[];
   enabled: Record<string, boolean>;

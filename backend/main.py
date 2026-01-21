@@ -4827,6 +4827,93 @@ async def reset_probe_state():
     return prober.force_reset_probe_state()
 
 
+class DismissStatsRequest(BaseModel):
+    """Request model for dismissing stream probe stats."""
+    stream_ids: list[int]
+
+
+class ClearStatsRequest(BaseModel):
+    """Request model for clearing stream probe stats."""
+    stream_ids: list[int]
+
+
+@app.post("/api/stream-stats/dismiss")
+async def dismiss_stream_stats(request: DismissStatsRequest):
+    """Dismiss probe failures for the specified streams.
+
+    Marks the streams as 'dismissed' so they don't appear in failed lists.
+    The dismissal is cleared automatically when the stream is re-probed.
+    """
+    if not request.stream_ids:
+        raise HTTPException(status_code=400, detail="stream_ids is required")
+
+    session = get_session()
+    try:
+        now = datetime.utcnow()
+        updated = session.query(StreamStats).filter(
+            StreamStats.stream_id.in_(request.stream_ids)
+        ).update(
+            {StreamStats.dismissed_at: now},
+            synchronize_session=False
+        )
+        session.commit()
+        logger.info(f"Dismissed {updated} stream stats for IDs: {request.stream_ids}")
+        return {"dismissed": updated, "stream_ids": request.stream_ids}
+    except Exception as e:
+        session.rollback()
+        logger.error(f"Failed to dismiss stream stats: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        session.close()
+
+
+@app.post("/api/stream-stats/clear")
+async def clear_stream_stats(request: ClearStatsRequest):
+    """Clear (delete) probe stats for the specified streams.
+
+    Completely removes the probe history for these streams.
+    They will appear as 'pending' (never probed) until re-probed.
+    """
+    if not request.stream_ids:
+        raise HTTPException(status_code=400, detail="stream_ids is required")
+
+    session = get_session()
+    try:
+        deleted = session.query(StreamStats).filter(
+            StreamStats.stream_id.in_(request.stream_ids)
+        ).delete(synchronize_session=False)
+        session.commit()
+        logger.info(f"Cleared {deleted} stream stats for IDs: {request.stream_ids}")
+        return {"cleared": deleted, "stream_ids": request.stream_ids}
+    except Exception as e:
+        session.rollback()
+        logger.error(f"Failed to clear stream stats: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        session.close()
+
+
+@app.get("/api/stream-stats/dismissed")
+async def get_dismissed_stream_stats():
+    """Get list of dismissed stream IDs.
+
+    Returns stream IDs that have been dismissed (failures acknowledged).
+    Used by frontend to filter out dismissed streams from probe results display.
+    """
+    session = get_session()
+    try:
+        dismissed = session.query(StreamStats.stream_id).filter(
+            StreamStats.dismissed_at.isnot(None)
+        ).all()
+        stream_ids = [s.stream_id for s in dismissed]
+        return {"dismissed_stream_ids": stream_ids, "count": len(stream_ids)}
+    except Exception as e:
+        logger.error(f"Failed to get dismissed stream stats: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        session.close()
+
+
 @app.post("/api/stream-stats/probe/{stream_id}")
 async def probe_single_stream(stream_id: int):
     """Trigger on-demand probe for a single stream."""
