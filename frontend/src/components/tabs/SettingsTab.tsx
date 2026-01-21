@@ -818,23 +818,18 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
     logger.info(`Re-probing ${failedStreamIds.length} failed streams`);
     setProbingAll(true);
     setProbeAllResult(null);
+    setProbeProgress(null);  // Reset progress to show fresh progress for re-probe
 
     try {
-      const result = await api.probeBulkStreams(failedStreamIds);
-      setProbeAllResult({
-        success: true,
-        message: `Re-probed ${result.probed} failed streams`
-      });
-
-      // Refresh probe history to show updated results
-      setTimeout(() => {
-        loadProbeHistory();
-      }, 1000);
+      // Use probeAllStreams with stream_ids filter for proper progress tracking
+      // Skip M3U refresh for re-probes (already have fresh data from initial probe)
+      const result = await api.probeAllStreams([], true, failedStreamIds);
+      setProbeAllResult({ success: true, message: result.message || `Re-probing ${failedStreamIds.length} failed streams...` });
+      // Progress polling will handle the rest - probingAll will be set to false when complete
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'Failed to re-probe streams';
       logger.error('Failed to re-probe failed streams', err);
       setProbeAllResult({ success: false, message: errorMessage });
-    } finally {
       setProbingAll(false);
     }
   };
