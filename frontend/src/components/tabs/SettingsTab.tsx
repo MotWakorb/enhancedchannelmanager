@@ -1972,11 +1972,22 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                 </span>
                 <input
                   id="maxConcurrentProbes"
-                  type="number"
-                  min="1"
-                  max="16"
+                  type="text"
+                  inputMode="numeric"
+                  pattern="[0-9]*"
                   value={maxConcurrentProbes}
-                  onChange={(e) => setMaxConcurrentProbes(Math.max(1, Math.min(16, parseInt(e.target.value) || 8)))}
+                  onChange={(e) => {
+                    const val = e.target.value.replace(/[^0-9]/g, '');
+                    if (val === '') {
+                      setMaxConcurrentProbes('' as unknown as number);
+                    } else {
+                      setMaxConcurrentProbes(parseInt(val, 10));
+                    }
+                  }}
+                  onBlur={(e) => {
+                    const val = parseInt(e.target.value, 10);
+                    setMaxConcurrentProbes(isNaN(val) ? 8 : Math.max(1, Math.min(16, val)));
+                  }}
                 />
                 {m3uAccountsMaxStreams.length > 0 && (
                   <span className="form-hint">
