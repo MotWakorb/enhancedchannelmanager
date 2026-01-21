@@ -165,11 +165,12 @@ export const StreamListItem = memo(function StreamListItem({
           className="clear-stats-btn"
           onClick={(e) => {
             e.stopPropagation();
+            console.log('Clear stats button clicked for stream:', stream.id);
             onClearStats(stream.id);
           }}
-          title="Clear probe stats"
+          title="Reset probe status"
         >
-          <span className="material-icons">clear</span>
+          <span className="material-icons">restart_alt</span>
         </button>
       )}
       {onCopyUrl && (

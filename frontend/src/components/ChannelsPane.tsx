@@ -1322,16 +1322,19 @@ export function ChannelsPane({
 
   // Handle clearing probe stats for a stream
   const handleClearStreamStats = async (streamId: number) => {
+    console.log('handleClearStreamStats called with streamId:', streamId);
     try {
-      await api.clearStreamStats([streamId]);
+      const result = await api.clearStreamStats([streamId]);
+      console.log('clearStreamStats result:', result);
       // Remove from local stats map so UI updates immediately
       setStreamStatsMap((prev) => {
         const next = new Map(prev);
         next.delete(streamId);
+        console.log('Removed streamId from stats map:', streamId);
         return next;
       });
     } catch (err) {
-      console.error('Failed to clear stream stats', err);
+      console.error('Failed to clear stream stats:', err);
     }
   };
 
