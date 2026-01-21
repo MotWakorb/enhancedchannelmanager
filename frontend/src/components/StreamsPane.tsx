@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import type { Stream, M3UAccount, ChannelGroup, ChannelProfile } from '../types';
+import type { Stream, M3UAccount, ChannelGroup, ChannelProfile, M3UGroupSetting } from '../types';
 import { useSelection, useExpandCollapse } from '../hooks';
 import { normalizeStreamName, detectRegionalVariants, filterStreamsByTimezone, detectCountryPrefixes, getUniqueCountryPrefixes, detectNetworkPrefixes, detectNetworkSuffixes, type TimezonePreference, type NormalizeOptions, type NumberSeparator, type PrefixOrder, type NormalizationSettings } from '../services/api';
 import { naturalCompare } from '../utils/naturalSort';
@@ -56,6 +56,7 @@ interface StreamsPaneProps {
   isEditMode?: boolean;
   channelGroups?: ChannelGroup[];
   selectedChannelGroups?: number[]; // IDs of enabled/visible channel groups
+  providerGroupSettings?: Record<number, M3UGroupSetting>; // For filtering out M3U-created groups
   channelProfiles?: ChannelProfile[];
   channelDefaults?: ChannelDefaults;
   // External trigger to open bulk create modal for stream groups (set by dropping on channels pane)
@@ -124,6 +125,7 @@ export function StreamsPane({
   isEditMode = false,
   channelGroups = [],
   selectedChannelGroups = [],
+  providerGroupSettings,
   channelProfiles = [],
   channelDefaults,
   externalTriggerGroupNames = null,
@@ -163,6 +165,25 @@ export function StreamsPane({
     }
     return streams.filter(stream => !mappedStreamIds.has(stream.id));
   }, [streams, hideMappedStreams, mappedStreamIds]);
+
+  // Filter channel groups to exclude M3U-created groups (for bulk create dropdown)
+  // Only show user-created groups, not groups that came from M3U providers
+  const userCreatedChannelGroups = useMemo(() => {
+    if (!providerGroupSettings) return channelGroups;
+
+    // Get set of channel group IDs that are associated with M3U providers
+    const m3uGroupIds = new Set<number>();
+    Object.values(providerGroupSettings).forEach(setting => {
+      m3uGroupIds.add(setting.channel_group);
+      // Also include group_override targets
+      if (setting.custom_properties?.group_override) {
+        m3uGroupIds.add(setting.custom_properties.group_override);
+      }
+    });
+
+    // Return only groups NOT created by M3U providers
+    return channelGroups.filter(group => !m3uGroupIds.has(group.id));
+  }, [channelGroups, providerGroupSettings]);
 
   // Shared memoized grouping logic to avoid duplication
   // Groups and sorts streams, then returns sorted entries
@@ -2003,7 +2024,7 @@ export function StreamsPane({
                                 )}
                               </div>
                               <div className="dropdown-options">
-                                {channelGroups
+                                {userCreatedChannelGroups
                                   .filter(g => !bulkCreateGroupSearch || g.name.toLowerCase().includes(bulkCreateGroupSearch.toLowerCase()))
                                   .map((g) => (
                                     <div
@@ -2018,7 +2039,7 @@ export function StreamsPane({
                                       {g.name}
                                     </div>
                                   ))}
-                                {channelGroups.filter(g => !bulkCreateGroupSearch || g.name.toLowerCase().includes(bulkCreateGroupSearch.toLowerCase())).length === 0 && (
+                                {userCreatedChannelGroups.filter(g => !bulkCreateGroupSearch || g.name.toLowerCase().includes(bulkCreateGroupSearch.toLowerCase())).length === 0 && (
                                   <div className="dropdown-no-results">No groups found</div>
                                 )}
                               </div>
