@@ -112,6 +112,19 @@ class StreamProber:
             logger.error(f"Failed to load probe history from {PROBE_HISTORY_FILE}: {e}")
             self._probe_history = []
 
+    def update_channel_groups(self, channel_groups: list[str]) -> None:
+        """Update the channel groups to probe.
+
+        This allows updating the prober's channel groups without restarting the service.
+        Called when settings are saved to ensure scheduled probes use the latest groups.
+
+        Args:
+            channel_groups: List of channel group names to probe. Empty list means all groups.
+        """
+        old_groups = self.probe_channel_groups
+        self.probe_channel_groups = channel_groups or []
+        logger.info(f"Updated probe_channel_groups: {old_groups} -> {self.probe_channel_groups}")
+
     def _persist_probe_history(self):
         """Persist probe history to disk."""
         try:
