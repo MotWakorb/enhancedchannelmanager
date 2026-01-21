@@ -163,34 +163,36 @@ export function StreamsPane({
 
   // Shared memoized grouping logic to avoid duplication
   // Groups and sorts streams, then returns sorted entries
-  // If no streams are loaded yet but we have group names, show empty groups
+  // Always show all groups from streamGroups, populated with any loaded streams
   const sortedStreamGroups = useMemo((): [string, Stream[]][] => {
     const groups = new Map<string, Stream[]>();
 
-    // If no streams loaded but we have group names from the API, show empty groups
-    // This enables lazy loading: groups are visible immediately, streams load on expand
-    if (filteredStreams.length === 0 && streamGroups.length > 0) {
-      // Create empty groups from the streamGroups list
-      streamGroups.forEach((groupName) => {
-        if (!hideUngroupedStreams || groupName !== 'Ungrouped') {
-          groups.set(groupName, []);
-        }
-      });
-    } else {
-      // Normal grouping: group streams by channel_group_name
-      filteredStreams.forEach((stream) => {
-        const groupName = stream.channel_group_name || 'Ungrouped';
+    // First, create empty entries for all known groups from the API
+    // This ensures all groups are visible even before their streams are loaded (lazy loading)
+    streamGroups.forEach((groupName) => {
+      if (!hideUngroupedStreams || groupName !== 'Ungrouped') {
+        groups.set(groupName, []);
+      }
+    });
+
+    // Then populate groups with any loaded/filtered streams
+    filteredStreams.forEach((stream) => {
+      const groupName = stream.channel_group_name || 'Ungrouped';
+      if (!hideUngroupedStreams || groupName !== 'Ungrouped') {
         if (!groups.has(groupName)) {
+          // Handle case where stream has a group not in streamGroups list
           groups.set(groupName, []);
         }
         groups.get(groupName)!.push(stream);
-      });
+      }
+    });
 
-      // Sort streams within each group alphabetically with natural sort
-      groups.forEach((groupStreams) => {
+    // Sort streams within each group alphabetically with natural sort
+    groups.forEach((groupStreams) => {
+      if (groupStreams.length > 0) {
         groupStreams.sort((a, b) => naturalCompare(a.name, b.name));
-      });
-    }
+      }
+    });
 
     // Convert to sorted array of [name, streams] tuples
     // Filter out Ungrouped if hideUngroupedStreams is true
