@@ -411,6 +411,15 @@ export function StreamsPane({
         const allGroupNames = selectedGroupsList.map(g => g.name);
         const allStreamIds = selectedGroupsList.flatMap(g => g.streams.map(s => s.id));
 
+        // Trigger lazy load for any groups that don't have streams loaded yet
+        if (onGroupExpand) {
+          selectedGroupsList.forEach(g => {
+            if (g.streams.length === 0) {
+              onGroupExpand(g.name);
+            }
+          });
+        }
+
         e.dataTransfer.setData('streamGroupNames', JSON.stringify(allGroupNames));
         e.dataTransfer.setData('streamGroupStreamIds', JSON.stringify(allStreamIds));
 
@@ -454,7 +463,7 @@ export function StreamsPane({
         setTimeout(() => document.body.removeChild(dragEl), 0);
       }
     },
-    [selectedGroupNames, groupedStreams]
+    [selectedGroupNames, groupedStreams, onGroupExpand]
   );
 
   // Bulk create handlers - apply settings defaults
@@ -1446,6 +1455,11 @@ export function StreamsPane({
                         draggable={true}
                         onDragStart={(e) => {
                           e.stopPropagation();
+                          // Trigger lazy load for this group if streams not yet loaded
+                          // This ensures streams are available when the drop completes
+                          if (group.streams.length === 0 && onGroupExpand) {
+                            onGroupExpand(group.name);
+                          }
                           handleGroupDragStart(e, group);
                         }}
                       >
