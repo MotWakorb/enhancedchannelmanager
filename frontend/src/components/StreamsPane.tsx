@@ -183,13 +183,25 @@ export function StreamsPane({
       });
     }
 
+    // DEBUG: Log filtering info
+    console.log('[StreamsPane] Channel groups filter debug:', {
+      allGroups: channelGroups.map(g => ({ id: g.id, name: g.name })),
+      m3uGroupIds: Array.from(m3uGroupIds),
+      deletedGroupIds: deletedGroupIds ? Array.from(deletedGroupIds) : 'undefined',
+      isEditMode,
+    });
+
     // Return only groups that:
     // 1. Are NOT created by M3U providers
     // 2. Are NOT staged for deletion (soft-deleted in edit mode)
-    return channelGroups.filter(group =>
+    const filtered = channelGroups.filter(group =>
       !m3uGroupIds.has(group.id) && !deletedGroupIds?.has(group.id)
     );
-  }, [channelGroups, providerGroupSettings, deletedGroupIds]);
+
+    console.log('[StreamsPane] Filtered groups:', filtered.map(g => ({ id: g.id, name: g.name })));
+
+    return filtered;
+  }, [channelGroups, providerGroupSettings, deletedGroupIds, isEditMode]);
 
   // Shared memoized grouping logic to avoid duplication
   // Groups and sorts streams, then returns sorted entries

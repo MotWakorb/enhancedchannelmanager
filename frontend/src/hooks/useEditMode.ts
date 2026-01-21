@@ -1414,14 +1414,19 @@ export function useEditMode({
 
   // Compute set of group IDs that are staged for deletion (soft-deleted)
   const deletedGroupIds = useMemo(() => {
-    if (!state.isActive) return new Set<number>();
+    if (!state.isActive) {
+      console.log('[useEditMode] Edit mode not active, returning empty deletedGroupIds');
+      return new Set<number>();
+    }
 
     const ids = new Set<number>();
     for (const op of state.stagedOperations) {
       if (op.apiCall.type === 'deleteChannelGroup') {
         ids.add(op.apiCall.groupId);
+        console.log('[useEditMode] Found deleteChannelGroup operation for group:', op.apiCall.groupId);
       }
     }
+    console.log('[useEditMode] Computed deletedGroupIds:', Array.from(ids), 'from', state.stagedOperations.length, 'staged operations');
     return ids;
   }, [state.isActive, state.stagedOperations]);
 
