@@ -452,6 +452,7 @@ class StreamProber:
             stats.probe_status = status
             stats.error_message = error_message
             stats.last_probed = datetime.utcnow()
+            stats.dismissed_at = None  # Clear dismissal when re-probed
 
             if ffprobe_data and status == "success":
                 self._parse_ffprobe_data(stats, ffprobe_data)

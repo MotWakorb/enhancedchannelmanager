@@ -252,6 +252,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   const [probeChannelGroups, setProbeChannelGroups] = useState<string[]>([]);
   const [showGroupSelectModal, setShowGroupSelectModal] = useState(false);
   const [tempProbeChannelGroups, setTempProbeChannelGroups] = useState<string[]>([]);
+  const [dismissedStreamIds, setDismissedStreamIds] = useState<Set<number>>(new Set());
   // M3U accounts for guidance on max concurrent probes
   const [m3uAccountsMaxStreams, setM3uAccountsMaxStreams] = useState<{ name: string; max_streams: number }[]>([]);
 
@@ -854,7 +855,63 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
     }
   };
 
-  const handleShowHistoryResults = (historyEntry: ProbeHistoryEntry, type: 'success' | 'failed' | 'skipped') => {
+  const loadDismissedStreamIds = async () => {
+    try {
+      const result = await api.getDismissedStreamIds();
+      setDismissedStreamIds(new Set(result.dismissed_stream_ids));
+    } catch (err) {
+      logger.warn('Failed to load dismissed stream IDs', err);
+    }
+  };
+
+  const handleDismissStream = async (streamId: number) => {
+    try {
+      await api.dismissStreamStats([streamId]);
+      setDismissedStreamIds(prev => new Set(prev).add(streamId));
+      logger.info(`Dismissed stream ${streamId}`);
+    } catch (err) {
+      logger.error('Failed to dismiss stream', err);
+    }
+  };
+
+  const handleClearStream = async (streamId: number) => {
+    try {
+      await api.clearStreamStats([streamId]);
+      // Remove from dismissed set if it was there
+      setDismissedStreamIds(prev => {
+        const next = new Set(prev);
+        next.delete(streamId);
+        return next;
+      });
+      logger.info(`Cleared stats for stream ${streamId}`);
+    } catch (err) {
+      logger.error('Failed to clear stream stats', err);
+    }
+  };
+
+  const handleDismissAllFailed = async () => {
+    if (!probeResults) return;
+    const failedIds = probeResults.failed_streams
+      .filter(s => !dismissedStreamIds.has(s.id))
+      .map(s => s.id);
+    if (failedIds.length === 0) return;
+
+    try {
+      await api.dismissStreamStats(failedIds);
+      setDismissedStreamIds(prev => {
+        const next = new Set(prev);
+        failedIds.forEach(id => next.add(id));
+        return next;
+      });
+      logger.info(`Dismissed ${failedIds.length} failed streams`);
+    } catch (err) {
+      logger.error('Failed to dismiss streams', err);
+    }
+  };
+
+  const handleShowHistoryResults = async (historyEntry: ProbeHistoryEntry, type: 'success' | 'failed' | 'skipped') => {
+    // Load dismissed IDs before showing modal
+    await loadDismissedStreamIds();
     // Use the history entry's streams for the modal
     setProbeResults({
       success_streams: historyEntry.success_streams,
@@ -2460,11 +2517,18 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
 
             <div className="probe-results-modal-body">
               {(() => {
-                const streams = probeResultsType === 'success'
+                const allStreams = probeResultsType === 'success'
                   ? probeResults.success_streams
                   : probeResultsType === 'skipped'
                   ? probeResults.skipped_streams
                   : probeResults.failed_streams;
+                // Filter out dismissed streams for failed view
+                const streams = probeResultsType === 'failed'
+                  ? allStreams.filter(s => !dismissedStreamIds.has(s.id))
+                  : allStreams;
+                const dismissedCount = probeResultsType === 'failed'
+                  ? allStreams.filter(s => dismissedStreamIds.has(s.id)).length
+                  : 0;
                 const emptyText = probeResultsType === 'success'
                   ? 'successful'
                   : probeResultsType === 'skipped'
@@ -2473,70 +2537,142 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
 
                 return streams.length === 0 ? (
                   <div className="probe-results-empty">
-                    No {emptyText} streams yet
+                    {dismissedCount > 0
+                      ? `All ${dismissedCount} failed streams have been dismissed`
+                      : `No ${emptyText} streams yet`}
                   </div>
                 ) : (
-                  <div className="probe-results-list">
-                    {streams.map((stream) => (
-                      <div
-                        key={stream.id}
-                        className={`probe-result-item ${probeResultsType === 'success' ? 'success' : probeResultsType === 'skipped' ? 'skipped' : 'failed'}`}
-                      >
-                        <div className="probe-result-item-info">
-                          <div className="probe-result-item-name">{stream.name}</div>
-                          <div className="probe-result-item-id">ID: {stream.id}</div>
-                          {probeResultsType === 'skipped' && 'reason' in stream && (stream as { reason?: string }).reason && (
-                            <div className="probe-result-item-reason" style={{ fontSize: '11px', color: '#f39c12', marginTop: '2px' }}>
-                              {(stream as { reason?: string }).reason}
-                            </div>
-                          )}
-                          {probeResultsType === 'failed' && 'error' in stream && (stream as { error?: string }).error && (
-                            <div className="probe-result-item-error" style={{ fontSize: '11px', color: '#e74c3c', marginTop: '2px' }}>
-                              {(stream as { error?: string }).error}
-                            </div>
-                          )}
-                        </div>
-                        {stream.url && (
-                          <button
-                            className="probe-result-copy-btn"
-                            onClick={() => handleCopyUrl(stream.url!)}
-                            title={copiedUrl === stream.url ? 'Copied!' : 'Copy stream URL'}
-                            style={{
-                              padding: '0.3rem 0.6rem',
-                              fontSize: '12px',
-                              backgroundColor: copiedUrl === stream.url ? 'rgba(46, 204, 113, 0.2)' : 'var(--bg-secondary)',
-                              color: copiedUrl === stream.url ? '#2ecc71' : 'var(--text-secondary)',
-                              border: '1px solid var(--border-color)',
-                              borderRadius: '4px',
-                              cursor: 'pointer',
-                              display: 'flex',
-                              alignItems: 'center',
-                              gap: '0.25rem',
-                              flexShrink: 0
-                            }}
-                          >
+                  <>
+                    {dismissedCount > 0 && (
+                      <div style={{ padding: '0.5rem 1rem', fontSize: '12px', color: 'var(--text-secondary)', backgroundColor: 'var(--bg-tertiary)', marginBottom: '0.5rem', borderRadius: '4px' }}>
+                        {dismissedCount} dismissed stream{dismissedCount !== 1 ? 's' : ''} hidden
+                      </div>
+                    )}
+                    <div className="probe-results-list">
+                      {streams.map((stream) => (
+                        <div
+                          key={stream.id}
+                          className={`probe-result-item ${probeResultsType === 'success' ? 'success' : probeResultsType === 'skipped' ? 'skipped' : 'failed'}`}
+                        >
+                          <div className="probe-result-item-info">
+                            <div className="probe-result-item-name">{stream.name}</div>
+                            <div className="probe-result-item-id">ID: {stream.id}</div>
+                            {probeResultsType === 'skipped' && 'reason' in stream && (stream as { reason?: string }).reason && (
+                              <div className="probe-result-item-reason" style={{ fontSize: '11px', color: '#f39c12', marginTop: '2px' }}>
+                                {(stream as { reason?: string }).reason}
+                              </div>
+                            )}
+                            {probeResultsType === 'failed' && 'error' in stream && (stream as { error?: string }).error && (
+                              <div className="probe-result-item-error" style={{ fontSize: '11px', color: '#e74c3c', marginTop: '2px' }}>
+                                {(stream as { error?: string }).error}
+                              </div>
+                            )}
+                          </div>
+                          <div style={{ display: 'flex', gap: '0.25rem', flexShrink: 0 }}>
+                            {probeResultsType === 'failed' && (
+                              <>
+                                <button
+                                  onClick={() => handleDismissStream(stream.id)}
+                                  title="Dismiss this failure"
+                                  style={{
+                                    padding: '0.3rem 0.6rem',
+                                    fontSize: '12px',
+                                    backgroundColor: 'var(--bg-secondary)',
+                                    color: 'var(--text-secondary)',
+                                    border: '1px solid var(--border-color)',
+                                    borderRadius: '4px',
+                                    cursor: 'pointer',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: '0.25rem'
+                                  }}
+                                >
+                                  <span className="material-icons" style={{ fontSize: '14px' }}>visibility_off</span>
+                                  Dismiss
+                                </button>
+                                <button
+                                  onClick={() => handleClearStream(stream.id)}
+                                  title="Clear probe stats for this stream"
+                                  style={{
+                                    padding: '0.3rem 0.6rem',
+                                    fontSize: '12px',
+                                    backgroundColor: 'var(--bg-secondary)',
+                                    color: 'var(--text-secondary)',
+                                    border: '1px solid var(--border-color)',
+                                    borderRadius: '4px',
+                                    cursor: 'pointer',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: '0.25rem'
+                                  }}
+                                >
+                                  <span className="material-icons" style={{ fontSize: '14px' }}>delete_outline</span>
+                                  Clear
+                                </button>
+                              </>
+                            )}
+                            {stream.url && (
+                              <button
+                                className="probe-result-copy-btn"
+                                onClick={() => handleCopyUrl(stream.url!)}
+                                title={copiedUrl === stream.url ? 'Copied!' : 'Copy stream URL'}
+                                style={{
+                                  padding: '0.3rem 0.6rem',
+                                  fontSize: '12px',
+                                  backgroundColor: copiedUrl === stream.url ? 'rgba(46, 204, 113, 0.2)' : 'var(--bg-secondary)',
+                                  color: copiedUrl === stream.url ? '#2ecc71' : 'var(--text-secondary)',
+                                  border: '1px solid var(--border-color)',
+                                  borderRadius: '4px',
+                                  cursor: 'pointer',
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  gap: '0.25rem'
+                                }}
+                              >
                             <span className="material-icons" style={{ fontSize: '14px' }}>
                               {copiedUrl === stream.url ? 'check' : 'content_copy'}
                             </span>
                             {copiedUrl === stream.url ? 'Copied' : 'Copy URL'}
                           </button>
                         )}
-                      </div>
-                    ))}
-                  </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </>
                 );
               })()}
             </div>
 
             <div className="probe-results-modal-footer">
-              {probeResultsType === 'failed' && probeResults.failed_count > 0 && (
-                <button
-                  onClick={handleRerunFailed}
-                  className="probe-results-rerun-btn"
-                  disabled={probingAll}
-                >
-                  {probingAll ? 'Re-probing...' : 'Re-probe Failed Streams'}
-                </button>
+              {probeResultsType === 'failed' && probeResults.failed_streams.filter(s => !dismissedStreamIds.has(s.id)).length > 0 && (
+                <>
+                  <button
+                    onClick={handleDismissAllFailed}
+                    style={{
+                      padding: '0.5rem 1rem',
+                      fontSize: '13px',
+                      backgroundColor: 'var(--bg-secondary)',
+                      color: 'var(--text-secondary)',
+                      border: '1px solid var(--border-color)',
+                      borderRadius: '4px',
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '0.25rem'
+                    }}
+                  >
+                    <span className="material-icons" style={{ fontSize: '16px' }}>visibility_off</span>
+                    Dismiss All
+                  </button>
+                  <button
+                    onClick={handleRerunFailed}
+                    className="probe-results-rerun-btn"
+                    disabled={probingAll}
+                  >
+                    {probingAll ? 'Re-probing...' : 'Re-probe Failed Streams'}
+                  </button>
+                </>
               )}
               <button
                 onClick={() => setShowProbeResultsModal(false)}
