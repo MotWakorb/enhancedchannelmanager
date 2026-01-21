@@ -57,9 +57,10 @@ function formatSchedule(task: TaskStatus): { summary: string; details: string[] 
   return { summary: 'Not scheduled', details: [] };
 }
 
-function TaskCard({ task, onRunNow, onToggleEnabled, onEdit, isRunning }: {
+function TaskCard({ task, onRunNow, onCancel, onToggleEnabled, onEdit, isRunning }: {
   task: TaskStatus;
   onRunNow: (taskId: string) => void;
+  onCancel: (taskId: string) => void;
   onToggleEnabled: (taskId: string, enabled: boolean) => void;
   onEdit: (task: TaskStatus) => void;
   isRunning: boolean;
@@ -117,27 +118,46 @@ function TaskCard({ task, onRunNow, onToggleEnabled, onEdit, isRunning }: {
             />
             Enabled
           </label>
-          {/* Run Now button */}
-          <button
-            onClick={() => onRunNow(task.task_id)}
-            disabled={isRunning || task.status === 'running'}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: '0.25rem',
-              padding: '0.5rem 0.75rem',
-              backgroundColor: 'var(--success)',
-              color: 'var(--success-text)',
-              border: 'none',
-              borderRadius: '4px',
-              cursor: isRunning ? 'not-allowed' : 'pointer',
-              opacity: isRunning ? 0.6 : 1,
-              fontSize: '0.85rem',
-            }}
-          >
-            <span className="material-icons" style={{ fontSize: '16px' }}>play_arrow</span>
-            Run Now
-          </button>
+          {/* Run Now / Cancel button */}
+          {(isRunning || task.status === 'running') ? (
+            <button
+              onClick={() => onCancel(task.task_id)}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.25rem',
+                padding: '0.5rem 0.75rem',
+                backgroundColor: '#e74c3c',
+                color: 'white',
+                border: 'none',
+                borderRadius: '4px',
+                cursor: 'pointer',
+                fontSize: '0.85rem',
+              }}
+            >
+              <span className="material-icons" style={{ fontSize: '16px' }}>stop</span>
+              Cancel
+            </button>
+          ) : (
+            <button
+              onClick={() => onRunNow(task.task_id)}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.25rem',
+                padding: '0.5rem 0.75rem',
+                backgroundColor: 'var(--success)',
+                color: 'var(--success-text)',
+                border: 'none',
+                borderRadius: '4px',
+                cursor: 'pointer',
+                fontSize: '0.85rem',
+              }}
+            >
+              <span className="material-icons" style={{ fontSize: '16px' }}>play_arrow</span>
+              Run Now
+            </button>
+          )}
           {/* Edit button */}
           <button
             onClick={() => onEdit(task)}
@@ -348,6 +368,33 @@ export function ScheduledTasksSection({ userTimezone: _userTimezone }: Scheduled
     }
   };
 
+  const handleCancel = async (taskId: string) => {
+    const task = tasks.find(t => t.task_id === taskId);
+    const taskName = task?.task_name || taskId;
+
+    try {
+      const result = await api.cancelTask(taskId);
+      logger.info(`Task ${taskId} cancelled`, result);
+      notifications.info(result.message || `${taskName} cancelled`, 'Task Cancelled');
+
+      // Reload tasks to get updated status
+      await loadTasks();
+    } catch (err) {
+      logger.error(`Failed to cancel task ${taskId}`, err);
+      notifications.error(
+        `Failed to cancel ${taskName}: ${err instanceof Error ? err.message : 'Unknown error'}`,
+        'Cancel Error'
+      );
+    } finally {
+      // Remove from running tasks set since it's cancelled
+      setRunningTasks((prev) => {
+        const next = new Set(prev);
+        next.delete(taskId);
+        return next;
+      });
+    }
+  };
+
   const handleToggleEnabled = async (taskId: string, enabled: boolean) => {
     try {
       await api.updateTask(taskId, { enabled });
@@ -426,6 +473,7 @@ export function ScheduledTasksSection({ userTimezone: _userTimezone }: Scheduled
             key={task.task_id}
             task={task}
             onRunNow={handleRunNow}
+            onCancel={handleCancel}
             onToggleEnabled={handleToggleEnabled}
             onEdit={setEditingTask}
             isRunning={runningTasks.has(task.task_id)}
