@@ -339,7 +339,13 @@ export function ScheduledTasksSection({ userTimezone: _userTimezone }: Scheduled
       logger.info(`Task ${taskId} completed`, result);
 
       // Show result notification
-      if (result.success) {
+      if (result.error === 'CANCELLED') {
+        // Task was cancelled - show info notification
+        notifications.info(
+          `${taskName} was cancelled. ${result.success_count} items completed before cancellation.`,
+          'Task Cancelled'
+        );
+      } else if (result.success) {
         notifications.success(
           `${taskName} completed: ${result.success_count} succeeded, ${result.failed_count} failed`,
           'Task Completed'

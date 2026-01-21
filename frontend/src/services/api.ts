@@ -1660,6 +1660,7 @@ export async function updateTask(taskId: string, config: TaskConfigUpdate): Prom
 export async function runTask(taskId: string): Promise<{
   success: boolean;
   message: string;
+  error?: string;  // "CANCELLED" when task was cancelled
   started_at: string;
   completed_at: string;
   total_items: number;
