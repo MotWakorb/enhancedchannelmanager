@@ -10,6 +10,9 @@ import httpx
 import os
 import re
 import logging
+import time
+from collections import defaultdict
+from datetime import datetime
 
 from dispatcharr_client import get_client, reset_client
 from config import (
@@ -63,6 +66,101 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# ============================================================================
+# Request Timing and Rate Tracking Middleware (for CPU diagnostics)
+# ============================================================================
+# Track request rates per endpoint to detect rapid polling
+_request_rate_tracker: dict[str, list[float]] = defaultdict(list)
+_rate_window_seconds = 10  # Track requests over 10-second window
+_rate_alert_threshold = 20  # Warn if more than 20 requests in window
+
+def _clean_old_timestamps(timestamps: list[float], window: float) -> list[float]:
+    """Remove timestamps older than the window."""
+    cutoff = time.time() - window
+    return [t for t in timestamps if t > cutoff]
+
+
+@app.middleware("http")
+async def request_timing_middleware(request: Request, call_next):
+    """Log request timing and detect rapid polling patterns."""
+    start_time = time.time()
+    path = request.url.path
+    method = request.method
+
+    # Skip static files and health checks for timing logs
+    skip_timing = path.startswith("/assets") or path == "/api/health"
+
+    # Process the request
+    response = await call_next(request)
+
+    # Calculate duration
+    duration_ms = (time.time() - start_time) * 1000
+
+    if not skip_timing:
+        # Track request rate for this endpoint
+        endpoint_key = f"{method} {path}"
+        now = time.time()
+        _request_rate_tracker[endpoint_key].append(now)
+        _request_rate_tracker[endpoint_key] = _clean_old_timestamps(
+            _request_rate_tracker[endpoint_key], _rate_window_seconds
+        )
+        request_count = len(_request_rate_tracker[endpoint_key])
+
+        # Log timing at DEBUG level
+        logger.debug(
+            f"[REQUEST] {method} {path} - {duration_ms:.1f}ms - "
+            f"status={response.status_code} - "
+            f"rate={request_count}/{_rate_window_seconds}s"
+        )
+
+        # Warn if endpoint is being hit too frequently (possible runaway loop)
+        if request_count >= _rate_alert_threshold:
+            logger.warning(
+                f"[RAPID-POLLING] {endpoint_key} hit {request_count} times in "
+                f"{_rate_window_seconds}s - possible polling issue!"
+            )
+
+        # Log slow requests at INFO level
+        if duration_ms > 1000:
+            logger.info(
+                f"[SLOW-REQUEST] {method} {path} took {duration_ms:.1f}ms"
+            )
+
+    return response
+
+
+# ============================================================================
+# Diagnostic Endpoint for Request Rate Stats
+# ============================================================================
+@app.get("/api/debug/request-rates")
+async def get_request_rates():
+    """Get current request rate statistics for all endpoints.
+
+    Useful for diagnosing CPU issues - shows which endpoints are being
+    hit most frequently.
+    """
+    now = time.time()
+    stats = {}
+    for endpoint, timestamps in _request_rate_tracker.items():
+        clean_timestamps = _clean_old_timestamps(timestamps, _rate_window_seconds)
+        if clean_timestamps:
+            stats[endpoint] = {
+                "count_last_10s": len(clean_timestamps),
+                "requests_per_second": len(clean_timestamps) / _rate_window_seconds,
+                "last_request_ago_ms": int((now - max(clean_timestamps)) * 1000),
+            }
+
+    # Sort by request count descending
+    sorted_stats = dict(sorted(stats.items(), key=lambda x: x[1]["count_last_10s"], reverse=True))
+
+    return {
+        "window_seconds": _rate_window_seconds,
+        "alert_threshold": _rate_alert_threshold,
+        "timestamp": datetime.utcnow().isoformat(),
+        "endpoints": sorted_stats,
+    }
 
 
 # Custom validation error handler to log details
@@ -763,19 +861,32 @@ async def get_channels(
     search: Optional[str] = None,
     channel_group: Optional[int] = None,
 ):
-    logger.debug(f"GET /api/channels - page: {page}, page_size: {page_size}, search: {search}, channel_group: {channel_group}")
+    start_time = time.time()
+    logger.debug(
+        f"[CHANNELS] Fetching channels - page={page}, page_size={page_size}, "
+        f"search={search}, group={channel_group}"
+    )
     client = get_client()
     try:
+        fetch_start = time.time()
         result = await client.get_channels(
             page=page,
             page_size=page_size,
             search=search,
             channel_group=channel_group,
         )
-        logger.info(f"Retrieved {len(result.get('results', []))} channels (page {page}, total: {result.get('count', 0)})")
+        fetch_time = (time.time() - fetch_start) * 1000
+        total_time = (time.time() - start_time) * 1000
+        result_count = len(result.get('results', []))
+        total_count = result.get('count', 0)
+
+        logger.debug(
+            f"[CHANNELS] Fetched {result_count} channels (total={total_count}, page={page}) "
+            f"- fetch={fetch_time:.1f}ms, total={total_time:.1f}ms"
+        )
         return result
     except Exception as e:
-        logger.exception(f"Failed to retrieve channels: {e}")
+        logger.exception(f"[CHANNELS] Failed to retrieve channels: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -2164,6 +2275,12 @@ async def get_streams(
     m3u_account: Optional[int] = None,
     bypass_cache: bool = False,
 ):
+    start_time = time.time()
+    logger.debug(
+        f"[STREAMS] Fetching streams - page={page}, page_size={page_size}, "
+        f"search={search}, group={channel_group_name}, m3u={m3u_account}, bypass_cache={bypass_cache}"
+    )
+
     cache = get_cache()
     cache_key = f"streams:p{page}:ps{page_size}:s{search or ''}:g{channel_group_name or ''}:m{m3u_account or ''}"
 
@@ -2171,11 +2288,18 @@ async def get_streams(
     if not bypass_cache:
         cached = cache.get(cache_key)
         if cached is not None:
-            logger.debug(f"Returning cached streams for {cache_key}")
+            cache_time = (time.time() - start_time) * 1000
+            result_count = len(cached.get("results", []))
+            total_count = cached.get("count", 0)
+            logger.debug(
+                f"[STREAMS] Cache HIT - returned {result_count} streams "
+                f"(total={total_count}) in {cache_time:.1f}ms"
+            )
             return cached
 
     client = get_client()
     try:
+        fetch_start = time.time()
         result = await client.get_streams(
             page=page,
             page_size=page_size,
@@ -2183,6 +2307,7 @@ async def get_streams(
             channel_group_name=channel_group_name,
             m3u_account=m3u_account,
         )
+        fetch_time = (time.time() - fetch_start) * 1000
 
         # Get channel groups for name lookup (also cached)
         groups_cache_key = "channel_groups"
@@ -2199,8 +2324,17 @@ async def get_streams(
 
         # Cache the result
         cache.set(cache_key, result)
+
+        total_time = (time.time() - start_time) * 1000
+        result_count = len(result.get("results", []))
+        total_count = result.get("count", 0)
+        logger.debug(
+            f"[STREAMS] Cache MISS - fetched {result_count} streams "
+            f"(total={total_count}) - fetch={fetch_time:.1f}ms, total={total_time:.1f}ms"
+        )
         return result
     except Exception as e:
+        logger.error(f"[STREAMS] Failed to fetch streams: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -4733,6 +4867,7 @@ class TaskConfigUpdate(BaseModel):
 @app.get("/api/tasks")
 async def list_tasks():
     """Get all registered tasks with their status, including schedules."""
+    start_time = time.time()
     try:
         from task_registry import get_registry
         from models import TaskSchedule
@@ -4763,9 +4898,15 @@ async def list_tasks():
         finally:
             session.close()
 
+        duration_ms = (time.time() - start_time) * 1000
+        running_tasks = [t.get('task_id') for t in tasks if t.get('status') == 'running']
+        logger.debug(
+            f"[TASKS] Listed {len(tasks)} tasks in {duration_ms:.1f}ms"
+            + (f" - running: {running_tasks}" if running_tasks else "")
+        )
         return {"tasks": tasks}
     except Exception as e:
-        logger.error(f"Failed to list tasks: {e}")
+        logger.error(f"[TASKS] Failed to list tasks: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
