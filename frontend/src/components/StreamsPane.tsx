@@ -99,7 +99,8 @@ interface StreamsPaneProps {
   // Set of stream IDs that are already mapped to channels (for "hide mapped" filter)
   mappedStreamIds?: Set<number>;
   // Callback when a group is expanded (for lazy loading streams)
-  onGroupExpand?: () => void;
+  // Passes the group name so only that group's streams can be loaded
+  onGroupExpand?: (groupName: string) => void;
 }
 
 export function StreamsPane({
@@ -1430,7 +1431,7 @@ export function StreamsPane({
                     onClick={() => {
                       // If group is being expanded (not currently expanded) and we have a callback, trigger lazy load
                       if (!isGroupExpanded(group.name) && onGroupExpand) {
-                        onGroupExpand();
+                        onGroupExpand(group.name);
                       }
                       toggleGroup(group.name);
                     }}

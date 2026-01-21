@@ -142,6 +142,8 @@ function App() {
 
   // Track if streams have been explicitly requested (lazy loading - don't auto-load on mount)
   const streamsExplicitlyRequested = useRef(false);
+  // Track which stream groups have been loaded (for per-group lazy loading)
+  const loadedStreamGroupsRef = useRef<Set<string>>(new Set());
 
   // Edit mode exit dialog state
   const [showExitDialog, setShowExitDialog] = useState(false);
@@ -870,6 +872,8 @@ function App() {
   // Force refresh streams from Dispatcharr (bypassing cache)
   const refreshStreams = useCallback(() => {
     streamsExplicitlyRequested.current = true;
+    // Clear loaded groups tracker so all groups reload
+    loadedStreamGroupsRef.current.clear();
     loadStreams(true);
   }, [streamFilters.search, streamFilters.providerFilter, streamFilters.groupFilter]);
 
@@ -879,6 +883,49 @@ function App() {
     if (!streamsExplicitlyRequested.current) {
       streamsExplicitlyRequested.current = true;
       loadStreams(false);
+    }
+  }, []);
+
+  // Load streams for a single group (per-group lazy loading)
+  // This allows loading only the streams for an expanded group instead of all streams
+  const loadStreamGroup = useCallback(async (groupName: string) => {
+    // Skip if this group's streams are already loaded
+    if (loadedStreamGroupsRef.current.has(groupName)) {
+      return;
+    }
+
+    // Mark as loaded immediately to prevent duplicate requests
+    loadedStreamGroupsRef.current.add(groupName);
+
+    try {
+      // Fetch streams for this specific group
+      const allGroupStreams: Stream[] = [];
+      let page = 1;
+      let hasMore = true;
+
+      while (hasMore) {
+        const response = await api.getStreams({
+          page,
+          pageSize: 500,
+          channelGroup: groupName,
+        });
+        allGroupStreams.push(...response.results);
+        hasMore = response.next !== null;
+        page++;
+      }
+
+      // Merge with existing streams (avoid duplicates by stream ID)
+      setStreams(prevStreams => {
+        const existingIds = new Set(prevStreams.map(s => s.id));
+        const newStreams = allGroupStreams.filter(s => !existingIds.has(s.id));
+        return [...prevStreams, ...newStreams];
+      });
+    } catch (err) {
+      // Remove from loaded set on error so user can retry
+      loadedStreamGroupsRef.current.delete(groupName);
+      if (err instanceof Error && err.name !== 'AbortError') {
+        logger.error(`Failed to load streams for group ${groupName}:`, err);
+      }
     }
   }, []);
 
@@ -903,6 +950,9 @@ function App() {
       setLoadingStates(prev => ({ ...prev, streams: false }));
       return;
     }
+
+    // Clear per-group loaded tracker since we're doing a full filtered load
+    loadedStreamGroupsRef.current.clear();
 
     const abortController = new AbortController();
     const timer = setTimeout(() => {
@@ -1871,8 +1921,8 @@ function App() {
               externalChannelToEdit={channelToEditFromGuide}
               onExternalChannelEditHandled={handleExternalChannelEditHandled}
 
-              // Lazy loading - trigger stream load when group expanded
-              onStreamGroupExpand={requestStreamsLoad}
+              // Lazy loading - load only the expanded group's streams
+              onStreamGroupExpand={loadStreamGroup}
             />
           )}
           {activeTab === 'm3u-manager' && (
