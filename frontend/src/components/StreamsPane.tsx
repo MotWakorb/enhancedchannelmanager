@@ -66,6 +66,8 @@ interface StreamsPaneProps {
   // Target group ID and starting number for pre-filling the bulk create modal
   externalTriggerTargetGroupId?: number | null;
   externalTriggerStartingNumber?: number | null;
+  // External trigger to open bulk create modal for manual entry (no streams pre-selected)
+  externalTriggerManualEntry?: boolean;
   onExternalTriggerHandled?: () => void;
   onBulkCreateFromGroup?: (
     streams: Stream[],
@@ -128,6 +130,7 @@ export function StreamsPane({
   externalTriggerStreamIds = null,
   externalTriggerTargetGroupId = null,
   externalTriggerStartingNumber = null,
+  externalTriggerManualEntry = false,
   onExternalTriggerHandled,
   onBulkCreateFromGroup,
   onCheckConflicts,
@@ -581,6 +584,46 @@ export function StreamsPane({
     setBulkCreateSelectedProfiles(new Set());
   }, []);
 
+  // Open bulk create modal for manual entry (no streams pre-selected)
+  const openBulkCreateModalForManualEntry = useCallback((
+    targetGroupId?: number | null,
+    startingNumber?: number | null
+  ) => {
+    setBulkCreateGroup(null);
+    setBulkCreateGroups([]);
+    setBulkCreateStreams([]);
+    // Pre-fill starting number if provided
+    setBulkCreateStartingNumber(startingNumber != null ? startingNumber.toString() : '');
+    // Pre-select group if provided
+    if (targetGroupId != null) {
+      setBulkCreateGroupOption('existing');
+      setBulkCreateSelectedGroupId(targetGroupId);
+    } else {
+      setBulkCreateGroupOption('existing');
+      setBulkCreateSelectedGroupId(null);
+    }
+    setBulkCreateNewGroupName('');
+    // Apply settings defaults
+    setBulkCreateTimezone((channelDefaults?.timezonePreference as TimezonePreference) || 'both');
+    setBulkCreateStripCountry(channelDefaults?.removeCountryPrefix ?? false);
+    setBulkCreateKeepCountry(channelDefaults?.includeCountryInName ?? false);
+    setBulkCreateCountrySeparator((channelDefaults?.countrySeparator as NumberSeparator) || '|');
+    setBulkCreateAddNumber(channelDefaults?.includeChannelNumberInName ?? false);
+    setBulkCreateSeparator((channelDefaults?.channelNumberSeparator as NumberSeparator) || '|');
+    setBulkCreatePrefixOrder('number-first');
+    setBulkCreateStripNetwork(false);
+    setBulkCreateStripSuffix(false);
+    // Apply default channel profile from settings
+    setBulkCreateSelectedProfiles(
+      channelDefaults?.defaultChannelProfileId ? new Set([channelDefaults.defaultChannelProfileId]) : new Set()
+    );
+    setNamingOptionsExpanded(false);
+    setChannelGroupExpanded(false);
+    setTimezoneExpanded(false);
+    setBulkCreateNormalizationSettings(channelDefaults?.normalizationSettings ?? { disabledBuiltinTags: [], customTags: [] });
+    setBulkCreateModalOpen(true);
+  }, [channelDefaults]);
+
   // Context menu handlers
   const closeContextMenu = useCallback(() => hideContextMenu(), [hideContextMenu]);
 
@@ -805,6 +848,18 @@ export function StreamsPane({
       onExternalTriggerHandled?.();
     }
   }, [externalTriggerStreamIds, externalTriggerTargetGroupId, externalTriggerStartingNumber, openBulkCreateModalForStreamIds, onBulkCreateFromGroup, onExternalTriggerHandled]);
+
+  // Handle external trigger to open bulk create modal for manual entry (no streams)
+  useEffect(() => {
+    if (externalTriggerManualEntry && onBulkCreateFromGroup) {
+      openBulkCreateModalForManualEntry(
+        externalTriggerTargetGroupId,
+        externalTriggerStartingNumber
+      );
+      // Signal that we've handled the trigger
+      onExternalTriggerHandled?.();
+    }
+  }, [externalTriggerManualEntry, externalTriggerTargetGroupId, externalTriggerStartingNumber, openBulkCreateModalForManualEntry, onBulkCreateFromGroup, onExternalTriggerHandled]);
 
   // Get the streams to create channels from (either from single group, multiple groups, or selection)
   const streamsToCreate = useMemo(() => {

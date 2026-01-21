@@ -161,6 +161,8 @@ function App() {
   const [droppedStreamIds, setDroppedStreamIds] = useState<number[] | null>(null);
   const [droppedStreamTargetGroupId, setDroppedStreamTargetGroupId] = useState<number | null>(null);
   const [droppedStreamStartingNumber, setDroppedStreamStartingNumber] = useState<number | null>(null);
+  // Manual entry trigger (for opening bulk create modal without pre-selected streams)
+  const [manualEntryTrigger, setManualEntryTrigger] = useState(false);
 
   // Edit mode for staging changes
   const {
@@ -1562,12 +1564,18 @@ function App() {
     setDroppedStreamStartingNumber(startingNumber);
   }, []);
 
+  // Handle open create channel modal (triggers bulk create modal in manual entry mode)
+  const handleOpenCreateChannelModal = useCallback(() => {
+    setManualEntryTrigger(true);
+  }, []);
+
   // Clear the dropped stream group/streams trigger after it's been handled
   const handleStreamGroupTriggerHandled = useCallback(() => {
     setDroppedStreamGroupNames(null);
     setDroppedStreamIds(null);
     setDroppedStreamTargetGroupId(null);
     setDroppedStreamStartingNumber(null);
+    setManualEntryTrigger(false);
   }, []);
 
   // Filter streams based on multi-select filters (client-side)
@@ -1894,9 +1902,11 @@ function App() {
               externalTriggerStreamIds={droppedStreamIds}
               externalTriggerTargetGroupId={droppedStreamTargetGroupId}
               externalTriggerStartingNumber={droppedStreamStartingNumber}
+              externalTriggerManualEntry={manualEntryTrigger}
               onExternalTriggerHandled={handleStreamGroupTriggerHandled}
               onStreamGroupDrop={handleStreamGroupDrop}
               onBulkStreamsDrop={handleBulkStreamsDrop}
+              onOpenCreateChannelModal={handleOpenCreateChannelModal}
               onBulkCreateFromGroup={handleBulkCreateFromGroup}
               onCheckConflicts={handleCheckConflicts}
               onGetHighestChannelNumber={handleGetHighestChannelNumber}

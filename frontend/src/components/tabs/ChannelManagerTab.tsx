@@ -134,11 +134,15 @@ export interface ChannelManagerTabProps {
   // Target group ID and starting number for pre-filling the bulk create modal
   externalTriggerTargetGroupId?: number | null;
   externalTriggerStartingNumber?: number | null;
+  // Manual entry trigger (opens bulk create modal without pre-selected streams)
+  externalTriggerManualEntry?: boolean;
   onExternalTriggerHandled?: () => void;
   onStreamGroupDrop?: (groupNames: string[], streamIds: number[]) => void;
   // Bulk streams drop (for opening bulk create modal when dropping multiple streams)
   // Includes target group ID and starting channel number for pre-filling the modal
   onBulkStreamsDrop?: (streamIds: number[], groupId: number | null, startingNumber: number) => void;
+  // Callback to open create channel modal (routes to bulk create modal in manual entry mode)
+  onOpenCreateChannelModal?: () => void;
   onBulkCreateFromGroup: (
     streams: Stream[],
     startingNumber: number,
@@ -299,9 +303,11 @@ export function ChannelManagerTab({
   externalTriggerStreamIds,
   externalTriggerTargetGroupId,
   externalTriggerStartingNumber,
+  externalTriggerManualEntry,
   onExternalTriggerHandled,
   onStreamGroupDrop,
   onBulkStreamsDrop,
+  onOpenCreateChannelModal,
   onBulkCreateFromGroup,
   onCheckConflicts,
   onGetHighestChannelNumber,
@@ -394,6 +400,7 @@ export function ChannelManagerTab({
           dispatcharrUrl={dispatcharrUrl}
           onStreamGroupDrop={onStreamGroupDrop}
           onBulkStreamsDrop={onBulkStreamsDrop}
+          onOpenCreateChannelModal={onOpenCreateChannelModal}
           showStreamUrls={showStreamUrls}
           epgAutoMatchThreshold={epgAutoMatchThreshold}
           gracenoteConflictMode={gracenoteConflictMode}
@@ -427,6 +434,7 @@ export function ChannelManagerTab({
           externalTriggerStreamIds={externalTriggerStreamIds}
           externalTriggerTargetGroupId={externalTriggerTargetGroupId}
           externalTriggerStartingNumber={externalTriggerStartingNumber}
+          externalTriggerManualEntry={externalTriggerManualEntry}
           onExternalTriggerHandled={onExternalTriggerHandled}
           onBulkCreateFromGroup={onBulkCreateFromGroup}
           onCheckConflicts={onCheckConflicts}
