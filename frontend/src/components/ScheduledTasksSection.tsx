@@ -383,24 +383,25 @@ export function ScheduledTasksSection({ userTimezone: _userTimezone }: Scheduled
       logger.info(`Task ${taskId} cancel requested`, result);
 
       if (result.status === 'cancelling') {
-        // Show initial notification
-        notifications.info('Cancellation requested, waiting for task to stop...', 'Cancelling');
-
         // Poll for task completion to show detailed result
+        // Don't show initial toast - wait for the detailed result
         let attempts = 0;
         const maxAttempts = 30; // 30 seconds max wait
         const pollInterval = 1000; // 1 second
+        let notificationShown = false; // Prevent duplicate notifications
 
         const pollForCompletion = async () => {
+          if (notificationShown) return; // Already showed notification
           attempts++;
           try {
             const taskStatus = await api.getTask(taskId);
             if (taskStatus.status !== 'running' && taskStatus.status !== 'scheduled') {
               // Task has stopped - check history for the result
               const history = await api.getTaskHistory(taskId, 1);
-              if (history.history.length > 0) {
+              if (history.history.length > 0 && !notificationShown) {
                 const lastExecution = history.history[0];
                 if (lastExecution.status === 'cancelled' || lastExecution.error === 'CANCELLED') {
+                  notificationShown = true;
                   notifications.info(
                     `${taskName} was cancelled. ${lastExecution.success_count} items completed before cancellation` +
                     (lastExecution.failed_count > 0 ? `, ${lastExecution.failed_count} failed` : '') +
@@ -416,7 +417,10 @@ export function ScheduledTasksSection({ userTimezone: _userTimezone }: Scheduled
             if (attempts < maxAttempts) {
               setTimeout(pollForCompletion, pollInterval);
             } else {
-              notifications.info(`${taskName} cancellation in progress`, 'Task Cancelling');
+              if (!notificationShown) {
+                notificationShown = true;
+                notifications.info(`${taskName} cancellation in progress`, 'Task Cancelling');
+              }
               await loadTasks();
             }
           } catch (pollErr) {
