@@ -2060,17 +2060,27 @@ export function StreamsPane({
                 </div>
               )}
 
-              {/* Naming Options - Collapsible Section */}
+              {/* Normalization - Collapsible Section */}
               <div className="form-group naming-options-section">
                 <div
                   className="naming-options-header"
                   onClick={() => setNamingOptionsExpanded(!namingOptionsExpanded)}
                 >
                   <span className="expand-icon">{namingOptionsExpanded ? '▼︎' : '▶︎'}</span>
-                  <span className="naming-options-title">Naming Options</span>
+                  <span className="naming-options-title">Normalization</span>
                   <span className="naming-options-summary">
                     {(() => {
                       const options: string[] = [];
+                      // Tag normalization
+                      const disabledTagCount = bulkCreateNormalizationSettings.disabledBuiltinTags.length;
+                      const customTagCount = bulkCreateNormalizationSettings.customTags.length;
+                      if (disabledTagCount > 0 || customTagCount > 0) {
+                        const tagParts: string[] = [];
+                        if (disabledTagCount > 0) tagParts.push(`${disabledTagCount} tags disabled`);
+                        if (customTagCount > 0) tagParts.push(`${customTagCount} custom`);
+                        options.push(tagParts.join(', '));
+                      }
+                      // Other normalization options
                       if (bulkCreateStripNetwork) options.push('Strip prefix');
                       if (bulkCreateStripSuffix) options.push('Strip suffix');
                       if (bulkCreateStripCountry) options.push('Remove country');
@@ -2090,6 +2100,14 @@ export function StreamsPane({
 
                 {namingOptionsExpanded && (
                   <div className="naming-options-content">
+                    {/* Tag-Based Normalization */}
+                    <div className="naming-option-group">
+                      <QuickTagManager
+                        settings={bulkCreateNormalizationSettings}
+                        onChange={setBulkCreateNormalizationSettings}
+                      />
+                    </div>
+
                     {/* Network prefix option - only show if network prefixes detected */}
                     {hasNetworkPrefixes && (
                       <div className="naming-option-group">
@@ -2272,14 +2290,6 @@ export function StreamsPane({
                     )}
                   </div>
                 )}
-              </div>
-
-              {/* Tag-Based Normalization */}
-              <div className="form-group">
-                <QuickTagManager
-                  settings={bulkCreateNormalizationSettings}
-                  onChange={setBulkCreateNormalizationSettings}
-                />
               </div>
 
               {/* Channel Profiles - Collapsible Section */}
