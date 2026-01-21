@@ -745,6 +745,17 @@ async def update_settings(request: SettingsRequest):
             prober.update_channel_groups(new_settings.probe_channel_groups)
             logger.info("Updated prober channel groups from settings")
 
+    # Update prober's parallel probing settings without requiring restart
+    if (new_settings.parallel_probing_enabled != current_settings.parallel_probing_enabled or
+            new_settings.max_concurrent_probes != current_settings.max_concurrent_probes):
+        prober = get_prober()
+        if prober:
+            prober.update_probing_settings(
+                new_settings.parallel_probing_enabled,
+                new_settings.max_concurrent_probes
+            )
+            logger.info("Updated prober parallel probing settings from settings")
+
     logger.info(f"Settings saved successfully - configured: {new_settings.is_configured()}, auth_changed: {auth_changed}")
     return {"status": "saved", "configured": new_settings.is_configured()}
 
