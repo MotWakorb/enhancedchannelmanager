@@ -330,6 +330,20 @@ class StreamProber:
             logger.error(f"Stream {stream_id} probe failed: {error_msg}")
             return self._save_probe_result(stream_id, name, None, "failed", error_msg)
 
+    async def _check_http_status(self, url: str) -> Optional[int]:
+        """Make a HEAD request to check the HTTP status code of a URL."""
+        try:
+            import httpx
+            async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
+                response = await client.head(
+                    url,
+                    headers={"User-Agent": "VLC/3.0.20 LibVLC/3.0.20"}
+                )
+                return response.status_code
+        except Exception as e:
+            logger.debug(f"HTTP status check failed for {url}: {e}")
+            return None
+
     async def _run_ffprobe(self, url: str) -> dict:
         """Run ffprobe and parse JSON output."""
         cmd = [
@@ -364,6 +378,14 @@ class StreamProber:
             error_text = stderr.decode().strip()[:500] if stderr else ""
             if not error_text:
                 error_text = f"Exit code {process.returncode} (no stderr output)"
+
+            # If ffprobe reports a vague HTTP error, check the actual status code
+            if "4XX" in error_text or "5XX" in error_text or "Server returned" in error_text:
+                status_code = await self._check_http_status(url)
+                if status_code:
+                    error_text = f"{error_text} (HTTP {status_code})"
+                    logger.info(f"[PROBE-HTTP] URL {url[:80]}... returned HTTP {status_code}")
+
             raise RuntimeError(f"ffprobe failed: {error_text}")
 
         output = stdout.decode()
