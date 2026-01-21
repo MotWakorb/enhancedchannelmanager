@@ -427,7 +427,10 @@ export function StreamsPane({
         const dragEl = document.createElement('div');
         dragEl.className = 'drag-preview';
         const totalStreams = selectedGroupsList.reduce((sum, g) => sum + g.streams.length, 0);
-        dragEl.textContent = `${selectedGroupsList.length} groups (${totalStreams} streams)`;
+        const hasUnloadedGroups = selectedGroupsList.some(g => g.streams.length === 0);
+        // Show "Loading..." if any groups haven't had their streams loaded yet
+        const streamCountText = hasUnloadedGroups ? 'Loading...' : `${totalStreams} streams`;
+        dragEl.textContent = `${selectedGroupsList.length} groups (${streamCountText})`;
         dragEl.style.cssText = `
           position: absolute;
           top: -1000px;
@@ -448,7 +451,9 @@ export function StreamsPane({
         // Custom drag image showing group info
         const dragEl = document.createElement('div');
         dragEl.className = 'drag-preview';
-        dragEl.textContent = `${group.name} (${group.streams.length} streams)`;
+        // Show "Loading..." if streams haven't been loaded yet
+        const streamCountText = group.streams.length === 0 ? 'Loading...' : `${group.streams.length} streams`;
+        dragEl.textContent = `${group.name} (${streamCountText})`;
         dragEl.style.cssText = `
           position: absolute;
           top: -1000px;
