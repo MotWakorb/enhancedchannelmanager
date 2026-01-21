@@ -982,7 +982,7 @@ class StreamProber:
 
         return sorted_ids
 
-    async def probe_all_streams(self, channel_groups_override: list[str] = None, skip_m3u_refresh: bool = False):
+    async def probe_all_streams(self, channel_groups_override: list[str] = None, skip_m3u_refresh: bool = False, stream_ids_filter: list[int] = None):
         """Probe all streams that are in channels (runs in background).
 
         Uses parallel probing - streams from different M3U accounts (or same M3U with
@@ -994,8 +994,10 @@ class StreamProber:
                                     If empty list, probes all groups.
             skip_m3u_refresh: If True, skip M3U refresh even if configured.
                              Use this for on-demand probes from the UI.
+            stream_ids_filter: Optional list of specific stream IDs to probe.
+                              If provided, only these streams will be probed (useful for re-probing failed streams).
         """
-        logger.info(f"[PROBE] probe_all_streams called with channel_groups_override={channel_groups_override}, skip_m3u_refresh={skip_m3u_refresh}")
+        logger.info(f"[PROBE] probe_all_streams called with channel_groups_override={channel_groups_override}, skip_m3u_refresh={skip_m3u_refresh}, stream_ids_filter={len(stream_ids_filter) if stream_ids_filter else 0}")
         logger.info(f"[PROBE] Settings: parallel_probing_enabled={self.parallel_probing_enabled}, max_concurrent_probes={self.max_concurrent_probes}")
         logger.debug(f"[PROBE] self.probe_channel_groups={self.probe_channel_groups}")
 
@@ -1090,6 +1092,14 @@ class StreamProber:
             # Filter to only streams that are in channels
             streams_to_probe = [s for s in all_streams if s["id"] in channel_stream_ids]
             logger.debug(f"[PROBE-MATCH] Matched {len(streams_to_probe)} streams to probe")
+
+            # If stream_ids_filter is provided, further filter to only those specific streams
+            # This is used for re-probing specific failed streams
+            if stream_ids_filter:
+                stream_ids_filter_set = set(stream_ids_filter)
+                original_count = len(streams_to_probe)
+                streams_to_probe = [s for s in streams_to_probe if s["id"] in stream_ids_filter_set]
+                logger.info(f"[PROBE-FILTER] Filtered to {len(streams_to_probe)} specific streams (from {original_count} channel streams, requested {len(stream_ids_filter)})")
 
             # Skip recently probed streams if configured
             if self.skip_recently_probed_hours > 0:
@@ -1295,11 +1305,17 @@ class StreamProber:
                             streams_started_this_round.append(stream)
 
                             # Update progress display with active streams
+                            # Show actual concurrent probe count (inside semaphore), not queued tasks
                             active_displays = [info[1] for info in active_tasks.values()]
+                            async with active_probe_count_lock:
+                                actual_concurrent = active_probe_count[0]
                             if len(active_displays) == 1:
                                 self._probe_progress_current_stream = active_displays[0]
+                            elif actual_concurrent <= 1:
+                                # Tasks queued but only 0-1 actually running
+                                self._probe_progress_current_stream = f"[{len(active_displays)} queued] {active_displays[0]}"
                             else:
-                                self._probe_progress_current_stream = f"[{len(active_displays)} parallel] {active_displays[0]}"
+                                self._probe_progress_current_stream = f"[{actual_concurrent} parallel] {active_displays[0]}"
 
                     # Remove started streams from pending
                     for stream in streams_started_this_round:
