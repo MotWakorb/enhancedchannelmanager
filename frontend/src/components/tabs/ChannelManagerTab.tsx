@@ -84,6 +84,7 @@ export interface ChannelManagerTabProps {
 
   // Provider & Filter Settings
   providerGroupSettings: Record<number, M3UGroupSetting>;
+  deletedGroupIds?: Set<number>; // Groups staged for deletion in edit mode
   channelListFilters: ChannelListFilterSettings;
   onChannelListFiltersChange: (updates: Partial<ChannelListFilterSettings>) => void;
   newlyCreatedGroupIds: Set<number>;
@@ -256,6 +257,7 @@ export function ChannelManagerTab({
 
   // Provider & Filter Settings
   providerGroupSettings,
+  deletedGroupIds,
   channelListFilters,
   onChannelListFiltersChange,
   newlyCreatedGroupIds,
@@ -429,6 +431,7 @@ export function ChannelManagerTab({
           channelGroups={channelGroups}
           selectedChannelGroups={selectedGroups}
           providerGroupSettings={providerGroupSettings}
+          deletedGroupIds={deletedGroupIds}
           channelProfiles={channelProfiles}
           channelDefaults={channelDefaults}
           externalTriggerGroupNames={externalTriggerGroupNames}
