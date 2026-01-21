@@ -102,6 +102,15 @@ def _run_migrations(engine) -> None:
                 conn.commit()
                 logger.info("Migration complete: added video_bitrate column")
 
+            # Check if dismissed_at column exists in stream_stats (v0.8.4-0059)
+            if "dismissed_at" not in columns:
+                logger.info("Adding dismissed_at column to stream_stats")
+                conn.execute(text(
+                    "ALTER TABLE stream_stats ADD COLUMN dismissed_at DATETIME"
+                ))
+                conn.commit()
+                logger.info("Migration complete: added dismissed_at column")
+
             # Migrate existing schedules from scheduled_tasks to task_schedules
             _migrate_task_schedules(conn)
 
