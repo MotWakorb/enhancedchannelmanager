@@ -1588,15 +1588,30 @@ class StreamProber:
 
     @staticmethod
     def get_stats_by_stream_ids(stream_ids: list[int]) -> dict[int, dict]:
-        """Get stats for multiple streams by their IDs."""
+        """Get stats for multiple streams by their IDs.
+
+        Uses batched queries to avoid massive IN clauses that can cause
+        performance issues with large numbers of stream IDs.
+        """
         if not stream_ids:
             return {}
+
+        # Batch size of 500 to avoid massive IN clauses
+        # SQLite handles this much better than 1900+ parameters
+        BATCH_SIZE = 500
+        result = {}
+
         session = get_session()
         try:
-            stats = session.query(StreamStats).filter(
-                StreamStats.stream_id.in_(stream_ids)
-            ).all()
-            return {s.stream_id: s.to_dict() for s in stats}
+            # Process in batches to avoid huge IN clauses
+            for i in range(0, len(stream_ids), BATCH_SIZE):
+                batch = stream_ids[i:i + BATCH_SIZE]
+                stats = session.query(StreamStats).filter(
+                    StreamStats.stream_id.in_(batch)
+                ).all()
+                for s in stats:
+                    result[s.stream_id] = s.to_dict()
+            return result
         finally:
             session.close()
 
