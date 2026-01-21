@@ -995,7 +995,8 @@ class StreamProber:
             skip_m3u_refresh: If True, skip M3U refresh even if configured.
                              Use this for on-demand probes from the UI.
         """
-        logger.debug(f"[PROBE] probe_all_streams called with channel_groups_override={channel_groups_override}, skip_m3u_refresh={skip_m3u_refresh}")
+        logger.info(f"[PROBE] probe_all_streams called with channel_groups_override={channel_groups_override}, skip_m3u_refresh={skip_m3u_refresh}")
+        logger.info(f"[PROBE] Settings: parallel_probing_enabled={self.parallel_probing_enabled}, max_concurrent_probes={self.max_concurrent_probes}")
         logger.debug(f"[PROBE] self.probe_channel_groups={self.probe_channel_groups}")
 
         if self._probing_in_progress:
@@ -1121,12 +1122,13 @@ class StreamProber:
 
             if self.parallel_probing_enabled:
                 # ========== PARALLEL PROBING MODE ==========
-                logger.info(f"Starting parallel probe of {len(streams_to_probe)} streams (filtered from {len(all_streams)} total)")
+                logger.info(f"[PROBE-PARALLEL] Starting parallel probe of {len(streams_to_probe)} streams (filtered from {len(all_streams)} total)")
+                logger.info(f"[PROBE-PARALLEL] Rate limit settings: max_concurrent_probes={self.max_concurrent_probes}")
 
                 # Global concurrency limit - max simultaneous probes regardless of M3U account
                 # This prevents system resource exhaustion when probing many streams
                 global_probe_semaphore = asyncio.Semaphore(self.max_concurrent_probes)
-                logger.info(f"Using global concurrency limit: {self.max_concurrent_probes} simultaneous probes")
+                logger.info(f"[PROBE-PARALLEL] Semaphore created with limit={self.max_concurrent_probes}")
 
                 # Track our own probe connections per M3U (separate from Dispatcharr's active connections)
                 # This lets us know how many streams WE are currently probing per M3U
@@ -1135,6 +1137,10 @@ class StreamProber:
 
                 # Results lock for thread-safe updates
                 results_lock = asyncio.Lock()
+
+                # Track active concurrent probes for debugging
+                active_probe_count = [0]  # Use list to allow modification in nested function
+                active_probe_count_lock = asyncio.Lock()
 
                 async def probe_single_stream(stream: dict, display_string: str) -> tuple[str, dict]:
                     """Probe a single stream and return (status, stream_info)."""
@@ -1153,6 +1159,14 @@ class StreamProber:
 
                     # Acquire global semaphore to limit total concurrent probes
                     async with global_probe_semaphore:
+                        # Track concurrent probe count
+                        async with active_probe_count_lock:
+                            active_probe_count[0] += 1
+                            current_count = active_probe_count[0]
+                            if current_count > self.max_concurrent_probes:
+                                logger.error(f"[PROBE-PARALLEL] RATE LIMIT EXCEEDED! active={current_count}, limit={self.max_concurrent_probes}")
+                            else:
+                                logger.debug(f"[PROBE-PARALLEL] Acquired semaphore: active={current_count}/{self.max_concurrent_probes}, stream={stream_id}")
                         try:
                             result = await self.probe_stream(stream_id, stream_url, stream_name)
                             probe_status = result.get("probe_status", "failed")
@@ -1170,6 +1184,10 @@ class StreamProber:
 
                             return (probe_status, stream_info)
                         finally:
+                            # Track concurrent probe count decrement
+                            async with active_probe_count_lock:
+                                active_probe_count[0] -= 1
+                                logger.debug(f"[PROBE-PARALLEL] Released semaphore: active={active_probe_count[0]}/{self.max_concurrent_probes}, stream={stream_id}")
                             # Release our probe connection for this M3U
                             if m3u_account_id:
                                 async with probe_connections_lock:
