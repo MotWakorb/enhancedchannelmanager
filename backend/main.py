@@ -737,6 +737,14 @@ async def update_settings(request: SettingsRequest):
         logger.info(f"Applying new backend log level: {new_settings.backend_log_level}")
         set_log_level(new_settings.backend_log_level)
 
+    # Update prober's channel groups without requiring restart
+    # This ensures scheduled probes use the latest group selection
+    if new_settings.probe_channel_groups != current_settings.probe_channel_groups:
+        prober = get_prober()
+        if prober:
+            prober.update_channel_groups(new_settings.probe_channel_groups)
+            logger.info("Updated prober channel groups from settings")
+
     logger.info(f"Settings saved successfully - configured: {new_settings.is_configured()}, auth_changed: {auth_changed}")
     return {"status": "saved", "configured": new_settings.is_configured()}
 
