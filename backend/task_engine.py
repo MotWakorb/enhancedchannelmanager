@@ -456,11 +456,11 @@ class TaskEngine:
                     user_initiated=(triggered_by == "manual"),
                 )
 
-                # Send info notification for cancellation
+                # Send warning notification for cancellation (warning type triggers alerts)
                 await self._notify_task_result(
                     task_name=instance.task_name,
                     task_id=task_id,
-                    notification_type="info",
+                    notification_type="warning",
                     title=f"Task Cancelled: {instance.task_name}",
                     message=f"Task was cancelled. {result.success_count} items completed before cancellation"
                             + (f", {result.failed_count} failed" if result.failed_count > 0 else "")
