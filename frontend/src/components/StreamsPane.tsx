@@ -1438,15 +1438,17 @@ export function StreamsPane({
                       toggleGroup(group.name);
                     }}
                     onContextMenu={(e) => handleGroupContextMenu(group, e)}
-                    draggable={isEditMode && !!onBulkCreateFromGroup}
-                    onDragStart={(e) => {
-                      if (isEditMode && onBulkCreateFromGroup) {
-                        handleGroupDragStart(e, group);
-                      }
-                    }}
                   >
                     {isEditMode && onBulkCreateFromGroup && (
-                      <span className="group-drag-handle" title="Drag to Channels pane to bulk create">
+                      <span
+                        className="group-drag-handle"
+                        title="Drag to Channels pane to bulk create"
+                        draggable={true}
+                        onDragStart={(e) => {
+                          e.stopPropagation();
+                          handleGroupDragStart(e, group);
+                        }}
+                      >
                         <span className="material-icons">drag_indicator</span>
                       </span>
                     )}
