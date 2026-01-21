@@ -172,6 +172,7 @@ function App() {
     modifiedChannelIds,
     displayChannels,
     stagedGroups,
+    deletedGroupIds,
     canLocalUndo,
     canLocalRedo,
     editModeDuration,
@@ -1871,6 +1872,7 @@ function App() {
 
               // Provider & Filter Settings
               providerGroupSettings={providerGroupSettings}
+              deletedGroupIds={deletedGroupIds}
               channelListFilters={channelListFilters}
               onChannelListFiltersChange={updateChannelListFilters}
               newlyCreatedGroupIds={newlyCreatedGroupIds}

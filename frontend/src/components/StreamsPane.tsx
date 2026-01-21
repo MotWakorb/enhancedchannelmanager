@@ -57,6 +57,7 @@ interface StreamsPaneProps {
   channelGroups?: ChannelGroup[];
   selectedChannelGroups?: number[]; // IDs of enabled/visible channel groups
   providerGroupSettings?: Record<number, M3UGroupSetting>; // For filtering out M3U-created groups
+  deletedGroupIds?: Set<number>; // Groups staged for deletion in edit mode
   channelProfiles?: ChannelProfile[];
   channelDefaults?: ChannelDefaults;
   // External trigger to open bulk create modal for stream groups (set by dropping on channels pane)
@@ -126,6 +127,7 @@ export function StreamsPane({
   channelGroups = [],
   selectedChannelGroups = [],
   providerGroupSettings,
+  deletedGroupIds,
   channelProfiles = [],
   channelDefaults,
   externalTriggerGroupNames = null,
@@ -166,8 +168,8 @@ export function StreamsPane({
     return streams.filter(stream => !mappedStreamIds.has(stream.id));
   }, [streams, hideMappedStreams, mappedStreamIds]);
 
-  // Filter channel groups to exclude M3U-created and empty groups (for bulk create dropdown)
-  // Only show active user-created groups with channels
+  // Filter channel groups to exclude M3U-created and soft-deleted groups (for bulk create dropdown)
+  // Only show active user-created groups
   const userCreatedChannelGroups = useMemo(() => {
     // Get set of channel group IDs that are associated with M3U providers
     const m3uGroupIds = new Set<number>();
@@ -183,11 +185,11 @@ export function StreamsPane({
 
     // Return only groups that:
     // 1. Are NOT created by M3U providers
-    // 2. Have at least one channel (not soft-deleted/orphaned)
+    // 2. Are NOT staged for deletion (soft-deleted in edit mode)
     return channelGroups.filter(group =>
-      !m3uGroupIds.has(group.id) && group.channel_count > 0
+      !m3uGroupIds.has(group.id) && !deletedGroupIds?.has(group.id)
     );
-  }, [channelGroups, providerGroupSettings]);
+  }, [channelGroups, providerGroupSettings, deletedGroupIds]);
 
   // Shared memoized grouping logic to avoid duplication
   // Groups and sorts streams, then returns sorted entries
