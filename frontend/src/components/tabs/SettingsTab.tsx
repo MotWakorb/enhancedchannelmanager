@@ -786,6 +786,17 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
     }
   };
 
+  const handleCancelProbe = async () => {
+    try {
+      const result = await api.cancelProbe();
+      setProbeAllResult({ success: true, message: result.message || 'Probe cancelled' });
+      // Progress polling will detect the cancelled status and update probingAll
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : 'Failed to cancel probe';
+      setProbeAllResult({ success: false, message: errorMessage });
+    }
+  };
+
   const handleResetProbeState = async () => {
     try {
       const result = await api.resetProbeState();
@@ -2067,6 +2078,23 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                   </span>
                 </div>
               )}
+              <div style={{ marginTop: '0.5rem', display: 'flex', justifyContent: 'flex-end' }}>
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  onClick={handleCancelProbe}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '0.25rem',
+                    padding: '0.4rem 0.8rem',
+                    fontSize: '0.85rem'
+                  }}
+                >
+                  <span className="material-icons" style={{ fontSize: '1rem' }}>stop</span>
+                  Cancel
+                </button>
+              </div>
             </div>
           )}
           {!probingAll && probeAllResult && (
@@ -2100,6 +2128,37 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
               </button>
             </div>
           )}
+        </div>
+      )}
+
+      {/* Reset Stuck Probe Section - only show when NOT actively probing */}
+      {!probingAll && (
+        <div className="settings-section">
+          <div className="settings-section-header">
+            <span className="material-icons">restart_alt</span>
+            <h3>Reset Probe State</h3>
+          </div>
+          <p className="form-hint" style={{ marginBottom: '1rem' }}>
+            If a probe appears stuck or was interrupted (e.g., browser closed during probe),
+            use this button to clear the probe state and allow starting a new probe.
+          </p>
+          <div className="settings-group">
+            <div style={{ display: 'flex', justifyContent: 'flex-start' }}>
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={handleResetProbeState}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.5rem'
+                }}
+              >
+                <span className="material-icons">refresh</span>
+                Reset Stuck Probe
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
