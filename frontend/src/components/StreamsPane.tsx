@@ -25,7 +25,7 @@ export interface ChannelDefaults {
   includeCountryInName: boolean;
   countrySeparator: string;
   timezonePreference: string;
-  defaultChannelProfileId?: number | null;
+  defaultChannelProfileIds?: number[];
   customNetworkPrefixes?: string[];
   customNetworkSuffixes?: string[];
   streamSortPriority?: ('resolution' | 'bitrate' | 'framerate')[];
@@ -532,7 +532,7 @@ export function StreamsPane({
     setBulkCreateStripNetwork(false); // Default to not stripping network prefixes
     // Apply default channel profile from settings
     setBulkCreateSelectedProfiles(
-      channelDefaults?.defaultChannelProfileId ? new Set([channelDefaults.defaultChannelProfileId]) : new Set()
+      channelDefaults?.defaultChannelProfileIds?.length ? new Set(channelDefaults.defaultChannelProfileIds) : new Set()
     );
     setNamingOptionsExpanded(false); // Collapse naming options
     setChannelGroupExpanded(false); // Collapse channel group options
@@ -561,7 +561,7 @@ export function StreamsPane({
     setBulkCreateStripNetwork(false); // Default to not stripping network prefixes
     // Apply default channel profile from settings
     setBulkCreateSelectedProfiles(
-      channelDefaults?.defaultChannelProfileId ? new Set([channelDefaults.defaultChannelProfileId]) : new Set()
+      channelDefaults?.defaultChannelProfileIds?.length ? new Set(channelDefaults.defaultChannelProfileIds) : new Set()
     );
     setNamingOptionsExpanded(false); // Collapse naming options
     setChannelGroupExpanded(false); // Collapse channel group options
@@ -604,7 +604,7 @@ export function StreamsPane({
     setBulkCreateStripNetwork(false);
     // Apply default channel profile from settings
     setBulkCreateSelectedProfiles(
-      channelDefaults?.defaultChannelProfileId ? new Set([channelDefaults.defaultChannelProfileId]) : new Set()
+      channelDefaults?.defaultChannelProfileIds?.length ? new Set(channelDefaults.defaultChannelProfileIds) : new Set()
     );
     setNamingOptionsExpanded(false);
     setChannelGroupExpanded(false);
@@ -654,7 +654,7 @@ export function StreamsPane({
     setBulkCreateStripSuffix(false);
     // Apply default channel profile from settings
     setBulkCreateSelectedProfiles(
-      channelDefaults?.defaultChannelProfileId ? new Set([channelDefaults.defaultChannelProfileId]) : new Set()
+      channelDefaults?.defaultChannelProfileIds?.length ? new Set(channelDefaults.defaultChannelProfileIds) : new Set()
     );
     setNamingOptionsExpanded(false);
     setChannelGroupExpanded(false);
@@ -713,7 +713,7 @@ export function StreamsPane({
     setBulkCreateStripNetwork(false);
     // Apply default channel profile from settings
     setBulkCreateSelectedProfiles(
-      channelDefaults?.defaultChannelProfileId ? new Set([channelDefaults.defaultChannelProfileId]) : new Set()
+      channelDefaults?.defaultChannelProfileIds?.length ? new Set(channelDefaults.defaultChannelProfileIds) : new Set()
     );
     setNamingOptionsExpanded(false);
     setChannelGroupExpanded(true); // Expand channel group section so user sees the "new group" option
@@ -808,7 +808,7 @@ export function StreamsPane({
     setBulkCreateStripNetwork(false);
     // Apply default channel profile from settings
     setBulkCreateSelectedProfiles(
-      channelDefaults?.defaultChannelProfileId ? new Set([channelDefaults.defaultChannelProfileId]) : new Set()
+      channelDefaults?.defaultChannelProfileIds?.length ? new Set(channelDefaults.defaultChannelProfileIds) : new Set()
     );
     setNamingOptionsExpanded(false);
     setChannelGroupExpanded(false);
@@ -844,7 +844,7 @@ export function StreamsPane({
     setBulkCreateStripNetwork(false);
     // Apply default channel profile from settings
     setBulkCreateSelectedProfiles(
-      channelDefaults?.defaultChannelProfileId ? new Set([channelDefaults.defaultChannelProfileId]) : new Set()
+      channelDefaults?.defaultChannelProfileIds?.length ? new Set(channelDefaults.defaultChannelProfileIds) : new Set()
     );
     setNamingOptionsExpanded(false);
     setChannelGroupExpanded(false);
