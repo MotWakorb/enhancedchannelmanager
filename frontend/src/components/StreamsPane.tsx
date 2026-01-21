@@ -166,23 +166,27 @@ export function StreamsPane({
     return streams.filter(stream => !mappedStreamIds.has(stream.id));
   }, [streams, hideMappedStreams, mappedStreamIds]);
 
-  // Filter channel groups to exclude M3U-created groups (for bulk create dropdown)
-  // Only show user-created groups, not groups that came from M3U providers
+  // Filter channel groups to exclude M3U-created and empty groups (for bulk create dropdown)
+  // Only show active user-created groups with channels
   const userCreatedChannelGroups = useMemo(() => {
-    if (!providerGroupSettings) return channelGroups;
-
     // Get set of channel group IDs that are associated with M3U providers
     const m3uGroupIds = new Set<number>();
-    Object.values(providerGroupSettings).forEach(setting => {
-      m3uGroupIds.add(setting.channel_group);
-      // Also include group_override targets
-      if (setting.custom_properties?.group_override) {
-        m3uGroupIds.add(setting.custom_properties.group_override);
-      }
-    });
+    if (providerGroupSettings) {
+      Object.values(providerGroupSettings).forEach(setting => {
+        m3uGroupIds.add(setting.channel_group);
+        // Also include group_override targets
+        if (setting.custom_properties?.group_override) {
+          m3uGroupIds.add(setting.custom_properties.group_override);
+        }
+      });
+    }
 
-    // Return only groups NOT created by M3U providers
-    return channelGroups.filter(group => !m3uGroupIds.has(group.id));
+    // Return only groups that:
+    // 1. Are NOT created by M3U providers
+    // 2. Have at least one channel (not soft-deleted/orphaned)
+    return channelGroups.filter(group =>
+      !m3uGroupIds.has(group.id) && group.channel_count > 0
+    );
   }, [channelGroups, providerGroupSettings]);
 
   // Shared memoized grouping logic to avoid duplication
