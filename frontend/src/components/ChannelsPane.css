@@ -1964,6 +1964,100 @@
   font-weight: 500;
 }
 
+/* Normalization Options in Modal */
+.modal-form .normalization-options {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.modal-form .original-stream-name {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  background-color: var(--bg-secondary);
+  border-radius: 4px;
+  font-size: 0.875rem;
+}
+
+.modal-form .original-label {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.modal-form .original-name {
+  color: var(--text-secondary);
+  word-break: break-word;
+}
+
+.modal-form .normalization-option {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+  font-size: 0.875rem;
+}
+
+.modal-form .normalization-option > span {
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+}
+
+.modal-form .normalization-option select {
+  padding: 0.375rem 0.5rem;
+  background-color: var(--bg-secondary);
+  border: 1px solid var(--border-secondary);
+  border-radius: 4px;
+  color: var(--text-primary);
+  font-size: 0.875rem;
+  cursor: pointer;
+}
+
+.modal-form .normalization-option select:focus {
+  outline: none;
+  border-color: var(--accent-primary);
+}
+
+.modal-form .separator-options.indent {
+  margin-left: 0;
+  margin-top: 0.25rem;
+}
+
+.modal-form .renormalize-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 0.5rem 1rem;
+  background-color: var(--button-primary-bg);
+  color: var(--button-primary-text);
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.875rem;
+  font-weight: 500;
+  margin-top: 0.25rem;
+}
+
+.modal-form .renormalize-btn:hover {
+  opacity: 0.9;
+}
+
+.modal-form .renormalize-btn .material-icons {
+  font-size: 18px;
+}
+
+.modal-form .normalization-hint {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  margin: 0;
+  padding: 0.5rem;
+  background-color: var(--bg-secondary);
+  border-radius: 4px;
+  line-height: 1.4;
+}
+
 /* Profile List in Modal */
 .modal-form .profile-list {
   display: flex;
