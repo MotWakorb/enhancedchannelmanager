@@ -1144,6 +1144,14 @@ class StreamProber:
             self._probe_progress_total = len(streams_to_probe)
             self._probe_progress_status = "probing"
 
+            # Log diagnostic info if no streams to probe
+            if len(streams_to_probe) == 0:
+                logger.warning(f"[PROBE-DIAGNOSTIC] No streams to probe! channel_stream_ids={len(channel_stream_ids)}, "
+                              f"all_streams={len(all_streams)}, stream_ids_filter={len(stream_ids_filter) if stream_ids_filter else 'None'}, "
+                              f"groups_override={channel_groups_override}, self.probe_channel_groups={self.probe_channel_groups}")
+            else:
+                logger.info(f"[PROBE-DIAGNOSTIC] Starting probe of {len(streams_to_probe)} streams")
+
             if self.parallel_probing_enabled:
                 # ========== PARALLEL PROBING MODE ==========
                 logger.info(f"[PROBE-PARALLEL] Starting parallel probe of {len(streams_to_probe)} streams (filtered from {len(all_streams)} total)")
@@ -1458,6 +1466,8 @@ class StreamProber:
                     await asyncio.sleep(0.5)  # Base rate limiting delay
 
             logger.info(f"Completed probing {probed_count} streams")
+            logger.info(f"[PROBE-DIAGNOSTIC] Final counts: success={self._probe_progress_success_count}, "
+                       f"failed={self._probe_progress_failed_count}, skipped={self._probe_progress_skipped_count}")
             self._probe_progress_status = "completed"
             self._probe_progress_current_stream = ""
 
@@ -1582,6 +1592,8 @@ class StreamProber:
 
         reorder_msg = f", {len(reordered_channels or [])} channels reordered" if reordered_channels else ""
         logger.info(f"Saved probe history entry: {total} streams, {self._probe_progress_success_count} success, {self._probe_progress_failed_count} failed, {self._probe_progress_skipped_count} skipped{reorder_msg}")
+        logger.info(f"[PROBE-DIAGNOSTIC] History entry stream lists: success_streams={len(history_entry['success_streams'])}, "
+                   f"failed_streams={len(history_entry['failed_streams'])}, skipped_streams={len(history_entry['skipped_streams'])}")
 
         # Persist to disk
         self._persist_probe_history()
