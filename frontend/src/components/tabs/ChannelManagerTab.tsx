@@ -168,7 +168,8 @@ export interface ChannelManagerTabProps {
   onExternalChannelEditHandled?: () => void;
 
   // Lazy loading - callback when a stream group is expanded
-  onStreamGroupExpand?: () => void;
+  // Passes the group name so only that group's streams can be loaded
+  onStreamGroupExpand?: (groupName: string) => void;
 }
 
 export function ChannelManagerTab({
