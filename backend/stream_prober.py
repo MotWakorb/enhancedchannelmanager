@@ -125,6 +125,23 @@ class StreamProber:
         self.probe_channel_groups = channel_groups or []
         logger.info(f"Updated probe_channel_groups: {old_groups} -> {self.probe_channel_groups}")
 
+    def update_probing_settings(self, parallel_probing_enabled: bool, max_concurrent_probes: int) -> None:
+        """Update the parallel probing settings.
+
+        This allows updating the prober's concurrency settings without restarting the service.
+        Called when settings are saved to ensure probes use the latest limits.
+
+        Args:
+            parallel_probing_enabled: Whether to enable parallel probing.
+            max_concurrent_probes: Max simultaneous probes (clamped to 1-16).
+        """
+        old_parallel = self.parallel_probing_enabled
+        old_concurrent = self.max_concurrent_probes
+        self.parallel_probing_enabled = parallel_probing_enabled
+        self.max_concurrent_probes = max(1, min(16, max_concurrent_probes))
+        logger.info(f"Updated probing settings: parallel_probing_enabled={old_parallel}->{self.parallel_probing_enabled}, "
+                    f"max_concurrent_probes={old_concurrent}->{self.max_concurrent_probes}")
+
     def _persist_probe_history(self):
         """Persist probe history to disk."""
         try:
