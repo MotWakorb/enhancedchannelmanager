@@ -2563,8 +2563,16 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                               </div>
                             )}
                             {probeResultsType === 'failed' && 'error' in stream && (stream as { error?: string }).error && (
-                              <div className="probe-result-item-error" style={{ fontSize: '11px', color: '#e74c3c', marginTop: '2px' }}>
-                                {(stream as { error?: string }).error}
+                              <div className="probe-result-item-error" style={{
+                                fontSize: '12px',
+                                color: '#e74c3c',
+                                marginTop: '4px',
+                                padding: '4px 8px',
+                                backgroundColor: 'rgba(231, 76, 60, 0.1)',
+                                borderRadius: '4px',
+                                borderLeft: '3px solid #e74c3c'
+                              }}>
+                                <strong>Error:</strong> {(stream as { error?: string }).error}
                               </div>
                             )}
                           </div>
