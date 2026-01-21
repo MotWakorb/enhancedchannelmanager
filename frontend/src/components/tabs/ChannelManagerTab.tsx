@@ -428,6 +428,7 @@ export function ChannelManagerTab({
           isEditMode={isEditMode}
           channelGroups={channelGroups}
           selectedChannelGroups={selectedGroups}
+          providerGroupSettings={providerGroupSettings}
           channelProfiles={channelProfiles}
           channelDefaults={channelDefaults}
           externalTriggerGroupNames={externalTriggerGroupNames}
