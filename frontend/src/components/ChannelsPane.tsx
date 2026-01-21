@@ -723,6 +723,12 @@ export function ChannelsPane({
   const [newChannelAddNumber, setNewChannelAddNumber] = useState(false);
   const [newChannelNumberSeparator, setNewChannelNumberSeparator] = useState<NumberSeparator>('-');
   const [newChannelStripCountry, setNewChannelStripCountry] = useState(false);
+  // Normalization options state for single channel create
+  const [newChannelNormalizationExpanded, setNewChannelNormalizationExpanded] = useState(false);
+  const [newChannelOriginalStreamName, setNewChannelOriginalStreamName] = useState<string | null>(null);
+  const [newChannelTimezoneOverride, setNewChannelTimezoneOverride] = useState<api.TimezonePreference | 'default'>('default');
+  const [newChannelCountryPrefixMode, setNewChannelCountryPrefixMode] = useState<'default' | 'strip' | 'keep'>('default');
+  const [newChannelCountrySeparator, setNewChannelCountrySeparator] = useState<NumberSeparator>('|');
   const [groupSearchText, setGroupSearchText] = useState('');
   const [showGroupDropdown, setShowGroupDropdown] = useState(false);
   const [creating, setCreating] = useState(false);
@@ -2122,6 +2128,45 @@ export function ChannelsPane({
     setNewChannelStreamIds([]);
     setGroupSearchText('');
     setShowGroupDropdown(false);
+    // Reset normalization options
+    setNewChannelOriginalStreamName(null);
+    setNewChannelNormalizationExpanded(false);
+    setNewChannelTimezoneOverride('default');
+    setNewChannelCountryPrefixMode('default');
+  };
+
+  // Re-normalize the channel name using selected normalization options
+  const handleRenormalizeChannelName = () => {
+    if (!newChannelOriginalStreamName) return;
+
+    // Build normalization options based on modal settings and defaults
+    const timezoneToUse: api.TimezonePreference =
+      newChannelTimezoneOverride === 'default'
+        ? (channelDefaults?.timezonePreference as api.TimezonePreference) ?? 'both'
+        : newChannelTimezoneOverride;
+
+    const stripCountry = newChannelCountryPrefixMode === 'strip';
+    const keepCountry = newChannelCountryPrefixMode === 'keep' ||
+      (newChannelCountryPrefixMode === 'default' && channelDefaults?.includeCountryInName);
+
+    const normalizeOptions: api.NormalizeOptions = {
+      timezonePreference: timezoneToUse,
+      stripCountryPrefix: stripCountry,
+      keepCountryPrefix: keepCountry,
+      countrySeparator: keepCountry
+        ? (newChannelCountryPrefixMode === 'default'
+            ? (channelDefaults?.countrySeparator as '-' | ':' | '|') ?? '|'
+            : newChannelCountrySeparator)
+        : undefined,
+      stripNetworkPrefix: true,
+      stripNetworkSuffix: true,
+      customNetworkPrefixes: channelDefaults?.customNetworkPrefixes,
+      customNetworkSuffixes: channelDefaults?.customNetworkSuffixes,
+      normalizationSettings: channelDefaults?.normalizationSettings,
+    };
+
+    const normalizedName = api.normalizeStreamName(newChannelOriginalStreamName, normalizeOptions);
+    setNewChannelName(normalizedName);
   };
 
   // Load hidden groups
@@ -2272,6 +2317,14 @@ export function ChannelsPane({
     const normalizedName = api.normalizeStreamName(firstStream.name, normalizeOptions);
     setNewChannelName(normalizedName);
 
+    // Store original stream name for re-normalization
+    setNewChannelOriginalStreamName(firstStream.name);
+    // Reset normalization options to defaults
+    setNewChannelNormalizationExpanded(false);
+    setNewChannelTimezoneOverride('default');
+    setNewChannelCountryPrefixMode('default');
+    setNewChannelCountrySeparator((channelDefaults?.countrySeparator as NumberSeparator) ?? '|');
+
     // Find matching logo by URL if stream has a logo_url
     // Always capture the logo_url for fallback during commit
     setNewChannelLogoUrl(firstStream.logo_url ?? null);
@@ -2363,6 +2416,14 @@ export function ChannelsPane({
     // Normalize the stream name using settings (includes disabled/custom tags)
     const normalizedName = api.normalizeStreamName(firstStream.name, normalizeOptions);
     setNewChannelName(normalizedName);
+
+    // Store original stream name for re-normalization
+    setNewChannelOriginalStreamName(firstStream.name);
+    // Reset normalization options to defaults
+    setNewChannelNormalizationExpanded(false);
+    setNewChannelTimezoneOverride('default');
+    setNewChannelCountryPrefixMode('default');
+    setNewChannelCountrySeparator((channelDefaults?.countrySeparator as NumberSeparator) ?? '|');
 
     // Find matching logo by URL if stream has a logo_url
     setNewChannelLogoUrl(firstStream.logo_url ?? null);
@@ -5082,6 +5143,115 @@ export function ChannelsPane({
                   </div>
                 )}
               </div>
+
+              {/* Name Normalization Section - only show when stream was dragged in */}
+              {newChannelOriginalStreamName && (
+                <div className="collapsible-section">
+                  <button
+                    type="button"
+                    className={`collapsible-header ${newChannelNormalizationExpanded ? 'expanded' : ''}`}
+                    onClick={() => setNewChannelNormalizationExpanded(!newChannelNormalizationExpanded)}
+                  >
+                    <span className="material-icons">
+                      {newChannelNormalizationExpanded ? 'expand_more' : 'chevron_right'}
+                    </span>
+                    <span>Name Normalization</span>
+                    <span className="collapsible-summary">
+                      {(() => {
+                        const options: string[] = [];
+                        if (newChannelTimezoneOverride !== 'default') {
+                          options.push(newChannelTimezoneOverride === 'east' ? 'East' : newChannelTimezoneOverride === 'west' ? 'West' : 'Both');
+                        }
+                        if (newChannelCountryPrefixMode !== 'default') {
+                          options.push(newChannelCountryPrefixMode === 'strip' ? 'Strip country' : 'Keep country');
+                        }
+                        return options.length > 0 ? options.join(', ') : 'Using defaults';
+                      })()}
+                    </span>
+                  </button>
+                  {newChannelNormalizationExpanded && (
+                    <div className="collapsible-content normalization-options">
+                      {/* Original stream name display */}
+                      <div className="original-stream-name">
+                        <span className="original-label">Original:</span>
+                        <span className="original-name">{newChannelOriginalStreamName}</span>
+                      </div>
+
+                      {/* Timezone preference */}
+                      <label className="normalization-option">
+                        <span>Timezone preference:</span>
+                        <select
+                          value={newChannelTimezoneOverride}
+                          onChange={(e) => setNewChannelTimezoneOverride(e.target.value as api.TimezonePreference | 'default')}
+                        >
+                          <option value="default">Use default ({channelDefaults?.timezonePreference ?? 'both'})</option>
+                          <option value="east">East Coast (prefer East feeds)</option>
+                          <option value="west">West Coast (prefer West feeds)</option>
+                          <option value="both">Keep Both</option>
+                        </select>
+                      </label>
+
+                      {/* Country prefix handling */}
+                      <label className="normalization-option">
+                        <span>Country prefix:</span>
+                        <select
+                          value={newChannelCountryPrefixMode}
+                          onChange={(e) => setNewChannelCountryPrefixMode(e.target.value as 'default' | 'strip' | 'keep')}
+                        >
+                          <option value="default">
+                            Use default ({channelDefaults?.includeCountryInName ? 'Keep' : 'Strip'})
+                          </option>
+                          <option value="strip">Strip country prefix</option>
+                          <option value="keep">Keep with separator</option>
+                        </select>
+                      </label>
+
+                      {/* Country separator - only show when keep is selected */}
+                      {newChannelCountryPrefixMode === 'keep' && (
+                        <div className="separator-options indent">
+                          <span className="separator-label">Separator:</span>
+                          <button
+                            type="button"
+                            className={`separator-btn ${newChannelCountrySeparator === '-' ? 'active' : ''}`}
+                            onClick={() => setNewChannelCountrySeparator('-')}
+                          >
+                            -
+                          </button>
+                          <button
+                            type="button"
+                            className={`separator-btn ${newChannelCountrySeparator === ':' ? 'active' : ''}`}
+                            onClick={() => setNewChannelCountrySeparator(':')}
+                          >
+                            :
+                          </button>
+                          <button
+                            type="button"
+                            className={`separator-btn ${newChannelCountrySeparator === '|' ? 'active' : ''}`}
+                            onClick={() => setNewChannelCountrySeparator('|')}
+                          >
+                            |
+                          </button>
+                        </div>
+                      )}
+
+                      {/* Re-normalize button */}
+                      <button
+                        type="button"
+                        className="renormalize-btn"
+                        onClick={handleRenormalizeChannelName}
+                      >
+                        <span className="material-icons">refresh</span>
+                        Apply Normalization
+                      </button>
+
+                      <p className="normalization-hint">
+                        Tag-based normalization (removing network prefixes, quality suffixes, etc.)
+                        uses settings from Settings → Channel Normalization.
+                      </p>
+                    </div>
+                  )}
+                </div>
+              )}
 
               {/* Channel Profiles Section */}
               {channelProfiles.length > 0 && (
