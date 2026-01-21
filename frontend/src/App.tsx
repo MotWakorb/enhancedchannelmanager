@@ -140,6 +140,9 @@ function App() {
   // Track if channel group filter has been auto-initialized
   const channelGroupFilterInitialized = useRef(false);
 
+  // Track if streams have been explicitly requested (lazy loading - don't auto-load on mount)
+  const streamsExplicitlyRequested = useRef(false);
+
   // Edit mode exit dialog state
   const [showExitDialog, setShowExitDialog] = useState(false);
   const [commitProgress, setCommitProgress] = useState<CommitProgress | null>(null);
@@ -478,7 +481,8 @@ function App() {
         loadProviders();
         loadProviderGroupSettings();
         loadStreamGroups();
-        loadStreams();
+        // NOTE: Streams are loaded lazily when user interacts with the streams pane
+        // This prevents loading 27,000+ streams on app startup which causes high CPU
         loadLogos();
         loadStreamProfiles();
         loadChannelProfiles();
@@ -652,7 +656,10 @@ function App() {
     loadProviders();
     loadProviderGroupSettings();
     loadStreamGroups();
-    loadStreams();
+    // Only reload streams if they were already loaded (lazy loading preservation)
+    if (streamsExplicitlyRequested.current) {
+      loadStreams();
+    }
     loadLogos();
     loadStreamProfiles();
     loadChannelProfiles();
@@ -694,18 +701,21 @@ function App() {
     });
   }, []);
 
-  // Wrapper functions to persist stream filters to localStorage
+  // Wrapper functions to persist stream filters to localStorage (also triggers lazy stream loading)
   const updateSelectedProviderFilters = useCallback((providerIds: number[]) => {
+    streamsExplicitlyRequested.current = true;
     setStreamFilters(prev => ({ ...prev, selectedProviders: providerIds }));
     localStorage.setItem('streamProviderFilters', JSON.stringify(providerIds));
   }, []);
 
   const updateSelectedStreamGroupFilters = useCallback((groups: string[]) => {
+    streamsExplicitlyRequested.current = true;
     setStreamFilters(prev => ({ ...prev, selectedGroups: groups }));
     localStorage.setItem('streamGroupFilters', JSON.stringify(groups));
   }, []);
 
   const clearStreamFilters = useCallback(() => {
+    streamsExplicitlyRequested.current = true;
     setStreamFilters(prev => ({ ...prev, selectedProviders: [], selectedGroups: [] }));
     localStorage.removeItem('streamProviderFilters');
     localStorage.removeItem('streamGroupFilters');
@@ -859,8 +869,18 @@ function App() {
 
   // Force refresh streams from Dispatcharr (bypassing cache)
   const refreshStreams = useCallback(() => {
+    streamsExplicitlyRequested.current = true;
     loadStreams(true);
   }, [streamFilters.search, streamFilters.providerFilter, streamFilters.groupFilter]);
+
+  // Request streams to be loaded (lazy loading trigger)
+  // Call this when user interacts with streams (e.g., expands streams pane, searches)
+  const requestStreamsLoad = useCallback(() => {
+    if (!streamsExplicitlyRequested.current) {
+      streamsExplicitlyRequested.current = true;
+      loadStreams(false);
+    }
+  }, []);
 
   // Reload channels when search changes
   useEffect(() => {
@@ -874,8 +894,16 @@ function App() {
     };
   }, [channelFilters.search]);
 
-  // Reload streams when filters change
+  // Reload streams when filters change - but only if explicitly requested
+  // This prevents loading 27,000+ streams on app startup which causes high CPU
   useEffect(() => {
+    // Skip loading on initial mount - streams are loaded lazily when user interacts
+    if (!streamsExplicitlyRequested.current) {
+      // Set loading to false since we're not actually loading
+      setLoadingStates(prev => ({ ...prev, streams: false }));
+      return;
+    }
+
     const abortController = new AbortController();
     const timer = setTimeout(() => {
       loadStreams(false, abortController.signal);
@@ -1797,13 +1825,13 @@ function App() {
               streamGroups={streamGroups}
               streamsLoading={loadingStates.streams}
 
-              // Stream Search & Filter
+              // Stream Search & Filter (triggers lazy stream loading)
               streamSearch={streamFilters.search}
-              onStreamSearchChange={(search) => setStreamFilters(prev => ({ ...prev, search }))}
+              onStreamSearchChange={(search) => { requestStreamsLoad(); setStreamFilters(prev => ({ ...prev, search })); }}
               streamProviderFilter={streamFilters.providerFilter}
-              onStreamProviderFilterChange={(providerFilter) => setStreamFilters(prev => ({ ...prev, providerFilter }))}
+              onStreamProviderFilterChange={(providerFilter) => { requestStreamsLoad(); setStreamFilters(prev => ({ ...prev, providerFilter })); }}
               streamGroupFilter={streamFilters.groupFilter}
-              onStreamGroupFilterChange={(groupFilter) => setStreamFilters(prev => ({ ...prev, groupFilter }))}
+              onStreamGroupFilterChange={(groupFilter) => { requestStreamsLoad(); setStreamFilters(prev => ({ ...prev, groupFilter })); }}
               selectedProviders={streamFilters.selectedProviders}
               onSelectedProvidersChange={updateSelectedProviderFilters}
               selectedStreamGroups={streamFilters.selectedGroups}
