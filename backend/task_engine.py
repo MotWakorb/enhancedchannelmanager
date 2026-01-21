@@ -405,7 +405,13 @@ class TaskEngine:
                     if execution:
                         execution.completed_at = result.completed_at
                         execution.duration_seconds = result.duration_seconds
-                        execution.status = "completed" if result.success else "failed"
+                        # Set status based on result: completed, cancelled, or failed
+                        if result.error == "CANCELLED":
+                            execution.status = "cancelled"
+                        elif result.success:
+                            execution.status = "completed"
+                        else:
+                            execution.status = "failed"
                         execution.success = result.success
                         execution.message = result.message
                         execution.error = result.error
