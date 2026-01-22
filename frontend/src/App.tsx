@@ -11,6 +11,7 @@ import * as api from './services/api';
 import type { Channel, ChannelGroup, ChannelProfile, Stream, M3UAccount, M3UGroupSetting, Logo, ChangeInfo, EPGData, StreamProfile, EPGSource, ChannelListFilterSettings, CommitProgress } from './types';
 import packageJson from '../package.json';
 import { logger } from './utils/logger';
+import { computeAutoRename } from './utils/channelRename';
 import { registerVLCModalCallback, downloadM3U } from './utils/vlc';
 import { VLCProtocolHelperModal } from './components/VLCProtocolHelperModal';
 import { NotificationCenter } from './components/NotificationCenter';
@@ -1394,7 +1395,25 @@ function App() {
             const newNum = hasDecimalShift
               ? Math.round(rawNewNum * 10) / 10
               : rawNewNum;
-            stageUpdateChannel(ch.id, { channel_number: newNum }, `Shifted channel ${ch.channel_number} to ${newNum} to make room`);
+
+            // Apply auto-rename if enabled
+            const newName = autoRenameChannelNumber
+              ? computeAutoRename(ch.name, ch.channel_number, newNum)
+              : undefined;
+
+            if (newName) {
+              stageUpdateChannel(
+                ch.id,
+                { channel_number: newNum, name: newName },
+                `Shifted "${ch.name}" to "${newName}" (channel ${ch.channel_number} → ${newNum})`
+              );
+            } else {
+              stageUpdateChannel(
+                ch.id,
+                { channel_number: newNum },
+                `Shifted channel ${ch.channel_number} to ${newNum} to make room`
+              );
+            }
           }
         }
 
