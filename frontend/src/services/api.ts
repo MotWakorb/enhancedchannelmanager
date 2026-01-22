@@ -438,6 +438,23 @@ export async function refreshM3UVod(id: number): Promise<{ success: boolean; mes
   });
 }
 
+// M3U Stream Metadata - parsed directly from M3U file
+export interface M3UStreamMetadataEntry {
+  'tvc-guide-stationid'?: string;
+  'tvg-name'?: string;
+  'tvg-logo'?: string;
+  'group-title'?: string;
+}
+
+export interface M3UStreamMetadataResponse {
+  metadata: Record<string, M3UStreamMetadataEntry>;  // keyed by tvg-id
+  count: number;
+}
+
+export async function getM3UStreamMetadata(accountId: number): Promise<M3UStreamMetadataResponse> {
+  return fetchJson(`${API_BASE}/m3u/accounts/${accountId}/stream-metadata`);
+}
+
 // M3U Filters
 export async function getM3UFilters(accountId: number): Promise<M3UFilter[]> {
   return fetchJson(`${API_BASE}/m3u/accounts/${accountId}/filters`);

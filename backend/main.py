@@ -3273,6 +3273,86 @@ async def get_m3u_account(account_id: int):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/api/m3u/accounts/{account_id}/stream-metadata")
+async def get_m3u_stream_metadata(account_id: int):
+    """Fetch and parse M3U file to extract stream metadata (tvg-id -> tvc-guide-stationid mapping).
+
+    This parses the M3U file directly to get attributes like tvc-guide-stationid
+    that Dispatcharr doesn't expose via its API.
+    """
+    client = get_client()
+    try:
+        # Get the M3U account details
+        account = await client.get_m3u_account(account_id)
+
+        # Construct the M3U URL based on account type
+        account_type = account.get("account_type", "M3U")
+        server_url = account.get("server_url")
+
+        if not server_url:
+            raise HTTPException(status_code=400, detail="M3U account has no server URL")
+
+        if account_type == "XC":
+            # XtreamCodes: construct M3U URL from credentials
+            username = account.get("username", "")
+            password = account.get("password", "")
+            # Remove trailing slash from server_url if present
+            base_url = server_url.rstrip("/")
+            m3u_url = f"{base_url}/get.php?username={username}&password={password}&type=m3u_plus&output=ts"
+        else:
+            # Standard M3U: server_url is the direct URL
+            m3u_url = server_url
+
+        # Fetch the M3U file
+        async with httpx.AsyncClient(timeout=60.0) as http_client:
+            response = await http_client.get(m3u_url, follow_redirects=True)
+            response.raise_for_status()
+            m3u_content = response.text
+
+        # Parse EXTINF lines to extract metadata
+        # Format: #EXTINF:-1 tvg-id="ID" tvc-guide-stationid="12345" ...,Channel Name
+        metadata = {}
+
+        # Regex to match key="value" or key=value patterns in EXTINF lines
+        attr_pattern = re.compile(r'([\w-]+)=["\']?([^"\'>\s,]+)["\']?')
+
+        lines = m3u_content.split('\n')
+        for line in lines:
+            line = line.strip()
+            if line.startswith('#EXTINF:'):
+                # Extract all attributes from the EXTINF line
+                attrs = dict(attr_pattern.findall(line))
+
+                tvg_id = attrs.get('tvg-id')
+                tvc_station_id = attrs.get('tvc-guide-stationid')
+
+                # Only include entries that have a tvg-id (needed for matching)
+                if tvg_id:
+                    entry = {}
+                    if tvc_station_id:
+                        entry['tvc-guide-stationid'] = tvc_station_id
+                    # Include other useful attributes
+                    if 'tvg-name' in attrs:
+                        entry['tvg-name'] = attrs['tvg-name']
+                    if 'tvg-logo' in attrs:
+                        entry['tvg-logo'] = attrs['tvg-logo']
+                    if 'group-title' in attrs:
+                        entry['group-title'] = attrs['group-title']
+
+                    if entry:  # Only add if we have at least one attribute
+                        metadata[tvg_id] = entry
+
+        logger.info(f"Parsed M3U metadata for account {account_id}: {len(metadata)} entries with tvg-id")
+        return {"metadata": metadata, "count": len(metadata)}
+
+    except httpx.HTTPError as e:
+        logger.error(f"Failed to fetch M3U file for account {account_id}: {e}")
+        raise HTTPException(status_code=502, detail=f"Failed to fetch M3U file: {str(e)}")
+    except Exception as e:
+        logger.error(f"Failed to parse M3U metadata for account {account_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.post("/api/m3u/accounts")
 async def create_m3u_account(request: Request):
     """Create a new M3U account."""

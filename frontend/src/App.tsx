@@ -1380,6 +1380,50 @@ function App() {
         const mergedCount = filteredStreams.length - streamsByNormalizedName.size;
         const channelCount = streamsByNormalizedName.size;
 
+        // Fetch M3U metadata to get tvc-guide-stationid (Gracenote ID) for streams
+        // This data isn't exposed by Dispatcharr's API, so we parse the M3U file directly
+        const m3uMetadataMap = new Map<string, string>(); // tvg_id -> tvc-guide-stationid
+        try {
+          // Get unique M3U account IDs from the streams
+          const m3uAccountIds = new Set<number>();
+          for (const stream of filteredStreams) {
+            if (stream.m3u_account !== null) {
+              m3uAccountIds.add(stream.m3u_account);
+            }
+          }
+
+          // Fetch metadata for each M3U account
+          const metadataPromises = Array.from(m3uAccountIds).map(async (accountId) => {
+            try {
+              const response = await api.getM3UStreamMetadata(accountId);
+              return response.metadata;
+            } catch (err) {
+              logger.warn(`Failed to fetch M3U metadata for account ${accountId}:`, err);
+              return null;
+            }
+          });
+
+          const metadataResults = await Promise.all(metadataPromises);
+
+          // Build combined map of tvg_id -> tvc-guide-stationid
+          for (const metadata of metadataResults) {
+            if (metadata) {
+              for (const [tvgId, entry] of Object.entries(metadata)) {
+                if (entry['tvc-guide-stationid']) {
+                  m3uMetadataMap.set(tvgId, entry['tvc-guide-stationid']);
+                }
+              }
+            }
+          }
+
+          if (m3uMetadataMap.size > 0) {
+            logger.info(`Loaded ${m3uMetadataMap.size} Gracenote ID mappings from M3U metadata`);
+          }
+        } catch (err) {
+          logger.warn('Failed to fetch M3U metadata for Gracenote IDs:', err);
+          // Continue without Gracenote IDs - not a critical error
+        }
+
         // Start a batch for all channel operations
         startBatch(`Create ${channelCount} channels from streams`);
 
@@ -1515,6 +1559,12 @@ function App() {
             }
             // Stop early if we found all three
             if (logoUrl && tvgId && tvcGuideStationId) break;
+          }
+
+          // If we didn't find Gracenote ID from stream but have tvg_id, look up from M3U metadata
+          // This gets the data directly from the M3U file since Dispatcharr doesn't expose it via API
+          if (!tvcGuideStationId && tvgId && m3uMetadataMap.has(tvgId)) {
+            tvcGuideStationId = m3uMetadataMap.get(tvgId);
           }
 
           // Create the channel (returns temp ID)
