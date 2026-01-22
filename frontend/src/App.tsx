@@ -1969,6 +1969,7 @@ function App() {
               channelProfiles={channelProfiles}
               streamProfiles={streamProfiles}
               onChannelGroupsChange={loadChannelGroups}
+              onAccountsChange={loadProviders}
               hideM3uUrls={hideM3uUrls}
             />
           )}
