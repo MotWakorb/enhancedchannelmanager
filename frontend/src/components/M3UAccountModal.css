@@ -13,13 +13,12 @@
 /* Radio button group */
 .radio-group {
   display: flex;
-  gap: 1.5rem;
+  gap: 1rem;
 }
 
 .radio-label {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
   cursor: pointer;
   color: var(--text-secondary);
 }
@@ -27,6 +26,7 @@
 .radio-label input[type="radio"] {
   width: auto;
   margin: 0;
+  margin-right: 0.4rem;
   cursor: pointer;
   accent-color: var(--accent-primary);
 }
