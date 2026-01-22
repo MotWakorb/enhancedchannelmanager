@@ -89,6 +89,7 @@ export interface EPGProgram {
   sub_title?: string | null;
   description?: string | null;
   tvg_id?: string | null;
+  channel_uuid?: string | null;  // Used by dummy EPG sources to match via channel UUID
 }
 
 export interface StreamProfile {
