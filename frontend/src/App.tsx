@@ -892,6 +892,7 @@ function App() {
 
   // Load streams for a single group (per-group lazy loading)
   // This allows loading only the streams for an expanded group instead of all streams
+  // When search is active, loads only matching streams for that group
   const loadStreamGroup = useCallback(async (groupName: string) => {
     // Skip if this group's streams are already loaded
     if (loadedStreamGroupsRef.current.has(groupName)) {
@@ -902,7 +903,7 @@ function App() {
     loadedStreamGroupsRef.current.add(groupName);
 
     try {
-      // Fetch streams for this specific group
+      // Fetch streams for this specific group (with search filter if active)
       const allGroupStreams: Stream[] = [];
       let page = 1;
       let hasMore = true;
@@ -912,6 +913,7 @@ function App() {
           page,
           pageSize: 500,
           channelGroup: groupName,
+          search: streamFilters.search || undefined,
         });
         allGroupStreams.push(...response.results);
         hasMore = response.next !== null;
@@ -931,7 +933,7 @@ function App() {
         logger.error(`Failed to load streams for group ${groupName}:`, err);
       }
     }
-  }, []);
+  }, [streamFilters.search]);
 
   // Reload channels when search changes
   useEffect(() => {
