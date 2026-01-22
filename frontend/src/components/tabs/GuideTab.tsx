@@ -121,6 +121,24 @@ export function GuideTab({
     return map;
   }, [programs]);
 
+  // Build programs map by channel_uuid for dummy EPG sources
+  // Dummy EPGs use channel_uuid instead of tvg_id for matching
+  const programsByChannelUuid = useMemo(() => {
+    const map = new Map<string, EPGProgram[]>();
+    programs.forEach(program => {
+      if (program.channel_uuid) {
+        const existing = map.get(program.channel_uuid) || [];
+        existing.push(program);
+        map.set(program.channel_uuid, existing);
+      }
+    });
+    // Sort programs by start time within each channel_uuid
+    map.forEach((progs) => {
+      progs.sort((a, b) => new Date(a.start_time).getTime() - new Date(b.start_time).getTime());
+    });
+    return map;
+  }, [programs]);
+
   // Get selected profile for filtering
   const selectedProfile = useMemo(() => {
     if (selectedProfileId === null) return null;
@@ -332,6 +350,7 @@ export function GuideTab({
   // Get programs for a channel within the visible time range
   // Uses epg_data_id -> tvg_id indirection to match programs, similar to Dispatcharr's approach.
   // This allows the guide to display correctly even if channel.tvg_id differs from the EPG's tvg_id.
+  // Also supports dummy EPG sources which use channel_uuid for matching.
   const getChannelPrograms = useCallback((channel: Channel): EPGProgram[] => {
     // First, try to get the tvg_id via the epg_data_id (preferred method)
     // This matches how Dispatcharr displays its guide
@@ -349,9 +368,19 @@ export function GuideTab({
       lookupTvgId = channel.tvg_id;
     }
 
-    if (!lookupTvgId) return [];
+    // Try to find programs by tvg_id first
+    let channelPrograms: EPGProgram[] = [];
+    if (lookupTvgId) {
+      channelPrograms = programsByTvgId.get(lookupTvgId) || [];
+    }
 
-    const channelPrograms = programsByTvgId.get(lookupTvgId) || [];
+    // If no programs found by tvg_id, try matching by channel UUID
+    // This handles dummy EPG sources which use channel_uuid instead of tvg_id
+    if (channelPrograms.length === 0 && channel.uuid) {
+      channelPrograms = programsByChannelUuid.get(channel.uuid) || [];
+    }
+
+    if (channelPrograms.length === 0) return [];
 
     // Filter to programs that overlap with our time range
     return channelPrograms.filter(program => {
@@ -359,7 +388,7 @@ export function GuideTab({
       const progEnd = new Date(program.end_time);
       return progStart < timeRange.end && progEnd > timeRange.start;
     });
-  }, [programsByTvgId, epgDataById, timeRange]);
+  }, [programsByTvgId, programsByChannelUuid, epgDataById, timeRange]);
 
   // Calculate position and width for a program block
   const getProgramStyle = useCallback((program: EPGProgram): React.CSSProperties => {
