@@ -4494,13 +4494,15 @@ export function ChannelsPane({
               >
                 <span className="material-icons">visibility_off</span>
               </button>
-              <SortDropdownButton
-                onSortByMode={handleSortAllStreamsByMode}
-                isLoading={bulkSortingByQuality}
-                showLabel={false}
-                className="sort-all-quality-btn-wrapper"
-                enabledCriteria={channelDefaults?.streamSortEnabled}
-              />
+              {selectedChannelIds.size === 0 && (
+                <SortDropdownButton
+                  onSortByMode={handleSortAllStreamsByMode}
+                  isLoading={bulkSortingByQuality}
+                  showLabel={false}
+                  className="sort-all-quality-btn-wrapper"
+                  enabledCriteria={channelDefaults?.streamSortEnabled}
+                />
+              )}
             </>
           )}
           <button
