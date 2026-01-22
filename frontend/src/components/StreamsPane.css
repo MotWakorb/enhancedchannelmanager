@@ -949,6 +949,7 @@
 .radio-option input[type="radio"] {
   width: 16px;
   height: 16px;
+  margin-right: 0.25rem;
   accent-color: var(--accent-primary);
   cursor: pointer;
 }
@@ -1289,6 +1290,7 @@
 .checkbox-option input[type="checkbox"] {
   width: 16px;
   height: 16px;
+  margin-right: 0.25rem;
   accent-color: var(--accent-primary);
   cursor: pointer;
 }
@@ -1435,7 +1437,7 @@
 }
 
 .option-hint.radio-hint {
-  margin-bottom: 0.75rem;
+  margin-bottom: 0.375rem;
 }
 
 .country-prefix-options {
