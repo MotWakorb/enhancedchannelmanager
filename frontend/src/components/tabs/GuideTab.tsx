@@ -131,23 +131,6 @@ export function GuideTab({
     return map;
   }, [programs]);
 
-  // Build programs map by channel_uuid for dummy EPG sources
-  // Dummy EPGs use channel_uuid instead of tvg_id for matching
-  const programsByChannelUuid = useMemo(() => {
-    const map = new Map<string, EPGProgram[]>();
-    programs.forEach(program => {
-      if (program.channel_uuid) {
-        const existing = map.get(program.channel_uuid) || [];
-        existing.push(program);
-        map.set(program.channel_uuid, existing);
-      }
-    });
-    // Sort programs by start time within each channel_uuid
-    map.forEach((progs) => {
-      progs.sort((a, b) => getProgramStart(a).getTime() - getProgramStart(b).getTime());
-    });
-    return map;
-  }, [programs]);
 
   // Get selected profile for filtering
   const selectedProfile = useMemo(() => {
@@ -385,9 +368,9 @@ export function GuideTab({
     }
 
     // If no programs found by tvg_id, try matching by channel UUID
-    // This handles dummy EPG sources which use channel_uuid instead of tvg_id
+    // Dummy EPG sources set program.tvg_id = channel.uuid, so we look up UUID in programsByTvgId
     if (channelPrograms.length === 0 && channel.uuid) {
-      channelPrograms = programsByChannelUuid.get(channel.uuid) || [];
+      channelPrograms = programsByTvgId.get(channel.uuid) || [];
     }
 
     if (channelPrograms.length === 0) return [];
@@ -398,7 +381,7 @@ export function GuideTab({
       const progEnd = getProgramEnd(program);
       return progStart < timeRange.end && progEnd > timeRange.start;
     });
-  }, [programsByTvgId, programsByChannelUuid, epgDataById, timeRange]);
+  }, [programsByTvgId, epgDataById, timeRange]);
 
   // Calculate position and width for a program block
   const getProgramStyle = useCallback((program: EPGProgram): React.CSSProperties => {
