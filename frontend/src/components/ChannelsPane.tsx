@@ -4479,7 +4479,6 @@ export function ChannelsPane({
                 title="Create new channel"
               >
                 <span className="material-icons create-channel-icon">add</span>
-                <span>Channel</span>
               </button>
               <button
                 className="create-group-btn"
@@ -4487,7 +4486,6 @@ export function ChannelsPane({
                 title="Create new channel group"
               >
                 <span className="material-icons create-channel-icon">create_new_folder</span>
-                <span>Group</span>
               </button>
               <button
                 className="hidden-groups-btn"
@@ -4495,13 +4493,11 @@ export function ChannelsPane({
                 title="View and restore hidden channel groups"
               >
                 <span className="material-icons">visibility_off</span>
-                <span>Hidden</span>
               </button>
               <SortDropdownButton
                 onSortByMode={handleSortAllStreamsByMode}
                 isLoading={bulkSortingByQuality}
-                showLabel={true}
-                labelText="Sort"
+                showLabel={false}
                 className="sort-all-quality-btn-wrapper"
                 enabledCriteria={channelDefaults?.streamSortEnabled}
               />
@@ -4513,7 +4509,6 @@ export function ChannelsPane({
             title="Manage channel profiles"
           >
             <span className="material-icons">group</span>
-            <span>Profiles</span>
           </button>
         </div>
       </div>
