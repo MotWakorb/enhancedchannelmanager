@@ -1377,24 +1377,18 @@ function App() {
           const hasDecimalShift = startingNumber % 1 !== 0;
           const incrementShift = hasDecimalShift ? 0.1 : 1;
 
-          // Calculate the ending number of the new channel range
-          const rawEndingNumber = startingNumber + (channelCount - 1) * incrementShift;
-          const endingNumber = hasDecimalShift
-            ? Math.round(rawEndingNumber * 10) / 10
-            : rawEndingNumber;
-
-          // Only shift channels that actually conflict with the new channel range
-          // (not ALL channels >= startingNumber)
-          const channelsToShift = displayChannels
-            .filter((ch) => ch.channel_number !== null &&
-                    ch.channel_number >= startingNumber &&
-                    ch.channel_number <= endingNumber)
-            .sort((a, b) => (b.channel_number ?? 0) - (a.channel_number ?? 0)); // Sort descending to avoid conflicts
-
           // Shift amount is the total range taken by new channels
           const shiftAmount = channelCount * incrementShift;
 
-          // Shift each conflicting channel to just after the new range
+          // Shift ALL channels that are at or after the starting number
+          // This ensures channels after the new range are also pushed down,
+          // avoiding duplicate channel numbers
+          const channelsToShift = displayChannels
+            .filter((ch) => ch.channel_number !== null &&
+                    ch.channel_number >= startingNumber)
+            .sort((a, b) => (b.channel_number ?? 0) - (a.channel_number ?? 0)); // Sort descending to avoid conflicts
+
+          // Shift each channel by the amount needed to make room for new channels
           for (const ch of channelsToShift) {
             const rawNewNum = ch.channel_number! + shiftAmount;
             const newNum = hasDecimalShift
