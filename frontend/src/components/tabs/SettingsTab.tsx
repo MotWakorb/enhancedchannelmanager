@@ -809,6 +809,16 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
     }
   };
 
+  const handleClearAllProbeStats = async () => {
+    try {
+      const result = await api.clearAllStreamStats();
+      setProbeAllResult({ success: true, message: `Cleared ${result.cleared} probe stats` });
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : 'Failed to clear probe stats';
+      setProbeAllResult({ success: false, message: errorMessage });
+    }
+  };
+
   const handleRerunFailed = async () => {
     setShowProbeResultsModal(false);
 
@@ -2163,7 +2173,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
             use this button to clear the probe state and allow starting a new probe.
           </p>
           <div className="settings-group">
-            <div style={{ display: 'flex', justifyContent: 'flex-start' }}>
+            <div style={{ display: 'flex', justifyContent: 'flex-start', gap: '0.75rem' }}>
               <button
                 type="button"
                 className="btn-secondary"
@@ -2176,6 +2186,20 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
               >
                 <span className="material-icons">refresh</span>
                 Reset Stuck Probe
+              </button>
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={handleClearAllProbeStats}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.5rem'
+                }}
+                title="Delete all probe statistics from the database"
+              >
+                <span className="material-icons">delete_sweep</span>
+                Clear All Probe Stats
               </button>
             </div>
           </div>

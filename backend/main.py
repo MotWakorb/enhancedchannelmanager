@@ -4908,6 +4908,29 @@ async def clear_stream_stats(request: ClearStatsRequest):
         session.close()
 
 
+@app.post("/api/stream-stats/clear-all")
+async def clear_all_stream_stats():
+    """Clear (delete) all probe stats for all streams.
+
+    Completely removes all probe history. All streams will appear as
+    'pending' (never probed) until re-probed.
+    """
+    from models import StreamStats
+
+    session = get_session()
+    try:
+        deleted = session.query(StreamStats).delete(synchronize_session=False)
+        session.commit()
+        logger.info(f"Cleared all stream stats ({deleted} records)")
+        return {"cleared": deleted}
+    except Exception as e:
+        session.rollback()
+        logger.error(f"Failed to clear all stream stats: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        session.close()
+
+
 @app.get("/api/stream-stats/dismissed")
 async def get_dismissed_stream_stats():
     """Get list of dismissed stream IDs.
