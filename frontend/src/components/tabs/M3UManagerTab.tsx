@@ -15,6 +15,7 @@ interface M3UManagerTabProps {
   channelProfiles?: ChannelProfile[];
   streamProfiles?: StreamProfile[];
   onChannelGroupsChange?: () => void;
+  onAccountsChange?: () => void;  // Called when M3U accounts are added/deleted/modified
   hideM3uUrls?: boolean;
 }
 
@@ -235,6 +236,7 @@ export function M3UManagerTab({
   channelProfiles = [],
   streamProfiles = [],
   onChannelGroupsChange,
+  onAccountsChange,
   hideM3uUrls = false,
 }: M3UManagerTabProps) {
   const [accounts, setAccounts] = useState<M3UAccount[]>([]);
@@ -331,6 +333,7 @@ export function M3UManagerTab({
     try {
       await api.deleteM3UAccount(account.id);
       await loadData();
+      onAccountsChange?.();  // Notify parent to reload providers
     } catch (err) {
       setError('Failed to delete M3U account');
     }
@@ -435,6 +438,7 @@ export function M3UManagerTab({
 
   const handleAccountSaved = () => {
     loadData();
+    onAccountsChange?.();  // Notify parent to reload providers
   };
 
   const handleSaveLinkedAccounts = async (linkGroups: number[][]) => {
