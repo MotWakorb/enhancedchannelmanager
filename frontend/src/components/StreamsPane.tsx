@@ -205,24 +205,28 @@ export function StreamsPane({
 
   // Shared memoized grouping logic to avoid duplication
   // Groups and sorts streams, then returns sorted entries
-  // Always show all groups from streamGroups, populated with any loaded streams
+  // When searching: only show groups with matching streams
+  // When not searching: show all groups for lazy loading
   const sortedStreamGroups = useMemo((): [string, Stream[]][] => {
     const groups = new Map<string, Stream[]>();
+    const isSearching = searchTerm.trim().length > 0;
 
-    // First, create empty entries for all known groups from the API
+    // When NOT searching, create empty entries for all known groups from the API
     // This ensures all groups are visible even before their streams are loaded (lazy loading)
-    streamGroups.forEach((groupName) => {
-      if (!hideUngroupedStreams || groupName !== 'Ungrouped') {
-        groups.set(groupName, []);
-      }
-    });
+    // When searching, skip this - only show groups that have matching streams
+    if (!isSearching) {
+      streamGroups.forEach((groupName) => {
+        if (!hideUngroupedStreams || groupName !== 'Ungrouped') {
+          groups.set(groupName, []);
+        }
+      });
+    }
 
-    // Then populate groups with any loaded/filtered streams
+    // Populate groups with loaded/filtered streams
     filteredStreams.forEach((stream) => {
       const groupName = stream.channel_group_name || 'Ungrouped';
       if (!hideUngroupedStreams || groupName !== 'Ungrouped') {
         if (!groups.has(groupName)) {
-          // Handle case where stream has a group not in streamGroups list
           groups.set(groupName, []);
         }
         groups.get(groupName)!.push(stream);
@@ -238,14 +242,19 @@ export function StreamsPane({
 
     // Convert to sorted array of [name, streams] tuples
     // Filter out Ungrouped if hideUngroupedStreams is true
+    // When searching, also filter out empty groups (no matching streams)
     return Array.from(groups.entries())
-      .filter(([name]) => !hideUngroupedStreams || name !== 'Ungrouped')
+      .filter(([name, streams]) => {
+        if (hideUngroupedStreams && name === 'Ungrouped') return false;
+        if (isSearching && streams.length === 0) return false;
+        return true;
+      })
       .sort(([a], [b]) => {
         if (a === 'Ungrouped') return 1;
         if (b === 'Ungrouped') return -1;
         return naturalCompare(a, b);
       });
-  }, [filteredStreams, hideUngroupedStreams, streamGroups]);
+  }, [filteredStreams, hideUngroupedStreams, streamGroups, searchTerm]);
 
   // Compute streams in display order (flattened array for selection)
   // This must be computed before useSelection so shift-click works correctly
