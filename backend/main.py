@@ -2230,7 +2230,12 @@ async def get_channel_groups_with_streams():
         page = 1
         total_channels = 0
         channels_with_streams = 0
+        channels_without_streams = 0
+        auto_created_count = 0
         sample_channel_groups = []  # Track first 5 for debugging
+        sample_channels_no_streams = []  # Track channels without streams
+        channels_by_group_id: dict = {}  # Track channel count per group for debugging
+        sample_auto_created = []  # Track auto-created channels for debugging
 
         while True:
             result = await client.get_channels(page=page, page_size=500)
@@ -2238,12 +2243,40 @@ async def get_channel_groups_with_streams():
             total_channels += len(page_channels)
 
             for channel in page_channels:
+                channel_group_id = channel.get("channel_group_id")
+                channel_number = channel.get("channel_number")
+                channel_name = channel.get("name")
+                is_auto_created = channel.get("auto_created", False)
+
+                # Track auto-created channels
+                if is_auto_created:
+                    auto_created_count += 1
+                    if len(sample_auto_created) < 10:
+                        group_name = group_map.get(channel_group_id, {}).get("name", "Unknown")
+                        sample_auto_created.append({
+                            "channel_id": channel.get("id"),
+                            "channel_name": channel_name,
+                            "channel_number": channel_number,
+                            "channel_group_id": channel_group_id,
+                            "group_name": group_name,
+                            "auto_created_by": channel.get("auto_created_by"),
+                            "auto_created_by_name": channel.get("auto_created_by_name")
+                        })
+
+                # Track channels per group
+                if channel_group_id is not None:
+                    if channel_group_id not in channels_by_group_id:
+                        channels_by_group_id[channel_group_id] = {"count": 0, "with_streams": 0, "samples": []}
+                    channels_by_group_id[channel_group_id]["count"] += 1
+                    if len(channels_by_group_id[channel_group_id]["samples"]) < 3:
+                        channels_by_group_id[channel_group_id]["samples"].append(f"#{channel_number} {channel_name}")
+
                 # Check if channel has any streams
                 stream_ids = channel.get("streams", [])
                 if stream_ids:  # Has at least one stream
                     channels_with_streams += 1
-                    # Record this group as having a channel with streams
-                    channel_group_id = channel.get("channel_group_id")
+                    if channel_group_id is not None:
+                        channels_by_group_id[channel_group_id]["with_streams"] += 1
 
                     # Collect samples for debugging - dump first channel completely
                     if len(sample_channel_groups) == 0:
@@ -2252,7 +2285,8 @@ async def get_channel_groups_with_streams():
                     if len(sample_channel_groups) < 5:
                         sample_channel_groups.append({
                             "channel_id": channel.get("id"),
-                            "channel_name": channel.get("name"),
+                            "channel_name": channel_name,
+                            "channel_number": channel_number,
                             "channel_group_id": channel_group_id,
                             "channel_group_type": type(channel_group_id).__name__,
                             "stream_count": len(stream_ids)
@@ -2261,6 +2295,18 @@ async def get_channel_groups_with_streams():
                     # IMPORTANT: Check for not None instead of truthy to handle group ID 0
                     if channel_group_id is not None:
                         groups_with_streams_ids.add(channel_group_id)
+                else:
+                    # Track channels WITHOUT streams for debugging
+                    channels_without_streams += 1
+                    if len(sample_channels_no_streams) < 10:
+                        sample_channels_no_streams.append({
+                            "channel_id": channel.get("id"),
+                            "channel_name": channel_name,
+                            "channel_number": channel_number,
+                            "channel_group_id": channel_group_id,
+                            "streams_field": stream_ids,
+                            "streams_field_type": type(stream_ids).__name__
+                        })
 
             if not result.get("next"):
                 break
@@ -2272,9 +2318,44 @@ async def get_channel_groups_with_streams():
         if sample_channel_groups:
             logger.info(f"Sample channels with streams (first 5): {sample_channel_groups}")
 
+        # Log channels without streams
+        if sample_channels_no_streams:
+            logger.warning(f"[DEBUG] Found {channels_without_streams} channels WITHOUT streams. Samples: {sample_channels_no_streams}")
+
+        # Log auto-created channels summary
+        logger.info(f"[DEBUG] Auto-created channels: {auto_created_count} out of {total_channels} total")
+        if sample_auto_created:
+            logger.info(f"[DEBUG] Sample auto-created channels: {sample_auto_created}")
+
+        # Log groups that have channels but NO streams
+        groups_with_channels_no_streams = []
+        for gid, data in channels_by_group_id.items():
+            if data["with_streams"] == 0 and data["count"] > 0:
+                group_name = group_map.get(gid, {}).get("name", "Unknown")
+                groups_with_channels_no_streams.append({
+                    "group_id": gid,
+                    "group_name": group_name,
+                    "channel_count": data["count"],
+                    "samples": data["samples"]
+                })
+
+        if groups_with_channels_no_streams:
+            logger.warning(f"[DEBUG] Groups with channels but NO streams ({len(groups_with_channels_no_streams)}): {groups_with_channels_no_streams[:20]}")
+
         logger.info(f"Scanned {total_channels} channels, found {channels_with_streams} with streams")
         logger.info(f"Found {len(groups_with_streams_ids)} groups with channels containing streams")
         logger.info(f"Group IDs found: {sorted(list(groups_with_streams_ids))}")
+
+        # Log group names for groups with streams
+        groups_with_streams_names = []
+        for gid in sorted(groups_with_streams_ids):
+            group_name = group_map.get(gid, {}).get("name", "Unknown")
+            groups_with_streams_names.append(f"{gid}:{group_name}")
+        logger.info(f"[DEBUG] Groups with streams (id:name): {groups_with_streams_names}")
+
+        # Log any groups named "Entertainment" specifically
+        entertainment_groups = [g for g in all_groups if "entertainment" in g.get("name", "").lower()]
+        logger.info(f"[DEBUG] Groups containing 'Entertainment' in name: {entertainment_groups}")
         logger.info(f"Group IDs in group_map: {sorted(list(group_map.keys()))}")
 
         # Build the result list

@@ -2496,7 +2496,28 @@ export function ChannelsPane({
     logger.info('[CHANNELS-DEBUG] Frontend received channels per group_id (before filtering):', groupIdCounts);
     logger.info(`[CHANNELS-DEBUG] Total channels in localChannels: ${localChannels.length}`);
 
+    // Count auto_created channels for debugging
+    const autoCreatedChannels = localChannels.filter(ch => ch.auto_created);
+    const manualChannels = localChannels.filter(ch => !ch.auto_created);
+    logger.info(`[CHANNELS-DEBUG] Channel breakdown: ${manualChannels.length} manual, ${autoCreatedChannels.length} auto_created`);
+
+    // Log auto_created channels by group for debugging
+    if (autoCreatedChannels.length > 0) {
+      const autoCreatedByGroup: Record<string, { count: number; samples: string[] }> = {};
+      autoCreatedChannels.forEach((ch) => {
+        const key = ch.channel_group_id !== null ? String(ch.channel_group_id) : 'ungrouped';
+        if (!autoCreatedByGroup[key]) autoCreatedByGroup[key] = { count: 0, samples: [] };
+        autoCreatedByGroup[key].count++;
+        if (autoCreatedByGroup[key].samples.length < 3) {
+          autoCreatedByGroup[key].samples.push(`#${ch.channel_number} ${ch.name}`);
+        }
+      });
+      logger.info('[CHANNELS-DEBUG] Auto-created channels by group:', autoCreatedByGroup);
+      logger.info('[CHANNELS-DEBUG] autoSyncRelatedGroups:', Array.from(autoSyncRelatedGroups));
+    }
+
     // Filter channels based on search term and auto-created filter
+    let hiddenDueToAutoCreated = 0;
     const visibleChannels = localChannels.filter((ch) => {
       // First, apply search filter if there's a search term
       if (searchTerm) {
@@ -2513,8 +2534,13 @@ export function ChannelsPane({
         // Show auto-created channel if showAutoChannelGroups filter is on
         return channelListFilters?.showAutoChannelGroups !== false;
       }
+      hiddenDueToAutoCreated++;
       return false; // Hide auto-created channels from non-auto-sync groups
     });
+
+    if (hiddenDueToAutoCreated > 0) {
+      logger.warn(`[CHANNELS-DEBUG] Hidden ${hiddenDueToAutoCreated} channels due to auto_created filter (not in autoSyncRelatedGroups)`);
+    }
 
     // Debug: Log after filtering
     const afterFilterCounts: Record<string, number> = {};
