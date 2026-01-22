@@ -1107,6 +1107,7 @@ export function useEditMode({
             logoId: apiCall.logoId,
             logoUrl: apiCall.logoUrl,
             tvgId: apiCall.tvgId,
+            tvcGuideStationId: apiCall.tvcGuideStationId,
           });
           break;
         }
