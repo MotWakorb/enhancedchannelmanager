@@ -945,14 +945,23 @@ function App() {
     };
   }, [channelFilters.search]);
 
-  // Reload streams when filters change - but only if explicitly requested
+  // Reload streams when filters change - but only if explicitly requested OR searching
   // This prevents loading 27,000+ streams on app startup which causes high CPU
+  // But allows search to work even before streams are explicitly requested
   useEffect(() => {
+    const hasSearchFilter = streamFilters.search?.trim();
+
     // Skip loading on initial mount - streams are loaded lazily when user interacts
-    if (!streamsExplicitlyRequested.current) {
+    // BUT if there's a search term, we should load (server will filter)
+    if (!streamsExplicitlyRequested.current && !hasSearchFilter) {
       // Set loading to false since we're not actually loading
       setLoadingStates(prev => ({ ...prev, streams: false }));
       return;
+    }
+
+    // Mark as explicitly requested if searching (so future loads work without search)
+    if (hasSearchFilter) {
+      streamsExplicitlyRequested.current = true;
     }
 
     // Clear per-group loaded tracker since we're doing a full filtered load
@@ -1593,27 +1602,22 @@ function App() {
   }, []);
 
   // Filter streams based on multi-select filters (client-side)
+  // Note: search term is handled server-side via loadStreams() API call
   const filteredStreams = useMemo(() => {
     let result = streams;
 
-    // Filter by search term
-    if (streamFilters.search.trim()) {
-      const searchLower = streamFilters.search.toLowerCase().trim();
-      result = result.filter((s) => s.name.toLowerCase().includes(searchLower));
-    }
-
-    // Filter by selected providers
+    // Filter by selected providers (multi-select, client-side)
     if (streamFilters.selectedProviders.length > 0) {
       result = result.filter((s) => s.m3u_account !== null && streamFilters.selectedProviders.includes(s.m3u_account));
     }
 
-    // Filter by selected stream groups
+    // Filter by selected stream groups (multi-select, client-side)
     if (streamFilters.selectedGroups.length > 0) {
       result = result.filter((s) => streamFilters.selectedGroups.includes(s.channel_group_name || ''));
     }
 
     return result;
-  }, [streams, streamFilters.search, streamFilters.selectedProviders, streamFilters.selectedGroups]);
+  }, [streams, streamFilters.selectedProviders, streamFilters.selectedGroups]);
 
   const handleDeleteChannel = useCallback(
     async (channelId: number) => {
@@ -1904,9 +1908,9 @@ function App() {
               streamGroups={streamGroups}
               streamsLoading={loadingStates.streams}
 
-              // Stream Search & Filter (triggers lazy stream loading)
+              // Stream Search & Filter (server-side search via useEffect debounce)
               streamSearch={streamFilters.search}
-              onStreamSearchChange={(search) => { requestStreamsLoad(); setStreamFilters(prev => ({ ...prev, search })); }}
+              onStreamSearchChange={(search) => setStreamFilters(prev => ({ ...prev, search }))}
               streamProviderFilter={streamFilters.providerFilter}
               onStreamProviderFilterChange={(providerFilter) => { requestStreamsLoad(); setStreamFilters(prev => ({ ...prev, providerFilter })); }}
               streamGroupFilter={streamFilters.groupFilter}
