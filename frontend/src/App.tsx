@@ -1495,25 +1495,41 @@ function App() {
             channelName = `${channelNumber} ${numberSeparator} ${nameWithoutNumber}`;
           }
 
-          // Find logo URL from the first stream that has one
+          // Find logo URL, tvg_id, and tvc_guide_stationid from the first stream that has them
           let logoUrl: string | undefined;
+          let tvgId: string | undefined;
+          let tvcGuideStationId: string | undefined;
           for (const stream of groupedStreams) {
-            if (stream.logo_url) {
+            if (!logoUrl && stream.logo_url) {
               logoUrl = stream.logo_url;
-              break;
             }
+            if (!tvgId && stream.tvg_id) {
+              tvgId = stream.tvg_id;
+            }
+            // Extract Gracenote ID from custom_properties (stored as tvc-guide-stationid from M3U)
+            if (!tvcGuideStationId && stream.custom_properties) {
+              const stationId = stream.custom_properties['tvc-guide-stationid'];
+              if (typeof stationId === 'string') {
+                tvcGuideStationId = stationId;
+              }
+            }
+            // Stop early if we found all three
+            if (logoUrl && tvgId && tvcGuideStationId) break;
           }
 
           // Create the channel (returns temp ID)
           // If targetNewGroupName is set, pass it so the commit logic can create the group first
           // Pass logoUrl - the commit logic will create the logo if needed
+          // Pass tvgId and tvcGuideStationId - auto-populate from stream metadata for EPG matching
           const tempChannelId = stageCreateChannel(
             channelName,
             channelNumber,
             targetGroupId ?? undefined,
             targetNewGroupName,
             undefined, // logoId - will be resolved during commit
-            logoUrl
+            logoUrl,
+            tvgId,
+            tvcGuideStationId
           );
 
           // Assign all streams in this group to the new channel

@@ -127,6 +127,7 @@ export interface Stream {
   channel_group: number | null;
   channel_group_name: string | null;
   is_custom: boolean;
+  custom_properties?: Record<string, unknown> | null;  // Extra M3U attributes like tvc-guide-stationid
 }
 
 // Stream probe statistics - metadata gathered via ffprobe

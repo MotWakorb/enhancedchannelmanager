@@ -398,6 +398,7 @@ class BulkCreateChannelOp(BaseModel):
     logoId: Optional[int] = None
     logoUrl: Optional[str] = None
     tvgId: Optional[str] = None
+    tvcGuideStationId: Optional[str] = None  # Gracenote ID from M3U tvc-guide-stationid
 
 
 class BulkDeleteChannelOp(BaseModel):
@@ -1667,6 +1668,8 @@ async def bulk_commit_operations(request: BulkCommitRequest):
                         channel_data["logo_id"] = logo_id
                     if op.tvgId is not None:
                         channel_data["tvg_id"] = op.tvgId
+                    if op.tvcGuideStationId is not None:
+                        channel_data["tvc_guide_stationid"] = op.tvcGuideStationId
 
                     logger.debug(f"[BULK-APPLY] Creating channel with data: {channel_data}")
                     new_channel = await client.create_channel(channel_data)
