@@ -11,6 +11,10 @@ export default defineConfig({
         changeOrigin: true,
       },
     },
+    fs: {
+      // Allow serving files from worktree paths
+      strict: false,
+    },
   },
   build: {
     outDir: 'dist',

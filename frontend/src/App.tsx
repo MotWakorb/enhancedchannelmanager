@@ -106,6 +106,7 @@ function App() {
     streamSortPriority: ['resolution', 'bitrate', 'framerate'] as ('resolution' | 'bitrate' | 'framerate')[],
     streamSortEnabled: { resolution: true, bitrate: true, framerate: true } as Record<'resolution' | 'bitrate' | 'framerate', boolean>,
     deprioritizeFailedStreams: true,
+    normalizationSettings: { disabledBuiltinTags: [], customTags: [] } as api.NormalizationSettings,
   });
   // Also keep separate state for use in callbacks (to avoid stale closure issues)
   const [defaultChannelProfileIds, setDefaultChannelProfileIds] = useState<number[]>([]);
@@ -139,6 +140,11 @@ function App() {
   // Track if channel group filter has been auto-initialized
   const channelGroupFilterInitialized = useRef(false);
 
+  // Track if streams have been explicitly requested (lazy loading - don't auto-load on mount)
+  const streamsExplicitlyRequested = useRef(false);
+  // Track which stream groups have been loaded (for per-group lazy loading)
+  const loadedStreamGroupsRef = useRef<Set<string>>(new Set());
+
   // Edit mode exit dialog state
   const [showExitDialog, setShowExitDialog] = useState(false);
   const [commitProgress, setCommitProgress] = useState<CommitProgress | null>(null);
@@ -155,6 +161,8 @@ function App() {
   const [droppedStreamIds, setDroppedStreamIds] = useState<number[] | null>(null);
   const [droppedStreamTargetGroupId, setDroppedStreamTargetGroupId] = useState<number | null>(null);
   const [droppedStreamStartingNumber, setDroppedStreamStartingNumber] = useState<number | null>(null);
+  // Manual entry trigger (for opening bulk create modal without pre-selected streams)
+  const [manualEntryTrigger, setManualEntryTrigger] = useState(false);
 
   // Edit mode for staging changes
   const {
@@ -164,6 +172,7 @@ function App() {
     modifiedChannelIds,
     displayChannels,
     stagedGroups,
+    deletedGroupIds,
     canLocalUndo,
     canLocalRedo,
     editModeDuration,
@@ -177,7 +186,7 @@ function App() {
     stageCreateChannel,
     stageDeleteChannel,
     stageDeleteChannelGroup,
-    getSummary,
+    summary,
     commit,
     discard,
     localUndo,
@@ -419,6 +428,7 @@ function App() {
           streamSortPriority: settings.stream_sort_priority ?? ['resolution', 'bitrate', 'framerate'],
           streamSortEnabled: settings.stream_sort_enabled ?? { resolution: true, bitrate: true, framerate: true },
           deprioritizeFailedStreams: settings.deprioritize_failed_streams ?? true,
+          normalizationSettings: settings.normalization_settings ?? { disabledBuiltinTags: [], customTags: [] },
         });
         setDefaultChannelProfileIds(settings.default_channel_profile_ids);
 
@@ -476,7 +486,8 @@ function App() {
         loadProviders();
         loadProviderGroupSettings();
         loadStreamGroups();
-        loadStreams();
+        // NOTE: Streams are loaded lazily when user interacts with the streams pane
+        // This prevents loading 27,000+ streams on app startup which causes high CPU
         loadLogos();
         loadStreamProfiles();
         loadChannelProfiles();
@@ -628,6 +639,7 @@ function App() {
         streamSortPriority: settings.stream_sort_priority ?? ['resolution', 'bitrate', 'framerate'],
         streamSortEnabled: settings.stream_sort_enabled ?? { resolution: true, bitrate: true, framerate: true },
         deprioritizeFailedStreams: settings.deprioritize_failed_streams ?? true,
+        normalizationSettings: settings.normalization_settings ?? { disabledBuiltinTags: [], customTags: [] },
       });
       setDefaultChannelProfileIds(settings.default_channel_profile_ids);
 
@@ -649,7 +661,10 @@ function App() {
     loadProviders();
     loadProviderGroupSettings();
     loadStreamGroups();
-    loadStreams();
+    // Only reload streams if they were already loaded (lazy loading preservation)
+    if (streamsExplicitlyRequested.current) {
+      loadStreams();
+    }
     loadLogos();
     loadStreamProfiles();
     loadChannelProfiles();
@@ -691,18 +706,21 @@ function App() {
     });
   }, []);
 
-  // Wrapper functions to persist stream filters to localStorage
+  // Wrapper functions to persist stream filters to localStorage (also triggers lazy stream loading)
   const updateSelectedProviderFilters = useCallback((providerIds: number[]) => {
+    streamsExplicitlyRequested.current = true;
     setStreamFilters(prev => ({ ...prev, selectedProviders: providerIds }));
     localStorage.setItem('streamProviderFilters', JSON.stringify(providerIds));
   }, []);
 
   const updateSelectedStreamGroupFilters = useCallback((groups: string[]) => {
+    streamsExplicitlyRequested.current = true;
     setStreamFilters(prev => ({ ...prev, selectedGroups: groups }));
     localStorage.setItem('streamGroupFilters', JSON.stringify(groups));
   }, []);
 
   const clearStreamFilters = useCallback(() => {
+    streamsExplicitlyRequested.current = true;
     setStreamFilters(prev => ({ ...prev, selectedProviders: [], selectedGroups: [] }));
     localStorage.removeItem('streamProviderFilters');
     localStorage.removeItem('streamGroupFilters');
@@ -856,8 +874,63 @@ function App() {
 
   // Force refresh streams from Dispatcharr (bypassing cache)
   const refreshStreams = useCallback(() => {
+    streamsExplicitlyRequested.current = true;
+    // Clear loaded groups tracker so all groups reload
+    loadedStreamGroupsRef.current.clear();
     loadStreams(true);
   }, [streamFilters.search, streamFilters.providerFilter, streamFilters.groupFilter]);
+
+  // Request streams to be loaded (lazy loading trigger)
+  // Call this when user interacts with streams (e.g., expands streams pane, searches)
+  const requestStreamsLoad = useCallback(() => {
+    if (!streamsExplicitlyRequested.current) {
+      streamsExplicitlyRequested.current = true;
+      loadStreams(false);
+    }
+  }, []);
+
+  // Load streams for a single group (per-group lazy loading)
+  // This allows loading only the streams for an expanded group instead of all streams
+  const loadStreamGroup = useCallback(async (groupName: string) => {
+    // Skip if this group's streams are already loaded
+    if (loadedStreamGroupsRef.current.has(groupName)) {
+      return;
+    }
+
+    // Mark as loaded immediately to prevent duplicate requests
+    loadedStreamGroupsRef.current.add(groupName);
+
+    try {
+      // Fetch streams for this specific group
+      const allGroupStreams: Stream[] = [];
+      let page = 1;
+      let hasMore = true;
+
+      while (hasMore) {
+        const response = await api.getStreams({
+          page,
+          pageSize: 500,
+          channelGroup: groupName,
+        });
+        allGroupStreams.push(...response.results);
+        hasMore = response.next !== null;
+        page++;
+      }
+
+      // Merge with existing streams (avoid duplicates by stream ID)
+      setStreams(prevStreams => {
+        const existingIds = new Set(prevStreams.map(s => s.id));
+        const newStreams = allGroupStreams.filter(s => !existingIds.has(s.id));
+        return [...prevStreams, ...newStreams];
+      });
+    } catch (err) {
+      // Remove from loaded set on error so user can retry
+      loadedStreamGroupsRef.current.delete(groupName);
+      if (err instanceof Error && err.name !== 'AbortError') {
+        logger.error(`Failed to load streams for group ${groupName}:`, err);
+      }
+    }
+  }, []);
 
   // Reload channels when search changes
   useEffect(() => {
@@ -871,8 +944,19 @@ function App() {
     };
   }, [channelFilters.search]);
 
-  // Reload streams when filters change
+  // Reload streams when filters change - but only if explicitly requested
+  // This prevents loading 27,000+ streams on app startup which causes high CPU
   useEffect(() => {
+    // Skip loading on initial mount - streams are loaded lazily when user interacts
+    if (!streamsExplicitlyRequested.current) {
+      // Set loading to false since we're not actually loading
+      setLoadingStates(prev => ({ ...prev, streams: false }));
+      return;
+    }
+
+    // Clear per-group loaded tracker since we're doing a full filtered load
+    loadedStreamGroupsRef.current.clear();
+
     const abortController = new AbortController();
     const timer = setTimeout(() => {
       loadStreams(false, abortController.signal);
@@ -1263,6 +1347,7 @@ function App() {
           customNetworkPrefixes: customNetworkPrefixes,
           stripNetworkSuffix: stripNetworkSuffix ?? false,
           customNetworkSuffixes: customNetworkSuffixes,
+          normalizationSettings: channelDefaults.normalizationSettings,
         };
 
         // Filter streams by timezone preference
@@ -1480,12 +1565,18 @@ function App() {
     setDroppedStreamStartingNumber(startingNumber);
   }, []);
 
+  // Handle open create channel modal (triggers bulk create modal in manual entry mode)
+  const handleOpenCreateChannelModal = useCallback(() => {
+    setManualEntryTrigger(true);
+  }, []);
+
   // Clear the dropped stream group/streams trigger after it's been handled
   const handleStreamGroupTriggerHandled = useCallback(() => {
     setDroppedStreamGroupNames(null);
     setDroppedStreamIds(null);
     setDroppedStreamTargetGroupId(null);
     setDroppedStreamStartingNumber(null);
+    setManualEntryTrigger(false);
   }, []);
 
   // Filter streams based on multi-select filters (client-side)
@@ -1683,7 +1774,7 @@ function App() {
 
       <EditModeExitDialog
         isOpen={showExitDialog}
-        summary={getSummary()}
+        summary={summary}
         onApply={handleApplyChanges}
         onDiscard={handleDiscardChanges}
         onKeepEditing={handleKeepEditing}
@@ -1781,24 +1872,26 @@ function App() {
 
               // Provider & Filter Settings
               providerGroupSettings={providerGroupSettings}
+              deletedGroupIds={deletedGroupIds}
               channelListFilters={channelListFilters}
               onChannelListFiltersChange={updateChannelListFilters}
               newlyCreatedGroupIds={newlyCreatedGroupIds}
               onTrackNewlyCreatedGroup={trackNewlyCreatedGroup}
 
               // Streams
+              allStreams={streams}
               streams={filteredStreams}
               providers={providers}
               streamGroups={streamGroups}
               streamsLoading={loadingStates.streams}
 
-              // Stream Search & Filter
+              // Stream Search & Filter (triggers lazy stream loading)
               streamSearch={streamFilters.search}
-              onStreamSearchChange={(search) => setStreamFilters(prev => ({ ...prev, search }))}
+              onStreamSearchChange={(search) => { requestStreamsLoad(); setStreamFilters(prev => ({ ...prev, search })); }}
               streamProviderFilter={streamFilters.providerFilter}
-              onStreamProviderFilterChange={(providerFilter) => setStreamFilters(prev => ({ ...prev, providerFilter }))}
+              onStreamProviderFilterChange={(providerFilter) => { requestStreamsLoad(); setStreamFilters(prev => ({ ...prev, providerFilter })); }}
               streamGroupFilter={streamFilters.groupFilter}
-              onStreamGroupFilterChange={(groupFilter) => setStreamFilters(prev => ({ ...prev, groupFilter }))}
+              onStreamGroupFilterChange={(groupFilter) => { requestStreamsLoad(); setStreamFilters(prev => ({ ...prev, groupFilter })); }}
               selectedProviders={streamFilters.selectedProviders}
               onSelectedProvidersChange={updateSelectedProviderFilters}
               selectedStreamGroups={streamFilters.selectedGroups}
@@ -1811,9 +1904,11 @@ function App() {
               externalTriggerStreamIds={droppedStreamIds}
               externalTriggerTargetGroupId={droppedStreamTargetGroupId}
               externalTriggerStartingNumber={droppedStreamStartingNumber}
+              externalTriggerManualEntry={manualEntryTrigger}
               onExternalTriggerHandled={handleStreamGroupTriggerHandled}
               onStreamGroupDrop={handleStreamGroupDrop}
               onBulkStreamsDrop={handleBulkStreamsDrop}
+              onOpenCreateChannelModal={handleOpenCreateChannelModal}
               onBulkCreateFromGroup={handleBulkCreateFromGroup}
               onCheckConflicts={handleCheckConflicts}
               onGetHighestChannelNumber={handleGetHighestChannelNumber}
@@ -1837,6 +1932,9 @@ function App() {
               // External trigger to open edit modal from Guide tab
               externalChannelToEdit={channelToEditFromGuide}
               onExternalChannelEditHandled={handleExternalChannelEditHandled}
+
+              // Lazy loading - load only the expanded group's streams
+              onStreamGroupExpand={loadStreamGroup}
             />
           )}
           {activeTab === 'm3u-manager' && (

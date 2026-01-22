@@ -405,7 +405,13 @@ class TaskEngine:
                     if execution:
                         execution.completed_at = result.completed_at
                         execution.duration_seconds = result.duration_seconds
-                        execution.status = "completed" if result.success else "failed"
+                        # Set status based on result: completed, cancelled, or failed
+                        if result.error == "CANCELLED":
+                            execution.status = "cancelled"
+                        elif result.success:
+                            execution.status = "completed"
+                        else:
+                            execution.status = "failed"
                         execution.success = result.success
                         execution.message = result.message
                         execution.error = result.error
@@ -429,7 +435,41 @@ class TaskEngine:
             alert_category = "probe_failures" if task_id == "stream_probe" else None
 
             # Log task completion to journal and send notifications
-            if result.success:
+            # Check for cancellation first - cancelled tasks should show a distinct message
+            if result.error == "CANCELLED":
+                log_entry(
+                    category="task",
+                    action_type="cancel",
+                    entity_name=instance.task_name,
+                    description=f"Cancelled {instance.task_name}: {result.success_count} completed before cancellation",
+                    entity_id=execution_id,
+                    after_value={
+                        "task_id": task_id,
+                        "success": False,
+                        "cancelled": True,
+                        "duration_seconds": result.duration_seconds,
+                        "total_items": result.total_items,
+                        "success_count": result.success_count,
+                        "failed_count": result.failed_count,
+                        "skipped_count": result.skipped_count,
+                    },
+                    user_initiated=(triggered_by == "manual"),
+                )
+
+                # Send warning notification for cancellation (warning type triggers alerts)
+                await self._notify_task_result(
+                    task_name=instance.task_name,
+                    task_id=task_id,
+                    notification_type="warning",
+                    title=f"Task Cancelled: {instance.task_name}",
+                    message=f"Task was cancelled. {result.success_count} items completed before cancellation"
+                            + (f", {result.failed_count} failed" if result.failed_count > 0 else "")
+                            + (f", {result.skipped_count} skipped" if result.skipped_count > 0 else "")
+                            + f" (out of {result.total_items} total)",
+                    result=result,
+                    alert_category=alert_category,
+                )
+            elif result.success:
                 log_entry(
                     category="task",
                     action_type="complete",

@@ -1,7 +1,9 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import * as api from '../../services/api';
 import { NETWORK_PREFIXES, NETWORK_SUFFIXES } from '../../constants/streamNormalization';
-import type { Theme, ProbeHistoryEntry, SortCriterion, SortEnabledMap, GracenoteConflictMode } from '../../services/api';
+import { normalizeStreamName } from '../../services/streamNormalization';
+import type { Theme, ProbeHistoryEntry, SortCriterion, SortEnabledMap, GracenoteConflictMode, NormalizationSettings } from '../../services/api';
+import { NormalizationTagsSection } from '../settings/NormalizationTagsSection';
 import type { ChannelProfile } from '../../types';
 import { logger } from '../../utils/logger';
 import { copyToClipboard } from '../../utils/clipboard';
@@ -137,7 +139,7 @@ interface SettingsTabProps {
   onProbeComplete?: () => void;
 }
 
-type SettingsPage = 'general' | 'channel-defaults' | 'appearance' | 'scheduled-tasks' | 'alert-methods' | 'maintenance';
+type SettingsPage = 'general' | 'channel-defaults' | 'normalization' | 'appearance' | 'scheduled-tasks' | 'alert-methods' | 'maintenance';
 
 export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onProbeComplete }: SettingsTabProps) {
   const [activePage, setActivePage] = useState<SettingsPage>('general');
@@ -161,6 +163,27 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   const [newPrefixInput, setNewPrefixInput] = useState('');
   const [customNetworkSuffixes, setCustomNetworkSuffixes] = useState<string[]>([]);
   const [newSuffixInput, setNewSuffixInput] = useState('');
+  // New tag-based normalization settings
+  const [normalizationSettings, setNormalizationSettings] = useState<NormalizationSettings>({
+    disabledBuiltinTags: [],
+    customTags: [],
+  });
+  const [normalizationPreviewInput, setNormalizationPreviewInput] = useState('');
+
+  // Compute normalized preview based on current settings
+  const normalizedPreviewResult = useMemo(() => {
+    if (!normalizationPreviewInput.trim()) return '';
+    return normalizeStreamName(normalizationPreviewInput, {
+      timezonePreference: 'both',
+      stripCountryPrefix: false, // Handled by normalization tags
+      keepCountryPrefix: includeCountryInName,
+      countrySeparator: countrySeparator as '-' | ':' | '|',
+      stripNetworkPrefix: true,
+      stripNetworkSuffix: true,
+      normalizationSettings,
+    });
+  }, [normalizationPreviewInput, includeCountryInName, countrySeparator, normalizationSettings]);
+
   const [streamSortPriority, setStreamSortPriority] = useState<SortCriterion[]>(['resolution', 'bitrate', 'framerate']);
   const [streamSortEnabled, setStreamSortEnabled] = useState<SortEnabledMap>({ resolution: true, bitrate: true, framerate: true });
   const [deprioritizeFailedStreams, setDeprioritizeFailedStreams] = useState(true);
@@ -184,11 +207,11 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   const [frontendLogLevel, setFrontendLogLevel] = useState('INFO');
 
   // Stream probe settings (scheduled probing is controlled by Task Engine)
-  const [streamProbeIntervalHours, setStreamProbeIntervalHours] = useState(24);
   const [streamProbeBatchSize, setStreamProbeBatchSize] = useState(10);
   const [streamProbeTimeout, setStreamProbeTimeout] = useState(30);
   const [bitrateSampleDuration, setBitrateSampleDuration] = useState(10);
   const [parallelProbingEnabled, setParallelProbingEnabled] = useState(true);
+  const [maxConcurrentProbes, setMaxConcurrentProbes] = useState(8);
   const [skipRecentlyProbedHours, setSkipRecentlyProbedHours] = useState(0);
   const [refreshM3usBeforeProbe, setRefreshM3usBeforeProbe] = useState(true);
   const [autoReorderAfterProbe, setAutoReorderAfterProbe] = useState(false);
@@ -206,6 +229,9 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
     failed_count: number;
     skipped_count: number;
     percentage: number;
+    rate_limited?: boolean;
+    rate_limited_hosts?: Array<{ host: string; backoff_remaining: number; consecutive_429s: number }>;
+    max_backoff_remaining?: number;
   } | null>(null);
   const [showProbeResultsModal, setShowProbeResultsModal] = useState(false);
   const [probeResultsType, setProbeResultsType] = useState<'success' | 'failed' | 'skipped'>('success');
@@ -226,6 +252,8 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   const [probeChannelGroups, setProbeChannelGroups] = useState<string[]>([]);
   const [showGroupSelectModal, setShowGroupSelectModal] = useState(false);
   const [tempProbeChannelGroups, setTempProbeChannelGroups] = useState<string[]>([]);
+  // M3U accounts for guidance on max concurrent probes
+  const [m3uAccountsMaxStreams, setM3uAccountsMaxStreams] = useState<{ name: string; max_streams: number }[]>([]);
 
   // Preserve settings not managed by this tab (to avoid overwriting them on save)
   const [linkedM3UAccounts, setLinkedM3UAccounts] = useState<number[][]>([]);
@@ -257,6 +285,76 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   const [restarting, setRestarting] = useState(false);
   const [restartResult, setRestartResult] = useState<{ success: boolean; message: string } | null>(null);
 
+  // Handler to save normalization settings immediately when tags change
+  // NOTE: This callback must be defined AFTER all state declarations to avoid temporal dead zone errors
+  const handleNormalizationSettingsChange = useCallback(async (newSettings: NormalizationSettings) => {
+    // Update local state first for immediate UI response
+    setNormalizationSettings(newSettings);
+
+    // Save to backend immediately (with all current settings)
+    try {
+      await api.saveSettings({
+        url,
+        username,
+        auto_rename_channel_number: autoRenameChannelNumber,
+        include_channel_number_in_name: includeChannelNumberInName,
+        channel_number_separator: channelNumberSeparator,
+        remove_country_prefix: removeCountryPrefix,
+        include_country_in_name: includeCountryInName,
+        country_separator: countrySeparator,
+        timezone_preference: timezonePreference,
+        show_stream_urls: showStreamUrls,
+        hide_auto_sync_groups: hideAutoSyncGroups,
+        hide_ungrouped_streams: hideUngroupedStreams,
+        hide_epg_urls: hideEpgUrls,
+        hide_m3u_urls: hideM3uUrls,
+        gracenote_conflict_mode: gracenoteConflictMode,
+        theme: theme,
+        default_channel_profile_ids: defaultChannelProfileIds,
+        epg_auto_match_threshold: epgAutoMatchThreshold,
+        custom_network_prefixes: customNetworkPrefixes,
+        custom_network_suffixes: customNetworkSuffixes,
+        normalization_settings: newSettings, // Use the new settings
+        stats_poll_interval: statsPollInterval,
+        user_timezone: userTimezone,
+        backend_log_level: backendLogLevel,
+        frontend_log_level: frontendLogLevel,
+        vlc_open_behavior: vlcOpenBehavior,
+        linked_m3u_accounts: linkedM3UAccounts,
+        stream_probe_batch_size: streamProbeBatchSize,
+        stream_probe_timeout: streamProbeTimeout,
+        probe_channel_groups: probeChannelGroups,
+        bitrate_sample_duration: bitrateSampleDuration,
+        parallel_probing_enabled: parallelProbingEnabled,
+        max_concurrent_probes: maxConcurrentProbes,
+        skip_recently_probed_hours: skipRecentlyProbedHours,
+        refresh_m3us_before_probe: refreshM3usBeforeProbe,
+        auto_reorder_after_probe: autoReorderAfterProbe,
+        stream_fetch_page_limit: streamFetchPageLimit,
+        stream_sort_priority: streamSortPriority,
+        stream_sort_enabled: streamSortEnabled,
+        deprioritize_failed_streams: deprioritizeFailedStreams,
+      });
+      logger.debug('Normalization settings saved automatically');
+    } catch (err) {
+      logger.error('Failed to auto-save normalization settings:', err);
+      // Don't show error to user for auto-save, just log it
+    }
+  }, [
+    url, username, autoRenameChannelNumber, includeChannelNumberInName,
+    channelNumberSeparator, removeCountryPrefix, includeCountryInName,
+    countrySeparator, timezonePreference, showStreamUrls, hideAutoSyncGroups,
+    hideUngroupedStreams, hideEpgUrls, hideM3uUrls, gracenoteConflictMode,
+    theme, defaultChannelProfileIds, epgAutoMatchThreshold,
+    customNetworkPrefixes, customNetworkSuffixes, statsPollInterval,
+    userTimezone, backendLogLevel, frontendLogLevel, vlcOpenBehavior,
+    linkedM3UAccounts, streamProbeBatchSize,
+    streamProbeTimeout, probeChannelGroups, bitrateSampleDuration,
+    parallelProbingEnabled, maxConcurrentProbes, skipRecentlyProbedHours, refreshM3usBeforeProbe,
+    autoReorderAfterProbe, streamFetchPageLimit, streamSortPriority,
+    streamSortEnabled, deprioritizeFailedStreams
+  ]);
+
   // DnD sensors for sort priority
   const sensors = useSensors(
     useSensor(PointerSensor),
@@ -282,7 +380,21 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
     loadAvailableChannelGroups();
     loadProbeHistory();
     checkForOngoingProbe();
+    loadM3UAccountsMaxStreams();
   }, []);
+
+  // Load M3U accounts to show guidance for max concurrent probes
+  const loadM3UAccountsMaxStreams = async () => {
+    try {
+      const accounts = await api.getM3UAccounts();
+      const maxStreamsList = accounts
+        .filter(a => a.is_active && a.max_streams > 0)
+        .map(a => ({ name: a.name, max_streams: a.max_streams }));
+      setM3uAccountsMaxStreams(maxStreamsList);
+    } catch (err) {
+      logger.warn('Failed to load M3U accounts for max streams guidance', err);
+    }
+  };
 
   // Check if a probe is already in progress (e.g., when returning to Settings tab)
   const checkForOngoingProbe = async () => {
@@ -450,6 +562,10 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       setEpgAutoMatchThreshold(settings.epg_auto_match_threshold ?? 80);
       setCustomNetworkPrefixes(settings.custom_network_prefixes ?? []);
       setCustomNetworkSuffixes(settings.custom_network_suffixes ?? []);
+      setNormalizationSettings(settings.normalization_settings ?? {
+        disabledBuiltinTags: [],
+        customTags: [],
+      });
       setStatsPollInterval(settings.stats_poll_interval ?? 10);
       setOriginalPollInterval(settings.stats_poll_interval ?? 10);
       setUserTimezone(settings.user_timezone ?? '');
@@ -464,12 +580,12 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       }
       setLinkedM3UAccounts(settings.linked_m3u_accounts ?? []);
       // Stream probe settings (scheduled probing is controlled by Task Engine)
-      setStreamProbeIntervalHours(settings.stream_probe_interval_hours ?? 24);
       setStreamProbeBatchSize(settings.stream_probe_batch_size ?? 10);
       setStreamProbeTimeout(settings.stream_probe_timeout ?? 30);
       setProbeChannelGroups(settings.probe_channel_groups ?? []);
       setBitrateSampleDuration(settings.bitrate_sample_duration ?? 10);
       setParallelProbingEnabled(settings.parallel_probing_enabled ?? true);
+      setMaxConcurrentProbes(settings.max_concurrent_probes ?? 8);
       setSkipRecentlyProbedHours(settings.skip_recently_probed_hours ?? 0);
       setRefreshM3usBeforeProbe(settings.refresh_m3us_before_probe ?? true);
       setOriginalRefreshM3usBeforeProbe(settings.refresh_m3us_before_probe ?? true);
@@ -561,6 +677,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         epg_auto_match_threshold: epgAutoMatchThreshold,
         custom_network_prefixes: customNetworkPrefixes,
         custom_network_suffixes: customNetworkSuffixes,
+        normalization_settings: normalizationSettings,
         stats_poll_interval: statsPollInterval,
         user_timezone: userTimezone,
         backend_log_level: backendLogLevel,
@@ -568,12 +685,12 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         vlc_open_behavior: vlcOpenBehavior,
         linked_m3u_accounts: linkedM3UAccounts,
         // Stream probe settings (scheduled probing is controlled by Task Engine)
-        stream_probe_interval_hours: streamProbeIntervalHours,
         stream_probe_batch_size: streamProbeBatchSize,
         stream_probe_timeout: streamProbeTimeout,
         probe_channel_groups: probeChannelGroups,
         bitrate_sample_duration: bitrateSampleDuration,
         parallel_probing_enabled: parallelProbingEnabled,
+        max_concurrent_probes: maxConcurrentProbes,
         skip_recently_probed_hours: skipRecentlyProbedHours,
         refresh_m3us_before_probe: refreshM3usBeforeProbe,
         auto_reorder_after_probe: autoReorderAfterProbe,
@@ -669,6 +786,17 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
     }
   };
 
+  const handleCancelProbe = async () => {
+    try {
+      const result = await api.cancelProbe();
+      setProbeAllResult({ success: true, message: result.message || 'Probe cancelled' });
+      // Progress polling will detect the cancelled status and update probingAll
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : 'Failed to cancel probe';
+      setProbeAllResult({ success: false, message: errorMessage });
+    }
+  };
+
   const handleResetProbeState = async () => {
     try {
       const result = await api.resetProbeState();
@@ -677,6 +805,16 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       setProbeProgress(null);
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'Failed to reset probe state';
+      setProbeAllResult({ success: false, message: errorMessage });
+    }
+  };
+
+  const handleClearAllProbeStats = async () => {
+    try {
+      const result = await api.clearAllStreamStats();
+      setProbeAllResult({ success: true, message: `Cleared ${result.cleared} probe stats` });
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : 'Failed to clear probe stats';
       setProbeAllResult({ success: false, message: errorMessage });
     }
   };
@@ -701,23 +839,18 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
     logger.info(`Re-probing ${failedStreamIds.length} failed streams`);
     setProbingAll(true);
     setProbeAllResult(null);
+    setProbeProgress(null);  // Reset progress to show fresh progress for re-probe
 
     try {
-      const result = await api.probeBulkStreams(failedStreamIds);
-      setProbeAllResult({
-        success: true,
-        message: `Re-probed ${result.probed} failed streams`
-      });
-
-      // Refresh probe history to show updated results
-      setTimeout(() => {
-        loadProbeHistory();
-      }, 1000);
+      // Use probeAllStreams with stream_ids filter for proper progress tracking
+      // Skip M3U refresh for re-probes (already have fresh data from initial probe)
+      const result = await api.probeAllStreams([], true, failedStreamIds);
+      setProbeAllResult({ success: true, message: result.message || `Re-probing ${failedStreamIds.length} failed streams...` });
+      // Progress polling will handle the rest - probingAll will be set to false when complete
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'Failed to re-probe streams';
       logger.error('Failed to re-probe failed streams', err);
       setProbeAllResult({ success: false, message: errorMessage });
-    } finally {
       setProbingAll(false);
     }
   };
@@ -731,7 +864,16 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
     }
   };
 
-  const handleShowHistoryResults = (historyEntry: ProbeHistoryEntry, type: 'success' | 'failed' | 'skipped') => {
+  const handleClearStream = async (streamId: number) => {
+    try {
+      await api.clearStreamStats([streamId]);
+      logger.info(`Cleared stats for stream ${streamId}`);
+    } catch (err) {
+      logger.error('Failed to clear stream stats', err);
+    }
+  };
+
+  const handleShowHistoryResults = async (historyEntry: ProbeHistoryEntry, type: 'success' | 'failed' | 'skipped') => {
     // Use the history entry's streams for the modal
     setProbeResults({
       success_streams: historyEntry.success_streams,
@@ -1399,81 +1541,6 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
             <span className="separator-preview">e.g., "101 {channelNumberSeparator} Sports Channel"</span>
           </div>
         )}
-
-        <div className="form-group">
-          <label>Country prefix handling</label>
-          <div className="radio-group">
-            <label className="radio-option">
-              <input
-                type="radio"
-                name="countryPrefix"
-                checked={removeCountryPrefix}
-                onChange={() => {
-                  setRemoveCountryPrefix(true);
-                  setIncludeCountryInName(false);
-                }}
-              />
-              <span className="radio-label">Remove</span>
-              <span className="radio-description">Strip country codes (US, UK, CA) from names</span>
-            </label>
-            <label className="radio-option">
-              <input
-                type="radio"
-                name="countryPrefix"
-                checked={!removeCountryPrefix && !includeCountryInName}
-                onChange={() => {
-                  setRemoveCountryPrefix(false);
-                  setIncludeCountryInName(false);
-                }}
-              />
-              <span className="radio-label">Keep as-is</span>
-              <span className="radio-description">Leave country prefixes unchanged</span>
-            </label>
-            <label className="radio-option">
-              <input
-                type="radio"
-                name="countryPrefix"
-                checked={includeCountryInName}
-                onChange={() => {
-                  setRemoveCountryPrefix(false);
-                  setIncludeCountryInName(true);
-                }}
-              />
-              <span className="radio-label">Normalize</span>
-              <span className="radio-description">Keep with consistent separator</span>
-            </label>
-          </div>
-        </div>
-
-        {includeCountryInName && (
-          <div className="separator-row indent">
-            <span className="separator-row-label">Separator:</span>
-            <div className="separator-buttons">
-              <button
-                type="button"
-                className={`separator-btn ${countrySeparator === '-' ? 'active' : ''}`}
-                onClick={() => setCountrySeparator('-')}
-              >
-                -
-              </button>
-              <button
-                type="button"
-                className={`separator-btn ${countrySeparator === ':' ? 'active' : ''}`}
-                onClick={() => setCountrySeparator(':')}
-              >
-                :
-              </button>
-              <button
-                type="button"
-                className={`separator-btn ${countrySeparator === '|' ? 'active' : ''}`}
-                onClick={() => setCountrySeparator('|')}
-              >
-                |
-              </button>
-            </div>
-            <span className="separator-preview">e.g., "US {countrySeparator} Sports Channel"</span>
-          </div>
-        )}
       </div>
 
       <div className="settings-section">
@@ -1618,174 +1685,126 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         </div>
       </div>
 
-      <div className="settings-section">
-        <div className="settings-section-header">
-          <span className="material-icons">label</span>
-          <h3>Custom Network Prefixes</h3>
+      {saveSuccess && (
+        <div className="save-success">
+          <span className="material-icons">check_circle</span>
+          Settings saved successfully
         </div>
+      )}
 
-        <div className="form-group">
-          <p className="form-hint" style={{ marginTop: 0, marginBottom: '0.75rem' }}>
-            Add custom prefixes to strip during bulk channel creation. These are merged with the built-in
-            list (CHAMP, PPV, NFL, NBA, etc.) when "Strip network prefixes" is enabled.
-          </p>
+      <div className="settings-actions">
+        <div className="settings-actions-left" />
+        <button className="btn-primary" onClick={handleSave} disabled={loading}>
+          <span className="material-icons">save</span>
+          {loading ? 'Saving...' : 'Save Settings'}
+        </button>
+      </div>
+    </div>
+  );
 
-          <div className="custom-prefix-input-row">
-            <input
-              type="text"
-              placeholder="Enter prefix (e.g., MARQUEE)"
-              value={newPrefixInput}
-              onChange={(e) => setNewPrefixInput(e.target.value.toUpperCase())}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && newPrefixInput.trim()) {
-                  e.preventDefault();
-                  const prefix = newPrefixInput.trim();
-                  // Check if prefix already exists in custom list or built-in list
-                  if (!customNetworkPrefixes.includes(prefix) && !NETWORK_PREFIXES.includes(prefix)) {
-                    setCustomNetworkPrefixes([...customNetworkPrefixes, prefix]);
-                  }
-                  setNewPrefixInput('');
-                }
-              }}
-              className="custom-prefix-input"
-            />
-            <button
-              type="button"
-              className="btn-secondary custom-prefix-add-btn"
-              onClick={() => {
-                const prefix = newPrefixInput.trim();
-                // Check if prefix already exists in custom list or built-in list
-                if (prefix && !customNetworkPrefixes.includes(prefix) && !NETWORK_PREFIXES.includes(prefix)) {
-                  setCustomNetworkPrefixes([...customNetworkPrefixes, prefix]);
-                }
-                setNewPrefixInput('');
-              }}
-              disabled={!newPrefixInput.trim() || NETWORK_PREFIXES.includes(newPrefixInput.trim()) || customNetworkPrefixes.includes(newPrefixInput.trim())}
-            >
-              <span className="material-icons">add</span>
-              Add
-            </button>
-          </div>
-
-          {newPrefixInput.trim() && NETWORK_PREFIXES.includes(newPrefixInput.trim()) && (
-            <p className="custom-prefix-warning">
-              "{newPrefixInput.trim()}" is already a built-in prefix
-            </p>
-          )}
-
-          {newPrefixInput.trim() && !NETWORK_PREFIXES.includes(newPrefixInput.trim()) && customNetworkPrefixes.includes(newPrefixInput.trim()) && (
-            <p className="custom-prefix-warning">
-              "{newPrefixInput.trim()}" is already in your custom list
-            </p>
-          )}
-
-          {customNetworkPrefixes.length > 0 && (
-            <div className="custom-prefix-list">
-              {customNetworkPrefixes.map((prefix) => (
-                <div key={prefix} className="custom-prefix-tag">
-                  <span>{prefix}</span>
-                  <button
-                    type="button"
-                    className="custom-prefix-remove"
-                    onClick={() => setCustomNetworkPrefixes(customNetworkPrefixes.filter(p => p !== prefix))}
-                    title="Remove prefix"
-                  >
-                    <span className="material-icons">close</span>
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
-
-          {customNetworkPrefixes.length === 0 && (
-            <p className="custom-prefix-empty">No custom prefixes defined. Built-in prefixes will be used.</p>
-          )}
-        </div>
+  const renderNormalizationPage = () => (
+    <div className="settings-page">
+      <div className="settings-page-header">
+        <h2>Channel Normalization</h2>
+        <p>Configure tag-based patterns for cleaning up channel names during bulk channel creation.</p>
       </div>
 
       <div className="settings-section">
         <div className="settings-section-header">
-          <span className="material-icons">label_off</span>
-          <h3>Custom Network Suffixes</h3>
+          <span className="material-icons">public</span>
+          <h3>Country Prefix Format</h3>
         </div>
+        <p className="form-hint" style={{ marginBottom: '1rem' }}>
+          Use the Country tag group below to strip country prefixes. Enable this option to instead
+          keep them with a consistent separator format.
+        </p>
 
         <div className="form-group">
-          <p className="form-hint" style={{ marginTop: 0, marginBottom: '0.75rem' }}>
-            Add custom suffixes to strip during bulk channel creation. These are merged with the built-in
-            list (ENGLISH, LIVE, BACKUP, etc.) when "Strip network suffixes" is enabled.
-          </p>
-
-          <div className="custom-prefix-input-row">
+          <label className="checkbox-label">
             <input
-              type="text"
-              placeholder="Enter suffix (e.g., SIMULCAST)"
-              value={newSuffixInput}
-              onChange={(e) => setNewSuffixInput(e.target.value.toUpperCase())}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && newSuffixInput.trim()) {
-                  e.preventDefault();
-                  const suffix = newSuffixInput.trim();
-                  // Check if suffix already exists in custom list or built-in list
-                  if (!customNetworkSuffixes.includes(suffix) && !NETWORK_SUFFIXES.includes(suffix)) {
-                    setCustomNetworkSuffixes([...customNetworkSuffixes, suffix]);
-                  }
-                  setNewSuffixInput('');
+              type="checkbox"
+              checked={includeCountryInName}
+              onChange={(e) => {
+                setIncludeCountryInName(e.target.checked);
+                if (e.target.checked) {
+                  setRemoveCountryPrefix(false);
                 }
               }}
-              className="custom-prefix-input"
             />
-            <button
-              type="button"
-              className="btn-secondary custom-prefix-add-btn"
-              onClick={() => {
-                const suffix = newSuffixInput.trim();
-                // Check if suffix already exists in custom list or built-in list
-                if (suffix && !customNetworkSuffixes.includes(suffix) && !NETWORK_SUFFIXES.includes(suffix)) {
-                  setCustomNetworkSuffixes([...customNetworkSuffixes, suffix]);
-                }
-                setNewSuffixInput('');
-              }}
-              disabled={!newSuffixInput.trim() || NETWORK_SUFFIXES.includes(newSuffixInput.trim()) || customNetworkSuffixes.includes(newSuffixInput.trim())}
-            >
-              <span className="material-icons">add</span>
-              Add
-            </button>
-          </div>
-
-          {newSuffixInput.trim() && NETWORK_SUFFIXES.includes(newSuffixInput.trim()) && (
-            <p className="custom-prefix-warning">
-              "{newSuffixInput.trim()}" is already a built-in suffix
-            </p>
-          )}
-
-          {newSuffixInput.trim() && !NETWORK_SUFFIXES.includes(newSuffixInput.trim()) && customNetworkSuffixes.includes(newSuffixInput.trim()) && (
-            <p className="custom-prefix-warning">
-              "{newSuffixInput.trim()}" is already in your custom list
-            </p>
-          )}
-
-          {customNetworkSuffixes.length > 0 && (
-            <div className="custom-prefix-list">
-              {customNetworkSuffixes.map((suffix) => (
-                <div key={suffix} className="custom-prefix-tag">
-                  <span>{suffix}</span>
-                  <button
-                    type="button"
-                    className="custom-prefix-remove"
-                    onClick={() => setCustomNetworkSuffixes(customNetworkSuffixes.filter(s => s !== suffix))}
-                    title="Remove suffix"
-                  >
-                    <span className="material-icons">close</span>
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
-
-          {customNetworkSuffixes.length === 0 && (
-            <p className="custom-prefix-empty">No custom suffixes defined. Built-in suffixes will be used.</p>
-          )}
+            <span>Normalize country prefix format</span>
+          </label>
         </div>
+
+        {includeCountryInName && (
+          <div className="separator-row indent">
+            <span className="separator-row-label">Separator:</span>
+            <div className="separator-buttons">
+              <button
+                type="button"
+                className={`separator-btn ${countrySeparator === '-' ? 'active' : ''}`}
+                onClick={() => setCountrySeparator('-')}
+              >
+                -
+              </button>
+              <button
+                type="button"
+                className={`separator-btn ${countrySeparator === ':' ? 'active' : ''}`}
+                onClick={() => setCountrySeparator(':')}
+              >
+                :
+              </button>
+              <button
+                type="button"
+                className={`separator-btn ${countrySeparator === '|' ? 'active' : ''}`}
+                onClick={() => setCountrySeparator('|')}
+              >
+                |
+              </button>
+            </div>
+            <span className="separator-preview">e.g., "US {countrySeparator} Sports Channel"</span>
+          </div>
+        )}
+      </div>
+
+      <NormalizationTagsSection
+        settings={normalizationSettings}
+        onChange={handleNormalizationSettingsChange}
+      />
+
+      {/* Preview Section */}
+      <div className="settings-section">
+        <div className="settings-section-header">
+          <span className="material-icons">preview</span>
+          <h3>Preview Normalization</h3>
+        </div>
+        <p className="form-hint" style={{ marginBottom: '1rem' }}>
+          Test how a stream name will be normalized with the current settings.
+        </p>
+        <div className="form-group">
+          <label htmlFor="normalization-preview-input">Stream Name</label>
+          <input
+            id="normalization-preview-input"
+            type="text"
+            value={normalizationPreviewInput}
+            onChange={(e) => setNormalizationPreviewInput(e.target.value)}
+            placeholder="Enter a stream name to preview (e.g., US: ESPN HD 1080p)"
+            style={{ width: '100%' }}
+          />
+        </div>
+        {normalizationPreviewInput.trim() && (
+          <div className="normalization-preview-result">
+            <div className="normalization-preview-label">Result:</div>
+            <div className="normalization-preview-value">
+              {normalizedPreviewResult || <span className="text-muted">(empty result)</span>}
+            </div>
+            {normalizedPreviewResult !== normalizationPreviewInput && (
+              <div className="normalization-preview-comparison">
+                <span className="material-icons" style={{ fontSize: '16px', color: 'var(--success-color)' }}>check_circle</span>
+                <span className="text-muted">Name was normalized</span>
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {saveSuccess && (
@@ -1824,19 +1843,6 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         </p>
 
         <div className="settings-group" style={{ marginTop: '1rem' }}>
-            <div className="form-group-vertical">
-              <label htmlFor="probeInterval">Probe interval (hours)</label>
-              <span className="form-description">How often to run scheduled probes (1-168 hours)</span>
-              <input
-                id="probeInterval"
-                type="number"
-                min="1"
-                max="168"
-                value={streamProbeIntervalHours}
-                onChange={(e) => setStreamProbeIntervalHours(Math.max(1, Math.min(168, parseInt(e.target.value) || 24)))}
-              />
-            </div>
-
             <div className="form-group-vertical">
               <label htmlFor="probeBatchSize">Batch size</label>
               <span className="form-description">Streams to probe per scheduled cycle (1-{totalStreamCount})</span>
@@ -1907,6 +1913,51 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                 Disable for sequential one-at-a-time probing.
               </span>
             </div>
+
+            {parallelProbingEnabled && (
+              <div className="form-group-vertical">
+                <label htmlFor="maxConcurrentProbes">Max concurrent probes</label>
+                <span className="form-description">
+                  Maximum number of streams to probe simultaneously (1-16).
+                  {m3uAccountsMaxStreams.length > 0 && (
+                    <>
+                      {' '}Based on your M3U providers:{' '}
+                      {m3uAccountsMaxStreams.map((a, i) => (
+                        <span key={a.name}>
+                          {i > 0 && ', '}
+                          <strong>{a.name}</strong>: {a.max_streams} streams
+                        </span>
+                      ))}
+                      . Set this to the lowest max_streams value to avoid rate limiting.
+                    </>
+                  )}
+                </span>
+                <input
+                  id="maxConcurrentProbes"
+                  type="text"
+                  inputMode="numeric"
+                  pattern="[0-9]*"
+                  value={maxConcurrentProbes}
+                  onChange={(e) => {
+                    const val = e.target.value.replace(/[^0-9]/g, '');
+                    if (val === '') {
+                      setMaxConcurrentProbes('' as unknown as number);
+                    } else {
+                      setMaxConcurrentProbes(parseInt(val, 10));
+                    }
+                  }}
+                  onBlur={(e) => {
+                    const val = parseInt(e.target.value, 10);
+                    setMaxConcurrentProbes(isNaN(val) ? 8 : Math.max(1, Math.min(16, val)));
+                  }}
+                />
+                {m3uAccountsMaxStreams.length > 0 && (
+                  <span className="form-hint">
+                    Recommended: {Math.min(...m3uAccountsMaxStreams.map(a => a.max_streams), 8)} (lowest provider limit)
+                  </span>
+                )}
+              </div>
+            )}
 
             <div className="form-group-vertical">
               <label htmlFor="skipRecentlyProbedHours">Skip recently probed streams (hours)</label>
@@ -2003,6 +2054,157 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
             </div>
           </div>
         </div>
+
+      {/* Probe Status Indicator - shows when probing or has result */}
+      {(probingAll || probeAllResult) && (
+        <div className="settings-section" style={{ padding: '1rem' }}>
+          {probingAll && (
+            <div style={{
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '0.5rem',
+              padding: '0.75rem 1rem',
+              backgroundColor: 'var(--bg-tertiary)',
+              borderRadius: '6px',
+              border: '1px solid var(--accent-primary)'
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                <span className="material-icons spinning" style={{ color: 'var(--accent-primary)' }}>sync</span>
+                <span>
+                  {probeProgress
+                    ? `Probing streams... ${probeProgress.current}/${probeProgress.total} (${probeProgress.percentage}%)`
+                    : 'Starting probe...'}
+                </span>
+              </div>
+              {probeProgress && (
+                <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginLeft: '2rem' }}>
+                  Success: {probeProgress.success_count} | Failed: {probeProgress.failed_count}
+                  {probeProgress.skipped_count > 0 && ` | Skipped: ${probeProgress.skipped_count}`}
+                </div>
+              )}
+              {probeProgress?.rate_limited && probeProgress.rate_limited_hosts && probeProgress.rate_limited_hosts.length > 0 && (
+                <div style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.5rem',
+                  marginTop: '0.25rem',
+                  padding: '0.5rem 0.75rem',
+                  backgroundColor: 'rgba(243, 156, 18, 0.1)',
+                  borderRadius: '4px',
+                  border: '1px solid rgba(243, 156, 18, 0.3)',
+                  fontSize: '0.85rem',
+                  color: '#f39c12'
+                }}>
+                  <span className="material-icons" style={{ fontSize: '1rem' }}>warning</span>
+                  <span>
+                    Rate limited by provider{probeProgress.rate_limited_hosts.length > 1 ? 's' : ''}: {' '}
+                    {probeProgress.rate_limited_hosts.map((h, i) => (
+                      <span key={h.host}>
+                        {i > 0 && ', '}
+                        {h.host} (waiting {Math.ceil(h.backoff_remaining)}s)
+                      </span>
+                    ))}
+                    {' '}— Consider reducing max concurrent probes
+                  </span>
+                </div>
+              )}
+              <div style={{ marginTop: '0.5rem', display: 'flex', justifyContent: 'flex-end' }}>
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  onClick={handleCancelProbe}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '0.25rem',
+                    padding: '0.4rem 0.8rem',
+                    fontSize: '0.85rem'
+                  }}
+                >
+                  <span className="material-icons" style={{ fontSize: '1rem' }}>stop</span>
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
+          {!probingAll && probeAllResult && (
+            <div style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.75rem',
+              padding: '0.75rem 1rem',
+              backgroundColor: 'var(--bg-tertiary)',
+              borderRadius: '6px',
+              border: `1px solid ${probeAllResult.success ? '#2ecc71' : '#e74c3c'}`
+            }}>
+              <span className="material-icons" style={{ color: probeAllResult.success ? '#2ecc71' : '#e74c3c' }}>
+                {probeAllResult.success ? 'check_circle' : 'error'}
+              </span>
+              <span>{probeAllResult.message}</span>
+              <button
+                onClick={() => setProbeAllResult(null)}
+                style={{
+                  marginLeft: 'auto',
+                  background: 'none',
+                  border: 'none',
+                  cursor: 'pointer',
+                  color: 'var(--text-secondary)',
+                  fontSize: '1.2rem',
+                  padding: '0.25rem'
+                }}
+                title="Dismiss"
+              >
+                ×
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Reset Stuck Probe Section - only show when NOT actively probing */}
+      {!probingAll && (
+        <div className="settings-section">
+          <div className="settings-section-header">
+            <span className="material-icons">restart_alt</span>
+            <h3>Reset Probe State</h3>
+          </div>
+          <p className="form-hint" style={{ marginBottom: '1rem' }}>
+            If a probe appears stuck or was interrupted (e.g., browser closed during probe),
+            use this button to clear the probe state and allow starting a new probe.
+          </p>
+          <div className="settings-group">
+            <div style={{ display: 'flex', justifyContent: 'flex-start', gap: '0.75rem' }}>
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={handleResetProbeState}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.5rem'
+                }}
+              >
+                <span className="material-icons">refresh</span>
+                Reset Stuck Probe
+              </button>
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={handleClearAllProbeStats}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.5rem'
+                }}
+                title="Delete all probe statistics from the database"
+              >
+                <span className="material-icons">delete_sweep</span>
+                Clear All Probe Stats
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Probe History Section */}
       {probeHistory.length > 0 && (
@@ -2224,6 +2426,13 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
             Channel Defaults
           </li>
           <li
+            className={`settings-nav-item ${activePage === 'normalization' ? 'active' : ''}`}
+            onClick={() => setActivePage('normalization')}
+          >
+            <span className="material-icons">label</span>
+            Channel Normalization
+          </li>
+          <li
             className={`settings-nav-item ${activePage === 'appearance' ? 'active' : ''}`}
             onClick={() => setActivePage('appearance')}
           >
@@ -2257,6 +2466,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       <div className="settings-content">
         {activePage === 'general' && renderGeneralPage()}
         {activePage === 'channel-defaults' && renderChannelDefaultsPage()}
+        {activePage === 'normalization' && renderNormalizationPage()}
         {activePage === 'appearance' && renderAppearancePage()}
         {activePage === 'scheduled-tasks' && <ScheduledTasksSection userTimezone={userTimezone} />}
         {activePage === 'alert-methods' && <AlertMethodSettings />}
@@ -2310,65 +2520,98 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                     No {emptyText} streams yet
                   </div>
                 ) : (
-                  <div className="probe-results-list">
-                    {streams.map((stream) => (
-                      <div
-                        key={stream.id}
-                        className={`probe-result-item ${probeResultsType === 'success' ? 'success' : probeResultsType === 'skipped' ? 'skipped' : 'failed'}`}
-                      >
-                        <div className="probe-result-item-info">
-                          <div className="probe-result-item-name">{stream.name}</div>
-                          <div className="probe-result-item-id">ID: {stream.id}</div>
-                          {probeResultsType === 'skipped' && 'reason' in stream && (stream as { reason?: string }).reason && (
-                            <div className="probe-result-item-reason" style={{ fontSize: '11px', color: '#f39c12', marginTop: '2px' }}>
-                              {(stream as { reason?: string }).reason}
-                            </div>
-                          )}
-                          {probeResultsType === 'failed' && 'error' in stream && (stream as { error?: string }).error && (
-                            <div className="probe-result-item-error" style={{ fontSize: '11px', color: '#e74c3c', marginTop: '2px' }}>
-                              {(stream as { error?: string }).error}
-                            </div>
-                          )}
-                        </div>
-                        {stream.url && (
-                          <button
-                            className="probe-result-copy-btn"
-                            onClick={() => handleCopyUrl(stream.url!)}
-                            title={copiedUrl === stream.url ? 'Copied!' : 'Copy stream URL'}
-                            style={{
-                              padding: '0.3rem 0.6rem',
-                              fontSize: '12px',
-                              backgroundColor: copiedUrl === stream.url ? 'rgba(46, 204, 113, 0.2)' : 'var(--bg-secondary)',
-                              color: copiedUrl === stream.url ? '#2ecc71' : 'var(--text-secondary)',
-                              border: '1px solid var(--border-color)',
-                              borderRadius: '4px',
-                              cursor: 'pointer',
-                              display: 'flex',
-                              alignItems: 'center',
-                              gap: '0.25rem',
-                              flexShrink: 0
-                            }}
-                          >
+                  <>
+                    <div className="probe-results-list">
+                      {streams.map((stream) => (
+                        <div
+                          key={stream.id}
+                          className={`probe-result-item ${probeResultsType === 'success' ? 'success' : probeResultsType === 'skipped' ? 'skipped' : 'failed'}`}
+                        >
+                          <div className="probe-result-item-info">
+                            <div className="probe-result-item-name">{stream.name}</div>
+                            <div className="probe-result-item-id">ID: {stream.id}</div>
+                            {probeResultsType === 'skipped' && 'reason' in stream && (stream as { reason?: string }).reason && (
+                              <div className="probe-result-item-reason" style={{ fontSize: '11px', color: '#f39c12', marginTop: '2px' }}>
+                                {(stream as { reason?: string }).reason}
+                              </div>
+                            )}
+                            {probeResultsType === 'failed' && 'error' in stream && (stream as { error?: string }).error && (
+                              <div className="probe-result-item-error" style={{
+                                fontSize: '12px',
+                                color: '#e74c3c',
+                                marginTop: '4px',
+                                padding: '4px 8px',
+                                backgroundColor: 'rgba(231, 76, 60, 0.1)',
+                                borderRadius: '4px',
+                                borderLeft: '3px solid #e74c3c'
+                              }}>
+                                <strong>Error:</strong> {(stream as { error?: string }).error}
+                              </div>
+                            )}
+                          </div>
+                          <div style={{ display: 'flex', gap: '0.25rem', flexShrink: 0 }}>
+                            {probeResultsType === 'failed' && (
+                              <button
+                                onClick={() => handleClearStream(stream.id)}
+                                title="Clear probe stats for this stream"
+                                style={{
+                                  padding: '0.3rem 0.6rem',
+                                  fontSize: '12px',
+                                  backgroundColor: 'var(--bg-secondary)',
+                                  color: 'var(--text-secondary)',
+                                  border: '1px solid var(--border-color)',
+                                  borderRadius: '4px',
+                                  cursor: 'pointer',
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  gap: '0.25rem'
+                                }}
+                              >
+                                <span className="material-icons" style={{ fontSize: '14px' }}>delete_outline</span>
+                                Clear
+                              </button>
+                            )}
+                            {stream.url && (
+                              <button
+                                className="probe-result-copy-btn"
+                                onClick={() => handleCopyUrl(stream.url!)}
+                                title={copiedUrl === stream.url ? 'Copied!' : 'Copy stream URL'}
+                                style={{
+                                  padding: '0.3rem 0.6rem',
+                                  fontSize: '12px',
+                                  backgroundColor: copiedUrl === stream.url ? 'rgba(46, 204, 113, 0.2)' : 'var(--bg-secondary)',
+                                  color: copiedUrl === stream.url ? '#2ecc71' : 'var(--text-secondary)',
+                                  border: '1px solid var(--border-color)',
+                                  borderRadius: '4px',
+                                  cursor: 'pointer',
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  gap: '0.25rem'
+                                }}
+                              >
                             <span className="material-icons" style={{ fontSize: '14px' }}>
                               {copiedUrl === stream.url ? 'check' : 'content_copy'}
                             </span>
                             {copiedUrl === stream.url ? 'Copied' : 'Copy URL'}
                           </button>
                         )}
-                      </div>
-                    ))}
-                  </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </>
                 );
               })()}
             </div>
 
             <div className="probe-results-modal-footer">
-              {probeResultsType === 'failed' && probeResults.failed_count > 0 && (
+              {probeResultsType === 'failed' && probeResults.failed_streams.length > 0 && (
                 <button
                   onClick={handleRerunFailed}
                   className="probe-results-rerun-btn"
+                  disabled={probingAll}
                 >
-                  Re-probe Failed Streams
+                  {probingAll ? 'Re-probing...' : 'Re-probe Failed Streams'}
                 </button>
               )}
               <button
@@ -2660,20 +2903,26 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                       epg_auto_match_threshold: epgAutoMatchThreshold,
                       custom_network_prefixes: customNetworkPrefixes,
                       custom_network_suffixes: customNetworkSuffixes,
+                      normalization_settings: normalizationSettings,
                       stats_poll_interval: statsPollInterval,
                       user_timezone: userTimezone,
                       backend_log_level: backendLogLevel,
                       frontend_log_level: frontendLogLevel,
                       vlc_open_behavior: vlcOpenBehavior,
                       linked_m3u_accounts: linkedM3UAccounts,
-                      stream_probe_interval_hours: streamProbeIntervalHours,
                       stream_probe_batch_size: streamProbeBatchSize,
                       stream_probe_timeout: streamProbeTimeout,
                       probe_channel_groups: tempProbeChannelGroups,
                       bitrate_sample_duration: bitrateSampleDuration,
                       parallel_probing_enabled: parallelProbingEnabled,
+                      max_concurrent_probes: maxConcurrentProbes,
+                      skip_recently_probed_hours: skipRecentlyProbedHours,
+                      refresh_m3us_before_probe: refreshM3usBeforeProbe,
+                      auto_reorder_after_probe: autoReorderAfterProbe,
+                      stream_fetch_page_limit: streamFetchPageLimit,
                       stream_sort_priority: streamSortPriority,
                       stream_sort_enabled: streamSortEnabled,
+                      deprioritize_failed_streams: deprioritizeFailedStreams,
                     });
                     logger.info('Probe channel groups saved');
                   } catch (err) {

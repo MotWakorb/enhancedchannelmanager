@@ -14,7 +14,7 @@ test.describe('Scheduled Tasks', () => {
     // Tasks may be in a section or separate tab
     const taskSection = appPage.locator(
       selectors.taskList +
-        ', [data-testid="task-list"], .scheduled-tasks, text=Scheduled Tasks'
+        ', [data-testid="task-list"], .scheduled-tasks, :has-text("Scheduled Tasks")'
     );
 
     const exists = await taskSection.count();
@@ -83,7 +83,7 @@ test.describe('Task Scheduling', () => {
   test('can view task schedule information', async ({ appPage }) => {
     // Look for schedule-related content
     const scheduleInfo = appPage.locator(
-      '.schedule, [data-testid*="schedule"], text=Schedule, text=Next run, text=Interval'
+      '.schedule, [data-testid*="schedule"], :has-text("Schedule"), :has-text("Next run"), :has-text("Interval")'
     );
 
     const count = await scheduleInfo.count();
@@ -91,7 +91,7 @@ test.describe('Task Scheduling', () => {
   });
 
   test('schedule shows next run time', async ({ appPage }) => {
-    const nextRun = appPage.locator('text=Next run, text=next run, [data-testid*="next-run"]');
+    const nextRun = appPage.locator(':has-text("Next run"), :has-text("next run"), [data-testid*="next-run"]');
     const count = await nextRun.count();
     // May or may not be visible
     expect(count).toBeGreaterThanOrEqual(0);
@@ -104,7 +104,7 @@ test.describe('Task Status', () => {
 
     // Look for toggle switches or enable/disable indicators
     const toggles = appPage.locator(
-      'input[type="checkbox"], .toggle, [role="switch"], text=Enabled, text=Disabled'
+      'input[type="checkbox"], .toggle, [role="switch"], :has-text("Enabled"), :has-text("Disabled")'
     );
 
     const count = await toggles.count();
@@ -114,7 +114,7 @@ test.describe('Task Status', () => {
   test('tasks show last run status', async ({ appPage }) => {
     await navigateToTab(appPage, 'settings');
 
-    const lastRun = appPage.locator('text=Last run, text=last run, [data-testid*="last-run"]');
+    const lastRun = appPage.locator(':has-text("Last run"), :has-text("last run"), [data-testid*="last-run"]');
     const count = await lastRun.count();
     expect(count).toBeGreaterThanOrEqual(0);
   });

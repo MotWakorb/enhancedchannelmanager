@@ -87,3 +87,50 @@ export const DEFAULT_QUALITY_PRIORITY = 30;
 export const COUNTRY_PREFIXES = [
   'US', 'USA', 'UK', 'CA', 'AU', 'NZ', 'IE', 'IN', 'PH', 'MX', 'BR', 'DE', 'FR', 'ES', 'IT', 'NL', 'BE', 'CH', 'AT', 'PL', 'SE', 'NO', 'DK', 'FI', 'PT', 'GR', 'TR', 'RU', 'JP', 'KR', 'CN', 'TW', 'HK', 'SG', 'MY', 'TH', 'ID', 'VN', 'PK', 'BD', 'LK', 'ZA', 'EG', 'NG', 'KE', 'GH', 'AR', 'CL', 'CO', 'PE', 'VE', 'EC', 'PR', 'DO', 'CU', 'JM', 'TT', 'BB', 'CR', 'PA', 'HN', 'SV', 'GT', 'NI', 'BZ', 'IL', 'AE', 'SA', 'QA', 'KW', 'BH', 'OM', 'JO', 'LB', 'IR', 'IQ', 'AF', 'LATAM', 'LATINO', 'LATIN',
 ];
+
+/**
+ * Tag group metadata for the normalization UI.
+ * Each group contains a display title, Material icon name, and array of available tags.
+ * Tags are user-configurable patterns that get stripped during stream name normalization.
+ */
+export interface TagGroupMetadata {
+  title: string;
+  icon: string;
+  description: string;
+  tags: string[];
+}
+
+export type TagGroupName = 'country' | 'league' | 'network' | 'quality' | 'timezone';
+
+export const TAG_GROUPS: Record<TagGroupName, TagGroupMetadata> = {
+  country: {
+    title: 'Country Prefixes',
+    icon: 'public',
+    description: 'Country codes stripped from the beginning of stream names (e.g., "US: ESPN" → "ESPN")',
+    tags: [...COUNTRY_PREFIXES],
+  },
+  league: {
+    title: 'League Prefixes',
+    icon: 'sports_football',
+    description: 'Sports league names stripped from stream names (e.g., "NFL: Cardinals" → "Cardinals")',
+    tags: [...LEAGUE_PREFIXES],
+  },
+  network: {
+    title: 'Network Tags',
+    icon: 'tv',
+    description: 'Network prefixes and suffixes stripped from channel names',
+    tags: [...new Set([...NETWORK_PREFIXES, ...NETWORK_SUFFIXES])],
+  },
+  quality: {
+    title: 'Quality Suffixes',
+    icon: 'high_quality',
+    description: 'Resolution and codec tags stripped from stream names (e.g., "ESPN HD" → "ESPN")',
+    tags: [...QUALITY_SUFFIXES],
+  },
+  timezone: {
+    title: 'Timezone Suffixes',
+    icon: 'schedule',
+    description: 'Regional timezone markers stripped from stream names (e.g., "ESPN EAST" → "ESPN")',
+    tags: [...TIMEZONE_SUFFIXES],
+  },
+};

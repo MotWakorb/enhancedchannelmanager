@@ -84,13 +84,15 @@ export interface ChannelManagerTabProps {
 
   // Provider & Filter Settings
   providerGroupSettings: Record<number, M3UGroupSetting>;
+  deletedGroupIds?: Set<number>; // Groups staged for deletion in edit mode
   channelListFilters: ChannelListFilterSettings;
   onChannelListFiltersChange: (updates: Partial<ChannelListFilterSettings>) => void;
   newlyCreatedGroupIds: Set<number>;
   onTrackNewlyCreatedGroup: (groupId: number) => void;
 
   // Streams
-  streams: Stream[];
+  allStreams: Stream[];  // All streams (unfiltered) - for ChannelsPane lookups
+  streams: Stream[];     // Filtered streams - for StreamsPane display
   providers: M3UAccount[];
   streamGroups: string[];
   streamsLoading: boolean;
@@ -133,11 +135,15 @@ export interface ChannelManagerTabProps {
   // Target group ID and starting number for pre-filling the bulk create modal
   externalTriggerTargetGroupId?: number | null;
   externalTriggerStartingNumber?: number | null;
+  // Manual entry trigger (opens bulk create modal without pre-selected streams)
+  externalTriggerManualEntry?: boolean;
   onExternalTriggerHandled?: () => void;
   onStreamGroupDrop?: (groupNames: string[], streamIds: number[]) => void;
   // Bulk streams drop (for opening bulk create modal when dropping multiple streams)
   // Includes target group ID and starting channel number for pre-filling the modal
   onBulkStreamsDrop?: (streamIds: number[], groupId: number | null, startingNumber: number) => void;
+  // Callback to open create channel modal (routes to bulk create modal in manual entry mode)
+  onOpenCreateChannelModal?: () => void;
   onBulkCreateFromGroup: (
     streams: Stream[],
     startingNumber: number,
@@ -165,6 +171,10 @@ export interface ChannelManagerTabProps {
   // External trigger to open edit modal from Guide tab
   externalChannelToEdit?: Channel | null;
   onExternalChannelEditHandled?: () => void;
+
+  // Lazy loading - callback when a stream group is expanded
+  // Passes the group name so only that group's streams can be loaded
+  onStreamGroupExpand?: (groupName: string) => void;
 }
 
 export function ChannelManagerTab({
@@ -247,12 +257,14 @@ export function ChannelManagerTab({
 
   // Provider & Filter Settings
   providerGroupSettings,
+  deletedGroupIds,
   channelListFilters,
   onChannelListFiltersChange,
   newlyCreatedGroupIds,
   onTrackNewlyCreatedGroup,
 
   // Streams
+  allStreams,
   streams,
   providers,
   streamGroups,
@@ -293,9 +305,11 @@ export function ChannelManagerTab({
   externalTriggerStreamIds,
   externalTriggerTargetGroupId,
   externalTriggerStartingNumber,
+  externalTriggerManualEntry,
   onExternalTriggerHandled,
   onStreamGroupDrop,
   onBulkStreamsDrop,
+  onOpenCreateChannelModal,
   onBulkCreateFromGroup,
   onCheckConflicts,
   onGetHighestChannelNumber,
@@ -303,6 +317,9 @@ export function ChannelManagerTab({
   // External trigger to open edit modal from Guide tab
   externalChannelToEdit,
   onExternalChannelEditHandled,
+
+  // Lazy loading
+  onStreamGroupExpand,
 }: ChannelManagerTabProps) {
   // Compute set of stream IDs that are already mapped to channels
   const mappedStreamIds = useMemo(() => {
@@ -319,7 +336,7 @@ export function ChannelManagerTab({
         <ChannelsPane
           channelGroups={channelGroups}
           channels={channels}
-          streams={streams}
+          streams={allStreams}
           providers={providers}
           selectedChannelId={selectedChannelId}
           onChannelSelect={onChannelSelect}
@@ -385,6 +402,7 @@ export function ChannelManagerTab({
           dispatcharrUrl={dispatcharrUrl}
           onStreamGroupDrop={onStreamGroupDrop}
           onBulkStreamsDrop={onBulkStreamsDrop}
+          onOpenCreateChannelModal={onOpenCreateChannelModal}
           showStreamUrls={showStreamUrls}
           epgAutoMatchThreshold={epgAutoMatchThreshold}
           gracenoteConflictMode={gracenoteConflictMode}
@@ -412,12 +430,15 @@ export function ChannelManagerTab({
           isEditMode={isEditMode}
           channelGroups={channelGroups}
           selectedChannelGroups={selectedGroups}
+          providerGroupSettings={providerGroupSettings}
+          deletedGroupIds={deletedGroupIds}
           channelProfiles={channelProfiles}
           channelDefaults={channelDefaults}
           externalTriggerGroupNames={externalTriggerGroupNames}
           externalTriggerStreamIds={externalTriggerStreamIds}
           externalTriggerTargetGroupId={externalTriggerTargetGroupId}
           externalTriggerStartingNumber={externalTriggerStartingNumber}
+          externalTriggerManualEntry={externalTriggerManualEntry}
           onExternalTriggerHandled={onExternalTriggerHandled}
           onBulkCreateFromGroup={onBulkCreateFromGroup}
           onCheckConflicts={onCheckConflicts}
@@ -426,6 +447,7 @@ export function ChannelManagerTab({
           hideUngroupedStreams={hideUngroupedStreams}
           onRefreshStreams={onRefreshStreams}
           mappedStreamIds={mappedStreamIds}
+          onGroupExpand={onStreamGroupExpand}
         />
       }
     />

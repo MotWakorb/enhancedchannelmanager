@@ -23,7 +23,6 @@ logger = logging.getLogger(__name__)
 # Default configuration
 DEFAULT_PROBE_TIMEOUT = 30  # seconds
 DEFAULT_PROBE_BATCH_SIZE = 10  # streams per cycle
-DEFAULT_PROBE_INTERVAL_HOURS = 24  # daily
 BITRATE_SAMPLE_DURATION = 8  # seconds to sample stream for bitrate measurement
 
 # Probe history persistence
@@ -47,11 +46,11 @@ class StreamProber:
         client,
         probe_timeout: int = DEFAULT_PROBE_TIMEOUT,
         probe_batch_size: int = DEFAULT_PROBE_BATCH_SIZE,
-        probe_interval_hours: int = DEFAULT_PROBE_INTERVAL_HOURS,
         user_timezone: str = "",  # IANA timezone name
         probe_channel_groups: list[str] = None,  # List of group names to probe (empty/None = all groups)
         bitrate_sample_duration: int = 10,  # Duration in seconds to sample stream for bitrate (10, 20, or 30)
         parallel_probing_enabled: bool = True,  # Probe streams from different M3Us simultaneously
+        max_concurrent_probes: int = 8,  # Max simultaneous probes when parallel probing is enabled (1-16)
         skip_recently_probed_hours: int = 0,  # Skip streams probed within last N hours (0 = always probe)
         refresh_m3us_before_probe: bool = True,  # Refresh all M3U accounts before starting probe
         auto_reorder_after_probe: bool = False,  # Automatically reorder streams in channels after probe completes
@@ -63,11 +62,11 @@ class StreamProber:
         self.client = client
         self.probe_timeout = probe_timeout
         self.probe_batch_size = probe_batch_size
-        self.probe_interval_hours = probe_interval_hours
         self.user_timezone = user_timezone
         self.probe_channel_groups = probe_channel_groups or []
         self.bitrate_sample_duration = bitrate_sample_duration
         self.parallel_probing_enabled = parallel_probing_enabled
+        self.max_concurrent_probes = max(1, min(16, max_concurrent_probes))  # Clamp to 1-16
         self.skip_recently_probed_hours = skip_recently_probed_hours
         self.refresh_m3us_before_probe = refresh_m3us_before_probe
         self.auto_reorder_after_probe = auto_reorder_after_probe
@@ -93,6 +92,10 @@ class StreamProber:
         # Probe history - list of last 5 probe runs
         self._probe_history = []  # List of {timestamp, total, success_count, failed_count, status, success_streams, failed_streams}
 
+        # Rate limit tracking for adaptive backoff
+        self._rate_limited_hosts = {}  # host -> {"last_429_time": timestamp, "backoff_until": timestamp, "consecutive_429s": count}
+        self._rate_limit_lock = None  # Will be initialized as asyncio.Lock() when needed
+
         # Load probe history from disk on initialization
         self._load_probe_history()
 
@@ -109,6 +112,36 @@ class StreamProber:
             logger.error(f"Failed to load probe history from {PROBE_HISTORY_FILE}: {e}")
             self._probe_history = []
 
+    def update_channel_groups(self, channel_groups: list[str]) -> None:
+        """Update the channel groups to probe.
+
+        This allows updating the prober's channel groups without restarting the service.
+        Called when settings are saved to ensure scheduled probes use the latest groups.
+
+        Args:
+            channel_groups: List of channel group names to probe. Empty list means all groups.
+        """
+        old_groups = self.probe_channel_groups
+        self.probe_channel_groups = channel_groups or []
+        logger.info(f"Updated probe_channel_groups: {old_groups} -> {self.probe_channel_groups}")
+
+    def update_probing_settings(self, parallel_probing_enabled: bool, max_concurrent_probes: int) -> None:
+        """Update the parallel probing settings.
+
+        This allows updating the prober's concurrency settings without restarting the service.
+        Called when settings are saved to ensure probes use the latest limits.
+
+        Args:
+            parallel_probing_enabled: Whether to enable parallel probing.
+            max_concurrent_probes: Max simultaneous probes (clamped to 1-16).
+        """
+        old_parallel = self.parallel_probing_enabled
+        old_concurrent = self.max_concurrent_probes
+        self.parallel_probing_enabled = parallel_probing_enabled
+        self.max_concurrent_probes = max(1, min(16, max_concurrent_probes))
+        logger.info(f"Updated probing settings: parallel_probing_enabled={old_parallel}->{self.parallel_probing_enabled}, "
+                    f"max_concurrent_probes={old_concurrent}->{self.max_concurrent_probes}")
+
     def _persist_probe_history(self):
         """Persist probe history to disk."""
         try:
@@ -120,6 +153,94 @@ class StreamProber:
             logger.debug(f"Persisted {len(self._probe_history)} probe history entries to {PROBE_HISTORY_FILE}")
         except Exception as e:
             logger.error(f"Failed to persist probe history to {PROBE_HISTORY_FILE}: {e}")
+
+    def _extract_host_from_url(self, url: str) -> Optional[str]:
+        """Extract the host/domain from a URL."""
+        if not url:
+            return None
+        try:
+            from urllib.parse import urlparse
+            parsed = urlparse(url)
+            return parsed.netloc or parsed.hostname
+        except Exception:
+            return None
+
+    async def _is_host_rate_limited(self, host: str) -> bool:
+        """Check if a host is currently rate-limited."""
+        if not host or host not in self._rate_limited_hosts:
+            return False
+
+        host_info = self._rate_limited_hosts[host]
+        current_time = time.time()
+
+        # Check if backoff period has expired
+        if current_time >= host_info.get("backoff_until", 0):
+            return False
+
+        return True
+
+    async def _get_host_backoff_delay(self, host: str) -> float:
+        """Get the remaining backoff delay for a rate-limited host."""
+        if not host or host not in self._rate_limited_hosts:
+            return 0
+
+        host_info = self._rate_limited_hosts[host]
+        current_time = time.time()
+        backoff_until = host_info.get("backoff_until", 0)
+
+        if current_time >= backoff_until:
+            return 0
+
+        return backoff_until - current_time
+
+    async def _record_rate_limit_error(self, url: str):
+        """Record a 429 rate limit error for adaptive backoff."""
+        host = self._extract_host_from_url(url)
+        if not host:
+            return
+
+        current_time = time.time()
+
+        if host not in self._rate_limited_hosts:
+            self._rate_limited_hosts[host] = {
+                "last_429_time": current_time,
+                "backoff_until": current_time + 5.0,  # Initial 5 second backoff
+                "consecutive_429s": 1
+            }
+            logger.warning(f"[RATE-LIMIT] Host {host} rate-limited, initial backoff 5s")
+        else:
+            host_info = self._rate_limited_hosts[host]
+            consecutive = host_info.get("consecutive_429s", 0) + 1
+
+            # Exponential backoff: 5s, 10s, 20s, 40s, max 60s
+            backoff_seconds = min(5.0 * (2 ** (consecutive - 1)), 60.0)
+            host_info["last_429_time"] = current_time
+            host_info["backoff_until"] = current_time + backoff_seconds
+            host_info["consecutive_429s"] = consecutive
+
+            logger.warning(f"[RATE-LIMIT] Host {host} rate-limited again ({consecutive} consecutive), backoff {backoff_seconds}s")
+
+    async def _record_successful_probe(self, url: str):
+        """Record a successful probe to reset rate limit tracking for a host."""
+        host = self._extract_host_from_url(url)
+        if not host or host not in self._rate_limited_hosts:
+            return
+
+        # Reset consecutive count on success, but keep backoff active until it expires
+        host_info = self._rate_limited_hosts[host]
+        if host_info.get("consecutive_429s", 0) > 0:
+            # Reduce consecutive count on success
+            host_info["consecutive_429s"] = max(0, host_info["consecutive_429s"] - 1)
+            if host_info["consecutive_429s"] == 0:
+                # Remove from rate-limited hosts when fully recovered
+                del self._rate_limited_hosts[host]
+                logger.info(f"[RATE-LIMIT] Host {host} recovered from rate limiting")
+
+    def _is_rate_limit_error(self, error_message: str) -> bool:
+        """Check if an error message indicates a 429 rate limit error."""
+        if not error_message:
+            return False
+        return "429" in error_message or "Too Many Requests" in error_message
 
     async def start(self):
         """Initialize the stream prober (check ffprobe availability).
@@ -181,142 +302,6 @@ class StreamProber:
             "message": f"Probe state forcibly reset (was_in_progress={was_in_progress})"
         }
 
-    async def _probe_stale_streams(self):
-        """Find and probe streams that haven't been probed recently."""
-        if self._probing_in_progress:
-            logger.debug("Probe already in progress, skipping")
-            return
-
-        self._probing_in_progress = True
-        self._probe_cancelled = False  # Reset cancellation flag
-        start_time = datetime.utcnow()
-        probed_count = 0
-
-        # Reset tracking variables
-        self._probe_success_streams = []
-        self._probe_failed_streams = []
-        self._probe_skipped_streams = []
-        self._probe_progress_total = 0
-        self._probe_progress_current = 0
-        self._probe_progress_success_count = 0
-        self._probe_progress_failed_count = 0
-        self._probe_progress_skipped_count = 0
-        self._probe_progress_status = "probing"
-        self._probe_progress_current_stream = ""
-
-        try:
-            cutoff = datetime.utcnow() - timedelta(hours=self.probe_interval_hours)
-
-            # Get all streams from Dispatcharr
-            streams = await self._fetch_all_streams()
-            if not streams:
-                logger.debug("No streams found to probe")
-                return
-
-            # Find streams needing probe (never probed or stale)
-            session = get_session()
-            try:
-                probed_recently = {
-                    stat.stream_id
-                    for stat in session.query(StreamStats).filter(
-                        StreamStats.last_probed > cutoff
-                    ).all()
-                }
-
-                to_probe = [s for s in streams if s["id"] not in probed_recently]
-                to_probe = to_probe[: self.probe_batch_size]  # Limit batch size
-
-                if not to_probe:
-                    logger.debug("No streams need probing")
-                    return
-
-                logger.info(f"Scheduled probe: {len(to_probe)} streams to probe")
-
-                # Set progress tracking
-                self._probe_progress_total = len(to_probe)
-
-                # Build stream_id -> channel mapping for auto-reorder
-                stream_to_channels = {}
-                for stream in streams:
-                    stream_id = stream["id"]
-                    channel_id = stream.get("channel")
-                    if channel_id:
-                        if stream_id not in stream_to_channels:
-                            stream_to_channels[stream_id] = []
-                        stream_to_channels[stream_id].append(channel_id)
-
-                for stream in to_probe:
-                    if self._probe_cancelled:
-                        break
-
-                    stream_id = stream["id"]
-                    stream_url = stream.get("url")
-                    stream_name = stream.get("name")
-
-                    self._probe_progress_current = probed_count + 1
-                    self._probe_progress_current_stream = stream_name or f"Stream {stream_id}"
-
-                    result = await self.probe_stream(stream_id, stream_url, stream_name)
-
-                    # Track success/failure
-                    probe_status = result.get("probe_status", "failed")
-                    stream_info = {"id": stream_id, "name": stream_name, "url": stream_url}
-                    if probe_status == "success":
-                        self._probe_progress_success_count += 1
-                        self._probe_success_streams.append(stream_info)
-                    else:
-                        self._probe_progress_failed_count += 1
-                        # Include error message for failed streams
-                        stream_info["error"] = result.get("error_message", "Unknown error")
-                        self._probe_failed_streams.append(stream_info)
-
-                    probed_count += 1
-                    await asyncio.sleep(1)  # Rate limiting
-
-                logger.info(f"Scheduled probe completed: {probed_count} streams probed")
-                self._probe_progress_status = "completed"
-                self._probe_progress_current_stream = ""
-
-                # Auto-reorder streams if configured
-                reordered_channels = []
-                if self.auto_reorder_after_probe:
-                    logger.info("=" * 60)
-                    logger.info("[AUTO-REORDER] Starting automatic stream reorder after probe")
-                    logger.info(f"[AUTO-REORDER] Configuration:")
-                    logger.info(f"[AUTO-REORDER]   Sort priority: {self.stream_sort_priority}")
-                    logger.info(f"[AUTO-REORDER]   Sort enabled: {self.stream_sort_enabled}")
-                    logger.info(f"[AUTO-REORDER]   Deprioritize failed: {self.deprioritize_failed_streams}")
-                    logger.info(f"[AUTO-REORDER]   Channel groups filter: {self.probe_channel_groups or 'ALL GROUPS'}")
-                    logger.info("=" * 60)
-                    self._probe_progress_status = "reordering"
-                    self._probe_progress_current_stream = "Reordering streams..."
-                    try:
-                        # Use the same channel groups filter as configured
-                        channel_groups_override = self.probe_channel_groups if self.probe_channel_groups else None
-                        reordered_channels = await self._auto_reorder_channels(channel_groups_override, stream_to_channels)
-                        logger.info("=" * 60)
-                        logger.info(f"[AUTO-REORDER] Completed: {len(reordered_channels)} channels reordered")
-                        for ch in reordered_channels:
-                            logger.info(f"[AUTO-REORDER]   - {ch['channel_name']} (id={ch['channel_id']}): {ch['stream_count']} streams")
-                        logger.info("=" * 60)
-                    except Exception as e:
-                        logger.error(f"[AUTO-REORDER] Failed: {e}")
-
-                # Save to probe history
-                self._save_probe_history(start_time, probed_count, reordered_channels=reordered_channels)
-
-            finally:
-                session.close()
-        except Exception as e:
-            logger.error(f"Scheduled probe failed: {e}")
-            self._probe_progress_status = "failed"
-            self._probe_progress_current_stream = ""
-
-            # Save failed run to history
-            self._save_probe_history(start_time, probed_count, error=str(e))
-        finally:
-            self._probing_in_progress = False
-
     async def probe_stream(
         self, stream_id: int, url: Optional[str], name: Optional[str] = None
     ) -> dict:
@@ -362,6 +347,20 @@ class StreamProber:
             logger.error(f"Stream {stream_id} probe failed: {error_msg}")
             return self._save_probe_result(stream_id, name, None, "failed", error_msg)
 
+    async def _check_http_status(self, url: str) -> Optional[int]:
+        """Make a HEAD request to check the HTTP status code of a URL."""
+        try:
+            import httpx
+            async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
+                response = await client.head(
+                    url,
+                    headers={"User-Agent": "VLC/3.0.20 LibVLC/3.0.20"}
+                )
+                return response.status_code
+        except Exception as e:
+            logger.debug(f"HTTP status check failed for {url}: {e}")
+            return None
+
     async def _run_ffprobe(self, url: str) -> dict:
         """Run ffprobe and parse JSON output."""
         cmd = [
@@ -396,6 +395,14 @@ class StreamProber:
             error_text = stderr.decode().strip()[:500] if stderr else ""
             if not error_text:
                 error_text = f"Exit code {process.returncode} (no stderr output)"
+
+            # If ffprobe reports a vague HTTP error, check the actual status code
+            if "4XX" in error_text or "5XX" in error_text or "Server returned" in error_text:
+                status_code = await self._check_http_status(url)
+                if status_code:
+                    error_text = f"{error_text} (HTTP {status_code})"
+                    logger.info(f"[PROBE-HTTP] URL {url[:80]}... returned HTTP {status_code}")
+
             raise RuntimeError(f"ffprobe failed: {error_text}")
 
         output = stdout.decode()
@@ -484,6 +491,7 @@ class StreamProber:
             stats.probe_status = status
             stats.error_message = error_message
             stats.last_probed = datetime.utcnow()
+            stats.dismissed_at = None  # Clear dismissal when re-probed
 
             if ffprobe_data and status == "success":
                 self._parse_ffprobe_data(stats, ffprobe_data)
@@ -1027,7 +1035,7 @@ class StreamProber:
 
         return sorted_ids
 
-    async def probe_all_streams(self, channel_groups_override: list[str] = None, skip_m3u_refresh: bool = False):
+    async def probe_all_streams(self, channel_groups_override: list[str] = None, skip_m3u_refresh: bool = False, stream_ids_filter: list[int] = None):
         """Probe all streams that are in channels (runs in background).
 
         Uses parallel probing - streams from different M3U accounts (or same M3U with
@@ -1039,8 +1047,11 @@ class StreamProber:
                                     If empty list, probes all groups.
             skip_m3u_refresh: If True, skip M3U refresh even if configured.
                              Use this for on-demand probes from the UI.
+            stream_ids_filter: Optional list of specific stream IDs to probe.
+                              If provided, only these streams will be probed (useful for re-probing failed streams).
         """
-        logger.debug(f"[PROBE] probe_all_streams called with channel_groups_override={channel_groups_override}, skip_m3u_refresh={skip_m3u_refresh}")
+        logger.info(f"[PROBE] probe_all_streams called with channel_groups_override={channel_groups_override}, skip_m3u_refresh={skip_m3u_refresh}, stream_ids_filter={len(stream_ids_filter) if stream_ids_filter else 0}")
+        logger.info(f"[PROBE] Settings: parallel_probing_enabled={self.parallel_probing_enabled}, max_concurrent_probes={self.max_concurrent_probes}")
         logger.debug(f"[PROBE] self.probe_channel_groups={self.probe_channel_groups}")
 
         if self._probing_in_progress:
@@ -1135,6 +1146,14 @@ class StreamProber:
             streams_to_probe = [s for s in all_streams if s["id"] in channel_stream_ids]
             logger.debug(f"[PROBE-MATCH] Matched {len(streams_to_probe)} streams to probe")
 
+            # If stream_ids_filter is provided, further filter to only those specific streams
+            # This is used for re-probing specific failed streams
+            if stream_ids_filter:
+                stream_ids_filter_set = set(stream_ids_filter)
+                original_count = len(streams_to_probe)
+                streams_to_probe = [s for s in streams_to_probe if s["id"] in stream_ids_filter_set]
+                logger.info(f"[PROBE-FILTER] Filtered to {len(streams_to_probe)} specific streams (from {original_count} channel streams, requested {len(stream_ids_filter)})")
+
             # Skip recently probed streams if configured
             if self.skip_recently_probed_hours > 0:
                 from datetime import timedelta
@@ -1164,9 +1183,23 @@ class StreamProber:
             self._probe_progress_total = len(streams_to_probe)
             self._probe_progress_status = "probing"
 
+            # Log diagnostic info if no streams to probe
+            if len(streams_to_probe) == 0:
+                logger.warning(f"[PROBE-DIAGNOSTIC] No streams to probe! channel_stream_ids={len(channel_stream_ids)}, "
+                              f"all_streams={len(all_streams)}, stream_ids_filter={len(stream_ids_filter) if stream_ids_filter else 'None'}, "
+                              f"groups_override={channel_groups_override}, self.probe_channel_groups={self.probe_channel_groups}")
+            else:
+                logger.info(f"[PROBE-DIAGNOSTIC] Starting probe of {len(streams_to_probe)} streams")
+
             if self.parallel_probing_enabled:
                 # ========== PARALLEL PROBING MODE ==========
-                logger.info(f"Starting parallel probe of {len(streams_to_probe)} streams (filtered from {len(all_streams)} total)")
+                logger.info(f"[PROBE-PARALLEL] Starting parallel probe of {len(streams_to_probe)} streams (filtered from {len(all_streams)} total)")
+                logger.info(f"[PROBE-PARALLEL] Rate limit settings: max_concurrent_probes={self.max_concurrent_probes}")
+
+                # Global concurrency limit - max simultaneous probes regardless of M3U account
+                # This prevents system resource exhaustion when probing many streams
+                global_probe_semaphore = asyncio.Semaphore(self.max_concurrent_probes)
+                logger.info(f"[PROBE-PARALLEL] Semaphore created with limit={self.max_concurrent_probes}")
 
                 # Track our own probe connections per M3U (separate from Dispatcharr's active connections)
                 # This lets us know how many streams WE are currently probing per M3U
@@ -1176,6 +1209,10 @@ class StreamProber:
                 # Results lock for thread-safe updates
                 results_lock = asyncio.Lock()
 
+                # Track active concurrent probes for debugging
+                active_probe_count = [0]  # Use list to allow modification in nested function
+                active_probe_count_lock = asyncio.Lock()
+
                 async def probe_single_stream(stream: dict, display_string: str) -> tuple[str, dict]:
                     """Probe a single stream and return (status, stream_info)."""
                     stream_id = stream["id"]
@@ -1183,20 +1220,50 @@ class StreamProber:
                     stream_url = stream.get("url", "")
                     m3u_account_id = stream.get("m3u_account")
 
-                    try:
-                        result = await self.probe_stream(stream_id, stream_url, stream_name)
-                        probe_status = result.get("probe_status", "failed")
-                        stream_info = {"id": stream_id, "name": stream_name, "url": stream_url}
-                        # Include error message for failed streams
-                        if probe_status != "success":
-                            stream_info["error"] = result.get("error_message", "Unknown error")
-                        return (probe_status, stream_info)
-                    finally:
-                        # Release our probe connection for this M3U
-                        if m3u_account_id:
-                            async with probe_connections_lock:
-                                if m3u_account_id in probe_connections:
-                                    probe_connections[m3u_account_id] = max(0, probe_connections[m3u_account_id] - 1)
+                    # Check if host is rate-limited and wait for backoff
+                    host = self._extract_host_from_url(stream_url)
+                    if host:
+                        backoff_delay = await self._get_host_backoff_delay(host)
+                        if backoff_delay > 0:
+                            logger.debug(f"[RATE-LIMIT] Waiting {backoff_delay:.1f}s before probing {host}")
+                            await asyncio.sleep(backoff_delay)
+
+                    # Acquire global semaphore to limit total concurrent probes
+                    async with global_probe_semaphore:
+                        # Track concurrent probe count
+                        async with active_probe_count_lock:
+                            active_probe_count[0] += 1
+                            current_count = active_probe_count[0]
+                            if current_count > self.max_concurrent_probes:
+                                logger.error(f"[PROBE-PARALLEL] RATE LIMIT EXCEEDED! active={current_count}, limit={self.max_concurrent_probes}")
+                            else:
+                                logger.debug(f"[PROBE-PARALLEL] Acquired semaphore: active={current_count}/{self.max_concurrent_probes}, stream={stream_id}")
+                        try:
+                            result = await self.probe_stream(stream_id, stream_url, stream_name)
+                            probe_status = result.get("probe_status", "failed")
+                            error_message = result.get("error_message", "")
+                            stream_info = {"id": stream_id, "name": stream_name, "url": stream_url}
+
+                            # Check for rate limit errors and record them
+                            if probe_status != "success":
+                                stream_info["error"] = error_message or "Unknown error"
+                                if self._is_rate_limit_error(error_message):
+                                    await self._record_rate_limit_error(stream_url)
+                            else:
+                                # Record success to help host recover from rate limiting
+                                await self._record_successful_probe(stream_url)
+
+                            return (probe_status, stream_info)
+                        finally:
+                            # Track concurrent probe count decrement
+                            async with active_probe_count_lock:
+                                active_probe_count[0] -= 1
+                                logger.debug(f"[PROBE-PARALLEL] Released semaphore: active={active_probe_count[0]}/{self.max_concurrent_probes}, stream={stream_id}")
+                            # Release our probe connection for this M3U
+                            if m3u_account_id:
+                                async with probe_connections_lock:
+                                    if m3u_account_id in probe_connections:
+                                        probe_connections[m3u_account_id] = max(0, probe_connections[m3u_account_id] - 1)
 
                 # Process streams with parallel probing
                 pending_streams = list(streams_to_probe)  # Streams waiting to be probed
@@ -1299,11 +1366,17 @@ class StreamProber:
                             streams_started_this_round.append(stream)
 
                             # Update progress display with active streams
+                            # Show actual concurrent probe count (inside semaphore), not queued tasks
                             active_displays = [info[1] for info in active_tasks.values()]
+                            async with active_probe_count_lock:
+                                actual_concurrent = active_probe_count[0]
                             if len(active_displays) == 1:
                                 self._probe_progress_current_stream = active_displays[0]
+                            elif actual_concurrent <= 1:
+                                # Tasks queued but only 0-1 actually running
+                                self._probe_progress_current_stream = f"[{len(active_displays)} queued] {active_displays[0]}"
                             else:
-                                self._probe_progress_current_stream = f"[{len(active_displays)} parallel] {active_displays[0]}"
+                                self._probe_progress_current_stream = f"[{actual_concurrent} parallel] {active_displays[0]}"
 
                     # Remove started streams from pending
                     for stream in streams_started_this_round:
@@ -1400,24 +1473,40 @@ class StreamProber:
                         probed_count += 1
                         continue
 
+                    # Check if host is rate-limited and wait for backoff (sequential mode)
+                    host = self._extract_host_from_url(stream_url)
+                    if host:
+                        backoff_delay = await self._get_host_backoff_delay(host)
+                        if backoff_delay > 0:
+                            logger.debug(f"[RATE-LIMIT] Waiting {backoff_delay:.1f}s before probing {host}")
+                            await asyncio.sleep(backoff_delay)
+
                     result = await self.probe_stream(stream_id, stream_url, stream_name)
 
                     # Track success/failure
                     probe_status = result.get("probe_status", "failed")
+                    error_message = result.get("error_message", "")
                     stream_info = {"id": stream_id, "name": stream_name, "url": stream_url}
                     if probe_status == "success":
                         self._probe_progress_success_count += 1
                         self._probe_success_streams.append(stream_info)
+                        # Record success to help host recover from rate limiting
+                        await self._record_successful_probe(stream_url)
                     else:
                         self._probe_progress_failed_count += 1
                         # Include error message for failed streams
-                        stream_info["error"] = result.get("error_message", "Unknown error")
+                        stream_info["error"] = error_message or "Unknown error"
                         self._probe_failed_streams.append(stream_info)
+                        # Check for rate limit errors and record them
+                        if self._is_rate_limit_error(error_message):
+                            await self._record_rate_limit_error(stream_url)
 
                     probed_count += 1
-                    await asyncio.sleep(0.5)  # Rate limiting
+                    await asyncio.sleep(0.5)  # Base rate limiting delay
 
             logger.info(f"Completed probing {probed_count} streams")
+            logger.info(f"[PROBE-DIAGNOSTIC] Final counts: success={self._probe_progress_success_count}, "
+                       f"failed={self._probe_progress_failed_count}, skipped={self._probe_progress_skipped_count}")
             self._probe_progress_status = "completed"
             self._probe_progress_current_stream = ""
 
@@ -1452,6 +1541,9 @@ class StreamProber:
 
     def get_probe_progress(self) -> dict:
         """Get current probe all streams progress."""
+        # Get rate limit summary
+        rate_limit_info = self._get_rate_limit_summary()
+
         progress = {
             "in_progress": self._probing_in_progress,
             "total": self._probe_progress_total,
@@ -1461,12 +1553,39 @@ class StreamProber:
             "success_count": self._probe_progress_success_count,
             "failed_count": self._probe_progress_failed_count,
             "skipped_count": self._probe_progress_skipped_count,
-            "percentage": round((self._probe_progress_current / self._probe_progress_total * 100) if self._probe_progress_total > 0 else 0, 1)
+            "percentage": round((self._probe_progress_current / self._probe_progress_total * 100) if self._probe_progress_total > 0 else 0, 1),
+            "rate_limited": rate_limit_info["is_rate_limited"],
+            "rate_limited_hosts": rate_limit_info["hosts"],
+            "max_backoff_remaining": rate_limit_info["max_backoff_remaining"]
         }
         # Log when probing is in progress for debugging
         if self._probing_in_progress:
             logger.debug(f"[PROBE-PROGRESS] in_progress=True, status={self._probe_progress_status}, {self._probe_progress_current}/{self._probe_progress_total}")
         return progress
+
+    def _get_rate_limit_summary(self) -> dict:
+        """Get a summary of current rate limit status for all hosts."""
+        current_time = time.time()
+        rate_limited_hosts = []
+        max_backoff = 0
+
+        for host, info in self._rate_limited_hosts.items():
+            backoff_until = info.get("backoff_until", 0)
+            remaining = backoff_until - current_time
+
+            if remaining > 0:
+                rate_limited_hosts.append({
+                    "host": host,
+                    "backoff_remaining": round(remaining, 1),
+                    "consecutive_429s": info.get("consecutive_429s", 0)
+                })
+                max_backoff = max(max_backoff, remaining)
+
+        return {
+            "is_rate_limited": len(rate_limited_hosts) > 0,
+            "hosts": rate_limited_hosts,
+            "max_backoff_remaining": round(max_backoff, 1) if max_backoff > 0 else 0
+        }
 
     def get_probe_results(self) -> dict:
         """Get detailed results of the last probe all streams operation."""
@@ -1512,6 +1631,8 @@ class StreamProber:
 
         reorder_msg = f", {len(reordered_channels or [])} channels reordered" if reordered_channels else ""
         logger.info(f"Saved probe history entry: {total} streams, {self._probe_progress_success_count} success, {self._probe_progress_failed_count} failed, {self._probe_progress_skipped_count} skipped{reorder_msg}")
+        logger.info(f"[PROBE-DIAGNOSTIC] History entry stream lists: success_streams={len(history_entry['success_streams'])}, "
+                   f"failed_streams={len(history_entry['failed_streams'])}, skipped_streams={len(history_entry['skipped_streams'])}")
 
         # Persist to disk
         self._persist_probe_history()
@@ -1532,15 +1653,30 @@ class StreamProber:
 
     @staticmethod
     def get_stats_by_stream_ids(stream_ids: list[int]) -> dict[int, dict]:
-        """Get stats for multiple streams by their IDs."""
+        """Get stats for multiple streams by their IDs.
+
+        Uses batched queries to avoid massive IN clauses that can cause
+        performance issues with large numbers of stream IDs.
+        """
         if not stream_ids:
             return {}
+
+        # Batch size of 500 to avoid massive IN clauses
+        # SQLite handles this much better than 1900+ parameters
+        BATCH_SIZE = 500
+        result = {}
+
         session = get_session()
         try:
-            stats = session.query(StreamStats).filter(
-                StreamStats.stream_id.in_(stream_ids)
-            ).all()
-            return {s.stream_id: s.to_dict() for s in stats}
+            # Process in batches to avoid huge IN clauses
+            for i in range(0, len(stream_ids), BATCH_SIZE):
+                batch = stream_ids[i:i + BATCH_SIZE]
+                stats = session.query(StreamStats).filter(
+                    StreamStats.stream_id.in_(batch)
+                ).all()
+                for s in stats:
+                    result[s.stream_id] = s.to_dict()
+            return result
         finally:
             session.close()
 

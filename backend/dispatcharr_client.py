@@ -1,3 +1,4 @@
+import asyncio
 import httpx
 import logging
 from typing import Optional
@@ -15,11 +16,24 @@ class DispatcharrClient:
         self.access_token: Optional[str] = None
         self.refresh_token: Optional[str] = None
         self._client = httpx.AsyncClient(timeout=30.0)
+        # Lock to prevent multiple concurrent authentication attempts
+        # This prevents race conditions when many requests arrive simultaneously
+        self._auth_lock = asyncio.Lock()
 
     async def _ensure_authenticated(self) -> None:
-        """Ensure we have a valid access token."""
-        if not self.access_token:
-            await self._login()
+        """Ensure we have a valid access token.
+
+        Uses a lock to prevent multiple concurrent requests from all
+        triggering authentication at the same time (race condition).
+        """
+        # Quick check without lock - if we have a token, we're good
+        if self.access_token:
+            return
+
+        # Acquire lock and check again (double-check locking pattern)
+        async with self._auth_lock:
+            if not self.access_token:
+                await self._login()
 
     async def _login(self) -> None:
         """Authenticate and obtain JWT tokens."""

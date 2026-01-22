@@ -25,7 +25,7 @@ import { logger } from '../utils/logger';
 import { ChannelProfilesListModal } from './ChannelProfilesListModal';
 import type { ChannelDefaults } from './StreamsPane';
 import * as api from '../services/api';
-import type { NumberSeparator, SortCriterion, GracenoteConflictMode } from '../services/api';
+import type { SortCriterion, GracenoteConflictMode } from '../services/api';
 import { HistoryToolbar } from './HistoryToolbar';
 import { BulkEPGAssignModal, type EPGAssignment } from './BulkEPGAssignModal';
 import { BulkLCNFetchModal, type LCNAssignment } from './BulkLCNFetchModal';
@@ -124,6 +124,8 @@ interface ChannelsPaneProps {
   // Bulk streams drop callback (for opening bulk create modal when dropping multiple streams)
   // Includes target group ID and starting channel number for pre-filling the modal
   onBulkStreamsDrop?: (streamIds: number[], groupId: number | null, startingNumber: number) => void;
+  // Callback to open create channel modal (routes to bulk create modal in manual entry mode)
+  onOpenCreateChannelModal?: () => void;
   // Appearance settings
   showStreamUrls?: boolean;
   // EPG matching settings
@@ -298,7 +300,7 @@ interface DroppableGroupHeaderProps {
   onSortStreamsByMode?: (mode: 'smart' | 'resolution' | 'bitrate' | 'framerate') => void;
   isSortingByQuality?: boolean;
   enabledCriteria?: Record<'resolution' | 'bitrate' | 'framerate', boolean>;
-  hasFailedStreams?: boolean;
+  failedChannelCount?: number;
 }
 
 const DroppableGroupHeader = memo(function DroppableGroupHeader({
@@ -325,7 +327,7 @@ const DroppableGroupHeader = memo(function DroppableGroupHeader({
   onSortStreamsByMode,
   isSortingByQuality = false,
   enabledCriteria = { resolution: true, bitrate: true, framerate: true },
-  hasFailedStreams = false,
+  failedChannelCount = 0,
 }: DroppableGroupHeaderProps) {
   const droppableId = `group-${groupId}`;
   const { isOver, setNodeRef } = useDroppable({
@@ -465,9 +467,10 @@ const DroppableGroupHeader = memo(function DroppableGroupHeader({
         </span>
       )}
       <span className="group-count">{channelCount}</span>
-      {hasFailedStreams && (
-        <span className="group-failed-indicator" title="One or more channels have failed streams">
+      {failedChannelCount > 0 && (
+        <span className="group-failed-indicator" title={`${failedChannelCount} channel${failedChannelCount !== 1 ? 's' : ''} with failed streams`}>
           <span className="material-icons">error</span>
+          <span className="failed-count">{failedChannelCount}</span>
         </span>
       )}
       {channelRange && channelRange.min !== null && channelRange.max !== null && (
@@ -672,6 +675,8 @@ export function ChannelsPane({
   onStreamGroupDrop,
   // Bulk streams drop
   onBulkStreamsDrop,
+  // Create channel modal
+  onOpenCreateChannelModal,
   // Appearance settings
   showStreamUrls = true,
   // EPG matching settings
@@ -685,6 +690,10 @@ export function ChannelsPane({
   // Suppress unused variable warnings - these are passed through but handled in parent
   void _onStageBulkAssignNumbers;
   void onLogosChange;
+  // These props are no longer used directly since channel creation is routed to bulk create modal
+  void onCreateChannel;
+  void onStageAddStream;
+  void channelProfiles;
   const [expandedGroups, setExpandedGroups] = useState<GroupState>({});
   const [groupOrder, setGroupOrder] = useState<number[]>([]); // Custom order for groups
   const [dragOverChannelId, setDragOverChannelId] = useState<number | null>(null);
@@ -706,29 +715,7 @@ export function ChannelsPane({
   } = useDropdown();
 
   // Modal management with useModal hook
-  const createModal = useModal();
   const profilesModal = useModal();
-  const [newChannelName, setNewChannelName] = useState('');
-  const [newChannelNumber, setNewChannelNumber] = useState('');
-  const [newChannelGroup, setNewChannelGroup] = useState<number | ''>('');
-  const [newChannelLogoId, setNewChannelLogoId] = useState<number | null>(null); // Logo from dropped stream
-  const [newChannelLogoUrl, setNewChannelLogoUrl] = useState<string | null>(null); // Logo URL from dropped stream (used if no logo_id match)
-  const [newChannelTvgId, setNewChannelTvgId] = useState<string | null>(null); // tvg_id from dropped stream
-  const [newChannelStreamIds, setNewChannelStreamIds] = useState<number[]>([]); // Streams to assign after channel creation
-  const [newChannelSelectedProfiles, setNewChannelSelectedProfiles] = useState<Set<number>>(new Set());
-  const [newChannelProfilesExpanded, setNewChannelProfilesExpanded] = useState(false);
-  // Naming options state for single channel create
-  const [newChannelNamingExpanded, setNewChannelNamingExpanded] = useState(false);
-  const [newChannelAddNumber, setNewChannelAddNumber] = useState(false);
-  const [newChannelNumberSeparator, setNewChannelNumberSeparator] = useState<NumberSeparator>('-');
-  const [newChannelStripCountry, setNewChannelStripCountry] = useState(false);
-  const [groupSearchText, setGroupSearchText] = useState('');
-  const [showGroupDropdown, setShowGroupDropdown] = useState(false);
-  const [creating, setCreating] = useState(false);
-  const conflictDialog = useModal();
-  const [conflictingChannelNumber, setConflictingChannelNumber] = useState<number | null>(null);
-  const groupInputRef = useRef<HTMLInputElement>(null);
-  const groupDropdownListRef = useRef<HTMLDivElement>(null);
 
   // Edit channel number state
   const [editingChannelId, setEditingChannelId] = useState<number | null>(null);
@@ -919,29 +906,14 @@ export function ChannelsPane({
     }
   }, [externalChannelToEdit, onExternalChannelEditHandled]);
 
-  // Close group autocomplete dropdown when clicking outside
-  useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-      if (
-        groupInputRef.current &&
-        !groupInputRef.current.contains(event.target as Node) &&
-        groupDropdownListRef.current &&
-        !groupDropdownListRef.current.contains(event.target as Node)
-      ) {
-        setShowGroupDropdown(false);
-      }
-    };
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, []);
-
-
-  // Filter channel groups based on search text (for create modal dropdown)
-  const searchFilteredChannelGroups = useMemo(() => {
-    return channelGroups.filter((group) =>
-      group.name.toLowerCase().includes(groupSearchText.toLowerCase())
-    );
-  }, [channelGroups, groupSearchText]);
+  // Create a Map for O(1) logo lookups instead of O(n) array.find()
+  const logoMap = useMemo(() => {
+    const map = new Map<number, Logo>();
+    for (const logo of logos) {
+      map.set(logo.id, logo);
+    }
+    return map;
+  }, [logos]);
 
   // Load streams when a channel is selected
   useEffect(() => {
@@ -1007,7 +979,7 @@ export function ChannelsPane({
     fetchStreamStats();
   }, [channelStreams]);
 
-  // Pre-load stream stats for all streams assigned to channels (for hasFailedStreams indicator)
+  // Pre-load stream stats for all streams assigned to channels (for failed streams indicators)
   useEffect(() => {
     const preloadAllStreamStats = async () => {
       // Collect all unique stream IDs from all channels
@@ -1348,6 +1320,24 @@ export function ChannelsPane({
     setChannelStreams((prev) => prev.filter((s) => s.id !== streamId));
   };
 
+  // Handle clearing probe stats for a stream
+  const handleClearStreamStats = async (streamId: number) => {
+    console.log('handleClearStreamStats called with streamId:', streamId);
+    try {
+      const result = await api.clearStreamStats([streamId]);
+      console.log('clearStreamStats result:', result);
+      // Remove from local stats map so UI updates immediately
+      setStreamStatsMap((prev) => {
+        const next = new Map(prev);
+        next.delete(streamId);
+        console.log('Removed streamId from stats map:', streamId);
+        return next;
+      });
+    } catch (err) {
+      console.error('Failed to clear stream stats:', err);
+    }
+  };
+
   // Handle initiating channel deletion
   const handleDeleteChannelClick = (channel: Channel) => {
     setChannelToDelete(channel);
@@ -1398,16 +1388,16 @@ export function ChannelsPane({
     editChannelModal.open();
   };
 
-  // Helper to get logo URL for a channel
-  const getChannelLogoUrl = (channel: Channel): string | null => {
+  // Helper to get logo URL for a channel - uses logoMap for O(1) lookup
+  const getChannelLogoUrl = useCallback((channel: Channel): string | null => {
     // For staged channels (during edit mode), use the temporary logo URL
     if (channel._stagedLogoUrl) {
       return channel._stagedLogoUrl;
     }
     if (!channel.logo_id) return null;
-    const logo = logos.find((l) => l.id === channel.logo_id);
+    const logo = logoMap.get(channel.logo_id);
     return logo?.cache_url || logo?.url || null;
-  };
+  }, [logoMap]);
 
   // Handle confirming channel deletion
   const handleConfirmDelete = async () => {
@@ -2098,22 +2088,6 @@ export function ChannelsPane({
     }
   };
 
-  // Close the create modal and reset form state
-  const handleCloseCreateModal = () => {
-    createModal.close();
-    conflictDialog.close();
-    setConflictingChannelNumber(null);
-    setNewChannelName('');
-    setNewChannelNumber('');
-    setNewChannelGroup('');
-    setNewChannelLogoId(null);
-    setNewChannelLogoUrl(null);
-    setNewChannelTvgId(null);
-    setNewChannelStreamIds([]);
-    setGroupSearchText('');
-    setShowGroupDropdown(false);
-  };
-
   // Load hidden groups
   const loadHiddenGroups = async () => {
     try {
@@ -2208,324 +2182,33 @@ export function ChannelsPane({
     return maxNumber + 1;
   };
 
-  // Check if a channel number already exists
-  // Use localChannels in edit mode since it may have been modified
-  const channelNumberExists = (num: number): boolean => {
-    const sourceChannels = isEditMode ? localChannels : channels;
-    return sourceChannels.some((ch) => ch.channel_number === num);
-  };
-
-  // Handle stream dropped on group header - creates new channel with stream name
-  // Supports multiple streams being dropped at once (e.g., same stream from different providers)
+  // Handle stream dropped on group header - creates new channel(s) with stream name(s)
+  // Always routes to bulk create modal for consistent UX (works for 1 or many streams)
   const handleStreamDropOnGroup = (groupId: number | 'ungrouped', streamIds: number[]) => {
-    if (streamIds.length === 0) return;
-
-    // Get all dropped streams
-    const droppedStreams = streamIds
-      .map(id => allStreams.find((s: Stream) => s.id === id))
-      .filter((s): s is Stream => s !== undefined);
-    if (droppedStreams.length === 0) return;
-
-    // Check if there are multiple unique stream names (would create multiple channels)
-    const uniqueNormalizedNames = new Set(
-      droppedStreams.map(s => api.normalizeStreamName(s.name, 'both'))
-    );
+    if (streamIds.length === 0 || !onBulkStreamsDrop) return;
 
     // Calculate the starting channel number for this group
     const numericGroupId = groupId === 'ungrouped' ? '' : groupId;
     const nextNumber = getNextChannelNumberForGroup(numericGroupId);
     const targetGroupId = groupId === 'ungrouped' ? null : groupId;
 
-    // If multiple unique names, use bulk create modal instead
-    if (uniqueNormalizedNames.size > 1 && onBulkStreamsDrop) {
-      onBulkStreamsDrop(streamIds, targetGroupId, nextNumber);
-      return;
-    }
-
-    // Use the first stream's info for the channel details
-    const firstStream = droppedStreams[0];
-
-    // Use stream name as the channel name
-    setNewChannelName(firstStream.name);
-
-    // Find matching logo by URL if stream has a logo_url
-    // Always capture the logo_url for fallback during commit
-    setNewChannelLogoUrl(firstStream.logo_url ?? null);
-    if (firstStream.logo_url) {
-      const matchingLogo = logos.find(
-        (logo) => logo.url === firstStream.logo_url || logo.cache_url === firstStream.logo_url
-      );
-      setNewChannelLogoId(matchingLogo?.id ?? null);
-    } else {
-      setNewChannelLogoId(null);
-    }
-
-    // Capture the stream's tvg_id for the new channel
-    setNewChannelTvgId(firstStream.tvg_id ?? null);
-
-    // Store all stream IDs to assign after channel creation
-    setNewChannelStreamIds(streamIds);
-
-    // Set the group (handle 'ungrouped' case)
-    if (groupId === 'ungrouped') {
-      setNewChannelGroup('');
-      setGroupSearchText('');
-    } else {
-      const group = channelGroups.find((g) => g.id === groupId);
-      setNewChannelGroup(groupId);
-      setGroupSearchText(group?.name || '');
-    }
-    setNewChannelNumber(nextNumber.toString());
-
-    // Set default channel profile from settings
-    setNewChannelSelectedProfiles(
-      channelDefaults?.defaultChannelProfileId ? new Set([channelDefaults.defaultChannelProfileId]) : new Set()
-    );
-    setNewChannelProfilesExpanded(false);
-
-    // Set naming options from settings defaults
-    setNewChannelAddNumber(channelDefaults?.includeChannelNumberInName ?? false);
-    setNewChannelNumberSeparator((channelDefaults?.channelNumberSeparator as NumberSeparator) || '-');
-    setNewChannelStripCountry(channelDefaults?.removeCountryPrefix ?? false);
-    setNewChannelNamingExpanded(false);
-
-    // Open the create modal
-    createModal.open();
+    // Route to bulk create modal (handles single or multiple streams)
+    onBulkStreamsDrop(streamIds, targetGroupId, nextNumber);
   };
 
-  // Handle stream dropped between channels - creates new channel at specific position
+  // Handle stream dropped between channels - creates new channel(s) at specific position
+  // Always routes to bulk create modal for consistent UX (works for 1 or many streams)
   const handleStreamDropAtPosition = (
     groupId: number | 'ungrouped',
     streamIds: number[],
     insertAtChannelNumber: number
   ) => {
-    if (streamIds.length === 0) return;
-
-    // Get all dropped streams
-    const droppedStreams = streamIds
-      .map(id => allStreams.find((s: Stream) => s.id === id))
-      .filter((s): s is Stream => s !== undefined);
-    if (droppedStreams.length === 0) return;
-
-    // Check if there are multiple unique stream names (would create multiple channels)
-    const uniqueNormalizedNames = new Set(
-      droppedStreams.map(s => api.normalizeStreamName(s.name, 'both'))
-    );
+    if (streamIds.length === 0 || !onBulkStreamsDrop) return;
 
     const targetGroupId = groupId === 'ungrouped' ? null : groupId;
 
-    // If multiple unique names, use bulk create modal instead
-    if (uniqueNormalizedNames.size > 1 && onBulkStreamsDrop) {
-      onBulkStreamsDrop(streamIds, targetGroupId, insertAtChannelNumber);
-      return;
-    }
-
-    // Use the first stream's info for the channel details
-    const firstStream = droppedStreams[0];
-
-    // Use stream name as the channel name
-    setNewChannelName(firstStream.name);
-
-    // Find matching logo by URL if stream has a logo_url
-    setNewChannelLogoUrl(firstStream.logo_url ?? null);
-    if (firstStream.logo_url) {
-      const matchingLogo = logos.find(
-        (logo) => logo.url === firstStream.logo_url || logo.cache_url === firstStream.logo_url
-      );
-      setNewChannelLogoId(matchingLogo?.id ?? null);
-    } else {
-      setNewChannelLogoId(null);
-    }
-
-    // Capture the stream's tvg_id for the new channel
-    setNewChannelTvgId(firstStream.tvg_id ?? null);
-
-    // Store all stream IDs to assign after channel creation
-    setNewChannelStreamIds(streamIds);
-
-    // Set the group
-    if (groupId === 'ungrouped') {
-      setNewChannelGroup('');
-      setGroupSearchText('');
-    } else {
-      const group = channelGroups.find((g) => g.id === groupId);
-      setNewChannelGroup(groupId);
-      setGroupSearchText(group?.name || '');
-    }
-
-    // Use the specific insert position
-    setNewChannelNumber(insertAtChannelNumber.toString());
-
-    // Set default channel profile from settings
-    setNewChannelSelectedProfiles(
-      channelDefaults?.defaultChannelProfileId ? new Set([channelDefaults.defaultChannelProfileId]) : new Set()
-    );
-    setNewChannelProfilesExpanded(false);
-
-    // Set naming options from settings defaults
-    setNewChannelAddNumber(channelDefaults?.includeChannelNumberInName ?? false);
-    setNewChannelNumberSeparator((channelDefaults?.channelNumberSeparator as NumberSeparator) || '-');
-    setNewChannelStripCountry(channelDefaults?.removeCountryPrefix ?? false);
-    setNewChannelNamingExpanded(false);
-
-    // Open the create modal
-    createModal.open();
-  };
-
-  // Handle creating a new channel - checks for conflicts first
-  const handleCreateChannel = async () => {
-    if (!newChannelName.trim() || !newChannelNumber.trim()) return;
-
-    const channelNum = parseFloat(newChannelNumber);
-    if (isNaN(channelNum)) return;
-
-    // Check if this channel number already exists
-    if (channelNumberExists(channelNum)) {
-      setConflictingChannelNumber(channelNum);
-      conflictDialog.open();
-      return;
-    }
-
-    // No conflict, create the channel directly
-    await createChannelWithNumber(channelNum);
-  };
-
-  // Create channel with the specified number (after conflict resolution or no conflict)
-  const createChannelWithNumber = async (channelNum: number) => {
-    setCreating(true);
-    try {
-      // Build the final channel name with naming options applied
-      let finalName = newChannelName.trim();
-
-      // Strip country prefix if requested (e.g., "US : BET Gospel" -> "BET Gospel")
-      if (newChannelStripCountry) {
-        finalName = api.stripCountryPrefix(finalName);
-      }
-
-      // Add channel number prefix if requested
-      if (newChannelAddNumber) {
-        finalName = `${channelNum} ${newChannelNumberSeparator} ${finalName}`;
-      }
-
-      // Pass profile IDs to onCreateChannel - it handles both edit mode (pending assignments) and normal mode (immediate API calls)
-      const profileIdsArray = newChannelSelectedProfiles.size > 0 ? Array.from(newChannelSelectedProfiles) : undefined;
-
-      const newChannel = await onCreateChannel(
-        finalName,
-        channelNum,
-        newChannelGroup !== '' ? newChannelGroup : undefined,
-        newChannelLogoId ?? undefined,
-        newChannelTvgId ?? undefined,
-        newChannelLogoUrl ?? undefined,
-        profileIdsArray
-      );
-
-      // Assign the streams to the channel if any were dropped
-      if (newChannelStreamIds.length > 0 && newChannel?.id) {
-        if (isEditMode && onStageAddStream) {
-          // In edit mode, stage all stream assignments
-          for (const streamId of newChannelStreamIds) {
-            const stream = allStreams.find((s: Stream) => s.id === streamId);
-            onStageAddStream(newChannel.id, streamId, `Added stream "${stream?.name || streamId}" to channel`);
-          }
-        } else {
-          // In normal mode, call the API directly for each stream
-          for (const streamId of newChannelStreamIds) {
-            try {
-              await onChannelDrop(newChannel.id, streamId);
-            } catch (err) {
-              console.error(`Failed to assign stream ${streamId} to channel ${newChannel.id}:`, err);
-            }
-          }
-        }
-      }
-
-      // Profile assignment is now handled by onCreateChannel (in normal mode it makes API calls immediately,
-      // in edit mode it stores them in pendingProfileAssignmentsRef to apply after commit)
-
-      // In edit mode, the channel is added to workingCopy by stageCreateChannel,
-      // which flows through the channels prop and syncs to localChannels via useEffect.
-      // We don't manually add here to avoid duplicates.
-      handleCloseCreateModal();
-    } catch {
-      // Error handled in parent
-    } finally {
-      setCreating(false);
-    }
-  };
-
-  // Handle conflict resolution: push channels down to make room
-  const handleConflictPushDown = async () => {
-    if (conflictingChannelNumber === null) return;
-
-    setCreating(true);
-    conflictDialog.close();
-
-    try {
-      // Get channels that need to be shifted (>= the conflicting number)
-      // Use localChannels in edit mode since it may have been modified
-      // IMPORTANT: Push down ALL channels with >= the number, across ALL groups
-      // Channel numbers must be unique globally, not just within a group
-      const sourceChannels = isEditMode ? localChannels : channels;
-      const channelsToShift = sourceChannels
-        .filter((ch) => ch.channel_number !== null && ch.channel_number >= conflictingChannelNumber)
-        .sort((a, b) => (b.channel_number ?? 0) - (a.channel_number ?? 0)); // Sort descending to avoid conflicts
-
-      // If in edit mode, stage the shifts; otherwise, this would need API calls
-      if (isEditMode && onStageUpdateChannel) {
-        // Shift each channel down by 1 (starting from highest to avoid conflicts)
-        for (const ch of channelsToShift) {
-          const newNum = ch.channel_number! + 1;
-          const newName = autoRenameChannelNumber ? computeAutoRename(ch.name, ch.channel_number, newNum) : undefined;
-          const description = newName
-            ? `Changed "${ch.name}" to "${newName}"`
-            : `Changed channel number from ${ch.channel_number} to ${newNum}`;
-          onStageUpdateChannel(ch.id, {
-            channel_number: newNum,
-            ...(newName ? { name: newName } : {})
-          }, description);
-        }
-
-        // Update local state
-        setLocalChannels((prev) =>
-          prev.map((ch) => {
-            const shift = channelsToShift.find((s) => s.id === ch.id);
-            if (shift) {
-              const newNum = ch.channel_number! + 1;
-              const newName = autoRenameChannelNumber ? computeAutoRename(ch.name, ch.channel_number, newNum) : undefined;
-              return { ...ch, channel_number: newNum, ...(newName ? { name: newName } : {}) };
-            }
-            return ch;
-          })
-        );
-      }
-
-      // Now create the new channel at the original number
-      await createChannelWithNumber(conflictingChannelNumber);
-    } catch {
-      // Error handled
-    } finally {
-      setCreating(false);
-    }
-  };
-
-  // Handle conflict resolution: add to end of group
-  const handleConflictAddToEnd = async () => {
-    conflictDialog.close();
-    const endNumber = getNextChannelNumberForGroup(newChannelGroup);
-    await createChannelWithNumber(endNumber);
-  };
-
-  // Handle selecting a group from the autocomplete dropdown
-  const handleSelectGroup = (group: ChannelGroup | null) => {
-    if (group) {
-      setNewChannelGroup(group.id);
-      setGroupSearchText(group.name);
-    } else {
-      setNewChannelGroup('');
-      setGroupSearchText('');
-    }
-    setShowGroupDropdown(false);
+    // Route to bulk create modal (handles single or multiple streams)
+    onBulkStreamsDrop(streamIds, targetGroupId, insertAtChannelNumber);
   };
 
   // Helper function to compute auto-rename for a channel number change
@@ -4379,13 +4062,13 @@ export function ChannelsPane({
       onSelectGroupChannels(allGroupChannelIds, !allSelected);
     };
 
-    // Check if any channel in this group has failed streams
-    const groupHasFailedStreams = groupChannels.some(channel =>
+    // Count channels in this group that have failed streams
+    const groupFailedChannelCount = groupChannels.filter(channel =>
       channel.streams.some(streamId => {
         const stats = streamStatsMap.get(streamId);
         return stats && (stats.probe_status === 'failed' || stats.probe_status === 'timeout');
       })
-    );
+    ).length;
 
     return (
       <div key={groupId} className={`channel-group ${isEmpty ? 'empty-group' : ''}`}>
@@ -4412,7 +4095,7 @@ export function ChannelsPane({
           onSortStreamsByMode={(mode) => handleSortGroupStreamsByMode(groupId, mode)}
           isSortingByQuality={bulkSortingByQuality}
           enabledCriteria={channelDefaults?.streamSortEnabled}
-          hasFailedStreams={groupHasFailedStreams}
+          failedChannelCount={groupFailedChannelCount}
         />
         {isExpanded && isEmpty && (
           <div className="group-channels empty-group-placeholder">
@@ -4594,6 +4277,7 @@ export function ChannelsPane({
                                         isEditMode={isEditMode}
                                         onRemove={handleRemoveStream}
                                         onCopyUrl={stream.url ? () => handleCopyStreamUrl(stream.url!, stream.name) : undefined}
+                                        onClearStats={handleClearStreamStats}
                                         showStreamUrls={showStreamUrls}
                                         streamStats={streamStatsMap.get(stream.id) ?? null}
                                       />
@@ -4686,6 +4370,48 @@ export function ChannelsPane({
               </button>
             );
           })()}
+          {!isEditMode && (() => {
+            // Count channels with failed streams
+            const channelsWithFailedStreams = channels.filter(ch =>
+              ch.streams.some(streamId => {
+                const stats = streamStatsMap.get(streamId);
+                return stats && (stats.probe_status === 'failed' || stats.probe_status === 'timeout');
+              })
+            );
+            const failedStreamsCount = channelsWithFailedStreams.length;
+            if (failedStreamsCount === 0) return null;
+
+            // Get unique group IDs that have channels with failed streams
+            const groupsWithFailedStreams = new Set(
+              channelsWithFailedStreams.map(ch => ch.channel_group_id).filter((id): id is number => id !== null)
+            );
+            // Include ungrouped (null group) as group ID 0 for expansion
+            const hasUngrouped = channelsWithFailedStreams.some(ch => ch.channel_group_id === null);
+
+            const handleExpandFailedGroups = () => {
+              setExpandedGroups(prev => {
+                const newState = { ...prev };
+                groupsWithFailedStreams.forEach(groupId => {
+                  newState[groupId] = true;
+                });
+                if (hasUngrouped) {
+                  newState[0] = true; // 0 represents ungrouped
+                }
+                return newState;
+              });
+            };
+
+            return (
+              <button
+                className="failed-streams-alert"
+                title={`${failedStreamsCount} channel${failedStreamsCount !== 1 ? 's' : ''} with failed streams - click to expand affected groups`}
+                onClick={handleExpandFailedGroups}
+              >
+                <span className="material-icons">error</span>
+                {failedStreamsCount}
+              </button>
+            );
+          })()}
           {isEditMode && selectedChannelIds.size > 0 && (
             <div className="selection-info">
               <span className="selection-count">{selectedChannelIds.size} selected</span>
@@ -4765,28 +4491,7 @@ export function ChannelsPane({
             <>
               <button
                 className="create-channel-btn"
-                onClick={() => {
-                  // Reset form state
-                  setNewChannelName('');
-                  setNewChannelNumber('');
-                  setNewChannelGroup('');
-                  setGroupSearchText('');
-                  setNewChannelLogoId(null);
-                  setNewChannelLogoUrl(null);
-                  setNewChannelTvgId(null);
-                  setNewChannelStreamIds([]);
-                  // Set default channel profile from settings
-                  setNewChannelSelectedProfiles(
-                    channelDefaults?.defaultChannelProfileId ? new Set([channelDefaults.defaultChannelProfileId]) : new Set()
-                  );
-                  setNewChannelProfilesExpanded(false);
-                  // Set naming options from settings defaults
-                  setNewChannelAddNumber(channelDefaults?.includeChannelNumberInName ?? false);
-                  setNewChannelNumberSeparator((channelDefaults?.channelNumberSeparator as NumberSeparator) || '-');
-                  setNewChannelStripCountry(channelDefaults?.removeCountryPrefix ?? false);
-                  setNewChannelNamingExpanded(false);
-                  createModal.open();
-                }}
+                onClick={() => onOpenCreateChannelModal?.()}
                 title="Create new channel"
               >
                 <span className="material-icons create-channel-icon">add</span>
@@ -4828,243 +4533,6 @@ export function ChannelsPane({
           </button>
         </div>
       </div>
-
-      {/* Create Channel Modal */}
-      {createModal.isOpen && (
-        <div className="modal-overlay">
-          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
-            <h3>Create New Channel</h3>
-            <div className="modal-form">
-              <label>
-                Channel Name *
-                <input
-                  type="text"
-                  value={newChannelName}
-                  onChange={(e) => setNewChannelName(e.target.value)}
-                  placeholder="e.g., Sports Channel HD"
-                  autoFocus
-                />
-              </label>
-              <label>
-                Channel Number *
-                <input
-                  type="number"
-                  value={newChannelNumber}
-                  onChange={(e) => setNewChannelNumber(e.target.value)}
-                  placeholder="e.g., 100"
-                  min="1"
-                  step="any"
-                />
-              </label>
-              <label>
-                Channel Group
-                <div className="group-autocomplete">
-                  <input
-                    ref={groupInputRef}
-                    type="text"
-                    value={groupSearchText}
-                    onChange={(e) => {
-                      setGroupSearchText(e.target.value);
-                      setShowGroupDropdown(true);
-                      // Clear selection if user is typing something different
-                      if (newChannelGroup !== '') {
-                        const selectedGroup = channelGroups.find((g) => g.id === newChannelGroup);
-                        if (selectedGroup && e.target.value !== selectedGroup.name) {
-                          setNewChannelGroup('');
-                        }
-                      }
-                    }}
-                    onFocus={() => setShowGroupDropdown(true)}
-                    placeholder="Type to search or leave empty..."
-                  />
-                  {groupSearchText && (
-                    <button
-                      type="button"
-                      className="group-autocomplete-clear"
-                      onClick={() => handleSelectGroup(null)}
-                    >
-                      ✕
-                    </button>
-                  )}
-                  {showGroupDropdown && (
-                    <div ref={groupDropdownListRef} className="group-autocomplete-dropdown">
-                      <div
-                        className={`group-autocomplete-option ${newChannelGroup === '' ? 'selected' : ''}`}
-                        onClick={() => handleSelectGroup(null)}
-                      >
-                        No Group
-                      </div>
-                      {searchFilteredChannelGroups.map((group) => (
-                        <div
-                          key={group.id}
-                          className={`group-autocomplete-option ${newChannelGroup === group.id ? 'selected' : ''}`}
-                          onClick={() => handleSelectGroup(group)}
-                        >
-                          {group.name}
-                        </div>
-                      ))}
-                      {searchFilteredChannelGroups.length === 0 && groupSearchText && (
-                        <div className="group-autocomplete-empty">No matching groups</div>
-                      )}
-                    </div>
-                  )}
-                </div>
-              </label>
-
-              {/* Naming Options Section */}
-              <div className="collapsible-section">
-                <button
-                  type="button"
-                  className={`collapsible-header ${newChannelNamingExpanded ? 'expanded' : ''}`}
-                  onClick={() => setNewChannelNamingExpanded(!newChannelNamingExpanded)}
-                >
-                  <span className="material-icons">
-                    {newChannelNamingExpanded ? 'expand_more' : 'chevron_right'}
-                  </span>
-                  <span>Naming Options</span>
-                  <span className="collapsible-summary">
-                    {(() => {
-                      const options: string[] = [];
-                      if (newChannelStripCountry) options.push('Strip country');
-                      if (newChannelAddNumber) options.push(`Add # (${newChannelNumberSeparator})`);
-                      return options.length > 0 ? options.join(', ') : 'Default';
-                    })()}
-                  </span>
-                </button>
-                {newChannelNamingExpanded && (
-                  <div className="collapsible-content naming-options">
-                    {/* Strip country prefix - only show if detected */}
-                    {api.getCountryPrefix(newChannelName) && (
-                      <label className="naming-option">
-                        <input
-                          type="checkbox"
-                          checked={newChannelStripCountry}
-                          onChange={(e) => setNewChannelStripCountry(e.target.checked)}
-                        />
-                        <span>Strip country prefix ({api.getCountryPrefix(newChannelName)})</span>
-                      </label>
-                    )}
-
-                    {/* Add channel number to name */}
-                    <label className="naming-option">
-                      <input
-                        type="checkbox"
-                        checked={newChannelAddNumber}
-                        onChange={(e) => setNewChannelAddNumber(e.target.checked)}
-                      />
-                      <span>Add channel number to name</span>
-                    </label>
-                    {newChannelAddNumber && (
-                      <div className="separator-options">
-                        <span className="separator-label">Separator:</span>
-                        <button
-                          type="button"
-                          className={`separator-btn ${newChannelNumberSeparator === '-' ? 'active' : ''}`}
-                          onClick={() => setNewChannelNumberSeparator('-')}
-                        >
-                          -
-                        </button>
-                        <button
-                          type="button"
-                          className={`separator-btn ${newChannelNumberSeparator === ':' ? 'active' : ''}`}
-                          onClick={() => setNewChannelNumberSeparator(':')}
-                        >
-                          :
-                        </button>
-                        <button
-                          type="button"
-                          className={`separator-btn ${newChannelNumberSeparator === '|' ? 'active' : ''}`}
-                          onClick={() => setNewChannelNumberSeparator('|')}
-                        >
-                          |
-                        </button>
-                      </div>
-                    )}
-
-                    {/* Preview - show when any naming option is active */}
-                    {(newChannelStripCountry || newChannelAddNumber) && newChannelName && newChannelNumber && (
-                      <div className="naming-preview">
-                        <span className="preview-label">Preview:</span>
-                        <span className="preview-name">
-                          {(() => {
-                            let preview = newChannelName;
-                            if (newChannelStripCountry) {
-                              preview = api.stripCountryPrefix(preview);
-                            }
-                            if (newChannelAddNumber) {
-                              preview = `${newChannelNumber} ${newChannelNumberSeparator} ${preview}`;
-                            }
-                            return preview;
-                          })()}
-                        </span>
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
-
-              {/* Channel Profiles Section */}
-              {channelProfiles.length > 0 && (
-                <div className="collapsible-section">
-                  <button
-                    type="button"
-                    className={`collapsible-header ${newChannelProfilesExpanded ? 'expanded' : ''}`}
-                    onClick={() => setNewChannelProfilesExpanded(!newChannelProfilesExpanded)}
-                  >
-                    <span className="material-icons">
-                      {newChannelProfilesExpanded ? 'expand_more' : 'chevron_right'}
-                    </span>
-                    <span>Channel Profiles</span>
-                    <span className="collapsible-summary">
-                      {newChannelSelectedProfiles.size === 0
-                        ? 'None selected'
-                        : `${newChannelSelectedProfiles.size} selected`}
-                    </span>
-                  </button>
-                  {newChannelProfilesExpanded && (
-                    <div className="collapsible-content profile-list">
-                      {channelProfiles.map((profile) => (
-                        <label key={profile.id} className="profile-checkbox">
-                          <input
-                            type="checkbox"
-                            checked={newChannelSelectedProfiles.has(profile.id)}
-                            onChange={() => {
-                              const newSet = new Set(newChannelSelectedProfiles);
-                              if (newSet.has(profile.id)) {
-                                newSet.delete(profile.id);
-                              } else {
-                                newSet.add(profile.id);
-                              }
-                              setNewChannelSelectedProfiles(newSet);
-                            }}
-                          />
-                          <span>{profile.name}</span>
-                        </label>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-            <div className="modal-actions">
-              <button
-                className="modal-btn cancel"
-                onClick={handleCloseCreateModal}
-                disabled={creating}
-              >
-                Cancel
-              </button>
-              <button
-                className="modal-btn primary"
-                onClick={handleCreateChannel}
-                disabled={creating || !newChannelName.trim() || !newChannelNumber.trim()}
-              >
-                {creating ? 'Creating...' : 'Create Channel'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* Create Channel Group Modal */}
       {createGroupModal.isOpen && (
@@ -5155,54 +4623,6 @@ export function ChannelsPane({
                 onClick={() => hiddenGroupsModal.close()}
               >
                 Close
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Channel Number Conflict Dialog */}
-      {conflictDialog.isOpen && conflictingChannelNumber !== null && (
-        <div className="modal-overlay">
-          <div className="modal-content conflict-dialog" onClick={(e) => e.stopPropagation()}>
-            <h3>Channel Number Conflict</h3>
-            <div className="conflict-message">
-              <p>
-                Channel number <strong>{conflictingChannelNumber}</strong> is already in use.
-              </p>
-              <p>How would you like to proceed?</p>
-            </div>
-            <div className="conflict-options">
-              <button
-                className="conflict-option-btn push-down"
-                onClick={handleConflictPushDown}
-                disabled={creating}
-              >
-                <span className="material-icons">vertical_align_bottom</span>
-                <div className="conflict-option-text">
-                  <strong>Push channels down</strong>
-                  <span>Insert at {conflictingChannelNumber} and shift existing channels</span>
-                </div>
-              </button>
-              <button
-                className="conflict-option-btn add-to-end"
-                onClick={handleConflictAddToEnd}
-                disabled={creating}
-              >
-                <span className="material-icons">last_page</span>
-                <div className="conflict-option-text">
-                  <strong>Add to end</strong>
-                  <span>Use next available number ({getNextChannelNumberForGroup(newChannelGroup)})</span>
-                </div>
-              </button>
-            </div>
-            <div className="modal-actions">
-              <button
-                className="modal-btn cancel"
-                onClick={() => conflictDialog.close()}
-                disabled={creating}
-              >
-                Cancel
               </button>
             </div>
           </div>
@@ -5482,7 +4902,7 @@ export function ChannelsPane({
               changeDescriptions.push(`name to "${changes.name}"`);
             }
             if (changes.logo_id !== undefined) {
-              const logoName = changes.logo_id ? logos.find((l) => l.id === changes.logo_id)?.name : null;
+              const logoName = changes.logo_id ? logoMap.get(changes.logo_id)?.name : null;
               changeDescriptions.push(logoName ? `logo to "${logoName}"` : 'removed logo');
             }
             if (changes.tvg_id !== undefined) {

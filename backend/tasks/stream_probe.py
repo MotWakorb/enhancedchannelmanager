@@ -24,7 +24,6 @@ class StreamProbeTask(TaskScheduler):
     all the complex probing logic. This task simply delegates to it.
 
     Configuration is managed via the existing settings in DispatcharrSettings:
-    - stream_probe_interval_hours
     - stream_probe_schedule_time
     - probe_channel_groups
     - etc.
@@ -62,8 +61,15 @@ class StreamProbeTask(TaskScheduler):
             self._channel_groups = config["channel_groups"] or []
 
     def set_prober(self, prober):
-        """Set the StreamProber instance to delegate to."""
+        """Set the StreamProber instance to delegate to.
+
+        When a new prober is set (e.g., after settings update), clear any cached
+        channel groups so the task uses the prober's updated settings.
+        """
         self._prober = prober
+        # Clear cached channel groups - use prober's settings instead
+        self._channel_groups = []
+        logger.info(f"[{self.task_id}] Prober updated, cleared channel groups cache")
 
     def set_channel_groups(self, groups: list[str]):
         """Set channel groups to filter by for this run."""

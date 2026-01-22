@@ -32,6 +32,7 @@ export function TabNavigation({ activeTab, onTabChange, disabled, editModeActive
       {TABS.map((tab) => (
         <button
           key={tab.id}
+          data-tab={tab.id}
           className={`tab-button ${activeTab === tab.id ? 'active' : ''}`}
           onClick={() => onTabChange(tab.id)}
           disabled={disabled}

@@ -44,17 +44,32 @@ When doing work on this project, follow these steps in order:
 
 4. **Run quality gates** (if code changed) - **MANDATORY** before committing:
    ```bash
-   # Backend: Python syntax check + tests (REQUIRED for any backend changes)
+   # Windows: Run comprehensive quality gates
+   .scripts\quality-gates.bat
+
+   # Linux/Mac: Run comprehensive quality gates
+   ./scripts/quality-gates.sh
+
+   # Or run individual test suites:
+
+   # Backend: Python syntax check + unit/integration tests (REQUIRED for backend changes)
    python -m py_compile backend/main.py
    cd backend && python -m pytest tests/ -q
 
-   # Frontend: Tests + TypeScript compilation and build (REQUIRED for any frontend changes)
+   # Frontend: Unit tests + TypeScript compilation (REQUIRED for frontend changes)
    cd frontend && npm test && npm run build
 
-   # Or run all quality gates at once:
-   ./scripts/quality-gates.sh
+   # E2E: End-to-end tests (REQUIRED for all changes)
+   npm run test:e2e              # Run all E2E tests (headless)
+   npm run test:e2e:ui           # Run with UI mode (for debugging)
+   npm run test:e2e:headed       # Run in headed browser (for debugging)
    ```
    **CRITICAL**: If syntax checks or tests fail, fix errors before proceeding. Never commit broken code.
+
+   **Test Coverage:**
+   - **Backend**: Unit tests (fast, isolated) + Integration tests (with database/APIs)
+   - **Frontend**: Hook tests, service tests, component tests
+   - **E2E**: Full user workflows across all major features (channels, M3U, EPG, tasks, etc.)
 
 5. **Update the bead with work done** - Document what was changed:
    ```bash
@@ -117,6 +132,74 @@ When doing work on this project, follow these steps in order:
   bd create enhancedchannelmanager "Description"  # Note the ID it prints
   bd close <id>                                    # Use the exact ID from above
   ```
+
+## Testing Guidelines
+
+**Test Infrastructure Overview:**
+
+This project has comprehensive test coverage at three levels:
+
+### 1. Backend Tests (Python/pytest)
+Located in `backend/tests/`, run with `cd backend && python -m pytest tests/ -q`
+
+**Unit Tests** (`backend/tests/unit/`):
+- `test_journal.py` - Journal logging system
+- `test_cache.py` - Caching mechanisms
+- `test_schedule_calculator.py` - Schedule calculations
+- `test_cron_parser.py` - Cron expression parsing
+- `test_alert_methods.py` - Alert method logic
+
+**Integration Tests** (`backend/tests/integration/`):
+- `test_api_settings.py` - Settings API endpoints
+- `test_api_tasks.py` - Task scheduler API endpoints
+- `test_api_notifications.py` - Notification API endpoints
+- `test_api_alert_methods.py` - Alert methods API endpoints
+
+### 2. Frontend Tests (Vitest)
+Located in `frontend/src/`, run with `cd frontend && npm test`
+
+- `hooks/useChangeHistory.test.ts` - Change history tracking hook
+- `hooks/useAsyncOperation.test.ts` - Async operation management hook
+- `hooks/useSelection.test.ts` - Selection state management hook
+- `services/api.test.ts` - API service layer
+
+### 3. E2E Tests (Playwright)
+Located in `e2e/`, run with `npm run test:e2e` from root
+
+**Test Coverage:**
+- `smoke.spec.ts` - Basic smoke tests
+- `channels.spec.ts` - Channel management workflows
+- `m3u-manager.spec.ts` - M3U playlist management
+- `epg-manager.spec.ts` - EPG data management
+- `logo-manager.spec.ts` - Logo management
+- `guide.spec.ts` - TV guide functionality
+- `tasks.spec.ts` - Scheduled tasks
+- `settings.spec.ts` - Application settings
+- `journal.spec.ts` - Journal/logging
+- `stats.spec.ts` - Statistics and analytics
+- `alert-methods.spec.ts` - Alert notification methods
+
+**Running E2E Tests:**
+```bash
+npm run test:e2e           # Headless mode (CI/CD)
+npm run test:e2e:ui        # Interactive UI mode
+npm run test:e2e:headed    # Run in visible browser
+npm run test:e2e:debug     # Debug mode with breakpoints
+npm run test:e2e:report    # View test report
+```
+
+**When to Run Tests:**
+- **Backend tests**: MANDATORY for any backend code changes
+- **Frontend tests**: MANDATORY for any frontend code changes
+- **E2E tests**: MANDATORY for all code changes - ensures full user workflow integrity
+
+**Quality Gates Script:**
+The `quality-gates.bat` (Windows) or `quality-gates.sh` (Linux/Mac) runs:
+1. Backend Python syntax check
+2. Backend unit + integration tests
+3. Frontend unit tests
+4. Frontend TypeScript build
+5. E2E tests (always run)
 
 ## CSS/Styling Guidelines
 

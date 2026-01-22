@@ -114,6 +114,49 @@ jobs:
           # Skip CKV_DOCKER_8 - Same reason, entrypoint starts as root then switches to appuser
           skip_check: CKV2_GHA_1,CKV_DOCKER_3,CKV_DOCKER_8
 
+  # Container vulnerability scanning with Trivy
+  container-security-scan:
+    name: Container Security Scan (Trivy)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request' && github.base_ref == 'main'
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Extract version and set release channel
+        id: version
+        run: |
+          VERSION=$(jq -r '.version' frontend/package.json)
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          echo "channel=latest" >> $GITHUB_OUTPUT
+
+      - name: Build Docker image for Trivy scan
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          load: true
+          tags: ecm-scan:latest
+          platforms: linux/amd64
+          build-args: |
+            GIT_COMMIT=${{ github.sha }}
+            ECM_VERSION=${{ steps.version.outputs.version }}
+            RELEASE_CHANNEL=${{ steps.version.outputs.channel }}
+          cache-from: type=gha,scope=trivy-scan
+          cache-to: type=gha,mode=max,scope=trivy-scan
+
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ecm-scan:latest
+          format: 'table'
+          exit-code: '1'
+          ignore-unfixed: true
+          vuln-type: 'os,library'
+          severity: 'CRITICAL,HIGH'
+
   # DAST - Dynamic Application Security Testing
   dast-scan:
     name: DAST Security Scan
@@ -216,7 +259,7 @@ jobs:
     name: Build Docker Image (AMD64)
     runs-on: ubuntu-latest
     # On PRs to main, wait for security scans; on dev branch pushes, run immediately
-    needs: [security-scan-frontend, security-scan-backend, codeql-analysis, iac-security-scan, dast-scan]
+    needs: [security-scan-frontend, security-scan-backend, codeql-analysis, iac-security-scan, container-security-scan, dast-scan]
     if: always() && (github.event_name != 'pull_request' || !contains(needs.*.result, 'failure'))
     permissions:
       contents: read
@@ -260,30 +303,6 @@ jobs:
             echo "channel=latest" >> $GITHUB_OUTPUT
           fi
 
-      - name: Build Docker image for Trivy scan
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          load: true
-          tags: ecm-scan:latest
-          platforms: linux/amd64
-          build-args: |
-            GIT_COMMIT=${{ github.sha }}
-            ECM_VERSION=${{ steps.version.outputs.version }}
-            RELEASE_CHANNEL=${{ steps.version.outputs.channel }}
-          cache-from: type=gha,scope=amd64
-          cache-to: type=gha,mode=max,scope=amd64
-
-      - name: Run Trivy vulnerability scanner
-        uses: aquasecurity/trivy-action@master
-        with:
-          image-ref: ecm-scan:latest
-          format: 'table'
-          exit-code: '1'
-          ignore-unfixed: true
-          vuln-type: 'os,library'
-          severity: 'CRITICAL,HIGH'
-
       - name: Build and push (AMD64)
         id: build
         uses: docker/build-push-action@v5
@@ -305,7 +324,7 @@ jobs:
     name: Build Docker Image (ARM64)
     runs-on: ubuntu-24.04-arm
     # On PRs to main, wait for security scans; on dev branch pushes, run immediately
-    needs: [security-scan-frontend, security-scan-backend, codeql-analysis, iac-security-scan, dast-scan]
+    needs: [security-scan-frontend, security-scan-backend, codeql-analysis, iac-security-scan, container-security-scan, dast-scan]
     if: always() && (github.event_name != 'pull_request' || !contains(needs.*.result, 'failure'))
     permissions:
       contents: read

@@ -1640,6 +1640,38 @@
   overflow: hidden;
 }
 
+/* Ensure dropdown escapes collapsible section overflow in bulk create modal */
+.bulk-create-modal .collapsible-section {
+  overflow: visible;
+  position: relative;
+}
+
+.bulk-create-modal .collapsible-content {
+  overflow: visible;
+  position: relative;
+}
+
+.bulk-create-modal .radio-group {
+  overflow: visible;
+  position: relative;
+}
+
+.bulk-create-modal .searchable-dropdown {
+  position: relative;
+  z-index: 100;
+}
+
+/* Add padding to the collapsible content when it contains the dropdown
+   so the dropdown has enough space within the scrollable modal-body */
+.bulk-create-modal .collapsible-content .searchable-dropdown {
+  margin-bottom: 220px; /* Space for dropdown-options (max-height: 200px) + search box */
+}
+
+/* When dropdown is closed, collapse the margin */
+.bulk-create-modal .collapsible-content .searchable-dropdown:not(:has(.dropdown-menu)) {
+  margin-bottom: 0;
+}
+
 .searchable-dropdown .dropdown-search {
   display: flex;
   align-items: center;

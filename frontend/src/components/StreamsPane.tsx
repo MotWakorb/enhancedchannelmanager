@@ -1,13 +1,14 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import type { Stream, M3UAccount, ChannelGroup, ChannelProfile } from '../types';
+import type { Stream, M3UAccount, ChannelGroup, ChannelProfile, M3UGroupSetting } from '../types';
 import { useSelection, useExpandCollapse } from '../hooks';
-import { normalizeStreamName, detectRegionalVariants, filterStreamsByTimezone, detectCountryPrefixes, getUniqueCountryPrefixes, detectNetworkPrefixes, detectNetworkSuffixes, type TimezonePreference, type NormalizeOptions, type NumberSeparator, type PrefixOrder } from '../services/api';
+import { normalizeStreamName, detectRegionalVariants, filterStreamsByTimezone, detectCountryPrefixes, getUniqueCountryPrefixes, detectNetworkPrefixes, detectNetworkSuffixes, type TimezonePreference, type NormalizeOptions, type NumberSeparator, type PrefixOrder, type NormalizationSettings } from '../services/api';
 import { naturalCompare } from '../utils/naturalSort';
 import { openInVLC } from '../utils/vlc';
 import { useCopyFeedback } from '../hooks/useCopyFeedback';
 import { useDropdown } from '../hooks/useDropdown';
 import { useContextMenu } from '../hooks/useContextMenu';
 import { useKeyboardShortcuts } from '../hooks/useKeyboardShortcuts';
+import { QuickTagManager } from './QuickTagManager';
 import './StreamsPane.css';
 
 interface StreamGroup {
@@ -24,12 +25,13 @@ export interface ChannelDefaults {
   includeCountryInName: boolean;
   countrySeparator: string;
   timezonePreference: string;
-  defaultChannelProfileId?: number | null;
+  defaultChannelProfileIds?: number[];
   customNetworkPrefixes?: string[];
   customNetworkSuffixes?: string[];
   streamSortPriority?: ('resolution' | 'bitrate' | 'framerate')[];
   streamSortEnabled?: Record<'resolution' | 'bitrate' | 'framerate', boolean>;
   deprioritizeFailedStreams?: boolean;
+  normalizationSettings?: NormalizationSettings;
 }
 
 interface StreamsPaneProps {
@@ -54,6 +56,8 @@ interface StreamsPaneProps {
   isEditMode?: boolean;
   channelGroups?: ChannelGroup[];
   selectedChannelGroups?: number[]; // IDs of enabled/visible channel groups
+  providerGroupSettings?: Record<number, M3UGroupSetting>; // For filtering out M3U-created groups
+  deletedGroupIds?: Set<number>; // Groups staged for deletion in edit mode
   channelProfiles?: ChannelProfile[];
   channelDefaults?: ChannelDefaults;
   // External trigger to open bulk create modal for stream groups (set by dropping on channels pane)
@@ -64,6 +68,8 @@ interface StreamsPaneProps {
   // Target group ID and starting number for pre-filling the bulk create modal
   externalTriggerTargetGroupId?: number | null;
   externalTriggerStartingNumber?: number | null;
+  // External trigger to open bulk create modal for manual entry (no streams pre-selected)
+  externalTriggerManualEntry?: boolean;
   onExternalTriggerHandled?: () => void;
   onBulkCreateFromGroup?: (
     streams: Stream[],
@@ -96,6 +102,9 @@ interface StreamsPaneProps {
   onRefreshStreams?: () => void;
   // Set of stream IDs that are already mapped to channels (for "hide mapped" filter)
   mappedStreamIds?: Set<number>;
+  // Callback when a group is expanded (for lazy loading streams)
+  // Passes the group name so only that group's streams can be loaded
+  onGroupExpand?: (groupName: string) => void;
 }
 
 export function StreamsPane({
@@ -117,12 +126,15 @@ export function StreamsPane({
   isEditMode = false,
   channelGroups = [],
   selectedChannelGroups = [],
+  providerGroupSettings,
+  deletedGroupIds,
   channelProfiles = [],
   channelDefaults,
   externalTriggerGroupNames = null,
   externalTriggerStreamIds = null,
   externalTriggerTargetGroupId = null,
   externalTriggerStartingNumber = null,
+  externalTriggerManualEntry = false,
   onExternalTriggerHandled,
   onBulkCreateFromGroup,
   onCheckConflicts,
@@ -131,6 +143,7 @@ export function StreamsPane({
   hideUngroupedStreams = true,
   onRefreshStreams,
   mappedStreamIds,
+  onGroupExpand,
 }: StreamsPaneProps) {
   // Expand/collapse groups with useExpandCollapse hook
   const {
@@ -155,23 +168,72 @@ export function StreamsPane({
     return streams.filter(stream => !mappedStreamIds.has(stream.id));
   }, [streams, hideMappedStreams, mappedStreamIds]);
 
+  // Filter channel groups to exclude M3U-created and soft-deleted groups (for bulk create dropdown)
+  // Only show active user-created groups
+  const userCreatedChannelGroups = useMemo(() => {
+    // Get set of channel group IDs that are associated with M3U providers
+    const m3uGroupIds = new Set<number>();
+    if (providerGroupSettings) {
+      Object.values(providerGroupSettings).forEach(setting => {
+        m3uGroupIds.add(setting.channel_group);
+        // Also include group_override targets
+        if (setting.custom_properties?.group_override) {
+          m3uGroupIds.add(setting.custom_properties.group_override);
+        }
+      });
+    }
+
+    // DEBUG: Log filtering info
+    console.log('[StreamsPane] Channel groups filter debug:', {
+      allGroups: channelGroups.map(g => ({ id: g.id, name: g.name })),
+      m3uGroupIds: Array.from(m3uGroupIds),
+      deletedGroupIds: deletedGroupIds ? Array.from(deletedGroupIds) : 'undefined',
+      isEditMode,
+    });
+
+    // Return only groups that:
+    // 1. Are NOT created by M3U providers
+    // 2. Are NOT staged for deletion (soft-deleted in edit mode)
+    const filtered = channelGroups.filter(group =>
+      !m3uGroupIds.has(group.id) && !deletedGroupIds?.has(group.id)
+    );
+
+    console.log('[StreamsPane] Filtered groups:', filtered.map(g => ({ id: g.id, name: g.name })));
+
+    return filtered;
+  }, [channelGroups, providerGroupSettings, deletedGroupIds, isEditMode]);
+
   // Shared memoized grouping logic to avoid duplication
   // Groups and sorts streams, then returns sorted entries
+  // Always show all groups from streamGroups, populated with any loaded streams
   const sortedStreamGroups = useMemo((): [string, Stream[]][] => {
     const groups = new Map<string, Stream[]>();
 
-    // Group streams by channel_group_name
-    filteredStreams.forEach((stream) => {
-      const groupName = stream.channel_group_name || 'Ungrouped';
-      if (!groups.has(groupName)) {
+    // First, create empty entries for all known groups from the API
+    // This ensures all groups are visible even before their streams are loaded (lazy loading)
+    streamGroups.forEach((groupName) => {
+      if (!hideUngroupedStreams || groupName !== 'Ungrouped') {
         groups.set(groupName, []);
       }
-      groups.get(groupName)!.push(stream);
+    });
+
+    // Then populate groups with any loaded/filtered streams
+    filteredStreams.forEach((stream) => {
+      const groupName = stream.channel_group_name || 'Ungrouped';
+      if (!hideUngroupedStreams || groupName !== 'Ungrouped') {
+        if (!groups.has(groupName)) {
+          // Handle case where stream has a group not in streamGroups list
+          groups.set(groupName, []);
+        }
+        groups.get(groupName)!.push(stream);
+      }
     });
 
     // Sort streams within each group alphabetically with natural sort
     groups.forEach((groupStreams) => {
-      groupStreams.sort((a, b) => naturalCompare(a.name, b.name));
+      if (groupStreams.length > 0) {
+        groupStreams.sort((a, b) => naturalCompare(a.name, b.name));
+      }
     });
 
     // Convert to sorted array of [name, streams] tuples
@@ -183,7 +245,7 @@ export function StreamsPane({
         if (b === 'Ungrouped') return -1;
         return naturalCompare(a, b);
       });
-  }, [filteredStreams, hideUngroupedStreams]);
+  }, [filteredStreams, hideUngroupedStreams, streamGroups]);
 
   // Compute streams in display order (flattened array for selection)
   // This must be computed before useSelection so shift-click works correctly
@@ -240,6 +302,10 @@ export function StreamsPane({
   const [bulkCreateSelectedProfiles, setBulkCreateSelectedProfiles] = useState<Set<number>>(new Set());
   const [bulkCreateGroupSearch, setBulkCreateGroupSearch] = useState('');
   const [profilesExpanded, setProfilesExpanded] = useState(false);
+  const [bulkCreateNormalizationSettings, setBulkCreateNormalizationSettings] = useState<NormalizationSettings>({
+    disabledBuiltinTags: [],
+    customTags: [],
+  });
 
   // Bulk create group dropdown management
   const {
@@ -387,6 +453,15 @@ export function StreamsPane({
         const allGroupNames = selectedGroupsList.map(g => g.name);
         const allStreamIds = selectedGroupsList.flatMap(g => g.streams.map(s => s.id));
 
+        // Trigger lazy load for any groups that don't have streams loaded yet
+        if (onGroupExpand) {
+          selectedGroupsList.forEach(g => {
+            if (g.streams.length === 0) {
+              onGroupExpand(g.name);
+            }
+          });
+        }
+
         e.dataTransfer.setData('streamGroupNames', JSON.stringify(allGroupNames));
         e.dataTransfer.setData('streamGroupStreamIds', JSON.stringify(allStreamIds));
 
@@ -394,7 +469,10 @@ export function StreamsPane({
         const dragEl = document.createElement('div');
         dragEl.className = 'drag-preview';
         const totalStreams = selectedGroupsList.reduce((sum, g) => sum + g.streams.length, 0);
-        dragEl.textContent = `${selectedGroupsList.length} groups (${totalStreams} streams)`;
+        const hasUnloadedGroups = selectedGroupsList.some(g => g.streams.length === 0);
+        // Show "Loading..." if any groups haven't had their streams loaded yet
+        const streamCountText = hasUnloadedGroups ? 'Loading...' : `${totalStreams} streams`;
+        dragEl.textContent = `${selectedGroupsList.length} groups (${streamCountText})`;
         dragEl.style.cssText = `
           position: absolute;
           top: -1000px;
@@ -415,7 +493,9 @@ export function StreamsPane({
         // Custom drag image showing group info
         const dragEl = document.createElement('div');
         dragEl.className = 'drag-preview';
-        dragEl.textContent = `${group.name} (${group.streams.length} streams)`;
+        // Show "Loading..." if streams haven't been loaded yet
+        const streamCountText = group.streams.length === 0 ? 'Loading...' : `${group.streams.length} streams`;
+        dragEl.textContent = `${group.name} (${streamCountText})`;
         dragEl.style.cssText = `
           position: absolute;
           top: -1000px;
@@ -430,7 +510,7 @@ export function StreamsPane({
         setTimeout(() => document.body.removeChild(dragEl), 0);
       }
     },
-    [selectedGroupNames, groupedStreams]
+    [selectedGroupNames, groupedStreams, onGroupExpand]
   );
 
   // Bulk create handlers - apply settings defaults
@@ -452,11 +532,12 @@ export function StreamsPane({
     setBulkCreateStripNetwork(false); // Default to not stripping network prefixes
     // Apply default channel profile from settings
     setBulkCreateSelectedProfiles(
-      channelDefaults?.defaultChannelProfileId ? new Set([channelDefaults.defaultChannelProfileId]) : new Set()
+      channelDefaults?.defaultChannelProfileIds?.length ? new Set(channelDefaults.defaultChannelProfileIds) : new Set()
     );
     setNamingOptionsExpanded(false); // Collapse naming options
     setChannelGroupExpanded(false); // Collapse channel group options
     setTimezoneExpanded(false); // Collapse timezone options
+    setBulkCreateNormalizationSettings(channelDefaults?.normalizationSettings ?? { disabledBuiltinTags: [], customTags: [] });
     setBulkCreateModalOpen(true);
   }, [channelDefaults]);
 
@@ -480,11 +561,12 @@ export function StreamsPane({
     setBulkCreateStripNetwork(false); // Default to not stripping network prefixes
     // Apply default channel profile from settings
     setBulkCreateSelectedProfiles(
-      channelDefaults?.defaultChannelProfileId ? new Set([channelDefaults.defaultChannelProfileId]) : new Set()
+      channelDefaults?.defaultChannelProfileIds?.length ? new Set(channelDefaults.defaultChannelProfileIds) : new Set()
     );
     setNamingOptionsExpanded(false); // Collapse naming options
     setChannelGroupExpanded(false); // Collapse channel group options
     setTimezoneExpanded(false); // Collapse timezone options
+    setBulkCreateNormalizationSettings(channelDefaults?.normalizationSettings ?? { disabledBuiltinTags: [], customTags: [] });
     setBulkCreateModalOpen(true);
   }, [streams, selectedIds, channelDefaults]);
 
@@ -522,11 +604,12 @@ export function StreamsPane({
     setBulkCreateStripNetwork(false);
     // Apply default channel profile from settings
     setBulkCreateSelectedProfiles(
-      channelDefaults?.defaultChannelProfileId ? new Set([channelDefaults.defaultChannelProfileId]) : new Set()
+      channelDefaults?.defaultChannelProfileIds?.length ? new Set(channelDefaults.defaultChannelProfileIds) : new Set()
     );
     setNamingOptionsExpanded(false);
     setChannelGroupExpanded(false);
     setTimezoneExpanded(false);
+    setBulkCreateNormalizationSettings(channelDefaults?.normalizationSettings ?? { disabledBuiltinTags: [], customTags: [] });
     setBulkCreateModalOpen(true);
   }, [streams, channelDefaults]);
 
@@ -539,6 +622,46 @@ export function StreamsPane({
     setBulkCreateGroupStartNumbers(new Map());
     setBulkCreateSelectedProfiles(new Set());
   }, []);
+
+  // Open bulk create modal for manual entry (no streams pre-selected)
+  const openBulkCreateModalForManualEntry = useCallback((
+    targetGroupId?: number | null,
+    startingNumber?: number | null
+  ) => {
+    setBulkCreateGroup(null);
+    setBulkCreateGroups([]);
+    setBulkCreateStreams([]);
+    // Pre-fill starting number if provided
+    setBulkCreateStartingNumber(startingNumber != null ? startingNumber.toString() : '');
+    // Pre-select group if provided
+    if (targetGroupId != null) {
+      setBulkCreateGroupOption('existing');
+      setBulkCreateSelectedGroupId(targetGroupId);
+    } else {
+      setBulkCreateGroupOption('existing');
+      setBulkCreateSelectedGroupId(null);
+    }
+    setBulkCreateNewGroupName('');
+    // Apply settings defaults
+    setBulkCreateTimezone((channelDefaults?.timezonePreference as TimezonePreference) || 'both');
+    setBulkCreateStripCountry(channelDefaults?.removeCountryPrefix ?? false);
+    setBulkCreateKeepCountry(channelDefaults?.includeCountryInName ?? false);
+    setBulkCreateCountrySeparator((channelDefaults?.countrySeparator as NumberSeparator) || '|');
+    setBulkCreateAddNumber(channelDefaults?.includeChannelNumberInName ?? false);
+    setBulkCreateSeparator((channelDefaults?.channelNumberSeparator as NumberSeparator) || '|');
+    setBulkCreatePrefixOrder('number-first');
+    setBulkCreateStripNetwork(false);
+    setBulkCreateStripSuffix(false);
+    // Apply default channel profile from settings
+    setBulkCreateSelectedProfiles(
+      channelDefaults?.defaultChannelProfileIds?.length ? new Set(channelDefaults.defaultChannelProfileIds) : new Set()
+    );
+    setNamingOptionsExpanded(false);
+    setChannelGroupExpanded(false);
+    setTimezoneExpanded(false);
+    setBulkCreateNormalizationSettings(channelDefaults?.normalizationSettings ?? { disabledBuiltinTags: [], customTags: [] });
+    setBulkCreateModalOpen(true);
+  }, [channelDefaults]);
 
   // Context menu handlers
   const closeContextMenu = useCallback(() => hideContextMenu(), [hideContextMenu]);
@@ -590,11 +713,12 @@ export function StreamsPane({
     setBulkCreateStripNetwork(false);
     // Apply default channel profile from settings
     setBulkCreateSelectedProfiles(
-      channelDefaults?.defaultChannelProfileId ? new Set([channelDefaults.defaultChannelProfileId]) : new Set()
+      channelDefaults?.defaultChannelProfileIds?.length ? new Set(channelDefaults.defaultChannelProfileIds) : new Set()
     );
     setNamingOptionsExpanded(false);
     setChannelGroupExpanded(true); // Expand channel group section so user sees the "new group" option
     setTimezoneExpanded(false);
+    setBulkCreateNormalizationSettings(channelDefaults?.normalizationSettings ?? { disabledBuiltinTags: [], customTags: [] });
     setBulkCreateModalOpen(true);
     closeContextMenu();
   }, [contextMenu, streams, channelDefaults, closeContextMenu]);
@@ -684,11 +808,12 @@ export function StreamsPane({
     setBulkCreateStripNetwork(false);
     // Apply default channel profile from settings
     setBulkCreateSelectedProfiles(
-      channelDefaults?.defaultChannelProfileId ? new Set([channelDefaults.defaultChannelProfileId]) : new Set()
+      channelDefaults?.defaultChannelProfileIds?.length ? new Set(channelDefaults.defaultChannelProfileIds) : new Set()
     );
     setNamingOptionsExpanded(false);
     setChannelGroupExpanded(false);
     setTimezoneExpanded(false);
+    setBulkCreateNormalizationSettings(channelDefaults?.normalizationSettings ?? { disabledBuiltinTags: [], customTags: [] });
     setBulkCreateModalOpen(true);
   }, [groupedStreams, selectedIds, channelDefaults]);
 
@@ -719,11 +844,12 @@ export function StreamsPane({
     setBulkCreateStripNetwork(false);
     // Apply default channel profile from settings
     setBulkCreateSelectedProfiles(
-      channelDefaults?.defaultChannelProfileId ? new Set([channelDefaults.defaultChannelProfileId]) : new Set()
+      channelDefaults?.defaultChannelProfileIds?.length ? new Set(channelDefaults.defaultChannelProfileIds) : new Set()
     );
     setNamingOptionsExpanded(false);
     setChannelGroupExpanded(false);
     setTimezoneExpanded(false);
+    setBulkCreateNormalizationSettings(channelDefaults?.normalizationSettings ?? { disabledBuiltinTags: [], customTags: [] });
     setBulkCreateModalOpen(true);
   }, [channelDefaults]);
 
@@ -761,6 +887,18 @@ export function StreamsPane({
       onExternalTriggerHandled?.();
     }
   }, [externalTriggerStreamIds, externalTriggerTargetGroupId, externalTriggerStartingNumber, openBulkCreateModalForStreamIds, onBulkCreateFromGroup, onExternalTriggerHandled]);
+
+  // Handle external trigger to open bulk create modal for manual entry (no streams)
+  useEffect(() => {
+    if (externalTriggerManualEntry && onBulkCreateFromGroup) {
+      openBulkCreateModalForManualEntry(
+        externalTriggerTargetGroupId,
+        externalTriggerStartingNumber
+      );
+      // Signal that we've handled the trigger
+      onExternalTriggerHandled?.();
+    }
+  }, [externalTriggerManualEntry, externalTriggerTargetGroupId, externalTriggerStartingNumber, openBulkCreateModalForManualEntry, onBulkCreateFromGroup, onExternalTriggerHandled]);
 
   // Get the streams to create channels from (either from single group, multiple groups, or selection)
   const streamsToCreate = useMemo(() => {
@@ -819,6 +957,7 @@ export function StreamsPane({
       customNetworkPrefixes: channelDefaults?.customNetworkPrefixes,
       stripNetworkSuffix: bulkCreateStripSuffix,
       customNetworkSuffixes: channelDefaults?.customNetworkSuffixes,
+      normalizationSettings: bulkCreateNormalizationSettings,
     };
 
     const unsortedStreamsByNormalizedName = new Map<string, Stream[]>();
@@ -863,7 +1002,7 @@ export function StreamsPane({
     const hasDuplicates = duplicateCount > 0;
     const excludedCount = streamsToCreate.length - filteredStreams.length;
     return { uniqueCount, duplicateCount, hasDuplicates, streamsByNormalizedName, excludedCount };
-  }, [streamsToCreate, bulkCreateTimezone, bulkCreateStripCountry, bulkCreateKeepCountry, bulkCreateCountrySeparator, bulkCreateStripNetwork, bulkCreateStripSuffix]);
+  }, [streamsToCreate, bulkCreateTimezone, bulkCreateStripCountry, bulkCreateKeepCountry, bulkCreateCountrySeparator, bulkCreateStripNetwork, bulkCreateStripSuffix, bulkCreateNormalizationSettings]);
 
   // Actually perform the bulk create with the specified pushDown option
   // startingNumberOverride: optionally override the starting number (used by "insert at end" option)
@@ -1399,17 +1538,30 @@ export function StreamsPane({
                 <div key={group.name} className={`stream-group ${isGroupFullySelected(group) && isEditMode ? 'group-selected' : ''}`}>
                   <div
                     className="stream-group-header"
-                    onClick={() => toggleGroup(group.name)}
-                    onContextMenu={(e) => handleGroupContextMenu(group, e)}
-                    draggable={isEditMode && !!onBulkCreateFromGroup}
-                    onDragStart={(e) => {
-                      if (isEditMode && onBulkCreateFromGroup) {
-                        handleGroupDragStart(e, group);
+                    onClick={() => {
+                      // If group is being expanded (not currently expanded) and we have a callback, trigger lazy load
+                      if (!isGroupExpanded(group.name) && onGroupExpand) {
+                        onGroupExpand(group.name);
                       }
+                      toggleGroup(group.name);
                     }}
+                    onContextMenu={(e) => handleGroupContextMenu(group, e)}
                   >
                     {isEditMode && onBulkCreateFromGroup && (
-                      <span className="group-drag-handle" title="Drag to Channels pane to bulk create">
+                      <span
+                        className="group-drag-handle"
+                        title="Drag to Channels pane to bulk create"
+                        draggable={true}
+                        onDragStart={(e) => {
+                          e.stopPropagation();
+                          // Trigger lazy load for this group if streams not yet loaded
+                          // This ensures streams are available when the drop completes
+                          if (group.streams.length === 0 && onGroupExpand) {
+                            onGroupExpand(group.name);
+                          }
+                          handleGroupDragStart(e, group);
+                        }}
+                      >
                         <span className="material-icons">drag_indicator</span>
                       </span>
                     )}
@@ -1890,7 +2042,7 @@ export function StreamsPane({
                                 )}
                               </div>
                               <div className="dropdown-options">
-                                {channelGroups
+                                {userCreatedChannelGroups
                                   .filter(g => !bulkCreateGroupSearch || g.name.toLowerCase().includes(bulkCreateGroupSearch.toLowerCase()))
                                   .map((g) => (
                                     <div
@@ -1905,7 +2057,7 @@ export function StreamsPane({
                                       {g.name}
                                     </div>
                                   ))}
-                                {channelGroups.filter(g => !bulkCreateGroupSearch || g.name.toLowerCase().includes(bulkCreateGroupSearch.toLowerCase())).length === 0 && (
+                                {userCreatedChannelGroups.filter(g => !bulkCreateGroupSearch || g.name.toLowerCase().includes(bulkCreateGroupSearch.toLowerCase())).length === 0 && (
                                   <div className="dropdown-no-results">No groups found</div>
                                 )}
                               </div>
@@ -2002,17 +2154,27 @@ export function StreamsPane({
                 </div>
               )}
 
-              {/* Naming Options - Collapsible Section */}
+              {/* Normalization - Collapsible Section */}
               <div className="form-group naming-options-section">
                 <div
                   className="naming-options-header"
                   onClick={() => setNamingOptionsExpanded(!namingOptionsExpanded)}
                 >
                   <span className="expand-icon">{namingOptionsExpanded ? '▼︎' : '▶︎'}</span>
-                  <span className="naming-options-title">Naming Options</span>
+                  <span className="naming-options-title">Normalization</span>
                   <span className="naming-options-summary">
                     {(() => {
                       const options: string[] = [];
+                      // Tag normalization
+                      const disabledTagCount = bulkCreateNormalizationSettings.disabledBuiltinTags.length;
+                      const customTagCount = bulkCreateNormalizationSettings.customTags.length;
+                      if (disabledTagCount > 0 || customTagCount > 0) {
+                        const tagParts: string[] = [];
+                        if (disabledTagCount > 0) tagParts.push(`${disabledTagCount} tags disabled`);
+                        if (customTagCount > 0) tagParts.push(`${customTagCount} custom`);
+                        options.push(tagParts.join(', '));
+                      }
+                      // Other normalization options
                       if (bulkCreateStripNetwork) options.push('Strip prefix');
                       if (bulkCreateStripSuffix) options.push('Strip suffix');
                       if (bulkCreateStripCountry) options.push('Remove country');
@@ -2032,6 +2194,14 @@ export function StreamsPane({
 
                 {namingOptionsExpanded && (
                   <div className="naming-options-content">
+                    {/* Tag-Based Normalization */}
+                    <div className="naming-option-group">
+                      <QuickTagManager
+                        settings={bulkCreateNormalizationSettings}
+                        onChange={setBulkCreateNormalizationSettings}
+                      />
+                    </div>
+
                     {/* Network prefix option - only show if network prefixes detected */}
                     {hasNetworkPrefixes && (
                       <div className="naming-option-group">

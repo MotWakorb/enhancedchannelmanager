@@ -57,9 +57,10 @@ function formatSchedule(task: TaskStatus): { summary: string; details: string[] 
   return { summary: 'Not scheduled', details: [] };
 }
 
-function TaskCard({ task, onRunNow, onToggleEnabled, onEdit, isRunning }: {
+function TaskCard({ task, onRunNow, onCancel, onToggleEnabled, onEdit, isRunning }: {
   task: TaskStatus;
   onRunNow: (taskId: string) => void;
+  onCancel: (taskId: string) => void;
   onToggleEnabled: (taskId: string, enabled: boolean) => void;
   onEdit: (task: TaskStatus) => void;
   isRunning: boolean;
@@ -117,27 +118,46 @@ function TaskCard({ task, onRunNow, onToggleEnabled, onEdit, isRunning }: {
             />
             Enabled
           </label>
-          {/* Run Now button */}
-          <button
-            onClick={() => onRunNow(task.task_id)}
-            disabled={isRunning || task.status === 'running'}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: '0.25rem',
-              padding: '0.5rem 0.75rem',
-              backgroundColor: 'var(--success)',
-              color: 'var(--success-text)',
-              border: 'none',
-              borderRadius: '4px',
-              cursor: isRunning ? 'not-allowed' : 'pointer',
-              opacity: isRunning ? 0.6 : 1,
-              fontSize: '0.85rem',
-            }}
-          >
-            <span className="material-icons" style={{ fontSize: '16px' }}>play_arrow</span>
-            Run Now
-          </button>
+          {/* Run Now / Cancel button */}
+          {(isRunning || task.status === 'running') ? (
+            <button
+              onClick={() => onCancel(task.task_id)}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.25rem',
+                padding: '0.5rem 0.75rem',
+                backgroundColor: '#e74c3c',
+                color: 'white',
+                border: 'none',
+                borderRadius: '4px',
+                cursor: 'pointer',
+                fontSize: '0.85rem',
+              }}
+            >
+              <span className="material-icons" style={{ fontSize: '16px' }}>stop</span>
+              Cancel
+            </button>
+          ) : (
+            <button
+              onClick={() => onRunNow(task.task_id)}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.25rem',
+                padding: '0.5rem 0.75rem',
+                backgroundColor: 'var(--success)',
+                color: 'var(--success-text)',
+                border: 'none',
+                borderRadius: '4px',
+                cursor: 'pointer',
+                fontSize: '0.85rem',
+              }}
+            >
+              <span className="material-icons" style={{ fontSize: '16px' }}>play_arrow</span>
+              Run Now
+            </button>
+          )}
           {/* Edit button */}
           <button
             onClick={() => onEdit(task)}
@@ -319,7 +339,11 @@ export function ScheduledTasksSection({ userTimezone: _userTimezone }: Scheduled
       logger.info(`Task ${taskId} completed`, result);
 
       // Show result notification
-      if (result.success) {
+      // Note: Cancelled tasks don't show notification here - handleCancel shows it via polling
+      if (result.error === 'CANCELLED') {
+        // Task was cancelled - notification already shown by handleCancel
+        logger.info(`${taskName} was cancelled (notification handled by cancel handler)`);
+      } else if (result.success) {
         notifications.success(
           `${taskName} completed: ${result.success_count} succeeded, ${result.failed_count} failed`,
           'Task Completed'
@@ -340,6 +364,84 @@ export function ScheduledTasksSection({ userTimezone: _userTimezone }: Scheduled
         'Task Error'
       );
     } finally {
+      setRunningTasks((prev) => {
+        const next = new Set(prev);
+        next.delete(taskId);
+        return next;
+      });
+    }
+  };
+
+  const handleCancel = async (taskId: string) => {
+    const task = tasks.find(t => t.task_id === taskId);
+    const taskName = task?.task_name || taskId;
+
+    try {
+      const result = await api.cancelTask(taskId);
+      logger.info(`Task ${taskId} cancel requested`, result);
+
+      if (result.status === 'cancelling') {
+        // Poll for task completion to show detailed result
+        // Don't show initial toast - wait for the detailed result
+        let attempts = 0;
+        const maxAttempts = 30; // 30 seconds max wait
+        const pollInterval = 1000; // 1 second
+        let notificationShown = false; // Prevent duplicate notifications
+
+        const pollForCompletion = async () => {
+          if (notificationShown) return; // Already showed notification
+          attempts++;
+          try {
+            const taskStatus = await api.getTask(taskId);
+            if (taskStatus.status !== 'running' && taskStatus.status !== 'scheduled') {
+              // Task has stopped - check history for the result
+              const history = await api.getTaskHistory(taskId, 1);
+              if (history.history.length > 0 && !notificationShown) {
+                const lastExecution = history.history[0];
+                if (lastExecution.status === 'cancelled' || lastExecution.error === 'CANCELLED') {
+                  notificationShown = true;
+                  notifications.info(
+                    `${taskName} was cancelled. ${lastExecution.success_count} items completed before cancellation` +
+                    (lastExecution.failed_count > 0 ? `, ${lastExecution.failed_count} failed` : '') +
+                    ` (out of ${lastExecution.total_items} total)`,
+                    'Task Cancelled'
+                  );
+                }
+              }
+              await loadTasks();
+              return;
+            }
+            // Still running, poll again
+            if (attempts < maxAttempts) {
+              setTimeout(pollForCompletion, pollInterval);
+            } else {
+              if (!notificationShown) {
+                notificationShown = true;
+                notifications.info(`${taskName} cancellation in progress`, 'Task Cancelling');
+              }
+              await loadTasks();
+            }
+          } catch (pollErr) {
+            logger.error('Error polling for task completion', pollErr);
+            await loadTasks();
+          }
+        };
+
+        // Start polling after a brief delay
+        setTimeout(pollForCompletion, pollInterval);
+      } else {
+        // Task wasn't running or other status
+        notifications.info(result.message || `${taskName} cancelled`, 'Task Cancelled');
+        await loadTasks();
+      }
+    } catch (err) {
+      logger.error(`Failed to cancel task ${taskId}`, err);
+      notifications.error(
+        `Failed to cancel ${taskName}: ${err instanceof Error ? err.message : 'Unknown error'}`,
+        'Cancel Error'
+      );
+    } finally {
+      // Remove from running tasks set since it's cancelled
       setRunningTasks((prev) => {
         const next = new Set(prev);
         next.delete(taskId);
@@ -426,6 +528,7 @@ export function ScheduledTasksSection({ userTimezone: _userTimezone }: Scheduled
             key={task.task_id}
             task={task}
             onRunNow={handleRunNow}
+            onCancel={handleCancel}
             onToggleEnabled={handleToggleEnabled}
             onEdit={setEditingTask}
             isRunning={runningTasks.has(task.task_id)}

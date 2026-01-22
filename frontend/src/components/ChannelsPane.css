@@ -113,6 +113,30 @@
   font-size: 14px;
 }
 
+.failed-streams-alert {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.2rem 0.5rem;
+  background-color: rgba(231, 76, 60, 0.15);
+  border: 1px solid rgba(231, 76, 60, 0.4);
+  border-radius: 4px;
+  color: var(--error, #e74c3c);
+  font-size: 0.75rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 0.15s, border-color 0.15s;
+}
+
+.failed-streams-alert:hover {
+  background-color: rgba(231, 76, 60, 0.25);
+  border-color: rgba(231, 76, 60, 0.6);
+}
+
+.failed-streams-alert .material-icons {
+  font-size: 14px;
+}
+
 /* Selection info in header */
 .selection-info {
   display: flex;
@@ -944,11 +968,23 @@
 .group-failed-indicator {
   display: inline-flex;
   align-items: center;
+  gap: 0.2rem;
   margin-left: 0.5rem;
+  padding: 0.1rem 0.4rem;
+  background-color: rgba(231, 76, 60, 0.15);
+  border: 1px solid rgba(231, 76, 60, 0.4);
+  border-radius: 4px;
+  color: var(--error, #e74c3c);
+  font-size: 0.75rem;
+  font-weight: 600;
 }
 
 .group-failed-indicator .material-icons {
-  font-size: 1rem;
+  font-size: 0.875rem;
+  color: var(--error, #e74c3c);
+}
+
+.group-failed-indicator .failed-count {
   color: var(--error, #e74c3c);
 }
 
@@ -1442,6 +1478,29 @@
   opacity: 1;
 }
 
+/* Clear stats button - always visible when present (indicates error state) */
+.clear-stats-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.25rem;
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  border-radius: 4px;
+  transition: color 0.15s, background 0.15s;
+}
+
+.clear-stats-btn:hover {
+  color: var(--error-color, #e74c3c);
+  background: rgba(231, 76, 60, 0.1);
+}
+
+.clear-stats-btn .material-icons {
+  font-size: 1rem;
+}
+
 /* Stream Metadata Tags */
 .stream-metadata {
   display: inline-flex;
@@ -1926,6 +1985,100 @@
   font-size: 0.875rem;
   color: var(--accent-primary);
   font-weight: 500;
+}
+
+/* Normalization Options in Modal */
+.modal-form .normalization-options {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.modal-form .original-stream-name {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  background-color: var(--bg-secondary);
+  border-radius: 4px;
+  font-size: 0.875rem;
+}
+
+.modal-form .original-label {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.modal-form .original-name {
+  color: var(--text-secondary);
+  word-break: break-word;
+}
+
+.modal-form .normalization-option {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+  font-size: 0.875rem;
+}
+
+.modal-form .normalization-option > span {
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+}
+
+.modal-form .normalization-option select {
+  padding: 0.375rem 0.5rem;
+  background-color: var(--bg-secondary);
+  border: 1px solid var(--border-secondary);
+  border-radius: 4px;
+  color: var(--text-primary);
+  font-size: 0.875rem;
+  cursor: pointer;
+}
+
+.modal-form .normalization-option select:focus {
+  outline: none;
+  border-color: var(--accent-primary);
+}
+
+.modal-form .separator-options.indent {
+  margin-left: 0;
+  margin-top: 0.25rem;
+}
+
+.modal-form .renormalize-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 0.5rem 1rem;
+  background-color: var(--button-primary-bg);
+  color: var(--button-primary-text);
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.875rem;
+  font-weight: 500;
+  margin-top: 0.25rem;
+}
+
+.modal-form .renormalize-btn:hover {
+  opacity: 0.9;
+}
+
+.modal-form .renormalize-btn .material-icons {
+  font-size: 18px;
+}
+
+.modal-form .normalization-hint {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  margin: 0;
+  padding: 0.5rem;
+  background-color: var(--bg-secondary);
+  border-radius: 4px;
+  line-height: 1.4;
 }
 
 /* Profile List in Modal */

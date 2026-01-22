@@ -10,6 +10,9 @@ import httpx
 import os
 import re
 import logging
+import time
+from collections import defaultdict
+from datetime import datetime
 
 from dispatcharr_client import get_client, reset_client
 from config import (
@@ -63,6 +66,101 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# ============================================================================
+# Request Timing and Rate Tracking Middleware (for CPU diagnostics)
+# ============================================================================
+# Track request rates per endpoint to detect rapid polling
+_request_rate_tracker: dict[str, list[float]] = defaultdict(list)
+_rate_window_seconds = 10  # Track requests over 10-second window
+_rate_alert_threshold = 20  # Warn if more than 20 requests in window
+
+def _clean_old_timestamps(timestamps: list[float], window: float) -> list[float]:
+    """Remove timestamps older than the window."""
+    cutoff = time.time() - window
+    return [t for t in timestamps if t > cutoff]
+
+
+@app.middleware("http")
+async def request_timing_middleware(request: Request, call_next):
+    """Log request timing and detect rapid polling patterns."""
+    start_time = time.time()
+    path = request.url.path
+    method = request.method
+
+    # Skip static files and health checks for timing logs
+    skip_timing = path.startswith("/assets") or path == "/api/health"
+
+    # Process the request
+    response = await call_next(request)
+
+    # Calculate duration
+    duration_ms = (time.time() - start_time) * 1000
+
+    if not skip_timing:
+        # Track request rate for this endpoint
+        endpoint_key = f"{method} {path}"
+        now = time.time()
+        _request_rate_tracker[endpoint_key].append(now)
+        _request_rate_tracker[endpoint_key] = _clean_old_timestamps(
+            _request_rate_tracker[endpoint_key], _rate_window_seconds
+        )
+        request_count = len(_request_rate_tracker[endpoint_key])
+
+        # Log timing at DEBUG level
+        logger.debug(
+            f"[REQUEST] {method} {path} - {duration_ms:.1f}ms - "
+            f"status={response.status_code} - "
+            f"rate={request_count}/{_rate_window_seconds}s"
+        )
+
+        # Warn if endpoint is being hit too frequently (possible runaway loop)
+        if request_count >= _rate_alert_threshold:
+            logger.warning(
+                f"[RAPID-POLLING] {endpoint_key} hit {request_count} times in "
+                f"{_rate_window_seconds}s - possible polling issue!"
+            )
+
+        # Log slow requests at INFO level
+        if duration_ms > 1000:
+            logger.info(
+                f"[SLOW-REQUEST] {method} {path} took {duration_ms:.1f}ms"
+            )
+
+    return response
+
+
+# ============================================================================
+# Diagnostic Endpoint for Request Rate Stats
+# ============================================================================
+@app.get("/api/debug/request-rates")
+async def get_request_rates():
+    """Get current request rate statistics for all endpoints.
+
+    Useful for diagnosing CPU issues - shows which endpoints are being
+    hit most frequently.
+    """
+    now = time.time()
+    stats = {}
+    for endpoint, timestamps in _request_rate_tracker.items():
+        clean_timestamps = _clean_old_timestamps(timestamps, _rate_window_seconds)
+        if clean_timestamps:
+            stats[endpoint] = {
+                "count_last_10s": len(clean_timestamps),
+                "requests_per_second": len(clean_timestamps) / _rate_window_seconds,
+                "last_request_ago_ms": int((now - max(clean_timestamps)) * 1000),
+            }
+
+    # Sort by request count descending
+    sorted_stats = dict(sorted(stats.items(), key=lambda x: x[1]["count_last_10s"], reverse=True))
+
+    return {
+        "window_seconds": _rate_window_seconds,
+        "alert_threshold": _rate_alert_threshold,
+        "timestamp": datetime.utcnow().isoformat(),
+        "endpoints": sorted_stats,
+    }
 
 
 # Custom validation error handler to log details
@@ -137,18 +235,17 @@ async def startup_event():
         # Note: Scheduled probing is now controlled by the Task Engine (StreamProbeTask)
         try:
             logger.debug(
-                f"Initializing stream prober (interval: {settings.stream_probe_interval_hours}h, "
-                f"batch: {settings.stream_probe_batch_size}, timeout: {settings.stream_probe_timeout}s)"
+                f"Initializing stream prober (batch: {settings.stream_probe_batch_size}, timeout: {settings.stream_probe_timeout}s)"
             )
             prober = StreamProber(
                 get_client(),
                 probe_timeout=settings.stream_probe_timeout,
                 probe_batch_size=settings.stream_probe_batch_size,
-                probe_interval_hours=settings.stream_probe_interval_hours,
                 user_timezone=settings.user_timezone,
                 probe_channel_groups=settings.probe_channel_groups,
                 bitrate_sample_duration=settings.bitrate_sample_duration,
                 parallel_probing_enabled=settings.parallel_probing_enabled,
+                max_concurrent_probes=settings.max_concurrent_probes,
                 skip_recently_probed_hours=settings.skip_recently_probed_hours,
                 refresh_m3us_before_probe=settings.refresh_m3us_before_probe,
                 auto_reorder_after_probe=settings.auto_reorder_after_probe,
@@ -387,6 +484,20 @@ async def health_check():
 
 
 # Settings
+class NormalizationTag(BaseModel):
+    """A normalization tag with its matching mode."""
+    value: str
+    mode: str = "both"  # "prefix", "suffix", or "both"
+
+
+class NormalizationSettings(BaseModel):
+    """User-configurable normalization settings."""
+    # Built-in tags that user has disabled (format: "group:value", e.g., "country:US")
+    disabledBuiltinTags: list[str] = []
+    # User-added custom tags
+    customTags: list[NormalizationTag] = []
+
+
 class SettingsRequest(BaseModel):
     url: str
     username: str
@@ -416,13 +527,13 @@ class SettingsRequest(BaseModel):
     frontend_log_level: str = "INFO"
     vlc_open_behavior: str = "m3u_fallback"
     # Stream probe settings (scheduled probing is controlled by Task Engine)
-    stream_probe_interval_hours: int = 24
     stream_probe_batch_size: int = 10
     stream_probe_timeout: int = 30
     stream_probe_schedule_time: str = "03:00"  # HH:MM format, 24h
     probe_channel_groups: list[str] = []  # Channel groups to probe
     bitrate_sample_duration: int = 10  # Duration in seconds to sample stream for bitrate (10, 20, or 30)
     parallel_probing_enabled: bool = True  # Probe multiple streams from different M3Us simultaneously
+    max_concurrent_probes: int = 8  # Max simultaneous probes when parallel probing is enabled (1-16)
     skip_recently_probed_hours: int = 0  # Skip streams successfully probed within last N hours (0 = always probe)
     refresh_m3us_before_probe: bool = True  # Refresh all M3U accounts before starting probe
     auto_reorder_after_probe: bool = False  # Automatically reorder streams in channels after probe completes
@@ -430,6 +541,7 @@ class SettingsRequest(BaseModel):
     stream_sort_priority: list[str] = ["resolution", "bitrate", "framerate"]  # Priority order for Smart Sort
     stream_sort_enabled: dict[str, bool] = {"resolution": True, "bitrate": True, "framerate": True}  # Which criteria are enabled
     deprioritize_failed_streams: bool = True  # When enabled, failed/timeout/pending streams sort to bottom
+    normalization_settings: Optional[NormalizationSettings] = None  # User-configurable normalization tags
 
 
 class SettingsResponse(BaseModel):
@@ -461,13 +573,13 @@ class SettingsResponse(BaseModel):
     frontend_log_level: str
     vlc_open_behavior: str
     # Stream probe settings (scheduled probing is controlled by Task Engine)
-    stream_probe_interval_hours: int
     stream_probe_batch_size: int
     stream_probe_timeout: int
     stream_probe_schedule_time: str  # HH:MM format, 24h
     probe_channel_groups: list[str]
     bitrate_sample_duration: int
     parallel_probing_enabled: bool  # Probe multiple streams from different M3Us simultaneously
+    max_concurrent_probes: int  # Max simultaneous probes when parallel probing is enabled (1-16)
     skip_recently_probed_hours: int  # Skip streams successfully probed within last N hours (0 = always probe)
     refresh_m3us_before_probe: bool  # Refresh all M3U accounts before starting probe
     auto_reorder_after_probe: bool  # Automatically reorder streams in channels after probe completes
@@ -475,6 +587,7 @@ class SettingsResponse(BaseModel):
     stream_sort_priority: list[str]  # Priority order for Smart Sort
     stream_sort_enabled: dict[str, bool]  # Which criteria are enabled
     deprioritize_failed_streams: bool  # When enabled, failed/timeout/pending streams sort to bottom
+    normalization_settings: NormalizationSettings  # User-configurable normalization tags
 
 
 class TestConnectionRequest(BaseModel):
@@ -517,13 +630,13 @@ async def get_current_settings():
         backend_log_level=settings.backend_log_level,
         frontend_log_level=settings.frontend_log_level,
         vlc_open_behavior=settings.vlc_open_behavior,
-        stream_probe_interval_hours=settings.stream_probe_interval_hours,
         stream_probe_batch_size=settings.stream_probe_batch_size,
         stream_probe_timeout=settings.stream_probe_timeout,
         stream_probe_schedule_time=settings.stream_probe_schedule_time,
         probe_channel_groups=settings.probe_channel_groups,
         bitrate_sample_duration=settings.bitrate_sample_duration,
         parallel_probing_enabled=settings.parallel_probing_enabled,
+        max_concurrent_probes=settings.max_concurrent_probes,
         skip_recently_probed_hours=settings.skip_recently_probed_hours,
         refresh_m3us_before_probe=settings.refresh_m3us_before_probe,
         auto_reorder_after_probe=settings.auto_reorder_after_probe,
@@ -531,6 +644,13 @@ async def get_current_settings():
         stream_sort_priority=settings.stream_sort_priority,
         stream_sort_enabled=settings.stream_sort_enabled,
         deprioritize_failed_streams=settings.deprioritize_failed_streams,
+        normalization_settings=NormalizationSettings(
+            disabledBuiltinTags=settings.disabled_builtin_tags,
+            customTags=[
+                NormalizationTag(value=tag["value"], mode=tag.get("mode", "both"))
+                for tag in settings.custom_normalization_tags
+            ]
+        ),
     )
 
 
@@ -584,19 +704,29 @@ async def update_settings(request: SettingsRequest):
         backend_log_level=request.backend_log_level,
         frontend_log_level=request.frontend_log_level,
         vlc_open_behavior=request.vlc_open_behavior,
-        stream_probe_interval_hours=request.stream_probe_interval_hours,
         stream_probe_batch_size=request.stream_probe_batch_size,
         stream_probe_timeout=request.stream_probe_timeout,
         stream_probe_schedule_time=request.stream_probe_schedule_time,
         probe_channel_groups=request.probe_channel_groups,
         bitrate_sample_duration=request.bitrate_sample_duration,
         parallel_probing_enabled=request.parallel_probing_enabled,
+        max_concurrent_probes=request.max_concurrent_probes,
         skip_recently_probed_hours=request.skip_recently_probed_hours,
         refresh_m3us_before_probe=request.refresh_m3us_before_probe,
         auto_reorder_after_probe=request.auto_reorder_after_probe,
+        stream_fetch_page_limit=request.stream_fetch_page_limit,
         stream_sort_priority=request.stream_sort_priority,
         stream_sort_enabled=request.stream_sort_enabled,
         deprioritize_failed_streams=request.deprioritize_failed_streams,
+        # Convert normalization_settings from API format to backend format
+        disabled_builtin_tags=(
+            request.normalization_settings.disabledBuiltinTags
+            if request.normalization_settings else current_settings.disabled_builtin_tags
+        ),
+        custom_normalization_tags=(
+            [{"value": tag.value, "mode": tag.mode} for tag in request.normalization_settings.customTags]
+            if request.normalization_settings else current_settings.custom_normalization_tags
+        ),
     )
     save_settings(new_settings)
     clear_settings_cache()
@@ -606,6 +736,25 @@ async def update_settings(request: SettingsRequest):
     if new_settings.backend_log_level != current_settings.backend_log_level:
         logger.info(f"Applying new backend log level: {new_settings.backend_log_level}")
         set_log_level(new_settings.backend_log_level)
+
+    # Update prober's channel groups without requiring restart
+    # This ensures scheduled probes use the latest group selection
+    if new_settings.probe_channel_groups != current_settings.probe_channel_groups:
+        prober = get_prober()
+        if prober:
+            prober.update_channel_groups(new_settings.probe_channel_groups)
+            logger.info("Updated prober channel groups from settings")
+
+    # Update prober's parallel probing settings without requiring restart
+    if (new_settings.parallel_probing_enabled != current_settings.parallel_probing_enabled or
+            new_settings.max_concurrent_probes != current_settings.max_concurrent_probes):
+        prober = get_prober()
+        if prober:
+            prober.update_probing_settings(
+                new_settings.parallel_probing_enabled,
+                new_settings.max_concurrent_probes
+            )
+            logger.info("Updated prober parallel probing settings from settings")
 
     logger.info(f"Settings saved successfully - configured: {new_settings.is_configured()}, auth_changed: {auth_changed}")
     return {"status": "saved", "configured": new_settings.is_configured()}
@@ -678,11 +827,11 @@ async def restart_services():
                 get_client(),
                 probe_timeout=settings.stream_probe_timeout,
                 probe_batch_size=settings.stream_probe_batch_size,
-                probe_interval_hours=settings.stream_probe_interval_hours,
                 user_timezone=settings.user_timezone,
                 probe_channel_groups=settings.probe_channel_groups,
                 bitrate_sample_duration=settings.bitrate_sample_duration,
                 parallel_probing_enabled=settings.parallel_probing_enabled,
+                max_concurrent_probes=settings.max_concurrent_probes,
                 skip_recently_probed_hours=settings.skip_recently_probed_hours,
                 refresh_m3us_before_probe=settings.refresh_m3us_before_probe,
                 auto_reorder_after_probe=settings.auto_reorder_after_probe,
@@ -731,19 +880,32 @@ async def get_channels(
     search: Optional[str] = None,
     channel_group: Optional[int] = None,
 ):
-    logger.debug(f"GET /api/channels - page: {page}, page_size: {page_size}, search: {search}, channel_group: {channel_group}")
+    start_time = time.time()
+    logger.debug(
+        f"[CHANNELS] Fetching channels - page={page}, page_size={page_size}, "
+        f"search={search}, group={channel_group}"
+    )
     client = get_client()
     try:
+        fetch_start = time.time()
         result = await client.get_channels(
             page=page,
             page_size=page_size,
             search=search,
             channel_group=channel_group,
         )
-        logger.info(f"Retrieved {len(result.get('results', []))} channels (page {page}, total: {result.get('count', 0)})")
+        fetch_time = (time.time() - fetch_start) * 1000
+        total_time = (time.time() - start_time) * 1000
+        result_count = len(result.get('results', []))
+        total_count = result.get('count', 0)
+
+        logger.debug(
+            f"[CHANNELS] Fetched {result_count} channels (total={total_count}, page={page}) "
+            f"- fetch={fetch_time:.1f}ms, total={total_time:.1f}ms"
+        )
         return result
     except Exception as e:
-        logger.exception(f"Failed to retrieve channels: {e}")
+        logger.exception(f"[CHANNELS] Failed to retrieve channels: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -2132,6 +2294,12 @@ async def get_streams(
     m3u_account: Optional[int] = None,
     bypass_cache: bool = False,
 ):
+    start_time = time.time()
+    logger.debug(
+        f"[STREAMS] Fetching streams - page={page}, page_size={page_size}, "
+        f"search={search}, group={channel_group_name}, m3u={m3u_account}, bypass_cache={bypass_cache}"
+    )
+
     cache = get_cache()
     cache_key = f"streams:p{page}:ps{page_size}:s{search or ''}:g{channel_group_name or ''}:m{m3u_account or ''}"
 
@@ -2139,11 +2307,18 @@ async def get_streams(
     if not bypass_cache:
         cached = cache.get(cache_key)
         if cached is not None:
-            logger.debug(f"Returning cached streams for {cache_key}")
+            cache_time = (time.time() - start_time) * 1000
+            result_count = len(cached.get("results", []))
+            total_count = cached.get("count", 0)
+            logger.debug(
+                f"[STREAMS] Cache HIT - returned {result_count} streams "
+                f"(total={total_count}) in {cache_time:.1f}ms"
+            )
             return cached
 
     client = get_client()
     try:
+        fetch_start = time.time()
         result = await client.get_streams(
             page=page,
             page_size=page_size,
@@ -2151,6 +2326,7 @@ async def get_streams(
             channel_group_name=channel_group_name,
             m3u_account=m3u_account,
         )
+        fetch_time = (time.time() - fetch_start) * 1000
 
         # Get channel groups for name lookup (also cached)
         groups_cache_key = "channel_groups"
@@ -2167,8 +2343,17 @@ async def get_streams(
 
         # Cache the result
         cache.set(cache_key, result)
+
+        total_time = (time.time() - start_time) * 1000
+        result_count = len(result.get("results", []))
+        total_count = result.get("count", 0)
+        logger.debug(
+            f"[STREAMS] Cache MISS - fetched {result_count} streams "
+            f"(total={total_count}) - fetch={fetch_time:.1f}ms, total={total_time:.1f}ms"
+        )
         return result
     except Exception as e:
+        logger.error(f"[STREAMS] Failed to fetch streams: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -4512,6 +4697,7 @@ class ProbeAllRequest(BaseModel):
     """Request for probe all streams endpoint with optional group filtering."""
     channel_groups: list[str] = []  # Empty list means all groups
     skip_m3u_refresh: bool = False  # Skip M3U refresh for on-demand probes
+    stream_ids: list[int] = []  # Optional list of specific stream IDs to probe (empty = all)
 
 
 # NOTE: /probe/bulk and /probe/all MUST be defined BEFORE /probe/{stream_id}
@@ -4561,9 +4747,11 @@ async def probe_bulk_streams(request: BulkProbeRequest):
 async def probe_all_streams_endpoint(request: ProbeAllRequest = ProbeAllRequest()):
     """Trigger probe for all streams (background task).
 
-    Optionally filter by channel groups. If channel_groups is empty, probes all groups.
+    Optionally filter by channel groups or specific stream IDs.
+    If channel_groups is empty, probes all groups.
+    If stream_ids is provided, probes only those specific streams (useful for re-probing failed streams).
     """
-    logger.info(f"Probe all streams request received with groups filter: {request.channel_groups}")
+    logger.info(f"Probe all streams request received with groups filter: {request.channel_groups}, stream_ids: {len(request.stream_ids) if request.stream_ids else 0}")
 
     prober = get_prober()
     logger.info(f"get_prober() returned: {prober is not None}")
@@ -4585,14 +4773,16 @@ async def probe_all_streams_endpoint(request: ProbeAllRequest = ProbeAllRequest(
             logger.info("[PROBE-TASK] Background probe task starting...")
             await prober.probe_all_streams(
                 channel_groups_override=request.channel_groups or None,
-                skip_m3u_refresh=request.skip_m3u_refresh
+                skip_m3u_refresh=request.skip_m3u_refresh,
+                stream_ids_filter=request.stream_ids or None
             )
             logger.info("[PROBE-TASK] Background probe task completed successfully")
         except Exception as e:
             logger.error(f"[PROBE-TASK] Background probe task failed with error: {e}", exc_info=True)
 
     # Start background task with optional group filter
-    logger.info(f"Starting background probe task (groups: {request.channel_groups or 'all'}, skip_m3u_refresh: {request.skip_m3u_refresh})")
+    stream_ids_msg = f", stream_ids: {len(request.stream_ids)}" if request.stream_ids else ""
+    logger.info(f"Starting background probe task (groups: {request.channel_groups or 'all'}, skip_m3u_refresh: {request.skip_m3u_refresh}{stream_ids_msg})")
     asyncio.create_task(run_probe_with_logging())
     logger.info("Background task created, returning response")
     return {"status": "started", "message": "Background probe started"}
@@ -4648,6 +4838,122 @@ async def reset_probe_state():
     return prober.force_reset_probe_state()
 
 
+class DismissStatsRequest(BaseModel):
+    """Request model for dismissing stream probe stats."""
+    stream_ids: list[int]
+
+
+class ClearStatsRequest(BaseModel):
+    """Request model for clearing stream probe stats."""
+    stream_ids: list[int]
+
+
+@app.post("/api/stream-stats/dismiss")
+async def dismiss_stream_stats(request: DismissStatsRequest):
+    """Dismiss probe failures for the specified streams.
+
+    Marks the streams as 'dismissed' so they don't appear in failed lists.
+    The dismissal is cleared automatically when the stream is re-probed.
+    """
+    from models import StreamStats
+
+    if not request.stream_ids:
+        raise HTTPException(status_code=400, detail="stream_ids is required")
+
+    session = get_session()
+    try:
+        now = datetime.utcnow()
+        updated = session.query(StreamStats).filter(
+            StreamStats.stream_id.in_(request.stream_ids)
+        ).update(
+            {StreamStats.dismissed_at: now},
+            synchronize_session=False
+        )
+        session.commit()
+        logger.info(f"Dismissed {updated} stream stats for IDs: {request.stream_ids}")
+        return {"dismissed": updated, "stream_ids": request.stream_ids}
+    except Exception as e:
+        session.rollback()
+        logger.error(f"Failed to dismiss stream stats: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        session.close()
+
+
+@app.post("/api/stream-stats/clear")
+async def clear_stream_stats(request: ClearStatsRequest):
+    """Clear (delete) probe stats for the specified streams.
+
+    Completely removes the probe history for these streams.
+    They will appear as 'pending' (never probed) until re-probed.
+    """
+    from models import StreamStats
+
+    if not request.stream_ids:
+        raise HTTPException(status_code=400, detail="stream_ids is required")
+
+    session = get_session()
+    try:
+        deleted = session.query(StreamStats).filter(
+            StreamStats.stream_id.in_(request.stream_ids)
+        ).delete(synchronize_session=False)
+        session.commit()
+        logger.info(f"Cleared {deleted} stream stats for IDs: {request.stream_ids}")
+        return {"cleared": deleted, "stream_ids": request.stream_ids}
+    except Exception as e:
+        session.rollback()
+        logger.error(f"Failed to clear stream stats: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        session.close()
+
+
+@app.post("/api/stream-stats/clear-all")
+async def clear_all_stream_stats():
+    """Clear (delete) all probe stats for all streams.
+
+    Completely removes all probe history. All streams will appear as
+    'pending' (never probed) until re-probed.
+    """
+    from models import StreamStats
+
+    session = get_session()
+    try:
+        deleted = session.query(StreamStats).delete(synchronize_session=False)
+        session.commit()
+        logger.info(f"Cleared all stream stats ({deleted} records)")
+        return {"cleared": deleted}
+    except Exception as e:
+        session.rollback()
+        logger.error(f"Failed to clear all stream stats: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        session.close()
+
+
+@app.get("/api/stream-stats/dismissed")
+async def get_dismissed_stream_stats():
+    """Get list of dismissed stream IDs.
+
+    Returns stream IDs that have been dismissed (failures acknowledged).
+    Used by frontend to filter out dismissed streams from probe results display.
+    """
+    from models import StreamStats
+
+    session = get_session()
+    try:
+        dismissed = session.query(StreamStats.stream_id).filter(
+            StreamStats.dismissed_at.isnot(None)
+        ).all()
+        stream_ids = [s.stream_id for s in dismissed]
+        return {"dismissed_stream_ids": stream_ids, "count": len(stream_ids)}
+    except Exception as e:
+        logger.error(f"Failed to get dismissed stream stats: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        session.close()
+
+
 @app.post("/api/stream-stats/probe/{stream_id}")
 async def probe_single_stream(stream_id: int):
     """Trigger on-demand probe for a single stream."""
@@ -4700,13 +5006,47 @@ class TaskConfigUpdate(BaseModel):
 
 @app.get("/api/tasks")
 async def list_tasks():
-    """Get all registered tasks with their status."""
+    """Get all registered tasks with their status, including schedules."""
+    start_time = time.time()
     try:
         from task_registry import get_registry
+        from models import TaskSchedule
+        from schedule_calculator import describe_schedule
+
         registry = get_registry()
-        return {"tasks": registry.get_all_task_statuses()}
+        tasks = registry.get_all_task_statuses()
+
+        # Include schedules for each task
+        session = get_session()
+        try:
+            for task in tasks:
+                task_id = task.get('task_id')
+                if task_id:
+                    schedules = session.query(TaskSchedule).filter(TaskSchedule.task_id == task_id).all()
+                    task['schedules'] = []
+                    for schedule in schedules:
+                        schedule_dict = schedule.to_dict()
+                        schedule_dict['description'] = describe_schedule(
+                            schedule_type=schedule.schedule_type,
+                            interval_seconds=schedule.interval_seconds,
+                            schedule_time=schedule.schedule_time,
+                            timezone=schedule.timezone,
+                            days_of_week=schedule.get_days_of_week_list(),
+                            day_of_month=schedule.day_of_month,
+                        )
+                        task['schedules'].append(schedule_dict)
+        finally:
+            session.close()
+
+        duration_ms = (time.time() - start_time) * 1000
+        running_tasks = [t.get('task_id') for t in tasks if t.get('status') == 'running']
+        logger.debug(
+            f"[TASKS] Listed {len(tasks)} tasks in {duration_ms:.1f}ms"
+            + (f" - running: {running_tasks}" if running_tasks else "")
+        )
+        return {"tasks": tasks}
     except Exception as e:
-        logger.error(f"Failed to list tasks: {e}")
+        logger.error(f"[TASKS] Failed to list tasks: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

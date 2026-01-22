@@ -23,7 +23,12 @@
       "Bash(curl:*)",
       "Bash(python3:*)",
       "Bash(gh run list:*)",
-      "Bash(docker ps:*)"
+      "Bash(docker ps:*)",
+      "Bash(cmd /c scriptsquality-gates.bat)",
+      "Bash(python -m pytest:*)",
+      "Bash(npm test:*)",
+      "Bash(test:*)",
+      "Bash(npx vitest:*)"
     ],
     "deny": [],
     "ask": [],

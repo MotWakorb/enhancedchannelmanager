@@ -111,7 +111,6 @@ class TestRestartServices:
             mock_settings.stats_poll_interval = 30
             mock_settings.stream_probe_timeout = 15
             mock_settings.stream_probe_batch_size = 10
-            mock_settings.stream_probe_interval_hours = 24
             mock_settings.user_timezone = "America/New_York"
             mock_settings.probe_channel_groups = None
             mock_settings.bitrate_sample_duration = 5

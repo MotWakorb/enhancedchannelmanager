@@ -630,6 +630,23 @@ export type SortEnabledMap = Record<SortCriterion, boolean>;
 
 export type GracenoteConflictMode = 'ask' | 'skip' | 'overwrite';
 
+// Normalization tag mode - where the tag should be matched
+export type NormalizationTagMode = 'prefix' | 'suffix' | 'both';
+
+// A single normalization tag with its matching mode
+export interface NormalizationTag {
+  value: string;
+  mode: NormalizationTagMode;
+}
+
+// User-configurable normalization settings
+export interface NormalizationSettings {
+  // Built-in tags that user has disabled (by group:value key, e.g., "country:US")
+  disabledBuiltinTags: string[];
+  // User-added custom tags
+  customTags: NormalizationTag[];
+}
+
 export interface SettingsResponse {
   url: string;
   username: string;
@@ -659,7 +676,6 @@ export interface SettingsResponse {
   frontend_log_level: string;  // Frontend log level (DEBUG, INFO, WARN, ERROR)
   vlc_open_behavior: string;  // VLC open behavior: "protocol_only", "m3u_fallback", "m3u_only"
   // Stream probe settings (scheduled probing is controlled by Task Engine)
-  stream_probe_interval_hours: number;  // Hours between auto-probe cycles
   stream_probe_batch_size: number;  // Streams to probe per scheduled cycle
   stream_probe_timeout: number;  // Timeout in seconds for each probe
   stream_probe_schedule_time: string;  // Time of day to run probes (HH:MM, 24h format)
@@ -673,6 +689,7 @@ export interface SettingsResponse {
   stream_sort_priority: SortCriterion[];  // Priority order for Smart Sort (e.g., ['resolution', 'bitrate', 'framerate'])
   stream_sort_enabled: SortEnabledMap;  // Which sort criteria are enabled (e.g., { resolution: true, bitrate: true, framerate: false })
   deprioritize_failed_streams: boolean;  // When enabled, failed/timeout/pending streams sort to bottom
+  normalization_settings: NormalizationSettings;  // User-configurable normalization tag settings
 }
 
 export interface TestConnectionResult {
@@ -713,7 +730,6 @@ export async function saveSettings(settings: {
   frontend_log_level?: string;  // Optional - Frontend log level, defaults to INFO
   vlc_open_behavior?: string;  // Optional - VLC open behavior: "protocol_only", "m3u_fallback", "m3u_only"
   // Stream probe settings (scheduled probing is controlled by Task Engine)
-  stream_probe_interval_hours?: number;  // Optional - hours between auto-probe cycles, defaults to 24
   stream_probe_batch_size?: number;  // Optional - streams per scheduled cycle, defaults to 10
   stream_probe_timeout?: number;  // Optional - timeout in seconds, defaults to 30
   stream_probe_schedule_time?: string;  // Optional - time of day for probes (HH:MM), defaults to "03:00"
@@ -727,6 +743,7 @@ export async function saveSettings(settings: {
   stream_sort_priority?: SortCriterion[];  // Optional - priority order for Smart Sort, defaults to ['resolution', 'bitrate', 'framerate']
   stream_sort_enabled?: SortEnabledMap;  // Optional - which sort criteria are enabled, defaults to all true
   deprioritize_failed_streams?: boolean;  // Optional - deprioritize failed/timeout/pending streams in sort, defaults to true
+  normalization_settings?: NormalizationSettings;  // Optional - user-configurable normalization tags
 }): Promise<{ status: string; configured: boolean }> {
   return fetchJson(`${API_BASE}/settings`, {
     method: 'POST',
@@ -1356,9 +1373,10 @@ export async function probeBulkStreams(streamIds: number[]): Promise<import('../
  * Start background probe of all streams.
  * @param channelGroups - Optional list of channel group names to filter by
  * @param skipM3uRefresh - If true, skip M3U refresh (use for on-demand probes from UI)
+ * @param streamIds - Optional list of specific stream IDs to probe (useful for re-probing failed streams)
  */
-export async function probeAllStreams(channelGroups?: string[], skipM3uRefresh?: boolean): Promise<{ status: string; message: string }> {
-  logger.debug('[Probe] probeAllStreams called with groups:', channelGroups, 'skipM3uRefresh:', skipM3uRefresh);
+export async function probeAllStreams(channelGroups?: string[], skipM3uRefresh?: boolean, streamIds?: number[]): Promise<{ status: string; message: string }> {
+  logger.debug('[Probe] probeAllStreams called with groups:', channelGroups, 'skipM3uRefresh:', skipM3uRefresh, 'streamIds:', streamIds?.length);
 
   try {
     const result = await fetchJson(`${API_BASE}/stream-stats/probe/all`, {
@@ -1366,7 +1384,8 @@ export async function probeAllStreams(channelGroups?: string[], skipM3uRefresh?:
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         channel_groups: channelGroups || [],
-        skip_m3u_refresh: skipM3uRefresh ?? false
+        skip_m3u_refresh: skipM3uRefresh ?? false,
+        stream_ids: streamIds || []
       }),
     }) as { status: string; message: string };
     logger.debug('[Probe] probeAllStreams request succeeded:', result);
@@ -1424,6 +1443,49 @@ export async function getProbeResults(): Promise<{
     failed_count: number;
     skipped_count: number;
   }>;
+}
+
+/**
+ * Dismiss probe failures for the specified streams.
+ * Dismissed streams won't appear in failed lists until re-probed.
+ */
+export async function dismissStreamStats(streamIds: number[]): Promise<{ dismissed: number; stream_ids: number[] }> {
+  return fetchJson(`${API_BASE}/stream-stats/dismiss`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ stream_ids: streamIds }),
+  }) as Promise<{ dismissed: number; stream_ids: number[] }>;
+}
+
+/**
+ * Clear (delete) probe stats for the specified streams.
+ * Streams will appear as 'pending' (never probed) until re-probed.
+ */
+export async function clearStreamStats(streamIds: number[]): Promise<{ cleared: number; stream_ids: number[] }> {
+  return fetchJson(`${API_BASE}/stream-stats/clear`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ stream_ids: streamIds }),
+  }) as Promise<{ cleared: number; stream_ids: number[] }>;
+}
+
+/**
+ * Clear all probe stats for all streams.
+ * All streams will appear as 'pending' (never probed) until re-probed.
+ */
+export async function clearAllStreamStats(): Promise<{ cleared: number }> {
+  return fetchJson(`${API_BASE}/stream-stats/clear-all`, {
+    method: 'POST',
+  }) as Promise<{ cleared: number }>;
+}
+
+/**
+ * Get list of dismissed stream IDs.
+ */
+export async function getDismissedStreamIds(): Promise<{ dismissed_stream_ids: number[]; count: number }> {
+  return fetchJson(`${API_BASE}/stream-stats/dismissed`, {
+    method: 'GET',
+  }) as Promise<{ dismissed_stream_ids: number[]; count: number }>;
 }
 
 export interface SortConfig {
@@ -1641,6 +1703,7 @@ export async function updateTask(taskId: string, config: TaskConfigUpdate): Prom
 export async function runTask(taskId: string): Promise<{
   success: boolean;
   message: string;
+  error?: string;  // "CANCELLED" when task was cancelled
   started_at: string;
   completed_at: string;
   total_items: number;

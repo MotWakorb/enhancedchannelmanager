@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef, useEffect } from 'react';
+import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import type {
   Channel,
   ChannelSnapshot,
@@ -985,6 +985,9 @@ export function useEditMode({
     return summary;
   }, [state.stagedOperations, state.modifiedChannelIds]);
 
+  // Memoized summary - computed once per state change, not on every render call
+  const summary = useMemo(() => getSummary(), [getSummary]);
+
   // Check for conflicts with server
   const checkForConflicts = useCallback(async (): Promise<boolean> => {
     // Compare baseline snapshot with current server state
@@ -1409,6 +1412,24 @@ export function useEditMode({
   // Convert stagedGroups Map to array for consumers
   const stagedGroupsArray = state.isActive ? Array.from(state.stagedGroups.values()) : [];
 
+  // Compute set of group IDs that are staged for deletion (soft-deleted)
+  const deletedGroupIds = useMemo(() => {
+    if (!state.isActive) {
+      console.log('[useEditMode] Edit mode not active, returning empty deletedGroupIds');
+      return new Set<number>();
+    }
+
+    const ids = new Set<number>();
+    for (const op of state.stagedOperations) {
+      if (op.apiCall.type === 'deleteChannelGroup') {
+        ids.add(op.apiCall.groupId);
+        console.log('[useEditMode] Found deleteChannelGroup operation for group:', op.apiCall.groupId);
+      }
+    }
+    console.log('[useEditMode] Computed deletedGroupIds:', Array.from(ids), 'from', state.stagedOperations.length, 'staged operations');
+    return ids;
+  }, [state.isActive, state.stagedOperations]);
+
   return {
     // State
     isEditMode: state.isActive,
@@ -1417,6 +1438,7 @@ export function useEditMode({
     modifiedChannelIds: state.modifiedChannelIds,
     displayChannels,
     stagedGroups: stagedGroupsArray,
+    deletedGroupIds,
     canLocalUndo: state.localUndoStack.length > 0,
     canLocalRedo: state.localRedoStack.length > 0,
     editModeDuration,
@@ -1446,6 +1468,7 @@ export function useEditMode({
     endBatch,
 
     // Commit/Discard
+    summary,
     getSummary,
     validate,
     commit,

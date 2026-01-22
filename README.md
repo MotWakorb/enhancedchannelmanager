@@ -100,8 +100,12 @@ A professional-grade web interface for managing IPTV configurations with Dispatc
 - **Merge Duplicate Names** - Streams with identical names from different M3U providers are merged into a single channel with all streams assigned (provides multi-provider redundancy)
 - **Quality Variant Normalization** - Streams with quality suffixes (FHD, UHD, HD, SD, 4K, 1080P, etc.) are automatically merged into one channel
 - **Smart Stream Ordering** - Streams are automatically ordered by quality (UHD/4K → FHD/1080p → HD/720p → SD) and interleaved by provider for failover redundancy (e.g., Provider1-FHD, Provider2-FHD, Provider1-HD, Provider2-HD)
-- **Network Prefix Stripping** - Option to strip network prefixes (e.g., "CHAMP | Queens Park Rangers" → "Queens Park Rangers") to merge streams from different networks into the same channel
-- **Network Suffix Stripping** - Option to strip network suffixes (e.g., "ESPN (ENGLISH)" → "ESPN", "HBO BACKUP" → "HBO") to clean up channel names and merge language/feed variants
+- **Tag-Based Normalization** - Integrated Quick Tag Manager lets you customize which tags to strip:
+  - Toggle built-in tags across 5 groups (Country, League, Network, Quality, Timezone)
+  - Add custom tags with prefix/suffix/both mode on the fly
+  - Settings default to your configured preferences, adjustable per-operation
+- **Network Prefix Stripping** - Strip network prefixes (e.g., "CHAMP | Queens Park Rangers" → "Queens Park Rangers") to merge streams from different networks
+- **Network Suffix Stripping** - Strip network suffixes (e.g., "ESPN (ENGLISH)" → "ESPN", "HBO BACKUP" → "HBO") to clean up channel names
 - **East/West Timezone Preference** - When streams have regional variants (e.g., "Movies Channel" and "Movies Channel West"), choose to create East feeds only, West feeds only, or keep both as separate channels
 - **Country Prefix Options** - Choose to remove country prefixes (e.g., "US: Sports Channel" → "Sports Channel") or keep them with normalized formatting (e.g., "US: Sports Channel" → "US | Sports Channel") with configurable separator
 - **Channel Number Prefix** - Option to prepend channel numbers to names with configurable separator (-, :, or |), e.g., "100 | Sports Channel"
@@ -240,11 +244,19 @@ The Settings tab features sidebar navigation with multiple sections:
 - **Dispatcharr Connection** - Configure server URL, username, and password
 - **Test Connection** - Verify connectivity before saving
 
-#### Custom Network Prefixes
-Add custom prefixes to strip during bulk channel creation. These are merged with the built-in list (CHAMP, PPV, NFL, NBA, etc.) when "Strip network prefixes" is enabled.
+#### Stream Name Normalization (Tag-Based)
+Powerful tag-based system for cleaning and normalizing stream names during bulk channel creation:
 
-#### Custom Network Suffixes
-Add custom suffixes to strip during bulk channel creation. These are merged with the built-in list (ENGLISH, LIVE, BACKUP, FEED, etc.) when "Strip network suffixes" is enabled.
+- **5 Built-in Tag Groups** - Country (US, UK, CA, etc.), League (NFL, NBA, NHL, etc.), Network (CHAMP, PPV, etc.), Quality (FHD, UHD, HD, SD, etc.), Timezone (EST, PST, EAST, WEST, etc.)
+- **Toggle Individual Tags** - Enable or disable specific built-in tags within each group
+- **Custom Tags** - Add your own tags with mode selection:
+  - **Prefix only** - Strip when tag appears at start of name
+  - **Suffix only** - Strip when tag appears at end of name
+  - **Any position** - Strip tag wherever it appears
+- **Expandable Groups** - Click to expand each tag group and see/manage individual tags
+- **Summary Stats** - See counts of active, disabled, and custom tags at a glance
+- **Reset to Defaults** - One-click restore of default tag configuration
+- **Quick Tag Manager** - Compact tag editor also available in bulk create modal for per-operation customization
 
 #### Stream Probing
 Automated stream health checking:
@@ -260,6 +272,8 @@ Automated stream health checking:
 - **Probe History** - View past probe results with timestamps and statistics
 - **Auto-Reorder After Probe** - Automatically reorder streams by quality and status after scheduled probes complete
 - **Parallel Probing** - Streams from different M3U accounts probe concurrently
+- **Max Concurrent Probes** - Configure simultaneous probe limit (1-16) with guidance based on provider limits
+- **Rate Limit Detection** - Automatic backoff when providers return 429 errors, with UI notification
 - **M3U Connection Awareness** - Respects M3U max connection limits during probing
 - **Persistent History** - Probe results saved to `/config/probe_history.json` and persist across container restarts
 - **Failed Stream Indicators** - Visual error icons on channels and groups that contain failed/timeout streams
@@ -382,12 +396,15 @@ In-app notifications and external alerts:
 - **Failed Stream Details** - Task alerts include names of failed streams
 - **Failed Stream Indicators** - Visual markers on channels/groups with probe failures
 
-### v0.8.6 - Tag-Based Channel Normalization
-Improved UI for managing stream name normalization:
-- Expandable tag groups (Country, League, Network, Quality, Timezone)
-- Toggle individual built-in tags on/off
-- Custom tags with prefix/suffix/both mode
-- Quick tag management in bulk create modal
+### ~~v0.8.4 - Tag-Based Normalization Engine~~ ✅ Implemented
+Powerful tag-based system for stream name normalization:
+- **5 Built-in Tag Groups** - Country, League, Network, Quality, Timezone with 100+ tags
+- **Toggle Individual Tags** - Enable/disable specific tags within each group
+- **Custom Tags** - Add your own with prefix/suffix/both mode selection
+- **Expandable UI** - Collapsible tag groups with counts and bulk enable/disable
+- **Quick Tag Manager** - Compact tag editor in bulk create modal for per-operation customization
+- **Settings Integration** - Configure default normalization in Settings tab
+- **Backward Compatible** - Migrates old custom prefix/suffix settings automatically
 
 ### v0.9.0 - Mobile Interface
 Full mobile support for managing channels on the go:

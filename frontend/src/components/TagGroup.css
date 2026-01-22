@@ -1,0 +1,185 @@
+/* TagGroup Component Styles */
+
+.tag-group {
+  border: 1px solid var(--border-primary);
+  border-radius: 8px;
+  background-color: var(--bg-secondary);
+  overflow: hidden;
+}
+
+/* Group header */
+.tag-group-header {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem 1rem;
+  background-color: var(--bg-tertiary);
+  cursor: pointer;
+  user-select: none;
+  transition: background-color 0.15s;
+}
+
+.tag-group-header:hover {
+  background-color: var(--bg-hover);
+}
+
+.tag-group-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  background-color: var(--button-primary-bg);
+  color: var(--button-primary-text);
+  flex-shrink: 0;
+}
+
+.tag-group-icon .material-icons {
+  font-size: 18px;
+}
+
+.tag-group-title {
+  flex: 1;
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.tag-group-count {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  padding: 0.15rem 0.5rem;
+  background-color: var(--bg-primary);
+  border-radius: 10px;
+}
+
+.tag-group-expand {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  transition: transform 0.2s ease;
+}
+
+.tag-group-expand .material-icons {
+  font-size: 20px;
+}
+
+.tag-group.tag-group-expanded .tag-group-expand {
+  transform: rotate(180deg);
+}
+
+/* Group content */
+.tag-group-content {
+  max-height: 0;
+  overflow: hidden;
+  transition: max-height 0.3s ease-out;
+}
+
+.tag-group.tag-group-expanded .tag-group-content {
+  max-height: 1000px;
+  transition: max-height 0.3s ease-in;
+}
+
+.tag-group-inner {
+  padding: 1rem;
+}
+
+/* Description */
+.tag-group-description {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  margin-bottom: 0.75rem;
+  line-height: 1.4;
+}
+
+/* Tags container */
+.tag-group-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+/* Empty state */
+.tag-group-empty {
+  padding: 1rem;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+
+/* Custom tags section divider */
+.tag-group-divider {
+  margin: 1rem 0;
+  border: none;
+  border-top: 1px dashed var(--border-secondary);
+}
+
+.tag-group-section-label {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 0.5rem;
+}
+
+/* Compact variant */
+.tag-group.tag-group-compact .tag-group-header {
+  padding: 0.5rem 0.75rem;
+}
+
+.tag-group.tag-group-compact .tag-group-icon {
+  width: 24px;
+  height: 24px;
+}
+
+.tag-group.tag-group-compact .tag-group-icon .material-icons {
+  font-size: 16px;
+}
+
+.tag-group.tag-group-compact .tag-group-title {
+  font-size: 0.875rem;
+}
+
+.tag-group.tag-group-compact .tag-group-inner {
+  padding: 0.75rem;
+}
+
+.tag-group.tag-group-compact .tag-group-tags {
+  gap: 0.375rem;
+}
+
+/* Actions toolbar */
+.tag-group-actions {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--border-secondary);
+}
+
+.tag-group-action-btn {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.25rem 0.5rem;
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  background: none;
+  border: 1px solid var(--border-secondary);
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.tag-group-action-btn:hover {
+  background-color: var(--bg-hover);
+  border-color: var(--border-primary);
+  color: var(--text-primary);
+}
+
+.tag-group-action-btn .material-icons {
+  font-size: 14px;
+}
