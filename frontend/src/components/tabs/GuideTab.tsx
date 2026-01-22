@@ -20,6 +20,16 @@ const getLocalDateString = (date: Date): string => {
   return `${year}-${month}-${day}`;
 };
 
+// Helper to get program start time (handles both start_time and start field names)
+const getProgramStart = (program: EPGProgram): Date => {
+  return new Date(program.start_time || program.start || '');
+};
+
+// Helper to get program end time (handles both end_time and stop field names)
+const getProgramEnd = (program: EPGProgram): Date => {
+  return new Date(program.end_time || program.stop || '');
+};
+
 interface GuideTabProps {
   // Optional: pass existing data from parent to avoid re-fetching
   channels?: Channel[];
@@ -116,7 +126,7 @@ export function GuideTab({
     });
     // Sort programs by start time within each tvg_id
     map.forEach((progs) => {
-      progs.sort((a, b) => new Date(a.start_time).getTime() - new Date(b.start_time).getTime());
+      progs.sort((a, b) => getProgramStart(a).getTime() - getProgramStart(b).getTime());
     });
     return map;
   }, [programs]);
@@ -134,7 +144,7 @@ export function GuideTab({
     });
     // Sort programs by start time within each channel_uuid
     map.forEach((progs) => {
-      progs.sort((a, b) => new Date(a.start_time).getTime() - new Date(b.start_time).getTime());
+      progs.sort((a, b) => getProgramStart(a).getTime() - getProgramStart(b).getTime());
     });
     return map;
   }, [programs]);
@@ -384,16 +394,16 @@ export function GuideTab({
 
     // Filter to programs that overlap with our time range
     return channelPrograms.filter(program => {
-      const progStart = new Date(program.start_time);
-      const progEnd = new Date(program.end_time);
+      const progStart = getProgramStart(program);
+      const progEnd = getProgramEnd(program);
       return progStart < timeRange.end && progEnd > timeRange.start;
     });
   }, [programsByTvgId, programsByChannelUuid, epgDataById, timeRange]);
 
   // Calculate position and width for a program block
   const getProgramStyle = useCallback((program: EPGProgram): React.CSSProperties => {
-    const progStart = new Date(program.start_time);
-    const progEnd = new Date(program.end_time);
+    const progStart = getProgramStart(program);
+    const progEnd = getProgramEnd(program);
 
     // Clamp to visible time range
     const visibleStart = Math.max(progStart.getTime(), timeRange.start.getTime());
@@ -411,8 +421,8 @@ export function GuideTab({
 
   // Check if a program is currently airing
   const isNowPlaying = useCallback((program: EPGProgram): boolean => {
-    const progStart = new Date(program.start_time);
-    const progEnd = new Date(program.end_time);
+    const progStart = getProgramStart(program);
+    const progEnd = getProgramEnd(program);
     return currentTime >= progStart && currentTime < progEnd;
   }, [currentTime]);
 
@@ -490,7 +500,7 @@ export function GuideTab({
                 key={program.id}
                 className={`program-block ${isNowPlaying(program) ? 'now-playing' : ''}`}
                 style={getProgramStyle(program)}
-                title={`${program.title}${program.sub_title ? ` - ${program.sub_title}` : ''}\n${formatTime(new Date(program.start_time))} - ${formatTime(new Date(program.end_time))}`}
+                title={`${program.title}${program.sub_title ? ` - ${program.sub_title}` : ''}\n${formatTime(getProgramStart(program))} - ${formatTime(getProgramEnd(program))}`}
               >
                 <div className="program-title">{program.title}</div>
                 {program.sub_title && (

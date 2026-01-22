@@ -90,6 +90,9 @@ export interface EPGProgram {
   description?: string | null;
   tvg_id?: string | null;
   channel_uuid?: string | null;  // Used by dummy EPG sources to match via channel UUID
+  // Dispatcharr may also return these alternate field names
+  start?: string;  // Alternate for start_time
+  stop?: string;   // Alternate for end_time
 }
 
 export interface StreamProfile {
