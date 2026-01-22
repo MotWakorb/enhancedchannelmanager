@@ -899,6 +899,28 @@ async def get_channels(
         result_count = len(result.get('results', []))
         total_count = result.get('count', 0)
 
+        # Debug logging: count channels per group_id on first page of unfiltered requests
+        if page == 1 and not search and not channel_group:
+            channels = result.get('results', [])
+            group_counts: dict = {}
+            for ch in channels:
+                group_id = ch.get('channel_group_id')
+                group_name = ch.get('channel_group_name', 'Unknown')
+                key = f"{group_id}:{group_name}"
+                if key not in group_counts:
+                    group_counts[key] = {'count': 0, 'sample_channels': []}
+                group_counts[key]['count'] += 1
+                # Keep first 3 sample channel names per group for debugging
+                if len(group_counts[key]['sample_channels']) < 3:
+                    group_counts[key]['sample_channels'].append(
+                        f"#{ch.get('channel_number')} {ch.get('name', 'unnamed')}"
+                    )
+
+            logger.info(f"[CHANNELS-DEBUG] Page 1 stats: {result_count} channels returned, API total={total_count}")
+            logger.info(f"[CHANNELS-DEBUG] Channels per group_id (page 1 only):")
+            for key, data in sorted(group_counts.items(), key=lambda x: -x[1]['count']):
+                logger.info(f"  {key}: {data['count']} channels (samples: {data['sample_channels']})")
+
         logger.debug(
             f"[CHANNELS] Fetched {result_count} channels (total={total_count}, page={page}) "
             f"- fetch={fetch_time:.1f}ms, total={total_time:.1f}ms"
