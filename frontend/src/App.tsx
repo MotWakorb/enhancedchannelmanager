@@ -1347,7 +1347,7 @@ function App() {
           customNetworkPrefixes: customNetworkPrefixes,
           stripNetworkSuffix: stripNetworkSuffix ?? false,
           customNetworkSuffixes: customNetworkSuffixes,
-          normalizationSettings: appSettings.normalizationSettings,
+          normalizationSettings: channelDefaults.normalizationSettings,
         };
 
         // Filter streams by timezone preference
