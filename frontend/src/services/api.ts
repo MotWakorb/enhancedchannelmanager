@@ -1470,6 +1470,16 @@ export async function clearStreamStats(streamIds: number[]): Promise<{ cleared: 
 }
 
 /**
+ * Clear all probe stats for all streams.
+ * All streams will appear as 'pending' (never probed) until re-probed.
+ */
+export async function clearAllStreamStats(): Promise<{ cleared: number }> {
+  return fetchJson(`${API_BASE}/stream-stats/clear-all`, {
+    method: 'POST',
+  }) as Promise<{ cleared: number }>;
+}
+
+/**
  * Get list of dismissed stream IDs.
  */
 export async function getDismissedStreamIds(): Promise<{ dismissed_stream_ids: number[]; count: number }> {
