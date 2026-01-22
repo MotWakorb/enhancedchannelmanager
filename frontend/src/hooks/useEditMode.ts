@@ -523,7 +523,7 @@ export function useEditMode({
             name: apiCall.name,
             channel_group_id: channelGroupId,
             tvg_id: apiCall.tvgId ?? null,
-            tvc_guide_stationid: null,
+            tvc_guide_stationid: apiCall.tvcGuideStationId ?? null,
             epg_data_id: null,
             streams: [],
             stream_profile_id: null,
