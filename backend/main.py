@@ -4855,6 +4855,8 @@ async def dismiss_stream_stats(request: DismissStatsRequest):
     Marks the streams as 'dismissed' so they don't appear in failed lists.
     The dismissal is cleared automatically when the stream is re-probed.
     """
+    from models import StreamStats
+
     if not request.stream_ids:
         raise HTTPException(status_code=400, detail="stream_ids is required")
 
@@ -4885,6 +4887,8 @@ async def clear_stream_stats(request: ClearStatsRequest):
     Completely removes the probe history for these streams.
     They will appear as 'pending' (never probed) until re-probed.
     """
+    from models import StreamStats
+
     if not request.stream_ids:
         raise HTTPException(status_code=400, detail="stream_ids is required")
 
@@ -4911,6 +4915,8 @@ async def get_dismissed_stream_stats():
     Returns stream IDs that have been dismissed (failures acknowledged).
     Used by frontend to filter out dismissed streams from probe results display.
     """
+    from models import StreamStats
+
     session = get_session()
     try:
         dismissed = session.query(StreamStats.stream_id).filter(
