@@ -1393,9 +1393,11 @@ function App() {
           }
 
           // Fetch metadata for each M3U account
+          logger.debug(`Fetching M3U metadata for ${m3uAccountIds.size} account(s): ${Array.from(m3uAccountIds).join(', ')}`);
           const metadataPromises = Array.from(m3uAccountIds).map(async (accountId) => {
             try {
               const response = await api.getM3UStreamMetadata(accountId);
+              logger.debug(`M3U metadata for account ${accountId}: ${response.count} entries`);
               return response.metadata;
             } catch (err) {
               logger.warn(`Failed to fetch M3U metadata for account ${accountId}:`, err);
@@ -1417,7 +1419,9 @@ function App() {
           }
 
           if (m3uMetadataMap.size > 0) {
-            logger.info(`Loaded ${m3uMetadataMap.size} Gracenote ID mappings from M3U metadata`);
+            logger.debug(`Loaded ${m3uMetadataMap.size} Gracenote ID mappings from M3U metadata`);
+          } else {
+            logger.debug('No Gracenote ID mappings found in M3U metadata');
           }
         } catch (err) {
           logger.warn('Failed to fetch M3U metadata for Gracenote IDs:', err);
@@ -1565,7 +1569,11 @@ function App() {
           // This gets the data directly from the M3U file since Dispatcharr doesn't expose it via API
           if (!tvcGuideStationId && tvgId && m3uMetadataMap.has(tvgId)) {
             tvcGuideStationId = m3uMetadataMap.get(tvgId);
+            logger.debug(`Found Gracenote ID from M3U metadata for tvg_id "${tvgId}": ${tvcGuideStationId}`);
           }
+
+          // Debug: Log what we're passing to stageCreateChannel
+          logger.debug(`Creating channel "${channelName}": tvgId=${tvgId}, tvcGuideStationId=${tvcGuideStationId}, m3uMetadataMap.has(tvgId)=${tvgId ? m3uMetadataMap.has(tvgId) : 'N/A'}`);
 
           // Create the channel (returns temp ID)
           // If targetNewGroupName is set, pass it so the commit logic can create the group first

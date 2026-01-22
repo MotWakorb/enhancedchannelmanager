@@ -16,6 +16,7 @@ import type {
 import * as api from '../services/api';
 import { createSnapshot } from '../utils/channelSnapshot';
 import { generateId } from '../utils/idGenerator';
+import { logger } from '../utils/logger';
 
 // Compute which channels are modified by comparing working copy to baseline
 function computeModifiedChannelIds(
@@ -1097,6 +1098,7 @@ export function useEditMode({
 
         case 'createChannel': {
           const tempId = operation.afterSnapshot[0]?.id ?? -1;
+          logger.debug(`buildBulkOperations createChannel: name="${apiCall.name}", tvgId=${apiCall.tvgId}, tvcGuideStationId=${apiCall.tvcGuideStationId}`);
           bulkOperations.push({
             type: 'createChannel',
             tempId: tempId,

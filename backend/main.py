@@ -1671,6 +1671,7 @@ async def bulk_commit_operations(request: BulkCommitRequest):
                     if op.tvcGuideStationId is not None:
                         channel_data["tvc_guide_stationid"] = op.tvcGuideStationId
 
+                    logger.debug(f"[BULK-APPLY] op.tvgId={op.tvgId}, op.tvcGuideStationId={op.tvcGuideStationId}")
                     logger.debug(f"[BULK-APPLY] Creating channel with data: {channel_data}")
                     new_channel = await client.create_channel(channel_data)
 
