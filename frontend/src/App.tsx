@@ -1596,6 +1596,12 @@ function App() {
   const filteredStreams = useMemo(() => {
     let result = streams;
 
+    // Filter by search term
+    if (streamFilters.search.trim()) {
+      const searchLower = streamFilters.search.toLowerCase().trim();
+      result = result.filter((s) => s.name.toLowerCase().includes(searchLower));
+    }
+
     // Filter by selected providers
     if (streamFilters.selectedProviders.length > 0) {
       result = result.filter((s) => s.m3u_account !== null && streamFilters.selectedProviders.includes(s.m3u_account));
@@ -1607,7 +1613,7 @@ function App() {
     }
 
     return result;
-  }, [streams, streamFilters.selectedProviders, streamFilters.selectedGroups]);
+  }, [streams, streamFilters.search, streamFilters.selectedProviders, streamFilters.selectedGroups]);
 
   const handleDeleteChannel = useCallback(
     async (channelId: number) => {
