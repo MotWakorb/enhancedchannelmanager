@@ -13,7 +13,7 @@
 /* Radio button group */
 .radio-group {
   display: flex;
-  gap: 1rem;
+  gap: 0.5rem;
 }
 
 .radio-label {
@@ -88,4 +88,25 @@
 .m3u-account-modal input[type="number"]::-webkit-inner-spin-button {
   -webkit-appearance: none;
   margin: 0;
+}
+
+/* File upload styling */
+.file-upload-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.file-upload-row .btn-secondary {
+  flex-shrink: 0;
+  padding: 0.5rem 1rem;
+  font-size: 0.9rem;
+}
+
+.uploaded-file-name {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }

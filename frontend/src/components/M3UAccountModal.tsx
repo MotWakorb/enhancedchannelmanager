@@ -1,4 +1,4 @@
-import { useState, useEffect, memo } from 'react';
+import { useState, useEffect, memo, useRef } from 'react';
 import type { M3UAccount, M3UAccountType, ServerGroup } from '../types';
 import * as api from '../services/api';
 import { useAsyncOperation } from '../hooks/useAsyncOperation';
@@ -64,6 +64,11 @@ export const M3UAccountModal = memo(function M3UAccountModal({
   const [autoEnableSeries, setAutoEnableSeries] = useState(false);
   const [isActive, setIsActive] = useState(true);
 
+  // File upload state
+  const [uploadedFileName, setUploadedFileName] = useState('');
+  const [uploading, setUploading] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
   // UI state
   const { loading, error, execute, setError, clearError } = useAsyncOperation();
 
@@ -74,6 +79,7 @@ export const M3UAccountModal = memo(function M3UAccountModal({
         // Editing existing account
         setName(account.name);
         setFilePath(account.file_path || '');
+        setUploadedFileName('');
         setUsername(account.username || '');
         setPassword(''); // Never pre-fill password
         setServerGroup(account.server_group);
@@ -103,6 +109,7 @@ export const M3UAccountModal = memo(function M3UAccountModal({
         setServerUrl('');
         setHdhrIP('');
         setFilePath('');
+        setUploadedFileName('');
         setUsername('');
         setPassword('');
         setServerGroup(null);
@@ -193,6 +200,36 @@ export const M3UAccountModal = memo(function M3UAccountModal({
     });
   };
 
+  const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    // Validate file type
+    if (!file.name.toLowerCase().endsWith('.m3u') && !file.name.toLowerCase().endsWith('.m3u8')) {
+      setError('Invalid file type. Only .m3u and .m3u8 files are allowed.');
+      return;
+    }
+
+    setUploading(true);
+    clearError();
+
+    try {
+      const result = await api.uploadM3UFile(file);
+      setFilePath(result.file_path);
+      setUploadedFileName(result.original_name);
+      // Clear the URL field since we're using a file
+      setServerUrl('');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to upload file');
+    } finally {
+      setUploading(false);
+      // Reset the input so the same file can be selected again
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
+      }
+    }
+  };
+
   if (!isOpen) return null;
 
   return (
@@ -267,14 +304,42 @@ export const M3UAccountModal = memo(function M3UAccountModal({
               </div>
               <div className="form-or">- or -</div>
               <div className="form-group">
-                <label htmlFor="filePath">Local File Path</label>
+                <label>Upload M3U File</label>
+                <div className="file-upload-row">
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept=".m3u,.m3u8"
+                    onChange={handleFileUpload}
+                    style={{ display: 'none' }}
+                  />
+                  <button
+                    type="button"
+                    className="btn-secondary"
+                    onClick={() => fileInputRef.current?.click()}
+                    disabled={uploading}
+                  >
+                    {uploading ? 'Uploading...' : 'Choose File'}
+                  </button>
+                  {uploadedFileName && (
+                    <span className="uploaded-file-name">{uploadedFileName}</span>
+                  )}
+                </div>
+              </div>
+              <div className="form-or">- or -</div>
+              <div className="form-group">
+                <label htmlFor="filePath">Server File Path</label>
                 <input
                   id="filePath"
                   type="text"
                   placeholder="/path/to/playlist.m3u"
                   value={filePath}
-                  onChange={(e) => setFilePath(e.target.value)}
+                  onChange={(e) => {
+                    setFilePath(e.target.value);
+                    setUploadedFileName(''); // Clear uploaded file name when typing
+                  }}
                 />
+                <span className="form-hint">Path to M3U file on the server</span>
               </div>
             </>
           )}

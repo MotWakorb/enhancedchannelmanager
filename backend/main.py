@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Request, Body
+from fastapi import FastAPI, HTTPException, Request, Body, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
@@ -3375,6 +3375,62 @@ async def create_m3u_account(request: Request):
         return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/m3u/upload")
+async def upload_m3u_file(file: UploadFile = File(...)):
+    """Upload an M3U file and return the path for use with M3U accounts.
+
+    The file is saved to /config/m3u_uploads/ directory.
+    Returns the full path that can be used as file_path when creating/updating M3U accounts.
+    """
+    import aiofiles
+    from pathlib import Path
+    import uuid
+
+    # Create uploads directory if it doesn't exist
+    uploads_dir = CONFIG_DIR / "m3u_uploads"
+    uploads_dir.mkdir(parents=True, exist_ok=True)
+
+    # Validate file extension
+    original_name = file.filename or "upload.m3u"
+    if not original_name.lower().endswith(('.m3u', '.m3u8')):
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid file type. Only .m3u and .m3u8 files are allowed."
+        )
+
+    # Create a unique filename to avoid collisions
+    # Use original name with a short UUID prefix for uniqueness
+    safe_name = re.sub(r'[^\w\-_\.]', '_', original_name)
+    unique_prefix = str(uuid.uuid4())[:8]
+    final_name = f"{unique_prefix}_{safe_name}"
+    file_path = uploads_dir / final_name
+
+    try:
+        # Read and save the file
+        content = await file.read()
+        async with aiofiles.open(file_path, 'wb') as f:
+            await f.write(content)
+
+        logger.info(f"M3U file uploaded: {file_path} ({len(content)} bytes)")
+
+        # Log to journal
+        journal.log_entry(
+            category="m3u",
+            action_type="upload",
+            entity_name=original_name,
+            description=f"Uploaded M3U file '{original_name}' ({len(content)} bytes)",
+        )
+
+        return {
+            "file_path": str(file_path),
+            "original_name": original_name,
+            "size": len(content)
+        }
+    except Exception as e:
+        logger.error(f"Failed to upload M3U file: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to save file: {str(e)}")
 
 
 @app.put("/api/m3u/accounts/{account_id}")
