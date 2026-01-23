@@ -3121,6 +3121,99 @@
   background-color: var(--error)22;
 }
 
+/* EPG Source Filter */
+.epg-source-filter {
+  position: relative;
+  margin-bottom: 0.5rem;
+}
+
+.epg-source-filter-btn {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  background-color: var(--bg-secondary);
+  border: 1px solid var(--border-secondary);
+  border-radius: 4px;
+  color: var(--text-primary);
+  cursor: pointer;
+  font-size: 0.85rem;
+  width: 100%;
+}
+
+.epg-source-filter-btn:hover {
+  background-color: var(--bg-hover);
+}
+
+.epg-source-filter-btn .material-icons {
+  font-size: 1.1rem;
+  color: var(--text-secondary);
+}
+
+.epg-source-filter-btn .material-icons:last-child {
+  margin-left: auto;
+}
+
+.epg-source-filter-dropdown {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  margin-top: 4px;
+  background-color: var(--input-bg);
+  border: 1px solid var(--border-secondary);
+  border-radius: 4px;
+  z-index: 100;
+  max-height: 250px;
+  overflow-y: auto;
+}
+
+.epg-source-filter-actions {
+  display: flex;
+  gap: 0.5rem;
+  padding: 0.5rem;
+  border-bottom: 1px solid var(--border-secondary);
+}
+
+.epg-source-filter-actions button {
+  flex: 1;
+  padding: 0.35rem 0.5rem;
+  background-color: var(--bg-secondary);
+  border: 1px solid var(--border-secondary);
+  border-radius: 4px;
+  color: var(--text-primary);
+  cursor: pointer;
+  font-size: 0.8rem;
+}
+
+.epg-source-filter-actions button:hover {
+  background-color: var(--bg-hover);
+}
+
+.epg-source-filter-options {
+  padding: 0.5rem;
+}
+
+.epg-source-filter-option {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 0.5rem;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.85rem;
+  color: var(--text-primary);
+}
+
+.epg-source-filter-option:hover {
+  background-color: var(--bg-hover);
+}
+
+.epg-source-filter-option input[type="checkbox"] {
+  margin: 0;
+  cursor: pointer;
+}
+
 /* EPG Search Dropdown */
 .epg-search-container {
   position: relative;

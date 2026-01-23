@@ -695,7 +695,7 @@ export function GuideTab({
             icon_url: e.icon_url,
             epg_source: e.epg_source,
           }))}
-          epgSources={epgSources.map(s => ({ id: s.id, name: s.name }))}
+          epgSources={epgSources.map(s => ({ id: s.id, name: s.name, source_type: s.source_type }))}
           streamProfiles={streamProfiles.map(p => ({ id: p.id, name: p.name, is_active: p.is_active }))}
           epgDataLoading={epgDataLoading}
           onClose={() => {
