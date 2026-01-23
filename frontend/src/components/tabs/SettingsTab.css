@@ -109,6 +109,61 @@
   font-weight: 500;
   color: var(--button-text);
   margin: 0;
+  flex: 1;
+}
+
+/* Edit button in section header */
+.btn-edit-connection {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.35rem 0.75rem;
+  font-size: 0.8rem;
+  background-color: var(--bg-tertiary);
+  border: 1px solid var(--border-primary);
+  border-radius: 4px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.btn-edit-connection:hover {
+  background-color: var(--bg-secondary);
+  color: var(--button-text);
+  border-color: var(--border-secondary);
+}
+
+.btn-edit-connection .material-icons {
+  font-size: 16px;
+}
+
+/* Connection info display */
+.connection-info-display {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 1rem;
+  background-color: var(--bg-secondary);
+  border: 1px solid var(--border-primary);
+  border-radius: 8px;
+}
+
+.connection-info-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.connection-label {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  min-width: 100px;
+}
+
+.connection-value {
+  font-size: 0.9rem;
+  color: var(--text-primary);
+  font-family: monospace;
 }
 
 .form-row {
