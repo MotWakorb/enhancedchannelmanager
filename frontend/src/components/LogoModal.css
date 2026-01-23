@@ -1,6 +1,7 @@
-/* Logo Modal Styles */
-/* Extends SettingsModal.css base styles */
+/* Logo Modal Styles
+   Component-specific styles - base modal styles are in ModalBase.css */
 
+/* Modal sizing */
 .logo-modal {
   max-width: 480px;
 }
@@ -147,10 +148,10 @@
 }
 
 /* ===================== */
-/* URL TOGGLE            */
+/* OR DIVIDER            */
 /* ===================== */
 
-.url-toggle {
+.or-divider {
   display: flex;
   align-items: center;
   gap: 1rem;
@@ -163,19 +164,10 @@
   background-color: var(--border-primary);
 }
 
-.toggle-url-btn {
-  background: none;
-  border: none;
-  color: var(--accent-primary);
+.or-text {
+  color: var(--text-muted);
   font-size: 0.85rem;
-  cursor: pointer;
-  padding: 0.25rem 0.5rem;
-  transition: color 0.15s;
-}
-
-.toggle-url-btn:hover {
-  color: var(--text-primary);
-  text-decoration: underline;
+  text-transform: uppercase;
 }
 
 /* ===================== */
