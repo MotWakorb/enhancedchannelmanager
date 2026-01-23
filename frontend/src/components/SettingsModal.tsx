@@ -27,7 +27,6 @@ export const SettingsModal = memo(function SettingsModal({ isOpen, onClose, onSa
   const [loading, setLoading] = useState(false);
   const [testing, setTesting] = useState(false);
   const [connectionVerified, setConnectionVerified] = useState<boolean | null>(null);
-  const [error, setError] = useState<string | null>(null);
 
   // Track original URL/username to detect if auth settings changed
   const [originalUrl, setOriginalUrl] = useState('');
@@ -57,7 +56,6 @@ export const SettingsModal = memo(function SettingsModal({ isOpen, onClose, onSa
       setHideAutoSyncGroups(settings.hide_auto_sync_groups);
       setTheme(settings.theme || 'dark');
       setConnectionVerified(null);
-      setError(null);
     } catch (err) {
       console.error('Failed to load settings:', err);
     }
@@ -65,53 +63,30 @@ export const SettingsModal = memo(function SettingsModal({ isOpen, onClose, onSa
 
   const handleTest = async () => {
     if (!url || !username || !password) {
-      setError('URL, username, and password are required to test connection');
+      setConnectionVerified(false);
       return;
     }
 
     setTesting(true);
     setConnectionVerified(null);
-    setError(null);
 
     try {
       const result = await api.testConnection({ url, username, password });
       setConnectionVerified(result.success);
-      if (!result.success) {
-        setError(result.message || 'Connection failed');
-      }
     } catch (err) {
       setConnectionVerified(false);
-      setError('Failed to test connection');
     } finally {
       setTesting(false);
     }
   };
 
   const handleSave = async () => {
-    // Check if auth settings (URL or username) have changed
-    const authChanged = url !== originalUrl || username !== originalUsername;
-    const isNewSetup = !originalUrl && !originalUsername;
-
-    // Validate required fields
-    if (!url || !username) {
-      setError('URL and username are required');
-      return;
-    }
-
-    // Password is only required if auth settings changed or new setup
-    if ((authChanged || isNewSetup) && !password) {
-      setError('Password is required when changing URL or username');
-      return;
-    }
-
-    // Connection must be verified before saving
+    // Connection must be verified before saving (button is disabled anyway, but double-check)
     if (connectionVerified !== true) {
-      setError('Please test the connection before saving');
       return;
     }
 
     setLoading(true);
-    setError(null);
 
     try {
       await api.saveSettings({
@@ -132,7 +107,7 @@ export const SettingsModal = memo(function SettingsModal({ isOpen, onClose, onSa
       onSaved();
       onClose();
     } catch (err) {
-      setError('Failed to save settings');
+      console.error('Failed to save settings:', err);
     } finally {
       setLoading(false);
     }
@@ -142,16 +117,16 @@ export const SettingsModal = memo(function SettingsModal({ isOpen, onClose, onSa
 
   return (
     <div className="modal-overlay">
-      <div className="modal-container modal-sm modal-content" onClick={(e) => e.stopPropagation()}>
+      <div className="settings-modal modal-container modal-sm" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
           <h2>Dispatcharr Connection Settings</h2>
-          <button className="modal-close-btn close-btn" onClick={onClose}>
+          <button className="modal-close-btn" onClick={onClose}>
             <span className="material-icons">close</span>
           </button>
         </div>
 
         <div className="modal-body modal-body-compact">
-          <div className="modal-form-group form-group">
+          <div className="modal-form-group">
             <label htmlFor="url">Dispatcharr URL</label>
             <input
               id="url"
@@ -165,7 +140,7 @@ export const SettingsModal = memo(function SettingsModal({ isOpen, onClose, onSa
             />
           </div>
 
-          <div className="modal-form-group form-group">
+          <div className="modal-form-group">
             <label htmlFor="username">Username</label>
             <input
               id="username"
@@ -179,7 +154,7 @@ export const SettingsModal = memo(function SettingsModal({ isOpen, onClose, onSa
             />
           </div>
 
-          <div className="modal-form-group form-group">
+          <div className="modal-form-group">
             <label htmlFor="password">Password</label>
             <input
               id="password"
@@ -193,13 +168,9 @@ export const SettingsModal = memo(function SettingsModal({ isOpen, onClose, onSa
             />
           </div>
 
-          {error && <div className="error-message">{error}</div>}
         </div>
 
         <div className="modal-footer">
-          <button className="modal-btn modal-btn-secondary btn-secondary" onClick={onClose} disabled={loading}>
-            Cancel
-          </button>
           <button
             className={`modal-btn btn-test ${connectionVerified === true ? 'btn-test-success' : connectionVerified === false ? 'btn-test-failed' : ''}`}
             onClick={handleTest}
