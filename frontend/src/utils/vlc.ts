@@ -75,15 +75,9 @@ export function openInVLC(url: string, name?: string): void {
     document.body.removeChild(iframe);
 
     if (!protocolWorked) {
-      // Protocol failed - handle based on behavior mode
-      if (behavior === 'protocol_only') {
-        // Show helper modal via registered callbacks
-        if (modalCallbacks.length > 0) {
-          modalCallbacks[0](url, name);
-        }
-      } else {
-        // m3u_fallback: download M3U file
-        downloadM3U(url, name);
+      // Protocol failed - show helper modal (user can download M3U from there)
+      if (modalCallbacks.length > 0) {
+        modalCallbacks[0](url, name);
       }
     }
   }, 500);
