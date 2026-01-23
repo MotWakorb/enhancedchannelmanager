@@ -773,6 +773,14 @@ export function ChannelsPane({
 
   // Bulk EPG assignment modal state
   const bulkEPGModal = useModal();
+  const [bulkEPGLoading, setBulkEPGLoading] = useState(false);
+
+  // Clear EPG loading spinner when modal opens
+  useEffect(() => {
+    if (bulkEPGModal.isOpen && bulkEPGLoading) {
+      setBulkEPGLoading(false);
+    }
+  }, [bulkEPGModal.isOpen, bulkEPGLoading]);
 
   // Bulk LCN fetch modal state
   const bulkLCNModal = useModal();
@@ -4411,10 +4419,17 @@ export function ChannelsPane({
               <div className="selection-actions">
                 <button
                   className="bulk-action-btn"
-                  onClick={() => bulkEPGModal.open()}
+                  onClick={() => {
+                    setBulkEPGLoading(true);
+                    // Defer modal open to allow spinner to render first
+                    setTimeout(() => bulkEPGModal.open(), 50);
+                  }}
+                  disabled={bulkEPGLoading}
                   title="Assign EPG to selected channels"
                 >
-                  <span className="material-icons">live_tv</span>
+                  <span className={`material-icons${bulkEPGLoading ? ' spinning' : ''}`}>
+                    {bulkEPGLoading ? 'sync' : 'live_tv'}
+                  </span>
                 </button>
                 <button
                   className="bulk-action-btn"

@@ -1606,6 +1606,14 @@
   to { transform: rotate(360deg); }
 }
 
+.spinning {
+  animation: spin 1s linear infinite reverse;
+}
+
+.bulk-action-btn .material-icons.spinning {
+  animation: spin 1s linear infinite reverse !important;
+}
+
 /* Channel Probe Button - probes all streams in a channel */
 .probe-channel-btn {
   display: flex;
