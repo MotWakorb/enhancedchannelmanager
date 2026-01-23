@@ -74,11 +74,11 @@ export const AutoSyncSettingsModal = memo(function AutoSyncSettingsModal({
   // Populate form from existing customProperties
   useEffect(() => {
     if (isOpen) {
-      setEpgSourceId(customProperties?.xc_id ?? '');
+      setEpgSourceId(customProperties?.custom_epg_id ?? '');
       setGroupOverride(customProperties?.group_override?.toString() ?? '');
       setNameRegexPattern(customProperties?.name_regex_pattern ?? '');
       setNameReplacePattern(customProperties?.name_replace_pattern ?? '');
-      setChannelNameFilter(customProperties?.channel_name_filter ?? '');
+      setChannelNameFilter(customProperties?.name_match_regex ?? '');
       setSelectedProfileIds(new Set(customProperties?.channel_profile_ids ?? []));
       setSortOrder(customProperties?.channel_sort_order ?? '');
       setSortReverse(customProperties?.channel_sort_reverse ?? false);
@@ -230,11 +230,11 @@ export const AutoSyncSettingsModal = memo(function AutoSyncSettingsModal({
   const handleSave = () => {
     const props: AutoSyncCustomProperties = {};
 
-    if (epgSourceId) props.xc_id = epgSourceId;
+    if (epgSourceId) props.custom_epg_id = epgSourceId;
     if (groupOverride) props.group_override = parseInt(groupOverride, 10);
     if (nameRegexPattern) props.name_regex_pattern = nameRegexPattern;
     if (nameReplacePattern !== undefined && nameRegexPattern) props.name_replace_pattern = nameReplacePattern;
-    if (channelNameFilter) props.channel_name_filter = channelNameFilter;
+    if (channelNameFilter) props.name_match_regex = channelNameFilter;
     if (selectedProfileIds.size > 0) props.channel_profile_ids = Array.from(selectedProfileIds);
     if (sortOrder) props.channel_sort_order = sortOrder as 'provider' | 'name' | 'tvg_id' | 'updated_at';
     if (sortReverse) props.channel_sort_reverse = sortReverse;
