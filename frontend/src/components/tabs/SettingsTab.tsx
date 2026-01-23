@@ -2427,15 +2427,16 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                   </li>
                 ))}
               </ul>
-              <button
-                className="btn-danger"
-                onClick={handleCleanupOrphanedGroups}
-                disabled={cleaningOrphaned || loadingOrphaned}
-                style={{ marginTop: '1rem' }}
-              >
-                <span className="material-icons">delete_forever</span>
-                {cleaningOrphaned ? 'Cleaning...' : `Delete ${orphanedGroups.length} Orphaned Group(s)`}
-              </button>
+              <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '1rem' }}>
+                <button
+                  className="btn-danger"
+                  onClick={handleCleanupOrphanedGroups}
+                  disabled={cleaningOrphaned || loadingOrphaned}
+                >
+                  <span className="material-icons">delete_forever</span>
+                  {cleaningOrphaned ? 'Cleaning...' : `Delete ${orphanedGroups.length} Orphaned Group(s)`}
+                </button>
+              </div>
             </div>
           )}
 
