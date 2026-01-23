@@ -272,6 +272,14 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   const [cleanupResult, setCleanupResult] = useState<string | null>(null);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
 
+  // Auto-created channels maintenance state
+  const [autoCreatedGroups, setAutoCreatedGroups] = useState<api.AutoCreatedGroup[]>([]);
+  const [totalAutoCreatedChannels, setTotalAutoCreatedChannels] = useState(0);
+  const [loadingAutoCreated, setLoadingAutoCreated] = useState(false);
+  const [selectedAutoCreatedGroups, setSelectedAutoCreatedGroups] = useState<Set<number>>(new Set());
+  const [clearingAutoCreated, setClearingAutoCreated] = useState(false);
+  const [autoCreatedResult, setAutoCreatedResult] = useState<{ success: boolean; message: string } | null>(null);
+
   // Track original URL/username to detect if auth settings changed
   const [originalUrl, setOriginalUrl] = useState('');
   const [originalUsername, setOriginalUsername] = useState('');
@@ -955,6 +963,74 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       setCleanupResult(`Failed to cleanup orphaned groups: ${err}`);
     } finally {
       setCleaningOrphaned(false);
+    }
+  };
+
+  // Auto-created channels handlers
+  const handleLoadAutoCreatedGroups = async () => {
+    setLoadingAutoCreated(true);
+    setAutoCreatedResult(null);
+    try {
+      const result = await api.getGroupsWithAutoCreatedChannels();
+      setAutoCreatedGroups(result.groups);
+      setTotalAutoCreatedChannels(result.total_auto_created_channels);
+      setSelectedAutoCreatedGroups(new Set()); // Clear selection
+      if (result.groups.length === 0) {
+        setAutoCreatedResult({ success: true, message: 'No groups with auto_created channels found.' });
+      }
+    } catch (err) {
+      setAutoCreatedResult({ success: false, message: `Failed to load groups: ${err}` });
+    } finally {
+      setLoadingAutoCreated(false);
+    }
+  };
+
+  const handleToggleAutoCreatedGroup = (groupId: number) => {
+    setSelectedAutoCreatedGroups(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(groupId)) {
+        newSet.delete(groupId);
+      } else {
+        newSet.add(groupId);
+      }
+      return newSet;
+    });
+  };
+
+  const handleSelectAllAutoCreatedGroups = () => {
+    if (selectedAutoCreatedGroups.size === autoCreatedGroups.length) {
+      setSelectedAutoCreatedGroups(new Set());
+    } else {
+      setSelectedAutoCreatedGroups(new Set(autoCreatedGroups.map(g => g.id)));
+    }
+  };
+
+  const handleClearAutoCreatedFlag = async () => {
+    if (selectedAutoCreatedGroups.size === 0) return;
+
+    setClearingAutoCreated(true);
+    setAutoCreatedResult(null);
+    try {
+      const result = await api.clearAutoCreatedFlag(Array.from(selectedAutoCreatedGroups));
+      setAutoCreatedResult({ success: true, message: result.message });
+
+      if (result.updated_count > 0) {
+        // Reload to refresh the list
+        await handleLoadAutoCreatedGroups();
+        // Notify parent to refresh data (channels may have changed)
+        onSaved();
+      }
+
+      if (result.failed_channels.length > 0) {
+        setAutoCreatedResult({
+          success: false,
+          message: `${result.message}. ${result.failed_channels.length} channel(s) failed to update.`
+        });
+      }
+    } catch (err) {
+      setAutoCreatedResult({ success: false, message: `Failed to clear auto_created flag: ${err}` });
+    } finally {
+      setClearingAutoCreated(false);
     }
   };
 
@@ -2385,6 +2461,135 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
             <div className={cleanupResult.includes('Failed') ? 'error-message' : 'success-message'} style={{ marginTop: '1rem' }}>
               <span className="material-icons">{cleanupResult.includes('Failed') ? 'error' : 'check_circle'}</span>
               {cleanupResult}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Auto-Created Channels Section */}
+      <div className="settings-section">
+        <div className="settings-section-header">
+          <span className="material-icons">auto_fix_high</span>
+          <h3>Auto-Created Channels</h3>
+        </div>
+        <p className="form-hint" style={{ marginBottom: '1rem' }}>
+          Channels marked as "auto_created" are hidden from the Channel Manager unless their group has Auto Channel Sync enabled.
+          Use this tool to convert auto_created channels to manual channels, making them visible in all groups.
+        </p>
+
+        <div className="settings-group">
+          <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+            <button
+              className="btn-secondary"
+              onClick={handleLoadAutoCreatedGroups}
+              disabled={loadingAutoCreated || clearingAutoCreated}
+            >
+              <span className="material-icons">search</span>
+              {loadingAutoCreated ? 'Scanning...' : 'Scan for Auto-Created Channels'}
+            </button>
+          </div>
+
+          {autoCreatedGroups.length > 0 && (
+            <div style={{ marginTop: '1rem' }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.75rem' }}>
+                <p style={{ margin: 0 }}>
+                  <strong>Found {totalAutoCreatedChannels} auto_created channel(s) in {autoCreatedGroups.length} group(s):</strong>
+                </p>
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  onClick={handleSelectAllAutoCreatedGroups}
+                  style={{ padding: '0.4rem 0.8rem', fontSize: '0.85rem' }}
+                >
+                  {selectedAutoCreatedGroups.size === autoCreatedGroups.length ? 'Deselect All' : 'Select All'}
+                </button>
+              </div>
+
+              <div style={{
+                maxHeight: '300px',
+                overflowY: 'auto',
+                border: '1px solid var(--border-color)',
+                borderRadius: '6px',
+                backgroundColor: 'var(--bg-secondary)'
+              }}>
+                {autoCreatedGroups.map(group => (
+                  <div
+                    key={group.id}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'flex-start',
+                      padding: '0.75rem 1rem',
+                      borderBottom: '1px solid var(--border-color)',
+                      cursor: 'pointer',
+                      backgroundColor: selectedAutoCreatedGroups.has(group.id) ? 'var(--bg-tertiary)' : 'transparent'
+                    }}
+                    onClick={() => handleToggleAutoCreatedGroup(group.id)}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={selectedAutoCreatedGroups.has(group.id)}
+                      onChange={() => handleToggleAutoCreatedGroup(group.id)}
+                      onClick={(e) => e.stopPropagation()}
+                      style={{ marginRight: '0.75rem', marginTop: '0.2rem' }}
+                    />
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontWeight: 500 }}>
+                        {group.name}
+                        <span style={{ color: 'var(--text-secondary)', marginLeft: '0.5rem', fontWeight: 400 }}>
+                          ({group.auto_created_count} channel{group.auto_created_count !== 1 ? 's' : ''})
+                        </span>
+                      </div>
+                      {group.sample_channels.length > 0 && (
+                        <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
+                          {group.sample_channels.slice(0, 3).map((ch, i) => (
+                            <span key={ch.id}>
+                              {i > 0 && ', '}
+                              #{ch.channel_number} {ch.name}
+                            </span>
+                          ))}
+                          {group.auto_created_count > 3 && <span>, ...</span>}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', marginTop: '1rem' }}>
+                <button
+                  className="btn-primary"
+                  onClick={handleClearAutoCreatedFlag}
+                  disabled={clearingAutoCreated || loadingAutoCreated || selectedAutoCreatedGroups.size === 0}
+                >
+                  <span className="material-icons">
+                    {clearingAutoCreated ? 'sync' : 'check_circle'}
+                  </span>
+                  {clearingAutoCreated
+                    ? 'Converting...'
+                    : `Convert ${selectedAutoCreatedGroups.size > 0
+                        ? autoCreatedGroups
+                            .filter(g => selectedAutoCreatedGroups.has(g.id))
+                            .reduce((sum, g) => sum + g.auto_created_count, 0)
+                        : 0} Channel(s) to Manual`}
+                </button>
+                {selectedAutoCreatedGroups.size > 0 && (
+                  <span style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
+                    {selectedAutoCreatedGroups.size} group{selectedAutoCreatedGroups.size !== 1 ? 's' : ''} selected
+                  </span>
+                )}
+              </div>
+            </div>
+          )}
+
+          {autoCreatedResult && (
+            <div
+              className={autoCreatedResult.success ? 'success-message' : 'error-message'}
+              style={{ marginTop: '1rem' }}
+            >
+              <span className="material-icons">
+                {autoCreatedResult.success ? 'check_circle' : 'error'}
+              </span>
+              {autoCreatedResult.message}
             </div>
           )}
         </div>

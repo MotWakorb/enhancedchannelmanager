@@ -338,6 +338,39 @@ export async function getChannelGroupsWithStreams(): Promise<{
   return fetchJson(`${API_BASE}/channel-groups/with-streams`);
 }
 
+export interface AutoCreatedGroup {
+  id: number;
+  name: string;
+  auto_created_count: number;
+  sample_channels: Array<{
+    id: number;
+    name: string;
+    channel_number: number | null;
+    auto_created_by: number | null;
+    auto_created_by_name: string | null;
+  }>;
+}
+
+export async function getGroupsWithAutoCreatedChannels(): Promise<{
+  groups: AutoCreatedGroup[];
+  total_auto_created_channels: number;
+}> {
+  return fetchJson(`${API_BASE}/channel-groups/auto-created`);
+}
+
+export async function clearAutoCreatedFlag(groupIds: number[]): Promise<{
+  status: string;
+  message: string;
+  updated_count: number;
+  updated_channels: Array<{ id: number; name: string; channel_number: number | null }>;
+  failed_channels: Array<{ id: number; name: string; error: string }>;
+}> {
+  return fetchJson(`${API_BASE}/channels/clear-auto-created`, {
+    method: 'POST',
+    body: JSON.stringify({ group_ids: groupIds }),
+  });
+}
+
 // Streams
 export async function getStreams(params?: {
   page?: number;

@@ -2211,6 +2211,167 @@ async def get_orphaned_channel_groups():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/api/channel-groups/auto-created")
+async def get_groups_with_auto_created_channels():
+    """Find channel groups that contain auto_created channels.
+
+    Returns groups with at least one channel that has auto_created=True.
+    """
+    client = get_client()
+    try:
+        # Get all channel groups
+        all_groups = await client.get_channel_groups()
+        group_map = {g["id"]: g for g in all_groups}
+
+        # Fetch all channels (paginated) and find auto_created ones
+        auto_created_by_group: dict[int, list[dict]] = {}
+        page = 1
+        total_auto_created = 0
+
+        while True:
+            result = await client.get_channels(page=page, page_size=500)
+            page_channels = result.get("results", [])
+
+            for channel in page_channels:
+                if channel.get("auto_created"):
+                    total_auto_created += 1
+                    group_id = channel.get("channel_group_id")
+                    if group_id is not None:
+                        if group_id not in auto_created_by_group:
+                            auto_created_by_group[group_id] = []
+                        auto_created_by_group[group_id].append({
+                            "id": channel.get("id"),
+                            "name": channel.get("name"),
+                            "channel_number": channel.get("channel_number"),
+                            "auto_created_by": channel.get("auto_created_by"),
+                            "auto_created_by_name": channel.get("auto_created_by_name"),
+                        })
+
+            if not result.get("next"):
+                break
+            page += 1
+            if page > 50:  # Safety limit
+                break
+
+        # Build result with group info
+        groups_with_auto_created = []
+        for group_id, channels in auto_created_by_group.items():
+            group_info = group_map.get(group_id, {})
+            groups_with_auto_created.append({
+                "id": group_id,
+                "name": group_info.get("name", f"Unknown Group {group_id}"),
+                "auto_created_count": len(channels),
+                "sample_channels": channels[:5],  # First 5 as samples
+            })
+
+        # Sort by name
+        groups_with_auto_created.sort(key=lambda g: g["name"].lower())
+
+        logger.info(f"Found {len(groups_with_auto_created)} groups with {total_auto_created} total auto_created channels")
+        return {
+            "groups": groups_with_auto_created,
+            "total_auto_created_channels": total_auto_created,
+        }
+    except Exception as e:
+        logger.error(f"Failed to find groups with auto_created channels: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class ClearAutoCreatedRequest(BaseModel):
+    group_ids: list[int]
+
+
+@app.post("/api/channels/clear-auto-created")
+async def clear_auto_created_flag(request: ClearAutoCreatedRequest):
+    """Clear the auto_created flag from all channels in the specified groups.
+
+    This converts auto_created channels to manual channels by setting
+    auto_created=False and auto_created_by=None.
+    """
+    client = get_client()
+    group_ids = set(request.group_ids)
+
+    if not group_ids:
+        raise HTTPException(status_code=400, detail="No group IDs provided")
+
+    try:
+        # Fetch all channels and find auto_created ones in the specified groups
+        channels_to_update = []
+        page = 1
+
+        while True:
+            result = await client.get_channels(page=page, page_size=500)
+            page_channels = result.get("results", [])
+
+            for channel in page_channels:
+                if channel.get("auto_created") and channel.get("channel_group_id") in group_ids:
+                    channels_to_update.append({
+                        "id": channel.get("id"),
+                        "name": channel.get("name"),
+                        "channel_number": channel.get("channel_number"),
+                        "channel_group_id": channel.get("channel_group_id"),
+                    })
+
+            if not result.get("next"):
+                break
+            page += 1
+            if page > 50:  # Safety limit
+                break
+
+        if not channels_to_update:
+            return {
+                "status": "ok",
+                "message": "No auto_created channels found in the specified groups",
+                "updated_count": 0,
+                "updated_channels": [],
+                "failed_channels": [],
+            }
+
+        logger.info(f"Clearing auto_created flag from {len(channels_to_update)} channels in groups {group_ids}")
+
+        # Update each channel via Dispatcharr API
+        updated_channels = []
+        failed_channels = []
+
+        for channel in channels_to_update:
+            channel_id = channel["id"]
+            try:
+                await client.update_channel(channel_id, {
+                    "auto_created": False,
+                    "auto_created_by": None,
+                })
+                updated_channels.append(channel)
+                logger.debug(f"Cleared auto_created flag from channel {channel_id} ({channel['name']})")
+            except Exception as update_err:
+                failed_channels.append({**channel, "error": str(update_err)})
+                logger.error(f"Failed to clear auto_created flag from channel {channel_id}: {update_err}")
+
+        # Log to journal
+        journal.log_entry(
+            category="channel",
+            action_type="bulk_update",
+            entity_id=None,
+            entity_name="Clear Auto-Created Flag",
+            description=f"Cleared auto_created flag from {len(updated_channels)} channels in {len(group_ids)} group(s)",
+            after_value={
+                "group_ids": list(group_ids),
+                "updated_count": len(updated_channels),
+                "failed_count": len(failed_channels),
+            },
+        )
+
+        return {
+            "status": "ok",
+            "message": f"Cleared auto_created flag from {len(updated_channels)} channel(s)",
+            "updated_count": len(updated_channels),
+            "updated_channels": updated_channels[:20],  # Limit response size
+            "failed_channels": failed_channels,
+        }
+    except Exception as e:
+        logger.error(f"Failed to clear auto_created flags: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/api/channel-groups/with-streams")
 async def get_channel_groups_with_streams():
     """Get all channel groups that have channels with streams.
