@@ -1,6 +1,7 @@
 import { useState, useEffect, memo } from 'react';
 import * as api from '../services/api';
 import type { Theme } from '../services/api';
+import './ModalBase.css';
 import './SettingsModal.css';
 
 interface SettingsModalProps {
@@ -133,16 +134,16 @@ export const SettingsModal = memo(function SettingsModal({ isOpen, onClose, onSa
 
   return (
     <div className="modal-overlay">
-      <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+      <div className="modal-container modal-sm modal-content" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
           <h2>Dispatcharr Connection Settings</h2>
-          <button className="close-btn" onClick={onClose}>
-            &times;
+          <button className="modal-close-btn close-btn" onClick={onClose}>
+            <span className="material-icons">close</span>
           </button>
         </div>
 
         <div className="modal-body">
-          <div className="form-group">
+          <div className="modal-form-group form-group">
             <label htmlFor="url">Dispatcharr URL</label>
             <input
               id="url"
@@ -153,7 +154,7 @@ export const SettingsModal = memo(function SettingsModal({ isOpen, onClose, onSa
             />
           </div>
 
-          <div className="form-group">
+          <div className="modal-form-group form-group">
             <label htmlFor="username">Username</label>
             <input
               id="username"
@@ -164,7 +165,7 @@ export const SettingsModal = memo(function SettingsModal({ isOpen, onClose, onSa
             />
           </div>
 
-          <div className="form-group">
+          <div className="modal-form-group form-group">
             <label htmlFor="password">Password</label>
             <input
               id="password"
@@ -175,10 +176,10 @@ export const SettingsModal = memo(function SettingsModal({ isOpen, onClose, onSa
             />
           </div>
 
-          <div className="form-group-divider" />
+          <div className="modal-divider form-group-divider" />
 
-          <div className="form-group checkbox-group">
-            <label htmlFor="autoRename" className="checkbox-label">
+          <div className="modal-form-group form-group checkbox-group">
+            <label htmlFor="autoRename" className="modal-checkbox-row checkbox-label">
               <input
                 id="autoRename"
                 type="checkbox"
@@ -187,7 +188,7 @@ export const SettingsModal = memo(function SettingsModal({ isOpen, onClose, onSa
               />
               <span>Auto-rename channel when number changes</span>
             </label>
-            <p className="form-help">
+            <p className="form-hint form-help">
               When enabled, if a channel name contains the old channel number, it will be
               automatically updated to the new number (e.g., "101 Sports Channel" → "102 Sports Channel").
             </p>
@@ -203,13 +204,13 @@ export const SettingsModal = memo(function SettingsModal({ isOpen, onClose, onSa
         </div>
 
         <div className="modal-footer">
-          <button className="btn-secondary" onClick={onClose} disabled={loading}>
+          <button className="modal-btn modal-btn-secondary btn-secondary" onClick={onClose} disabled={loading}>
             Cancel
           </button>
-          <button className="btn-test" onClick={handleTest} disabled={testing || loading}>
+          <button className="modal-btn btn-test" onClick={handleTest} disabled={testing || loading}>
             {testing ? 'Testing...' : 'Test Connection'}
           </button>
-          <button className="btn-primary" onClick={handleSave} disabled={loading}>
+          <button className="modal-btn modal-btn-primary btn-primary" onClick={handleSave} disabled={loading}>
             {loading ? 'Saving...' : 'Save'}
           </button>
         </div>
