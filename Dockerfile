@@ -30,8 +30,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends gosu ffmpeg \
     && useradd --create-home --shell /bin/bash appuser
 
 # Install Python dependencies
+# Note: Build tools needed for ARM64 where some packages lack pre-built wheels
 COPY backend/requirements.txt ./
-RUN pip install --no-cache-dir -r requirements.txt
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        gcc \
+        python3-dev \
+        libffi-dev \
+    && pip install --no-cache-dir -r requirements.txt \
+    && apt-get purge -y gcc python3-dev libffi-dev \
+    && apt-get autoremove -y \
+    && rm -rf /var/lib/apt/lists/*
 
 # Copy backend code
 COPY backend/ ./
