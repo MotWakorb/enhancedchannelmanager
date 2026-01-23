@@ -179,15 +179,16 @@ export interface M3UAccountProfile {
 }
 
 // Auto-sync custom properties for channel groups
+// Field names must match Dispatcharr's expected fields in custom_properties
 export interface AutoSyncCustomProperties {
-  xc_id?: string | null;                    // Force EPG Source ID (string for API compatibility)
+  custom_epg_id?: string | null;            // Force EPG Source ID (Dispatcharr field name)
   group_override?: number | null;           // Override Channel Group ID
   name_regex_pattern?: string;              // Find pattern (regex)
   name_replace_pattern?: string;            // Replace pattern
-  channel_name_filter?: string;             // Channel name filter (regex)
+  name_match_regex?: string;                // Channel name filter regex (Dispatcharr field name)
   channel_profile_ids?: string[];           // Channel Profile IDs (strings for API compatibility)
   channel_sort_order?: 'provider' | 'name' | 'tvg_id' | 'updated_at' | null; // Sort field
-  channel_sort_reverse?: boolean; // Reverse sort order
+  channel_sort_reverse?: boolean;           // Reverse sort order
   stream_profile_id?: number | null;        // Stream Profile ID
   custom_logo_id?: number | null;           // Custom Logo ID
 }
