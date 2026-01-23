@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo, useRef, useCallback, memo } from 'react';
 import type { AutoSyncCustomProperties, ChannelGroup, ChannelProfile, StreamProfile, EPGSource, Logo } from '../types';
 import * as api from '../services/api';
+import './ModalBase.css';
 import './AutoSyncSettingsModal.css';
 
 interface AutoSyncSettingsModalProps {
@@ -55,10 +56,16 @@ export const AutoSyncSettingsModal = memo(function AutoSyncSettingsModal({
   const [showNewGroupInput, setShowNewGroupInput] = useState(false);
   const [newGroupName, setNewGroupName] = useState('');
   const [creatingGroup, setCreatingGroup] = useState(false);
+  const [epgDropdownOpen, setEpgDropdownOpen] = useState(false);
+  const [sortDropdownOpen, setSortDropdownOpen] = useState(false);
+  const [streamProfileDropdownOpen, setStreamProfileDropdownOpen] = useState(false);
 
   const profileDropdownRef = useRef<HTMLDivElement>(null);
   const logoDropdownRef = useRef<HTMLDivElement>(null);
   const groupDropdownRef = useRef<HTMLDivElement>(null);
+  const epgDropdownRef = useRef<HTMLDivElement>(null);
+  const sortDropdownRef = useRef<HTMLDivElement>(null);
+  const streamProfileDropdownRef = useRef<HTMLDivElement>(null);
 
   // Load logos when modal opens
   useEffect(() => {
@@ -100,6 +107,15 @@ export const AutoSyncSettingsModal = memo(function AutoSyncSettingsModal({
       }
       if (groupDropdownRef.current && !groupDropdownRef.current.contains(event.target as Node)) {
         setGroupDropdownOpen(false);
+      }
+      if (epgDropdownRef.current && !epgDropdownRef.current.contains(event.target as Node)) {
+        setEpgDropdownOpen(false);
+      }
+      if (sortDropdownRef.current && !sortDropdownRef.current.contains(event.target as Node)) {
+        setSortDropdownOpen(false);
+      }
+      if (streamProfileDropdownRef.current && !streamProfileDropdownRef.current.contains(event.target as Node)) {
+        setStreamProfileDropdownOpen(false);
       }
     };
 
@@ -160,6 +176,33 @@ export const AutoSyncSettingsModal = memo(function AutoSyncSettingsModal({
   const activeEpgSources = useMemo(() => {
     return epgSources.filter(s => s.is_active);
   }, [epgSources]);
+
+  // Get selected EPG source name
+  const selectedEpgSource = useMemo(() => {
+    if (!epgSourceId) return null;
+    return activeEpgSources.find(s => s.id.toString() === epgSourceId);
+  }, [activeEpgSources, epgSourceId]);
+
+  // Get selected stream profile name
+  const selectedStreamProfile = useMemo(() => {
+    if (!streamProfileId) return null;
+    return streamProfiles.find(p => p.id.toString() === streamProfileId);
+  }, [streamProfiles, streamProfileId]);
+
+  // Sort order options
+  const sortOrderOptions = useMemo(() => [
+    { value: '', label: 'Select sort order...' },
+    { value: 'provider', label: 'Provider Order (Default)' },
+    { value: 'name', label: 'Name' },
+    { value: 'tvg_id', label: 'TVG ID' },
+    { value: 'updated_at', label: 'Updated At' },
+  ], []);
+
+  // Get selected sort order label
+  const selectedSortOrderLabel = useMemo(() => {
+    const option = sortOrderOptions.find(o => o.value === sortOrder);
+    return option?.label || 'Select sort order...';
+  }, [sortOrder, sortOrderOptions]);
 
   // Filter channel groups by search
   const filteredGroups = useMemo(() => {
@@ -281,38 +324,69 @@ export const AutoSyncSettingsModal = memo(function AutoSyncSettingsModal({
 
   return (
     <div className="modal-overlay" onClick={onClose}>
-      <div className="modal-content auto-sync-settings-modal" onClick={(e) => e.stopPropagation()}>
+      <div className="modal-container modal-md auto-sync-settings-modal" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
           <div className="header-info">
             <h2>Auto-Sync Settings</h2>
             <span className="group-name-display">{groupName}</span>
           </div>
-          <button className="close-btn" onClick={onClose}>
-            &times;
+          <button className="modal-close-btn" onClick={onClose}>
+            <span className="material-icons">close</span>
           </button>
         </div>
 
         <div className="modal-body">
           <div className="settings-form">
             {/* Force EPG Source */}
-            <div className="form-group">
+            <div className="modal-form-group" ref={epgDropdownRef}>
               <label>Force EPG Source</label>
-              <select
-                value={epgSourceId}
-                onChange={(e) => setEpgSourceId(e.target.value)}
-              >
-                <option value="">-- None --</option>
-                {activeEpgSources.map(source => (
-                  <option key={source.id} value={source.id.toString()}>
-                    {source.name}
-                  </option>
-                ))}
-              </select>
+              <div className="searchable-select-dropdown">
+                <button
+                  type="button"
+                  className="dropdown-trigger"
+                  onClick={() => setEpgDropdownOpen(!epgDropdownOpen)}
+                >
+                  <span className="dropdown-value">
+                    {selectedEpgSource ? selectedEpgSource.name : '-- None --'}
+                  </span>
+                  <span className="material-icons">expand_more</span>
+                </button>
+                {epgDropdownOpen && (
+                  <div className="dropdown-menu">
+                    <div className="dropdown-options">
+                      <div
+                        className={`dropdown-option-item ${!epgSourceId ? 'selected' : ''}`}
+                        onClick={() => {
+                          setEpgSourceId('');
+                          setEpgDropdownOpen(false);
+                        }}
+                      >
+                        <span className="no-selection">-- None --</span>
+                      </div>
+                      {activeEpgSources.map(source => (
+                        <div
+                          key={source.id}
+                          className={`dropdown-option-item ${epgSourceId === source.id.toString() ? 'selected' : ''}`}
+                          onClick={() => {
+                            setEpgSourceId(source.id.toString());
+                            setEpgDropdownOpen(false);
+                          }}
+                        >
+                          <span>{source.name}</span>
+                        </div>
+                      ))}
+                      {activeEpgSources.length === 0 && (
+                        <div className="dropdown-empty">No EPG sources available</div>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
               <span className="form-hint">Override the EPG source for all channels in this group</span>
             </div>
 
             {/* Override Channel Group */}
-            <div className="form-group" ref={groupDropdownRef}>
+            <div className="modal-form-group" ref={groupDropdownRef}>
               <label>Override Channel Group</label>
               <div className="searchable-select-dropdown">
                 <button
@@ -434,7 +508,7 @@ export const AutoSyncSettingsModal = memo(function AutoSyncSettingsModal({
             </div>
 
             {/* Channel Name Find & Replace */}
-            <div className="form-group">
+            <div className="modal-form-group">
               <label>Channel Name Find & Replace (Regex)</label>
               <div className="dual-input">
                 <div className="input-with-label">
@@ -463,7 +537,7 @@ export const AutoSyncSettingsModal = memo(function AutoSyncSettingsModal({
             </div>
 
             {/* Channel Name Filter */}
-            <div className="form-group">
+            <div className="modal-form-group">
               <label>Channel Name Filter (Regex)</label>
               <input
                 type="text"
@@ -478,7 +552,7 @@ export const AutoSyncSettingsModal = memo(function AutoSyncSettingsModal({
             </div>
 
             {/* Channel Profile Assignment */}
-            <div className="form-group" ref={profileDropdownRef}>
+            <div className="modal-form-group" ref={profileDropdownRef}>
               <label>Channel Profile Assignment</label>
               <div className="multi-select-dropdown">
                 <button
@@ -521,19 +595,37 @@ export const AutoSyncSettingsModal = memo(function AutoSyncSettingsModal({
             </div>
 
             {/* Channel Sort Order */}
-            <div className="form-group">
+            <div className="modal-form-group" ref={sortDropdownRef}>
               <label>Channel Sort Order</label>
-              <select
-                value={sortOrder}
-                onChange={(e) => setSortOrder(e.target.value)}
-              >
-                <option value="">Select sort order...</option>
-                <option value="provider">Provider Order (Default)</option>
-                <option value="name">Name</option>
-                <option value="tvg_id">TVG ID</option>
-                <option value="updated_at">Updated At</option>
-              </select>
-              <label className="checkbox-row">
+              <div className="searchable-select-dropdown">
+                <button
+                  type="button"
+                  className="dropdown-trigger"
+                  onClick={() => setSortDropdownOpen(!sortDropdownOpen)}
+                >
+                  <span className="dropdown-value">{selectedSortOrderLabel}</span>
+                  <span className="material-icons">expand_more</span>
+                </button>
+                {sortDropdownOpen && (
+                  <div className="dropdown-menu">
+                    <div className="dropdown-options">
+                      {sortOrderOptions.map(option => (
+                        <div
+                          key={option.value}
+                          className={`dropdown-option-item ${sortOrder === option.value ? 'selected' : ''}`}
+                          onClick={() => {
+                            setSortOrder(option.value);
+                            setSortDropdownOpen(false);
+                          }}
+                        >
+                          <span className={option.value === '' ? 'no-selection' : ''}>{option.label}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+              <label className="modal-checkbox-row">
                 <input
                   type="checkbox"
                   checked={sortReverse}
@@ -545,24 +637,55 @@ export const AutoSyncSettingsModal = memo(function AutoSyncSettingsModal({
             </div>
 
             {/* Stream Profile Assignment */}
-            <div className="form-group">
+            <div className="modal-form-group" ref={streamProfileDropdownRef}>
               <label>Stream Profile Assignment</label>
-              <select
-                value={streamProfileId}
-                onChange={(e) => setStreamProfileId(e.target.value)}
-              >
-                <option value="">-- None --</option>
-                {streamProfiles.map(profile => (
-                  <option key={profile.id} value={profile.id.toString()}>
-                    {profile.name}
-                  </option>
-                ))}
-              </select>
+              <div className="searchable-select-dropdown">
+                <button
+                  type="button"
+                  className="dropdown-trigger"
+                  onClick={() => setStreamProfileDropdownOpen(!streamProfileDropdownOpen)}
+                >
+                  <span className="dropdown-value">
+                    {selectedStreamProfile ? selectedStreamProfile.name : '-- None --'}
+                  </span>
+                  <span className="material-icons">expand_more</span>
+                </button>
+                {streamProfileDropdownOpen && (
+                  <div className="dropdown-menu">
+                    <div className="dropdown-options">
+                      <div
+                        className={`dropdown-option-item ${!streamProfileId ? 'selected' : ''}`}
+                        onClick={() => {
+                          setStreamProfileId('');
+                          setStreamProfileDropdownOpen(false);
+                        }}
+                      >
+                        <span className="no-selection">-- None --</span>
+                      </div>
+                      {streamProfiles.map(profile => (
+                        <div
+                          key={profile.id}
+                          className={`dropdown-option-item ${streamProfileId === profile.id.toString() ? 'selected' : ''}`}
+                          onClick={() => {
+                            setStreamProfileId(profile.id.toString());
+                            setStreamProfileDropdownOpen(false);
+                          }}
+                        >
+                          <span>{profile.name}</span>
+                        </div>
+                      ))}
+                      {streamProfiles.length === 0 && (
+                        <div className="dropdown-empty">No stream profiles available</div>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
               <span className="form-hint">Assign a stream profile to synced channels</span>
             </div>
 
             {/* Custom Logo */}
-            <div className="form-group" ref={logoDropdownRef}>
+            <div className="modal-form-group" ref={logoDropdownRef}>
               <label>Custom Logo</label>
               <div className="logo-select-dropdown">
                 <button
@@ -671,21 +794,21 @@ export const AutoSyncSettingsModal = memo(function AutoSyncSettingsModal({
           </div>
         </div>
 
-        <div className="modal-footer">
+        <div className="modal-footer modal-footer-spread">
           <button
             type="button"
-            className="btn-text"
+            className="modal-btn modal-btn-text"
             onClick={handleClearAll}
             disabled={!hasValues}
           >
             Clear All
           </button>
           <div className="footer-buttons">
-            <button className="btn-secondary" onClick={onClose}>
+            <button className="modal-btn modal-btn-secondary" onClick={onClose}>
               Cancel
             </button>
             <button
-              className="btn-primary"
+              className="modal-btn modal-btn-primary"
               onClick={handleSave}
               disabled={Boolean(regexError) || Boolean(filterError)}
             >

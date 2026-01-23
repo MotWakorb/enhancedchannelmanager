@@ -746,6 +746,25 @@ export function StreamsPane({
 
   // Toggle group selection (select/deselect all streams in group)
   const toggleGroupSelection = useCallback((group: StreamGroup) => {
+    // If streams aren't loaded yet, trigger lazy load and mark group as selected
+    if (group.streams.length === 0) {
+      if (onGroupExpand) {
+        onGroupExpand(group.name);
+      }
+      // Toggle group in selectedGroupNames even without streams loaded
+      // This provides visual feedback and the streams will be selected when they load
+      setSelectedGroupNames(prev => {
+        const next = new Set(prev);
+        if (next.has(group.name)) {
+          next.delete(group.name);
+        } else {
+          next.add(group.name);
+        }
+        return next;
+      });
+      return;
+    }
+
     const groupStreamIds = group.streams.map(s => s.id);
     const allSelected = groupStreamIds.every(id => selectedIds.has(id));
 
@@ -766,7 +785,7 @@ export function StreamsPane({
         return next;
       });
     }
-  }, [selectedIds, selectMultiple, deselectMultiple]);
+  }, [selectedIds, selectMultiple, deselectMultiple, onGroupExpand]);
 
   // Check if all streams in a group are selected
   const isGroupFullySelected = useCallback((group: StreamGroup): boolean => {
@@ -780,6 +799,22 @@ export function StreamsPane({
     const selectedCount = group.streams.filter(s => selectedIds.has(s.id)).length;
     return selectedCount > 0 && selectedCount < group.streams.length;
   }, [selectedIds]);
+
+  // When streams load for a group that was marked as selected (but had no streams), select those streams
+  useEffect(() => {
+    selectedGroupNames.forEach(groupName => {
+      const group = groupedStreams.find(g => g.name === groupName);
+      if (group && group.streams.length > 0) {
+        // Check if streams are already selected
+        const allSelected = group.streams.every(s => selectedIds.has(s.id));
+        if (!allSelected) {
+          // Select all streams in this group
+          const streamIds = group.streams.map(s => s.id);
+          selectMultiple(streamIds);
+        }
+      }
+    });
+  }, [groupedStreams, selectedGroupNames, selectedIds, selectMultiple]);
 
   // Open bulk create modal for multiple selected groups
   const openBulkCreateModalForGroups = useCallback(() => {
@@ -1544,7 +1579,7 @@ export function StreamsPane({
           <>
             <div className="streams-list">
               {groupedStreams.map((group) => (
-                <div key={group.name} className={`stream-group ${isGroupFullySelected(group) && isEditMode ? 'group-selected' : ''}`}>
+                <div key={group.name} className={`stream-group ${(isGroupFullySelected(group) || (group.streams.length === 0 && selectedGroupNames.has(group.name))) && isEditMode ? 'group-selected' : ''}`}>
                   <div
                     className="stream-group-header"
                     onClick={() => {
@@ -1575,7 +1610,8 @@ export function StreamsPane({
                       </span>
                     )}
                     {isEditMode && onBulkCreateFromGroup && (
-                      <span
+                      <button
+                        type="button"
                         className="group-selection-checkbox"
                         onClick={(e) => {
                           e.stopPropagation();
@@ -1586,16 +1622,16 @@ export function StreamsPane({
                         onMouseDown={(e) => e.stopPropagation()}
                         onTouchStart={(e) => e.stopPropagation()}
                         draggable={false}
-                        title={isGroupFullySelected(group) ? 'Deselect all streams in group' : 'Select all streams in group'}
+                        title={isGroupFullySelected(group) || selectedGroupNames.has(group.name) ? 'Deselect all streams in group' : 'Select all streams in group'}
                       >
                         <span className="material-icons">
-                          {isGroupFullySelected(group)
+                          {isGroupFullySelected(group) || (group.streams.length === 0 && selectedGroupNames.has(group.name))
                             ? 'check_box'
                             : isGroupPartiallySelected(group)
                               ? 'indeterminate_check_box'
                               : 'check_box_outline_blank'}
                         </span>
-                      </span>
+                      </button>
                     )}
                     <span className="expand-icon">{group.expanded ? '▼︎' : '▶︎'}</span>
                     <span className="group-name">{group.name}</span>

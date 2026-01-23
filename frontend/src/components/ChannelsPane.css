@@ -497,7 +497,7 @@
   border-color: var(--accent-primary);
 }
 
-.dropdown-arrow {
+.group-filter-button .dropdown-arrow {
   font-size: 0.6rem;
   color: var(--text-secondary);
 }

@@ -341,16 +341,23 @@
   color: var(--drag-handle-hover);
 }
 
-.group-selection-checkbox {
+button.group-selection-checkbox {
   display: flex;
   align-items: center;
   justify-content: center;
   padding: 0.5rem;
   margin: -0.5rem;
   margin-right: 0.5rem;
+  margin-left: 0.25rem;
   color: var(--text-muted);
   cursor: pointer;
   transition: color 0.15s;
+  position: relative;
+  z-index: 1;
+  /* Reset button styles */
+  background: none;
+  border: none;
+  font: inherit;
 }
 
 .group-selection-checkbox .material-icons {

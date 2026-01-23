@@ -348,8 +348,10 @@
 .modal-checkbox-row input[type="checkbox"] {
   width: 1rem;
   height: 1rem;
+  margin-right: 0.5rem;
   cursor: pointer;
 }
+
 
 
 /* =============================================================================
@@ -546,4 +548,378 @@
 .modal-section-title .material-icons {
   font-size: 1rem;
   color: var(--accent-primary, #6366f1);
+}
+
+
+/* =============================================================================
+   DROPDOWN COMPONENTS - Reusable dropdown patterns for modals
+   ============================================================================= */
+
+/* Dropdown container types */
+.multi-select-dropdown,
+.logo-select-dropdown,
+.searchable-select-dropdown {
+  position: relative;
+}
+
+/* Dropdown trigger button */
+.dropdown-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 0.625rem 0.75rem;
+  background-color: var(--input-bg, #1a1a2e);
+  border: 1px solid var(--border-secondary, #3a3a5a);
+  border-radius: 6px;
+  color: var(--text-primary, #fff);
+  font-size: 0.875rem;
+  cursor: pointer;
+  text-align: left;
+}
+
+.dropdown-trigger:hover {
+  border-color: var(--accent-primary, #6366f1);
+}
+
+.dropdown-trigger .material-icons {
+  font-size: 18px;
+  color: var(--text-secondary, #888);
+  transition: transform 0.2s;
+}
+
+.dropdown-value {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Dropdown menu container */
+.dropdown-menu {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  margin-top: 4px;
+  background-color: var(--bg-secondary, #252540);
+  border: 1px solid var(--border-secondary, #3a3a5a);
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  z-index: 100;
+  max-height: 250px;
+  display: flex;
+  flex-direction: column;
+}
+
+.dropdown-menu.logo-dropdown-menu {
+  max-height: 400px;
+}
+
+/* Dropdown search bar */
+.dropdown-search {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem;
+  border-bottom: 1px solid var(--border-primary, #2a2a4a);
+}
+
+.dropdown-search .material-icons {
+  font-size: 18px;
+  color: var(--text-muted, #666);
+}
+
+.dropdown-search input {
+  flex: 1;
+  border: none;
+  background: none;
+  color: var(--text-primary, #fff);
+  font-size: 0.875rem;
+  outline: none;
+}
+
+.dropdown-search input::placeholder {
+  color: var(--text-muted, #666);
+}
+
+.dropdown-search .clear-search {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  padding: 0.125rem;
+  cursor: pointer;
+  color: var(--text-secondary, #888);
+  border-radius: 3px;
+}
+
+.dropdown-search .clear-search:hover {
+  background: var(--bg-hover, rgba(255, 255, 255, 0.05));
+  color: var(--text-primary, #fff);
+}
+
+.dropdown-search .clear-search .material-icons {
+  font-size: 1rem;
+}
+
+/* Dropdown inline input - for "add new" functionality */
+.dropdown-inline-input,
+.new-group-input,
+.logo-url-input {
+  display: flex;
+  gap: 0.375rem;
+  padding: 0.5rem;
+  border-bottom: 1px solid var(--border-primary, #2a2a4a);
+}
+
+.dropdown-inline-input input,
+.new-group-input input,
+.logo-url-input input {
+  flex: 1;
+  padding: 0.375rem 0.5rem;
+  background-color: var(--input-bg, #1a1a2e);
+  border: 1px solid var(--border-secondary, #3a3a5a);
+  border-radius: 4px;
+  color: var(--text-primary, #fff);
+  font-size: 0.8rem;
+}
+
+.dropdown-inline-input input:focus,
+.new-group-input input:focus,
+.logo-url-input input:focus {
+  outline: none;
+  border-color: var(--accent-primary, #6366f1);
+}
+
+.dropdown-inline-input input::placeholder,
+.new-group-input input::placeholder,
+.logo-url-input input::placeholder {
+  color: var(--text-muted, #666);
+}
+
+.dropdown-inline-input button,
+.new-group-input button,
+.logo-url-input button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.375rem;
+  background-color: var(--button-primary-bg, #6366f1);
+  border: none;
+  border-radius: 4px;
+  color: var(--button-primary-text, #fff);
+  cursor: pointer;
+  transition: opacity 0.15s;
+}
+
+.dropdown-inline-input button:hover:not(:disabled),
+.new-group-input button:hover:not(:disabled),
+.logo-url-input button:hover:not(:disabled) {
+  opacity: 0.9;
+}
+
+.dropdown-inline-input button:disabled,
+.new-group-input button:disabled,
+.logo-url-input button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.dropdown-inline-input button .material-icons,
+.new-group-input button .material-icons,
+.logo-url-input button .material-icons {
+  font-size: 18px;
+}
+
+.dropdown-inline-input button.cancel-btn,
+.new-group-input button.cancel-btn {
+  background-color: var(--border-primary, #2a2a4a);
+  color: var(--text-secondary, #888);
+}
+
+.dropdown-inline-input button.cancel-btn:hover,
+.new-group-input button.cancel-btn:hover {
+  background-color: var(--border-secondary, #3a3a5a);
+}
+
+/* Spinning animation for loading states in dropdowns */
+.dropdown-inline-input .spinning,
+.new-group-input .spinning,
+.logo-url-input .spinning {
+  animation: modal-spin 1s linear infinite;
+}
+
+/* Dropdown actions (Select All/Clear All) */
+.dropdown-actions {
+  display: flex;
+  gap: 0.5rem;
+  padding: 0.5rem;
+  border-bottom: 1px solid var(--border-primary, #2a2a4a);
+}
+
+.dropdown-actions button {
+  flex: 1;
+  padding: 0.375rem 0.5rem;
+  background-color: var(--border-primary, #2a2a4a);
+  border: none;
+  border-radius: 4px;
+  color: var(--text-primary, #fff);
+  font-size: 0.75rem;
+  cursor: pointer;
+  transition: background-color 0.15s;
+}
+
+.dropdown-actions button:hover {
+  background-color: var(--border-secondary, #3a3a5a);
+}
+
+/* Dropdown options container */
+.dropdown-options {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0.5rem;
+}
+
+/* Dropdown option items - unified styles */
+.dropdown-option,
+.dropdown-option-item,
+.logo-option-none {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.875rem;
+  color: var(--text-primary, #fff);
+}
+
+.dropdown-option-item {
+  padding: 0.5rem 0.75rem;
+}
+
+.dropdown-option:hover,
+.dropdown-option-item:hover,
+.logo-option-none:hover {
+  background-color: var(--input-bg, #1a1a2e);
+}
+
+.dropdown-option-item.selected,
+.logo-option-none.selected {
+  background-color: rgba(100, 108, 255, 0.15);
+}
+
+.dropdown-option input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent-primary, #6366f1);
+  margin-right: 0.5rem;
+}
+
+.dropdown-option-item .no-selection,
+.no-logo {
+  color: var(--text-muted, #666);
+}
+
+.dropdown-empty {
+  display: block;
+  padding: 0.75rem;
+  text-align: center;
+  color: var(--text-muted, #666);
+  font-size: 0.875rem;
+}
+
+.dropdown-loading {
+  padding: 1rem;
+  text-align: center;
+  color: var(--text-muted, #666);
+  font-size: 0.875rem;
+}
+
+/* Add new option - special styling */
+.dropdown-option-item.add-new-option {
+  color: var(--accent-primary, #6366f1);
+  border-bottom: 1px solid var(--border-primary, #2a2a4a);
+  border-radius: 0;
+  margin-bottom: 0.25rem;
+}
+
+.dropdown-option-item.add-new-option .material-icons {
+  font-size: 18px;
+}
+
+.dropdown-option-item.add-new-option:hover {
+  background-color: rgba(100, 108, 255, 0.1);
+}
+
+
+/* =============================================================================
+   LOGO PICKER - Reusable logo grid component
+   ============================================================================= */
+
+.logo-options {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.5rem;
+}
+
+.logo-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.5rem;
+  max-height: 250px;
+  overflow-y: auto;
+}
+
+.logo-grid-item {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  aspect-ratio: 1;
+  padding: 0.375rem;
+  background-color: var(--input-bg, #1a1a2e);
+  border: 2px solid transparent;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: border-color 0.15s, background-color 0.15s;
+}
+
+.logo-grid-item:hover {
+  background-color: var(--border-primary, #2a2a4a);
+}
+
+.logo-grid-item.selected {
+  border-color: var(--accent-primary, #6366f1);
+  background-color: rgba(100, 108, 255, 0.1);
+}
+
+.logo-grid-preview {
+  width: 100%;
+  height: 100%;
+  max-width: 56px;
+  max-height: 56px;
+  object-fit: contain;
+}
+
+.selected-logo {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex: 1;
+  overflow: hidden;
+}
+
+.selected-logo span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.logo-preview {
+  width: 24px;
+  height: 24px;
+  object-fit: contain;
 }
