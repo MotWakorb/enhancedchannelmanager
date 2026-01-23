@@ -923,3 +923,74 @@
   height: 24px;
   object-fit: contain;
 }
+
+
+/* =============================================================================
+   INFO/HELP MODAL COMPONENTS - Reusable patterns for informational modals
+   ============================================================================= */
+
+/* Large centered icon for info/help modals */
+.modal-info-icon {
+  text-align: center;
+  margin-bottom: 1.5rem;
+}
+
+.modal-info-icon .material-icons {
+  font-size: 64px;
+  color: var(--accent-primary, #6366f1);
+}
+
+/* Intro paragraph */
+.modal-info-intro {
+  font-size: 1rem;
+  margin-bottom: 1rem;
+  color: var(--text-primary, #fff);
+}
+
+/* General info text */
+.modal-info-text {
+  font-size: 0.9rem;
+  color: var(--text-secondary, #888);
+  line-height: 1.5;
+  margin: 0;
+}
+
+/* Styled bullet list */
+.modal-bullet-list {
+  list-style-type: disc;
+  margin: 0 0 1.5rem 1.5rem;
+  padding: 0;
+  color: var(--text-secondary, #888);
+}
+
+.modal-bullet-list li {
+  margin-bottom: 0.5rem;
+  line-height: 1.4;
+}
+
+/* Info card - for grouped information blocks */
+.modal-info-card {
+  background-color: var(--bg-secondary, #252540);
+  border: 1px solid var(--border-primary, #3a3a5a);
+  border-radius: 6px;
+  padding: 1rem;
+  margin-bottom: 0.75rem;
+}
+
+.modal-info-card:last-child {
+  margin-bottom: 0;
+}
+
+.modal-info-card strong {
+  display: block;
+  color: var(--accent-primary, #6366f1);
+  margin-bottom: 0.5rem;
+  font-size: 0.95rem;
+}
+
+.modal-info-card p {
+  margin: 0;
+  font-size: 0.9rem;
+  color: var(--text-secondary, #888);
+  line-height: 1.5;
+}
