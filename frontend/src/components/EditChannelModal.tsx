@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, memo } from 'react';
 import type { Channel, Logo } from '../types';
 import * as api from '../services/api';
+import './ModalBase.css';
 
 export interface ChannelMetadataChanges {
   channel_number?: number;
@@ -74,6 +75,10 @@ export const EditChannelModal = memo(function EditChannelModal({
   // TVG-ID from EPG picker state
   const [tvgIdPickerOpen, setTvgIdPickerOpen] = useState(false);
   const [tvgIdSearch, setTvgIdSearch] = useState('');
+
+  // Stream Profile dropdown state
+  const [streamProfileDropdownOpen, setStreamProfileDropdownOpen] = useState(false);
+  const streamProfileDropdownRef = useRef<HTMLDivElement>(null);
 
   // Filter EPG sources to exclude dummy types
   const nonDummyEpgSources = epgSources.filter(s => s.source_type !== 'dummy');
@@ -324,6 +329,20 @@ export const EditChannelModal = memo(function EditChannelModal({
     }
   }, [epgSourceFilterOpen]);
 
+  // Close stream profile dropdown on outside click
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (streamProfileDropdownRef.current && !streamProfileDropdownRef.current.contains(event.target as Node)) {
+        setStreamProfileDropdownOpen(false);
+      }
+    };
+
+    if (streamProfileDropdownOpen) {
+      document.addEventListener('mousedown', handleClickOutside);
+      return () => document.removeEventListener('mousedown', handleClickOutside);
+    }
+  }, [streamProfileDropdownOpen]);
+
   // Toggle EPG source selection
   const handleToggleEpgSource = (sourceId: number) => {
     setSelectedEpgSourceIds(prev => {
@@ -345,15 +364,15 @@ export const EditChannelModal = memo(function EditChannelModal({
       : `${selectedEpgSourceIds.size} sources`;
 
   return (
-    <div className="edit-channel-modal-overlay">
-      <div className="edit-channel-modal" onClick={(e) => e.stopPropagation()}>
-        <div className="edit-channel-titlebar">
-          <span className="edit-channel-titlebar-text">Edit Channel</span>
-          <button className="edit-channel-titlebar-close" onClick={handleClose} title="Close">
+    <div className="modal-overlay">
+      <div className="modal-container edit-channel-modal">
+        <div className="modal-header">
+          <h2>Edit Channel</h2>
+          <button className="modal-close-btn" onClick={handleClose} title="Close">
             <span className="material-icons">close</span>
           </button>
         </div>
-        <div className="edit-channel-content">
+        <div className="modal-body">
         {/* Channel Number and Name Section */}
         <div className="edit-channel-header-fields">
           <div className="edit-channel-number-field">
@@ -635,20 +654,43 @@ export const EditChannelModal = memo(function EditChannelModal({
         {/* Stream Profile Section */}
         <div className="edit-channel-section">
           <label>Stream Profile</label>
-          <select
-            className="edit-channel-select"
-            value={selectedStreamProfileId ?? ''}
-            onChange={(e) => setSelectedStreamProfileId(e.target.value ? Number(e.target.value) : null)}
-          >
-            <option value="">Default (no profile)</option>
-            {streamProfiles
-              .filter((p) => p.is_active)
-              .map((profile) => (
-                <option key={profile.id} value={profile.id}>
-                  {profile.name}
-                </option>
-              ))}
-          </select>
+          <div className="searchable-select-dropdown" ref={streamProfileDropdownRef}>
+            <button
+              type="button"
+              className="dropdown-trigger"
+              onClick={() => setStreamProfileDropdownOpen(!streamProfileDropdownOpen)}
+            >
+              <span className="dropdown-value">
+                {selectedStreamProfileId
+                  ? streamProfiles.find(p => p.id === selectedStreamProfileId)?.name || 'Unknown'
+                  : 'Default (no profile)'}
+              </span>
+              <span className="material-icons">expand_more</span>
+            </button>
+            {streamProfileDropdownOpen && (
+              <div className="dropdown-menu">
+                <div className="dropdown-options">
+                  <div
+                    className={`dropdown-option-item${selectedStreamProfileId === null ? ' selected' : ''}`}
+                    onClick={() => { setSelectedStreamProfileId(null); setStreamProfileDropdownOpen(false); }}
+                  >
+                    Default (no profile)
+                  </div>
+                  {streamProfiles
+                    .filter((p) => p.is_active)
+                    .map((profile) => (
+                      <div
+                        key={profile.id}
+                        className={`dropdown-option-item${selectedStreamProfileId === profile.id ? ' selected' : ''}`}
+                        onClick={() => { setSelectedStreamProfileId(profile.id); setStreamProfileDropdownOpen(false); }}
+                      >
+                        {profile.name}
+                      </div>
+                    ))}
+                </div>
+              </div>
+            )}
+          </div>
           <span className="edit-channel-hint">Determines how streams are processed/transcoded</span>
         </div>
 
@@ -783,15 +825,16 @@ export const EditChannelModal = memo(function EditChannelModal({
           </div>
         </div>
 
-        <div className="edit-channel-actions">
+        </div>
+
+        <div className="modal-footer">
           <button
-            className="edit-channel-save-btn"
+            className="modal-btn modal-btn-primary"
             onClick={handleSave}
             disabled={saving || !hasChanges}
           >
             {saving ? 'Saving...' : 'Save Changes'}
           </button>
-        </div>
         </div>
 
         {/* Discard Changes Confirmation Dialog */}

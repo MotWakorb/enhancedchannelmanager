@@ -813,25 +813,7 @@ button.group-selection-checkbox {
   color: var(--text-primary);
 }
 
-.modal-close-btn {
-  background: none;
-  border: none;
-  padding: 0.25rem;
-  cursor: pointer;
-  border-radius: 4px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.modal-close-btn:hover {
-  background-color: var(--border-primary);
-}
-
-.modal-close-btn .material-icons {
-  font-size: 1.25rem;
-  color: var(--text-secondary);
-}
+/* modal-close-btn styles are in ModalBase.css */
 
 .modal-body {
   padding: 1.25rem;

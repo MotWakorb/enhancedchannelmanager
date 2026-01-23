@@ -2479,76 +2479,13 @@
 }
 
 
-/* Edit Channel Modal */
-.edit-channel-modal-overlay {
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background-color: rgba(0, 0, 0, 0.7);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 1000;
-}
+/* Edit Channel Modal
+   Component-specific styles - base modal styles are in ModalBase.css */
 
+/* Modal sizing */
 .edit-channel-modal {
-  background-color: var(--bg-tertiary);
-  border-radius: 8px;
   min-width: 600px;
   max-width: 800px;
-  max-height: 80vh;
-  overflow: hidden;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
-  display: flex;
-  flex-direction: column;
-}
-
-.edit-channel-titlebar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0.75rem 1rem;
-  background-color: var(--bg-tertiary);
-  border-bottom: 1px solid var(--border-primary);
-  border-radius: 8px 8px 0 0;
-  user-select: none;
-}
-
-.edit-channel-titlebar-text {
-  font-size: 0.9rem;
-  font-weight: 500;
-  color: var(--button-text);
-}
-
-.edit-channel-titlebar-close {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 28px;
-  height: 28px;
-  background: none;
-  border: none;
-  border-radius: 4px;
-  color: var(--text-secondary);
-  cursor: pointer;
-  transition: background-color 0.15s, color 0.15s;
-}
-
-.edit-channel-titlebar-close:hover {
-  background-color: var(--error);
-  color: var(--text-primary);
-}
-
-.edit-channel-titlebar-close .material-icons {
-  font-size: 18px;
-}
-
-.edit-channel-content {
-  flex: 1;
-  overflow-y: auto;
-  padding: 1.5rem;
 }
 
 /* Channel Number and Name header fields */
@@ -2799,34 +2736,6 @@
   font-size: 1rem;
 }
 
-.edit-channel-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 0.75rem;
-  margin-top: 1.5rem;
-  padding-top: 1rem;
-  border-top: 1px solid var(--border-primary);
-}
-
-.edit-channel-save-btn {
-  padding: 0.5rem 1.5rem;
-  background-color: var(--button-primary-bg);
-  border: none;
-  border-radius: 4px;
-  color: var(--button-primary-text);
-  cursor: pointer;
-  transition: background-color 0.15s;
-}
-
-.edit-channel-save-btn:hover {
-  background-color: var(--button-primary-bg);
-}
-
-.edit-channel-save-btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
 /* Discard Changes Confirmation Dialog */
 .discard-confirm-overlay {
   position: absolute;
@@ -3050,27 +2959,6 @@
   font-size: 0.75rem;
   color: var(--error-color, #ef4444);
   font-style: italic;
-}
-
-.edit-channel-select {
-  width: 100%;
-  padding: 0.5rem;
-  background-color: var(--input-bg);
-  border: 1px solid var(--border-secondary);
-  border-radius: 4px;
-  color: var(--text-primary);
-  font-size: 0.9rem;
-  cursor: pointer;
-}
-
-.edit-channel-select:focus {
-  outline: none;
-  border-color: var(--accent-primary);
-}
-
-.edit-channel-select option {
-  background-color: var(--input-bg);
-  color: var(--text-primary);
 }
 
 /* EPG Preview */
