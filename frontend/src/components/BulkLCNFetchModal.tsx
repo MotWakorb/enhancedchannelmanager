@@ -292,18 +292,18 @@ export const BulkLCNFetchModal = memo(function BulkLCNFetchModal({
 
   return (
     <div className="modal-overlay">
-      <div className="bulk-lcn-modal" onClick={e => e.stopPropagation()}>
-        <div className="bulk-lcn-header">
+      <div className="modal-container modal-lg bulk-lcn-modal" onClick={e => e.stopPropagation()}>
+        <div className="modal-header">
           <h2>Fetch Gracenote IDs</h2>
           <button className="modal-close-btn" onClick={onClose}>
             <span className="material-icons">close</span>
           </button>
         </div>
 
-        <div className="bulk-lcn-body">
+        <div className="modal-body bulk-lcn-body">
           {phase === 'fetching' ? (
-            <div className="bulk-lcn-fetching">
-              <span className="material-icons spinning">sync</span>
+            <div className="modal-loading">
+              <span className="material-icons modal-spinning-ccw">sync</span>
               <div className="fetching-text">
                 <p>Fetching Gracenote IDs for {selectedChannels.length} channels...</p>
                 <p className="fetching-hint">This may take a moment for large EPG files</p>
@@ -313,28 +313,28 @@ export const BulkLCNFetchModal = memo(function BulkLCNFetchModal({
             <>
               {/* Error message */}
               {error && (
-                <div className="bulk-lcn-error">
+                <div className="modal-error-banner">
                   <span className="material-icons">error</span>
                   <span>{error}</span>
                 </div>
               )}
 
               {/* Summary */}
-              <div className="bulk-lcn-summary">
-                <div className="summary-item success">
+              <div className="modal-summary">
+                <div className="modal-summary-item success">
                   <span className="material-icons">check_circle</span>
                   <span>{found.length} found</span>
                 </div>
-                <div className="summary-item warning">
+                <div className="modal-summary-item warning">
                   <span className="material-icons">help</span>
                   <span>{notFound.length} not found</span>
                 </div>
-                <div className="summary-item neutral">
+                <div className="modal-summary-item neutral">
                   <span className="material-icons">link_off</span>
                   <span>{noTvgId.length} no TVG-ID</span>
                 </div>
                 {alreadyHas.length > 0 && (
-                  <div className="summary-item info">
+                  <div className="modal-summary-item info">
                     <span className="material-icons">verified</span>
                     <span>{alreadyHas.length} already set</span>
                   </div>
@@ -343,9 +343,9 @@ export const BulkLCNFetchModal = memo(function BulkLCNFetchModal({
 
               {/* Found Section */}
               {found.length > 0 && (
-                <div className="bulk-lcn-section collapsible">
+                <div className="modal-collapsible">
                   <button
-                    className="section-header clickable"
+                    className="modal-collapsible-header"
                     onClick={() => setFoundExpanded(!foundExpanded)}
                   >
                     <span className="material-icons">check_circle</span>
@@ -400,9 +400,9 @@ export const BulkLCNFetchModal = memo(function BulkLCNFetchModal({
 
               {/* Not Found Section */}
               {notFound.length > 0 && (
-                <div className="bulk-lcn-section collapsible">
+                <div className="modal-collapsible">
                   <button
-                    className="section-header clickable"
+                    className="modal-collapsible-header"
                     onClick={() => setNotFoundExpanded(!notFoundExpanded)}
                   >
                     <span className="material-icons">help</span>
@@ -432,9 +432,9 @@ export const BulkLCNFetchModal = memo(function BulkLCNFetchModal({
 
               {/* No TVG-ID Section */}
               {noTvgId.length > 0 && (
-                <div className="bulk-lcn-section collapsible">
+                <div className="modal-collapsible">
                   <button
-                    className="section-header clickable"
+                    className="modal-collapsible-header"
                     onClick={() => setNoTvgIdExpanded(!noTvgIdExpanded)}
                   >
                     <span className="material-icons">link_off</span>
@@ -464,9 +464,9 @@ export const BulkLCNFetchModal = memo(function BulkLCNFetchModal({
 
               {/* Already Has Section */}
               {alreadyHas.length > 0 && (
-                <div className="bulk-lcn-section collapsible">
+                <div className="modal-collapsible">
                   <button
-                    className="section-header clickable"
+                    className="modal-collapsible-header"
                     onClick={() => setAlreadyHasExpanded(!alreadyHasExpanded)}
                   >
                     <span className="material-icons">verified</span>
@@ -497,12 +497,9 @@ export const BulkLCNFetchModal = memo(function BulkLCNFetchModal({
           )}
         </div>
 
-        <div className="bulk-lcn-footer">
-          <button className="btn-cancel" onClick={onClose}>
-            Cancel
-          </button>
+        <div className="modal-footer">
           <button
-            className="btn-primary"
+            className="modal-btn modal-btn-primary"
             onClick={handleAssign}
             disabled={phase === 'fetching' || selectedCount === 0}
           >
