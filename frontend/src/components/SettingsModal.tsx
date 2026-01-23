@@ -14,7 +14,6 @@ export const SettingsModal = memo(function SettingsModal({ isOpen, onClose, onSa
   const [url, setUrl] = useState('');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
-  const [autoRenameChannelNumber, setAutoRenameChannelNumber] = useState(false);
   // Channel defaults (stored but not edited in this modal - use Settings tab)
   const [includeChannelNumberInName, setIncludeChannelNumberInName] = useState(false);
   const [channelNumberSeparator, setChannelNumberSeparator] = useState('-');
@@ -27,7 +26,7 @@ export const SettingsModal = memo(function SettingsModal({ isOpen, onClose, onSa
   const [theme, setTheme] = useState<Theme>('dark');
   const [loading, setLoading] = useState(false);
   const [testing, setTesting] = useState(false);
-  const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
+  const [connectionVerified, setConnectionVerified] = useState<boolean | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   // Track original URL/username to detect if auth settings changed
@@ -48,7 +47,6 @@ export const SettingsModal = memo(function SettingsModal({ isOpen, onClose, onSa
       setOriginalUrl(settings.url);
       setOriginalUsername(settings.username);
       setPassword(''); // Never load password from server
-      setAutoRenameChannelNumber(settings.auto_rename_channel_number);
       setIncludeChannelNumberInName(settings.include_channel_number_in_name);
       setChannelNumberSeparator(settings.channel_number_separator);
       setRemoveCountryPrefix(settings.remove_country_prefix);
@@ -58,7 +56,7 @@ export const SettingsModal = memo(function SettingsModal({ isOpen, onClose, onSa
       setShowStreamUrls(settings.show_stream_urls);
       setHideAutoSyncGroups(settings.hide_auto_sync_groups);
       setTheme(settings.theme || 'dark');
-      setTestResult(null);
+      setConnectionVerified(null);
       setError(null);
     } catch (err) {
       console.error('Failed to load settings:', err);
@@ -72,14 +70,18 @@ export const SettingsModal = memo(function SettingsModal({ isOpen, onClose, onSa
     }
 
     setTesting(true);
-    setTestResult(null);
+    setConnectionVerified(null);
     setError(null);
 
     try {
       const result = await api.testConnection({ url, username, password });
-      setTestResult(result);
+      setConnectionVerified(result.success);
+      if (!result.success) {
+        setError(result.message || 'Connection failed');
+      }
     } catch (err) {
-      setTestResult({ success: false, message: 'Failed to test connection' });
+      setConnectionVerified(false);
+      setError('Failed to test connection');
     } finally {
       setTesting(false);
     }
@@ -88,6 +90,7 @@ export const SettingsModal = memo(function SettingsModal({ isOpen, onClose, onSa
   const handleSave = async () => {
     // Check if auth settings (URL or username) have changed
     const authChanged = url !== originalUrl || username !== originalUsername;
+    const isNewSetup = !originalUrl && !originalUsername;
 
     // Validate required fields
     if (!url || !username) {
@@ -95,9 +98,15 @@ export const SettingsModal = memo(function SettingsModal({ isOpen, onClose, onSa
       return;
     }
 
-    // Password is only required if auth settings changed
-    if (authChanged && !password) {
+    // Password is only required if auth settings changed or new setup
+    if ((authChanged || isNewSetup) && !password) {
       setError('Password is required when changing URL or username');
+      return;
+    }
+
+    // Connection must be verified before saving
+    if (connectionVerified !== true) {
+      setError('Please test the connection before saving');
       return;
     }
 
@@ -110,7 +119,6 @@ export const SettingsModal = memo(function SettingsModal({ isOpen, onClose, onSa
         username,
         // Only send password if it was entered
         ...(password ? { password } : {}),
-        auto_rename_channel_number: autoRenameChannelNumber,
         include_channel_number_in_name: includeChannelNumberInName,
         channel_number_separator: channelNumberSeparator,
         remove_country_prefix: removeCountryPrefix,
@@ -142,7 +150,7 @@ export const SettingsModal = memo(function SettingsModal({ isOpen, onClose, onSa
           </button>
         </div>
 
-        <div className="modal-body">
+        <div className="modal-body modal-body-compact">
           <div className="modal-form-group form-group">
             <label htmlFor="url">Dispatcharr URL</label>
             <input
@@ -150,7 +158,10 @@ export const SettingsModal = memo(function SettingsModal({ isOpen, onClose, onSa
               type="text"
               placeholder="http://localhost:9191"
               value={url}
-              onChange={(e) => setUrl(e.target.value)}
+              onChange={(e) => {
+                setUrl(e.target.value);
+                setConnectionVerified(null);
+              }}
             />
           </div>
 
@@ -161,7 +172,10 @@ export const SettingsModal = memo(function SettingsModal({ isOpen, onClose, onSa
               type="text"
               placeholder="admin"
               value={username}
-              onChange={(e) => setUsername(e.target.value)}
+              onChange={(e) => {
+                setUsername(e.target.value);
+                setConnectionVerified(null);
+              }}
             />
           </div>
 
@@ -172,45 +186,31 @@ export const SettingsModal = memo(function SettingsModal({ isOpen, onClose, onSa
               type="password"
               placeholder="Enter password"
               value={password}
-              onChange={(e) => setPassword(e.target.value)}
+              onChange={(e) => {
+                setPassword(e.target.value);
+                setConnectionVerified(null);
+              }}
             />
           </div>
 
-          <div className="modal-divider form-group-divider" />
-
-          <div className="modal-form-group form-group checkbox-group">
-            <label htmlFor="autoRename" className="modal-checkbox-row checkbox-label">
-              <input
-                id="autoRename"
-                type="checkbox"
-                checked={autoRenameChannelNumber}
-                onChange={(e) => setAutoRenameChannelNumber(e.target.checked)}
-              />
-              <span>Auto-rename channel when number changes</span>
-            </label>
-            <p className="form-hint form-help">
-              When enabled, if a channel name contains the old channel number, it will be
-              automatically updated to the new number (e.g., "101 Sports Channel" → "102 Sports Channel").
-            </p>
-          </div>
-
           {error && <div className="error-message">{error}</div>}
-
-          {testResult && (
-            <div className={`test-result ${testResult.success ? 'success' : 'error'}`}>
-              {testResult.message}
-            </div>
-          )}
         </div>
 
         <div className="modal-footer">
           <button className="modal-btn modal-btn-secondary btn-secondary" onClick={onClose} disabled={loading}>
             Cancel
           </button>
-          <button className="modal-btn btn-test" onClick={handleTest} disabled={testing || loading}>
-            {testing ? 'Testing...' : 'Test Connection'}
+          <button
+            className={`modal-btn btn-test ${connectionVerified === true ? 'btn-test-success' : connectionVerified === false ? 'btn-test-failed' : ''}`}
+            onClick={handleTest}
+            disabled={testing || loading}
+          >
+            <span className={`material-icons ${testing ? 'spinning' : ''}`}>
+              {testing ? 'sync' : connectionVerified === true ? 'check_circle' : connectionVerified === false ? 'error' : 'wifi_tethering'}
+            </span>
+            {testing ? 'Testing...' : connectionVerified === true ? 'Connected' : connectionVerified === false ? 'Failed' : 'Test Connection'}
           </button>
-          <button className="modal-btn modal-btn-primary btn-primary" onClick={handleSave} disabled={loading}>
+          <button className="modal-btn modal-btn-primary btn-primary" onClick={handleSave} disabled={loading || connectionVerified !== true}>
             {loading ? 'Saving...' : 'Save'}
           </button>
         </div>
