@@ -1068,6 +1068,10 @@
   color: var(--text-secondary, #888);
 }
 
+.modal-summary-item.info {
+  color: var(--info, #3b82f6);
+}
+
 .modal-summary-item .score-range {
   font-size: 0.8rem;
   font-weight: normal;
@@ -1100,6 +1104,25 @@
 .modal-warning-banner p {
   margin: 0;
   font-size: 0.9rem;
+}
+
+/* Error banner variant */
+.modal-error-banner {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.75rem 1rem;
+  background: rgba(239, 68, 68, 0.1);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  border-radius: 6px;
+  color: var(--error-color, #ef4444);
+  margin-bottom: 1rem;
+  font-size: 0.875rem;
+}
+
+.modal-error-banner .material-icons {
+  font-size: 18px;
+  flex-shrink: 0;
 }
 
 
@@ -1292,5 +1315,5 @@
 }
 
 .modal-spinning-ccw {
-  animation: modal-spin-ccw 1s linear infinite;
+  animation: modal-spin-ccw 1s linear infinite !important;
 }

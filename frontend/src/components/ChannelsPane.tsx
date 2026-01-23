@@ -784,6 +784,14 @@ export function ChannelsPane({
 
   // Bulk LCN fetch modal state
   const bulkLCNModal = useModal();
+  const [bulkLCNLoading, setBulkLCNLoading] = useState(false);
+
+  // Clear LCN loading spinner when modal opens
+  useEffect(() => {
+    if (bulkLCNModal.isOpen && bulkLCNLoading) {
+      setBulkLCNLoading(false);
+    }
+  }, [bulkLCNModal.isOpen, bulkLCNLoading]);
 
   // Gracenote conflict modal state
   const gracenoteConflictModal = useModal();
@@ -4433,10 +4441,16 @@ export function ChannelsPane({
                 </button>
                 <button
                   className="bulk-action-btn"
-                  onClick={() => bulkLCNModal.open()}
+                  onClick={() => {
+                    setBulkLCNLoading(true);
+                    setTimeout(() => bulkLCNModal.open(), 50);
+                  }}
+                  disabled={bulkLCNLoading}
                   title="Fetch Gracenote IDs for selected channels"
                 >
-                  <span className="material-icons">confirmation_number</span>
+                  <span className={`material-icons${bulkLCNLoading ? ' spinning' : ''}`}>
+                    {bulkLCNLoading ? 'sync' : 'confirmation_number'}
+                  </span>
                 </button>
                 <button
                   className="bulk-action-btn"
