@@ -16,6 +16,7 @@
  * - modal-md: 550px (standard forms, settings) [default]
  * - modal-lg: 700px (complex forms, lists)
  * - modal-xl: 900px (data tables, multi-column layouts)
+ * - modal-xxl: 1000px (large data tables, bulk operations)
  * - modal-full: 95vw (full-width content)
  */
 
@@ -139,12 +140,16 @@
   max-width: 900px;
 }
 
+.modal-container.modal-xxl {
+  max-width: 1000px;
+}
+
 .modal-container.modal-full {
   max-width: 95vw;
 }
 
 /* Default size if no size class specified */
-.modal-container:not(.modal-sm):not(.modal-md):not(.modal-lg):not(.modal-xl):not(.modal-full) {
+.modal-container:not(.modal-sm):not(.modal-md):not(.modal-lg):not(.modal-xl):not(.modal-xxl):not(.modal-full) {
   max-width: 550px;
 }
 
@@ -469,7 +474,8 @@
   .modal-container.modal-sm,
   .modal-container.modal-md,
   .modal-container.modal-lg,
-  .modal-container.modal-xl {
+  .modal-container.modal-xl,
+  .modal-container.modal-xxl {
     max-width: 100%;
   }
 
