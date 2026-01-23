@@ -2493,13 +2493,13 @@ export function ChannelsPane({
       const key = ch.channel_group_id !== null ? String(ch.channel_group_id) : 'ungrouped';
       groupIdCounts[key] = (groupIdCounts[key] || 0) + 1;
     });
-    logger.info('[CHANNELS-DEBUG] Frontend received channels per group_id (before filtering):', groupIdCounts);
-    logger.info(`[CHANNELS-DEBUG] Total channels in localChannels: ${localChannels.length}`);
+    logger.debug('[CHANNELS-DEBUG] Frontend received channels per group_id (before filtering):', groupIdCounts);
+    logger.debug(`[CHANNELS-DEBUG] Total channels in localChannels: ${localChannels.length}`);
 
     // Count auto_created channels for debugging
     const autoCreatedChannels = localChannels.filter(ch => ch.auto_created);
     const manualChannels = localChannels.filter(ch => !ch.auto_created);
-    logger.info(`[CHANNELS-DEBUG] Channel breakdown: ${manualChannels.length} manual, ${autoCreatedChannels.length} auto_created`);
+    logger.debug(`[CHANNELS-DEBUG] Channel breakdown: ${manualChannels.length} manual, ${autoCreatedChannels.length} auto_created`);
 
     // Log auto_created channels by group for debugging
     if (autoCreatedChannels.length > 0) {
@@ -2512,12 +2512,13 @@ export function ChannelsPane({
           autoCreatedByGroup[key].samples.push(`#${ch.channel_number} ${ch.name}`);
         }
       });
-      logger.info('[CHANNELS-DEBUG] Auto-created channels by group:', autoCreatedByGroup);
-      logger.info('[CHANNELS-DEBUG] autoSyncRelatedGroups:', Array.from(autoSyncRelatedGroups));
+      logger.debug('[CHANNELS-DEBUG] Auto-created channels by group:', autoCreatedByGroup);
+      logger.debug('[CHANNELS-DEBUG] autoSyncRelatedGroups:', Array.from(autoSyncRelatedGroups));
     }
 
     // Filter channels based on search term and auto-created filter
     let hiddenDueToAutoCreated = 0;
+    const hiddenChannelsByGroup: Record<string, { count: number; samples: string[] }> = {};
     const visibleChannels = localChannels.filter((ch) => {
       // First, apply search filter if there's a search term
       if (searchTerm) {
@@ -2534,12 +2535,20 @@ export function ChannelsPane({
         // Show auto-created channel if showAutoChannelGroups filter is on
         return channelListFilters?.showAutoChannelGroups !== false;
       }
+      // Track hidden channels by group for debugging
       hiddenDueToAutoCreated++;
+      const key = groupId !== null ? String(groupId) : 'ungrouped';
+      if (!hiddenChannelsByGroup[key]) hiddenChannelsByGroup[key] = { count: 0, samples: [] };
+      hiddenChannelsByGroup[key].count++;
+      if (hiddenChannelsByGroup[key].samples.length < 5) {
+        hiddenChannelsByGroup[key].samples.push(`#${ch.channel_number} ${ch.name} (auto_created=${ch.auto_created}, auto_created_by=${ch.auto_created_by})`);
+      }
       return false; // Hide auto-created channels from non-auto-sync groups
     });
 
     if (hiddenDueToAutoCreated > 0) {
-      logger.warn(`[CHANNELS-DEBUG] Hidden ${hiddenDueToAutoCreated} channels due to auto_created filter (not in autoSyncRelatedGroups)`);
+      logger.debug(`[CHANNELS-DEBUG] Hidden ${hiddenDueToAutoCreated} channels due to auto_created filter (not in autoSyncRelatedGroups)`);
+      logger.debug('[CHANNELS-DEBUG] Hidden channels by group:', hiddenChannelsByGroup);
     }
 
     // Debug: Log after filtering
@@ -2548,8 +2557,8 @@ export function ChannelsPane({
       const key = ch.channel_group_id !== null ? String(ch.channel_group_id) : 'ungrouped';
       afterFilterCounts[key] = (afterFilterCounts[key] || 0) + 1;
     });
-    logger.info('[CHANNELS-DEBUG] Visible channels per group_id (after filtering):', afterFilterCounts);
-    logger.info(`[CHANNELS-DEBUG] Visible channels: ${visibleChannels.length}, filtered out: ${localChannels.length - visibleChannels.length}`);
+    logger.debug('[CHANNELS-DEBUG] Visible channels per group_id (after filtering):', afterFilterCounts);
+    logger.debug(`[CHANNELS-DEBUG] Visible channels: ${visibleChannels.length}, filtered out: ${localChannels.length - visibleChannels.length}`);
 
     // Group channels by channel_group_id
     const grouped = visibleChannels.reduce<Record<number | 'ungrouped', Channel[]>>(
