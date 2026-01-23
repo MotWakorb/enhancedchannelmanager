@@ -32,18 +32,18 @@
   /* Container */
   --modal-bg: var(--bg-primary, #1a1a2e);
   --modal-border-color: var(--border-color, #3a3a5a);
-  --modal-border-radius: 12px;
+  --modal-border-radius: 6px;
   --modal-shadow: 0 20px 60px rgba(0, 0, 0, 0.4);
 
   /* Header */
   --modal-header-bg: var(--bg-secondary, #252540);
   --modal-header-border: var(--border-color, #3a3a5a);
-  --modal-header-padding: 1rem 1.25rem;
+  --modal-header-padding: 0.5rem;
   --modal-title-color: var(--text-primary, #ffffff);
   --modal-title-size: 1.1rem;
 
   /* Body */
-  --modal-body-padding: 1.25rem;
+  --modal-body-padding: 1rem;
   --modal-body-max-height: 70vh;
 
   /* Footer */
@@ -54,7 +54,7 @@
 
   /* Close button */
   --modal-close-color: var(--text-secondary, #888);
-  --modal-close-hover-color: var(--text-primary, #fff);
+  --modal-close-hover-color: #ff6b6b;
   --modal-close-size: 1.5rem;
 
   /* Animation */
@@ -208,8 +208,8 @@
 }
 
 .modal-close-btn:hover {
-  color: var(--modal-close-hover-color);
-  background: rgba(255, 255, 255, 0.1);
+  background-color: var(--modal-close-hover-color);
+  color: #fff;
 }
 
 .modal-close-btn .material-icons {
