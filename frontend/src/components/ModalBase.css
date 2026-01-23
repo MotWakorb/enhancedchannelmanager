@@ -955,6 +955,14 @@
   margin: 0;
 }
 
+/* Description paragraph at top of modal body */
+.modal-description {
+  color: var(--text-muted, #666);
+  margin: 0 0 1rem 0;
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+
 /* Styled bullet list */
 .modal-bullet-list {
   list-style-type: disc;

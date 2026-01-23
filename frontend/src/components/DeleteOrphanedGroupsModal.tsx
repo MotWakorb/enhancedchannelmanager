@@ -1,4 +1,5 @@
 import { useState, useEffect, memo } from 'react';
+import './ModalBase.css';
 import './DeleteOrphanedGroupsModal.css';
 
 interface OrphanedGroup {
@@ -56,10 +57,12 @@ export const DeleteOrphanedGroupsModal = memo(function DeleteOrphanedGroupsModal
 
   return (
     <div className="modal-overlay" onClick={onClose}>
-      <div className="modal-content delete-orphaned-modal" onClick={(e) => e.stopPropagation()}>
+      <div className="modal-container modal-md delete-orphaned-modal" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
           <h2>Delete Orphaned Channel Groups</h2>
-          <button className="close-btn" onClick={onClose}>×</button>
+          <button className="modal-close-btn" onClick={onClose}>
+            <span className="material-icons">close</span>
+          </button>
         </div>
 
         <div className="modal-body">
@@ -67,22 +70,24 @@ export const DeleteOrphanedGroupsModal = memo(function DeleteOrphanedGroupsModal
             Select the channel groups you want to delete. This action cannot be undone.
           </p>
 
-          <div className="selection-controls">
-            <button
-              type="button"
-              className="btn-text"
-              onClick={handleSelectAll}
-            >
-              Select All
-            </button>
-            <button
-              type="button"
-              className="btn-text"
-              onClick={handleSelectNone}
-            >
-              Select None
-            </button>
-            <span className="selection-count">
+          <div className="modal-toolbar-row selection-controls">
+            <div className="modal-toolbar-actions">
+              <button
+                type="button"
+                className="modal-btn-small"
+                onClick={handleSelectAll}
+              >
+                Select All
+              </button>
+              <button
+                type="button"
+                className="modal-btn-small"
+                onClick={handleSelectNone}
+              >
+                Select None
+              </button>
+            </div>
+            <span className="modal-toolbar-count">
               {selectedGroups.size} of {groups.length} selected
             </span>
           </div>
@@ -112,14 +117,7 @@ export const DeleteOrphanedGroupsModal = memo(function DeleteOrphanedGroupsModal
         <div className="modal-footer">
           <button
             type="button"
-            className="btn-secondary"
-            onClick={onClose}
-          >
-            Cancel
-          </button>
-          <button
-            type="button"
-            className="btn-danger"
+            className="modal-btn modal-btn-danger"
             onClick={handleConfirm}
             disabled={selectedGroups.size === 0}
           >
