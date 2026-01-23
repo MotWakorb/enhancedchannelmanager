@@ -1597,3 +1597,149 @@
   font-size: 0.875rem;
   color: var(--text-secondary, #888);
 }
+
+
+/* =============================================================================
+   SECTION DIVIDER - Centered text with lines on either side
+   ============================================================================= */
+
+.modal-section-divider {
+  display: flex;
+  align-items: center;
+  margin: 1.5rem 0 1rem;
+  color: var(--text-secondary, #888);
+}
+
+.modal-section-divider::before,
+.modal-section-divider::after {
+  content: '';
+  flex: 1;
+  border-bottom: 1px solid var(--border-primary, #3a3a5a);
+}
+
+.modal-section-divider span {
+  padding: 0 1rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.modal-section-description {
+  font-size: 0.8rem;
+  color: var(--text-muted, #666);
+  margin-bottom: 1rem;
+  line-height: 1.5;
+}
+
+
+/* =============================================================================
+   FORM ROW - Two column grid layout for forms
+   ============================================================================= */
+
+.modal-form-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+}
+
+@media (max-width: 600px) {
+  .modal-form-row {
+    grid-template-columns: 1fr;
+  }
+}
+
+
+/* =============================================================================
+   CHECKBOX LABEL - Checkbox with inline label
+   ============================================================================= */
+
+.modal-checkbox-label {
+  display: flex !important;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.875rem;
+  color: var(--text-primary, #fff);
+  cursor: pointer;
+  user-select: none;
+  margin-bottom: 0 !important;
+}
+
+.modal-checkbox-label input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+  accent-color: var(--accent-primary, #6366f1);
+}
+
+.modal-required {
+  color: var(--error-color, #ef4444);
+}
+
+
+/* =============================================================================
+   PREVIEW SECTION - Test/preview output area
+   ============================================================================= */
+
+.modal-preview-section {
+  background-color: var(--input-bg, #1a1a2e);
+  border: 1px solid var(--border-secondary, #3a3a5a);
+  border-radius: 6px;
+  padding: 1rem;
+  margin-top: 1rem;
+}
+
+.modal-preview-section h4 {
+  margin: 0 0 0.75rem 0;
+  font-size: 0.875rem;
+  color: var(--text-primary, #fff);
+}
+
+.modal-preview-groups {
+  margin-bottom: 0.75rem;
+}
+
+.modal-preview-groups strong {
+  display: block;
+  font-size: 0.75rem;
+  color: var(--text-secondary, #888);
+  margin-bottom: 0.25rem;
+}
+
+.modal-preview-groups code {
+  display: block;
+  font-size: 0.75rem;
+  background-color: var(--bg-primary, #1a1a2e);
+  padding: 0.5rem;
+  border-radius: 4px;
+  color: var(--accent-primary, #6366f1);
+  overflow-x: auto;
+  white-space: pre;
+}
+
+.modal-preview-item {
+  font-size: 0.875rem;
+  color: var(--text-primary, #fff);
+  margin-bottom: 0.5rem;
+}
+
+.modal-preview-item:last-child {
+  margin-bottom: 0;
+}
+
+.modal-preview-item strong {
+  color: var(--text-secondary, #888);
+  margin-right: 0.5rem;
+}
+
+.modal-preview-no-match {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: var(--warning, #f59e0b);
+  font-size: 0.875rem;
+}
+
+.modal-preview-no-match .material-icons {
+  font-size: 18px;
+}
