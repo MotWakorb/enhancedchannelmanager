@@ -11,6 +11,7 @@ import type { LogLevel as FrontendLogLevel } from '../../utils/logger';
 import { DeleteOrphanedGroupsModal } from '../DeleteOrphanedGroupsModal';
 import { ScheduledTasksSection } from '../ScheduledTasksSection';
 import { AlertMethodSettings } from '../AlertMethodSettings';
+import { SettingsModal } from '../SettingsModal';
 import {
   DndContext,
   closestCenter,
@@ -271,6 +272,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   const [cleaningOrphaned, setCleaningOrphaned] = useState(false);
   const [cleanupResult, setCleanupResult] = useState<string | null>(null);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [showConnectionModal, setShowConnectionModal] = useState(false);
 
   // Auto-created channels maintenance state
   const [autoCreatedGroups, setAutoCreatedGroups] = useState<api.AutoCreatedGroup[]>([]);
@@ -1061,49 +1063,29 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         <div className="settings-section-header">
           <span className="material-icons">link</span>
           <h3>Dispatcharr Connection</h3>
-        </div>
-
-        <div className="form-group-vertical">
-          <label htmlFor="url">Server URL</label>
-          <span className="form-description">The URL of your Dispatcharr server (e.g., http://localhost:9191)</span>
-          <input
-            id="url"
-            type="text"
-            placeholder="http://localhost:9191"
-            value={url}
-            onChange={(e) => setUrl(e.target.value)}
-          />
-        </div>
-
-        <div className="form-group-vertical">
-          <label htmlFor="username">Username</label>
-          <span className="form-description">Your Dispatcharr admin username</span>
-          <input
-            id="username"
-            type="text"
-            placeholder="admin"
-            value={username}
-            onChange={(e) => setUsername(e.target.value)}
-          />
-        </div>
-
-        <div className="form-group-vertical">
-          <label htmlFor="password">Password</label>
-          <span className="form-description">Only required when changing URL or username</span>
-          <input
-            id="password"
-            type="password"
-            placeholder="Enter password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-          />
-        </div>
-
-        <div className="form-group-vertical">
-          <button className="btn-test" onClick={handleTest} disabled={testing || loading}>
-            <span className="material-icons">wifi_tethering</span>
-            {testing ? 'Testing...' : 'Test Connection'}
+          <button
+            className="btn-edit-connection"
+            onClick={() => setShowConnectionModal(true)}
+            title="Edit connection settings"
+          >
+            <span className="material-icons">edit</span>
+            Edit
           </button>
+        </div>
+
+        <div className="connection-info-display">
+          <div className="connection-info-row">
+            <span className="connection-label">Server URL:</span>
+            <span className="connection-value">{url || 'Not configured'}</span>
+          </div>
+          <div className="connection-info-row">
+            <span className="connection-label">Username:</span>
+            <span className="connection-value">{username || 'Not configured'}</span>
+          </div>
+          <div className="connection-info-row">
+            <span className="connection-label">Password:</span>
+            <span className="connection-value">••••••••</span>
+          </div>
         </div>
       </div>
 
@@ -3142,6 +3124,15 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
           </div>
         </div>
       )}
+
+      <SettingsModal
+        isOpen={showConnectionModal}
+        onClose={() => setShowConnectionModal(false)}
+        onSaved={() => {
+          setShowConnectionModal(false);
+          loadSettings();
+        }}
+      />
     </div>
   );
 }
