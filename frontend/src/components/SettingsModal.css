@@ -149,17 +149,10 @@
 }
 
 .btn-test {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.4rem;
   background-color: #2d4a3e;
   border: 1px solid #3d6a5e;
   color: var(--success);
   transition: all 0.2s;
-}
-
-.btn-test .material-icons {
-  font-size: 1.1rem;
 }
 
 .btn-test:hover:not(:disabled) {
@@ -173,30 +166,11 @@
   color: #4ade80;
 }
 
-.btn-test.btn-test-success .material-icons {
-  color: #4ade80;
-}
-
 /* Failed state */
 .btn-test.btn-test-failed {
   background-color: #5a2d2d;
   border-color: #7a3d3d;
   color: #ff6b6b;
-}
-
-.btn-test.btn-test-failed .material-icons {
-  color: #ff6b6b;
-}
-
-/* Spinning animation for testing */
-.btn-test .material-icons.spinning,
-.btn-test:not(.btn-test-success):not(.btn-test-failed) .material-icons[class*="sync"] {
-  animation: spin 1s linear infinite;
-}
-
-@keyframes spin {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
 }
 
 .btn-primary {

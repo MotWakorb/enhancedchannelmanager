@@ -205,9 +205,6 @@ export const SettingsModal = memo(function SettingsModal({ isOpen, onClose, onSa
             onClick={handleTest}
             disabled={testing || loading}
           >
-            <span className={`material-icons ${testing ? 'spinning' : ''}`}>
-              {testing ? 'sync' : connectionVerified === true ? 'check_circle' : connectionVerified === false ? 'error' : 'wifi_tethering'}
-            </span>
             {testing ? 'Testing...' : connectionVerified === true ? 'Connected' : connectionVerified === false ? 'Failed' : 'Test Connection'}
           </button>
           <button className="modal-btn modal-btn-primary btn-primary" onClick={handleSave} disabled={loading || connectionVerified !== true}>
