@@ -1,9 +1,13 @@
 /* M3U Groups Modal Styles
    Component-specific styles - base modal styles are in ModalBase.css */
 
-/* Modal sizing - uses modal-xxl (1000px) from ModalBase.css */
+/* Modal sizing - uses modal-lg (700px) from ModalBase.css */
+/* Fixed height modal that doesn't shrink when content filters */
 .m3u-groups-modal {
-  max-height: 80vh;
+  height: 80vh !important;
+  min-height: 80vh !important;
+  max-height: 80vh !important;
+  flex-shrink: 0;
 }
 
 /* Header with account name and linked info */
@@ -121,9 +125,12 @@
   background-color: var(--border-secondary);
 }
 
-/* Modal Body - no padding for full-width list */
+/* Modal Body - no padding for full-width list, flex to fill space */
 .m3u-groups-modal .modal-body {
   padding: 0;
+  flex: 1;
+  overflow-y: auto;
+  max-height: none; /* Override ModalBase.css 70vh limit */
 }
 
 /* Groups List */
@@ -131,6 +138,7 @@
   display: flex;
   flex-direction: column;
   overflow-x: hidden;
+  min-height: 100%;
 }
 
 .groups-header {

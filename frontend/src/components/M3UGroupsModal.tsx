@@ -273,7 +273,7 @@ export const M3UGroupsModal = memo(function M3UGroupsModal({
 
   return (
     <div className="modal-overlay">
-      <div className="modal-container modal-lg m3u-groups-modal" onClick={(e) => e.stopPropagation()}>
+      <div className="modal-container modal-lg m3u-groups-modal" style={{ height: '80vh', minHeight: '80vh', maxHeight: '80vh' }} onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
           <div className="header-info">
             <h2>Manage Groups</h2>
