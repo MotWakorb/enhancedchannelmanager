@@ -198,8 +198,8 @@ export const M3UFiltersModal = memo(function M3UFiltersModal({
 
         <div className="modal-body">
           {loading ? (
-            <div className="loading-state">
-              <span className="material-icons spinning">sync</span>
+            <div className="modal-loading">
+              <span className="material-icons">sync</span>
               <p>Loading filters...</p>
             </div>
           ) : (
@@ -328,10 +328,10 @@ export const M3UFiltersModal = memo(function M3UFiltersModal({
 
               {/* Filters List */}
               {filters.length === 0 && !editingFilter ? (
-                <div className="empty-state">
+                <div className="modal-empty-state">
                   <span className="material-icons">filter_alt_off</span>
                   <p>No filters configured for this account.</p>
-                  <p className="hint">Add a filter to control which streams are imported.</p>
+                  <p>Add a filter to control which streams are imported.</p>
                 </div>
               ) : filters.length > 0 && (
                 <div className="filters-list">
@@ -385,7 +385,7 @@ export const M3UFiltersModal = memo(function M3UFiltersModal({
             </>
           )}
 
-          {error && <div className="error-message">{error}</div>}
+          {error && <div className="modal-error-banner">{error}</div>}
         </div>
       </div>
     </div>

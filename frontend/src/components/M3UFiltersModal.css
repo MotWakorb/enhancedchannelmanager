@@ -235,58 +235,6 @@
   font-size: 16px;
 }
 
-/* Empty State */
-.m3u-filters-modal .empty-state {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 0.5rem;
-  padding: 3rem 2rem;
-  color: var(--text-secondary);
-  text-align: center;
-}
-
-.m3u-filters-modal .empty-state .material-icons {
-  font-size: 48px;
-  color: var(--text-muted);
-}
-
-.m3u-filters-modal .empty-state p {
-  margin: 0;
-}
-
-.m3u-filters-modal .empty-state .hint {
-  font-size: 0.875rem;
-  color: var(--text-muted);
-}
-
-/* Loading State */
-.m3u-filters-modal .loading-state {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 1rem;
-  padding: 3rem 2rem;
-  color: var(--text-secondary);
-}
-
-.m3u-filters-modal .loading-state .material-icons {
-  font-size: 36px;
-}
-
-/* Error Message */
-.m3u-filters-modal .error-message {
-  padding: 0.75rem;
-  background-color: rgba(239, 68, 68, 0.15);
-  border: 1px solid rgba(239, 68, 68, 0.3);
-  border-radius: 6px;
-  color: var(--error);
-  font-size: 0.875rem;
-  margin-top: 1rem;
-}
-
 /* Responsive */
 @media (max-width: 600px) {
   .filter-form .form-row {
