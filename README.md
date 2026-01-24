@@ -406,12 +406,70 @@ Powerful tag-based system for stream name normalization:
 - **Settings Integration** - Configure default normalization in Settings tab
 - **Backward Compatible** - Migrates old custom prefix/suffix settings automatically
 
+### v0.8.6 - Stream Sorting & Probe Schedules
+Enhanced stream sorting options and granular probe scheduling:
+- **M3U Priority Sorting** - Sort streams by M3U account priority order
+- **Audio Type Sorting** - Sort by audio codec/quality (AAC, AC3, EAC3, etc.)
+- **Per-Group Probe Schedules** - Configure different probe schedules for different channel groups
+- **Multiple Probe Schedules** - Create multiple independent probe schedules with different settings
+- **Probe Schedule Templates** - Save and reuse common probe configurations
+
+### v0.8.7 - Granular Normalization Engine
+Advanced rule-based stream name normalization:
+- **Rule Creation UI** - Create custom normalization rules with conditions and actions
+- **Rule Prioritization** - Drag-and-drop rule ordering to control execution priority
+- **Regex Support** - Full regex pattern matching and replacement capabilities
+- **Condition Types** - Contains, starts with, ends with, regex match
+- **Action Types** - Remove prefix/suffix, replace, regex replace, set value
+- **Rule Groups** - Organize rules into logical groups for better management
+- **Rule Testing Panel** - Test rules against sample stream names before applying
+- **Built-in Rules Migration** - Migrate existing tag-based normalization to new engine
+
 ### v0.9.0 - Mobile Interface
 Full mobile support for managing channels on the go:
 - Responsive layouts for phones and tablets
 - Touch-optimized controls
 - Mobile-friendly navigation
 - Progressive Web App (PWA) support
+
+### v0.10.0 - Preview Stream
+Embedded video player for stream preview:
+- **MPEG-TS Playback** - Native .ts stream playback using mpegts.js library
+- **Preview Modal** - Click any stream to open a preview player
+- **Stream Health Indicators** - Visual feedback on stream quality and stability
+- **Quick Preview** - Preview streams before assigning to channels
+- **Integration Points** - Preview from stream list, channel streams, and bulk create modal
+
+### v0.11.0 - M3U Change Tracking
+Track and report changes to M3U sources:
+- **Snapshot System** - Store M3U state snapshots for comparison
+- **Group Change Detection** - Track when groups are added or deleted
+- **Stream Change Detection** - Track when streams are added, deleted, or modified
+- **M3U Changes Tab** - New tab to view all detected changes with filtering
+- **Email Digest Reports** - Configurable email digests when changes occur
+- **Change History** - Historical view of all M3U changes over time
+
+### v0.12.0 - Channel Auto-Creation Pipeline
+Rules engine for automatic channel management:
+- **Rule-Based Automation** - Create rules to automatically create/delete channels
+- **Condition Builder** - Define conditions based on stream properties, groups, M3U sources
+- **Action Executor** - Automatically assign logos, EPG, profiles, and groups
+- **Pipeline-as-Code** - Define automation pipelines in YAML format
+- **YAML Import/Export** - Share and version control your automation rules
+- **Scheduled Execution** - Run pipelines on schedules or triggered by M3U refreshes
+- **Dry Run Mode** - Preview what changes a pipeline would make before executing
+- **Audit Trail** - Full logging of automated actions for troubleshooting
+
+### v0.13.0 - Enhanced Stats
+Advanced analytics and popularity-based channel management:
+- **Channel Watch Tracking** - Track watch time and view counts per channel
+- **Unique Client Tracking** - Count unique connecting IPs per channel
+- **Upstream/Downstream Bandwidth** - Monitor bandwidth utilization in both directions
+- **Popularity Scoring** - Calculate channel popularity based on multiple metrics
+- **Auto-Add Popular Channels** - Automatically add channels that become popular
+- **Auto-Remove Unpopular** - Optionally remove channels with low viewership
+- **Popularity Dashboard** - Visual analytics for channel performance
+- **Trend Analysis** - Track popularity changes over time
 
 ---
 
