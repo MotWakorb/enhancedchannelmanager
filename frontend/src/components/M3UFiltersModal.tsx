@@ -1,6 +1,7 @@
-import { useState, useEffect, useCallback, memo } from 'react';
+import { useState, useEffect, useCallback, useRef, memo } from 'react';
 import type { M3UAccount, M3UFilter, M3UFilterCreateRequest } from '../types';
 import * as api from '../services/api';
+import './ModalBase.css';
 import './M3UFiltersModal.css';
 
 interface M3UFiltersModalProps {
@@ -40,6 +41,12 @@ export const M3UFiltersModal = memo(function M3UFiltersModal({
   const [editingFilter, setEditingFilter] = useState<EditingFilter | null>(null);
   const [isAddingNew, setIsAddingNew] = useState(false);
 
+  // Dropdown state
+  const [filterTypeDropdownOpen, setFilterTypeDropdownOpen] = useState(false);
+  const [actionDropdownOpen, setActionDropdownOpen] = useState(false);
+  const filterTypeDropdownRef = useRef<HTMLDivElement>(null);
+  const actionDropdownRef = useRef<HTMLDivElement>(null);
+
   const loadFilters = useCallback(async () => {
     setLoading(true);
     setError(null);
@@ -59,8 +66,27 @@ export const M3UFiltersModal = memo(function M3UFiltersModal({
       loadFilters();
       setEditingFilter(null);
       setIsAddingNew(false);
+      setFilterTypeDropdownOpen(false);
+      setActionDropdownOpen(false);
     }
   }, [isOpen, loadFilters]);
+
+  // Close dropdowns on outside click
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (filterTypeDropdownRef.current && !filterTypeDropdownRef.current.contains(event.target as Node)) {
+        setFilterTypeDropdownOpen(false);
+      }
+      if (actionDropdownRef.current && !actionDropdownRef.current.contains(event.target as Node)) {
+        setActionDropdownOpen(false);
+      }
+    };
+
+    if (filterTypeDropdownOpen || actionDropdownOpen) {
+      document.addEventListener('mousedown', handleClickOutside);
+      return () => document.removeEventListener('mousedown', handleClickOutside);
+    }
+  }, [filterTypeDropdownOpen, actionDropdownOpen]);
 
   const handleAddNew = () => {
     const nextOrder = filters.length > 0
@@ -149,14 +175,14 @@ export const M3UFiltersModal = memo(function M3UFiltersModal({
 
   return (
     <div className="modal-overlay">
-      <div className="modal-content m3u-filters-modal" onClick={(e) => e.stopPropagation()}>
+      <div className="modal-container m3u-filters-modal" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
           <div className="header-info">
             <h2>Manage Filters</h2>
             <span className="account-name">{account.name}</span>
           </div>
-          <button className="close-btn" onClick={onClose}>
-            &times;
+          <button className="modal-close-btn" onClick={onClose}>
+            <span className="material-icons">close</span>
           </button>
         </div>
 
@@ -164,7 +190,7 @@ export const M3UFiltersModal = memo(function M3UFiltersModal({
           <p className="filter-help">
             Filters control which streams are imported from this M3U source.
           </p>
-          <button className="btn-primary btn-small" onClick={handleAddNew} disabled={editingFilter !== null}>
+          <button className="modal-btn modal-btn-primary btn-small" onClick={handleAddNew} disabled={editingFilter !== null}>
             <span className="material-icons">add</span>
             Add Filter
           </button>
@@ -184,36 +210,81 @@ export const M3UFiltersModal = memo(function M3UFiltersModal({
                   <h3>{isAddingNew ? 'Add Filter' : 'Edit Filter'}</h3>
 
                   <div className="form-row">
-                    <div className="form-group">
+                    <div className="modal-form-group">
                       <label>Filter Type</label>
-                      <select
-                        value={editingFilter.filter_type}
-                        onChange={(e) => setEditingFilter({
-                          ...editingFilter,
-                          filter_type: e.target.value as FilterType,
-                        })}
-                      >
-                        <option value="group">Group Name</option>
-                        <option value="name">Stream Name</option>
-                        <option value="url">Stream URL</option>
-                      </select>
+                      <div className="searchable-select-dropdown" ref={filterTypeDropdownRef}>
+                        <button
+                          type="button"
+                          className="dropdown-trigger"
+                          onClick={() => setFilterTypeDropdownOpen(!filterTypeDropdownOpen)}
+                        >
+                          <span className="dropdown-value">
+                            {getFilterTypeLabel(editingFilter.filter_type)}
+                          </span>
+                          <span className="material-icons">expand_more</span>
+                        </button>
+                        {filterTypeDropdownOpen && (
+                          <div className="dropdown-menu">
+                            <div className="dropdown-options">
+                              {(['group', 'name', 'url'] as FilterType[]).map((type) => (
+                                <div
+                                  key={type}
+                                  className={`dropdown-option-item${editingFilter.filter_type === type ? ' selected' : ''}`}
+                                  onClick={() => {
+                                    setEditingFilter({ ...editingFilter, filter_type: type });
+                                    setFilterTypeDropdownOpen(false);
+                                  }}
+                                >
+                                  {getFilterTypeLabel(type)}
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </div>
                     </div>
 
-                    <div className="form-group">
+                    <div className="modal-form-group">
                       <label>Action</label>
-                      <select
-                        value={editingFilter.exclude ? 'exclude' : 'include'}
-                        onChange={(e) => setEditingFilter({
-                          ...editingFilter,
-                          exclude: e.target.value === 'exclude',
-                        })}
-                      >
-                        <option value="exclude">Exclude matches</option>
-                        <option value="include">Include only matches</option>
-                      </select>
+                      <div className="searchable-select-dropdown" ref={actionDropdownRef}>
+                        <button
+                          type="button"
+                          className="dropdown-trigger"
+                          onClick={() => setActionDropdownOpen(!actionDropdownOpen)}
+                        >
+                          <span className="dropdown-value">
+                            {editingFilter.exclude ? 'Exclude matches' : 'Include only matches'}
+                          </span>
+                          <span className="material-icons">expand_more</span>
+                        </button>
+                        {actionDropdownOpen && (
+                          <div className="dropdown-menu">
+                            <div className="dropdown-options">
+                              <div
+                                className={`dropdown-option-item${editingFilter.exclude ? ' selected' : ''}`}
+                                onClick={() => {
+                                  setEditingFilter({ ...editingFilter, exclude: true });
+                                  setActionDropdownOpen(false);
+                                }}
+                              >
+                                Exclude matches
+                              </div>
+                              <div
+                                className={`dropdown-option-item${!editingFilter.exclude ? ' selected' : ''}`}
+                                onClick={() => {
+                                  setEditingFilter({ ...editingFilter, exclude: false });
+                                  setActionDropdownOpen(false);
+                                }}
+                              >
+                                Include only matches
+                              </div>
+                            </div>
+                          </div>
+                        )}
+                      </div>
                     </div>
 
-                    <div className="form-group">
+                    <div className="modal-form-group">
                       <label>Order</label>
                       <input
                         type="number"
@@ -227,7 +298,7 @@ export const M3UFiltersModal = memo(function M3UFiltersModal({
                     </div>
                   </div>
 
-                  <div className="form-group">
+                  <div className="modal-form-group">
                     <label>Regex Pattern</label>
                     <input
                       type="text"
@@ -245,10 +316,10 @@ export const M3UFiltersModal = memo(function M3UFiltersModal({
                   </div>
 
                   <div className="form-actions">
-                    <button className="btn-secondary" onClick={handleCancelEdit} disabled={saving}>
+                    <button className="modal-btn modal-btn-secondary" onClick={handleCancelEdit} disabled={saving}>
                       Cancel
                     </button>
-                    <button className="btn-primary" onClick={handleSaveFilter} disabled={saving}>
+                    <button className="modal-btn modal-btn-primary" onClick={handleSaveFilter} disabled={saving}>
                       {saving ? 'Saving...' : isAddingNew ? 'Create Filter' : 'Save Changes'}
                     </button>
                   </div>
@@ -315,12 +386,6 @@ export const M3UFiltersModal = memo(function M3UFiltersModal({
           )}
 
           {error && <div className="error-message">{error}</div>}
-        </div>
-
-        <div className="modal-footer">
-          <button className="btn-secondary" onClick={onClose}>
-            Close
-          </button>
         </div>
       </div>
     </div>
