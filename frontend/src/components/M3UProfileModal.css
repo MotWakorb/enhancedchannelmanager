@@ -1,58 +1,14 @@
-/* M3U Profile Modal Styles */
+/* M3U Profile Modal Styles
+   Component-specific styles - base modal styles are in ModalBase.css */
 
+/* Modal sizing - uses modal-lg (700px) from ModalBase.css */
 .m3u-profile-modal {
-  max-width: 800px;
   max-height: 85vh;
-  display: flex;
-  flex-direction: column;
 }
 
-.m3u-profile-modal .modal-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 1rem 1.5rem;
-  border-bottom: 1px solid var(--border-primary);
-}
-
-.m3u-profile-modal .modal-header h2 {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  margin: 0;
-  font-size: 1.25rem;
-  color: var(--text-primary);
-}
-
+/* Header icon color */
 .m3u-profile-modal .modal-header h2 .material-icons {
-  font-size: 24px;
   color: var(--accent-primary);
-}
-
-.m3u-profile-modal .modal-close {
-  background: none;
-  border: none;
-  padding: 0.25rem;
-  cursor: pointer;
-  color: var(--text-secondary);
-  border-radius: 4px;
-  transition: background-color 0.15s, color 0.15s;
-}
-
-.m3u-profile-modal .modal-close:hover {
-  background-color: var(--border-primary);
-  color: var(--text-primary);
-}
-
-.m3u-profile-modal .modal-close .material-icons {
-  font-size: 20px;
-}
-
-/* Modal Body */
-.m3u-profile-modal .modal-body {
-  flex: 1;
-  overflow-y: auto;
-  padding: 1.5rem;
 }
 
 /* Profiles List */
@@ -349,100 +305,6 @@
 .form-actions .button-group {
   display: flex;
   gap: 0.75rem;
-}
-
-.form-actions button {
-  padding: 0.625rem 1.25rem;
-  border: none;
-  border-radius: 6px;
-  font-size: 0.875rem;
-  font-weight: 500;
-  cursor: pointer;
-  transition: background-color 0.15s;
-}
-
-.form-actions .btn-secondary {
-  background-color: var(--border-primary);
-  color: var(--text-primary);
-}
-
-.form-actions .btn-secondary:hover:not(:disabled) {
-  background-color: var(--border-secondary);
-}
-
-.form-actions .btn-primary {
-  background-color: var(--button-primary-bg);
-  color: var(--button-primary-text);
-}
-
-.form-actions .btn-primary:hover:not(:disabled) {
-  opacity: 0.9;
-}
-
-.form-actions button:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-/* Empty State */
-.m3u-profile-modal .empty-state {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 0.75rem;
-  padding: 3rem 2rem;
-  color: var(--text-secondary);
-  text-align: center;
-}
-
-.m3u-profile-modal .empty-state .material-icons {
-  font-size: 64px;
-  color: var(--text-muted);
-}
-
-.m3u-profile-modal .empty-state p {
-  margin: 0;
-  font-size: 0.875rem;
-}
-
-/* Loading State */
-.m3u-profile-modal .loading-state {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 1rem;
-  padding: 3rem 2rem;
-  color: var(--text-secondary);
-}
-
-.m3u-profile-modal .loading-state .material-icons {
-  font-size: 48px;
-}
-
-.m3u-profile-modal .loading-state p {
-  margin: 0;
-  font-size: 0.875rem;
-}
-
-/* Error Message */
-.m3u-profile-modal .error-message {
-  display: flex;
-  align-items: flex-start;
-  gap: 0.5rem;
-  padding: 0.75rem 1rem;
-  margin-bottom: 1rem;
-  background-color: rgba(239, 68, 68, 0.15);
-  border: 1px solid rgba(239, 68, 68, 0.3);
-  border-radius: 6px;
-  color: var(--error);
-  font-size: 0.875rem;
-}
-
-.m3u-profile-modal .error-message .material-icons {
-  font-size: 18px;
-  margin-top: 0.125rem;
 }
 
 /* Responsive */
