@@ -1,0 +1,266 @@
+/* TaskEditorModal.css
+   Component-specific styles - base modal styles are in ModalBase.css */
+
+/* Task description box */
+.task-editor-modal .task-description {
+  background-color: var(--bg-secondary);
+  padding: 1rem;
+  border-radius: 6px;
+  margin-bottom: 1.5rem;
+  font-size: 0.9rem;
+  color: var(--text-secondary);
+}
+
+/* Enable task checkbox section */
+.task-editor-modal .enable-section {
+  margin-bottom: 1.5rem;
+}
+
+.task-editor-modal .enable-label {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  cursor: pointer;
+}
+
+.task-editor-modal .enable-label input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--accent-primary);
+}
+
+.task-editor-modal .enable-label span {
+  font-weight: 500;
+}
+
+.task-editor-modal .enable-hint {
+  margin-left: 2rem;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+/* Schedules section */
+.task-editor-modal .schedules-section {
+  margin-bottom: 1.5rem;
+}
+
+.task-editor-modal .schedules-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.75rem;
+}
+
+.task-editor-modal .schedules-header label {
+  font-weight: 500;
+}
+
+.task-editor-modal .add-schedule-btn {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.5rem 0.75rem;
+  border: none;
+  border-radius: 4px;
+  background-color: var(--button-primary-bg);
+  color: var(--button-primary-text);
+  cursor: pointer;
+  font-size: 0.85rem;
+}
+
+.task-editor-modal .add-schedule-btn:hover {
+  opacity: 0.9;
+}
+
+.task-editor-modal .add-schedule-btn .material-icons {
+  font-size: 16px;
+}
+
+/* Empty schedules state */
+.task-editor-modal .empty-schedules {
+  background-color: var(--bg-secondary);
+  padding: 2rem;
+  border-radius: 6px;
+  text-align: center;
+  color: var(--text-muted);
+}
+
+.task-editor-modal .empty-schedules .material-icons {
+  font-size: 32px;
+  margin-bottom: 0.5rem;
+  display: block;
+}
+
+.task-editor-modal .empty-schedules .hint {
+  font-size: 0.85rem;
+}
+
+/* Schedule list */
+.task-editor-modal .schedule-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.task-editor-modal .schedule-item {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem 1rem;
+  background-color: var(--bg-secondary);
+  border-radius: 6px;
+  border: 1px solid transparent;
+}
+
+.task-editor-modal .schedule-item.disabled {
+  border-color: var(--border-color);
+  opacity: 0.6;
+}
+
+.task-editor-modal .schedule-item input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--success);
+}
+
+.task-editor-modal .schedule-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.task-editor-modal .schedule-name {
+  font-weight: 500;
+  font-size: 0.9rem;
+}
+
+.task-editor-modal .schedule-description {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.task-editor-modal .schedule-next-run {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+
+.task-editor-modal .schedule-actions {
+  display: flex;
+  gap: 0.25rem;
+}
+
+.task-editor-modal .schedule-action-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0.25rem;
+  color: var(--text-secondary);
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.task-editor-modal .schedule-action-btn:hover {
+  background-color: var(--bg-tertiary);
+  color: var(--text-primary);
+}
+
+.task-editor-modal .schedule-action-btn.delete {
+  color: var(--error);
+}
+
+.task-editor-modal .schedule-action-btn.delete:hover {
+  background-color: rgba(239, 68, 68, 0.1);
+}
+
+.task-editor-modal .schedule-action-btn .material-icons {
+  font-size: 18px;
+}
+
+/* Task config section */
+.task-editor-modal .config-section {
+  background-color: var(--bg-secondary);
+  padding: 1rem;
+  border-radius: 6px;
+  margin-bottom: 1.5rem;
+}
+
+.task-editor-modal .config-section label.section-label {
+  display: block;
+  margin-bottom: 0.75rem;
+  font-weight: 500;
+}
+
+.task-editor-modal .config-hint {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  margin-bottom: 0.75rem;
+}
+
+.task-editor-modal .config-list {
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.task-editor-modal .config-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem;
+  cursor: pointer;
+  border-radius: 4px;
+}
+
+.task-editor-modal .config-checkbox:hover {
+  background-color: var(--bg-tertiary);
+}
+
+.task-editor-modal .config-checkbox input[type="checkbox"] {
+  accent-color: var(--accent-primary);
+}
+
+.task-editor-modal .config-checkbox .badge {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+/* Retention settings grid */
+.task-editor-modal .retention-grid {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.task-editor-modal .retention-item label {
+  display: block;
+  font-size: 0.85rem;
+  margin-bottom: 0.25rem;
+}
+
+.task-editor-modal .retention-item input[type="number"] {
+  width: 100px;
+  padding: 0.5rem;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
+}
+
+.task-editor-modal .retention-item input[type="number"]:focus {
+  outline: none;
+  border-color: var(--accent-primary);
+}
+
+/* Spinning animation */
+@keyframes task-editor-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.task-editor-modal .spinning {
+  animation: task-editor-spin 1s linear infinite;
+}
+
+/* Schedule editor nested modal */
+.schedule-editor-modal .modal-container {
+  max-width: 500px;
+}
