@@ -130,6 +130,12 @@ export interface Stream {
   custom_properties?: Record<string, unknown> | null;  // Extra M3U attributes like tvc-guide-stationid
 }
 
+// Stream group with count (returned by /api/stream-groups)
+export interface StreamGroupInfo {
+  name: string;
+  count: number;
+}
+
 // Stream probe statistics - metadata gathered via ffprobe
 export interface StreamStats {
   stream_id: number;
