@@ -106,8 +106,9 @@
   letter-spacing: normal;
 }
 
-.loading,
-.empty-state {
+/* .empty-state is defined in shared/common.css */
+/* Component-specific override for smaller padding */
+.loading {
   text-align: center;
   color: var(--text-muted);
   padding: 2rem 1rem;

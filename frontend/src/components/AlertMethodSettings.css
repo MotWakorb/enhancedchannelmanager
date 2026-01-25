@@ -329,24 +329,10 @@
   gap: 0.375rem;
 }
 
-.alert-method-settings .btn-primary {
-  padding: 0.625rem 1.25rem;
-  background-color: var(--button-primary-bg);
-  border: none;
-  border-radius: 6px;
-  color: var(--button-primary-text);
-  cursor: pointer;
-  font-size: 0.875rem;
-  font-weight: 500;
-}
-
-.alert-method-settings .btn-primary:hover {
-  filter: brightness(1.1);
-}
-
+/* .btn-primary is defined in shared/common.css */
+/* Override disabled opacity */
 .alert-method-settings .btn-primary:disabled {
   opacity: 0.6;
-  cursor: not-allowed;
 }
 
 /* .spinning is defined in shared/common.css */

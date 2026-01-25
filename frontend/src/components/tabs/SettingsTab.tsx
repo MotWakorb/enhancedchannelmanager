@@ -2670,27 +2670,27 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
 
       {showProbeResultsModal && probeResults && (
         <div
-          className="probe-results-modal-overlay"
+          className="modal-overlay"
           onClick={() => setShowProbeResultsModal(false)}
         >
           <div
-            className="probe-results-modal-content"
+            className="modal-container modal-lg probe-results-modal"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="probe-results-modal-header">
-              <h3 className={probeResultsType === 'success' ? 'success' : probeResultsType === 'skipped' ? 'skipped' : 'failed'}>
-                {probeResultsType === 'success' ? '✓ Successful Streams' : probeResultsType === 'skipped' ? '⊘ Skipped Streams' : '✗ Failed Streams'} (
+            <div className="modal-header">
+              <h2 className={probeResultsType === 'success' ? 'success' : probeResultsType === 'skipped' ? 'skipped' : 'failed'}>
+                {probeResultsType === 'success' ? 'Successful Streams' : probeResultsType === 'skipped' ? 'Skipped Streams' : 'Failed Streams'} (
                 {probeResultsType === 'success' ? probeResults.success_count : probeResultsType === 'skipped' ? probeResults.skipped_count : probeResults.failed_count})
-              </h3>
+              </h2>
               <button
                 onClick={() => setShowProbeResultsModal(false)}
-                className="probe-results-modal-close"
+                className="modal-close-btn"
               >
-                ×
+                <span className="material-icons">close</span>
               </button>
             </div>
 
-            <div className="probe-results-modal-body">
+            <div className="modal-body probe-results-body">
               {(() => {
                 const streams = probeResultsType === 'success'
                   ? probeResults.success_streams
@@ -2704,7 +2704,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                   : 'failed';
 
                 return streams.length === 0 ? (
-                  <div className="probe-results-empty">
+                  <div className="empty-state">
                     No {emptyText} streams yet
                   </div>
                 ) : (
@@ -2792,23 +2792,17 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
               })()}
             </div>
 
-            <div className="probe-results-modal-footer">
-              {probeResultsType === 'failed' && probeResults.failed_streams.length > 0 && (
+            {probeResultsType === 'failed' && probeResults.failed_streams.length > 0 && (
+              <div className="modal-footer">
                 <button
                   onClick={handleRerunFailed}
-                  className="probe-results-rerun-btn"
+                  className="btn-primary"
                   disabled={probingAll}
                 >
                   {probingAll ? 'Re-probing...' : 'Re-probe Failed Streams'}
                 </button>
-              )}
-              <button
-                onClick={() => setShowProbeResultsModal(false)}
-                className="probe-results-close-btn"
-              >
-                Close
-              </button>
-            </div>
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -2816,23 +2810,22 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       {/* Reordered Channels Modal */}
       {showReorderModal && reorderData && (
         <div
-          className="probe-results-modal-overlay"
+          className="modal-overlay"
           onClick={() => setShowReorderModal(false)}
         >
           <div
-            className="probe-results-modal-content"
+            className="modal-container modal-xl reorder-modal"
             onClick={(e) => e.stopPropagation()}
-            style={{ maxWidth: '900px' }}
           >
-            <div className="probe-results-modal-header">
-              <h3 style={{ color: '#3498db' }}>
-                ⇅ Reordered Channels ({reorderData.length})
-              </h3>
+            <div className="modal-header">
+              <h2>
+                Reordered Channels ({reorderData.length})
+              </h2>
               <button
                 onClick={() => setShowReorderModal(false)}
-                className="probe-results-modal-close"
+                className="modal-close-btn"
               >
-                ×
+                <span className="material-icons">close</span>
               </button>
             </div>
 
@@ -2863,9 +2856,9 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
               </div>
             )}
 
-            <div className="probe-results-modal-body">
+            <div className="modal-body reorder-body">
               {reorderData.length === 0 ? (
-                <div className="probe-results-empty">
+                <div className="empty-state">
                   No channels were reordered
                 </div>
               ) : (
@@ -2976,14 +2969,6 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
               )}
             </div>
 
-            <div className="probe-results-modal-footer">
-              <button
-                onClick={() => setShowReorderModal(false)}
-                className="probe-results-close-btn"
-              >
-                Close
-              </button>
-            </div>
           </div>
         </div>
       )}
@@ -2991,14 +2976,14 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       {/* Channel Group Selection Modal */}
       {showGroupSelectModal && (
         <div className="modal-overlay" onClick={() => setShowGroupSelectModal(false)}>
-          <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '500px' }}>
+          <div className="modal-container modal-md" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
-              <h3>Select Channel Groups to Probe</h3>
+              <h2>Select Channel Groups to Probe</h2>
               <button
                 onClick={() => setShowGroupSelectModal(false)}
-                className="probe-results-modal-close"
+                className="modal-close-btn"
               >
-                ×
+                <span className="material-icons">close</span>
               </button>
             </div>
 

@@ -45,51 +45,11 @@
   border-bottom: 1px solid var(--border-primary);
 }
 
-.search-box {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.5rem 0.75rem;
-  background-color: var(--bg-primary);
-  border: 1px solid var(--border-secondary);
-  border-radius: 6px;
+/* .search-box is defined in shared/common.css */
+/* Override for full width and primary background in this context */
+.m3u-groups-modal .search-box {
   width: 100%;
-}
-
-.search-box .material-icons {
-  font-size: 18px;
-  color: var(--text-muted);
-}
-
-.search-box input {
-  flex: 1;
-  border: none;
-  background: none;
-  color: var(--text-primary);
-  font-size: 0.875rem;
-  outline: none;
-}
-
-.search-box input::placeholder {
-  color: var(--text-muted);
-}
-
-.clear-search {
-  background: none;
-  border: none;
-  padding: 0;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  color: var(--text-muted);
-}
-
-.clear-search:hover {
-  color: var(--text-primary);
-}
-
-.clear-search .material-icons {
-  font-size: 16px;
+  background-color: var(--bg-primary);
 }
 
 .toolbar-actions {

@@ -4,6 +4,15 @@
  * This file defines consistent modal patterns for ECM.
  * To use: import this file and apply the appropriate classes.
  *
+ * RELATIONSHIP WITH shared/common.css:
+ * This file extends patterns from shared/common.css with modal-specific variations.
+ * - Animations: Uses @keyframes spin from common.css
+ * - Buttons: .modal-btn-* parallel .btn-* from common.css (modal-specific styling)
+ * - Forms: .modal-form-group parallels .form-group (modal-specific layout)
+ * - Loading: .modal-loading parallels .loading-state (modal-specific layout)
+ * - Empty: .modal-empty-state parallels .empty-state (modal-specific layout)
+ * - Errors: .modal-error-banner parallels .error-banner (same styling)
+ *
  * MIGRATION GUIDE:
  * 1. Import this CSS in your modal component
  * 2. Replace custom overlay class with "modal-overlay"
@@ -447,16 +456,8 @@
 
 .modal-loading .material-icons {
   font-size: 2rem;
-  animation: modal-spin 1s linear infinite reverse;
-}
-
-@keyframes modal-spin {
-  from {
-    transform: rotate(0deg);
-  }
-  to {
-    transform: rotate(360deg);
-  }
+  /* Uses @keyframes spin from shared/common.css */
+  animation: spin 1s linear infinite reverse;
 }
 
 
@@ -744,12 +745,7 @@
   background-color: var(--border-secondary, #3a3a5a);
 }
 
-/* Spinning animation for loading states in dropdowns */
-.dropdown-inline-input .spinning,
-.new-group-input .spinning,
-.logo-url-input .spinning {
-  animation: modal-spin 1s linear infinite reverse;
-}
+/* Spinning animation for loading states in dropdowns - uses .spinning from common.css */
 
 /* Dropdown actions (Select All/Clear All) */
 .dropdown-actions {
@@ -1317,13 +1313,9 @@
    SPINNING ANIMATION - For loading states (counter-clockwise)
    ============================================================================= */
 
-@keyframes modal-spin-ccw {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(-360deg); }
-}
-
+/* Modal spinning class - uses @keyframes spin from shared/common.css */
 .modal-spinning-ccw {
-  animation: modal-spin-ccw 1s linear infinite !important;
+  animation: spin 1s linear infinite reverse !important;
 }
 
 

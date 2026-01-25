@@ -384,28 +384,7 @@
   transition: background-color 0.15s, opacity 0.15s;
 }
 
-.modal-footer .btn-secondary {
-  background-color: var(--border-primary);
-  color: var(--text-primary);
-}
-
-.modal-footer .btn-secondary:hover:not(:disabled) {
-  background-color: var(--border-secondary);
-}
-
-.modal-footer .btn-primary {
-  background-color: var(--button-primary-bg);
-  color: var(--button-primary-text);
-}
-
-.modal-footer .btn-primary:hover:not(:disabled) {
-  background-color: var(--button-primary-bg);
-}
-
-.modal-footer button:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
+/* .btn-primary, .btn-secondary are defined in shared/common.css */
 
 /* Responsive */
 @media (max-width: 900px) {

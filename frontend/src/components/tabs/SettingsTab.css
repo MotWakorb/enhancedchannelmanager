@@ -1011,84 +1011,28 @@
   }
 }
 
-/* Probe Results Modal */
-.probe-results-modal-overlay {
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background-color: rgba(0, 0, 0, 0.7);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 1000;
-}
-
-.probe-results-modal-content {
-  background-color: var(--bg-secondary);
-  color: var(--text-primary);
-  border-radius: 8px;
-  padding: 2rem;
-  max-width: 600px;
-  max-height: 80vh;
-  width: 90%;
-  display: flex;
-  flex-direction: column;
-  border: 2px solid var(--border-primary);
-}
-
-.probe-results-modal-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 1rem;
-}
-
-.probe-results-modal-header h3 {
-  margin: 0;
-}
-
-.probe-results-modal-header h3.success {
+/* Probe Results Modal - uses ModalBase.css for base structure */
+/* Header title colors based on result type */
+.probe-results-modal .modal-header h2.success {
   color: var(--success);
 }
 
-.probe-results-modal-header h3.failed {
+.probe-results-modal .modal-header h2.failed {
   color: var(--error);
 }
 
-.probe-results-modal-header h3.skipped {
+.probe-results-modal .modal-header h2.skipped {
   color: #f39c12;
 }
 
-.probe-results-modal-close {
-  background: transparent;
-  border: none;
-  color: var(--text-primary);
-  font-size: 24px;
-  cursor: pointer;
-  padding: 0 0.5rem;
-}
-
-.probe-results-modal-close:hover {
-  color: var(--text-muted);
-}
-
-.probe-results-modal-body {
-  flex: 1;
-  overflow-y: auto;
-  margin-bottom: 1rem;
-  padding: 0.5rem;
+/* Body styling */
+.probe-results-body {
   background-color: var(--bg-primary);
   border-radius: 4px;
+  padding: 0.5rem;
 }
 
-.probe-results-empty {
-  padding: 1rem;
-  text-align: center;
-  color: var(--text-muted);
-}
-
+/* Results list */
 .probe-results-list {
   display: flex;
   flex-direction: column;
@@ -1133,37 +1077,11 @@
   color: var(--text-muted);
 }
 
-.probe-results-modal-footer {
-  display: flex;
-  gap: 1rem;
-  justify-content: flex-end;
-}
-
-.probe-results-rerun-btn {
-  padding: 0.5rem 1rem;
-  background-color: var(--error);
-  color: white;
-  border: none;
+/* Reorder Modal body */
+.reorder-body {
+  background-color: var(--bg-primary);
   border-radius: 4px;
-  cursor: pointer;
-  font-weight: bold;
-}
-
-.probe-results-rerun-btn:hover {
-  background-color: #dc2626;
-}
-
-.probe-results-close-btn {
-  padding: 0.5rem 1rem;
-  background-color: var(--border-primary);
-  color: var(--text-primary);
-  border: none;
-  border-radius: 4px;
-  cursor: pointer;
-}
-
-.probe-results-close-btn:hover {
-  background-color: var(--border-secondary);
+  padding: 0.5rem;
 }
 
 .probe-counter-link {

@@ -71,55 +71,10 @@
   align-items: center;
 }
 
-.search-box {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.5rem 0.75rem;
-  background-color: var(--input-bg);
-  border: 1px solid var(--border-secondary);
-  border-radius: 6px;
-  flex: 1;
+/* .search-box is defined in shared/common.css */
+/* Override for larger min-width in this context */
+.filters-bar .search-box {
   min-width: 250px;
-}
-
-.search-box .material-icons {
-  font-size: 18px;
-  color: var(--text-muted);
-}
-
-.search-box input {
-  flex: 1;
-  background: none;
-  border: none;
-  color: var(--text-primary);
-  font-size: 0.875rem;
-  outline: none;
-}
-
-.search-box input::placeholder {
-  color: var(--text-muted);
-}
-
-.search-box .clear-search {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: transparent;
-  border: none;
-  padding: 0.125rem;
-  cursor: pointer;
-  color: var(--text-secondary);
-  border-radius: 3px;
-}
-
-.search-box .clear-search:hover {
-  background: var(--bg-hover);
-  color: var(--text-primary);
-}
-
-.search-box .clear-search .material-icons {
-  font-size: 1rem;
 }
 
 /* CustomSelect in filter bar - compact plain text */
