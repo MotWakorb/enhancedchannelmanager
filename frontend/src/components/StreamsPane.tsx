@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import type { Stream, M3UAccount, ChannelGroup, ChannelProfile, M3UGroupSetting } from '../types';
+import type { Stream, StreamGroupInfo, M3UAccount, ChannelGroup, ChannelProfile, M3UGroupSetting } from '../types';
 import { useSelection, useExpandCollapse } from '../hooks';
 import { normalizeStreamName, detectRegionalVariants, filterStreamsByTimezone, detectCountryPrefixes, getUniqueCountryPrefixes, detectNetworkPrefixes, detectNetworkSuffixes, type TimezonePreference, type NormalizeOptions, type NumberSeparator, type PrefixOrder, type NormalizationSettings } from '../services/api';
 import { naturalCompare } from '../utils/naturalSort';
@@ -38,7 +38,7 @@ export interface ChannelDefaults {
 interface StreamsPaneProps {
   streams: Stream[];
   providers: M3UAccount[];
-  streamGroups: string[];
+  streamGroups: StreamGroupInfo[];
   searchTerm: string;
   onSearchChange: (term: string) => void;
   providerFilter: number | null;
@@ -207,6 +207,16 @@ export function StreamsPane({
   // Shared memoized grouping logic to avoid duplication
   // Groups and sorts streams, then returns sorted entries
   // When searching: only show groups with matching streams
+  // Create a map of group name -> count from the API-provided stream groups
+  // This is used to display counts even before streams are lazy-loaded
+  const streamGroupCounts = useMemo((): Map<string, number> => {
+    const counts = new Map<string, number>();
+    streamGroups.forEach((groupInfo) => {
+      counts.set(groupInfo.name, groupInfo.count);
+    });
+    return counts;
+  }, [streamGroups]);
+
   // When not searching: show all groups for lazy loading
   const sortedStreamGroups = useMemo((): [string, Stream[]][] => {
     const groups = new Map<string, Stream[]>();
@@ -216,9 +226,9 @@ export function StreamsPane({
     // This ensures all groups are visible even before their streams are loaded (lazy loading)
     // When searching, skip this - only show groups that have matching streams
     if (!isSearching) {
-      streamGroups.forEach((groupName) => {
-        if (!hideUngroupedStreams || groupName !== 'Ungrouped') {
-          groups.set(groupName, []);
+      streamGroups.forEach((groupInfo) => {
+        if (!hideUngroupedStreams || groupInfo.name !== 'Ungrouped') {
+          groups.set(groupInfo.name, []);
         }
       });
     }
@@ -478,11 +488,9 @@ export function StreamsPane({
         // Custom drag image showing multi-group info
         const dragEl = document.createElement('div');
         dragEl.className = 'drag-preview';
-        const totalStreams = selectedGroupsList.reduce((sum, g) => sum + g.streams.length, 0);
-        const hasUnloadedGroups = selectedGroupsList.some(g => g.streams.length === 0);
-        // Show "Loading..." if any groups haven't had their streams loaded yet
-        const streamCountText = hasUnloadedGroups ? 'Loading...' : `${totalStreams} streams`;
-        dragEl.textContent = `${selectedGroupsList.length} groups (${streamCountText})`;
+        // Use API counts for accurate display even before streams are loaded
+        const totalStreams = selectedGroupsList.reduce((sum, g) => sum + (streamGroupCounts.get(g.name) ?? g.streams.length), 0);
+        dragEl.textContent = `${selectedGroupsList.length} groups (${totalStreams} streams)`;
         dragEl.style.cssText = `
           position: absolute;
           top: -1000px;
@@ -503,9 +511,9 @@ export function StreamsPane({
         // Custom drag image showing group info
         const dragEl = document.createElement('div');
         dragEl.className = 'drag-preview';
-        // Show "Loading..." if streams haven't been loaded yet
-        const streamCountText = group.streams.length === 0 ? 'Loading...' : `${group.streams.length} streams`;
-        dragEl.textContent = `${group.name} (${streamCountText})`;
+        // Use API count for accurate display even before streams are loaded
+        const streamCount = streamGroupCounts.get(group.name) ?? group.streams.length;
+        dragEl.textContent = `${group.name} (${streamCount} streams)`;
         dragEl.style.cssText = `
           position: absolute;
           top: -1000px;
@@ -1491,9 +1499,9 @@ export function StreamsPane({
                       className="filter-dropdown-action"
                       onClick={() => {
                         // Select all visible (filtered) groups
-                        const filteredGroups = streamGroups.filter(g =>
-                          g.toLowerCase().includes(groupSearchFilter.toLowerCase())
-                        );
+                        const filteredGroups = streamGroups
+                          .filter(g => g.name.toLowerCase().includes(groupSearchFilter.toLowerCase()))
+                          .map(g => g.name);
                         const newSelection = [...new Set([...selectedStreamGroups, ...filteredGroups])];
                         onSelectedStreamGroupsChange!(newSelection);
                       }}
@@ -1505,9 +1513,9 @@ export function StreamsPane({
                       onClick={() => {
                         if (groupSearchFilter) {
                           // Clear only visible (filtered) groups
-                          const filteredGroups = streamGroups.filter(g =>
-                            g.toLowerCase().includes(groupSearchFilter.toLowerCase())
-                          );
+                          const filteredGroups = streamGroups
+                            .filter(g => g.name.toLowerCase().includes(groupSearchFilter.toLowerCase()))
+                            .map(g => g.name);
                           onSelectedStreamGroupsChange!(
                             selectedStreamGroups.filter(g => !filteredGroups.includes(g))
                           );
@@ -1521,24 +1529,24 @@ export function StreamsPane({
                   </div>
                   <div className="filter-dropdown-options">
                     {streamGroups
-                      .filter(group => group.toLowerCase().includes(groupSearchFilter.toLowerCase()))
-                      .map((group) => (
-                        <label key={group} className="filter-dropdown-option">
+                      .filter(groupInfo => groupInfo.name.toLowerCase().includes(groupSearchFilter.toLowerCase()))
+                      .map((groupInfo) => (
+                        <label key={groupInfo.name} className="filter-dropdown-option">
                           <input
                             type="checkbox"
-                            checked={selectedStreamGroups.includes(group)}
+                            checked={selectedStreamGroups.includes(groupInfo.name)}
                             onChange={(e) => {
                               if (e.target.checked) {
-                                onSelectedStreamGroupsChange!([...selectedStreamGroups, group]);
+                                onSelectedStreamGroupsChange!([...selectedStreamGroups, groupInfo.name]);
                               } else {
-                                onSelectedStreamGroupsChange!(selectedStreamGroups.filter((g) => g !== group));
+                                onSelectedStreamGroupsChange!(selectedStreamGroups.filter((g) => g !== groupInfo.name));
                               }
                             }}
                           />
-                          <span className="filter-option-name">{group}</span>
+                          <span className="filter-option-name">{groupInfo.name}</span>
                         </label>
                       ))}
-                    {streamGroups.filter(group => group.toLowerCase().includes(groupSearchFilter.toLowerCase())).length === 0 && (
+                    {streamGroups.filter(groupInfo => groupInfo.name.toLowerCase().includes(groupSearchFilter.toLowerCase())).length === 0 && (
                       <div className="filter-dropdown-empty">No groups match "{groupSearchFilter}"</div>
                     )}
                   </div>
@@ -1554,9 +1562,9 @@ export function StreamsPane({
               searchPlaceholder="Search groups..."
               options={[
                 { value: '', label: 'All Groups' },
-                ...streamGroups.map((group) => ({
-                  value: group,
-                  label: group,
+                ...streamGroups.map((groupInfo) => ({
+                  value: groupInfo.name,
+                  label: groupInfo.name,
                 })),
               ]}
             />
@@ -1638,7 +1646,7 @@ export function StreamsPane({
                     )}
                     <span className="expand-icon">{group.expanded ? '▼︎' : '▶︎'}</span>
                     <span className="group-name">{group.name}</span>
-                    <span className="group-count">{group.streams.length}</span>
+                    <span className="group-count">{streamGroupCounts.get(group.name) ?? group.streams.length}</span>
                     {isEditMode && onBulkCreateFromGroup && (
                       <button
                         className="bulk-create-btn"
@@ -1903,7 +1911,7 @@ export function StreamsPane({
                           const existingGroup = channelGroups.find(g => g.name === customName);
                           return (
                             <div key={group.name} className="group-name-row">
-                              <span className="group-stream-count">{group.streams.length}</span>
+                              <span className="group-stream-count">{streamGroupCounts.get(group.name) ?? group.streams.length}</span>
                               <input
                                 type="text"
                                 value={customName}

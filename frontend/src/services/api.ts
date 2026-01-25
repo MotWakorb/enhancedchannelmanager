@@ -3,6 +3,7 @@ import type {
   ChannelGroup,
   ChannelProfile,
   Stream,
+  StreamGroupInfo,
   M3UAccount,
   M3UAccountProfile,
   M3UAccountCreateRequest,
@@ -392,7 +393,7 @@ export async function getStreams(params?: {
   return fetchJson(`${API_BASE}/streams${query}`, { signal: params?.signal });
 }
 
-export async function getStreamGroups(bypassCache?: boolean): Promise<string[]> {
+export async function getStreamGroups(bypassCache?: boolean): Promise<StreamGroupInfo[]> {
   const params = bypassCache ? '?bypass_cache=true' : '';
   return fetchJson(`${API_BASE}/stream-groups${params}`);
 }
