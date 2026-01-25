@@ -41,6 +41,44 @@ const SORT_CRITERION_CONFIG: Record<SortCriterion, { icon: string; label: string
   audio_channels: { icon: 'surround_sound', label: 'Audio Channels', description: '5.1 > Stereo > Mono' },
 };
 
+// All known sort criteria - used to merge new criteria into saved settings
+const ALL_SORT_CRITERIA: SortCriterion[] = ['resolution', 'bitrate', 'framerate', 'm3u_priority', 'audio_channels'];
+
+// Default enabled state for each criterion
+const DEFAULT_SORT_ENABLED: SortEnabledMap = {
+  resolution: true,
+  bitrate: true,
+  framerate: true,
+  m3u_priority: false,
+  audio_channels: false,
+};
+
+// Merge saved sort criteria with any new criteria that may have been added
+// Preserves saved order and enabled state, appends new criteria at end (disabled)
+function mergeSortCriteria(
+  savedPriority: SortCriterion[] | undefined,
+  savedEnabled: SortEnabledMap | undefined
+): { priority: SortCriterion[]; enabled: SortEnabledMap } {
+  if (!savedPriority || savedPriority.length === 0) {
+    return { priority: ALL_SORT_CRITERIA, enabled: DEFAULT_SORT_ENABLED };
+  }
+
+  // Start with saved criteria in their saved order
+  const priority = [...savedPriority];
+  const enabled = { ...DEFAULT_SORT_ENABLED, ...savedEnabled };
+
+  // Add any new criteria that aren't in the saved list
+  for (const criterion of ALL_SORT_CRITERIA) {
+    if (!priority.includes(criterion)) {
+      priority.push(criterion);
+      // New criteria default to disabled
+      enabled[criterion] = false;
+    }
+  }
+
+  return { priority, enabled };
+}
+
 // Sortable item component for drag-and-drop
 function SortablePriorityItem({
   id,
@@ -605,8 +643,10 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       setAutoReorderAfterProbe(settings.auto_reorder_after_probe ?? false);
       setOriginalAutoReorder(settings.auto_reorder_after_probe ?? false);
       setStreamFetchPageLimit(settings.stream_fetch_page_limit ?? 200);
-      setStreamSortPriority(settings.stream_sort_priority ?? ['resolution', 'bitrate', 'framerate', 'm3u_priority', 'audio_channels']);
-      setStreamSortEnabled(settings.stream_sort_enabled ?? { resolution: true, bitrate: true, framerate: true, m3u_priority: false, audio_channels: false });
+      // Merge saved criteria with any new criteria that may have been added in updates
+      const merged = mergeSortCriteria(settings.stream_sort_priority, settings.stream_sort_enabled);
+      setStreamSortPriority(merged.priority);
+      setStreamSortEnabled(merged.enabled);
       setDeprioritizeFailedStreams(settings.deprioritize_failed_streams ?? true);
       setNeedsRestart(false);
       setRestartResult(null);
