@@ -128,99 +128,10 @@
   font-size: 18px;
 }
 
-/* Loading State */
-.loading-state {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 1rem;
-  height: 200px;
-  color: var(--text-secondary);
-}
-
-.loading-state .material-icons {
-  font-size: 48px;
-}
-
+/* .loading-state is defined in shared/common.css */
 /* .spinning is defined in shared/common.css */
-
-/* Empty State */
-.empty-state {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 1rem;
-  padding: 4rem 2rem;
-  background-color: var(--bg-primary);
-  border-radius: 8px;
-  border: 1px dashed #444;
-  text-align: center;
-}
-
-.empty-state .material-icons {
-  font-size: 64px;
-  color: var(--text-muted);
-}
-
-.empty-state h3 {
-  margin: 0;
-  font-size: 1.25rem;
-  color: var(--text-primary);
-}
-
-.empty-state p {
-  margin: 0;
-  color: var(--text-secondary);
-}
-
-.empty-state .btn-primary {
-  display: flex;
-  align-items: center;
-  gap: 0.375rem;
-  padding: 0.625rem 1.25rem;
-  background-color: var(--button-primary-bg);
-  color: var(--button-primary-text);
-  border: none;
-  border-radius: 6px;
-  font-size: 0.875rem;
-  font-weight: 500;
-  cursor: pointer;
-  margin-top: 0.5rem;
-}
-
-.empty-state .btn-primary:hover {
-  opacity: 0.9;
-}
-
-/* Error Banner */
-.error-banner {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.75rem 1rem;
-  background-color: rgba(239, 68, 68, 0.15);
-  border: 1px solid rgba(239, 68, 68, 0.3);
-  border-radius: 6px;
-  color: var(--error);
-  margin-bottom: 1rem;
-}
-
-.error-banner .material-icons {
-  font-size: 20px;
-}
-
-.error-banner button {
-  margin-left: auto;
-  background: none;
-  border: none;
-  color: var(--error);
-  font-size: 1.25rem;
-  cursor: pointer;
-  padding: 0;
-  line-height: 1;
-}
+/* .empty-state is defined in shared/common.css */
+/* .error-banner is defined in shared/common.css */
 
 /* Logos List Container */
 .logos-container {

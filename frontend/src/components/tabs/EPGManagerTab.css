@@ -34,99 +34,10 @@
 
 /* .btn-primary, .btn-secondary are defined in shared/common.css */
 
-/* Loading State */
-.loading-state {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 1rem;
-  height: 200px;
-  color: var(--text-secondary);
-}
-
-.loading-state .material-icons {
-  font-size: 48px;
-}
-
+/* .loading-state is defined in shared/common.css */
 /* .spinning is defined in shared/common.css */
-
-/* Empty State */
-.empty-state {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 1rem;
-  padding: 4rem 2rem;
-  background-color: var(--bg-primary);
-  border-radius: 8px;
-  border: 1px dashed #444;
-  text-align: center;
-}
-
-.empty-state .material-icons {
-  font-size: 64px;
-  color: var(--text-muted);
-}
-
-.empty-state h3 {
-  margin: 0;
-  font-size: 1.25rem;
-  color: var(--text-primary);
-}
-
-.empty-state p {
-  margin: 0;
-  color: var(--text-secondary);
-}
-
-.empty-state .btn-primary {
-  display: flex;
-  align-items: center;
-  gap: 0.375rem;
-  padding: 0.625rem 1.25rem;
-  background-color: var(--button-primary-bg);
-  color: var(--button-primary-text);
-  border: none;
-  border-radius: 6px;
-  font-size: 0.875rem;
-  font-weight: 500;
-  cursor: pointer;
-  margin-top: 0.5rem;
-}
-
-.empty-state .btn-primary:hover {
-  background-color: var(--button-primary-bg);
-}
-
-/* Error Banner */
-.error-banner {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.75rem 1rem;
-  background-color: rgba(239, 68, 68, 0.15);
-  border: 1px solid rgba(239, 68, 68, 0.3);
-  border-radius: 6px;
-  color: var(--error);
-  margin-bottom: 1rem;
-}
-
-.error-banner .material-icons {
-  font-size: 20px;
-}
-
-.error-banner button {
-  margin-left: auto;
-  background: none;
-  border: none;
-  color: var(--error);
-  font-size: 1.25rem;
-  cursor: pointer;
-  padding: 0;
-  line-height: 1;
-}
+/* .empty-state is defined in shared/common.css */
+/* .error-banner is defined in shared/common.css */
 
 /* EPG Sources List */
 .epg-sources-list {
@@ -242,29 +153,7 @@
   font-style: italic;
 }
 
-.status-success {
-  color: var(--success);
-}
-
-.status-error {
-  color: var(--error);
-}
-
-.status-pending {
-  color: var(--warning);
-}
-
-.status-pending .spinning {
-  animation: spin 1s linear infinite reverse;
-}
-
-.status-disabled {
-  color: var(--text-muted);
-}
-
-.status-idle {
-  color: var(--text-secondary);
-}
+/* .status-success, .status-error, .status-pending, .status-disabled, .status-idle are defined in shared/common.css */
 
 .source-info {
   min-width: 0;
@@ -441,59 +330,7 @@
   overflow-y: auto;
 }
 
-.form-group {
-  margin-bottom: 1rem;
-}
-
-.form-group:last-child {
-  margin-bottom: 0;
-}
-
-.form-group label {
-  display: block;
-  margin-bottom: 0.375rem;
-  font-size: 0.875rem;
-  font-weight: 500;
-  color: var(--button-text);
-}
-
-.form-group input[type="text"],
-.form-group input[type="url"],
-.form-group input[type="password"],
-.form-group input[type="number"],
-.form-group select {
-  width: 100%;
-  padding: 0.625rem 0.75rem;
-  border: 1px solid var(--border-secondary);
-  border-radius: 6px;
-  background-color: var(--input-bg);
-  color: var(--text-primary);
-  font-size: 0.875rem;
-  transition: border-color 0.15s, box-shadow 0.15s;
-}
-
-.form-group input:focus,
-.form-group select:focus {
-  outline: none;
-  border-color: var(--accent-primary);
-  box-shadow: 0 0 0 2px rgba(100, 108, 255, 0.2);
-}
-
-.form-group input::placeholder {
-  color: var(--text-muted);
-}
-
-.form-group input:disabled,
-.form-group select:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.form-hint {
-  font-size: 0.75rem;
-  color: var(--text-muted);
-  margin-top: 0.25rem;
-}
+/* .form-group and .form-hint are defined in shared/common.css */
 
 .form-row {
   display: grid;

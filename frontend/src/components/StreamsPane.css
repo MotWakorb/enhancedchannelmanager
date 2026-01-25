@@ -877,34 +877,17 @@ button.group-selection-checkbox {
   font-style: italic;
 }
 
-.form-group {
+/* .form-group, .form-input, .form-select are defined in shared/common.css */
+
+/* Streams-specific form override */
+.bulk-create-modal .form-group {
   margin-bottom: 1.25rem;
 }
 
-.form-group > label {
-  display: block;
+.bulk-create-modal .form-group > label {
   font-size: 0.85rem;
   color: var(--text-secondary);
   margin-bottom: 0.5rem;
-  font-weight: 500;
-}
-
-.form-input,
-.form-select {
-  width: 100%;
-  padding: 0.625rem 0.75rem;
-  background-color: var(--input-bg);
-  border: 1px solid var(--border-secondary);
-  border-radius: 6px;
-  color: var(--text-primary);
-  font-size: 0.9rem;
-  box-sizing: border-box;
-}
-
-.form-input:focus,
-.form-select:focus {
-  outline: none;
-  border-color: var(--accent-primary);
 }
 
 .number-range-preview {

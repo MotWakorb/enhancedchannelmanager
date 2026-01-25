@@ -442,10 +442,10 @@
 
 /* .spinning is defined in shared/common.css */
 
-/* Form Hint */
+/* .form-hint is defined in shared/common.css */
+/* Override for slightly larger font size in this context */
 .alert-method-settings .form-hint {
   font-size: 0.8rem;
-  color: var(--text-muted);
   margin-top: 0.375rem;
 }
 
