@@ -946,16 +946,21 @@ export function ChannelsPane({
         return;
       }
 
-      // In edit mode, use the local streams list to avoid API calls for staged changes
+      // In edit mode, try to use local streams list first to avoid API calls for staged changes
       if (isEditMode) {
         const orderedStreams = selectedChannel.streams
           .map((id) => allStreams.find((s) => s.id === id))
           .filter((s): s is Stream => s !== undefined);
-        setChannelStreams(orderedStreams);
-        return;
+
+        // If all streams were found in allStreams, use them
+        if (orderedStreams.length === selectedChannel.streams.length) {
+          setChannelStreams(orderedStreams);
+          return;
+        }
+        // Otherwise fall through to API fetch - streams may be filtered out in StreamsPane
       }
 
-      // Normal mode - fetch from API
+      // Fetch from API (view mode, or edit mode when streams not in allStreams)
       setStreamsLoading(true);
       try {
         const streamDetails = await api.getChannelStreams(selectedChannelId);
