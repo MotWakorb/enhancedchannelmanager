@@ -24,6 +24,7 @@ def create_mock_stats(
     stream_name: str = None,
     resolution: str = "1920x1080",
     bitrate: int = 5000000,
+    video_bitrate: int = None,
     fps: str = "30",
     audio_channels: int = 2,
     probe_status: str = "success"
@@ -34,6 +35,7 @@ def create_mock_stats(
     stats.stream_name = stream_name or f"Stream {stream_id}"
     stats.resolution = resolution
     stats.bitrate = bitrate
+    stats.video_bitrate = video_bitrate  # Add video_bitrate field
     stats.fps = fps
     stats.audio_channels = audio_channels
     stats.probe_status = probe_status
