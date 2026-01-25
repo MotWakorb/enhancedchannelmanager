@@ -933,6 +933,8 @@ export function ChannelsPane({
   }, [logos]);
 
   // Load streams when a channel is selected
+  // Always fetch from API to ensure we have the correct streams regardless of
+  // what's loaded in StreamsPane (which uses lazy loading and filtering)
   useEffect(() => {
     const loadStreams = async () => {
       if (!selectedChannelId) {
@@ -946,21 +948,7 @@ export function ChannelsPane({
         return;
       }
 
-      // In edit mode, try to use local streams list first to avoid API calls for staged changes
-      if (isEditMode) {
-        const orderedStreams = selectedChannel.streams
-          .map((id) => allStreams.find((s) => s.id === id))
-          .filter((s): s is Stream => s !== undefined);
-
-        // If all streams were found in allStreams, use them
-        if (orderedStreams.length === selectedChannel.streams.length) {
-          setChannelStreams(orderedStreams);
-          return;
-        }
-        // Otherwise fall through to API fetch - streams may be filtered out in StreamsPane
-      }
-
-      // Fetch from API (view mode, or edit mode when streams not in allStreams)
+      // Fetch from API
       setStreamsLoading(true);
       try {
         const streamDetails = await api.getChannelStreams(selectedChannelId);
@@ -976,7 +964,7 @@ export function ChannelsPane({
       }
     };
     loadStreams();
-  }, [selectedChannelId, channels, isEditMode, allStreams]);
+  }, [selectedChannelId, channels]);
 
   // Fetch stream stats when channelStreams changes
   useEffect(() => {
