@@ -176,7 +176,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
     if (!normalizationPreviewInput.trim()) return '';
     return normalizeStreamName(normalizationPreviewInput, {
       timezonePreference: 'both',
-      stripCountryPrefix: false, // Handled by normalization tags
+      stripCountryPrefix: true, // Enable tag-based country stripping (keepCountryPrefix overrides if true)
       keepCountryPrefix: includeCountryInName,
       countrySeparator: countrySeparator as '-' | ':' | '|',
       stripNetworkPrefix: true,
