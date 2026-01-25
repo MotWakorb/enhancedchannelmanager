@@ -5156,7 +5156,7 @@ async def probe_bulk_streams(request: BulkProbeRequest):
             if stream:
                 logger.debug(f"Probing stream {stream_id}")
                 result = await prober.probe_stream(
-                    stream_id, stream.get("url"), stream.get("name")
+                    stream_id, stream.get("url"), stream.get("name"), stream.get("m3u_account")
                 )
                 results.append(result)
                 await asyncio.sleep(0.5)  # Rate limiting
@@ -5405,7 +5405,7 @@ async def probe_single_stream(stream_id: int):
 
         logger.info(f"Probing single stream {stream_id}")
         result = await prober.probe_stream(
-            stream_id, stream.get("url"), stream.get("name")
+            stream_id, stream.get("url"), stream.get("name"), stream.get("m3u_account")
         )
         logger.info(f"Single stream probe completed for {stream_id}")
         return result
