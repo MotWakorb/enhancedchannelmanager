@@ -26,7 +26,6 @@ def create_mock_stats(
     bitrate: int = 5000000,
     fps: str = "30",
     audio_channels: int = 2,
-    m3u_account_id: int = None,
     probe_status: str = "success"
 ) -> StreamStats:
     """Create a mock StreamStats object for testing."""
@@ -37,7 +36,6 @@ def create_mock_stats(
     stats.bitrate = bitrate
     stats.fps = fps
     stats.audio_channels = audio_channels
-    stats.m3u_account_id = m3u_account_id
     stats.probe_status = probe_status
     return stats
 
@@ -73,12 +71,15 @@ class TestM3UPrioritySorting:
 
         # Create stats for streams from different M3U accounts
         stats_map = {
-            1: create_mock_stats(1, m3u_account_id=3),  # priority 10
-            2: create_mock_stats(2, m3u_account_id=1),  # priority 100
-            3: create_mock_stats(3, m3u_account_id=2),  # priority 50
+            1: create_mock_stats(1),  # M3U account 3, priority 10
+            2: create_mock_stats(2),  # M3U account 1, priority 100
+            3: create_mock_stats(3),  # M3U account 2, priority 50
         }
 
-        sorted_ids = prober._smart_sort_streams([1, 2, 3], stats_map, "Test Channel")
+        # Map stream IDs to M3U accounts
+        stream_m3u_map = {1: 3, 2: 1, 3: 2}
+
+        sorted_ids = prober._smart_sort_streams([1, 2, 3], stats_map, stream_m3u_map, "Test Channel")
 
         # Should be sorted by priority: 100 > 50 > 10
         assert sorted_ids == [2, 3, 1]
@@ -92,11 +93,13 @@ class TestM3UPrioritySorting:
         )
 
         stats_map = {
-            1: create_mock_stats(1, m3u_account_id=1),   # priority 100
-            2: create_mock_stats(2, m3u_account_id=99),  # unknown, priority 0
+            1: create_mock_stats(1),   # M3U account 1, priority 100
+            2: create_mock_stats(2),  # M3U account 99, unknown, priority 0
         }
 
-        sorted_ids = prober._smart_sort_streams([1, 2], stats_map, "Test Channel")
+        stream_m3u_map = {1: 1, 2: 99}
+
+        sorted_ids = prober._smart_sort_streams([1, 2], stats_map, stream_m3u_map, "Test Channel")
 
         # Known M3U first
         assert sorted_ids == [1, 2]
@@ -110,11 +113,13 @@ class TestM3UPrioritySorting:
         )
 
         stats_map = {
-            1: create_mock_stats(1, m3u_account_id=1),     # priority 100
-            2: create_mock_stats(2, m3u_account_id=None),  # no M3U, priority 0
+            1: create_mock_stats(1),     # M3U account 1, priority 100
+            2: create_mock_stats(2),  # no M3U account, priority 0
         }
 
-        sorted_ids = prober._smart_sort_streams([1, 2], stats_map, "Test Channel")
+        stream_m3u_map = {1: 1, 2: None}
+
+        sorted_ids = prober._smart_sort_streams([1, 2], stats_map, stream_m3u_map, "Test Channel")
 
         assert sorted_ids == [1, 2]
 
@@ -128,11 +133,13 @@ class TestM3UPrioritySorting:
 
         # Different M3U priorities but same resolution
         stats_map = {
-            1: create_mock_stats(1, m3u_account_id=2, resolution="1920x1080"),  # low M3U priority
-            2: create_mock_stats(2, m3u_account_id=1, resolution="1280x720"),   # high M3U priority but low res
+            1: create_mock_stats(1, resolution="1920x1080"),  # M3U account 2, low M3U priority
+            2: create_mock_stats(2, resolution="1280x720"),   # M3U account 1, high M3U priority but low res
         }
 
-        sorted_ids = prober._smart_sort_streams([1, 2], stats_map, "Test Channel")
+        stream_m3u_map = {1: 2, 2: 1}
+
+        sorted_ids = prober._smart_sort_streams([1, 2], stats_map, stream_m3u_map, "Test Channel")
 
         # Should sort by resolution only (m3u_priority disabled)
         assert sorted_ids == [1, 2]
@@ -146,11 +153,13 @@ class TestM3UPrioritySorting:
         )
 
         stats_map = {
-            1: create_mock_stats(1, m3u_account_id=1),
-            2: create_mock_stats(2, m3u_account_id=2),
+            1: create_mock_stats(1),
+            2: create_mock_stats(2),
         }
 
-        sorted_ids = prober._smart_sort_streams([1, 2], stats_map, "Test Channel")
+        stream_m3u_map = {1: 1, 2: 2}
+
+        sorted_ids = prober._smart_sort_streams([1, 2], stats_map, stream_m3u_map, "Test Channel")
 
         # All same priority, original order preserved
         assert sorted_ids == [1, 2]
@@ -172,7 +181,7 @@ class TestAudioChannelsSorting:
             3: create_mock_stats(3, audio_channels=1),  # mono
         }
 
-        sorted_ids = prober._smart_sort_streams([1, 2, 3], stats_map, "Test Channel")
+        sorted_ids = prober._smart_sort_streams([1, 2, 3], stats_map, {}, "Test Channel")
 
         # Should be sorted: 6ch > 2ch > 1ch
         assert sorted_ids == [2, 1, 3]
@@ -189,7 +198,7 @@ class TestAudioChannelsSorting:
             2: create_mock_stats(2, audio_channels=2),
         }
 
-        sorted_ids = prober._smart_sort_streams([1, 2], stats_map, "Test Channel")
+        sorted_ids = prober._smart_sort_streams([1, 2], stats_map, {}, "Test Channel")
 
         assert sorted_ids == [2, 1]
 
@@ -205,7 +214,7 @@ class TestAudioChannelsSorting:
             2: create_mock_stats(2, audio_channels=2, bitrate=5000000),
         }
 
-        sorted_ids = prober._smart_sort_streams([1, 2], stats_map, "Test Channel")
+        sorted_ids = prober._smart_sort_streams([1, 2], stats_map, {}, "Test Channel")
 
         # Should sort by bitrate only
         assert sorted_ids == [2, 1]
@@ -222,7 +231,7 @@ class TestAudioChannelsSorting:
             2: create_mock_stats(2, audio_channels=8),  # 7.1
         }
 
-        sorted_ids = prober._smart_sort_streams([1, 2], stats_map, "Test Channel")
+        sorted_ids = prober._smart_sort_streams([1, 2], stats_map, {}, "Test Channel")
 
         assert sorted_ids == [2, 1]
 
@@ -239,11 +248,13 @@ class TestCombinedCriteria:
         )
 
         stats_map = {
-            1: create_mock_stats(1, resolution="1920x1080", m3u_account_id=2),  # same res, low M3U
-            2: create_mock_stats(2, resolution="1920x1080", m3u_account_id=1),  # same res, high M3U
+            1: create_mock_stats(1, resolution="1920x1080"),  # same res, M3U account 2, low M3U priority
+            2: create_mock_stats(2, resolution="1920x1080"),  # same res, M3U account 1, high M3U priority
         }
 
-        sorted_ids = prober._smart_sort_streams([1, 2], stats_map, "Test Channel")
+        stream_m3u_map = {1: 2, 2: 1}
+
+        sorted_ids = prober._smart_sort_streams([1, 2], stats_map, stream_m3u_map, "Test Channel")
 
         # Same resolution, so M3U priority decides
         assert sorted_ids == [2, 1]
@@ -260,7 +271,7 @@ class TestCombinedCriteria:
             2: create_mock_stats(2, resolution="1920x1080", audio_channels=6),
         }
 
-        sorted_ids = prober._smart_sort_streams([1, 2], stats_map, "Test Channel")
+        sorted_ids = prober._smart_sort_streams([1, 2], stats_map, {}, "Test Channel")
 
         assert sorted_ids == [2, 1]
 
@@ -276,7 +287,7 @@ class TestCombinedCriteria:
             2: create_mock_stats(2, resolution="1920x1080", audio_channels=6),  # 1080p, 5.1
         }
 
-        sorted_ids = prober._smart_sort_streams([1, 2], stats_map, "Test Channel")
+        sorted_ids = prober._smart_sort_streams([1, 2], stats_map, {}, "Test Channel")
 
         # Audio channels first, so 5.1 wins despite lower resolution
         assert sorted_ids == [2, 1]
@@ -301,7 +312,7 @@ class TestCombinedCriteria:
             2: create_mock_stats(2, resolution="1920x1080", bitrate=5000000, fps="60"),
         }
 
-        sorted_ids = prober._smart_sort_streams([1, 2], stats_map, "Test Channel")
+        sorted_ids = prober._smart_sort_streams([1, 2], stats_map, {}, "Test Channel")
 
         # Higher framerate wins
         assert sorted_ids == [2, 1]
@@ -323,7 +334,7 @@ class TestBackwardsCompatibility:
             2: create_mock_stats(2, resolution="1920x1080", bitrate=5000000),
         }
 
-        sorted_ids = prober._smart_sort_streams([1, 2], stats_map, "Test Channel")
+        sorted_ids = prober._smart_sort_streams([1, 2], stats_map, {}, "Test Channel")
 
         # Higher resolution wins
         assert sorted_ids == [2, 1]
@@ -341,11 +352,13 @@ class TestBackwardsCompatibility:
         )
 
         stats_map = {
-            1: create_mock_stats(1, resolution="1920x1080", m3u_account_id=2, audio_channels=6),
-            2: create_mock_stats(2, resolution="1920x1080", m3u_account_id=1, audio_channels=2),
+            1: create_mock_stats(1, resolution="1920x1080", audio_channels=6),
+            2: create_mock_stats(2, resolution="1920x1080", audio_channels=2),
         }
 
-        sorted_ids = prober._smart_sort_streams([1, 2], stats_map, "Test Channel")
+        stream_m3u_map = {1: 2, 2: 1}
+
+        sorted_ids = prober._smart_sort_streams([1, 2], stats_map, stream_m3u_map, "Test Channel")
 
         # Only resolution considered, and they're equal, so original order
         assert sorted_ids == [1, 2]
@@ -357,14 +370,14 @@ class TestEdgeCases:
     def test_empty_stream_list(self):
         """Empty stream list returns empty list."""
         prober = create_prober()
-        sorted_ids = prober._smart_sort_streams([], {}, "Test Channel")
+        sorted_ids = prober._smart_sort_streams([], {}, {}, "Test Channel")
         assert sorted_ids == []
 
     def test_single_stream(self):
         """Single stream returns single-item list."""
         prober = create_prober()
         stats_map = {1: create_mock_stats(1)}
-        sorted_ids = prober._smart_sort_streams([1], stats_map, "Test Channel")
+        sorted_ids = prober._smart_sort_streams([1], stats_map, {}, "Test Channel")
         assert sorted_ids == [1]
 
     def test_missing_stats_for_stream(self):
@@ -379,7 +392,7 @@ class TestEdgeCases:
             # Stream 2 has no stats
         }
 
-        sorted_ids = prober._smart_sort_streams([1, 2], stats_map, "Test Channel")
+        sorted_ids = prober._smart_sort_streams([1, 2], stats_map, {}, "Test Channel")
 
         # Stream with stats should come first
         assert sorted_ids[0] == 1
@@ -397,7 +410,7 @@ class TestEdgeCases:
             2: create_mock_stats(2, resolution="1920x1080", probe_status="failed"),
         }
 
-        sorted_ids = prober._smart_sort_streams([1, 2], stats_map, "Test Channel")
+        sorted_ids = prober._smart_sort_streams([1, 2], stats_map, {}, "Test Channel")
 
         # Failed stream at bottom despite higher resolution
         assert sorted_ids == [1, 2]
@@ -420,7 +433,7 @@ class TestEdgeCases:
             2: create_mock_stats(2, resolution="1920x1080", probe_status="failed"),
         }
 
-        sorted_ids = prober._smart_sort_streams([1, 2], stats_map, "Test Channel")
+        sorted_ids = prober._smart_sort_streams([1, 2], stats_map, {}, "Test Channel")
 
         # Successful stream sorted by stats, failed stream gets zeros (not pushed to bottom)
         # Both have (0,) prefix, but stream 1 has negative resolution, stream 2 has 0
@@ -463,11 +476,13 @@ class TestUpdateSortSettings:
 
         # Verify it works with a sort
         stats_map = {
-            1: create_mock_stats(1, resolution="1920x1080", m3u_account_id=2),
-            2: create_mock_stats(2, resolution="1920x1080", m3u_account_id=1),
+            1: create_mock_stats(1, resolution="1920x1080"),
+            2: create_mock_stats(2, resolution="1920x1080"),
         }
 
-        sorted_ids = prober._smart_sort_streams([1, 2], stats_map, "Test Channel")
+        stream_m3u_map = {1: 2, 2: 1}
+
+        sorted_ids = prober._smart_sort_streams([1, 2], stats_map, stream_m3u_map, "Test Channel")
 
         # Higher M3U priority wins
         assert sorted_ids == [2, 1]

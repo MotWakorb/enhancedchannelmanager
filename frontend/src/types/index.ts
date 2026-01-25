@@ -140,7 +140,6 @@ export interface StreamGroupInfo {
 export interface StreamStats {
   stream_id: number;
   stream_name: string | null;
-  m3u_account_id: number | null;   // M3U account ID for priority sorting
   resolution: string | null;       // e.g., "1920x1080"
   fps: string | null;              // e.g., "29.97"
   video_codec: string | null;      // e.g., "h264", "hevc"

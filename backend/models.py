@@ -157,7 +157,6 @@ class StreamStats(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     stream_id = Column(Integer, nullable=False, unique=True)  # Dispatcharr stream ID
     stream_name = Column(String(255), nullable=True)  # Cached stream name
-    m3u_account_id = Column(Integer, nullable=True)  # M3U account ID for priority sorting
     resolution = Column(String(20), nullable=True)  # e.g., "1920x1080"
     fps = Column(String(20), nullable=True)  # e.g., "29.97" - stored as string for flexibility
     video_codec = Column(String(50), nullable=True)  # e.g., "h264", "hevc"
@@ -183,7 +182,6 @@ class StreamStats(Base):
         return {
             "stream_id": self.stream_id,
             "stream_name": self.stream_name,
-            "m3u_account_id": self.m3u_account_id,
             "resolution": self.resolution,
             "fps": self.fps,
             "video_codec": self.video_codec,
