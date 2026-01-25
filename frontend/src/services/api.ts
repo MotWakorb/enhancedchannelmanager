@@ -701,8 +701,11 @@ export type Theme = 'dark' | 'light' | 'high-contrast';
 export type LogLevel = 'DEBUG' | 'INFO' | 'WARN' | 'WARNING' | 'ERROR' | 'CRITICAL';
 
 // Sort criteria for stream sorting
-export type SortCriterion = 'resolution' | 'bitrate' | 'framerate';
+export type SortCriterion = 'resolution' | 'bitrate' | 'framerate' | 'm3u_priority' | 'audio_channels';
 export type SortEnabledMap = Record<SortCriterion, boolean>;
+
+// M3U account priorities for sorting - maps account ID (as string) to priority value
+export type M3UAccountPriorities = Record<string, number>;
 
 export type GracenoteConflictMode = 'ask' | 'skip' | 'overwrite';
 
@@ -764,6 +767,7 @@ export interface SettingsResponse {
   stream_fetch_page_limit: number;  // Max pages when fetching streams (pages * 500 = max streams)
   stream_sort_priority: SortCriterion[];  // Priority order for Smart Sort (e.g., ['resolution', 'bitrate', 'framerate'])
   stream_sort_enabled: SortEnabledMap;  // Which sort criteria are enabled (e.g., { resolution: true, bitrate: true, framerate: false })
+  m3u_account_priorities: M3UAccountPriorities;  // M3U account priorities for sorting (account_id -> priority)
   deprioritize_failed_streams: boolean;  // When enabled, failed/timeout/pending streams sort to bottom
   normalization_settings: NormalizationSettings;  // User-configurable normalization tag settings
 }
@@ -818,6 +822,7 @@ export async function saveSettings(settings: {
   stream_fetch_page_limit?: number;  // Optional - max pages when fetching streams, defaults to 200 (100K streams)
   stream_sort_priority?: SortCriterion[];  // Optional - priority order for Smart Sort, defaults to ['resolution', 'bitrate', 'framerate']
   stream_sort_enabled?: SortEnabledMap;  // Optional - which sort criteria are enabled, defaults to all true
+  m3u_account_priorities?: M3UAccountPriorities;  // Optional - M3U account priorities for sorting
   deprioritize_failed_streams?: boolean;  // Optional - deprioritize failed/timeout/pending streams in sort, defaults to true
   normalization_settings?: NormalizationSettings;  // Optional - user-configurable normalization tags
 }): Promise<{ status: string; configured: boolean }> {

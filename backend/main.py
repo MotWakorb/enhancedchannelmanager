@@ -253,6 +253,7 @@ async def startup_event():
                 stream_sort_priority=settings.stream_sort_priority,
                 stream_sort_enabled=settings.stream_sort_enabled,
                 stream_fetch_page_limit=settings.stream_fetch_page_limit,
+                m3u_account_priorities=settings.m3u_account_priorities,
             )
             logger.info(f"StreamProber instance created: {prober is not None}")
 
@@ -539,8 +540,9 @@ class SettingsRequest(BaseModel):
     refresh_m3us_before_probe: bool = True  # Refresh all M3U accounts before starting probe
     auto_reorder_after_probe: bool = False  # Automatically reorder streams in channels after probe completes
     stream_fetch_page_limit: int = 200  # Max pages when fetching streams (200 pages * 500 = 100K streams)
-    stream_sort_priority: list[str] = ["resolution", "bitrate", "framerate"]  # Priority order for Smart Sort
-    stream_sort_enabled: dict[str, bool] = {"resolution": True, "bitrate": True, "framerate": True}  # Which criteria are enabled
+    stream_sort_priority: list[str] = ["resolution", "bitrate", "framerate", "m3u_priority", "audio_channels"]  # Priority order for Smart Sort
+    stream_sort_enabled: dict[str, bool] = {"resolution": True, "bitrate": True, "framerate": True, "m3u_priority": False, "audio_channels": False}  # Which criteria are enabled
+    m3u_account_priorities: dict[str, int] = {}  # M3U account priorities (account_id -> priority value)
     deprioritize_failed_streams: bool = True  # When enabled, failed/timeout/pending streams sort to bottom
     normalization_settings: Optional[NormalizationSettings] = None  # User-configurable normalization tags
 
@@ -587,6 +589,7 @@ class SettingsResponse(BaseModel):
     stream_fetch_page_limit: int  # Max pages when fetching streams (200 pages * 500 = 100K streams)
     stream_sort_priority: list[str]  # Priority order for Smart Sort
     stream_sort_enabled: dict[str, bool]  # Which criteria are enabled
+    m3u_account_priorities: dict[str, int]  # M3U account priorities (account_id -> priority value)
     deprioritize_failed_streams: bool  # When enabled, failed/timeout/pending streams sort to bottom
     normalization_settings: NormalizationSettings  # User-configurable normalization tags
 
@@ -644,6 +647,7 @@ async def get_current_settings():
         stream_fetch_page_limit=settings.stream_fetch_page_limit,
         stream_sort_priority=settings.stream_sort_priority,
         stream_sort_enabled=settings.stream_sort_enabled,
+        m3u_account_priorities=settings.m3u_account_priorities,
         deprioritize_failed_streams=settings.deprioritize_failed_streams,
         normalization_settings=NormalizationSettings(
             disabledBuiltinTags=settings.disabled_builtin_tags,
@@ -718,6 +722,7 @@ async def update_settings(request: SettingsRequest):
         stream_fetch_page_limit=request.stream_fetch_page_limit,
         stream_sort_priority=request.stream_sort_priority,
         stream_sort_enabled=request.stream_sort_enabled,
+        m3u_account_priorities=request.m3u_account_priorities,
         deprioritize_failed_streams=request.deprioritize_failed_streams,
         # Convert normalization_settings from API format to backend format
         disabled_builtin_tags=(
@@ -756,6 +761,19 @@ async def update_settings(request: SettingsRequest):
                 new_settings.max_concurrent_probes
             )
             logger.info("Updated prober parallel probing settings from settings")
+
+    # Update prober's sort settings without requiring restart
+    if (new_settings.stream_sort_priority != current_settings.stream_sort_priority or
+            new_settings.stream_sort_enabled != current_settings.stream_sort_enabled or
+            new_settings.m3u_account_priorities != current_settings.m3u_account_priorities):
+        prober = get_prober()
+        if prober:
+            prober.update_sort_settings(
+                new_settings.stream_sort_priority,
+                new_settings.stream_sort_enabled,
+                new_settings.m3u_account_priorities
+            )
+            logger.info("Updated prober sort settings from settings")
 
     logger.info(f"Settings saved successfully - configured: {new_settings.is_configured()}, auth_changed: {auth_changed}")
     return {"status": "saved", "configured": new_settings.is_configured()}
@@ -840,6 +858,7 @@ async def restart_services():
                 stream_sort_priority=settings.stream_sort_priority,
                 stream_sort_enabled=settings.stream_sort_enabled,
                 stream_fetch_page_limit=settings.stream_fetch_page_limit,
+                m3u_account_priorities=settings.m3u_account_priorities,
             )
             set_prober(new_prober)
 
