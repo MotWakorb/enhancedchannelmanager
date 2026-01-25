@@ -22,6 +22,7 @@ import {
 import { CSS } from '@dnd-kit/utilities';
 import type { Channel, ChannelGroup, ChannelProfile, Stream, StreamStats, M3UAccount, M3UGroupSetting, Logo, ChangeInfo, ChangeRecord, SavePoint, EPGData, EPGSource, StreamProfile, ChannelListFilterSettings } from '../types';
 import { logger } from '../utils/logger';
+import { computeAutoRename } from '../utils/channelRename';
 import { ChannelProfilesListModal } from './ChannelProfilesListModal';
 import type { ChannelDefaults } from './StreamsPane';
 import * as api from '../services/api';
@@ -772,9 +773,25 @@ export function ChannelsPane({
 
   // Bulk EPG assignment modal state
   const bulkEPGModal = useModal();
+  const [bulkEPGLoading, setBulkEPGLoading] = useState(false);
+
+  // Clear EPG loading spinner when modal opens
+  useEffect(() => {
+    if (bulkEPGModal.isOpen && bulkEPGLoading) {
+      setBulkEPGLoading(false);
+    }
+  }, [bulkEPGModal.isOpen, bulkEPGLoading]);
 
   // Bulk LCN fetch modal state
   const bulkLCNModal = useModal();
+  const [bulkLCNLoading, setBulkLCNLoading] = useState(false);
+
+  // Clear LCN loading spinner when modal opens
+  useEffect(() => {
+    if (bulkLCNModal.isOpen && bulkLCNLoading) {
+      setBulkLCNLoading(false);
+    }
+  }, [bulkLCNModal.isOpen, bulkLCNLoading]);
 
   // Gracenote conflict modal state
   const gracenoteConflictModal = useModal();
@@ -2211,67 +2228,6 @@ export function ChannelsPane({
     onBulkStreamsDrop(streamIds, targetGroupId, insertAtChannelNumber);
   };
 
-  // Helper function to compute auto-rename for a channel number change
-  // Returns the new name if a channel number is detected in the name, undefined otherwise
-  // The caller is responsible for checking whether auto-rename is enabled
-  // Memoized with useCallback to avoid recreating regex functions on every render
-  const computeAutoRename = useCallback((
-    channelName: string,
-    _oldNumber: number | null,
-    newNumber: number | null
-  ): string | undefined => {
-    if (newNumber === null) {
-      return undefined;
-    }
-
-    const newNumberStr = String(newNumber);
-
-    // Check for number in the middle: "US | 5034 - DABL" or "US | 5034: DABL"
-    // Pattern: PREFIX | NUMBER - SUFFIX (where PREFIX doesn't start with a digit)
-    const midMatch = channelName.match(/^([A-Za-z].+?\s*\|\s*)(\d+(?:\.\d+)?)\s*([-:]\s*.+)$/);
-    if (midMatch) {
-      const [, prefix, oldNum, suffix] = midMatch;
-      // If the number is already the new number, no change needed
-      if (oldNum === newNumberStr) {
-        return undefined;
-      }
-      // Replace the number in the middle
-      const newName = `${prefix}${newNumberStr} ${suffix}`;
-      return newName !== channelName ? newName : undefined;
-    }
-
-    // Look for a number at the beginning of the channel name
-    // Pattern: "123 | Channel Name" or "123 - Channel Name" or "123: Channel Name" or "123 Channel Name"
-    // This matches a number at the start followed by a separator (space, |, -, :, .)
-    const prefixMatch = channelName.match(/^(\d+(?:\.\d+)?)\s*([|\-:.\s])\s*(.*)$/);
-
-    if (prefixMatch) {
-      const [, oldPrefix, separator, rest] = prefixMatch;
-      // If the prefix is already the new number, no change needed
-      if (oldPrefix === newNumberStr) {
-        return undefined;
-      }
-      // Replace the prefix with the new number
-      const newName = `${newNumberStr}${separator === ' ' ? ' ' : ` ${separator} `}${rest}`;
-      return newName !== channelName ? newName : undefined;
-    }
-
-    // Also check for number at the end: "Channel Name | 123"
-    const suffixMatch = channelName.match(/^(.*)\s*([|\-.])\s*(\d+(?:\.\d+)?)$/);
-    if (suffixMatch) {
-      const [, prefix, separator, oldSuffix] = suffixMatch;
-      // If the suffix is already the new number, no change needed
-      if (oldSuffix === newNumberStr) {
-        return undefined;
-      }
-      // Replace the suffix with the new number
-      const newName = `${prefix} ${separator} ${newNumberStr}`;
-      return newName !== channelName ? newName : undefined;
-    }
-
-    return undefined;
-  }, []);
-
   // Helper function to strip leading/trailing/middle channel numbers from a name for sorting purposes
   // Matches same patterns as computeAutoRename: "123 | Name", "123-Name", "US | 5034 - Name", "Name | 123"
   // Memoized with useCallback - no dependencies as it's a pure function
@@ -2547,7 +2503,38 @@ export function ChannelsPane({
 
   // Memoize expensive channel filtering and grouping operations
   const channelsByGroup = useMemo(() => {
+    // Debug: Log channel group_id distribution before filtering
+    const groupIdCounts: Record<string, number> = {};
+    localChannels.forEach((ch) => {
+      const key = ch.channel_group_id !== null ? String(ch.channel_group_id) : 'ungrouped';
+      groupIdCounts[key] = (groupIdCounts[key] || 0) + 1;
+    });
+    logger.debug('[CHANNELS-DEBUG] Frontend received channels per group_id (before filtering):', groupIdCounts);
+    logger.debug(`[CHANNELS-DEBUG] Total channels in localChannels: ${localChannels.length}`);
+
+    // Count auto_created channels for debugging
+    const autoCreatedChannels = localChannels.filter(ch => ch.auto_created);
+    const manualChannels = localChannels.filter(ch => !ch.auto_created);
+    logger.debug(`[CHANNELS-DEBUG] Channel breakdown: ${manualChannels.length} manual, ${autoCreatedChannels.length} auto_created`);
+
+    // Log auto_created channels by group for debugging
+    if (autoCreatedChannels.length > 0) {
+      const autoCreatedByGroup: Record<string, { count: number; samples: string[] }> = {};
+      autoCreatedChannels.forEach((ch) => {
+        const key = ch.channel_group_id !== null ? String(ch.channel_group_id) : 'ungrouped';
+        if (!autoCreatedByGroup[key]) autoCreatedByGroup[key] = { count: 0, samples: [] };
+        autoCreatedByGroup[key].count++;
+        if (autoCreatedByGroup[key].samples.length < 3) {
+          autoCreatedByGroup[key].samples.push(`#${ch.channel_number} ${ch.name}`);
+        }
+      });
+      logger.debug('[CHANNELS-DEBUG] Auto-created channels by group:', autoCreatedByGroup);
+      logger.debug('[CHANNELS-DEBUG] autoSyncRelatedGroups:', Array.from(autoSyncRelatedGroups));
+    }
+
     // Filter channels based on search term and auto-created filter
+    let hiddenDueToAutoCreated = 0;
+    const hiddenChannelsByGroup: Record<string, { count: number; samples: string[] }> = {};
     const visibleChannels = localChannels.filter((ch) => {
       // First, apply search filter if there's a search term
       if (searchTerm) {
@@ -2564,8 +2551,30 @@ export function ChannelsPane({
         // Show auto-created channel if showAutoChannelGroups filter is on
         return channelListFilters?.showAutoChannelGroups !== false;
       }
+      // Track hidden channels by group for debugging
+      hiddenDueToAutoCreated++;
+      const key = groupId !== null ? String(groupId) : 'ungrouped';
+      if (!hiddenChannelsByGroup[key]) hiddenChannelsByGroup[key] = { count: 0, samples: [] };
+      hiddenChannelsByGroup[key].count++;
+      if (hiddenChannelsByGroup[key].samples.length < 5) {
+        hiddenChannelsByGroup[key].samples.push(`#${ch.channel_number} ${ch.name} (auto_created=${ch.auto_created}, auto_created_by=${ch.auto_created_by})`);
+      }
       return false; // Hide auto-created channels from non-auto-sync groups
     });
+
+    if (hiddenDueToAutoCreated > 0) {
+      logger.debug(`[CHANNELS-DEBUG] Hidden ${hiddenDueToAutoCreated} channels due to auto_created filter (not in autoSyncRelatedGroups)`);
+      logger.debug('[CHANNELS-DEBUG] Hidden channels by group:', hiddenChannelsByGroup);
+    }
+
+    // Debug: Log after filtering
+    const afterFilterCounts: Record<string, number> = {};
+    visibleChannels.forEach((ch) => {
+      const key = ch.channel_group_id !== null ? String(ch.channel_group_id) : 'ungrouped';
+      afterFilterCounts[key] = (afterFilterCounts[key] || 0) + 1;
+    });
+    logger.debug('[CHANNELS-DEBUG] Visible channels per group_id (after filtering):', afterFilterCounts);
+    logger.debug(`[CHANNELS-DEBUG] Visible channels: ${visibleChannels.length}, filtered out: ${localChannels.length - visibleChannels.length}`);
 
     // Group channels by channel_group_id
     const grouped = visibleChannels.reduce<Record<number | 'ungrouped', Channel[]>>(
@@ -4418,17 +4427,30 @@ export function ChannelsPane({
               <div className="selection-actions">
                 <button
                   className="bulk-action-btn"
-                  onClick={() => bulkEPGModal.open()}
+                  onClick={() => {
+                    setBulkEPGLoading(true);
+                    // Defer modal open to allow spinner to render first
+                    setTimeout(() => bulkEPGModal.open(), 50);
+                  }}
+                  disabled={bulkEPGLoading}
                   title="Assign EPG to selected channels"
                 >
-                  <span className="material-icons">live_tv</span>
+                  <span className={`material-icons${bulkEPGLoading ? ' spinning' : ''}`}>
+                    {bulkEPGLoading ? 'sync' : 'live_tv'}
+                  </span>
                 </button>
                 <button
                   className="bulk-action-btn"
-                  onClick={() => bulkLCNModal.open()}
+                  onClick={() => {
+                    setBulkLCNLoading(true);
+                    setTimeout(() => bulkLCNModal.open(), 50);
+                  }}
+                  disabled={bulkLCNLoading}
                   title="Fetch Gracenote IDs for selected channels"
                 >
-                  <span className="material-icons">confirmation_number</span>
+                  <span className={`material-icons${bulkLCNLoading ? ' spinning' : ''}`}>
+                    {bulkLCNLoading ? 'sync' : 'confirmation_number'}
+                  </span>
                 </button>
                 <button
                   className="bulk-action-btn"
@@ -4495,7 +4517,6 @@ export function ChannelsPane({
                 title="Create new channel"
               >
                 <span className="material-icons create-channel-icon">add</span>
-                <span>Channel</span>
               </button>
               <button
                 className="create-group-btn"
@@ -4503,7 +4524,6 @@ export function ChannelsPane({
                 title="Create new channel group"
               >
                 <span className="material-icons create-channel-icon">create_new_folder</span>
-                <span>Group</span>
               </button>
               <button
                 className="hidden-groups-btn"
@@ -4511,16 +4531,16 @@ export function ChannelsPane({
                 title="View and restore hidden channel groups"
               >
                 <span className="material-icons">visibility_off</span>
-                <span>Hidden</span>
               </button>
-              <SortDropdownButton
-                onSortByMode={handleSortAllStreamsByMode}
-                isLoading={bulkSortingByQuality}
-                showLabel={true}
-                labelText="Sort"
-                className="sort-all-quality-btn-wrapper"
-                enabledCriteria={channelDefaults?.streamSortEnabled}
-              />
+              {selectedChannelIds.size === 0 && (
+                <SortDropdownButton
+                  onSortByMode={handleSortAllStreamsByMode}
+                  isLoading={bulkSortingByQuality}
+                  showLabel={false}
+                  className="sort-all-quality-btn-wrapper"
+                  enabledCriteria={channelDefaults?.streamSortEnabled}
+                />
+              )}
             </>
           )}
           <button
@@ -4529,7 +4549,6 @@ export function ChannelsPane({
             title="Manage channel profiles"
           >
             <span className="material-icons">group</span>
-            <span>Profiles</span>
           </button>
         </div>
       </div>

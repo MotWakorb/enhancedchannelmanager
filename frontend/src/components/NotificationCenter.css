@@ -131,14 +131,7 @@
   opacity: 0.5;
 }
 
-.notification-empty .spinning {
-  animation: spin 1s linear infinite;
-}
-
-@keyframes spin {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
-}
+/* .spinning is defined in shared/common.css */
 
 /* Individual notification */
 .notification-item {

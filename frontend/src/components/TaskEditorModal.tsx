@@ -4,6 +4,8 @@ import type { TaskStatus, TaskSchedule, TaskScheduleCreate, TaskScheduleUpdate }
 import type { EPGSource, M3UAccount } from '../types';
 import { logger } from '../utils/logger';
 import { ScheduleEditor } from './ScheduleEditor';
+import './ModalBase.css';
+import './TaskEditorModal.css';
 
 interface TaskEditorModalProps {
   task: TaskStatus;
@@ -164,255 +166,124 @@ export function TaskEditorModal({ task, onClose, onSaved }: TaskEditorModalProps
   };
 
   return (
-    <div
-      style={{
-        position: 'fixed',
-        top: 0,
-        left: 0,
-        right: 0,
-        bottom: 0,
-        backgroundColor: 'rgba(0, 0, 0, 0.6)',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        zIndex: 1000,
-      }}
-      onClick={(e) => e.target === e.currentTarget && onClose()}
-    >
-      <div
-        style={{
-          backgroundColor: 'var(--bg-primary)',
-          border: '1px solid var(--border-color)',
-          borderRadius: '8px',
-          width: '100%',
-          maxWidth: '600px',
-          maxHeight: '90vh',
-          overflow: 'auto',
-        }}
-      >
+    <div className="modal-overlay" onClick={(e) => e.target === e.currentTarget && onClose()}>
+      <div className="modal-container modal-md task-editor-modal" onClick={(e) => e.stopPropagation()}>
         {/* Header */}
-        <div
-          style={{
-            display: 'flex',
-            justifyContent: 'space-between',
-            alignItems: 'center',
-            padding: '1rem 1.5rem',
-            borderBottom: '1px solid var(--border-color)',
-          }}
-        >
+        <div className="modal-header">
           <div>
-            <h2 style={{ margin: 0, fontSize: '1.25rem' }}>Configure Task</h2>
-            <div style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', marginTop: '0.25rem' }}>
-              {task.task_name}
-            </div>
+            <h2>Configure Task</h2>
+            <div className="modal-subtitle">{task.task_name}</div>
           </div>
-          <button
-            onClick={onClose}
-            style={{
-              background: 'none',
-              border: 'none',
-              cursor: 'pointer',
-              color: 'var(--text-secondary)',
-              padding: '0.5rem',
-            }}
-          >
+          <button className="modal-close-btn" onClick={onClose}>
             <span className="material-icons">close</span>
           </button>
         </div>
 
         {/* Content */}
-        <div style={{ padding: '1.5rem' }}>
+        <div className="modal-body">
           {/* Task Description */}
-          <div
-            style={{
-              backgroundColor: 'var(--bg-secondary)',
-              padding: '1rem',
-              borderRadius: '6px',
-              marginBottom: '1.5rem',
-              fontSize: '0.9rem',
-              color: 'var(--text-secondary)',
-            }}
-          >
+          <div className="task-description">
             {task.task_description}
           </div>
 
           {/* Enable/Disable Task */}
-          <div style={{ marginBottom: '1.5rem' }}>
-            <label
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '0.75rem',
-                cursor: 'pointer',
-              }}
-            >
+          <div className="enable-section">
+            <label className="enable-label">
               <input
                 type="checkbox"
                 checked={enabled}
                 onChange={(e) => setEnabled(e.target.checked)}
-                style={{
-                  width: '18px',
-                  height: '18px',
-                  accentColor: 'var(--accent-primary)',
-                }}
               />
-              <span style={{ fontWeight: 500 }}>Enable task</span>
+              <span>Enable task</span>
             </label>
-            <div style={{ marginLeft: '2rem', fontSize: '0.85rem', color: 'var(--text-muted)' }}>
+            <div className="enable-hint">
               When disabled, no schedules will run for this task.
             </div>
           </div>
 
           {/* Schedules Section */}
-          <div style={{ marginBottom: '1.5rem' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
-              <label style={{ fontWeight: 500 }}>Schedules</label>
-              <button
-                onClick={() => setIsAddingSchedule(true)}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '0.25rem',
-                  padding: '0.5rem 0.75rem',
-                  border: 'none',
-                  borderRadius: '4px',
-                  backgroundColor: 'var(--button-primary-bg)',
-                  color: 'var(--button-primary-text)',
-                  cursor: 'pointer',
-                  fontSize: '0.85rem',
-                }}
-              >
-                <span className="material-icons" style={{ fontSize: '16px' }}>add</span>
+          <div className="schedules-section">
+            <div className="schedules-header">
+              <label>Schedules</label>
+              <button className="add-schedule-btn" onClick={() => setIsAddingSchedule(true)}>
+                <span className="material-icons">add</span>
                 Add Schedule
               </button>
             </div>
 
             {schedules.length === 0 ? (
-              <div
-                style={{
-                  backgroundColor: 'var(--bg-secondary)',
-                  padding: '2rem',
-                  borderRadius: '6px',
-                  textAlign: 'center',
-                  color: 'var(--text-muted)',
-                }}
-              >
-                <span className="material-icons" style={{ fontSize: '32px', marginBottom: '0.5rem', display: 'block' }}>
-                  event_busy
-                </span>
+              <div className="empty-schedules">
+                <span className="material-icons">event_busy</span>
                 No schedules configured.
                 <br />
-                <span style={{ fontSize: '0.85rem' }}>
+                <span className="hint">
                   Click "Add Schedule" to create one, or run the task manually.
                 </span>
               </div>
             ) : (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+              <div className="schedule-list">
                 {schedules.map((schedule) => (
                   <div
                     key={schedule.id}
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '0.75rem',
-                      padding: '0.75rem 1rem',
-                      backgroundColor: 'var(--bg-secondary)',
-                      borderRadius: '6px',
-                      border: `1px solid ${schedule.enabled ? 'transparent' : 'var(--border-color)'}`,
-                      opacity: schedule.enabled ? 1 : 0.6,
-                    }}
+                    className={`schedule-item ${!schedule.enabled ? 'disabled' : ''}`}
                   >
                     {/* Enable toggle */}
                     <input
                       type="checkbox"
                       checked={schedule.enabled}
                       onChange={() => handleToggleSchedule(schedule)}
-                      style={{
-                        width: '16px',
-                        height: '16px',
-                        accentColor: 'var(--success)',
-                      }}
                     />
 
                     {/* Schedule info */}
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontWeight: 500, fontSize: '0.9rem' }}>
+                    <div className="schedule-info">
+                      <div className="schedule-name">
                         {schedule.name || schedule.description}
                       </div>
                       {schedule.name && (
-                        <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                        <div className="schedule-description">
                           {schedule.description}
                         </div>
                       )}
                       {schedule.enabled && schedule.next_run_at && (
-                        <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+                        <div className="schedule-next-run">
                           Next: {formatNextRun(schedule.next_run_at)}
                         </div>
                       )}
                     </div>
 
                     {/* Actions */}
-                    <button
-                      onClick={() => setEditingSchedule(schedule)}
-                      style={{
-                        background: 'none',
-                        border: 'none',
-                        cursor: 'pointer',
-                        padding: '0.25rem',
-                        color: 'var(--text-secondary)',
-                      }}
-                      title="Edit schedule"
-                    >
-                      <span className="material-icons" style={{ fontSize: '18px' }}>edit</span>
-                    </button>
-                    <button
-                      onClick={() => handleDeleteSchedule(schedule)}
-                      style={{
-                        background: 'none',
-                        border: 'none',
-                        cursor: 'pointer',
-                        padding: '0.25rem',
-                        color: 'var(--error)',
-                      }}
-                      title="Delete schedule"
-                    >
-                      <span className="material-icons" style={{ fontSize: '18px' }}>delete</span>
-                    </button>
+                    <div className="schedule-actions">
+                      <button
+                        className="schedule-action-btn"
+                        onClick={() => setEditingSchedule(schedule)}
+                        title="Edit schedule"
+                      >
+                        <span className="material-icons">edit</span>
+                      </button>
+                      <button
+                        className="schedule-action-btn delete"
+                        onClick={() => handleDeleteSchedule(schedule)}
+                        title="Delete schedule"
+                      >
+                        <span className="material-icons">delete</span>
+                      </button>
+                    </div>
                   </div>
                 ))}
               </div>
             )}
           </div>
 
-          {/* Task-Specific Configuration */}
+          {/* Task-Specific Configuration: EPG Refresh */}
           {task.task_id === 'epg_refresh' && epgSources.length > 0 && (
-            <div
-              style={{
-                backgroundColor: 'var(--bg-secondary)',
-                padding: '1rem',
-                borderRadius: '6px',
-                marginBottom: '1.5rem',
-              }}
-            >
-              <label style={{ display: 'block', marginBottom: '0.75rem', fontWeight: 500 }}>
-                EPG Sources to Refresh
-              </label>
-              <div style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginBottom: '0.75rem' }}>
+            <div className="config-section">
+              <label className="section-label">EPG Sources to Refresh</label>
+              <div className="config-hint">
                 Select specific sources or leave empty to refresh all active sources.
               </div>
-              <div style={{ maxHeight: '200px', overflowY: 'auto' }}>
+              <div className="config-list">
                 {epgSources.map((source) => (
-                  <label
-                    key={source.id}
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '0.5rem',
-                      padding: '0.5rem',
-                      cursor: 'pointer',
-                      borderRadius: '4px',
-                    }}
-                  >
+                  <label key={source.id} className="config-checkbox">
                     <input
                       type="checkbox"
                       checked={((taskConfig.source_ids as number[]) || []).includes(source.id)}
@@ -424,11 +295,10 @@ export function TaskEditorModal({ task, onClose, onSaved }: TaskEditorModalProps
                           setTaskConfig({ ...taskConfig, source_ids: currentIds.filter((id) => id !== source.id) });
                         }
                       }}
-                      style={{ accentColor: 'var(--accent-primary)' }}
                     />
                     <span>{source.name}</span>
                     {source.source_type === 'dummy' && (
-                      <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>(dummy)</span>
+                      <span className="badge">(dummy)</span>
                     )}
                   </label>
                 ))}
@@ -436,36 +306,18 @@ export function TaskEditorModal({ task, onClose, onSaved }: TaskEditorModalProps
             </div>
           )}
 
+          {/* Task-Specific Configuration: M3U Refresh */}
           {task.task_id === 'm3u_refresh' && m3uAccounts.length > 0 && (
-            <div
-              style={{
-                backgroundColor: 'var(--bg-secondary)',
-                padding: '1rem',
-                borderRadius: '6px',
-                marginBottom: '1.5rem',
-              }}
-            >
-              <label style={{ display: 'block', marginBottom: '0.75rem', fontWeight: 500 }}>
-                M3U Accounts to Refresh
-              </label>
-              <div style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginBottom: '0.75rem' }}>
+            <div className="config-section">
+              <label className="section-label">M3U Accounts to Refresh</label>
+              <div className="config-hint">
                 Select specific accounts or leave empty to refresh all active accounts.
               </div>
-              <div style={{ maxHeight: '200px', overflowY: 'auto' }}>
+              <div className="config-list">
                 {m3uAccounts
                   .filter((account) => account.name.toLowerCase() !== 'custom')
                   .map((account) => (
-                    <label
-                      key={account.id}
-                      style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '0.5rem',
-                        padding: '0.5rem',
-                        cursor: 'pointer',
-                        borderRadius: '4px',
-                      }}
-                    >
+                    <label key={account.id} className="config-checkbox">
                       <input
                         type="checkbox"
                         checked={((taskConfig.account_ids as number[]) || []).includes(account.id)}
@@ -477,106 +329,65 @@ export function TaskEditorModal({ task, onClose, onSaved }: TaskEditorModalProps
                             setTaskConfig({ ...taskConfig, account_ids: currentIds.filter((id) => id !== account.id) });
                           }
                         }}
-                        style={{ accentColor: 'var(--accent-primary)' }}
                       />
                       <span>{account.name}</span>
                       {!account.is_active && (
-                        <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>(inactive)</span>
+                        <span className="badge">(inactive)</span>
                       )}
                     </label>
                   ))}
               </div>
-              <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginTop: '0.75rem', cursor: 'pointer' }}>
+              <label className="config-checkbox" style={{ marginTop: '0.75rem' }}>
                 <input
                   type="checkbox"
                   checked={taskConfig.skip_inactive !== false}
                   onChange={(e) => setTaskConfig({ ...taskConfig, skip_inactive: e.target.checked })}
-                  style={{ accentColor: 'var(--accent-primary)' }}
                 />
                 <span>Skip inactive accounts</span>
               </label>
             </div>
           )}
 
+          {/* Task-Specific Configuration: Cleanup */}
           {task.task_id === 'cleanup' && (
-            <div
-              style={{
-                backgroundColor: 'var(--bg-secondary)',
-                padding: '1rem',
-                borderRadius: '6px',
-                marginBottom: '1.5rem',
-              }}
-            >
-              <label style={{ display: 'block', marginBottom: '0.75rem', fontWeight: 500 }}>
-                Retention Settings
-              </label>
-              <div style={{ display: 'grid', gap: '0.75rem' }}>
-                <div>
-                  <label style={{ display: 'block', fontSize: '0.85rem', marginBottom: '0.25rem' }}>
-                    Probe history retention (days)
-                  </label>
+            <div className="config-section">
+              <label className="section-label">Retention Settings</label>
+              <div className="retention-grid">
+                <div className="retention-item">
+                  <label>Probe history retention (days)</label>
                   <input
                     type="number"
                     min={1}
                     max={365}
                     value={(taskConfig.probe_history_days as number) || 30}
                     onChange={(e) => setTaskConfig({ ...taskConfig, probe_history_days: parseInt(e.target.value) || 30 })}
-                    style={{
-                      width: '100px',
-                      padding: '0.5rem',
-                      border: '1px solid var(--border-color)',
-                      borderRadius: '4px',
-                      backgroundColor: 'var(--bg-primary)',
-                      color: 'var(--text-primary)',
-                    }}
                   />
                 </div>
-                <div>
-                  <label style={{ display: 'block', fontSize: '0.85rem', marginBottom: '0.25rem' }}>
-                    Task history retention (days)
-                  </label>
+                <div className="retention-item">
+                  <label>Task history retention (days)</label>
                   <input
                     type="number"
                     min={1}
                     max={365}
                     value={(taskConfig.task_history_days as number) || 30}
                     onChange={(e) => setTaskConfig({ ...taskConfig, task_history_days: parseInt(e.target.value) || 30 })}
-                    style={{
-                      width: '100px',
-                      padding: '0.5rem',
-                      border: '1px solid var(--border-color)',
-                      borderRadius: '4px',
-                      backgroundColor: 'var(--bg-primary)',
-                      color: 'var(--text-primary)',
-                    }}
                   />
                 </div>
-                <div>
-                  <label style={{ display: 'block', fontSize: '0.85rem', marginBottom: '0.25rem' }}>
-                    Journal retention (days)
-                  </label>
+                <div className="retention-item">
+                  <label>Journal retention (days)</label>
                   <input
                     type="number"
                     min={1}
                     max={365}
                     value={(taskConfig.journal_days as number) || 30}
                     onChange={(e) => setTaskConfig({ ...taskConfig, journal_days: parseInt(e.target.value) || 30 })}
-                    style={{
-                      width: '100px',
-                      padding: '0.5rem',
-                      border: '1px solid var(--border-color)',
-                      borderRadius: '4px',
-                      backgroundColor: 'var(--bg-primary)',
-                      color: 'var(--text-primary)',
-                    }}
                   />
                 </div>
-                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
+                <label className="config-checkbox">
                   <input
                     type="checkbox"
                     checked={taskConfig.vacuum_db !== false}
                     onChange={(e) => setTaskConfig({ ...taskConfig, vacuum_db: e.target.checked })}
-                    style={{ accentColor: 'var(--accent-primary)' }}
                   />
                   <span>Compact database after cleanup</span>
                 </label>
@@ -586,73 +397,21 @@ export function TaskEditorModal({ task, onClose, onSaved }: TaskEditorModalProps
 
           {/* Error message */}
           {error && (
-            <div
-              style={{
-                padding: '0.75rem',
-                backgroundColor: 'rgba(231, 76, 60, 0.1)',
-                border: '1px solid #e74c3c',
-                borderRadius: '4px',
-                color: '#e74c3c',
-                marginBottom: '1rem',
-              }}
-            >
+            <div className="modal-error-banner">
+              <span className="material-icons">error</span>
               {error}
             </div>
           )}
         </div>
 
         {/* Footer */}
-        <div
-          style={{
-            display: 'flex',
-            justifyContent: 'flex-end',
-            gap: '0.75rem',
-            padding: '1rem 1.5rem',
-            borderTop: '1px solid var(--border-color)',
-          }}
-        >
+        <div className="modal-footer">
           <button
-            onClick={onClose}
-            style={{
-              padding: '0.75rem 1.5rem',
-              border: '1px solid var(--border-color)',
-              borderRadius: '6px',
-              backgroundColor: 'var(--bg-secondary)',
-              color: 'var(--text-primary)',
-              cursor: 'pointer',
-            }}
-          >
-            Cancel
-          </button>
-          <button
+            className="modal-btn modal-btn-primary"
             onClick={handleSaveTask}
             disabled={saving}
-            style={{
-              padding: '0.75rem 1.5rem',
-              border: 'none',
-              borderRadius: '6px',
-              backgroundColor: 'var(--success)',
-              color: 'var(--success-text)',
-              cursor: saving ? 'not-allowed' : 'pointer',
-              opacity: saving ? 0.6 : 1,
-              display: 'flex',
-              alignItems: 'center',
-              gap: '0.5rem',
-            }}
           >
-            {saving ? (
-              <>
-                <span className="material-icons" style={{ fontSize: '16px', animation: 'spin 1s linear infinite' }}>
-                  sync
-                </span>
-                Saving...
-              </>
-            ) : (
-              <>
-                <span className="material-icons" style={{ fontSize: '16px' }}>save</span>
-                Save Changes
-              </>
-            )}
+            {saving ? 'Saving...' : 'Save Changes'}
           </button>
         </div>
       </div>
@@ -660,45 +419,14 @@ export function TaskEditorModal({ task, onClose, onSaved }: TaskEditorModalProps
       {/* Schedule Editor Modal (Add) */}
       {isAddingSchedule && (
         <div
-          style={{
-            position: 'fixed',
-            top: 0,
-            left: 0,
-            right: 0,
-            bottom: 0,
-            backgroundColor: 'rgba(0, 0, 0, 0.6)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            zIndex: 1001,
-          }}
+          className="modal-overlay schedule-editor-modal"
+          style={{ zIndex: 1001 }}
           onClick={(e) => e.target === e.currentTarget && setIsAddingSchedule(false)}
         >
-          <div
-            style={{
-              backgroundColor: 'var(--bg-primary)',
-              border: '1px solid var(--border-color)',
-              borderRadius: '8px',
-              width: '100%',
-              maxWidth: '500px',
-              maxHeight: '90vh',
-              overflow: 'auto',
-            }}
-          >
-            <div
-              style={{
-                display: 'flex',
-                justifyContent: 'space-between',
-                alignItems: 'center',
-                padding: '1rem 1.5rem',
-                borderBottom: '1px solid var(--border-color)',
-              }}
-            >
-              <h3 style={{ margin: 0 }}>Add Schedule</h3>
-              <button
-                onClick={() => setIsAddingSchedule(false)}
-                style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-secondary)' }}
-              >
+          <div className="modal-container modal-sm" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h2>Add Schedule</h2>
+              <button className="modal-close-btn" onClick={() => setIsAddingSchedule(false)}>
                 <span className="material-icons">close</span>
               </button>
             </div>
@@ -714,45 +442,14 @@ export function TaskEditorModal({ task, onClose, onSaved }: TaskEditorModalProps
       {/* Schedule Editor Modal (Edit) */}
       {editingSchedule && (
         <div
-          style={{
-            position: 'fixed',
-            top: 0,
-            left: 0,
-            right: 0,
-            bottom: 0,
-            backgroundColor: 'rgba(0, 0, 0, 0.6)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            zIndex: 1001,
-          }}
+          className="modal-overlay schedule-editor-modal"
+          style={{ zIndex: 1001 }}
           onClick={(e) => e.target === e.currentTarget && setEditingSchedule(null)}
         >
-          <div
-            style={{
-              backgroundColor: 'var(--bg-primary)',
-              border: '1px solid var(--border-color)',
-              borderRadius: '8px',
-              width: '100%',
-              maxWidth: '500px',
-              maxHeight: '90vh',
-              overflow: 'auto',
-            }}
-          >
-            <div
-              style={{
-                display: 'flex',
-                justifyContent: 'space-between',
-                alignItems: 'center',
-                padding: '1rem 1.5rem',
-                borderBottom: '1px solid var(--border-color)',
-              }}
-            >
-              <h3 style={{ margin: 0 }}>Edit Schedule</h3>
-              <button
-                onClick={() => setEditingSchedule(null)}
-                style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-secondary)' }}
-              >
+          <div className="modal-container modal-sm" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h2>Edit Schedule</h2>
+              <button className="modal-close-btn" onClick={() => setEditingSchedule(null)}>
                 <span className="material-icons">close</span>
               </button>
             </div>

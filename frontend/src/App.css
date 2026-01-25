@@ -260,14 +260,7 @@
 
 .tab-loading .material-icons {
   font-size: 2rem;
-  animation: spin 1s linear infinite;
+  animation: spin 1s linear infinite reverse;
 }
 
-@keyframes spin {
-  from {
-    transform: rotate(0deg);
-  }
-  to {
-    transform: rotate(360deg);
-  }
-}
+/* @keyframes spin is defined in shared/common.css */

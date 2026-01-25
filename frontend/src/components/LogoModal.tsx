@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback, memo } from 'react';
 import type { Logo } from '../types';
 import * as api from '../services/api';
+import './ModalBase.css';
 import './LogoModal.css';
 
 interface LogoModalProps {
@@ -19,7 +20,6 @@ export const LogoModal = memo(function LogoModal({ isOpen, onClose, onSaved, log
   const [url, setUrl] = useState('');
   const [file, setFile] = useState<File | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
-  const [inputMode, setInputMode] = useState<'upload' | 'url'>('upload');
 
   // Drag & drop state
   const [isDragging, setIsDragging] = useState(false);
@@ -37,14 +37,12 @@ export const LogoModal = memo(function LogoModal({ isOpen, onClose, onSaved, log
         setUrl(logo.url);
         setFile(null);
         setPreviewUrl(logo.cache_url || logo.url);
-        setInputMode('url'); // Edit mode always uses URL
       } else {
         // Creating new logo - reset to defaults
         setName('');
         setUrl('');
         setFile(null);
         setPreviewUrl(null);
-        setInputMode('upload');
       }
       setError(null);
       setIsDragging(false);
@@ -62,13 +60,13 @@ export const LogoModal = memo(function LogoModal({ isOpen, onClose, onSaved, log
 
   // Update preview when URL changes (debounced)
   useEffect(() => {
-    if (inputMode === 'url' && url && !file) {
+    if (url && !file) {
       const timer = setTimeout(() => {
         setPreviewUrl(url);
       }, 500);
       return () => clearTimeout(timer);
     }
-  }, [url, inputMode, file]);
+  }, [url, file]);
 
   const handleDragEnter = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -209,17 +207,17 @@ export const LogoModal = memo(function LogoModal({ isOpen, onClose, onSaved, log
 
   return (
     <div className="modal-overlay" onClick={onClose}>
-      <div className="modal-content logo-modal" onClick={(e) => e.stopPropagation()}>
+      <div className="modal-container logo-modal" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
           <h2>{isEdit ? 'Edit Logo' : 'Add Logo'}</h2>
-          <button className="close-btn" onClick={onClose}>
-            &times;
+          <button className="modal-close-btn" onClick={onClose}>
+            <span className="material-icons">close</span>
           </button>
         </div>
 
         <div className="modal-body">
           {/* Logo Name */}
-          <div className="form-group">
+          <div className="modal-form-group">
             <label htmlFor="logoName">Logo Name</label>
             <input
               id="logoName"
@@ -246,7 +244,7 @@ export const LogoModal = memo(function LogoModal({ isOpen, onClose, onSaved, log
                 </div>
               )}
 
-              <div className="form-group">
+              <div className="modal-form-group">
                 <label htmlFor="logoUrl">Logo URL</label>
                 <input
                   id="logoUrl"
@@ -317,42 +315,36 @@ export const LogoModal = memo(function LogoModal({ isOpen, onClose, onSaved, log
                 )}
               </div>
 
-              {/* URL Input Toggle */}
-              <div className="url-toggle">
+              {/* Or divider */}
+              <div className="or-divider">
                 <span className="divider-line"></span>
-                <button
-                  className="toggle-url-btn"
-                  onClick={() => setInputMode(inputMode === 'upload' ? 'url' : 'upload')}
-                >
-                  {inputMode === 'upload' ? 'or paste a URL' : 'or upload a file'}
-                </button>
+                <span className="or-text">or</span>
                 <span className="divider-line"></span>
               </div>
 
-              {inputMode === 'url' && (
-                <div className="form-group">
-                  <label htmlFor="logoUrlCreate">Logo URL</label>
-                  <input
-                    id="logoUrlCreate"
-                    type="text"
-                    placeholder="https://example.com/logo.png"
-                    value={url}
-                    onChange={(e) => {
-                      setUrl(e.target.value);
-                      setFile(null); // Clear file when URL is entered
-                    }}
-                  />
-                  {url && previewUrl && !file && (
-                    <div className="url-preview">
-                      <img
-                        src={previewUrl}
-                        alt="URL preview"
-                        onError={() => setPreviewUrl(null)}
-                      />
-                    </div>
-                  )}
-                </div>
-              )}
+              {/* URL Input */}
+              <div className="modal-form-group">
+                <label htmlFor="logoUrlCreate">Logo URL</label>
+                <input
+                  id="logoUrlCreate"
+                  type="text"
+                  placeholder="https://example.com/logo.png"
+                  value={url}
+                  onChange={(e) => {
+                    setUrl(e.target.value);
+                    setFile(null); // Clear file when URL is entered
+                  }}
+                />
+                {url && previewUrl && !file && (
+                  <div className="url-preview">
+                    <img
+                      src={previewUrl}
+                      alt="URL preview"
+                      onError={() => setPreviewUrl(null)}
+                    />
+                  </div>
+                )}
+              </div>
             </>
           )}
 
@@ -360,10 +352,7 @@ export const LogoModal = memo(function LogoModal({ isOpen, onClose, onSaved, log
         </div>
 
         <div className="modal-footer">
-          <button className="btn-secondary" onClick={onClose} disabled={loading}>
-            Cancel
-          </button>
-          <button className="btn-primary" onClick={handleSave} disabled={loading}>
+          <button className="modal-btn modal-btn-primary" onClick={handleSave} disabled={loading}>
             {loading ? 'Saving...' : isEdit ? 'Save Changes' : 'Add Logo'}
           </button>
         </div>

@@ -44,32 +44,19 @@ When doing work on this project, follow these steps in order:
 
 4. **Run quality gates** (if code changed) - **MANDATORY** before committing:
    ```bash
-   # Windows: Run comprehensive quality gates
-   .scripts\quality-gates.bat
-
-   # Linux/Mac: Run comprehensive quality gates
-   ./scripts/quality-gates.sh
-
-   # Or run individual test suites:
-
    # Backend: Python syntax check + unit/integration tests (REQUIRED for backend changes)
    python -m py_compile backend/main.py
    cd backend && python -m pytest tests/ -q
 
    # Frontend: Unit tests + TypeScript compilation (REQUIRED for frontend changes)
    cd frontend && npm test && npm run build
-
-   # E2E: End-to-end tests (REQUIRED for all changes)
-   npm run test:e2e              # Run all E2E tests (headless)
-   npm run test:e2e:ui           # Run with UI mode (for debugging)
-   npm run test:e2e:headed       # Run in headed browser (for debugging)
    ```
    **CRITICAL**: If syntax checks or tests fail, fix errors before proceeding. Never commit broken code.
 
    **Test Coverage:**
    - **Backend**: Unit tests (fast, isolated) + Integration tests (with database/APIs)
    - **Frontend**: Hook tests, service tests, component tests
-   - **E2E**: Full user workflows across all major features (channels, M3U, EPG, tasks, etc.)
+   - **E2E**: Run on merge to main only (not during regular dev workflow)
 
 5. **Update the bead with work done** - Document what was changed:
    ```bash
@@ -191,15 +178,7 @@ npm run test:e2e:report    # View test report
 **When to Run Tests:**
 - **Backend tests**: MANDATORY for any backend code changes
 - **Frontend tests**: MANDATORY for any frontend code changes
-- **E2E tests**: MANDATORY for all code changes - ensures full user workflow integrity
-
-**Quality Gates Script:**
-The `quality-gates.bat` (Windows) or `quality-gates.sh` (Linux/Mac) runs:
-1. Backend Python syntax check
-2. Backend unit + integration tests
-3. Frontend unit tests
-4. Frontend TypeScript build
-5. E2E tests (always run)
+- **E2E tests**: Run on merge to main only (CI/CD pipeline)
 
 ## CSS/Styling Guidelines
 

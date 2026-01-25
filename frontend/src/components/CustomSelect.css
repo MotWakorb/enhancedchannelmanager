@@ -1,0 +1,229 @@
+/**
+ * CustomSelect.css - Styled dropdown select component
+ *
+ * Follows the modal dropdown patterns from ModalBase.css for consistency.
+ * Replaces native browser <select> elements with custom styled dropdowns.
+ */
+
+.custom-select {
+  position: relative;
+  display: inline-block;
+  background: transparent;
+}
+
+/* Trigger button - plain text style */
+.custom-select-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0;
+  background: none;
+  border: none;
+  color: var(--text-primary);
+  font-size: 0.875rem;
+  cursor: pointer;
+  text-align: left;
+}
+
+.custom-select-trigger:hover:not(:disabled) {
+  color: var(--accent-primary);
+}
+
+.custom-select-trigger:focus {
+  outline: none;
+}
+
+.custom-select-trigger:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.custom-select.open .custom-select-trigger {
+  color: var(--accent-primary);
+}
+
+/* Value display */
+.custom-select-value {
+  white-space: nowrap;
+}
+
+/* Placeholder styling */
+.custom-select-trigger:not(:disabled) .custom-select-value:empty::before,
+.custom-select:not(.has-value) .custom-select-value {
+  color: var(--text-muted);
+}
+
+/* Arrow icon */
+.custom-select-arrow {
+  font-size: 18px !important;
+  color: var(--text-secondary);
+  flex-shrink: 0;
+  margin-left: 0.5rem;
+  transition: transform 0.2s;
+}
+
+.custom-select.open .custom-select-arrow {
+  transform: rotate(180deg);
+}
+
+/* Dropdown menu */
+.custom-select-menu {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  margin-top: 4px;
+  background-color: var(--bg-secondary);
+  border: 1px solid var(--border-secondary);
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  z-index: 1000;
+  max-height: 250px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  animation: custom-select-slide-in 0.15s ease-out;
+}
+
+@keyframes custom-select-slide-in {
+  from {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Search input */
+.custom-select-search {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid var(--border-primary);
+  background-color: var(--bg-tertiary);
+}
+
+.custom-select-search .material-icons {
+  font-size: 18px;
+  color: var(--text-muted);
+}
+
+.custom-select-search input {
+  flex: 1;
+  border: none;
+  background: none;
+  color: var(--text-primary);
+  font-size: 0.875rem;
+  outline: none;
+}
+
+.custom-select-search input::placeholder {
+  color: var(--text-muted);
+}
+
+.custom-select-search .clear-search {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  padding: 0.125rem;
+  cursor: pointer;
+  color: var(--text-secondary);
+  border-radius: 3px;
+  transition: background-color 0.15s, color 0.15s;
+}
+
+.custom-select-search .clear-search:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.custom-select-search .clear-search .material-icons {
+  font-size: 1rem;
+}
+
+/* Options container */
+.custom-select-options {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0.25rem;
+}
+
+/* Scrollbar styling */
+.custom-select-options::-webkit-scrollbar {
+  width: 6px;
+}
+
+.custom-select-options::-webkit-scrollbar-track {
+  background: var(--bg-secondary);
+}
+
+.custom-select-options::-webkit-scrollbar-thumb {
+  background: var(--border-secondary);
+  border-radius: 3px;
+}
+
+.custom-select-options::-webkit-scrollbar-thumb:hover {
+  background: var(--text-secondary);
+}
+
+/* Option items */
+.custom-select-option {
+  display: flex;
+  align-items: center;
+  padding: 0.5rem 0.75rem;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.875rem;
+  color: var(--text-primary);
+  transition: background-color 0.15s;
+}
+
+.custom-select-option:hover {
+  background-color: var(--input-bg);
+}
+
+.custom-select-option.highlighted {
+  background-color: var(--input-bg);
+}
+
+.custom-select-option.selected {
+  background-color: rgba(100, 108, 255, 0.15);
+  color: var(--accent-primary);
+}
+
+.custom-select-option.selected.highlighted {
+  background-color: rgba(100, 108, 255, 0.25);
+}
+
+.custom-select-option.disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.custom-select-option.disabled:hover {
+  background-color: transparent;
+}
+
+/* No results message */
+.custom-select-no-results {
+  padding: 0.75rem;
+  text-align: center;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+/* Disabled state */
+.custom-select.disabled {
+  pointer-events: none;
+}
+
+.custom-select.disabled .custom-select-trigger {
+  opacity: 0.5;
+  cursor: not-allowed;
+}

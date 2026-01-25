@@ -1,5 +1,5 @@
 import { memo } from 'react';
-import './VLCProtocolHelperModal.css';
+import './ModalBase.css';
 
 interface VLCProtocolHelperModalProps {
   isOpen: boolean;
@@ -18,31 +18,33 @@ export const VLCProtocolHelperModal = memo(function VLCProtocolHelperModal({
 
   return (
     <div className="modal-overlay" onClick={onClose}>
-      <div className="modal-content vlc-helper-modal" onClick={(e) => e.stopPropagation()}>
+      <div className="modal-container modal-lg" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
           <h2>VLC Protocol Not Available</h2>
-          <button className="close-btn" onClick={onClose}>×</button>
+          <button className="modal-close-btn" onClick={onClose}>
+            <span className="material-icons">close</span>
+          </button>
         </div>
 
         <div className="modal-body">
-          <div className="helper-icon">
+          <div className="modal-info-icon">
             <span className="material-icons">info</span>
           </div>
 
-          <p className="helper-intro">
+          <p className="modal-info-intro">
             The VLC protocol (vlc://) couldn't be opened. This usually happens when:
           </p>
 
-          <ul className="helper-reasons">
+          <ul className="modal-bullet-list">
             <li>VLC is not installed on your device</li>
             <li>Your browser requires a protocol handler extension</li>
             <li>VLC protocol handlers are not registered with your operating system</li>
           </ul>
 
-          <div className="helper-section">
-            <h3>Browser-Specific Solutions</h3>
+          <div className="modal-section">
+            <h3 className="modal-section-title">Browser-Specific Solutions</h3>
 
-            <div className="browser-solution">
+            <div className="modal-info-card">
               <strong>Chrome/Edge:</strong>
               <p>
                 Install the "Open in VLC media player" extension from your browser's web store.
@@ -50,7 +52,7 @@ export const VLCProtocolHelperModal = memo(function VLCProtocolHelperModal({
               </p>
             </div>
 
-            <div className="browser-solution">
+            <div className="modal-info-card">
               <strong>Firefox:</strong>
               <p>
                 Install the "Open in VLC" add-on from Firefox Add-ons.
@@ -58,7 +60,7 @@ export const VLCProtocolHelperModal = memo(function VLCProtocolHelperModal({
               </p>
             </div>
 
-            <div className="browser-solution">
+            <div className="modal-info-card">
               <strong>Safari:</strong>
               <p>
                 VLC protocol support is built-in if VLC is installed.
@@ -67,9 +69,9 @@ export const VLCProtocolHelperModal = memo(function VLCProtocolHelperModal({
             </div>
           </div>
 
-          <div className="helper-section">
-            <h3>Alternative: Download M3U File</h3>
-            <p>
+          <div className="modal-section">
+            <h3 className="modal-section-title">Alternative: Download M3U File</h3>
+            <p className="modal-info-text">
               You can download an M3U playlist file for this stream. Most systems will automatically
               open M3U files with VLC if it's installed.
             </p>
@@ -79,14 +81,7 @@ export const VLCProtocolHelperModal = memo(function VLCProtocolHelperModal({
         <div className="modal-footer">
           <button
             type="button"
-            className="btn-secondary"
-            onClick={onClose}
-          >
-            Close
-          </button>
-          <button
-            type="button"
-            className="btn-primary"
+            className="modal-btn modal-btn-primary"
             onClick={() => {
               onDownloadM3U();
               onClose();

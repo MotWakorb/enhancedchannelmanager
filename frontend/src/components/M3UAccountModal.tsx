@@ -1,7 +1,8 @@
-import { useState, useEffect, memo } from 'react';
+import { useState, useEffect, memo, useRef } from 'react';
 import type { M3UAccount, M3UAccountType, ServerGroup } from '../types';
 import * as api from '../services/api';
 import { useAsyncOperation } from '../hooks/useAsyncOperation';
+import './ModalBase.css';
 import './M3UAccountModal.css';
 
 // UI-only account type that includes HDHR (which gets converted to STD for API)
@@ -64,6 +65,15 @@ export const M3UAccountModal = memo(function M3UAccountModal({
   const [autoEnableSeries, setAutoEnableSeries] = useState(false);
   const [isActive, setIsActive] = useState(true);
 
+  // File upload state
+  const [uploadedFileName, setUploadedFileName] = useState('');
+  const [uploading, setUploading] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Server group dropdown state
+  const [serverGroupDropdownOpen, setServerGroupDropdownOpen] = useState(false);
+  const serverGroupDropdownRef = useRef<HTMLDivElement>(null);
+
   // UI state
   const { loading, error, execute, setError, clearError } = useAsyncOperation();
 
@@ -74,6 +84,7 @@ export const M3UAccountModal = memo(function M3UAccountModal({
         // Editing existing account
         setName(account.name);
         setFilePath(account.file_path || '');
+        setUploadedFileName('');
         setUsername(account.username || '');
         setPassword(''); // Never pre-fill password
         setServerGroup(account.server_group);
@@ -103,6 +114,7 @@ export const M3UAccountModal = memo(function M3UAccountModal({
         setServerUrl('');
         setHdhrIP('');
         setFilePath('');
+        setUploadedFileName('');
         setUsername('');
         setPassword('');
         setServerGroup(null);
@@ -116,8 +128,23 @@ export const M3UAccountModal = memo(function M3UAccountModal({
         setIsActive(true);
       }
       clearError();
+      setServerGroupDropdownOpen(false);
     }
   }, [isOpen, account, clearError]);
+
+  // Close server group dropdown on outside click
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (serverGroupDropdownRef.current && !serverGroupDropdownRef.current.contains(event.target as Node)) {
+        setServerGroupDropdownOpen(false);
+      }
+    };
+
+    if (serverGroupDropdownOpen) {
+      document.addEventListener('mousedown', handleClickOutside);
+      return () => document.removeEventListener('mousedown', handleClickOutside);
+    }
+  }, [serverGroupDropdownOpen]);
 
   const handleSave = async () => {
     // Validation
@@ -193,21 +220,51 @@ export const M3UAccountModal = memo(function M3UAccountModal({
     });
   };
 
+  const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    // Validate file type
+    if (!file.name.toLowerCase().endsWith('.m3u') && !file.name.toLowerCase().endsWith('.m3u8')) {
+      setError('Invalid file type. Only .m3u and .m3u8 files are allowed.');
+      return;
+    }
+
+    setUploading(true);
+    clearError();
+
+    try {
+      const result = await api.uploadM3UFile(file);
+      setFilePath(result.file_path);
+      setUploadedFileName(result.original_name);
+      // Clear the URL field since we're using a file
+      setServerUrl('');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to upload file');
+    } finally {
+      setUploading(false);
+      // Reset the input so the same file can be selected again
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
+      }
+    }
+  };
+
   if (!isOpen) return null;
 
   return (
     <div className="modal-overlay">
-      <div className="modal-content m3u-account-modal" onClick={(e) => e.stopPropagation()}>
+      <div className="modal-container m3u-account-modal" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
           <h2>{isEdit ? 'Edit M3U Account' : 'Add M3U Account'}</h2>
-          <button className="close-btn" onClick={onClose}>
-            &times;
+          <button className="modal-close-btn" onClick={onClose}>
+            <span className="material-icons">close</span>
           </button>
         </div>
 
         <div className="modal-body">
           {/* Account Name */}
-          <div className="form-group">
+          <div className="modal-form-group">
             <label htmlFor="name">Account Name</label>
             <input
               id="name"
@@ -219,7 +276,7 @@ export const M3UAccountModal = memo(function M3UAccountModal({
           </div>
 
           {/* Account Type */}
-          <div className="form-group">
+          <div className="modal-form-group">
             <label>Account Type</label>
             <div className="radio-group">
               <label className="radio-label">
@@ -255,7 +312,7 @@ export const M3UAccountModal = memo(function M3UAccountModal({
           {/* Standard M3U Fields */}
           {accountType === 'STD' && (
             <>
-              <div className="form-group">
+              <div className="modal-form-group">
                 <label htmlFor="serverUrl">M3U URL</label>
                 <input
                   id="serverUrl"
@@ -266,15 +323,43 @@ export const M3UAccountModal = memo(function M3UAccountModal({
                 />
               </div>
               <div className="form-or">- or -</div>
-              <div className="form-group">
-                <label htmlFor="filePath">Local File Path</label>
+              <div className="modal-form-group">
+                <label>Upload M3U File</label>
+                <div className="file-upload-row">
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept=".m3u,.m3u8"
+                    onChange={handleFileUpload}
+                    style={{ display: 'none' }}
+                  />
+                  <button
+                    type="button"
+                    className="modal-btn modal-btn-secondary"
+                    onClick={() => fileInputRef.current?.click()}
+                    disabled={uploading}
+                  >
+                    {uploading ? 'Uploading...' : 'Choose File'}
+                  </button>
+                  {uploadedFileName && (
+                    <span className="uploaded-file-name">{uploadedFileName}</span>
+                  )}
+                </div>
+              </div>
+              <div className="form-or">- or -</div>
+              <div className="modal-form-group">
+                <label htmlFor="filePath">Server File Path</label>
                 <input
                   id="filePath"
                   type="text"
                   placeholder="/path/to/playlist.m3u"
                   value={filePath}
-                  onChange={(e) => setFilePath(e.target.value)}
+                  onChange={(e) => {
+                    setFilePath(e.target.value);
+                    setUploadedFileName(''); // Clear uploaded file name when typing
+                  }}
                 />
+                <span className="form-hint">Path to M3U file on the server</span>
               </div>
             </>
           )}
@@ -282,7 +367,7 @@ export const M3UAccountModal = memo(function M3UAccountModal({
           {/* XtreamCodes Fields */}
           {accountType === 'XC' && (
             <>
-              <div className="form-group">
+              <div className="modal-form-group">
                 <label htmlFor="xcServerUrl">Server URL</label>
                 <input
                   id="xcServerUrl"
@@ -292,7 +377,7 @@ export const M3UAccountModal = memo(function M3UAccountModal({
                   onChange={(e) => setServerUrl(e.target.value)}
                 />
               </div>
-              <div className="form-group">
+              <div className="modal-form-group">
                 <label htmlFor="xcUsername">Username</label>
                 <input
                   id="xcUsername"
@@ -302,7 +387,7 @@ export const M3UAccountModal = memo(function M3UAccountModal({
                   onChange={(e) => setUsername(e.target.value)}
                 />
               </div>
-              <div className="form-group">
+              <div className="modal-form-group">
                 <label htmlFor="xcPassword">Password</label>
                 <input
                   id="xcPassword"
@@ -317,7 +402,7 @@ export const M3UAccountModal = memo(function M3UAccountModal({
 
           {/* HD Homerun Fields */}
           {accountType === 'HDHR' && (
-            <div className="form-group">
+            <div className="modal-form-group">
               <label htmlFor="hdhrIP">HD Homerun IP Address</label>
               <input
                 id="hdhrIP"
@@ -333,24 +418,47 @@ export const M3UAccountModal = memo(function M3UAccountModal({
           <div className="form-group-divider" />
 
           {/* Common Settings */}
-          <div className="form-group">
-            <label htmlFor="serverGroup">Server Group</label>
-            <select
-              id="serverGroup"
-              value={serverGroup ?? ''}
-              onChange={(e) => setServerGroup(e.target.value ? Number(e.target.value) : null)}
-            >
-              <option value="">None</option>
-              {serverGroups.map((sg) => (
-                <option key={sg.id} value={sg.id}>
-                  {sg.name}
-                </option>
-              ))}
-            </select>
+          <div className="modal-form-group">
+            <label>Server Group</label>
+            <div className="searchable-select-dropdown" ref={serverGroupDropdownRef}>
+              <button
+                type="button"
+                className="dropdown-trigger"
+                onClick={() => setServerGroupDropdownOpen(!serverGroupDropdownOpen)}
+              >
+                <span className="dropdown-value">
+                  {serverGroup !== null
+                    ? serverGroups.find(sg => sg.id === serverGroup)?.name || 'Unknown'
+                    : 'None'}
+                </span>
+                <span className="material-icons">expand_more</span>
+              </button>
+              {serverGroupDropdownOpen && (
+                <div className="dropdown-menu">
+                  <div className="dropdown-options">
+                    <div
+                      className={`dropdown-option-item${serverGroup === null ? ' selected' : ''}`}
+                      onClick={() => { setServerGroup(null); setServerGroupDropdownOpen(false); }}
+                    >
+                      None
+                    </div>
+                    {serverGroups.map((sg) => (
+                      <div
+                        key={sg.id}
+                        className={`dropdown-option-item${serverGroup === sg.id ? ' selected' : ''}`}
+                        onClick={() => { setServerGroup(sg.id); setServerGroupDropdownOpen(false); }}
+                      >
+                        {sg.name}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
 
           <div className="form-row">
-            <div className="form-group">
+            <div className="modal-form-group">
               <label htmlFor="maxStreams">Max Streams</label>
               <input
                 id="maxStreams"
@@ -362,7 +470,7 @@ export const M3UAccountModal = memo(function M3UAccountModal({
               />
               <span className="form-hint">0 = unlimited</span>
             </div>
-            <div className="form-group">
+            <div className="modal-form-group">
               <label htmlFor="refreshInterval">Refresh (hours)</label>
               <input
                 id="refreshInterval"
@@ -372,7 +480,7 @@ export const M3UAccountModal = memo(function M3UAccountModal({
                 onChange={(e) => setRefreshInterval(Number(e.target.value) || 24)}
               />
             </div>
-            <div className="form-group">
+            <div className="modal-form-group">
               <label htmlFor="staleDays">Stale Days</label>
               <input
                 id="staleDays"
@@ -387,8 +495,8 @@ export const M3UAccountModal = memo(function M3UAccountModal({
           <div className="form-group-divider" />
 
           {/* Toggles */}
-          <div className="form-group checkbox-group">
-            <label className="checkbox-label">
+          <div className="modal-form-group">
+            <label className="modal-checkbox-label">
               <input
                 type="checkbox"
                 checked={enableVod}
@@ -398,8 +506,8 @@ export const M3UAccountModal = memo(function M3UAccountModal({
             </label>
           </div>
 
-          <div className="form-group checkbox-group">
-            <label className="checkbox-label">
+          <div className="modal-form-group">
+            <label className="modal-checkbox-label">
               <input
                 type="checkbox"
                 checked={autoEnableLive}
@@ -409,8 +517,8 @@ export const M3UAccountModal = memo(function M3UAccountModal({
             </label>
           </div>
 
-          <div className="form-group checkbox-group">
-            <label className="checkbox-label">
+          <div className="modal-form-group">
+            <label className="modal-checkbox-label">
               <input
                 type="checkbox"
                 checked={autoEnableVod}
@@ -420,8 +528,8 @@ export const M3UAccountModal = memo(function M3UAccountModal({
             </label>
           </div>
 
-          <div className="form-group checkbox-group">
-            <label className="checkbox-label">
+          <div className="modal-form-group">
+            <label className="modal-checkbox-label">
               <input
                 type="checkbox"
                 checked={autoEnableSeries}
@@ -431,8 +539,8 @@ export const M3UAccountModal = memo(function M3UAccountModal({
             </label>
           </div>
 
-          <div className="form-group checkbox-group">
-            <label className="checkbox-label">
+          <div className="modal-form-group">
+            <label className="modal-checkbox-label">
               <input
                 type="checkbox"
                 checked={isActive}
@@ -446,10 +554,7 @@ export const M3UAccountModal = memo(function M3UAccountModal({
         </div>
 
         <div className="modal-footer">
-          <button className="btn-secondary" onClick={onClose} disabled={loading}>
-            Cancel
-          </button>
-          <button className="btn-primary" onClick={handleSave} disabled={loading}>
+          <button className="modal-btn modal-btn-primary" onClick={handleSave} disabled={loading}>
             {loading ? 'Saving...' : isEdit ? 'Save Changes' : 'Create Account'}
           </button>
         </div>

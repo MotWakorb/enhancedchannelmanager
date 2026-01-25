@@ -31,7 +31,21 @@ export default defineConfig({
   // Maximum time to wait for expect assertions
   expect: {
     timeout: 5000,
+    // Snapshot comparison settings for visual regression
+    toHaveScreenshot: {
+      // Allow small pixel differences for anti-aliasing
+      maxDiffPixelRatio: 0.05,
+      // Animation tolerance
+      animations: 'disabled',
+    },
+    toMatchSnapshot: {
+      maxDiffPixelRatio: 0.05,
+    },
   },
+
+  // Snapshot directory for baseline images
+  snapshotDir: './e2e/snapshots',
+  snapshotPathTemplate: '{snapshotDir}/{testFileDir}/{testFileName}-snapshots/{arg}{ext}',
 
   // Run tests in parallel
   fullyParallel: true,

@@ -16,6 +16,7 @@ import type {
 import * as api from '../services/api';
 import { createSnapshot } from '../utils/channelSnapshot';
 import { generateId } from '../utils/idGenerator';
+import { logger } from '../utils/logger';
 
 // Compute which channels are modified by comparing working copy to baseline
 function computeModifiedChannelIds(
@@ -522,7 +523,7 @@ export function useEditMode({
             name: apiCall.name,
             channel_group_id: channelGroupId,
             tvg_id: apiCall.tvgId ?? null,
-            tvc_guide_stationid: null,
+            tvc_guide_stationid: apiCall.tvcGuideStationId ?? null,
             epg_data_id: null,
             streams: [],
             stream_profile_id: null,
@@ -643,12 +644,12 @@ export function useEditMode({
   );
 
   const stageCreateChannel = useCallback(
-    (name: string, channelNumber?: number, groupId?: number, newGroupName?: string, logoId?: number, logoUrl?: string, tvgId?: string): number => {
+    (name: string, channelNumber?: number, groupId?: number, newGroupName?: string, logoId?: number, logoUrl?: string, tvgId?: string, tvcGuideStationId?: string): number => {
       // Use ref to get unique temp ID even when called in a loop (React batching issue)
       const tempId = nextTempIdRef.current;
       nextTempIdRef.current -= 1; // Decrement immediately for next call
       stageOperation(
-        { type: 'createChannel', name, channelNumber, groupId, newGroupName, logoId, logoUrl, tvgId },
+        { type: 'createChannel', name, channelNumber, groupId, newGroupName, logoId, logoUrl, tvgId, tvcGuideStationId },
         `Create channel "${name}"`,
         []
       );
@@ -1097,6 +1098,7 @@ export function useEditMode({
 
         case 'createChannel': {
           const tempId = operation.afterSnapshot[0]?.id ?? -1;
+          logger.debug(`buildBulkOperations createChannel: name="${apiCall.name}", tvgId=${apiCall.tvgId}, tvcGuideStationId=${apiCall.tvcGuideStationId}`);
           bulkOperations.push({
             type: 'createChannel',
             tempId: tempId,
@@ -1107,6 +1109,7 @@ export function useEditMode({
             logoId: apiCall.logoId,
             logoUrl: apiCall.logoUrl,
             tvgId: apiCall.tvgId,
+            tvcGuideStationId: apiCall.tvcGuideStationId,
           });
           break;
         }

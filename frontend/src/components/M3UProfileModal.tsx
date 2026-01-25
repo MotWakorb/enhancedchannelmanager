@@ -3,6 +3,7 @@ import type { M3UAccount, M3UAccountProfile } from '../types';
 import type { M3UProfileCreateRequest } from '../services/api';
 import * as api from '../services/api';
 import { useAsyncOperation } from '../hooks/useAsyncOperation';
+import './ModalBase.css';
 import './M3UProfileModal.css';
 
 interface M3UProfileModalProps {
@@ -162,28 +163,28 @@ export const M3UProfileModal = memo(function M3UProfileModal({
 
   return (
     <div className="modal-overlay" onClick={onClose}>
-      <div className="modal-content m3u-profile-modal" onClick={(e) => e.stopPropagation()}>
+      <div className="modal-container modal-lg m3u-profile-modal" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
           <h2>
             <span className="material-icons">account_circle</span>
             Manage Profiles - {account.name}
           </h2>
-          <button className="modal-close" onClick={onClose}>
+          <button className="modal-close-btn" onClick={onClose}>
             <span className="material-icons">close</span>
           </button>
         </div>
 
         <div className="modal-body">
           {error && (
-            <div className="error-message">
+            <div className="modal-error-banner">
               <span className="material-icons">error</span>
               {error}
             </div>
           )}
 
           {loading ? (
-            <div className="loading-state">
-              <span className="material-icons spinning">sync</span>
+            <div className="modal-loading">
+              <span className="material-icons">sync</span>
               <p>Loading profiles...</p>
             </div>
           ) : (
@@ -200,7 +201,7 @@ export const M3UProfileModal = memo(function M3UProfileModal({
                   </div>
 
                   {profiles.length === 0 ? (
-                    <div className="empty-state">
+                    <div className="modal-empty-state">
                       <span className="material-icons">account_circle</span>
                       <p>No profiles found</p>
                     </div>
@@ -351,14 +352,14 @@ export const M3UProfileModal = memo(function M3UProfileModal({
                     )}
                     <div className="button-group">
                       <button
-                        className="btn-secondary"
+                        className="modal-btn modal-btn-secondary"
                         onClick={handleCancelEdit}
                         disabled={saving}
                       >
                         Cancel
                       </button>
                       <button
-                        className="btn-primary"
+                        className="modal-btn modal-btn-primary"
                         onClick={handleSaveProfile}
                         disabled={saving}
                       >

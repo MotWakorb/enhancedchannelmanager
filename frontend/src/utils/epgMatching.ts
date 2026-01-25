@@ -1011,3 +1011,41 @@ export function previewNameNormalizations(
 
   return changes;
 }
+
+/**
+ * Check if an EPG entry matches a multi-word search query.
+ * Splits search into words and checks if all words appear in the EPG entry fields.
+ * Supports fuzzy matching by stripping non-alphanumeric characters.
+ *
+ * Examples:
+ *   "BBC News US" matches "BBCNews(BBCNEEU).us" because each word matches
+ *   "espn hd" matches "ESPN HD" (case-insensitive)
+ *   "fox 5" matches "FOX5 Atlanta" (alphanumeric normalization)
+ *
+ * @param epg - The EPG entry to check
+ * @param searchWords - Array of lowercase search words to match
+ * @param sourceName - Optional EPG source name to include in matching
+ * @returns true if all search words match the EPG entry
+ */
+export function matchesEPGSearch(
+  epg: EPGData,
+  searchWords: string[],
+  sourceName?: string
+): boolean {
+  const lowerName = epg.name.toLowerCase();
+  const lowerTvgId = epg.tvg_id.toLowerCase();
+  // Create alphanumeric-only versions for fuzzy matching against concatenated names
+  const normalizedName = lowerName.replace(/[^a-z0-9]/g, '');
+  const normalizedTvgId = lowerTvgId.replace(/[^a-z0-9]/g, '');
+  const lowerSourceName = sourceName?.toLowerCase() ?? '';
+
+  // Each search word must appear in name, tvg_id, source name, or their normalized versions
+  return searchWords.every(word => {
+    const normalizedWord = word.replace(/[^a-z0-9]/g, '');
+    return lowerName.includes(word) ||
+           lowerTvgId.includes(word) ||
+           normalizedName.includes(normalizedWord) ||
+           normalizedTvgId.includes(normalizedWord) ||
+           (lowerSourceName && lowerSourceName.includes(word));
+  });
+}
