@@ -313,11 +313,4 @@
   font-size: 18px;
 }
 
-.schedule-editor .spinning {
-  animation: spin 1s linear infinite;
-}
-
-@keyframes spin {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
-}
+/* .spinning is defined in shared/common.css */

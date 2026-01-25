@@ -250,15 +250,7 @@
   border-color: var(--accent-primary);
 }
 
-/* Spinning animation */
-@keyframes task-editor-spin {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
-}
-
-.task-editor-modal .spinning {
-  animation: task-editor-spin 1s linear infinite;
-}
+/* .spinning is defined in shared/common.css */
 
 /* Schedule editor nested modal */
 .schedule-editor-modal .modal-container {

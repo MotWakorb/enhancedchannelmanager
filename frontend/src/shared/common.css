@@ -35,9 +35,9 @@
   }
 }
 
-/* Spinning utility class */
+/* Spinning utility class - counter-clockwise by default */
 .spinning {
-  animation: spin 1s linear infinite;
+  animation: spin 1s linear infinite reverse;
 }
 
 

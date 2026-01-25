@@ -440,15 +440,7 @@
   cursor: not-allowed;
 }
 
-/* Spinning animation */
-.alert-method-settings .spinning {
-  animation: spin 1s linear infinite;
-}
-
-@keyframes spin {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
-}
+/* .spinning is defined in shared/common.css */
 
 /* Form Hint */
 .alert-method-settings .form-hint {
