@@ -87,11 +87,15 @@ class DispatcharrSettings(BaseModel):
     stream_fetch_page_limit: int = 200
     # Stream sort priority order for "Smart Sort" feature
     # Order determines priority: first element is primary sort key, subsequent elements are tie-breakers
-    # Valid values: "resolution", "bitrate", "framerate"
-    stream_sort_priority: list[str] = ["resolution", "bitrate", "framerate"]
+    # Valid values: "resolution", "bitrate", "framerate", "m3u_priority", "audio_channels"
+    stream_sort_priority: list[str] = ["resolution", "bitrate", "framerate", "m3u_priority", "audio_channels"]
     # Which sort criteria are enabled (users can disable criteria they don't want to use)
     # Only enabled criteria appear in sort dropdown and are used by Smart Sort
-    stream_sort_enabled: dict[str, bool] = {"resolution": True, "bitrate": True, "framerate": True}
+    stream_sort_enabled: dict[str, bool] = {"resolution": True, "bitrate": True, "framerate": True, "m3u_priority": False, "audio_channels": False}
+    # M3U account priorities for sorting - maps M3U account ID (as string) to priority value
+    # Higher priority value = preferred (sorted first). Accounts not in this map get priority 0.
+    # Example: {"1": 100, "2": 50} means M3U account 1 is preferred over account 2
+    m3u_account_priorities: dict[str, int] = {}
     # Deprioritize failed streams - when enabled, failed/timeout/pending streams sort to bottom
     deprioritize_failed_streams: bool = True
     # Normalization settings - user-configurable tags for stream name normalization
