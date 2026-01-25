@@ -426,8 +426,8 @@ function App() {
           timezonePreference: settings.timezone_preference,
           defaultChannelProfileIds: settings.default_channel_profile_ids,
           customNetworkPrefixes: settings.custom_network_prefixes ?? [],
-          streamSortPriority: settings.stream_sort_priority ?? ['resolution', 'bitrate', 'framerate'],
-          streamSortEnabled: settings.stream_sort_enabled ?? { resolution: true, bitrate: true, framerate: true },
+          streamSortPriority: settings.stream_sort_priority ?? ['resolution', 'bitrate', 'framerate', 'm3u_priority', 'audio_channels'],
+          streamSortEnabled: settings.stream_sort_enabled ?? { resolution: true, bitrate: true, framerate: true, m3u_priority: false, audio_channels: false },
           deprioritizeFailedStreams: settings.deprioritize_failed_streams ?? true,
           normalizationSettings: settings.normalization_settings ?? { disabledBuiltinTags: [], customTags: [] },
         });
@@ -637,8 +637,8 @@ function App() {
         timezonePreference: settings.timezone_preference,
         defaultChannelProfileIds: settings.default_channel_profile_ids,
         customNetworkPrefixes: settings.custom_network_prefixes ?? [],
-        streamSortPriority: settings.stream_sort_priority ?? ['resolution', 'bitrate', 'framerate'],
-        streamSortEnabled: settings.stream_sort_enabled ?? { resolution: true, bitrate: true, framerate: true },
+        streamSortPriority: settings.stream_sort_priority ?? ['resolution', 'bitrate', 'framerate', 'm3u_priority', 'audio_channels'],
+        streamSortEnabled: settings.stream_sort_enabled ?? { resolution: true, bitrate: true, framerate: true, m3u_priority: false, audio_channels: false },
         deprioritizeFailedStreams: settings.deprioritize_failed_streams ?? true,
         normalizationSettings: settings.normalization_settings ?? { disabledBuiltinTags: [], customTags: [] },
       });

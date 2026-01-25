@@ -58,6 +58,7 @@ class StreamProber:
         stream_sort_priority: list[str] = None,  # Priority order for Smart Sort criteria
         stream_sort_enabled: dict[str, bool] = None,  # Which criteria are enabled for Smart Sort
         stream_fetch_page_limit: int = 200,  # Max pages when fetching streams (200 * 500 = 100K streams)
+        m3u_account_priorities: dict[str, int] = None,  # M3U account priorities (account_id -> priority)
     ):
         self.client = client
         self.probe_timeout = probe_timeout
@@ -74,8 +75,9 @@ class StreamProber:
         self.stream_fetch_page_limit = stream_fetch_page_limit
         logger.info(f"[PROBER-INIT] auto_reorder_after_probe={auto_reorder_after_probe}")
         # Smart Sort configuration
-        self.stream_sort_priority = stream_sort_priority or ["resolution", "bitrate", "framerate"]
-        self.stream_sort_enabled = stream_sort_enabled or {"resolution": True, "bitrate": True, "framerate": True}
+        self.stream_sort_priority = stream_sort_priority or ["resolution", "bitrate", "framerate", "m3u_priority", "audio_channels"]
+        self.stream_sort_enabled = stream_sort_enabled or {"resolution": True, "bitrate": True, "framerate": True, "m3u_priority": False, "audio_channels": False}
+        self.m3u_account_priorities = m3u_account_priorities or {}
         self._probe_cancelled = False  # Controls cancellation of in-progress probe
         self._probing_in_progress = False
         # Progress tracking for probe all streams
@@ -141,6 +143,32 @@ class StreamProber:
         self.max_concurrent_probes = max(1, min(16, max_concurrent_probes))
         logger.info(f"Updated probing settings: parallel_probing_enabled={old_parallel}->{self.parallel_probing_enabled}, "
                     f"max_concurrent_probes={old_concurrent}->{self.max_concurrent_probes}")
+
+    def update_sort_settings(
+        self,
+        stream_sort_priority: list[str],
+        stream_sort_enabled: dict[str, bool],
+        m3u_account_priorities: dict[str, int]
+    ) -> None:
+        """Update the sort settings.
+
+        This allows updating the prober's sort settings without restarting the service.
+        Called when settings are saved to ensure smart sort uses the latest config.
+
+        Args:
+            stream_sort_priority: Priority order for sort criteria.
+            stream_sort_enabled: Which criteria are enabled.
+            m3u_account_priorities: M3U account priorities (account_id -> priority value).
+        """
+        old_priority = self.stream_sort_priority
+        old_enabled = self.stream_sort_enabled
+        old_m3u_priorities = self.m3u_account_priorities
+        self.stream_sort_priority = stream_sort_priority
+        self.stream_sort_enabled = stream_sort_enabled
+        self.m3u_account_priorities = m3u_account_priorities
+        logger.info(f"Updated sort settings: priority={old_priority}->{self.stream_sort_priority}, "
+                    f"enabled={old_enabled}->{self.stream_sort_enabled}, "
+                    f"m3u_priorities={old_m3u_priorities}->{self.m3u_account_priorities}")
 
     def _persist_probe_history(self):
         """Persist probe history to disk."""
@@ -303,18 +331,18 @@ class StreamProber:
         }
 
     async def probe_stream(
-        self, stream_id: int, url: Optional[str], name: Optional[str] = None
+        self, stream_id: int, url: Optional[str], name: Optional[str] = None, m3u_account_id: Optional[int] = None
     ) -> dict:
         """
         Probe a single stream using ffprobe.
         Returns the probe result dict.
         """
-        logger.debug(f"probe_stream() called for stream_id={stream_id}, name={name}, url={'present' if url else 'missing'}")
+        logger.debug(f"probe_stream() called for stream_id={stream_id}, name={name}, url={'present' if url else 'missing'}, m3u_account_id={m3u_account_id}")
 
         if not url:
             logger.warning(f"Stream {stream_id} has no URL, marking as failed")
             return self._save_probe_result(
-                stream_id, name, None, "failed", "No URL available"
+                stream_id, name, None, "failed", "No URL available", m3u_account_id=m3u_account_id
             )
 
         try:
@@ -328,7 +356,7 @@ class StreamProber:
 
             # Save probe result with both ffprobe metadata and measured bitrate
             return self._save_probe_result(
-                stream_id, name, result, "success", None, measured_bitrate
+                stream_id, name, result, "success", None, measured_bitrate, m3u_account_id=m3u_account_id
             )
         except asyncio.TimeoutError:
             logger.warning(f"Stream {stream_id} probe timed out after {self.probe_timeout}s")
@@ -338,6 +366,7 @@ class StreamProber:
                 None,
                 "timeout",
                 f"Probe timed out after {self.probe_timeout}s",
+                m3u_account_id=m3u_account_id,
             )
         except Exception as e:
             error_msg = str(e)
@@ -345,7 +374,7 @@ class StreamProber:
             if len(error_msg) > 500:
                 error_msg = error_msg[:500] + "..."
             logger.error(f"Stream {stream_id} probe failed: {error_msg}")
-            return self._save_probe_result(stream_id, name, None, "failed", error_msg)
+            return self._save_probe_result(stream_id, name, None, "failed", error_msg, m3u_account_id=m3u_account_id)
 
     async def _check_http_status(self, url: str) -> Optional[int]:
         """Make a HEAD request to check the HTTP status code of a URL."""
@@ -475,6 +504,7 @@ class StreamProber:
         status: str,
         error_message: Optional[str],
         measured_bitrate: Optional[int] = None,
+        m3u_account_id: Optional[int] = None,
     ) -> dict:
         """Parse ffprobe output and save to database."""
         session = get_session()
@@ -490,6 +520,7 @@ class StreamProber:
             stats.stream_name = stream_name
             stats.probe_status = status
             stats.error_message = error_message
+            stats.m3u_account_id = m3u_account_id
             stats.last_probed = datetime.utcnow()
             stats.dismissed_at = None  # Clear dismissal when re-probed
 
@@ -1017,8 +1048,23 @@ class StreamProber:
                             pass
                     sort_values.append(-framerate_value)
 
+                elif criterion == "m3u_priority":
+                    # Get M3U account priority from settings (higher priority = sorted first)
+                    m3u_priority_value = 0
+                    if stat.m3u_account_id is not None:
+                        # Convert to string since JSON keys are strings
+                        m3u_priority_value = self.m3u_account_priorities.get(str(stat.m3u_account_id), 0)
+                    # Negate for descending sort (higher priority first)
+                    sort_values.append(-m3u_priority_value)
+
+                elif criterion == "audio_channels":
+                    # Sort by audio channels: 5.1/6ch > stereo/2ch > mono/1ch
+                    audio_channels_value = stat.audio_channels or 0
+                    # Negate for descending sort (more channels first)
+                    sort_values.append(-audio_channels_value)
+
             logger.debug(f"[SMART-SORT]   {stream_name}: sort_tuple={tuple(sort_values)} "
-                        f"(res={stat.resolution}, br={stat.bitrate}, fps={stat.fps})")
+                        f"(res={stat.resolution}, br={stat.bitrate}, fps={stat.fps}, m3u={stat.m3u_account_id}, audio_ch={stat.audio_channels})")
             return tuple(sort_values)
 
         # Sort stream IDs by their stats
@@ -1239,7 +1285,7 @@ class StreamProber:
                             else:
                                 logger.debug(f"[PROBE-PARALLEL] Acquired semaphore: active={current_count}/{self.max_concurrent_probes}, stream={stream_id}")
                         try:
-                            result = await self.probe_stream(stream_id, stream_url, stream_name)
+                            result = await self.probe_stream(stream_id, stream_url, stream_name, m3u_account_id)
                             probe_status = result.get("probe_status", "failed")
                             error_message = result.get("error_message", "")
                             stream_info = {"id": stream_id, "name": stream_name, "url": stream_url}
@@ -1481,7 +1527,7 @@ class StreamProber:
                             logger.debug(f"[RATE-LIMIT] Waiting {backoff_delay:.1f}s before probing {host}")
                             await asyncio.sleep(backoff_delay)
 
-                    result = await self.probe_stream(stream_id, stream_url, stream_name)
+                    result = await self.probe_stream(stream_id, stream_url, stream_name, m3u_account_id)
 
                     # Track success/failure
                     probe_status = result.get("probe_status", "failed")

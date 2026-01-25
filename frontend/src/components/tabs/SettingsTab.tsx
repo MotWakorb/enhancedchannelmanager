@@ -37,6 +37,8 @@ const SORT_CRITERION_CONFIG: Record<SortCriterion, { icon: string; label: string
   resolution: { icon: 'aspect_ratio', label: 'Resolution', description: '4K > 1080p > 720p' },
   bitrate: { icon: 'speed', label: 'Bitrate', description: 'Higher bitrate first' },
   framerate: { icon: 'slow_motion_video', label: 'Framerate', description: '60fps > 30fps' },
+  m3u_priority: { icon: 'low_priority', label: 'M3U Priority', description: 'Higher priority M3U first' },
+  audio_channels: { icon: 'surround_sound', label: 'Audio Channels', description: '5.1 > Stereo > Mono' },
 };
 
 // Sortable item component for drag-and-drop
@@ -186,8 +188,8 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
     });
   }, [normalizationPreviewInput, includeCountryInName, countrySeparator, normalizationSettings]);
 
-  const [streamSortPriority, setStreamSortPriority] = useState<SortCriterion[]>(['resolution', 'bitrate', 'framerate']);
-  const [streamSortEnabled, setStreamSortEnabled] = useState<SortEnabledMap>({ resolution: true, bitrate: true, framerate: true });
+  const [streamSortPriority, setStreamSortPriority] = useState<SortCriterion[]>(['resolution', 'bitrate', 'framerate', 'm3u_priority', 'audio_channels']);
+  const [streamSortEnabled, setStreamSortEnabled] = useState<SortEnabledMap>({ resolution: true, bitrate: true, framerate: true, m3u_priority: false, audio_channels: false });
   const [deprioritizeFailedStreams, setDeprioritizeFailedStreams] = useState(true);
 
   // Appearance settings
@@ -603,8 +605,8 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       setAutoReorderAfterProbe(settings.auto_reorder_after_probe ?? false);
       setOriginalAutoReorder(settings.auto_reorder_after_probe ?? false);
       setStreamFetchPageLimit(settings.stream_fetch_page_limit ?? 200);
-      setStreamSortPriority(settings.stream_sort_priority ?? ['resolution', 'bitrate', 'framerate']);
-      setStreamSortEnabled(settings.stream_sort_enabled ?? { resolution: true, bitrate: true, framerate: true });
+      setStreamSortPriority(settings.stream_sort_priority ?? ['resolution', 'bitrate', 'framerate', 'm3u_priority', 'audio_channels']);
+      setStreamSortEnabled(settings.stream_sort_enabled ?? { resolution: true, bitrate: true, framerate: true, m3u_priority: false, audio_channels: false });
       setDeprioritizeFailedStreams(settings.deprioritize_failed_streams ?? true);
       setNeedsRestart(false);
       setRestartResult(null);
