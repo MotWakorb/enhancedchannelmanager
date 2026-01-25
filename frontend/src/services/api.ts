@@ -291,7 +291,7 @@ export async function updateChannelGroup(id: number, data: Partial<ChannelGroup>
 }
 
 export async function deleteChannelGroup(id: number): Promise<void> {
-  await fetch(`${API_BASE}/channel-groups/${id}`, { method: 'DELETE' });
+  await fetchJson(`${API_BASE}/channel-groups/${id}`, { method: 'DELETE' });
 }
 
 export async function getOrphanedChannelGroups(): Promise<{
@@ -933,7 +933,7 @@ export async function updateEPGSource(id: number, data: Partial<EPGSource>): Pro
 }
 
 export async function deleteEPGSource(id: number): Promise<void> {
-  await fetch(`${API_BASE}/epg/sources/${id}`, { method: 'DELETE' });
+  await fetchJson(`${API_BASE}/epg/sources/${id}`, { method: 'DELETE' });
 }
 
 export async function refreshEPGSource(id: number): Promise<void> {
@@ -1912,27 +1912,26 @@ export async function getNotifications(params?: {
   unread_only?: boolean;
   notification_type?: string;
 }): Promise<NotificationsResponse> {
-  const searchParams = new URLSearchParams();
-  if (params?.page) searchParams.set('page', String(params.page));
-  if (params?.page_size) searchParams.set('page_size', String(params.page_size));
-  if (params?.unread_only) searchParams.set('unread_only', 'true');
-  if (params?.notification_type) searchParams.set('notification_type', params.notification_type);
-
-  const query = searchParams.toString();
-  return fetchJson(`${API_BASE}/notifications${query ? `?${query}` : ''}`);
+  const query = buildQuery({
+    page: params?.page,
+    page_size: params?.page_size,
+    unread_only: params?.unread_only,
+    notification_type: params?.notification_type,
+  });
+  return fetchJson(`${API_BASE}/notifications${query}`);
 }
 
 export async function createNotification(data: CreateNotificationData): Promise<Notification> {
-  const searchParams = new URLSearchParams();
-  searchParams.set('message', data.message);
-  if (data.notification_type) searchParams.set('notification_type', data.notification_type);
-  if (data.title) searchParams.set('title', data.title);
-  if (data.source) searchParams.set('source', data.source);
-  if (data.source_id) searchParams.set('source_id', data.source_id);
-  if (data.action_label) searchParams.set('action_label', data.action_label);
-  if (data.action_url) searchParams.set('action_url', data.action_url);
-
-  return fetchJson(`${API_BASE}/notifications?${searchParams.toString()}`, {
+  const query = buildQuery({
+    message: data.message,
+    notification_type: data.notification_type,
+    title: data.title,
+    source: data.source,
+    source_id: data.source_id,
+    action_label: data.action_label,
+    action_url: data.action_url,
+  });
+  return fetchJson(`${API_BASE}/notifications${query}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: data.metadata ? JSON.stringify({ metadata: data.metadata }) : undefined,
@@ -1940,10 +1939,8 @@ export async function createNotification(data: CreateNotificationData): Promise<
 }
 
 export async function markNotificationRead(notificationId: number, read: boolean = true): Promise<Notification> {
-  const searchParams = new URLSearchParams();
-  searchParams.set('read', String(read));
-
-  return fetchJson(`${API_BASE}/notifications/${notificationId}?${searchParams.toString()}`, {
+  const query = buildQuery({ read });
+  return fetchJson(`${API_BASE}/notifications/${notificationId}${query}`, {
     method: 'PATCH',
   });
 }
@@ -1961,10 +1958,8 @@ export async function deleteNotification(notificationId: number): Promise<{ dele
 }
 
 export async function clearNotifications(readOnly: boolean = true): Promise<{ deleted: number; read_only: boolean }> {
-  const searchParams = new URLSearchParams();
-  searchParams.set('read_only', String(readOnly));
-
-  return fetchJson(`${API_BASE}/notifications?${searchParams.toString()}`, {
+  const query = buildQuery({ read_only: readOnly });
+  return fetchJson(`${API_BASE}/notifications${query}`, {
     method: 'DELETE',
   });
 }
