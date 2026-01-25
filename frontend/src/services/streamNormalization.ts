@@ -19,6 +19,75 @@ import {
 } from '../constants/streamNormalization';
 import { NormalizationSettings, NormalizationTag, NormalizationTagMode } from './api';
 
+/**
+ * Map of Unicode superscript/subscript/special characters to their ASCII equivalents.
+ * Covers modifier letters, subscripts, superscripts, and other common variants.
+ */
+const UNICODE_TO_ASCII_MAP: Record<string, string> = {
+  // Superscript letters (Modifier Letter Capital)
+  '\u1D2C': 'A', '\u1D2E': 'B', '\u1D30': 'D', '\u1D31': 'E', '\u1D33': 'G',
+  '\u1D34': 'H', '\u1D35': 'I', '\u1D36': 'J', '\u1D37': 'K', '\u1D38': 'L',
+  '\u1D39': 'M', '\u1D3A': 'N', '\u1D3C': 'O', '\u1D3E': 'P', '\u1D3F': 'R',
+  '\u1D40': 'T', '\u1D41': 'U', '\u1D42': 'W',
+  // Superscript letters (Modifier Letter Small)
+  '\u1D43': 'a', '\u1D47': 'b', '\u1D48': 'd', '\u1D49': 'e', '\u1D4D': 'g',
+  '\u02B0': 'h', '\u2071': 'i', '\u02B2': 'j', '\u1D4F': 'k', '\u02E1': 'l',
+  '\u1D50': 'm', '\u207F': 'n', '\u1D52': 'o', '\u1D56': 'p', '\u02B3': 'r',
+  '\u02E2': 's', '\u1D57': 't', '\u1D58': 'u', '\u1D5B': 'v', '\u02B7': 'w',
+  '\u02E3': 'x', '\u02B8': 'y', '\u1DBB': 'z',
+  // Common superscript characters
+  '\u00B2': '2', '\u00B3': '3', '\u00B9': '1', '\u2070': '0', '\u2074': '4',
+  '\u2075': '5', '\u2076': '6', '\u2077': '7', '\u2078': '8', '\u2079': '9',
+  '\u207A': '+', '\u207B': '-', '\u207C': '=', '\u207D': '(', '\u207E': ')',
+  // Subscript numbers
+  '\u2080': '0', '\u2081': '1', '\u2082': '2', '\u2083': '3', '\u2084': '4',
+  '\u2085': '5', '\u2086': '6', '\u2087': '7', '\u2088': '8', '\u2089': '9',
+  '\u208A': '+', '\u208B': '-', '\u208C': '=', '\u208D': '(', '\u208E': ')',
+  // Small capitals (often used stylistically)
+  '\u1D00': 'A', '\u0299': 'B', '\u1D04': 'C', '\u1D05': 'D', '\u1D07': 'E',
+  '\u0493': 'F', '\u0262': 'G', '\u029C': 'H', '\u026A': 'I', '\u1D0A': 'J',
+  '\u1D0B': 'K', '\u029F': 'L', '\u1D0D': 'M', '\u0274': 'N', '\u1D0F': 'O',
+  '\u1D18': 'P', '\u0280': 'R', '\u0455': 'S', '\u1D1B': 'T', '\u1D1C': 'U',
+  '\u1D20': 'V', '\u1D21': 'W', '\u028F': 'Y', '\u1D22': 'Z',
+  // Full-width letters (A-Z, a-z)
+  '\uFF21': 'A', '\uFF22': 'B', '\uFF23': 'C', '\uFF24': 'D', '\uFF25': 'E',
+  '\uFF26': 'F', '\uFF27': 'G', '\uFF28': 'H', '\uFF29': 'I', '\uFF2A': 'J',
+  '\uFF2B': 'K', '\uFF2C': 'L', '\uFF2D': 'M', '\uFF2E': 'N', '\uFF2F': 'O',
+  '\uFF30': 'P', '\uFF31': 'Q', '\uFF32': 'R', '\uFF33': 'S', '\uFF34': 'T',
+  '\uFF35': 'U', '\uFF36': 'V', '\uFF37': 'W', '\uFF38': 'X', '\uFF39': 'Y',
+  '\uFF3A': 'Z',
+  '\uFF41': 'a', '\uFF42': 'b', '\uFF43': 'c', '\uFF44': 'd', '\uFF45': 'e',
+  '\uFF46': 'f', '\uFF47': 'g', '\uFF48': 'h', '\uFF49': 'i', '\uFF4A': 'j',
+  '\uFF4B': 'k', '\uFF4C': 'l', '\uFF4D': 'm', '\uFF4E': 'n', '\uFF4F': 'o',
+  '\uFF50': 'p', '\uFF51': 'q', '\uFF52': 'r', '\uFF53': 's', '\uFF54': 't',
+  '\uFF55': 'u', '\uFF56': 'v', '\uFF57': 'w', '\uFF58': 'x', '\uFF59': 'y',
+  '\uFF5A': 'z',
+  // Full-width numbers
+  '\uFF10': '0', '\uFF11': '1', '\uFF12': '2', '\uFF13': '3', '\uFF14': '4',
+  '\uFF15': '5', '\uFF16': '6', '\uFF17': '7', '\uFF18': '8', '\uFF19': '9',
+};
+
+/**
+ * Normalize Unicode characters to their ASCII equivalents.
+ * Converts superscript, subscript, small caps, and full-width characters to standard ASCII.
+ * This allows quality suffixes like "ᵁᴴᴰ" to be detected as "UHD".
+ */
+export function normalizeUnicodeToAscii(input: string): string {
+  let result = '';
+  for (const char of input) {
+    result += UNICODE_TO_ASCII_MAP[char] ?? char;
+  }
+  return result;
+}
+
+/**
+ * Strip leading separator characters (pipes, dashes, colons) from a string.
+ * Handles patterns like "| UK | Channel Name" -> "UK | Channel Name"
+ */
+function stripLeadingSeparators(name: string): string {
+  return name.replace(/^[\s|:\-/]+/, '');
+}
+
 // Separator types for channel number prefix and country prefix
 export type NumberSeparator = '-' | ':' | '|';
 
@@ -27,7 +96,8 @@ export type NumberSeparator = '-' | ':' | '|';
  * Handles both named suffixes (FHD, UHD, 4K, HD, SD) and arbitrary resolutions (1080p, 720p, 476p, etc.)
  */
 function stripQualitySuffixes(name: string): string {
-  let result = name;
+  // Normalize Unicode chars first to strip superscript quality like "ᵁᴴᴰ"
+  let result = normalizeUnicodeToAscii(name);
 
   // First strip named quality suffixes from the constant list
   for (const suffix of QUALITY_SUFFIXES) {
@@ -72,7 +142,8 @@ export interface NormalizeOptions {
  * - Higher resolution numbers = higher quality = lower priority value
  */
 export function getStreamQualityPriority(streamName: string): number {
-  const upperName = streamName.toUpperCase();
+  // Normalize Unicode chars first to detect superscript quality like "ᵁᴴᴰ"
+  const upperName = normalizeUnicodeToAscii(streamName).toUpperCase();
 
   // First check for named quality indicators (4K, UHD, FHD, HD, SD)
   // These take precedence over numeric resolution parsing
@@ -331,7 +402,8 @@ export function detectNetworkSuffixes(streams: { name: string }[], customSuffixe
  * Returns the country code if found, null otherwise.
  */
 export function getCountryPrefix(name: string): string | null {
-  const trimmedName = name.trim();
+  // Strip leading separators to handle patterns like "| UK | Channel Name"
+  const trimmedName = stripLeadingSeparators(name.trim());
 
   // Check for each country prefix at the start of the name
   // Must be followed by a separator (space, colon, hyphen, pipe, etc.) or end of match
@@ -350,7 +422,8 @@ export function getCountryPrefix(name: string): string | null {
  * Strip country prefix and any trailing punctuation from a name.
  */
 export function stripCountryPrefix(name: string): string {
-  const trimmedName = name.trim();
+  // Strip leading separators to handle patterns like "| UK | Channel Name"
+  const trimmedName = stripLeadingSeparators(name.trim());
 
   // Try to match and remove country prefix with separator
   for (const prefix of COUNTRY_PREFIXES) {
@@ -545,7 +618,12 @@ export function normalizeStreamName(name: string, timezonePreferenceOrOptions: T
   // Otherwise fall back to the stripNetwork/stripSuffix boolean flags
   const useTagBasedNormalization = !!normalizationSettings;
 
-  let normalized = name.trim();
+  // Apply Unicode normalization first to convert superscript/special chars to ASCII
+  // This allows detection of quality suffixes like "ᵁᴴᴰ" as "UHD"
+  let normalized = normalizeUnicodeToAscii(name.trim());
+
+  // Strip leading separators to handle patterns like "| UK | Channel Name"
+  normalized = stripLeadingSeparators(normalized);
 
   // Tag-based normalization (new system) vs. legacy boolean flags
   if (useTagBasedNormalization && normalizationSettings) {
