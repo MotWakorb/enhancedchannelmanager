@@ -10,6 +10,7 @@ import type { Channel, Stream, EPGData, EPGSource } from '../types';
 import {
   batchFindEPGMatchesAsync,
   getEPGSourceName,
+  matchesEPGSearch,
   type EPGMatchResult,
   type EPGAssignment,
   type BatchMatchProgress,
@@ -894,23 +895,10 @@ const ConflictCard = memo(function ConflictCard({ result, epgSources, allEpgData
   // State for "Search All EPG" mode
   const [searchAllMode, setSearchAllMode] = useState(false);
 
-  // Fuzzy multi-word search matcher
-  // Splits search into words and checks if all words appear in the EPG entry
+  // Fuzzy multi-word search matcher using shared utility
   const matchesSearch = useCallback((epg: EPGData, searchWords: string[]): boolean => {
-    const lowerName = epg.name.toLowerCase();
-    const lowerTvgId = epg.tvg_id.toLowerCase();
-    const normalizedName = lowerName.replace(/[^a-z0-9]/g, '');
-    const normalizedTvgId = lowerTvgId.replace(/[^a-z0-9]/g, '');
-    const sourceName = getEPGSourceName(epg, epgSources).toLowerCase();
-
-    return searchWords.every(word => {
-      const normalizedWord = word.replace(/[^a-z0-9]/g, '');
-      return lowerName.includes(word) ||
-             lowerTvgId.includes(word) ||
-             normalizedName.includes(normalizedWord) ||
-             normalizedTvgId.includes(normalizedWord) ||
-             sourceName.includes(word);
-    });
+    const sourceName = getEPGSourceName(epg, epgSources);
+    return matchesEPGSearch(epg, searchWords, sourceName);
   }, [epgSources]);
 
   // Build a map from EPG id to confidence score for quick lookup
@@ -1080,24 +1068,10 @@ const EPGSearchCard = memo(function EPGSearchCard({
   searchTerm,
   onSearchChange,
 }: EPGSearchCardProps) {
-  // Search across all EPG data with fuzzy multi-word matching
-  // Splits search into words and checks if all words appear in the EPG entry
+  // Fuzzy multi-word search matcher using shared utility
   // This allows "BBC News US" to match "BBCNews(BBCNEEU).us"
   const matchesSearch = useCallback((epg: EPGData, searchWords: string[]): boolean => {
-    const lowerName = epg.name.toLowerCase();
-    const lowerTvgId = epg.tvg_id.toLowerCase();
-    // Also create a version with spaces removed for matching against concatenated names
-    const normalizedName = lowerName.replace(/[^a-z0-9]/g, '');
-    const normalizedTvgId = lowerTvgId.replace(/[^a-z0-9]/g, '');
-
-    // Each search word must appear in either name, tvg_id, or their normalized versions
-    return searchWords.every(word => {
-      const normalizedWord = word.replace(/[^a-z0-9]/g, '');
-      return lowerName.includes(word) ||
-             lowerTvgId.includes(word) ||
-             normalizedName.includes(normalizedWord) ||
-             normalizedTvgId.includes(normalizedWord);
-    });
+    return matchesEPGSearch(epg, searchWords);
   }, []);
 
   const searchResults = useMemo(() => {
