@@ -168,21 +168,21 @@ function M3UAccountRow({
         <span className="setting-item">
           Refresh: {account.refresh_interval === 0 ? 'Disabled' : `${account.refresh_interval}h`}
         </span>
-        {onPriorityChange && (
-          <span className="setting-item priority-setting" title="Sort priority for Smart Sort (higher = better)">
-            <span className="material-icons priority-icon">low_priority</span>
-            <input
-              type="number"
-              className="priority-input"
-              value={priority}
-              onChange={(e) => onPriorityChange(account.id, parseInt(e.target.value) || 0)}
-              min={0}
-              max={100}
-              title="Priority (0-100, higher = better)"
-            />
-          </span>
-        )}
       </div>
+
+      {onPriorityChange && (
+        <div className="account-priority">
+          <input
+            type="number"
+            className="priority-input"
+            value={priority}
+            onChange={(e) => onPriorityChange(account.id, parseInt(e.target.value) || 0)}
+            min={0}
+            max={100}
+            title="Sort priority (0-100, higher = better)"
+          />
+        </div>
+      )}
 
       <div className="account-updated">
         <span className="updated-label">Updated:</span>
@@ -672,6 +672,7 @@ export function M3UManagerTab({
             <span className="col-info">Account</span>
             <span className="col-groups">Groups</span>
             <span className="col-settings">Settings</span>
+            <span className="col-priority" title="Sort priority for Smart Sort (higher = better)">Priority</span>
             <span className="col-updated">Last Updated</span>
             <span className="col-actions">Actions</span>
           </div>
