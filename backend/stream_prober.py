@@ -1033,20 +1033,21 @@ class StreamProber:
 
             for criterion in active_criteria:
                 if criterion == "resolution":
-                    # Parse resolution (e.g., "1920x1080" -> width * height)
+                    # Parse resolution (e.g., "1920x1080" -> height only, matching frontend)
                     resolution_value = 0
                     if stat.resolution:
                         try:
                             parts = stat.resolution.split('x')
                             if len(parts) == 2:
-                                resolution_value = int(parts[0]) * int(parts[1])
+                                resolution_value = int(parts[1])  # Use height only
                         except:
                             pass
                     # Negate for descending sort (higher values first)
                     sort_values.append(-resolution_value)
 
                 elif criterion == "bitrate":
-                    bitrate_value = stat.bitrate or 0
+                    # Use video_bitrate first (from probe), fallback to overall bitrate
+                    bitrate_value = stat.video_bitrate or stat.bitrate or 0
                     sort_values.append(-bitrate_value)
 
                 elif criterion == "framerate":
