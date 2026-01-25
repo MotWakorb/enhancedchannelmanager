@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Request, Body
+from fastapi import FastAPI, HTTPException, Request, Body, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
@@ -398,6 +398,7 @@ class BulkCreateChannelOp(BaseModel):
     logoId: Optional[int] = None
     logoUrl: Optional[str] = None
     tvgId: Optional[str] = None
+    tvcGuideStationId: Optional[str] = None  # Gracenote ID from M3U tvc-guide-stationid
 
 
 class BulkDeleteChannelOp(BaseModel):
@@ -898,6 +899,28 @@ async def get_channels(
         total_time = (time.time() - start_time) * 1000
         result_count = len(result.get('results', []))
         total_count = result.get('count', 0)
+
+        # Debug logging: count channels per group_id on first page of unfiltered requests
+        if page == 1 and not search and not channel_group:
+            channels = result.get('results', [])
+            group_counts: dict = {}
+            for ch in channels:
+                group_id = ch.get('channel_group_id')
+                group_name = ch.get('channel_group_name', 'Unknown')
+                key = f"{group_id}:{group_name}"
+                if key not in group_counts:
+                    group_counts[key] = {'count': 0, 'sample_channels': []}
+                group_counts[key]['count'] += 1
+                # Keep first 3 sample channel names per group for debugging
+                if len(group_counts[key]['sample_channels']) < 3:
+                    group_counts[key]['sample_channels'].append(
+                        f"#{ch.get('channel_number')} {ch.get('name', 'unnamed')}"
+                    )
+
+            logger.info(f"[CHANNELS-DEBUG] Page 1 stats: {result_count} channels returned, API total={total_count}")
+            logger.info(f"[CHANNELS-DEBUG] Channels per group_id (page 1 only):")
+            for key, data in sorted(group_counts.items(), key=lambda x: -x[1]['count']):
+                logger.info(f"  {key}: {data['count']} channels (samples: {data['sample_channels']})")
 
         logger.debug(
             f"[CHANNELS] Fetched {result_count} channels (total={total_count}, page={page}) "
@@ -1645,7 +1668,10 @@ async def bulk_commit_operations(request: BulkCommitRequest):
                         channel_data["logo_id"] = logo_id
                     if op.tvgId is not None:
                         channel_data["tvg_id"] = op.tvgId
+                    if op.tvcGuideStationId is not None:
+                        channel_data["tvc_guide_stationid"] = op.tvcGuideStationId
 
+                    logger.debug(f"[BULK-APPLY] op.tvgId={op.tvgId}, op.tvcGuideStationId={op.tvcGuideStationId}")
                     logger.debug(f"[BULK-APPLY] Creating channel with data: {channel_data}")
                     new_channel = await client.create_channel(channel_data)
 
@@ -2185,6 +2211,167 @@ async def get_orphaned_channel_groups():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/api/channel-groups/auto-created")
+async def get_groups_with_auto_created_channels():
+    """Find channel groups that contain auto_created channels.
+
+    Returns groups with at least one channel that has auto_created=True.
+    """
+    client = get_client()
+    try:
+        # Get all channel groups
+        all_groups = await client.get_channel_groups()
+        group_map = {g["id"]: g for g in all_groups}
+
+        # Fetch all channels (paginated) and find auto_created ones
+        auto_created_by_group: dict[int, list[dict]] = {}
+        page = 1
+        total_auto_created = 0
+
+        while True:
+            result = await client.get_channels(page=page, page_size=500)
+            page_channels = result.get("results", [])
+
+            for channel in page_channels:
+                if channel.get("auto_created"):
+                    total_auto_created += 1
+                    group_id = channel.get("channel_group_id")
+                    if group_id is not None:
+                        if group_id not in auto_created_by_group:
+                            auto_created_by_group[group_id] = []
+                        auto_created_by_group[group_id].append({
+                            "id": channel.get("id"),
+                            "name": channel.get("name"),
+                            "channel_number": channel.get("channel_number"),
+                            "auto_created_by": channel.get("auto_created_by"),
+                            "auto_created_by_name": channel.get("auto_created_by_name"),
+                        })
+
+            if not result.get("next"):
+                break
+            page += 1
+            if page > 50:  # Safety limit
+                break
+
+        # Build result with group info
+        groups_with_auto_created = []
+        for group_id, channels in auto_created_by_group.items():
+            group_info = group_map.get(group_id, {})
+            groups_with_auto_created.append({
+                "id": group_id,
+                "name": group_info.get("name", f"Unknown Group {group_id}"),
+                "auto_created_count": len(channels),
+                "sample_channels": channels[:5],  # First 5 as samples
+            })
+
+        # Sort by name
+        groups_with_auto_created.sort(key=lambda g: g["name"].lower())
+
+        logger.info(f"Found {len(groups_with_auto_created)} groups with {total_auto_created} total auto_created channels")
+        return {
+            "groups": groups_with_auto_created,
+            "total_auto_created_channels": total_auto_created,
+        }
+    except Exception as e:
+        logger.error(f"Failed to find groups with auto_created channels: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class ClearAutoCreatedRequest(BaseModel):
+    group_ids: list[int]
+
+
+@app.post("/api/channels/clear-auto-created")
+async def clear_auto_created_flag(request: ClearAutoCreatedRequest):
+    """Clear the auto_created flag from all channels in the specified groups.
+
+    This converts auto_created channels to manual channels by setting
+    auto_created=False and auto_created_by=None.
+    """
+    client = get_client()
+    group_ids = set(request.group_ids)
+
+    if not group_ids:
+        raise HTTPException(status_code=400, detail="No group IDs provided")
+
+    try:
+        # Fetch all channels and find auto_created ones in the specified groups
+        channels_to_update = []
+        page = 1
+
+        while True:
+            result = await client.get_channels(page=page, page_size=500)
+            page_channels = result.get("results", [])
+
+            for channel in page_channels:
+                if channel.get("auto_created") and channel.get("channel_group_id") in group_ids:
+                    channels_to_update.append({
+                        "id": channel.get("id"),
+                        "name": channel.get("name"),
+                        "channel_number": channel.get("channel_number"),
+                        "channel_group_id": channel.get("channel_group_id"),
+                    })
+
+            if not result.get("next"):
+                break
+            page += 1
+            if page > 50:  # Safety limit
+                break
+
+        if not channels_to_update:
+            return {
+                "status": "ok",
+                "message": "No auto_created channels found in the specified groups",
+                "updated_count": 0,
+                "updated_channels": [],
+                "failed_channels": [],
+            }
+
+        logger.info(f"Clearing auto_created flag from {len(channels_to_update)} channels in groups {group_ids}")
+
+        # Update each channel via Dispatcharr API
+        updated_channels = []
+        failed_channels = []
+
+        for channel in channels_to_update:
+            channel_id = channel["id"]
+            try:
+                await client.update_channel(channel_id, {
+                    "auto_created": False,
+                    "auto_created_by": None,
+                })
+                updated_channels.append(channel)
+                logger.debug(f"Cleared auto_created flag from channel {channel_id} ({channel['name']})")
+            except Exception as update_err:
+                failed_channels.append({**channel, "error": str(update_err)})
+                logger.error(f"Failed to clear auto_created flag from channel {channel_id}: {update_err}")
+
+        # Log to journal
+        journal.log_entry(
+            category="channel",
+            action_type="bulk_update",
+            entity_id=None,
+            entity_name="Clear Auto-Created Flag",
+            description=f"Cleared auto_created flag from {len(updated_channels)} channels in {len(group_ids)} group(s)",
+            after_value={
+                "group_ids": list(group_ids),
+                "updated_count": len(updated_channels),
+                "failed_count": len(failed_channels),
+            },
+        )
+
+        return {
+            "status": "ok",
+            "message": f"Cleared auto_created flag from {len(updated_channels)} channel(s)",
+            "updated_count": len(updated_channels),
+            "updated_channels": updated_channels[:20],  # Limit response size
+            "failed_channels": failed_channels,
+        }
+    except Exception as e:
+        logger.error(f"Failed to clear auto_created flags: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/api/channel-groups/with-streams")
 async def get_channel_groups_with_streams():
     """Get all channel groups that have channels with streams.
@@ -2208,7 +2395,12 @@ async def get_channel_groups_with_streams():
         page = 1
         total_channels = 0
         channels_with_streams = 0
+        channels_without_streams = 0
+        auto_created_count = 0
         sample_channel_groups = []  # Track first 5 for debugging
+        sample_channels_no_streams = []  # Track channels without streams
+        channels_by_group_id: dict = {}  # Track channel count per group for debugging
+        sample_auto_created = []  # Track auto-created channels for debugging
 
         while True:
             result = await client.get_channels(page=page, page_size=500)
@@ -2216,12 +2408,40 @@ async def get_channel_groups_with_streams():
             total_channels += len(page_channels)
 
             for channel in page_channels:
+                channel_group_id = channel.get("channel_group_id")
+                channel_number = channel.get("channel_number")
+                channel_name = channel.get("name")
+                is_auto_created = channel.get("auto_created", False)
+
+                # Track auto-created channels
+                if is_auto_created:
+                    auto_created_count += 1
+                    if len(sample_auto_created) < 10:
+                        group_name = group_map.get(channel_group_id, {}).get("name", "Unknown")
+                        sample_auto_created.append({
+                            "channel_id": channel.get("id"),
+                            "channel_name": channel_name,
+                            "channel_number": channel_number,
+                            "channel_group_id": channel_group_id,
+                            "group_name": group_name,
+                            "auto_created_by": channel.get("auto_created_by"),
+                            "auto_created_by_name": channel.get("auto_created_by_name")
+                        })
+
+                # Track channels per group
+                if channel_group_id is not None:
+                    if channel_group_id not in channels_by_group_id:
+                        channels_by_group_id[channel_group_id] = {"count": 0, "with_streams": 0, "samples": []}
+                    channels_by_group_id[channel_group_id]["count"] += 1
+                    if len(channels_by_group_id[channel_group_id]["samples"]) < 3:
+                        channels_by_group_id[channel_group_id]["samples"].append(f"#{channel_number} {channel_name}")
+
                 # Check if channel has any streams
                 stream_ids = channel.get("streams", [])
                 if stream_ids:  # Has at least one stream
                     channels_with_streams += 1
-                    # Record this group as having a channel with streams
-                    channel_group_id = channel.get("channel_group_id")
+                    if channel_group_id is not None:
+                        channels_by_group_id[channel_group_id]["with_streams"] += 1
 
                     # Collect samples for debugging - dump first channel completely
                     if len(sample_channel_groups) == 0:
@@ -2230,7 +2450,8 @@ async def get_channel_groups_with_streams():
                     if len(sample_channel_groups) < 5:
                         sample_channel_groups.append({
                             "channel_id": channel.get("id"),
-                            "channel_name": channel.get("name"),
+                            "channel_name": channel_name,
+                            "channel_number": channel_number,
                             "channel_group_id": channel_group_id,
                             "channel_group_type": type(channel_group_id).__name__,
                             "stream_count": len(stream_ids)
@@ -2239,6 +2460,18 @@ async def get_channel_groups_with_streams():
                     # IMPORTANT: Check for not None instead of truthy to handle group ID 0
                     if channel_group_id is not None:
                         groups_with_streams_ids.add(channel_group_id)
+                else:
+                    # Track channels WITHOUT streams for debugging
+                    channels_without_streams += 1
+                    if len(sample_channels_no_streams) < 10:
+                        sample_channels_no_streams.append({
+                            "channel_id": channel.get("id"),
+                            "channel_name": channel_name,
+                            "channel_number": channel_number,
+                            "channel_group_id": channel_group_id,
+                            "streams_field": stream_ids,
+                            "streams_field_type": type(stream_ids).__name__
+                        })
 
             if not result.get("next"):
                 break
@@ -2250,9 +2483,44 @@ async def get_channel_groups_with_streams():
         if sample_channel_groups:
             logger.info(f"Sample channels with streams (first 5): {sample_channel_groups}")
 
+        # Log channels without streams
+        if sample_channels_no_streams:
+            logger.warning(f"[DEBUG] Found {channels_without_streams} channels WITHOUT streams. Samples: {sample_channels_no_streams}")
+
+        # Log auto-created channels summary
+        logger.info(f"[DEBUG] Auto-created channels: {auto_created_count} out of {total_channels} total")
+        if sample_auto_created:
+            logger.info(f"[DEBUG] Sample auto-created channels: {sample_auto_created}")
+
+        # Log groups that have channels but NO streams
+        groups_with_channels_no_streams = []
+        for gid, data in channels_by_group_id.items():
+            if data["with_streams"] == 0 and data["count"] > 0:
+                group_name = group_map.get(gid, {}).get("name", "Unknown")
+                groups_with_channels_no_streams.append({
+                    "group_id": gid,
+                    "group_name": group_name,
+                    "channel_count": data["count"],
+                    "samples": data["samples"]
+                })
+
+        if groups_with_channels_no_streams:
+            logger.warning(f"[DEBUG] Groups with channels but NO streams ({len(groups_with_channels_no_streams)}): {groups_with_channels_no_streams[:20]}")
+
         logger.info(f"Scanned {total_channels} channels, found {channels_with_streams} with streams")
         logger.info(f"Found {len(groups_with_streams_ids)} groups with channels containing streams")
         logger.info(f"Group IDs found: {sorted(list(groups_with_streams_ids))}")
+
+        # Log group names for groups with streams
+        groups_with_streams_names = []
+        for gid in sorted(groups_with_streams_ids):
+            group_name = group_map.get(gid, {}).get("name", "Unknown")
+            groups_with_streams_names.append(f"{gid}:{group_name}")
+        logger.info(f"[DEBUG] Groups with streams (id:name): {groups_with_streams_names}")
+
+        # Log any groups named "Entertainment" specifically
+        entertainment_groups = [g for g in all_groups if "entertainment" in g.get("name", "").lower()]
+        logger.info(f"[DEBUG] Groups containing 'Entertainment' in name: {entertainment_groups}")
         logger.info(f"Group IDs in group_map: {sorted(list(group_map.keys()))}")
 
         # Build the result list
@@ -2359,8 +2627,12 @@ async def get_streams(
 
 @app.get("/api/stream-groups")
 async def get_stream_groups(bypass_cache: bool = False):
+    """Get all stream groups with their stream counts.
+
+    Returns list of objects: [{"name": "Group Name", "count": 42}, ...]
+    """
     cache = get_cache()
-    cache_key = "stream_groups"
+    cache_key = "stream_groups_with_counts"
 
     # Try cache first (unless bypassed)
     if not bypass_cache:
@@ -2370,7 +2642,7 @@ async def get_stream_groups(bypass_cache: bool = False):
 
     client = get_client()
     try:
-        result = await client.get_stream_groups()
+        result = await client.get_stream_groups_with_counts()
         cache.set(cache_key, result)
         return result
     except Exception as e:
@@ -3167,6 +3439,86 @@ async def get_m3u_account(account_id: int):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/api/m3u/accounts/{account_id}/stream-metadata")
+async def get_m3u_stream_metadata(account_id: int):
+    """Fetch and parse M3U file to extract stream metadata (tvg-id -> tvc-guide-stationid mapping).
+
+    This parses the M3U file directly to get attributes like tvc-guide-stationid
+    that Dispatcharr doesn't expose via its API.
+    """
+    client = get_client()
+    try:
+        # Get the M3U account details
+        account = await client.get_m3u_account(account_id)
+
+        # Construct the M3U URL based on account type
+        account_type = account.get("account_type", "M3U")
+        server_url = account.get("server_url")
+
+        if not server_url:
+            raise HTTPException(status_code=400, detail="M3U account has no server URL")
+
+        if account_type == "XC":
+            # XtreamCodes: construct M3U URL from credentials
+            username = account.get("username", "")
+            password = account.get("password", "")
+            # Remove trailing slash from server_url if present
+            base_url = server_url.rstrip("/")
+            m3u_url = f"{base_url}/get.php?username={username}&password={password}&type=m3u_plus&output=ts"
+        else:
+            # Standard M3U: server_url is the direct URL
+            m3u_url = server_url
+
+        # Fetch the M3U file
+        async with httpx.AsyncClient(timeout=60.0) as http_client:
+            response = await http_client.get(m3u_url, follow_redirects=True)
+            response.raise_for_status()
+            m3u_content = response.text
+
+        # Parse EXTINF lines to extract metadata
+        # Format: #EXTINF:-1 tvg-id="ID" tvc-guide-stationid="12345" ...,Channel Name
+        metadata = {}
+
+        # Regex to match key="value" or key=value patterns in EXTINF lines
+        attr_pattern = re.compile(r'([\w-]+)=["\']?([^"\'>\s,]+)["\']?')
+
+        lines = m3u_content.split('\n')
+        for line in lines:
+            line = line.strip()
+            if line.startswith('#EXTINF:'):
+                # Extract all attributes from the EXTINF line
+                attrs = dict(attr_pattern.findall(line))
+
+                tvg_id = attrs.get('tvg-id')
+                tvc_station_id = attrs.get('tvc-guide-stationid')
+
+                # Only include entries that have a tvg-id (needed for matching)
+                if tvg_id:
+                    entry = {}
+                    if tvc_station_id:
+                        entry['tvc-guide-stationid'] = tvc_station_id
+                    # Include other useful attributes
+                    if 'tvg-name' in attrs:
+                        entry['tvg-name'] = attrs['tvg-name']
+                    if 'tvg-logo' in attrs:
+                        entry['tvg-logo'] = attrs['tvg-logo']
+                    if 'group-title' in attrs:
+                        entry['group-title'] = attrs['group-title']
+
+                    if entry:  # Only add if we have at least one attribute
+                        metadata[tvg_id] = entry
+
+        logger.info(f"Parsed M3U metadata for account {account_id}: {len(metadata)} entries with tvg-id")
+        return {"metadata": metadata, "count": len(metadata)}
+
+    except httpx.HTTPError as e:
+        logger.error(f"Failed to fetch M3U file for account {account_id}: {e}")
+        raise HTTPException(status_code=502, detail=f"Failed to fetch M3U file: {str(e)}")
+    except Exception as e:
+        logger.error(f"Failed to parse M3U metadata for account {account_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.post("/api/m3u/accounts")
 async def create_m3u_account(request: Request):
     """Create a new M3U account."""
@@ -3188,6 +3540,62 @@ async def create_m3u_account(request: Request):
         return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/m3u/upload")
+async def upload_m3u_file(file: UploadFile = File(...)):
+    """Upload an M3U file and return the path for use with M3U accounts.
+
+    The file is saved to /config/m3u_uploads/ directory.
+    Returns the full path that can be used as file_path when creating/updating M3U accounts.
+    """
+    import aiofiles
+    from pathlib import Path
+    import uuid
+
+    # Create uploads directory if it doesn't exist
+    uploads_dir = CONFIG_DIR / "m3u_uploads"
+    uploads_dir.mkdir(parents=True, exist_ok=True)
+
+    # Validate file extension
+    original_name = file.filename or "upload.m3u"
+    if not original_name.lower().endswith(('.m3u', '.m3u8')):
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid file type. Only .m3u and .m3u8 files are allowed."
+        )
+
+    # Create a unique filename to avoid collisions
+    # Use original name with a short UUID prefix for uniqueness
+    safe_name = re.sub(r'[^\w\-_\.]', '_', original_name)
+    unique_prefix = str(uuid.uuid4())[:8]
+    final_name = f"{unique_prefix}_{safe_name}"
+    file_path = uploads_dir / final_name
+
+    try:
+        # Read and save the file
+        content = await file.read()
+        async with aiofiles.open(file_path, 'wb') as f:
+            await f.write(content)
+
+        logger.info(f"M3U file uploaded: {file_path} ({len(content)} bytes)")
+
+        # Log to journal
+        journal.log_entry(
+            category="m3u",
+            action_type="upload",
+            entity_name=original_name,
+            description=f"Uploaded M3U file '{original_name}' ({len(content)} bytes)",
+        )
+
+        return {
+            "file_path": str(file_path),
+            "original_name": original_name,
+            "size": len(content)
+        }
+    except Exception as e:
+        logger.error(f"Failed to upload M3U file: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to save file: {str(e)}")
 
 
 @app.put("/api/m3u/accounts/{account_id}")

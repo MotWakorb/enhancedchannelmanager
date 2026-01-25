@@ -135,7 +135,6 @@ export function HistoryToolbar({
         title="Create checkpoint"
       >
         <span className="material-icons save-point-icon">bookmark_add</span>
-        <span>Checkpoint</span>
       </button>
 
       {/* Save Points Dropdown */}

@@ -66,11 +66,11 @@
   position: relative;
 }
 
-.dropdown-trigger {
+.save-points-dropdown .dropdown-trigger {
   min-width: 120px;
 }
 
-.dropdown-arrow {
+.save-points-dropdown .dropdown-arrow {
   font-size: 0.6rem;
   margin-left: 0.25rem;
 }

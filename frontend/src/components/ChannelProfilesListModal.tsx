@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo, memo } from 'react';
 import type { ChannelProfile, Channel, ChannelGroup } from '../types';
 import * as api from '../services/api';
+import { naturalCompare } from '../utils/naturalSort';
 import './ChannelProfilesListModal.css';
 
 interface ChannelProfilesListModalProps {
@@ -266,6 +267,36 @@ export const ChannelProfilesListModal = memo(function ChannelProfilesListModal({
     });
   };
 
+  // Toggle all channels in a group
+  const handleToggleGroup = (groupChannels: typeof channelsWithState, enable: boolean) => {
+    setChannelChanges(prev => {
+      const newChanges = new Map(prev);
+      for (const ch of groupChannels) {
+        if (enable) {
+          // Enable: if currently disabled, add change; if already enabled, remove any pending disable
+          if (!ch.enabled) {
+            newChanges.set(ch.id, true);
+          } else if (newChanges.get(ch.id) === false) {
+            newChanges.delete(ch.id);
+          }
+        } else {
+          // Disable: if currently enabled, add change; if already disabled, remove any pending enable
+          if (ch.enabled) {
+            newChanges.set(ch.id, false);
+          } else if (newChanges.get(ch.id) === true) {
+            newChanges.delete(ch.id);
+          }
+        }
+      }
+      return newChanges;
+    });
+  };
+
+  // Check if all channels in a group are enabled
+  const isGroupEnabled = (groupChannels: typeof channelsWithState): boolean => {
+    return groupChannels.every(ch => getChannelEnabled(ch));
+  };
+
   const handleSaveChannelChanges = async () => {
     if (!selectedProfile || channelChanges.size === 0) return;
 
@@ -307,19 +338,19 @@ export const ChannelProfilesListModal = memo(function ChannelProfilesListModal({
 
   return (
     <div className="modal-overlay">
-      <div className="modal-content channel-profiles-modal" onClick={(e) => e.stopPropagation()}>
+      <div className="modal-container modal-lg channel-profiles-modal" onClick={(e) => e.stopPropagation()}>
         {viewMode === 'list' ? (
           <>
             <div className="modal-header">
               <h2>Channel Profiles</h2>
-              <button className="close-btn" onClick={onClose}>
-                &times;
+              <button className="modal-close-btn" onClick={onClose}>
+                <span className="material-icons">close</span>
               </button>
             </div>
 
             <div className="modal-toolbar">
-              <div className="toolbar-row">
-                <div className="search-box">
+              <div className="modal-toolbar-row">
+                <div className="modal-search-box">
                   <span className="material-icons">search</span>
                   <input
                     type="text"
@@ -333,9 +364,9 @@ export const ChannelProfilesListModal = memo(function ChannelProfilesListModal({
                     </button>
                   )}
                 </div>
-                <span className="profile-count">{profiles.length} profile{profiles.length !== 1 ? 's' : ''}</span>
+                <span className="modal-toolbar-count">{profiles.length} profile{profiles.length !== 1 ? 's' : ''}</span>
               </div>
-              <div className="toolbar-row create-row">
+              <div className="modal-toolbar-row create-row">
                 <input
                   type="text"
                   className="create-input"
@@ -345,7 +376,7 @@ export const ChannelProfilesListModal = memo(function ChannelProfilesListModal({
                   onKeyDown={(e) => e.key === 'Enter' && handleCreateProfile()}
                 />
                 <button
-                  className="btn-small create-btn"
+                  className="modal-btn-small create-btn"
                   onClick={handleCreateProfile}
                   disabled={!newProfileName.trim() || isCreating}
                 >
@@ -356,15 +387,15 @@ export const ChannelProfilesListModal = memo(function ChannelProfilesListModal({
 
             <div className="modal-body">
               {loading ? (
-                <div className="loading-state">
-                  <span className="material-icons spinning">sync</span>
+                <div className="modal-loading">
+                  <span className="material-icons">sync</span>
                   <p>Loading profiles...</p>
                 </div>
               ) : (
                 <>
                   {/* Profile list */}
                   {filteredProfiles.length === 0 ? (
-                    <div className="empty-state">
+                    <div className="modal-empty-state">
                       {search ? (
                         <p>No profiles match "{search}"</p>
                       ) : (
@@ -410,14 +441,14 @@ export const ChannelProfilesListModal = memo(function ChannelProfilesListModal({
                             {profile.isEditing ? (
                               <>
                                 <button
-                                  className="icon-btn"
+                                  className="modal-icon-btn"
                                   onClick={() => handleSaveEdit(profile)}
                                   title="Save"
                                 >
                                   <span className="material-icons">check</span>
                                 </button>
                                 <button
-                                  className="icon-btn"
+                                  className="modal-icon-btn"
                                   onClick={() => handleCancelEdit(profile.id)}
                                   title="Cancel"
                                 >
@@ -427,21 +458,21 @@ export const ChannelProfilesListModal = memo(function ChannelProfilesListModal({
                             ) : (
                               <>
                                 <button
-                                  className="icon-btn"
+                                  className="modal-icon-btn"
                                   onClick={() => handleOpenChannels(profile)}
                                   title="Manage channels"
                                 >
                                   <span className="material-icons">tune</span>
                                 </button>
                                 <button
-                                  className="icon-btn"
+                                  className="modal-icon-btn"
                                   onClick={() => handleStartEdit(profile)}
                                   title="Rename"
                                 >
                                   <span className="material-icons">edit</span>
                                 </button>
                                 <button
-                                  className="icon-btn danger"
+                                  className="modal-icon-btn danger"
                                   onClick={() => handleDeleteProfile(profile)}
                                   title="Delete"
                                 >
@@ -457,37 +488,33 @@ export const ChannelProfilesListModal = memo(function ChannelProfilesListModal({
                 </>
               )}
 
-              {error && <div className="error-message">{error}</div>}
+              {error && <div className="modal-error-banner"><span className="material-icons">error</span><span>{error}</span></div>}
             </div>
 
             <div className="modal-footer">
-              <div></div>
-              <button className="btn-secondary" onClick={onClose}>
-                Close
-              </button>
             </div>
           </>
         ) : (
           <>
             {/* Channel assignment view */}
             <div className="modal-header">
-              <div className="header-info">
-                <button className="back-btn" onClick={handleBackToList}>
+              <div className="modal-header-with-back">
+                <button className="modal-back-btn" onClick={handleBackToList}>
                   <span className="material-icons">arrow_back</span>
                 </button>
-                <div>
+                <div className="modal-header-info">
                   <h2>Manage Channels</h2>
-                  <span className="subtitle">{selectedProfile?.name}</span>
+                  <span className="modal-header-subtitle">{selectedProfile?.name}</span>
                 </div>
               </div>
-              <button className="close-btn" onClick={onClose}>
-                &times;
+              <button className="modal-close-btn" onClick={onClose}>
+                <span className="material-icons">close</span>
               </button>
             </div>
 
             <div className="modal-toolbar">
-              <div className="toolbar-row">
-                <div className="search-box">
+              <div className="modal-toolbar-row">
+                <div className="modal-search-box">
                   <span className="material-icons">search</span>
                   <input
                     type="text"
@@ -501,14 +528,14 @@ export const ChannelProfilesListModal = memo(function ChannelProfilesListModal({
                     </button>
                   )}
                 </div>
-                <span className="channel-count-label">{enabledCount} / {channels.length} enabled</span>
+                <span className="modal-toolbar-count">{enabledCount} / {channels.length} enabled</span>
               </div>
-              <div className="toolbar-row">
-                <div className="toolbar-actions">
-                  <button className="btn-small enable-btn" onClick={handleEnableAllVisible}>
+              <div className="modal-toolbar-row">
+                <div className="modal-toolbar-actions">
+                  <button className="modal-btn-small enable" onClick={handleEnableAllVisible}>
                     Enable Visible
                   </button>
-                  <button className="btn-small disable-btn" onClick={handleDisableAllVisible}>
+                  <button className="modal-btn-small disable" onClick={handleDisableAllVisible}>
                     Disable Visible
                   </button>
                 </div>
@@ -525,17 +552,39 @@ export const ChannelProfilesListModal = memo(function ChannelProfilesListModal({
 
             <div className="modal-body channels-view">
               {Array.from(groupedChannels.entries())
-                .sort((a, b) => getGroupName(a[0]).localeCompare(getGroupName(b[0])))
-                .map(([groupId, groupChannels]) => (
+                .sort((a, b) => {
+                  // Sort by lowest channel number in each group
+                  const aMin = Math.min(...a[1].map(ch => ch.channel_number ?? Infinity));
+                  const bMin = Math.min(...b[1].map(ch => ch.channel_number ?? Infinity));
+                  if (aMin !== bMin) return aMin - bMin;
+                  // Fall back to group name if same channel numbers
+                  return getGroupName(a[0]).localeCompare(getGroupName(b[0]));
+                })
+                .map(([groupId, groupChannels]) => {
+                  const groupEnabled = isGroupEnabled(groupChannels);
+                  return (
                   <div key={groupId ?? 'ungrouped'} className="channel-group-section">
                     <div className="channel-group-header">
+                      <label className="modal-toggle" onClick={(e) => e.stopPropagation()}>
+                        <input
+                          type="checkbox"
+                          checked={groupEnabled}
+                          onChange={() => handleToggleGroup(groupChannels, !groupEnabled)}
+                        />
+                        <span className="modal-toggle-slider"></span>
+                      </label>
                       <span className="group-name">{getGroupName(groupId)}</span>
                       <span className="group-channel-count">
                         {groupChannels.filter(ch => getChannelEnabled(ch)).length} / {groupChannels.length}
                       </span>
                     </div>
                     <div className="channel-list">
-                      {groupChannels.map(channel => {
+                      {[...groupChannels].sort((a, b) => {
+                        const aNum = a.channel_number ?? Infinity;
+                        const bNum = b.channel_number ?? Infinity;
+                        if (aNum !== bNum) return aNum - bNum;
+                        return naturalCompare(a.name, b.name);
+                      }).map(channel => {
                         const isEnabled = getChannelEnabled(channel);
                         const hasChange = channelChanges.has(channel.id);
                         return (
@@ -544,13 +593,13 @@ export const ChannelProfilesListModal = memo(function ChannelProfilesListModal({
                             className={`channel-item ${isEnabled ? 'enabled' : ''} ${hasChange ? 'changed' : ''}`}
                             onClick={() => handleToggleChannel(channel.id)}
                           >
-                            <label className="toggle" onClick={(e) => e.stopPropagation()}>
+                            <label className="modal-toggle" onClick={(e) => e.stopPropagation()}>
                               <input
                                 type="checkbox"
                                 checked={isEnabled}
                                 onChange={() => handleToggleChannel(channel.id)}
                               />
-                              <span className="toggle-slider"></span>
+                              <span className="modal-toggle-slider"></span>
                             </label>
                             <span className="channel-number">
                               {channel.channel_number ?? '--'}
@@ -563,17 +612,18 @@ export const ChannelProfilesListModal = memo(function ChannelProfilesListModal({
                       })}
                     </div>
                   </div>
-                ))}
+                  );
+                })}
             </div>
 
-            {error && <div className="error-message">{error}</div>}
+            {error && <div className="modal-error-banner"><span className="material-icons">error</span><span>{error}</span></div>}
 
             <div className="modal-footer">
-              <button className="btn-secondary" onClick={handleBackToList} disabled={savingChannels}>
+              <button className="modal-btn modal-btn-secondary" onClick={handleBackToList} disabled={savingChannels}>
                 Back
               </button>
               <button
-                className="btn-primary"
+                className="modal-btn modal-btn-primary"
                 onClick={handleSaveChannelChanges}
                 disabled={savingChannels || channelChanges.size === 0}
               >

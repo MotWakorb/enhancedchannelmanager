@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, memo } from 'react';
 import type { Channel, Logo } from '../types';
 import * as api from '../services/api';
+import './ModalBase.css';
 
 export interface ChannelMetadataChanges {
   channel_number?: number;
@@ -16,7 +17,7 @@ export interface EditChannelModalProps {
   channel: Channel;
   logos: Logo[];
   epgData: { id: number; tvg_id: string; name: string; icon_url: string | null; epg_source: number }[];
-  epgSources: { id: number; name: string }[];
+  epgSources: { id: number; name: string; source_type?: string }[];
   streamProfiles: { id: number; name: string; is_active: boolean }[];
   onClose: () => void;
   onSave: (changes: ChannelMetadataChanges) => Promise<void>;
@@ -66,9 +67,21 @@ export const EditChannelModal = memo(function EditChannelModal({
   const [epgSearch, setEpgSearch] = useState('');
   const [epgDropdownOpen, setEpgDropdownOpen] = useState(false);
 
+  // EPG source filter state - IDs of sources to search (empty = all non-dummy sources)
+  const [selectedEpgSourceIds, setSelectedEpgSourceIds] = useState<Set<number>>(new Set());
+  const [epgSourceFilterOpen, setEpgSourceFilterOpen] = useState(false);
+  const epgSourceFilterRef = useRef<HTMLDivElement>(null);
+
   // TVG-ID from EPG picker state
   const [tvgIdPickerOpen, setTvgIdPickerOpen] = useState(false);
   const [tvgIdSearch, setTvgIdSearch] = useState('');
+
+  // Stream Profile dropdown state
+  const [streamProfileDropdownOpen, setStreamProfileDropdownOpen] = useState(false);
+  const streamProfileDropdownRef = useRef<HTMLDivElement>(null);
+
+  // Filter EPG sources to exclude dummy types
+  const nonDummyEpgSources = epgSources.filter(s => s.source_type !== 'dummy');
 
   const [saving, setSaving] = useState(false);
   const [showDiscardConfirm, setShowDiscardConfirm] = useState(false);
@@ -220,7 +233,19 @@ export const EditChannelModal = memo(function EditChannelModal({
     setTvgIdSearch(value);
   };
 
+  // Get non-dummy EPG source IDs for filtering
+  const nonDummyEpgSourceIds = new Set(nonDummyEpgSources.map(s => s.id));
+
   const filteredEpgData = epgData.filter((epg) => {
+    // First filter by EPG source
+    // If specific sources selected, only show from those; otherwise show all non-dummy sources
+    if (selectedEpgSourceIds.size > 0) {
+      if (!selectedEpgSourceIds.has(epg.epg_source)) return false;
+    } else {
+      // When no filter selected, exclude dummy EPG sources
+      if (!nonDummyEpgSourceIds.has(epg.epg_source)) return false;
+    }
+    // Then filter by search term
     const searchTerm = (epgDropdownOpen ? epgSearch : tvgIdSearch).toLowerCase();
     if (!searchTerm) return true;
     return (
@@ -230,6 +255,13 @@ export const EditChannelModal = memo(function EditChannelModal({
   });
 
   const filteredTvgIdEpgData = epgData.filter((epg) => {
+    // First filter by EPG source (same logic)
+    if (selectedEpgSourceIds.size > 0) {
+      if (!selectedEpgSourceIds.has(epg.epg_source)) return false;
+    } else {
+      if (!nonDummyEpgSourceIds.has(epg.epg_source)) return false;
+    }
+    // Then filter by search term
     const searchTerm = tvgIdSearch.toLowerCase();
     if (!searchTerm) return true;
     return (
@@ -283,16 +315,64 @@ export const EditChannelModal = memo(function EditChannelModal({
     }
   }, [epgDropdownOpen]);
 
+  // Close EPG source filter dropdown on outside click
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (epgSourceFilterRef.current && !epgSourceFilterRef.current.contains(event.target as Node)) {
+        setEpgSourceFilterOpen(false);
+      }
+    };
+
+    if (epgSourceFilterOpen) {
+      document.addEventListener('mousedown', handleClickOutside);
+      return () => document.removeEventListener('mousedown', handleClickOutside);
+    }
+  }, [epgSourceFilterOpen]);
+
+  // Close stream profile dropdown on outside click
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (streamProfileDropdownRef.current && !streamProfileDropdownRef.current.contains(event.target as Node)) {
+        setStreamProfileDropdownOpen(false);
+      }
+    };
+
+    if (streamProfileDropdownOpen) {
+      document.addEventListener('mousedown', handleClickOutside);
+      return () => document.removeEventListener('mousedown', handleClickOutside);
+    }
+  }, [streamProfileDropdownOpen]);
+
+  // Toggle EPG source selection
+  const handleToggleEpgSource = (sourceId: number) => {
+    setSelectedEpgSourceIds(prev => {
+      const next = new Set(prev);
+      if (next.has(sourceId)) {
+        next.delete(sourceId);
+      } else {
+        next.add(sourceId);
+      }
+      return next;
+    });
+  };
+
+  // Get display text for EPG source filter
+  const epgSourceFilterLabel = selectedEpgSourceIds.size === 0
+    ? 'All Sources'
+    : selectedEpgSourceIds.size === 1
+      ? nonDummyEpgSources.find(s => selectedEpgSourceIds.has(s.id))?.name || '1 source'
+      : `${selectedEpgSourceIds.size} sources`;
+
   return (
-    <div className="edit-channel-modal-overlay">
-      <div className="edit-channel-modal" onClick={(e) => e.stopPropagation()}>
-        <div className="edit-channel-titlebar">
-          <span className="edit-channel-titlebar-text">Edit Channel</span>
-          <button className="edit-channel-titlebar-close" onClick={handleClose} title="Close">
+    <div className="modal-overlay">
+      <div className="modal-container edit-channel-modal">
+        <div className="modal-header">
+          <h2>Edit Channel</h2>
+          <button className="modal-close-btn" onClick={handleClose} title="Close">
             <span className="material-icons">close</span>
           </button>
         </div>
-        <div className="edit-channel-content">
+        <div className="modal-body">
         {/* Channel Number and Name Section */}
         <div className="edit-channel-header-fields">
           <div className="edit-channel-number-field">
@@ -459,6 +539,50 @@ export const EditChannelModal = memo(function EditChannelModal({
               </button>
             </div>
           )}
+          {/* EPG Source Filter */}
+          {nonDummyEpgSources.length > 1 && (
+            <div className="epg-source-filter" ref={epgSourceFilterRef}>
+              <button
+                type="button"
+                className="epg-source-filter-btn"
+                onClick={() => setEpgSourceFilterOpen(!epgSourceFilterOpen)}
+              >
+                <span className="material-icons">filter_list</span>
+                <span>{epgSourceFilterLabel}</span>
+                <span className="material-icons">{epgSourceFilterOpen ? 'expand_less' : 'expand_more'}</span>
+              </button>
+              {epgSourceFilterOpen && (
+                <div className="epg-source-filter-dropdown">
+                  <div className="epg-source-filter-actions">
+                    <button
+                      type="button"
+                      onClick={() => setSelectedEpgSourceIds(new Set(nonDummyEpgSources.map(s => s.id)))}
+                    >
+                      Select All
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedEpgSourceIds(new Set())}
+                    >
+                      Clear
+                    </button>
+                  </div>
+                  <div className="epg-source-filter-options">
+                    {nonDummyEpgSources.map(source => (
+                      <label key={source.id} className="epg-source-filter-option">
+                        <input
+                          type="checkbox"
+                          checked={selectedEpgSourceIds.has(source.id)}
+                          onChange={() => handleToggleEpgSource(source.id)}
+                        />
+                        <span>{source.name}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
           <div className="epg-search-container" ref={epgDropdownRef}>
             <div className="search-input-wrapper">
               <input
@@ -530,20 +654,43 @@ export const EditChannelModal = memo(function EditChannelModal({
         {/* Stream Profile Section */}
         <div className="edit-channel-section">
           <label>Stream Profile</label>
-          <select
-            className="edit-channel-select"
-            value={selectedStreamProfileId ?? ''}
-            onChange={(e) => setSelectedStreamProfileId(e.target.value ? Number(e.target.value) : null)}
-          >
-            <option value="">Default (no profile)</option>
-            {streamProfiles
-              .filter((p) => p.is_active)
-              .map((profile) => (
-                <option key={profile.id} value={profile.id}>
-                  {profile.name}
-                </option>
-              ))}
-          </select>
+          <div className="searchable-select-dropdown" ref={streamProfileDropdownRef}>
+            <button
+              type="button"
+              className="dropdown-trigger"
+              onClick={() => setStreamProfileDropdownOpen(!streamProfileDropdownOpen)}
+            >
+              <span className="dropdown-value">
+                {selectedStreamProfileId
+                  ? streamProfiles.find(p => p.id === selectedStreamProfileId)?.name || 'Unknown'
+                  : 'Default (no profile)'}
+              </span>
+              <span className="material-icons">expand_more</span>
+            </button>
+            {streamProfileDropdownOpen && (
+              <div className="dropdown-menu">
+                <div className="dropdown-options">
+                  <div
+                    className={`dropdown-option-item${selectedStreamProfileId === null ? ' selected' : ''}`}
+                    onClick={() => { setSelectedStreamProfileId(null); setStreamProfileDropdownOpen(false); }}
+                  >
+                    Default (no profile)
+                  </div>
+                  {streamProfiles
+                    .filter((p) => p.is_active)
+                    .map((profile) => (
+                      <div
+                        key={profile.id}
+                        className={`dropdown-option-item${selectedStreamProfileId === profile.id ? ' selected' : ''}`}
+                        onClick={() => { setSelectedStreamProfileId(profile.id); setStreamProfileDropdownOpen(false); }}
+                      >
+                        {profile.name}
+                      </div>
+                    ))}
+                </div>
+              </div>
+            )}
+          </div>
           <span className="edit-channel-hint">Determines how streams are processed/transcoded</span>
         </div>
 
@@ -678,15 +825,16 @@ export const EditChannelModal = memo(function EditChannelModal({
           </div>
         </div>
 
-        <div className="edit-channel-actions">
+        </div>
+
+        <div className="modal-footer">
           <button
-            className="edit-channel-save-btn"
+            className="modal-btn modal-btn-primary"
             onClick={handleSave}
             disabled={saving || !hasChanges}
           >
             {saving ? 'Saving...' : 'Save Changes'}
           </button>
-        </div>
         </div>
 
         {/* Discard Changes Confirmation Dialog */}

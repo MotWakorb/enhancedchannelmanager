@@ -1,199 +1,38 @@
-.modal-overlay {
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background-color: rgba(0, 0, 0, 0.7);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 1000;
-}
+/* Settings Modal - component-specific styles only */
+/* Base modal styles come from ModalBase.css */
 
-.modal-content {
-  background-color: var(--bg-secondary);
-  border-radius: 8px;
-  width: 100%;
-  max-width: 450px;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
-  border: 1px solid var(--border-primary);
-}
-
-.modal-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 1rem 1.25rem;
-  border-bottom: 1px solid var(--border-primary);
-}
-
-.modal-header h2 {
-  margin: 0;
-  font-size: 1.1rem;
-  color: var(--text-primary);
-}
-
-.close-btn {
-  background: none;
-  border: none;
-  font-size: 1.5rem;
-  color: var(--text-muted);
-  cursor: pointer;
-  padding: 0;
-  line-height: 1;
-}
-
-.close-btn:hover {
-  color: var(--text-primary);
-}
-
-.modal-body {
-  padding: 1.25rem;
-}
-
-.form-group {
-  margin-bottom: 1rem;
-}
-
-.form-group label {
-  display: block;
-  margin-bottom: 0.5rem;
-  color: var(--text-secondary);
-  font-size: 0.9rem;
-}
-
-.form-group input {
-  width: 100%;
-  padding: 0.75rem;
-  background-color: var(--input-bg);
-  border: 1px solid var(--border-secondary);
-  border-radius: 4px;
-  color: var(--text-primary);
-  font-size: 0.95rem;
-  box-sizing: border-box;
-}
-
-.form-group input:focus {
-  outline: none;
-  border-color: var(--accent-primary);
-}
-
-.form-group input::placeholder {
-  color: var(--text-muted);
-}
-
-.error-message {
-  color: #ff6b6b;
-  font-size: 0.9rem;
-  padding: 0.75rem;
-  background-color: rgba(255, 107, 107, 0.1);
-  border-radius: 4px;
-  margin-top: 0.5rem;
-}
-
-.test-result {
-  padding: 0.75rem;
-  border-radius: 4px;
-  font-size: 0.9rem;
-  margin-top: 0.5rem;
-}
-
-.test-result.success {
-  color: var(--success);
-  background-color: rgba(74, 222, 128, 0.1);
-}
-
-.test-result.error {
-  color: #ff6b6b;
-  background-color: rgba(255, 107, 107, 0.1);
-}
-
-.modal-footer {
-  display: flex;
-  gap: 0.75rem;
-  justify-content: flex-end;
-  padding: 1rem 1.25rem;
-  border-top: 1px solid var(--border-primary);
-}
-
-.modal-footer button {
-  padding: 0.6rem 1rem;
-  border-radius: 4px;
-  font-size: 0.9rem;
-  cursor: pointer;
-  transition: background-color 0.15s;
-}
-
-.btn-secondary {
-  background-color: var(--border-primary);
-  border: 1px solid var(--border-secondary);
-  color: var(--button-text);
-}
-
-.btn-secondary:hover:not(:disabled) {
-  background-color: var(--border-secondary);
-}
-
+/* Test connection button states */
 .btn-test {
   background-color: #2d4a3e;
   border: 1px solid #3d6a5e;
   color: var(--success);
+  transition: all 0.2s;
+  min-width: 120px;
+  text-align: center;
 }
 
 .btn-test:hover:not(:disabled) {
   background-color: #3d5a4e;
 }
 
-.btn-primary {
-  background-color: var(--button-primary-bg);
-  border: 1px solid var(--button-primary-bg);
-  color: var(--button-primary-text);
+.btn-test.btn-test-success {
+  background-color: #1a5a3a;
+  border-color: #2a7a5a;
+  color: #4ade80;
 }
 
-.btn-primary:hover:not(:disabled) {
-  background-color: var(--button-primary-bg);
+.btn-test.btn-test-success:hover:not(:disabled) {
+  background-color: #1a5a3a;
+  border-color: #2a7a5a;
 }
 
-button:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
+.btn-test.btn-test-failed {
+  background-color: #5a2d2d;
+  border-color: #7a3d3d;
+  color: #ff6b6b;
 }
 
-/* Divider between sections */
-.form-group-divider {
-  height: 1px;
-  background-color: var(--border-primary);
-  margin: 1.25rem 0;
-}
-
-/* Checkbox styling */
-.checkbox-group {
-  margin-bottom: 0.5rem;
-}
-
-.checkbox-label {
-  display: flex !important;
-  align-items: center;
-  gap: 0.5rem;
-  cursor: pointer;
-  color: var(--button-text) !important;
-}
-
-.checkbox-label input[type="checkbox"] {
-  width: auto;
-  margin: 0;
-  cursor: pointer;
-  accent-color: var(--accent-primary);
-}
-
-.checkbox-label span {
-  font-size: 0.95rem;
-}
-
-.form-help {
-  margin: 0.5rem 0 0 0;
-  font-size: 0.8rem;
-  color: var(--text-muted);
-  line-height: 1.4;
+.btn-test.btn-test-failed:hover:not(:disabled) {
+  background-color: #5a2d2d;
+  border-color: #7a3d3d;
 }

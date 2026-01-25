@@ -11,6 +11,8 @@ import type { LogLevel as FrontendLogLevel } from '../../utils/logger';
 import { DeleteOrphanedGroupsModal } from '../DeleteOrphanedGroupsModal';
 import { ScheduledTasksSection } from '../ScheduledTasksSection';
 import { AlertMethodSettings } from '../AlertMethodSettings';
+import { SettingsModal } from '../SettingsModal';
+import { CustomSelect } from '../CustomSelect';
 import {
   DndContext,
   closestCenter,
@@ -175,7 +177,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
     if (!normalizationPreviewInput.trim()) return '';
     return normalizeStreamName(normalizationPreviewInput, {
       timezonePreference: 'both',
-      stripCountryPrefix: false, // Handled by normalization tags
+      stripCountryPrefix: true, // Enable tag-based country stripping (keepCountryPrefix overrides if true)
       keepCountryPrefix: includeCountryInName,
       countrySeparator: countrySeparator as '-' | ':' | '|',
       stripNetworkPrefix: true,
@@ -271,6 +273,15 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   const [cleaningOrphaned, setCleaningOrphaned] = useState(false);
   const [cleanupResult, setCleanupResult] = useState<string | null>(null);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [showConnectionModal, setShowConnectionModal] = useState(false);
+
+  // Auto-created channels maintenance state
+  const [autoCreatedGroups, setAutoCreatedGroups] = useState<api.AutoCreatedGroup[]>([]);
+  const [totalAutoCreatedChannels, setTotalAutoCreatedChannels] = useState(0);
+  const [loadingAutoCreated, setLoadingAutoCreated] = useState(false);
+  const [selectedAutoCreatedGroups, setSelectedAutoCreatedGroups] = useState<Set<number>>(new Set());
+  const [clearingAutoCreated, setClearingAutoCreated] = useState(false);
+  const [autoCreatedResult, setAutoCreatedResult] = useState<{ success: boolean; message: string } | null>(null);
 
   // Track original URL/username to detect if auth settings changed
   const [originalUrl, setOriginalUrl] = useState('');
@@ -958,6 +969,74 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
     }
   };
 
+  // Auto-created channels handlers
+  const handleLoadAutoCreatedGroups = async () => {
+    setLoadingAutoCreated(true);
+    setAutoCreatedResult(null);
+    try {
+      const result = await api.getGroupsWithAutoCreatedChannels();
+      setAutoCreatedGroups(result.groups);
+      setTotalAutoCreatedChannels(result.total_auto_created_channels);
+      setSelectedAutoCreatedGroups(new Set()); // Clear selection
+      if (result.groups.length === 0) {
+        setAutoCreatedResult({ success: true, message: 'No groups with auto_created channels found.' });
+      }
+    } catch (err) {
+      setAutoCreatedResult({ success: false, message: `Failed to load groups: ${err}` });
+    } finally {
+      setLoadingAutoCreated(false);
+    }
+  };
+
+  const handleToggleAutoCreatedGroup = (groupId: number) => {
+    setSelectedAutoCreatedGroups(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(groupId)) {
+        newSet.delete(groupId);
+      } else {
+        newSet.add(groupId);
+      }
+      return newSet;
+    });
+  };
+
+  const handleSelectAllAutoCreatedGroups = () => {
+    if (selectedAutoCreatedGroups.size === autoCreatedGroups.length) {
+      setSelectedAutoCreatedGroups(new Set());
+    } else {
+      setSelectedAutoCreatedGroups(new Set(autoCreatedGroups.map(g => g.id)));
+    }
+  };
+
+  const handleClearAutoCreatedFlag = async () => {
+    if (selectedAutoCreatedGroups.size === 0) return;
+
+    setClearingAutoCreated(true);
+    setAutoCreatedResult(null);
+    try {
+      const result = await api.clearAutoCreatedFlag(Array.from(selectedAutoCreatedGroups));
+      setAutoCreatedResult({ success: true, message: result.message });
+
+      if (result.updated_count > 0) {
+        // Reload to refresh the list
+        await handleLoadAutoCreatedGroups();
+        // Notify parent to refresh data (channels may have changed)
+        onSaved();
+      }
+
+      if (result.failed_channels.length > 0) {
+        setAutoCreatedResult({
+          success: false,
+          message: `${result.message}. ${result.failed_channels.length} channel(s) failed to update.`
+        });
+      }
+    } catch (err) {
+      setAutoCreatedResult({ success: false, message: `Failed to clear auto_created flag: ${err}` });
+    } finally {
+      setClearingAutoCreated(false);
+    }
+  };
+
   const renderGeneralPage = () => (
     <div className="settings-page">
       <div className="settings-page-header">
@@ -985,49 +1064,29 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         <div className="settings-section-header">
           <span className="material-icons">link</span>
           <h3>Dispatcharr Connection</h3>
-        </div>
-
-        <div className="form-group-vertical">
-          <label htmlFor="url">Server URL</label>
-          <span className="form-description">The URL of your Dispatcharr server (e.g., http://localhost:9191)</span>
-          <input
-            id="url"
-            type="text"
-            placeholder="http://localhost:9191"
-            value={url}
-            onChange={(e) => setUrl(e.target.value)}
-          />
-        </div>
-
-        <div className="form-group-vertical">
-          <label htmlFor="username">Username</label>
-          <span className="form-description">Your Dispatcharr admin username</span>
-          <input
-            id="username"
-            type="text"
-            placeholder="admin"
-            value={username}
-            onChange={(e) => setUsername(e.target.value)}
-          />
-        </div>
-
-        <div className="form-group-vertical">
-          <label htmlFor="password">Password</label>
-          <span className="form-description">Only required when changing URL or username</span>
-          <input
-            id="password"
-            type="password"
-            placeholder="Enter password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-          />
-        </div>
-
-        <div className="form-group-vertical">
-          <button className="btn-test" onClick={handleTest} disabled={testing || loading}>
-            <span className="material-icons">wifi_tethering</span>
-            {testing ? 'Testing...' : 'Test Connection'}
+          <button
+            className="btn-edit-connection"
+            onClick={() => setShowConnectionModal(true)}
+            title="Edit connection settings"
+          >
+            <span className="material-icons">edit</span>
+            Edit
           </button>
+        </div>
+
+        <div className="connection-info-display">
+          <div className="connection-info-row">
+            <span className="connection-label">Server URL:</span>
+            <span className="connection-value">{url || 'Not configured'}</span>
+          </div>
+          <div className="connection-info-row">
+            <span className="connection-label">Username:</span>
+            <span className="connection-value">{username || 'Not configured'}</span>
+          </div>
+          <div className="connection-info-row">
+            <span className="connection-label">Password:</span>
+            <span className="connection-value">••••••••</span>
+          </div>
         </div>
       </div>
 
@@ -1097,40 +1156,39 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
           <span className="form-description">
             Timezone used for daily bandwidth statistics and scheduled probe times. "Today" will roll over at midnight in your selected timezone, and scheduled probes will run at the configured time in this timezone.
           </span>
-          <select
-            id="userTimezone"
+          <CustomSelect
             value={userTimezone}
-            onChange={(e) => setUserTimezone(e.target.value)}
+            onChange={(val) => setUserTimezone(val)}
             className="timezone-select"
-          >
-            <option value="">UTC (Default)</option>
-            <optgroup label="US & Canada">
-              <option value="America/New_York">Eastern Time (ET)</option>
-              <option value="America/Chicago">Central Time (CT)</option>
-              <option value="America/Denver">Mountain Time (MT)</option>
-              <option value="America/Los_Angeles">Pacific Time (PT)</option>
-              <option value="America/Anchorage">Alaska Time (AKT)</option>
-              <option value="Pacific/Honolulu">Hawaii Time (HT)</option>
-            </optgroup>
-            <optgroup label="Europe">
-              <option value="Europe/London">London (GMT/BST)</option>
-              <option value="Europe/Paris">Paris (CET/CEST)</option>
-              <option value="Europe/Berlin">Berlin (CET/CEST)</option>
-              <option value="Europe/Amsterdam">Amsterdam (CET/CEST)</option>
-              <option value="Europe/Rome">Rome (CET/CEST)</option>
-              <option value="Europe/Madrid">Madrid (CET/CEST)</option>
-            </optgroup>
-            <optgroup label="Asia & Pacific">
-              <option value="Asia/Tokyo">Tokyo (JST)</option>
-              <option value="Asia/Shanghai">Shanghai (CST)</option>
-              <option value="Asia/Hong_Kong">Hong Kong (HKT)</option>
-              <option value="Asia/Singapore">Singapore (SGT)</option>
-              <option value="Asia/Dubai">Dubai (GST)</option>
-              <option value="Australia/Sydney">Sydney (AEST/AEDT)</option>
-              <option value="Australia/Melbourne">Melbourne (AEST/AEDT)</option>
-              <option value="Pacific/Auckland">Auckland (NZST/NZDT)</option>
-            </optgroup>
-          </select>
+            searchable
+            searchPlaceholder="Search timezones..."
+            options={[
+              { value: '', label: 'UTC (Default)' },
+              // US & Canada
+              { value: 'America/New_York', label: 'US: Eastern Time (ET)' },
+              { value: 'America/Chicago', label: 'US: Central Time (CT)' },
+              { value: 'America/Denver', label: 'US: Mountain Time (MT)' },
+              { value: 'America/Los_Angeles', label: 'US: Pacific Time (PT)' },
+              { value: 'America/Anchorage', label: 'US: Alaska Time (AKT)' },
+              { value: 'Pacific/Honolulu', label: 'US: Hawaii Time (HT)' },
+              // Europe
+              { value: 'Europe/London', label: 'EU: London (GMT/BST)' },
+              { value: 'Europe/Paris', label: 'EU: Paris (CET/CEST)' },
+              { value: 'Europe/Berlin', label: 'EU: Berlin (CET/CEST)' },
+              { value: 'Europe/Amsterdam', label: 'EU: Amsterdam (CET/CEST)' },
+              { value: 'Europe/Rome', label: 'EU: Rome (CET/CEST)' },
+              { value: 'Europe/Madrid', label: 'EU: Madrid (CET/CEST)' },
+              // Asia & Pacific
+              { value: 'Asia/Tokyo', label: 'Asia: Tokyo (JST)' },
+              { value: 'Asia/Shanghai', label: 'Asia: Shanghai (CST)' },
+              { value: 'Asia/Hong_Kong', label: 'Asia: Hong Kong (HKT)' },
+              { value: 'Asia/Singapore', label: 'Asia: Singapore (SGT)' },
+              { value: 'Asia/Dubai', label: 'Asia: Dubai (GST)' },
+              { value: 'Australia/Sydney', label: 'AU: Sydney (AEST/AEDT)' },
+              { value: 'Australia/Melbourne', label: 'AU: Melbourne (AEST/AEDT)' },
+              { value: 'Pacific/Auckland', label: 'NZ: Auckland (NZST/NZDT)' },
+            ]}
+          />
         </div>
       </div>
 
@@ -1146,17 +1204,17 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
             Controls Python backend logging level. Changes apply immediately.
             Check Docker logs to see backend messages.
           </span>
-          <select
-            id="backendLogLevel"
+          <CustomSelect
             value={backendLogLevel}
-            onChange={(e) => setBackendLogLevel(e.target.value)}
-          >
-            <option value="DEBUG">DEBUG - Show all messages including debug info</option>
-            <option value="INFO">INFO - Show informational messages and above</option>
-            <option value="WARNING">WARNING - Show warnings and errors only</option>
-            <option value="ERROR">ERROR - Show errors only</option>
-            <option value="CRITICAL">CRITICAL - Show only critical errors</option>
-          </select>
+            onChange={(val) => setBackendLogLevel(val)}
+            options={[
+              { value: 'DEBUG', label: 'DEBUG - Show all messages including debug info' },
+              { value: 'INFO', label: 'INFO - Show informational messages and above' },
+              { value: 'WARNING', label: 'WARNING - Show warnings and errors only' },
+              { value: 'ERROR', label: 'ERROR - Show errors only' },
+              { value: 'CRITICAL', label: 'CRITICAL - Show only critical errors' },
+            ]}
+          />
         </div>
 
         <div className="form-group-vertical">
@@ -1165,16 +1223,16 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
             Controls browser console logging level. Changes apply immediately.
             Open browser DevTools (F12) to see frontend messages.
           </span>
-          <select
-            id="frontendLogLevel"
+          <CustomSelect
             value={frontendLogLevel}
-            onChange={(e) => setFrontendLogLevel(e.target.value)}
-          >
-            <option value="DEBUG">DEBUG - Show all messages including debug info</option>
-            <option value="INFO">INFO - Show informational messages and above</option>
-            <option value="WARN">WARN - Show warnings and errors only</option>
-            <option value="ERROR">ERROR - Show errors only</option>
-          </select>
+            onChange={(val) => setFrontendLogLevel(val)}
+            options={[
+              { value: 'DEBUG', label: 'DEBUG - Show all messages including debug info' },
+              { value: 'INFO', label: 'INFO - Show informational messages and above' },
+              { value: 'WARN', label: 'WARN - Show warnings and errors only' },
+              { value: 'ERROR', label: 'ERROR - Show errors only' },
+            ]}
+          />
         </div>
       </div>
 
@@ -1344,15 +1402,15 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
 
         <div className="form-group">
           <label htmlFor="gracenoteConflictMode">Gracenote ID Conflict Handling</label>
-          <select
-            id="gracenoteConflictMode"
+          <CustomSelect
             value={gracenoteConflictMode}
-            onChange={(e) => setGracenoteConflictMode(e.target.value as GracenoteConflictMode)}
-          >
-            <option value="ask">Ask me what to do (show conflict dialog)</option>
-            <option value="skip">Skip channels with existing IDs</option>
-            <option value="overwrite">Automatically overwrite existing IDs</option>
-          </select>
+            onChange={(val) => setGracenoteConflictMode(val as GracenoteConflictMode)}
+            options={[
+              { value: 'ask', label: 'Ask me what to do (show conflict dialog)' },
+              { value: 'skip', label: 'Skip channels with existing IDs' },
+              { value: 'overwrite', label: 'Automatically overwrite existing IDs' },
+            ]}
+          />
           <p className="form-hint">
             When assigning Gracenote IDs, this controls what happens if a channel already has a
             different Gracenote ID. Choose "Ask" to review conflicts, "Skip" to leave existing
@@ -1369,15 +1427,15 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
 
         <div className="form-group">
           <label htmlFor="vlcOpenBehavior">Open in VLC Behavior</label>
-          <select
-            id="vlcOpenBehavior"
+          <CustomSelect
             value={vlcOpenBehavior}
-            onChange={(e) => setVlcOpenBehavior(e.target.value)}
-          >
-            <option value="protocol_only">Try VLC Protocol (show helper if it fails)</option>
-            <option value="m3u_fallback">Try VLC Protocol, then fallback to M3U download</option>
-            <option value="m3u_only">Always download M3U file</option>
-          </select>
+            onChange={(val) => setVlcOpenBehavior(val)}
+            options={[
+              { value: 'protocol_only', label: 'Try VLC Protocol (show helper if it fails)' },
+              { value: 'm3u_fallback', label: 'Try VLC Protocol, then fallback to M3U download' },
+              { value: 'm3u_only', label: 'Always download M3U file' },
+            ]}
+          />
           <p className="form-hint">
             Controls what happens when you click "Open in VLC". The vlc:// protocol requires
             browser extensions on some platforms. If "protocol_only" fails, a helper modal
@@ -1551,15 +1609,15 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
 
         <div className="form-group">
           <label htmlFor="timezone">Default timezone for regional channel variants</label>
-          <select
-            id="timezone"
+          <CustomSelect
             value={timezonePreference}
-            onChange={(e) => setTimezonePreference(e.target.value)}
-          >
-            <option value="east">East Coast (prefer East feeds)</option>
-            <option value="west">West Coast (prefer West feeds)</option>
-            <option value="both">Keep Both (create separate channels)</option>
-          </select>
+            onChange={(val) => setTimezonePreference(val)}
+            options={[
+              { value: 'east', label: 'East Coast (prefer East feeds)' },
+              { value: 'west', label: 'West Coast (prefer West feeds)' },
+              { value: 'both', label: 'Keep Both (create separate channels)' },
+            ]}
+          />
           <p className="form-hint">
             When streams have East/West variants, this determines which to use by default.
           </p>
@@ -1872,15 +1930,15 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
             <div className="form-group-vertical">
               <label htmlFor="bitrateSampleDuration">Bitrate measurement duration</label>
               <span className="form-description">How long to sample streams when measuring bitrate</span>
-              <select
-                id="bitrateSampleDuration"
-                value={bitrateSampleDuration}
-                onChange={(e) => setBitrateSampleDuration(Number(e.target.value))}
-              >
-                <option value={10}>10 seconds</option>
-                <option value={20}>20 seconds</option>
-                <option value={30}>30 seconds</option>
-              </select>
+              <CustomSelect
+                value={String(bitrateSampleDuration)}
+                onChange={(val) => setBitrateSampleDuration(Number(val))}
+                options={[
+                  { value: '10', label: '10 seconds' },
+                  { value: '20', label: '20 seconds' },
+                  { value: '30', label: '30 seconds' },
+                ]}
+              />
             </div>
 
             <div className="form-group-vertical">
@@ -2369,15 +2427,16 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                   </li>
                 ))}
               </ul>
-              <button
-                className="btn-danger"
-                onClick={handleCleanupOrphanedGroups}
-                disabled={cleaningOrphaned || loadingOrphaned}
-                style={{ marginTop: '1rem' }}
-              >
-                <span className="material-icons">delete_forever</span>
-                {cleaningOrphaned ? 'Cleaning...' : `Delete ${orphanedGroups.length} Orphaned Group(s)`}
-              </button>
+              <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '1rem' }}>
+                <button
+                  className="btn-danger"
+                  onClick={handleCleanupOrphanedGroups}
+                  disabled={cleaningOrphaned || loadingOrphaned}
+                >
+                  <span className="material-icons">delete_forever</span>
+                  {cleaningOrphaned ? 'Cleaning...' : `Delete ${orphanedGroups.length} Orphaned Group(s)`}
+                </button>
+              </div>
             </div>
           )}
 
@@ -2385,6 +2444,135 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
             <div className={cleanupResult.includes('Failed') ? 'error-message' : 'success-message'} style={{ marginTop: '1rem' }}>
               <span className="material-icons">{cleanupResult.includes('Failed') ? 'error' : 'check_circle'}</span>
               {cleanupResult}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Auto-Created Channels Section */}
+      <div className="settings-section">
+        <div className="settings-section-header">
+          <span className="material-icons">auto_fix_high</span>
+          <h3>Auto-Created Channels</h3>
+        </div>
+        <p className="form-hint" style={{ marginBottom: '1rem' }}>
+          Channels marked as "auto_created" are hidden from the Channel Manager unless their group has Auto Channel Sync enabled.
+          Use this tool to convert auto_created channels to manual channels, making them visible in all groups.
+        </p>
+
+        <div className="settings-group">
+          <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+            <button
+              className="btn-secondary"
+              onClick={handleLoadAutoCreatedGroups}
+              disabled={loadingAutoCreated || clearingAutoCreated}
+            >
+              <span className="material-icons">search</span>
+              {loadingAutoCreated ? 'Scanning...' : 'Scan for Auto-Created Channels'}
+            </button>
+          </div>
+
+          {autoCreatedGroups.length > 0 && (
+            <div style={{ marginTop: '1rem' }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.75rem' }}>
+                <p style={{ margin: 0 }}>
+                  <strong>Found {totalAutoCreatedChannels} auto_created channel(s) in {autoCreatedGroups.length} group(s):</strong>
+                </p>
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  onClick={handleSelectAllAutoCreatedGroups}
+                  style={{ padding: '0.4rem 0.8rem', fontSize: '0.85rem' }}
+                >
+                  {selectedAutoCreatedGroups.size === autoCreatedGroups.length ? 'Deselect All' : 'Select All'}
+                </button>
+              </div>
+
+              <div style={{
+                maxHeight: '300px',
+                overflowY: 'auto',
+                border: '1px solid var(--border-color)',
+                borderRadius: '6px',
+                backgroundColor: 'var(--bg-secondary)'
+              }}>
+                {autoCreatedGroups.map(group => (
+                  <div
+                    key={group.id}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'flex-start',
+                      padding: '0.75rem 1rem',
+                      borderBottom: '1px solid var(--border-color)',
+                      cursor: 'pointer',
+                      backgroundColor: selectedAutoCreatedGroups.has(group.id) ? 'var(--bg-tertiary)' : 'transparent'
+                    }}
+                    onClick={() => handleToggleAutoCreatedGroup(group.id)}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={selectedAutoCreatedGroups.has(group.id)}
+                      onChange={() => handleToggleAutoCreatedGroup(group.id)}
+                      onClick={(e) => e.stopPropagation()}
+                      style={{ marginRight: '0.75rem', marginTop: '0.2rem' }}
+                    />
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontWeight: 500 }}>
+                        {group.name}
+                        <span style={{ color: 'var(--text-secondary)', marginLeft: '0.5rem', fontWeight: 400 }}>
+                          ({group.auto_created_count} channel{group.auto_created_count !== 1 ? 's' : ''})
+                        </span>
+                      </div>
+                      {group.sample_channels.length > 0 && (
+                        <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
+                          {group.sample_channels.slice(0, 3).map((ch, i) => (
+                            <span key={ch.id}>
+                              {i > 0 && ', '}
+                              #{ch.channel_number} {ch.name}
+                            </span>
+                          ))}
+                          {group.auto_created_count > 3 && <span>, ...</span>}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', marginTop: '1rem' }}>
+                <button
+                  className="btn-primary"
+                  onClick={handleClearAutoCreatedFlag}
+                  disabled={clearingAutoCreated || loadingAutoCreated || selectedAutoCreatedGroups.size === 0}
+                >
+                  <span className="material-icons">
+                    {clearingAutoCreated ? 'sync' : 'check_circle'}
+                  </span>
+                  {clearingAutoCreated
+                    ? 'Converting...'
+                    : `Convert ${selectedAutoCreatedGroups.size > 0
+                        ? autoCreatedGroups
+                            .filter(g => selectedAutoCreatedGroups.has(g.id))
+                            .reduce((sum, g) => sum + g.auto_created_count, 0)
+                        : 0} Channel(s) to Manual`}
+                </button>
+                {selectedAutoCreatedGroups.size > 0 && (
+                  <span style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
+                    {selectedAutoCreatedGroups.size} group{selectedAutoCreatedGroups.size !== 1 ? 's' : ''} selected
+                  </span>
+                )}
+              </div>
+            </div>
+          )}
+
+          {autoCreatedResult && (
+            <div
+              className={autoCreatedResult.success ? 'success-message' : 'error-message'}
+              style={{ marginTop: '1rem' }}
+            >
+              <span className="material-icons">
+                {autoCreatedResult.success ? 'check_circle' : 'error'}
+              </span>
+              {autoCreatedResult.message}
             </div>
           )}
         </div>
@@ -2482,27 +2670,27 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
 
       {showProbeResultsModal && probeResults && (
         <div
-          className="probe-results-modal-overlay"
+          className="modal-overlay"
           onClick={() => setShowProbeResultsModal(false)}
         >
           <div
-            className="probe-results-modal-content"
+            className="modal-container modal-lg probe-results-modal"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="probe-results-modal-header">
-              <h3 className={probeResultsType === 'success' ? 'success' : probeResultsType === 'skipped' ? 'skipped' : 'failed'}>
-                {probeResultsType === 'success' ? '✓ Successful Streams' : probeResultsType === 'skipped' ? '⊘ Skipped Streams' : '✗ Failed Streams'} (
+            <div className="modal-header">
+              <h2 className={probeResultsType === 'success' ? 'success' : probeResultsType === 'skipped' ? 'skipped' : 'failed'}>
+                {probeResultsType === 'success' ? 'Successful Streams' : probeResultsType === 'skipped' ? 'Skipped Streams' : 'Failed Streams'} (
                 {probeResultsType === 'success' ? probeResults.success_count : probeResultsType === 'skipped' ? probeResults.skipped_count : probeResults.failed_count})
-              </h3>
+              </h2>
               <button
                 onClick={() => setShowProbeResultsModal(false)}
-                className="probe-results-modal-close"
+                className="modal-close-btn"
               >
-                ×
+                <span className="material-icons">close</span>
               </button>
             </div>
 
-            <div className="probe-results-modal-body">
+            <div className="modal-body probe-results-body">
               {(() => {
                 const streams = probeResultsType === 'success'
                   ? probeResults.success_streams
@@ -2516,7 +2704,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                   : 'failed';
 
                 return streams.length === 0 ? (
-                  <div className="probe-results-empty">
+                  <div className="empty-state">
                     No {emptyText} streams yet
                   </div>
                 ) : (
@@ -2604,23 +2792,17 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
               })()}
             </div>
 
-            <div className="probe-results-modal-footer">
-              {probeResultsType === 'failed' && probeResults.failed_streams.length > 0 && (
+            {probeResultsType === 'failed' && probeResults.failed_streams.length > 0 && (
+              <div className="modal-footer">
                 <button
                   onClick={handleRerunFailed}
-                  className="probe-results-rerun-btn"
+                  className="btn-primary"
                   disabled={probingAll}
                 >
                   {probingAll ? 'Re-probing...' : 'Re-probe Failed Streams'}
                 </button>
-              )}
-              <button
-                onClick={() => setShowProbeResultsModal(false)}
-                className="probe-results-close-btn"
-              >
-                Close
-              </button>
-            </div>
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -2628,23 +2810,22 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       {/* Reordered Channels Modal */}
       {showReorderModal && reorderData && (
         <div
-          className="probe-results-modal-overlay"
+          className="modal-overlay"
           onClick={() => setShowReorderModal(false)}
         >
           <div
-            className="probe-results-modal-content"
+            className="modal-container modal-xl reorder-modal"
             onClick={(e) => e.stopPropagation()}
-            style={{ maxWidth: '900px' }}
           >
-            <div className="probe-results-modal-header">
-              <h3 style={{ color: '#3498db' }}>
-                ⇅ Reordered Channels ({reorderData.length})
-              </h3>
+            <div className="modal-header">
+              <h2>
+                Reordered Channels ({reorderData.length})
+              </h2>
               <button
                 onClick={() => setShowReorderModal(false)}
-                className="probe-results-modal-close"
+                className="modal-close-btn"
               >
-                ×
+                <span className="material-icons">close</span>
               </button>
             </div>
 
@@ -2675,9 +2856,9 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
               </div>
             )}
 
-            <div className="probe-results-modal-body">
+            <div className="modal-body reorder-body">
               {reorderData.length === 0 ? (
-                <div className="probe-results-empty">
+                <div className="empty-state">
                   No channels were reordered
                 </div>
               ) : (
@@ -2788,14 +2969,6 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
               )}
             </div>
 
-            <div className="probe-results-modal-footer">
-              <button
-                onClick={() => setShowReorderModal(false)}
-                className="probe-results-close-btn"
-              >
-                Close
-              </button>
-            </div>
           </div>
         </div>
       )}
@@ -2803,14 +2976,14 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       {/* Channel Group Selection Modal */}
       {showGroupSelectModal && (
         <div className="modal-overlay" onClick={() => setShowGroupSelectModal(false)}>
-          <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '500px' }}>
+          <div className="modal-container modal-md" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
-              <h3>Select Channel Groups to Probe</h3>
+              <h2>Select Channel Groups to Probe</h2>
               <button
                 onClick={() => setShowGroupSelectModal(false)}
-                className="probe-results-modal-close"
+                className="modal-close-btn"
               >
-                ×
+                <span className="material-icons">close</span>
               </button>
             </div>
 
@@ -2937,6 +3110,15 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
           </div>
         </div>
       )}
+
+      <SettingsModal
+        isOpen={showConnectionModal}
+        onClose={() => setShowConnectionModal(false)}
+        onSaved={() => {
+          setShowConnectionModal(false);
+          loadSettings();
+        }}
+      />
     </div>
   );
 }

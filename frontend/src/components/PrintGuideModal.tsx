@@ -1,5 +1,6 @@
 import { useState, useMemo, useCallback, memo } from 'react';
 import type { Channel, ChannelGroup } from '../types';
+import './ModalBase.css';
 import './PrintGuideModal.css';
 
 // Clean channel name by removing channel number prefix
@@ -190,11 +191,11 @@ export const PrintGuideModal = memo(function PrintGuideModal({
 
   return (
     <div className="modal-overlay" onClick={onClose}>
-      <div className="modal-content print-guide-modal" onClick={(e) => e.stopPropagation()}>
+      <div className="modal-container modal-md print-guide-modal" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
           <h2>Print Channel Guide</h2>
-          <button className="close-btn" onClick={onClose}>
-            &times;
+          <button className="modal-close-btn" onClick={onClose}>
+            <span className="material-icons">close</span>
           </button>
         </div>
 
@@ -258,18 +259,15 @@ export const PrintGuideModal = memo(function PrintGuideModal({
         </div>
 
         <div className="modal-footer">
-          <button className="btn-secondary" onClick={toggleAll}>
+          <button className="modal-btn modal-btn-secondary" onClick={toggleAll}>
             {groupSettings.every(s => s.selected) ? 'Deselect All' : 'Select All'}
           </button>
-          <button className="btn-secondary" onClick={onClose}>
-            Cancel
-          </button>
           <button
-            className="btn-primary"
+            className="modal-btn modal-btn-primary"
             onClick={handlePrint}
             disabled={!groupSettings.some(s => s.selected)}
           >
-            <span className="material-icons" style={{ fontSize: '1rem', marginRight: '0.25rem' }}>print</span>
+            <span className="material-icons">print</span>
             Print Selected
           </button>
         </div>

@@ -1,7 +1,8 @@
-import { useState, useEffect, useMemo, useCallback, memo } from 'react';
+import { useState, useEffect, useMemo, useCallback, memo, useRef } from 'react';
 import type { EPGSource, DummyEPGCustomProperties } from '../types';
 import type { CreateEPGSourceRequest } from '../services/api';
 import { useAsyncOperation } from '../hooks/useAsyncOperation';
+import './ModalBase.css';
 import './DummyEPGSourceModal.css';
 
 // Common timezones for the dropdown
@@ -44,12 +45,12 @@ interface CollapsibleSectionProps {
 
 const CollapsibleSection = memo(function CollapsibleSection({ title, isOpen, onToggle, children }: CollapsibleSectionProps) {
   return (
-    <div className="collapsible-section">
-      <button type="button" className="collapsible-header" onClick={onToggle}>
+    <div className="modal-collapsible">
+      <button type="button" className="modal-collapsible-header" onClick={onToggle}>
         <span className="material-icons">{isOpen ? 'expand_less' : 'expand_more'}</span>
         <span>{title}</span>
       </button>
-      {isOpen && <div className="collapsible-content">{children}</div>}
+      {isOpen && <div className="modal-collapsible-content">{children}</div>}
     </div>
   );
 });
@@ -105,6 +106,33 @@ export const DummyEPGSourceModal = memo(function DummyEPGSourceModal({ isOpen, s
   const [fallbackOpen, setFallbackOpen] = useState(false);
   const [logoUrlsOpen, setLogoUrlsOpen] = useState(false);
   const [epgTagsOpen, setEpgTagsOpen] = useState(false);
+
+  // Dropdown state
+  const [nameSourceDropdownOpen, setNameSourceDropdownOpen] = useState(false);
+  const [eventTimezoneDropdownOpen, setEventTimezoneDropdownOpen] = useState(false);
+  const [outputTimezoneDropdownOpen, setOutputTimezoneDropdownOpen] = useState(false);
+  const [eventTimezoneSearch, setEventTimezoneSearch] = useState('');
+  const [outputTimezoneSearch, setOutputTimezoneSearch] = useState('');
+  const nameSourceDropdownRef = useRef<HTMLDivElement>(null);
+  const eventTimezoneDropdownRef = useRef<HTMLDivElement>(null);
+  const outputTimezoneDropdownRef = useRef<HTMLDivElement>(null);
+
+  // Close dropdowns when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (nameSourceDropdownRef.current && !nameSourceDropdownRef.current.contains(event.target as Node)) {
+        setNameSourceDropdownOpen(false);
+      }
+      if (eventTimezoneDropdownRef.current && !eventTimezoneDropdownRef.current.contains(event.target as Node)) {
+        setEventTimezoneDropdownOpen(false);
+      }
+      if (outputTimezoneDropdownRef.current && !outputTimezoneDropdownRef.current.contains(event.target as Node)) {
+        setOutputTimezoneDropdownOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
 
   // Load source data when modal opens
   useEffect(() => {
@@ -350,18 +378,20 @@ export const DummyEPGSourceModal = memo(function DummyEPGSourceModal({ isOpen, s
   if (!isOpen) return null;
 
   return (
-    <div className="modal-overlay" onClick={onClose}>
-      <div className="modal-content dummy-epg-modal" onClick={(e) => e.stopPropagation()}>
+    <div className="modal-overlay">
+      <div className="modal-container modal-lg dummy-epg-modal">
         <div className="modal-header">
           <h2>{source ? 'Edit Dummy EPG Source' : 'Add Dummy EPG Source'}</h2>
-          <button className="close-btn" onClick={onClose}>&times;</button>
+          <button className="modal-close-btn" onClick={onClose}>
+            <span className="material-icons">close</span>
+          </button>
         </div>
 
         <form onSubmit={handleSubmit}>
           <div className="modal-body">
             {/* Basic Info */}
-            <div className="form-group">
-              <label htmlFor="name">Name <span className="required">*</span></label>
+            <div className="modal-form-group">
+              <label htmlFor="name">Name <span className="modal-required">*</span></label>
               <input
                 id="name"
                 type="text"
@@ -372,8 +402,8 @@ export const DummyEPGSourceModal = memo(function DummyEPGSourceModal({ isOpen, s
               />
             </div>
 
-            <div className="form-group checkbox-group">
-              <label className="checkbox-label">
+            <div className="modal-form-group">
+              <label className="modal-checkbox-label">
                 <input
                   type="checkbox"
                   checked={isActive}
@@ -384,29 +414,51 @@ export const DummyEPGSourceModal = memo(function DummyEPGSourceModal({ isOpen, s
             </div>
 
             {/* Pattern Configuration Section */}
-            <div className="section-divider">
+            <div className="modal-section-divider">
               <span>Pattern Configuration</span>
             </div>
 
-            <p className="section-description">
+            <p className="modal-section-description">
               Define regex patterns to extract information from channel titles or stream names. Use named capture groups like (?&lt;groupname&gt;pattern).
             </p>
 
-            <div className="form-group">
-              <label htmlFor="nameSource">Name Source <span className="required">*</span></label>
-              <select
-                id="nameSource"
-                value={nameSource}
-                onChange={(e) => setNameSource(e.target.value as 'channel' | 'stream')}
-              >
-                <option value="channel">Channel Name</option>
-                <option value="stream">Stream Name</option>
-              </select>
+            <div className="modal-form-group">
+              <label>Name Source <span className="modal-required">*</span></label>
+              <div className="searchable-select-dropdown" ref={nameSourceDropdownRef}>
+                <button
+                  type="button"
+                  className="dropdown-trigger"
+                  onClick={() => setNameSourceDropdownOpen(!nameSourceDropdownOpen)}
+                >
+                  <span className="dropdown-value">
+                    {nameSource === 'channel' ? 'Channel Name' : 'Stream Name'}
+                  </span>
+                  <span className="material-icons">expand_more</span>
+                </button>
+                {nameSourceDropdownOpen && (
+                  <div className="dropdown-menu">
+                    <div className="dropdown-options">
+                      <div
+                        className={`dropdown-option-item${nameSource === 'channel' ? ' selected' : ''}`}
+                        onClick={() => { setNameSource('channel'); setNameSourceDropdownOpen(false); }}
+                      >
+                        Channel Name
+                      </div>
+                      <div
+                        className={`dropdown-option-item${nameSource === 'stream' ? ' selected' : ''}`}
+                        onClick={() => { setNameSource('stream'); setNameSourceDropdownOpen(false); }}
+                      >
+                        Stream Name
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
               <p className="form-hint">Choose whether to parse the channel name or a stream name assigned to the channel</p>
             </div>
 
             {nameSource === 'stream' && (
-              <div className="form-group">
+              <div className="modal-form-group">
                 <label htmlFor="streamIndex">Stream Index</label>
                 <input
                   id="streamIndex"
@@ -419,8 +471,8 @@ export const DummyEPGSourceModal = memo(function DummyEPGSourceModal({ isOpen, s
               </div>
             )}
 
-            <div className="form-group">
-              <label htmlFor="titlePattern">Title Pattern <span className="required">*</span></label>
+            <div className="modal-form-group">
+              <label htmlFor="titlePattern">Title Pattern <span className="modal-required">*</span></label>
               <input
                 id="titlePattern"
                 type="text"
@@ -434,7 +486,7 @@ export const DummyEPGSourceModal = memo(function DummyEPGSourceModal({ isOpen, s
               <p className="form-hint">Regex pattern to extract title information (e.g., team names, league). Example: (?&lt;league&gt;\w+) \d+: (?&lt;team1&gt;.*) VS (?&lt;team2&gt;.*)</p>
             </div>
 
-            <div className="form-group">
+            <div className="modal-form-group">
               <label htmlFor="timePattern">Time Pattern (Optional)</label>
               <input
                 id="timePattern"
@@ -449,7 +501,7 @@ export const DummyEPGSourceModal = memo(function DummyEPGSourceModal({ isOpen, s
               <p className="form-hint">Extract time from channel titles. Required groups: 'hour' (1-12 or 0-23), 'minute' (0-59), 'ampm' (AM/PM - optional for 24-hour)</p>
             </div>
 
-            <div className="form-group">
+            <div className="modal-form-group">
               <label htmlFor="datePattern">Date Pattern (Optional)</label>
               <input
                 id="datePattern"
@@ -465,15 +517,15 @@ export const DummyEPGSourceModal = memo(function DummyEPGSourceModal({ isOpen, s
             </div>
 
             {/* Output Templates Section */}
-            <div className="section-divider">
+            <div className="modal-section-divider">
               <span>Output Templates (Optional)</span>
             </div>
 
-            <p className="section-description">
+            <p className="modal-section-description">
               Use extracted groups from your patterns to format EPG titles and descriptions. Reference groups using &#123;groupname&#125; syntax. For cleaner URLs, use &#123;groupname_normalize&#125; to get alphanumeric-only lowercase versions.
             </p>
 
-            <div className="form-group">
+            <div className="modal-form-group">
               <label htmlFor="titleTemplate">Title Template</label>
               <input
                 id="titleTemplate"
@@ -485,7 +537,7 @@ export const DummyEPGSourceModal = memo(function DummyEPGSourceModal({ isOpen, s
               <p className="form-hint">Format the EPG title using extracted groups. Use &#123;starttime&#125; (12-hour: '10 PM'), &#123;starttime24&#125; (24-hour: '22:00'), &#123;endtime&#125;, &#123;date&#125;, &#123;month&#125;, &#123;day&#125;, or &#123;year&#125;</p>
             </div>
 
-            <div className="form-group">
+            <div className="modal-form-group">
               <label htmlFor="descriptionTemplate">Description Template</label>
               <textarea
                 id="descriptionTemplate"
@@ -503,11 +555,11 @@ export const DummyEPGSourceModal = memo(function DummyEPGSourceModal({ isOpen, s
               isOpen={upcomingEndedOpen}
               onToggle={() => setUpcomingEndedOpen(!upcomingEndedOpen)}
             >
-              <p className="section-description">
+              <p className="modal-section-description">
                 Customize how programs appear before and after the event. If left empty, will use the main title/description with "Upcoming:" or "Ended:" prefix.
               </p>
 
-              <div className="form-group">
+              <div className="modal-form-group">
                 <label htmlFor="upcomingTitleTemplate">Upcoming Title Template</label>
                 <input
                   id="upcomingTitleTemplate"
@@ -518,7 +570,7 @@ export const DummyEPGSourceModal = memo(function DummyEPGSourceModal({ isOpen, s
                 />
               </div>
 
-              <div className="form-group">
+              <div className="modal-form-group">
                 <label htmlFor="upcomingDescriptionTemplate">Upcoming Description Template</label>
                 <textarea
                   id="upcomingDescriptionTemplate"
@@ -529,7 +581,7 @@ export const DummyEPGSourceModal = memo(function DummyEPGSourceModal({ isOpen, s
                 />
               </div>
 
-              <div className="form-group">
+              <div className="modal-form-group">
                 <label htmlFor="endedTitleTemplate">Ended Title Template</label>
                 <input
                   id="endedTitleTemplate"
@@ -540,7 +592,7 @@ export const DummyEPGSourceModal = memo(function DummyEPGSourceModal({ isOpen, s
                 />
               </div>
 
-              <div className="form-group">
+              <div className="modal-form-group">
                 <label htmlFor="endedDescriptionTemplate">Ended Description Template</label>
                 <textarea
                   id="endedDescriptionTemplate"
@@ -557,11 +609,11 @@ export const DummyEPGSourceModal = memo(function DummyEPGSourceModal({ isOpen, s
               isOpen={fallbackOpen}
               onToggle={() => setFallbackOpen(!fallbackOpen)}
             >
-              <p className="section-description">
+              <p className="modal-section-description">
                 When patterns don't match the channel/stream name, use these custom fallback templates instead of the default placeholder messages. Leave empty to use the built-in humorous fallback descriptions.
               </p>
 
-              <div className="form-group">
+              <div className="modal-form-group">
                 <label htmlFor="fallbackTitleTemplate">Fallback Title Template</label>
                 <input
                   id="fallbackTitleTemplate"
@@ -573,7 +625,7 @@ export const DummyEPGSourceModal = memo(function DummyEPGSourceModal({ isOpen, s
                 <p className="form-hint">Custom title when patterns don't match. If empty, uses the channel/stream name</p>
               </div>
 
-              <div className="form-group">
+              <div className="modal-form-group">
                 <label htmlFor="fallbackDescriptionTemplate">Fallback Description Template</label>
                 <textarea
                   id="fallbackDescriptionTemplate"
@@ -587,43 +639,116 @@ export const DummyEPGSourceModal = memo(function DummyEPGSourceModal({ isOpen, s
             </CollapsibleSection>
 
             {/* EPG Settings Section */}
-            <div className="section-divider">
+            <div className="modal-section-divider">
               <span>EPG Settings</span>
             </div>
 
-            <div className="form-row">
-              <div className="form-group">
-                <label htmlFor="eventTimezone">Event Timezone</label>
-                <select
-                  id="eventTimezone"
-                  value={eventTimezone}
-                  onChange={(e) => setEventTimezone(e.target.value)}
-                >
-                  {TIMEZONES.filter(tz => tz.value !== '').map(tz => (
-                    <option key={tz.value} value={tz.value}>{tz.label}</option>
-                  ))}
-                </select>
+            <div className="modal-form-row">
+              <div className="modal-form-group">
+                <label>Event Timezone</label>
+                <div className="searchable-select-dropdown" ref={eventTimezoneDropdownRef}>
+                  <button
+                    type="button"
+                    className="dropdown-trigger"
+                    onClick={() => { setEventTimezoneDropdownOpen(!eventTimezoneDropdownOpen); setEventTimezoneSearch(''); }}
+                  >
+                    <span className="dropdown-value">
+                      {TIMEZONES.find(tz => tz.value === eventTimezone)?.label || eventTimezone}
+                    </span>
+                    <span className="material-icons">expand_more</span>
+                  </button>
+                  {eventTimezoneDropdownOpen && (
+                    <div className="dropdown-menu">
+                      <div className="dropdown-search">
+                        <span className="material-icons">search</span>
+                        <input
+                          type="text"
+                          placeholder="Search timezones..."
+                          value={eventTimezoneSearch}
+                          onChange={(e) => setEventTimezoneSearch(e.target.value)}
+                          autoFocus
+                        />
+                        {eventTimezoneSearch && (
+                          <button type="button" className="clear-search" onClick={() => setEventTimezoneSearch('')}>
+                            <span className="material-icons">close</span>
+                          </button>
+                        )}
+                      </div>
+                      <div className="dropdown-options">
+                        {TIMEZONES.filter(tz => tz.value !== '' && tz.label.toLowerCase().includes(eventTimezoneSearch.toLowerCase())).map(tz => (
+                          <div
+                            key={tz.value}
+                            className={`dropdown-option-item${eventTimezone === tz.value ? ' selected' : ''}`}
+                            onClick={() => { setEventTimezone(tz.value); setEventTimezoneDropdownOpen(false); }}
+                          >
+                            {tz.label}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
                 <p className="form-hint">The timezone of event times in your channel titles. DST is handled automatically!</p>
               </div>
 
-              <div className="form-group">
-                <label htmlFor="outputTimezone">Output Timezone (Optional)</label>
-                <select
-                  id="outputTimezone"
-                  value={outputTimezone}
-                  onChange={(e) => setOutputTimezone(e.target.value)}
-                >
-                  <option value="">Same as event timezone</option>
-                  {TIMEZONES.filter(tz => tz.value !== '').map(tz => (
-                    <option key={tz.value} value={tz.value}>{tz.label}</option>
-                  ))}
-                </select>
+              <div className="modal-form-group">
+                <label>Output Timezone (Optional)</label>
+                <div className="searchable-select-dropdown" ref={outputTimezoneDropdownRef}>
+                  <button
+                    type="button"
+                    className="dropdown-trigger"
+                    onClick={() => { setOutputTimezoneDropdownOpen(!outputTimezoneDropdownOpen); setOutputTimezoneSearch(''); }}
+                  >
+                    <span className="dropdown-value">
+                      {outputTimezone ? (TIMEZONES.find(tz => tz.value === outputTimezone)?.label || outputTimezone) : 'Same as event timezone'}
+                    </span>
+                    <span className="material-icons">expand_more</span>
+                  </button>
+                  {outputTimezoneDropdownOpen && (
+                    <div className="dropdown-menu">
+                      <div className="dropdown-search">
+                        <span className="material-icons">search</span>
+                        <input
+                          type="text"
+                          placeholder="Search timezones..."
+                          value={outputTimezoneSearch}
+                          onChange={(e) => setOutputTimezoneSearch(e.target.value)}
+                          autoFocus
+                        />
+                        {outputTimezoneSearch && (
+                          <button type="button" className="clear-search" onClick={() => setOutputTimezoneSearch('')}>
+                            <span className="material-icons">close</span>
+                          </button>
+                        )}
+                      </div>
+                      <div className="dropdown-options">
+                        {(!outputTimezoneSearch || 'same as event timezone'.includes(outputTimezoneSearch.toLowerCase())) && (
+                          <div
+                            className={`dropdown-option-item${outputTimezone === '' ? ' selected' : ''}`}
+                            onClick={() => { setOutputTimezone(''); setOutputTimezoneDropdownOpen(false); }}
+                          >
+                            Same as event timezone
+                          </div>
+                        )}
+                        {TIMEZONES.filter(tz => tz.value !== '' && tz.label.toLowerCase().includes(outputTimezoneSearch.toLowerCase())).map(tz => (
+                          <div
+                            key={tz.value}
+                            className={`dropdown-option-item${outputTimezone === tz.value ? ' selected' : ''}`}
+                            onClick={() => { setOutputTimezone(tz.value); setOutputTimezoneDropdownOpen(false); }}
+                          >
+                            {tz.label}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
                 <p className="form-hint">Display times in a different timezone than the event timezone</p>
               </div>
             </div>
 
-            <div className="form-row">
-              <div className="form-group">
+            <div className="modal-form-row">
+              <div className="modal-form-group">
                 <label htmlFor="programDuration">Program Duration (minutes)</label>
                 <input
                   id="programDuration"
@@ -636,7 +761,7 @@ export const DummyEPGSourceModal = memo(function DummyEPGSourceModal({ isOpen, s
                 <p className="form-hint">Default duration for each program</p>
               </div>
 
-              <div className="form-group">
+              <div className="modal-form-group">
                 <label htmlFor="categories">Categories (Optional)</label>
                 <input
                   id="categories"
@@ -654,7 +779,7 @@ export const DummyEPGSourceModal = memo(function DummyEPGSourceModal({ isOpen, s
               isOpen={logoUrlsOpen}
               onToggle={() => setLogoUrlsOpen(!logoUrlsOpen)}
             >
-              <div className="form-group">
+              <div className="modal-form-group">
                 <label htmlFor="channelLogoUrl">Channel Logo URL</label>
                 <input
                   id="channelLogoUrl"
@@ -666,7 +791,7 @@ export const DummyEPGSourceModal = memo(function DummyEPGSourceModal({ isOpen, s
                 <p className="form-hint">Build a URL for the channel logo using regex groups. Use &#123;groupname_normalize&#125; for cleaner URLs (alphanumeric-only, lowercase). This will be used as the channel &lt;icon&gt; in the EPG output.</p>
               </div>
 
-              <div className="form-group">
+              <div className="modal-form-group">
                 <label htmlFor="programPosterUrl">Program Poster URL (Optional)</label>
                 <input
                   id="programPosterUrl"
@@ -684,8 +809,8 @@ export const DummyEPGSourceModal = memo(function DummyEPGSourceModal({ isOpen, s
               isOpen={epgTagsOpen}
               onToggle={() => setEpgTagsOpen(!epgTagsOpen)}
             >
-              <div className="form-group checkbox-group">
-                <label className="checkbox-label">
+              <div className="modal-form-group">
+                <label className="modal-checkbox-label">
                   <input
                     type="checkbox"
                     checked={includeDateTag}
@@ -696,8 +821,8 @@ export const DummyEPGSourceModal = memo(function DummyEPGSourceModal({ isOpen, s
                 <p className="form-hint">Include the &lt;date&gt; tag in EPG output with the program's start date (YYYY-MM-DD format). Added to all programs.</p>
               </div>
 
-              <div className="form-group checkbox-group">
-                <label className="checkbox-label">
+              <div className="modal-form-group">
+                <label className="modal-checkbox-label">
                   <input
                     type="checkbox"
                     checked={includeLiveTag}
@@ -708,8 +833,8 @@ export const DummyEPGSourceModal = memo(function DummyEPGSourceModal({ isOpen, s
                 <p className="form-hint">Mark programs as live content with the &lt;live /&gt; tag in EPG output. Note: Only added to the main event, not upcoming/ended filler programs.</p>
               </div>
 
-              <div className="form-group checkbox-group">
-                <label className="checkbox-label">
+              <div className="modal-form-group">
+                <label className="modal-checkbox-label">
                   <input
                     type="checkbox"
                     checked={includeNewTag}
@@ -722,15 +847,15 @@ export const DummyEPGSourceModal = memo(function DummyEPGSourceModal({ isOpen, s
             </CollapsibleSection>
 
             {/* Test Your Configuration Section */}
-            <div className="section-divider">
+            <div className="modal-section-divider">
               <span>Test Your Configuration</span>
             </div>
 
-            <p className="section-description">
+            <p className="modal-section-description">
               Test your patterns and templates with a sample channel name to preview the output.
             </p>
 
-            <div className="form-group">
+            <div className="modal-form-group">
               <label htmlFor="sampleChannelName">Sample Channel Name</label>
               <input
                 id="sampleChannelName"
@@ -743,27 +868,27 @@ export const DummyEPGSourceModal = memo(function DummyEPGSourceModal({ isOpen, s
             </div>
 
             {sampleChannelName && (
-              <div className="preview-section">
+              <div className="modal-preview-section">
                 <h4>Preview:</h4>
                 {preview.groups ? (
                   <>
-                    <div className="preview-groups">
+                    <div className="modal-preview-groups">
                       <strong>Extracted Groups:</strong>
                       <code>{JSON.stringify(preview.groups, null, 2)}</code>
                     </div>
                     {preview.title && (
-                      <div className="preview-item">
+                      <div className="modal-preview-item">
                         <strong>Title:</strong> {preview.title}
                       </div>
                     )}
                     {preview.description && (
-                      <div className="preview-item">
+                      <div className="modal-preview-item">
                         <strong>Description:</strong> {preview.description}
                       </div>
                     )}
                   </>
                 ) : (
-                  <div className="preview-no-match">
+                  <div className="modal-preview-no-match">
                     <span className="material-icons">warning</span>
                     <span>Pattern did not match. {fallbackTitleTemplate ? `Using fallback: "${fallbackTitleTemplate}"` : 'Using channel name as title.'}</span>
                   </div>
@@ -771,21 +896,16 @@ export const DummyEPGSourceModal = memo(function DummyEPGSourceModal({ isOpen, s
               </div>
             )}
 
-            {error && <div className="error-message">{error}</div>}
+            {error && <div className="modal-error-banner">{error}</div>}
           </div>
 
           <div className="modal-footer">
-            <button type="button" className="btn-text" onClick={handleClearAll}>
+            <button type="button" className="modal-btn modal-btn-secondary" onClick={handleClearAll}>
               Clear All
             </button>
-            <div className="footer-buttons">
-              <button type="button" className="btn-secondary" onClick={onClose} disabled={saving}>
-                Cancel
-              </button>
-              <button type="submit" className="btn-primary" disabled={saving}>
-                {saving ? 'Saving...' : source ? 'Save Changes' : 'Add Dummy EPG'}
-              </button>
-            </div>
+            <button type="submit" className="modal-btn modal-btn-primary" disabled={saving}>
+              {saving ? 'Saving...' : source ? 'Save Changes' : 'Add Dummy EPG'}
+            </button>
           </div>
         </form>
       </div>

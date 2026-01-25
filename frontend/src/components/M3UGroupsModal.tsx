@@ -3,6 +3,7 @@ import type { M3UAccount, ChannelGroupM3UAccount, ChannelGroup, AutoSyncCustomPr
 import * as api from '../services/api';
 import { naturalCompare } from '../utils/naturalSort';
 import { AutoSyncSettingsModal } from './AutoSyncSettingsModal';
+import './ModalBase.css';
 import './M3UGroupsModal.css';
 
 interface M3UGroupsModalProps {
@@ -272,7 +273,7 @@ export const M3UGroupsModal = memo(function M3UGroupsModal({
 
   return (
     <div className="modal-overlay">
-      <div className="modal-content m3u-groups-modal" onClick={(e) => e.stopPropagation()}>
+      <div className="modal-container modal-lg m3u-groups-modal" style={{ height: '80vh', minHeight: '80vh', maxHeight: '80vh' }} onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
           <div className="header-info">
             <h2>Manage Groups</h2>
@@ -284,8 +285,8 @@ export const M3UGroupsModal = memo(function M3UGroupsModal({
               </span>
             )}
           </div>
-          <button className="close-btn" onClick={onClose}>
-            &times;
+          <button className="modal-close-btn" onClick={onClose}>
+            <span className="material-icons">close</span>
           </button>
         </div>
 
@@ -306,19 +307,21 @@ export const M3UGroupsModal = memo(function M3UGroupsModal({
           </div>
           <div className="toolbar-actions">
             <span className="group-count">{enabledCount} / {groups.length} enabled</span>
-            <button className="btn-small" onClick={handleEnableAll}>Enable All</button>
-            <button className="btn-small" onClick={handleDisableAll}>Disable All</button>
+            <div className="toolbar-buttons">
+              <button className="btn-small" onClick={handleEnableAll}>Enable All</button>
+              <button className="btn-small" onClick={handleDisableAll}>Disable All</button>
+            </div>
           </div>
         </div>
 
         <div className="modal-body">
           {loading ? (
-            <div className="loading-state">
-              <span className="material-icons spinning">sync</span>
+            <div className="modal-loading">
+              <span className="material-icons">sync</span>
               <p>Loading groups...</p>
             </div>
           ) : filteredGroups.length === 0 ? (
-            <div className="empty-state">
+            <div className="modal-empty-state">
               {search ? (
                 <p>No groups match "{search}"</p>
               ) : showOnlyAutoSync ? (
@@ -402,7 +405,7 @@ export const M3UGroupsModal = memo(function M3UGroupsModal({
             </div>
           )}
 
-          {error && <div className="error-message">{error}</div>}
+          {error && <div className="modal-error-banner">{error}</div>}
         </div>
 
         <div className="modal-footer">
@@ -424,14 +427,9 @@ export const M3UGroupsModal = memo(function M3UGroupsModal({
               <span>Auto-sync only</span>
             </label>
           </div>
-          <div className="footer-buttons">
-            <button className="btn-secondary" onClick={onClose} disabled={saving}>
-              Cancel
-            </button>
-            <button className="btn-primary" onClick={handleSave} disabled={saving || !hasChanges}>
-              {saving ? 'Saving...' : 'Save Changes'}
-            </button>
-          </div>
+          <button className="modal-btn modal-btn-primary" onClick={handleSave} disabled={saving || !hasChanges}>
+            {saving ? 'Saving...' : 'Save Changes'}
+          </button>
         </div>
       </div>
 

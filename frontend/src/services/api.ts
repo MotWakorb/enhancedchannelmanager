@@ -3,6 +3,7 @@ import type {
   ChannelGroup,
   ChannelProfile,
   Stream,
+  StreamGroupInfo,
   M3UAccount,
   M3UAccountProfile,
   M3UAccountCreateRequest,
@@ -291,7 +292,7 @@ export async function updateChannelGroup(id: number, data: Partial<ChannelGroup>
 }
 
 export async function deleteChannelGroup(id: number): Promise<void> {
-  await fetch(`${API_BASE}/channel-groups/${id}`, { method: 'DELETE' });
+  await fetchJson(`${API_BASE}/channel-groups/${id}`, { method: 'DELETE' });
 }
 
 export async function getOrphanedChannelGroups(): Promise<{
@@ -338,6 +339,39 @@ export async function getChannelGroupsWithStreams(): Promise<{
   return fetchJson(`${API_BASE}/channel-groups/with-streams`);
 }
 
+export interface AutoCreatedGroup {
+  id: number;
+  name: string;
+  auto_created_count: number;
+  sample_channels: Array<{
+    id: number;
+    name: string;
+    channel_number: number | null;
+    auto_created_by: number | null;
+    auto_created_by_name: string | null;
+  }>;
+}
+
+export async function getGroupsWithAutoCreatedChannels(): Promise<{
+  groups: AutoCreatedGroup[];
+  total_auto_created_channels: number;
+}> {
+  return fetchJson(`${API_BASE}/channel-groups/auto-created`);
+}
+
+export async function clearAutoCreatedFlag(groupIds: number[]): Promise<{
+  status: string;
+  message: string;
+  updated_count: number;
+  updated_channels: Array<{ id: number; name: string; channel_number: number | null }>;
+  failed_channels: Array<{ id: number; name: string; error: string }>;
+}> {
+  return fetchJson(`${API_BASE}/channels/clear-auto-created`, {
+    method: 'POST',
+    body: JSON.stringify({ group_ids: groupIds }),
+  });
+}
+
 // Streams
 export async function getStreams(params?: {
   page?: number;
@@ -359,7 +393,7 @@ export async function getStreams(params?: {
   return fetchJson(`${API_BASE}/streams${query}`, { signal: params?.signal });
 }
 
-export async function getStreamGroups(bypassCache?: boolean): Promise<string[]> {
+export async function getStreamGroups(bypassCache?: boolean): Promise<StreamGroupInfo[]> {
   const params = bypassCache ? '?bypass_cache=true' : '';
   return fetchJson(`${API_BASE}/stream-groups${params}`);
 }
@@ -399,6 +433,31 @@ export async function createM3UAccount(data: M3UAccountCreateRequest): Promise<M
   });
 }
 
+export async function uploadM3UFile(file: File): Promise<{ file_path: string; original_name: string; size: number }> {
+  const formData = new FormData();
+  formData.append('file', file);
+
+  const response = await fetch(`${API_BASE}/m3u/upload`, {
+    method: 'POST',
+    body: formData,
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    let errorMessage = response.statusText;
+    try {
+      const errorJson = JSON.parse(errorText);
+      errorMessage = errorJson.detail || errorMessage;
+    } catch {
+      // Use raw text if not JSON
+      errorMessage = errorText || errorMessage;
+    }
+    throw new Error(errorMessage);
+  }
+
+  return response.json();
+}
+
 export async function updateM3UAccount(id: number, data: Partial<M3UAccount>): Promise<M3UAccount> {
   return fetchJson(`${API_BASE}/m3u/accounts/${id}`, {
     method: 'PUT',
@@ -436,6 +495,23 @@ export async function refreshM3UVod(id: number): Promise<{ success: boolean; mes
   return fetchJson(`${API_BASE}/m3u/accounts/${id}/refresh-vod`, {
     method: 'POST',
   });
+}
+
+// M3U Stream Metadata - parsed directly from M3U file
+export interface M3UStreamMetadataEntry {
+  'tvc-guide-stationid'?: string;
+  'tvg-name'?: string;
+  'tvg-logo'?: string;
+  'group-title'?: string;
+}
+
+export interface M3UStreamMetadataResponse {
+  metadata: Record<string, M3UStreamMetadataEntry>;  // keyed by tvg-id
+  count: number;
+}
+
+export async function getM3UStreamMetadata(accountId: number): Promise<M3UStreamMetadataResponse> {
+  return fetchJson(`${API_BASE}/m3u/accounts/${accountId}/stream-metadata`);
 }
 
 // M3U Filters
@@ -858,7 +934,7 @@ export async function updateEPGSource(id: number, data: Partial<EPGSource>): Pro
 }
 
 export async function deleteEPGSource(id: number): Promise<void> {
-  await fetch(`${API_BASE}/epg/sources/${id}`, { method: 'DELETE' });
+  await fetchJson(`${API_BASE}/epg/sources/${id}`, { method: 'DELETE' });
 }
 
 export async function refreshEPGSource(id: number): Promise<void> {
@@ -1837,27 +1913,26 @@ export async function getNotifications(params?: {
   unread_only?: boolean;
   notification_type?: string;
 }): Promise<NotificationsResponse> {
-  const searchParams = new URLSearchParams();
-  if (params?.page) searchParams.set('page', String(params.page));
-  if (params?.page_size) searchParams.set('page_size', String(params.page_size));
-  if (params?.unread_only) searchParams.set('unread_only', 'true');
-  if (params?.notification_type) searchParams.set('notification_type', params.notification_type);
-
-  const query = searchParams.toString();
-  return fetchJson(`${API_BASE}/notifications${query ? `?${query}` : ''}`);
+  const query = buildQuery({
+    page: params?.page,
+    page_size: params?.page_size,
+    unread_only: params?.unread_only,
+    notification_type: params?.notification_type,
+  });
+  return fetchJson(`${API_BASE}/notifications${query}`);
 }
 
 export async function createNotification(data: CreateNotificationData): Promise<Notification> {
-  const searchParams = new URLSearchParams();
-  searchParams.set('message', data.message);
-  if (data.notification_type) searchParams.set('notification_type', data.notification_type);
-  if (data.title) searchParams.set('title', data.title);
-  if (data.source) searchParams.set('source', data.source);
-  if (data.source_id) searchParams.set('source_id', data.source_id);
-  if (data.action_label) searchParams.set('action_label', data.action_label);
-  if (data.action_url) searchParams.set('action_url', data.action_url);
-
-  return fetchJson(`${API_BASE}/notifications?${searchParams.toString()}`, {
+  const query = buildQuery({
+    message: data.message,
+    notification_type: data.notification_type,
+    title: data.title,
+    source: data.source,
+    source_id: data.source_id,
+    action_label: data.action_label,
+    action_url: data.action_url,
+  });
+  return fetchJson(`${API_BASE}/notifications${query}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: data.metadata ? JSON.stringify({ metadata: data.metadata }) : undefined,
@@ -1865,10 +1940,8 @@ export async function createNotification(data: CreateNotificationData): Promise<
 }
 
 export async function markNotificationRead(notificationId: number, read: boolean = true): Promise<Notification> {
-  const searchParams = new URLSearchParams();
-  searchParams.set('read', String(read));
-
-  return fetchJson(`${API_BASE}/notifications/${notificationId}?${searchParams.toString()}`, {
+  const query = buildQuery({ read });
+  return fetchJson(`${API_BASE}/notifications/${notificationId}${query}`, {
     method: 'PATCH',
   });
 }
@@ -1886,10 +1959,8 @@ export async function deleteNotification(notificationId: number): Promise<{ dele
 }
 
 export async function clearNotifications(readOnly: boolean = true): Promise<{ deleted: number; read_only: boolean }> {
-  const searchParams = new URLSearchParams();
-  searchParams.set('read_only', String(readOnly));
-
-  return fetchJson(`${API_BASE}/notifications?${searchParams.toString()}`, {
+  const query = buildQuery({ read_only: readOnly });
+  return fetchJson(`${API_BASE}/notifications${query}`, {
     method: 'DELETE',
   });
 }
