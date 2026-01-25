@@ -1519,20 +1519,7 @@ button.group-selection-checkbox {
   border-top: 1px solid var(--border-primary);
 }
 
-.btn-cancel {
-  padding: 0.625rem 1rem;
-  background-color: var(--bg-hover);
-  border: 1px solid var(--border-secondary);
-  border-radius: 6px;
-  color: var(--button-text);
-  font-size: 0.9rem;
-  cursor: pointer;
-  transition: background-color 0.15s;
-}
-
-.btn-cancel:hover {
-  background-color: var(--button-hover-bg);
-}
+/* .btn-cancel is defined in shared/common.css */
 
 .btn-create {
   display: flex;
