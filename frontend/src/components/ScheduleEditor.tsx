@@ -1,5 +1,6 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import type { TaskSchedule, TaskScheduleType, TaskScheduleCreate, TaskScheduleUpdate } from '../services/api';
+import { CustomSelect } from './CustomSelect';
 import './ScheduleEditor.css';
 
 interface ScheduleEditorProps {
@@ -231,18 +232,15 @@ export function ScheduleEditor({ schedule, onSave, onCancel, saving }: ScheduleE
                 onChange={(e) => setScheduleTime(e.target.value)}
                 className="time-input"
               />
-              <select
+              <CustomSelect
                 value={timezone}
-                onChange={(e) => setTimezone(e.target.value)}
+                onChange={(val) => setTimezone(val)}
                 className="timezone-select"
-              >
-                {TIMEZONE_OPTIONS.map((tz) => (
-                  <option key={tz.value} value={tz.value}>{tz.label}</option>
-                ))}
-                {!tzInList && (
-                  <option value={browserTz}>{browserTz} (Local)</option>
-                )}
-              </select>
+                options={[
+                  ...TIMEZONE_OPTIONS.map((tz) => ({ value: tz.value, label: tz.label })),
+                  ...(!tzInList ? [{ value: browserTz, label: `${browserTz} (Local)` }] : []),
+                ]}
+              />
             </div>
           </>
         )}
@@ -277,18 +275,15 @@ export function ScheduleEditor({ schedule, onSave, onCancel, saving }: ScheduleE
                 onChange={(e) => setScheduleTime(e.target.value)}
                 className="time-input"
               />
-              <select
+              <CustomSelect
                 value={timezone}
-                onChange={(e) => setTimezone(e.target.value)}
+                onChange={(val) => setTimezone(val)}
                 className="timezone-select"
-              >
-                {TIMEZONE_OPTIONS.map((tz) => (
-                  <option key={tz.value} value={tz.value}>{tz.label}</option>
-                ))}
-                {!tzInList && (
-                  <option value={browserTz}>{browserTz} (Local)</option>
-                )}
-              </select>
+                options={[
+                  ...TIMEZONE_OPTIONS.map((tz) => ({ value: tz.value, label: tz.label })),
+                  ...(!tzInList ? [{ value: browserTz, label: `${browserTz} (Local)` }] : []),
+                ]}
+              />
             </div>
           </>
         )}
@@ -323,18 +318,15 @@ export function ScheduleEditor({ schedule, onSave, onCancel, saving }: ScheduleE
                 onChange={(e) => setScheduleTime(e.target.value)}
                 className="time-input"
               />
-              <select
+              <CustomSelect
                 value={timezone}
-                onChange={(e) => setTimezone(e.target.value)}
+                onChange={(val) => setTimezone(val)}
                 className="timezone-select"
-              >
-                {TIMEZONE_OPTIONS.map((tz) => (
-                  <option key={tz.value} value={tz.value}>{tz.label}</option>
-                ))}
-                {!tzInList && (
-                  <option value={browserTz}>{browserTz} (Local)</option>
-                )}
-              </select>
+                options={[
+                  ...TIMEZONE_OPTIONS.map((tz) => ({ value: tz.value, label: tz.label })),
+                  ...(!tzInList ? [{ value: browserTz, label: `${browserTz} (Local)` }] : []),
+                ]}
+              />
             </div>
           </>
         )}
@@ -344,16 +336,18 @@ export function ScheduleEditor({ schedule, onSave, onCancel, saving }: ScheduleE
           <>
             <label>Day of Month</label>
             <div className="monthly-day-row">
-              <select
-                value={dayOfMonth}
-                onChange={(e) => setDayOfMonth(parseInt(e.target.value))}
+              <CustomSelect
+                value={String(dayOfMonth)}
+                onChange={(val) => setDayOfMonth(parseInt(val))}
                 className="day-select"
-              >
-                {Array.from({ length: 31 }, (_, i) => i + 1).map((day) => (
-                  <option key={day} value={day}>{day}</option>
-                ))}
-                <option value={-1}>Last day</option>
-              </select>
+                options={[
+                  ...Array.from({ length: 31 }, (_, i) => ({
+                    value: String(i + 1),
+                    label: String(i + 1),
+                  })),
+                  { value: '-1', label: 'Last day' },
+                ]}
+              />
               <span className="day-suffix">of each month</span>
             </div>
             <label>Time</label>
@@ -364,18 +358,15 @@ export function ScheduleEditor({ schedule, onSave, onCancel, saving }: ScheduleE
                 onChange={(e) => setScheduleTime(e.target.value)}
                 className="time-input"
               />
-              <select
+              <CustomSelect
                 value={timezone}
-                onChange={(e) => setTimezone(e.target.value)}
+                onChange={(val) => setTimezone(val)}
                 className="timezone-select"
-              >
-                {TIMEZONE_OPTIONS.map((tz) => (
-                  <option key={tz.value} value={tz.value}>{tz.label}</option>
-                ))}
-                {!tzInList && (
-                  <option value={browserTz}>{browserTz} (Local)</option>
-                )}
-              </select>
+                options={[
+                  ...TIMEZONE_OPTIONS.map((tz) => ({ value: tz.value, label: tz.label })),
+                  ...(!tzInList ? [{ value: browserTz, label: `${browserTz} (Local)` }] : []),
+                ]}
+              />
             </div>
           </>
         )}

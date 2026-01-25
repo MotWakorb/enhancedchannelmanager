@@ -7,6 +7,7 @@ import { M3UGroupsModal } from '../M3UGroupsModal';
 import { M3UFiltersModal } from '../M3UFiltersModal';
 import { M3ULinkedAccountsModal } from '../M3ULinkedAccountsModal';
 import { M3UProfileModal } from '../M3UProfileModal';
+import { CustomSelect } from '../CustomSelect';
 import './M3UManagerTab.css';
 
 interface M3UManagerTabProps {
@@ -568,16 +569,18 @@ export function M3UManagerTab({
         </div>
         <div className="header-actions">
           {serverGroups.length > 0 && (
-            <select
+            <CustomSelect
               className="server-group-filter"
-              value={filterServerGroup ?? ''}
-              onChange={(e) => setFilterServerGroup(e.target.value ? Number(e.target.value) : null)}
-            >
-              <option value="">All Server Groups</option>
-              {serverGroups.map(sg => (
-                <option key={sg.id} value={sg.id}>{sg.name}</option>
-              ))}
-            </select>
+              value={filterServerGroup?.toString() ?? ''}
+              onChange={(val) => setFilterServerGroup(val ? Number(val) : null)}
+              options={[
+                { value: '', label: 'All Server Groups' },
+                ...serverGroups.map(sg => ({
+                  value: sg.id.toString(),
+                  label: sg.name,
+                })),
+              ]}
+            />
           )}
           <button className="btn-secondary" onClick={() => setLinkedAccountsModalOpen(true)}>
             <span className="material-icons">link</span>

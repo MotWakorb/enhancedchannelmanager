@@ -8,6 +8,7 @@ import type {
   AlertSources,
   AlertFilterMode,
 } from '../services/api';
+import { CustomSelect } from './CustomSelect';
 import './AlertMethodSettings.css';
 
 interface AlertMethodSettingsProps {
@@ -469,18 +470,19 @@ export function AlertMethodSettings({ className }: AlertMethodSettingsProps) {
 
               <div className="form-group">
                 <label>Method Type <span className="required">*</span></label>
-                <select
+                <CustomSelect
                   value={formData.method_type}
-                  onChange={(e) => handleTypeChange(e.target.value)}
+                  onChange={(val) => handleTypeChange(val)}
                   disabled={!!editingMethod}
-                >
-                  <option value="">Select a method type...</option>
-                  {methodTypes.map(type => (
-                    <option key={type.type} value={type.type}>
-                      {type.display_name}
-                    </option>
-                  ))}
-                </select>
+                  placeholder="Select a method type..."
+                  options={[
+                    { value: '', label: 'Select a method type...' },
+                    ...methodTypes.map(type => ({
+                      value: type.type,
+                      label: type.display_name,
+                    })),
+                  ]}
+                />
               </div>
 
               {selectedType && (
@@ -583,9 +585,9 @@ export function AlertMethodSettings({ className }: AlertMethodSettingsProps) {
                           </label>
                           {formData.alert_sources?.epg_refresh?.enabled && (
                             <div className="filter-options">
-                              <select
+                              <CustomSelect
                                 value={formData.alert_sources?.epg_refresh?.filter_mode || 'all'}
-                                onChange={(e) => {
+                                onChange={(val) => {
                                   const sources = formData.alert_sources || { ...DEFAULT_ALERT_SOURCES };
                                   setFormData(prev => ({
                                     ...prev,
@@ -593,16 +595,17 @@ export function AlertMethodSettings({ className }: AlertMethodSettingsProps) {
                                       ...sources,
                                       epg_refresh: {
                                         ...sources.epg_refresh!,
-                                        filter_mode: e.target.value as AlertFilterMode,
+                                        filter_mode: val as AlertFilterMode,
                                       },
                                     },
                                   }));
                                 }}
-                              >
-                                <option value="all">All Sources</option>
-                                <option value="only_selected">Only Selected Sources</option>
-                                <option value="all_except">All Except Selected</option>
-                              </select>
+                                options={[
+                                  { value: 'all', label: 'All Sources' },
+                                  { value: 'only_selected', label: 'Only Selected Sources' },
+                                  { value: 'all_except', label: 'All Except Selected' },
+                                ]}
+                              />
                               {formData.alert_sources?.epg_refresh?.filter_mode !== 'all' && (
                                 <div className="source-select">
                                   {epgSources.map(source => (
@@ -664,9 +667,9 @@ export function AlertMethodSettings({ className }: AlertMethodSettingsProps) {
                           </label>
                           {formData.alert_sources?.m3u_refresh?.enabled && (
                             <div className="filter-options">
-                              <select
+                              <CustomSelect
                                 value={formData.alert_sources?.m3u_refresh?.filter_mode || 'all'}
-                                onChange={(e) => {
+                                onChange={(val) => {
                                   const sources = formData.alert_sources || { ...DEFAULT_ALERT_SOURCES };
                                   setFormData(prev => ({
                                     ...prev,
@@ -674,16 +677,17 @@ export function AlertMethodSettings({ className }: AlertMethodSettingsProps) {
                                       ...sources,
                                       m3u_refresh: {
                                         ...sources.m3u_refresh!,
-                                        filter_mode: e.target.value as AlertFilterMode,
+                                        filter_mode: val as AlertFilterMode,
                                       },
                                     },
                                   }));
                                 }}
-                              >
-                                <option value="all">All Accounts</option>
-                                <option value="only_selected">Only Selected Accounts</option>
-                                <option value="all_except">All Except Selected</option>
-                              </select>
+                                options={[
+                                  { value: 'all', label: 'All Accounts' },
+                                  { value: 'only_selected', label: 'Only Selected Accounts' },
+                                  { value: 'all_except', label: 'All Except Selected' },
+                                ]}
+                              />
                               {formData.alert_sources?.m3u_refresh?.filter_mode !== 'all' && (
                                 <div className="source-select">
                                   {m3uAccounts.map(account => (

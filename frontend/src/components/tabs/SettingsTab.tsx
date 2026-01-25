@@ -12,6 +12,7 @@ import { DeleteOrphanedGroupsModal } from '../DeleteOrphanedGroupsModal';
 import { ScheduledTasksSection } from '../ScheduledTasksSection';
 import { AlertMethodSettings } from '../AlertMethodSettings';
 import { SettingsModal } from '../SettingsModal';
+import { CustomSelect } from '../CustomSelect';
 import {
   DndContext,
   closestCenter,
@@ -1155,40 +1156,39 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
           <span className="form-description">
             Timezone used for daily bandwidth statistics and scheduled probe times. "Today" will roll over at midnight in your selected timezone, and scheduled probes will run at the configured time in this timezone.
           </span>
-          <select
-            id="userTimezone"
+          <CustomSelect
             value={userTimezone}
-            onChange={(e) => setUserTimezone(e.target.value)}
+            onChange={(val) => setUserTimezone(val)}
             className="timezone-select"
-          >
-            <option value="">UTC (Default)</option>
-            <optgroup label="US & Canada">
-              <option value="America/New_York">Eastern Time (ET)</option>
-              <option value="America/Chicago">Central Time (CT)</option>
-              <option value="America/Denver">Mountain Time (MT)</option>
-              <option value="America/Los_Angeles">Pacific Time (PT)</option>
-              <option value="America/Anchorage">Alaska Time (AKT)</option>
-              <option value="Pacific/Honolulu">Hawaii Time (HT)</option>
-            </optgroup>
-            <optgroup label="Europe">
-              <option value="Europe/London">London (GMT/BST)</option>
-              <option value="Europe/Paris">Paris (CET/CEST)</option>
-              <option value="Europe/Berlin">Berlin (CET/CEST)</option>
-              <option value="Europe/Amsterdam">Amsterdam (CET/CEST)</option>
-              <option value="Europe/Rome">Rome (CET/CEST)</option>
-              <option value="Europe/Madrid">Madrid (CET/CEST)</option>
-            </optgroup>
-            <optgroup label="Asia & Pacific">
-              <option value="Asia/Tokyo">Tokyo (JST)</option>
-              <option value="Asia/Shanghai">Shanghai (CST)</option>
-              <option value="Asia/Hong_Kong">Hong Kong (HKT)</option>
-              <option value="Asia/Singapore">Singapore (SGT)</option>
-              <option value="Asia/Dubai">Dubai (GST)</option>
-              <option value="Australia/Sydney">Sydney (AEST/AEDT)</option>
-              <option value="Australia/Melbourne">Melbourne (AEST/AEDT)</option>
-              <option value="Pacific/Auckland">Auckland (NZST/NZDT)</option>
-            </optgroup>
-          </select>
+            searchable
+            searchPlaceholder="Search timezones..."
+            options={[
+              { value: '', label: 'UTC (Default)' },
+              // US & Canada
+              { value: 'America/New_York', label: 'US: Eastern Time (ET)' },
+              { value: 'America/Chicago', label: 'US: Central Time (CT)' },
+              { value: 'America/Denver', label: 'US: Mountain Time (MT)' },
+              { value: 'America/Los_Angeles', label: 'US: Pacific Time (PT)' },
+              { value: 'America/Anchorage', label: 'US: Alaska Time (AKT)' },
+              { value: 'Pacific/Honolulu', label: 'US: Hawaii Time (HT)' },
+              // Europe
+              { value: 'Europe/London', label: 'EU: London (GMT/BST)' },
+              { value: 'Europe/Paris', label: 'EU: Paris (CET/CEST)' },
+              { value: 'Europe/Berlin', label: 'EU: Berlin (CET/CEST)' },
+              { value: 'Europe/Amsterdam', label: 'EU: Amsterdam (CET/CEST)' },
+              { value: 'Europe/Rome', label: 'EU: Rome (CET/CEST)' },
+              { value: 'Europe/Madrid', label: 'EU: Madrid (CET/CEST)' },
+              // Asia & Pacific
+              { value: 'Asia/Tokyo', label: 'Asia: Tokyo (JST)' },
+              { value: 'Asia/Shanghai', label: 'Asia: Shanghai (CST)' },
+              { value: 'Asia/Hong_Kong', label: 'Asia: Hong Kong (HKT)' },
+              { value: 'Asia/Singapore', label: 'Asia: Singapore (SGT)' },
+              { value: 'Asia/Dubai', label: 'Asia: Dubai (GST)' },
+              { value: 'Australia/Sydney', label: 'AU: Sydney (AEST/AEDT)' },
+              { value: 'Australia/Melbourne', label: 'AU: Melbourne (AEST/AEDT)' },
+              { value: 'Pacific/Auckland', label: 'NZ: Auckland (NZST/NZDT)' },
+            ]}
+          />
         </div>
       </div>
 
@@ -1204,17 +1204,17 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
             Controls Python backend logging level. Changes apply immediately.
             Check Docker logs to see backend messages.
           </span>
-          <select
-            id="backendLogLevel"
+          <CustomSelect
             value={backendLogLevel}
-            onChange={(e) => setBackendLogLevel(e.target.value)}
-          >
-            <option value="DEBUG">DEBUG - Show all messages including debug info</option>
-            <option value="INFO">INFO - Show informational messages and above</option>
-            <option value="WARNING">WARNING - Show warnings and errors only</option>
-            <option value="ERROR">ERROR - Show errors only</option>
-            <option value="CRITICAL">CRITICAL - Show only critical errors</option>
-          </select>
+            onChange={(val) => setBackendLogLevel(val)}
+            options={[
+              { value: 'DEBUG', label: 'DEBUG - Show all messages including debug info' },
+              { value: 'INFO', label: 'INFO - Show informational messages and above' },
+              { value: 'WARNING', label: 'WARNING - Show warnings and errors only' },
+              { value: 'ERROR', label: 'ERROR - Show errors only' },
+              { value: 'CRITICAL', label: 'CRITICAL - Show only critical errors' },
+            ]}
+          />
         </div>
 
         <div className="form-group-vertical">
@@ -1223,16 +1223,16 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
             Controls browser console logging level. Changes apply immediately.
             Open browser DevTools (F12) to see frontend messages.
           </span>
-          <select
-            id="frontendLogLevel"
+          <CustomSelect
             value={frontendLogLevel}
-            onChange={(e) => setFrontendLogLevel(e.target.value)}
-          >
-            <option value="DEBUG">DEBUG - Show all messages including debug info</option>
-            <option value="INFO">INFO - Show informational messages and above</option>
-            <option value="WARN">WARN - Show warnings and errors only</option>
-            <option value="ERROR">ERROR - Show errors only</option>
-          </select>
+            onChange={(val) => setFrontendLogLevel(val)}
+            options={[
+              { value: 'DEBUG', label: 'DEBUG - Show all messages including debug info' },
+              { value: 'INFO', label: 'INFO - Show informational messages and above' },
+              { value: 'WARN', label: 'WARN - Show warnings and errors only' },
+              { value: 'ERROR', label: 'ERROR - Show errors only' },
+            ]}
+          />
         </div>
       </div>
 
@@ -1402,15 +1402,15 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
 
         <div className="form-group">
           <label htmlFor="gracenoteConflictMode">Gracenote ID Conflict Handling</label>
-          <select
-            id="gracenoteConflictMode"
+          <CustomSelect
             value={gracenoteConflictMode}
-            onChange={(e) => setGracenoteConflictMode(e.target.value as GracenoteConflictMode)}
-          >
-            <option value="ask">Ask me what to do (show conflict dialog)</option>
-            <option value="skip">Skip channels with existing IDs</option>
-            <option value="overwrite">Automatically overwrite existing IDs</option>
-          </select>
+            onChange={(val) => setGracenoteConflictMode(val as GracenoteConflictMode)}
+            options={[
+              { value: 'ask', label: 'Ask me what to do (show conflict dialog)' },
+              { value: 'skip', label: 'Skip channels with existing IDs' },
+              { value: 'overwrite', label: 'Automatically overwrite existing IDs' },
+            ]}
+          />
           <p className="form-hint">
             When assigning Gracenote IDs, this controls what happens if a channel already has a
             different Gracenote ID. Choose "Ask" to review conflicts, "Skip" to leave existing
@@ -1427,15 +1427,15 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
 
         <div className="form-group">
           <label htmlFor="vlcOpenBehavior">Open in VLC Behavior</label>
-          <select
-            id="vlcOpenBehavior"
+          <CustomSelect
             value={vlcOpenBehavior}
-            onChange={(e) => setVlcOpenBehavior(e.target.value)}
-          >
-            <option value="protocol_only">Try VLC Protocol (show helper if it fails)</option>
-            <option value="m3u_fallback">Try VLC Protocol, then fallback to M3U download</option>
-            <option value="m3u_only">Always download M3U file</option>
-          </select>
+            onChange={(val) => setVlcOpenBehavior(val)}
+            options={[
+              { value: 'protocol_only', label: 'Try VLC Protocol (show helper if it fails)' },
+              { value: 'm3u_fallback', label: 'Try VLC Protocol, then fallback to M3U download' },
+              { value: 'm3u_only', label: 'Always download M3U file' },
+            ]}
+          />
           <p className="form-hint">
             Controls what happens when you click "Open in VLC". The vlc:// protocol requires
             browser extensions on some platforms. If "protocol_only" fails, a helper modal
@@ -1609,15 +1609,15 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
 
         <div className="form-group">
           <label htmlFor="timezone">Default timezone for regional channel variants</label>
-          <select
-            id="timezone"
+          <CustomSelect
             value={timezonePreference}
-            onChange={(e) => setTimezonePreference(e.target.value)}
-          >
-            <option value="east">East Coast (prefer East feeds)</option>
-            <option value="west">West Coast (prefer West feeds)</option>
-            <option value="both">Keep Both (create separate channels)</option>
-          </select>
+            onChange={(val) => setTimezonePreference(val)}
+            options={[
+              { value: 'east', label: 'East Coast (prefer East feeds)' },
+              { value: 'west', label: 'West Coast (prefer West feeds)' },
+              { value: 'both', label: 'Keep Both (create separate channels)' },
+            ]}
+          />
           <p className="form-hint">
             When streams have East/West variants, this determines which to use by default.
           </p>
@@ -1930,15 +1930,15 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
             <div className="form-group-vertical">
               <label htmlFor="bitrateSampleDuration">Bitrate measurement duration</label>
               <span className="form-description">How long to sample streams when measuring bitrate</span>
-              <select
-                id="bitrateSampleDuration"
-                value={bitrateSampleDuration}
-                onChange={(e) => setBitrateSampleDuration(Number(e.target.value))}
-              >
-                <option value={10}>10 seconds</option>
-                <option value={20}>20 seconds</option>
-                <option value={30}>30 seconds</option>
-              </select>
+              <CustomSelect
+                value={String(bitrateSampleDuration)}
+                onChange={(val) => setBitrateSampleDuration(Number(val))}
+                options={[
+                  { value: '10', label: '10 seconds' },
+                  { value: '20', label: '20 seconds' },
+                  { value: '30', label: '30 seconds' },
+                ]}
+              />
             </div>
 
             <div className="form-group-vertical">

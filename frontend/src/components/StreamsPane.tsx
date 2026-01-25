@@ -9,6 +9,7 @@ import { useDropdown } from '../hooks/useDropdown';
 import { useContextMenu } from '../hooks/useContextMenu';
 import { useKeyboardShortcuts } from '../hooks/useKeyboardShortcuts';
 import { QuickTagManager } from './QuickTagManager';
+import { CustomSelect } from './CustomSelect';
 import './StreamsPane.css';
 
 interface StreamGroup {
@@ -1430,20 +1431,20 @@ export function StreamsPane({
               )}
             </div>
           ) : (
-            <select
-              value={providerFilter ?? ''}
-              onChange={(e) =>
-                onProviderFilterChange(e.target.value ? parseInt(e.target.value, 10) : null)
+            <CustomSelect
+              value={String(providerFilter ?? '')}
+              onChange={(val) =>
+                onProviderFilterChange(val ? parseInt(val, 10) : null)
               }
               className="filter-select"
-            >
-              <option value="">All Providers</option>
-              {providers.map((provider) => (
-                <option key={provider.id} value={provider.id}>
-                  {provider.name}
-                </option>
-              ))}
-            </select>
+              options={[
+                { value: '', label: 'All Providers' },
+                ...providers.map((provider) => ({
+                  value: String(provider.id),
+                  label: provider.name,
+                })),
+              ]}
+            />
           )}
 
           {/* Group Filter Dropdown */}
@@ -1545,18 +1546,20 @@ export function StreamsPane({
               )}
             </div>
           ) : (
-            <select
+            <CustomSelect
               value={groupFilter ?? ''}
-              onChange={(e) => onGroupFilterChange(e.target.value || null)}
+              onChange={(val) => onGroupFilterChange(val || null)}
               className="filter-select"
-            >
-              <option value="">All Groups</option>
-              {streamGroups.map((group) => (
-                <option key={group} value={group}>
-                  {group}
-                </option>
-              ))}
-            </select>
+              searchable
+              searchPlaceholder="Search groups..."
+              options={[
+                { value: '', label: 'All Groups' },
+                ...streamGroups.map((group) => ({
+                  value: group,
+                  label: group,
+                })),
+              ]}
+            />
           )}
 
           {/* Clear Filters Button - show when any filter is active */}

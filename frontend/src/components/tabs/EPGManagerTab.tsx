@@ -19,6 +19,7 @@ import { CSS } from '@dnd-kit/utilities';
 import type { EPGSource, EPGSourceType } from '../../types';
 import * as api from '../../services/api';
 import { DummyEPGSourceModal } from '../DummyEPGSourceModal';
+import { CustomSelect } from '../CustomSelect';
 import './EPGManagerTab.css';
 
 interface SortableEPGSourceRowProps {
@@ -305,15 +306,15 @@ function EPGSourceModal({ isOpen, source, onClose, onSave }: EPGSourceModalProps
 
             <div className="form-group">
               <label htmlFor="sourceType">Source Type</label>
-              <select
-                id="sourceType"
+              <CustomSelect
                 value={sourceType}
-                onChange={(e) => setSourceType(e.target.value as EPGSourceType)}
+                onChange={(val) => setSourceType(val as EPGSourceType)}
                 disabled={!!source}
-              >
-                <option value="xmltv">XMLTV (URL)</option>
-                <option value="schedules_direct">Schedules Direct</option>
-              </select>
+                options={[
+                  { value: 'xmltv', label: 'XMLTV (URL)' },
+                  { value: 'schedules_direct', label: 'Schedules Direct' },
+                ]}
+              />
               {source && (
                 <p className="form-hint">Source type cannot be changed after creation</p>
               )}
