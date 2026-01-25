@@ -276,6 +276,8 @@ export function M3UManagerTab({
   const [linkedM3UAccounts, setLinkedM3UAccounts] = useState<number[][]>([]);
   const [syncingGroups, setSyncingGroups] = useState(false);
   const [m3uAccountPriorities, setM3uAccountPriorities] = useState<Record<string, number>>({});
+  const [pendingPriorities, setPendingPriorities] = useState<Record<string, number>>({});
+  const [savingPriorities, setSavingPriorities] = useState(false);
 
   const loadData = useCallback(async () => {
     try {
@@ -287,7 +289,9 @@ export function M3UManagerTab({
       setAccounts(accountsData);
       setServerGroups(serverGroupsData);
       setLinkedM3UAccounts(settings.linked_m3u_accounts ?? []);
-      setM3uAccountPriorities(settings.m3u_account_priorities ?? {});
+      const priorities = settings.m3u_account_priorities ?? {};
+      setM3uAccountPriorities(priorities);
+      setPendingPriorities(priorities);
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load M3U accounts');
@@ -457,26 +461,39 @@ export function M3UManagerTab({
     loadData();
   };
 
-  // Handle M3U account priority change
-  const handlePriorityChange = useCallback(async (accountId: number, priority: number) => {
-    const newPriorities = { ...m3uAccountPriorities };
-    if (priority === 0) {
-      // Remove from priorities if set to 0 (default)
-      delete newPriorities[String(accountId)];
-    } else {
-      newPriorities[String(accountId)] = priority;
-    }
-    setM3uAccountPriorities(newPriorities);
+  // Handle M3U account priority change (local only, not saved until Save button clicked)
+  const handlePriorityChange = useCallback((accountId: number, priority: number) => {
+    setPendingPriorities(prev => {
+      const newPriorities = { ...prev };
+      if (priority === 0) {
+        delete newPriorities[String(accountId)];
+      } else {
+        newPriorities[String(accountId)] = priority;
+      }
+      return newPriorities;
+    });
+  }, []);
 
-    // Save to settings
+  // Check if there are unsaved priority changes
+  const hasPriorityChanges = useMemo(() => {
+    const savedKeys = Object.keys(m3uAccountPriorities);
+    const pendingKeys = Object.keys(pendingPriorities);
+    if (savedKeys.length !== pendingKeys.length) return true;
+    return savedKeys.some(key => m3uAccountPriorities[key] !== pendingPriorities[key]);
+  }, [m3uAccountPriorities, pendingPriorities]);
+
+  // Save priority changes
+  const handleSavePriorities = useCallback(async () => {
+    setSavingPriorities(true);
     try {
-      await api.saveSettings({ m3u_account_priorities: newPriorities });
+      await api.saveSettings({ m3u_account_priorities: pendingPriorities });
+      setM3uAccountPriorities(pendingPriorities);
     } catch (err) {
       console.error('Failed to save M3U priorities:', err);
-      // Revert on error
-      setM3uAccountPriorities(m3uAccountPriorities);
+    } finally {
+      setSavingPriorities(false);
     }
-  }, [m3uAccountPriorities]);
+  }, [pendingPriorities]);
 
   const handleAccountSaved = () => {
     loadData();
@@ -609,6 +626,19 @@ export function M3UManagerTab({
           </p>
         </div>
         <div className="header-actions">
+          {hasPriorityChanges && (
+            <button
+              className="btn-primary save-priorities-btn"
+              onClick={handleSavePriorities}
+              disabled={savingPriorities}
+              title="Save priority changes"
+            >
+              <span className={`material-icons ${savingPriorities ? 'spinning' : ''}`}>
+                {savingPriorities ? 'sync' : 'save'}
+              </span>
+              {savingPriorities ? 'Saving...' : 'Save Priorities'}
+            </button>
+          )}
           {serverGroups.length > 0 && (
             <CustomSelect
               className="server-group-filter"
@@ -691,7 +721,7 @@ export function M3UManagerTab({
                 onManageProfiles={handleManageProfiles}
                 linkedAccountNames={linkedAccountNamesMap.get(account.id)}
                 hideM3uUrls={hideM3uUrls}
-                priority={m3uAccountPriorities[String(account.id)] ?? 0}
+                priority={pendingPriorities[String(account.id)] ?? 0}
                 onPriorityChange={handlePriorityChange}
               />
             ))}
