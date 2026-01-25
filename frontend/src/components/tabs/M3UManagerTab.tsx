@@ -173,13 +173,20 @@ function M3UAccountRow({
       {onPriorityChange && (
         <div className="account-priority">
           <input
-            type="number"
+            type="text"
             className="priority-input"
-            value={priority}
-            onChange={(e) => onPriorityChange(account.id, parseInt(e.target.value) || 0)}
-            min={0}
-            max={100}
-            title="Sort priority (0-100, higher = better)"
+            value={priority || ''}
+            onChange={(e) => {
+              const val = e.target.value;
+              // Allow empty or numbers only
+              if (val === '' || /^\d+$/.test(val)) {
+                const num = parseInt(val) || 0;
+                // Clamp to 1-100 range (0 means not set)
+                onPriorityChange(account.id, Math.min(100, Math.max(0, num)));
+              }
+            }}
+            placeholder="-"
+            title="Sort priority (1-100, higher = better)"
           />
         </div>
       )}
@@ -486,7 +493,12 @@ export function M3UManagerTab({
   const handleSavePriorities = useCallback(async () => {
     setSavingPriorities(true);
     try {
-      await api.saveSettings({ m3u_account_priorities: pendingPriorities });
+      // Load current settings and merge with priority changes
+      const settings = await api.getSettings();
+      await api.saveSettings({
+        ...settings,
+        m3u_account_priorities: pendingPriorities,
+      });
       setM3uAccountPriorities(pendingPriorities);
     } catch (err) {
       console.error('Failed to save M3U priorities:', err);
