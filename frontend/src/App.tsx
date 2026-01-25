@@ -8,9 +8,10 @@ import {
 import { ChannelManagerTab } from './components/tabs/ChannelManagerTab';
 import { useChangeHistory, useEditMode } from './hooks';
 import * as api from './services/api';
-import type { Channel, ChannelGroup, ChannelProfile, Stream, M3UAccount, M3UGroupSetting, Logo, ChangeInfo, EPGData, StreamProfile, EPGSource, ChannelListFilterSettings, CommitProgress } from './types';
+import type { Channel, ChannelGroup, ChannelProfile, Stream, StreamGroupInfo, M3UAccount, M3UGroupSetting, Logo, ChangeInfo, EPGData, StreamProfile, EPGSource, ChannelListFilterSettings, CommitProgress } from './types';
 import packageJson from '../package.json';
 import { logger } from './utils/logger';
+import { computeAutoRename } from './utils/channelRename';
 import { registerVLCModalCallback, downloadM3U } from './utils/vlc';
 import { VLCProtocolHelperModal } from './components/VLCProtocolHelperModal';
 import { NotificationCenter } from './components/NotificationCenter';
@@ -50,7 +51,7 @@ function App() {
   // Streams state
   const [streams, setStreams] = useState<Stream[]>([]);
   const [providers, setProviders] = useState<M3UAccount[]>([]);
-  const [streamGroups, setStreamGroups] = useState<string[]>([]);
+  const [streamGroups, setStreamGroups] = useState<StreamGroupInfo[]>([]);
 
   // Stream filters - grouped state (with localStorage initialization)
   const [streamFilters, setStreamFilters] = useState(() => {
@@ -891,6 +892,7 @@ function App() {
 
   // Load streams for a single group (per-group lazy loading)
   // This allows loading only the streams for an expanded group instead of all streams
+  // When search is active, loads only matching streams for that group
   const loadStreamGroup = useCallback(async (groupName: string) => {
     // Skip if this group's streams are already loaded
     if (loadedStreamGroupsRef.current.has(groupName)) {
@@ -901,7 +903,7 @@ function App() {
     loadedStreamGroupsRef.current.add(groupName);
 
     try {
-      // Fetch streams for this specific group
+      // Fetch streams for this specific group (with search filter if active)
       const allGroupStreams: Stream[] = [];
       let page = 1;
       let hasMore = true;
@@ -911,6 +913,7 @@ function App() {
           page,
           pageSize: 500,
           channelGroup: groupName,
+          search: streamFilters.search || undefined,
         });
         allGroupStreams.push(...response.results);
         hasMore = response.next !== null;
@@ -930,7 +933,7 @@ function App() {
         logger.error(`Failed to load streams for group ${groupName}:`, err);
       }
     }
-  }, []);
+  }, [streamFilters.search]);
 
   // Reload channels when search changes
   useEffect(() => {
@@ -944,14 +947,23 @@ function App() {
     };
   }, [channelFilters.search]);
 
-  // Reload streams when filters change - but only if explicitly requested
+  // Reload streams when filters change - but only if explicitly requested OR searching
   // This prevents loading 27,000+ streams on app startup which causes high CPU
+  // But allows search to work even before streams are explicitly requested
   useEffect(() => {
+    const hasSearchFilter = streamFilters.search?.trim();
+
     // Skip loading on initial mount - streams are loaded lazily when user interacts
-    if (!streamsExplicitlyRequested.current) {
+    // BUT if there's a search term, we should load (server will filter)
+    if (!streamsExplicitlyRequested.current && !hasSearchFilter) {
       // Set loading to false since we're not actually loading
       setLoadingStates(prev => ({ ...prev, streams: false }));
       return;
+    }
+
+    // Mark as explicitly requested if searching (so future loads work without search)
+    if (hasSearchFilter) {
+      streamsExplicitlyRequested.current = true;
     }
 
     // Clear per-group loaded tracker since we're doing a full filtered load
@@ -1368,6 +1380,54 @@ function App() {
         const mergedCount = filteredStreams.length - streamsByNormalizedName.size;
         const channelCount = streamsByNormalizedName.size;
 
+        // Fetch M3U metadata to get tvc-guide-stationid (Gracenote ID) for streams
+        // This data isn't exposed by Dispatcharr's API, so we parse the M3U file directly
+        const m3uMetadataMap = new Map<string, string>(); // tvg_id -> tvc-guide-stationid
+        try {
+          // Get unique M3U account IDs from the streams
+          const m3uAccountIds = new Set<number>();
+          for (const stream of filteredStreams) {
+            if (stream.m3u_account !== null) {
+              m3uAccountIds.add(stream.m3u_account);
+            }
+          }
+
+          // Fetch metadata for each M3U account
+          logger.debug(`Fetching M3U metadata for ${m3uAccountIds.size} account(s): ${Array.from(m3uAccountIds).join(', ')}`);
+          const metadataPromises = Array.from(m3uAccountIds).map(async (accountId) => {
+            try {
+              const response = await api.getM3UStreamMetadata(accountId);
+              logger.debug(`M3U metadata for account ${accountId}: ${response.count} entries`);
+              return response.metadata;
+            } catch (err) {
+              logger.warn(`Failed to fetch M3U metadata for account ${accountId}:`, err);
+              return null;
+            }
+          });
+
+          const metadataResults = await Promise.all(metadataPromises);
+
+          // Build combined map of tvg_id -> tvc-guide-stationid
+          for (const metadata of metadataResults) {
+            if (metadata) {
+              for (const [tvgId, entry] of Object.entries(metadata)) {
+                if (entry['tvc-guide-stationid']) {
+                  m3uMetadataMap.set(tvgId, entry['tvc-guide-stationid']);
+                }
+              }
+            }
+          }
+
+          if (m3uMetadataMap.size > 0) {
+            logger.debug(`Loaded ${m3uMetadataMap.size} Gracenote ID mappings from M3U metadata`);
+          } else {
+            logger.debug('No Gracenote ID mappings found in M3U metadata');
+          }
+        } catch (err) {
+          logger.warn('Failed to fetch M3U metadata for Gracenote IDs:', err);
+          // Continue without Gracenote IDs - not a critical error
+        }
+
         // Start a batch for all channel operations
         startBatch(`Create ${channelCount} channels from streams`);
 
@@ -1377,30 +1437,42 @@ function App() {
           const hasDecimalShift = startingNumber % 1 !== 0;
           const incrementShift = hasDecimalShift ? 0.1 : 1;
 
-          // Calculate the ending number of the new channel range
-          const rawEndingNumber = startingNumber + (channelCount - 1) * incrementShift;
-          const endingNumber = hasDecimalShift
-            ? Math.round(rawEndingNumber * 10) / 10
-            : rawEndingNumber;
-
-          // Only shift channels that actually conflict with the new channel range
-          // (not ALL channels >= startingNumber)
-          const channelsToShift = displayChannels
-            .filter((ch) => ch.channel_number !== null &&
-                    ch.channel_number >= startingNumber &&
-                    ch.channel_number <= endingNumber)
-            .sort((a, b) => (b.channel_number ?? 0) - (a.channel_number ?? 0)); // Sort descending to avoid conflicts
-
           // Shift amount is the total range taken by new channels
           const shiftAmount = channelCount * incrementShift;
 
-          // Shift each conflicting channel to just after the new range
+          // Shift ALL channels that are at or after the starting number
+          // This ensures channels after the new range are also pushed down,
+          // avoiding duplicate channel numbers
+          const channelsToShift = displayChannels
+            .filter((ch) => ch.channel_number !== null &&
+                    ch.channel_number >= startingNumber)
+            .sort((a, b) => (b.channel_number ?? 0) - (a.channel_number ?? 0)); // Sort descending to avoid conflicts
+
+          // Shift each channel by the amount needed to make room for new channels
           for (const ch of channelsToShift) {
             const rawNewNum = ch.channel_number! + shiftAmount;
             const newNum = hasDecimalShift
               ? Math.round(rawNewNum * 10) / 10
               : rawNewNum;
-            stageUpdateChannel(ch.id, { channel_number: newNum }, `Shifted channel ${ch.channel_number} to ${newNum} to make room`);
+
+            // Apply auto-rename if enabled
+            const newName = autoRenameChannelNumber
+              ? computeAutoRename(ch.name, ch.channel_number, newNum)
+              : undefined;
+
+            if (newName) {
+              stageUpdateChannel(
+                ch.id,
+                { channel_number: newNum, name: newName },
+                `Shifted "${ch.name}" to "${newName}" (channel ${ch.channel_number} → ${newNum})`
+              );
+            } else {
+              stageUpdateChannel(
+                ch.id,
+                { channel_number: newNum },
+                `Shifted channel ${ch.channel_number} to ${newNum} to make room`
+              );
+            }
           }
         }
 
@@ -1471,25 +1543,51 @@ function App() {
             channelName = `${channelNumber} ${numberSeparator} ${nameWithoutNumber}`;
           }
 
-          // Find logo URL from the first stream that has one
+          // Find logo URL, tvg_id, and tvc_guide_stationid from the first stream that has them
           let logoUrl: string | undefined;
+          let tvgId: string | undefined;
+          let tvcGuideStationId: string | undefined;
           for (const stream of groupedStreams) {
-            if (stream.logo_url) {
+            if (!logoUrl && stream.logo_url) {
               logoUrl = stream.logo_url;
-              break;
             }
+            if (!tvgId && stream.tvg_id) {
+              tvgId = stream.tvg_id;
+            }
+            // Extract Gracenote ID from custom_properties (stored as tvc-guide-stationid from M3U)
+            if (!tvcGuideStationId && stream.custom_properties) {
+              const stationId = stream.custom_properties['tvc-guide-stationid'];
+              if (typeof stationId === 'string') {
+                tvcGuideStationId = stationId;
+              }
+            }
+            // Stop early if we found all three
+            if (logoUrl && tvgId && tvcGuideStationId) break;
           }
+
+          // If we didn't find Gracenote ID from stream but have tvg_id, look up from M3U metadata
+          // This gets the data directly from the M3U file since Dispatcharr doesn't expose it via API
+          if (!tvcGuideStationId && tvgId && m3uMetadataMap.has(tvgId)) {
+            tvcGuideStationId = m3uMetadataMap.get(tvgId);
+            logger.debug(`Found Gracenote ID from M3U metadata for tvg_id "${tvgId}": ${tvcGuideStationId}`);
+          }
+
+          // Debug: Log what we're passing to stageCreateChannel
+          logger.debug(`Creating channel "${channelName}": tvgId=${tvgId}, tvcGuideStationId=${tvcGuideStationId}, m3uMetadataMap.has(tvgId)=${tvgId ? m3uMetadataMap.has(tvgId) : 'N/A'}`);
 
           // Create the channel (returns temp ID)
           // If targetNewGroupName is set, pass it so the commit logic can create the group first
           // Pass logoUrl - the commit logic will create the logo if needed
+          // Pass tvgId and tvcGuideStationId - auto-populate from stream metadata for EPG matching
           const tempChannelId = stageCreateChannel(
             channelName,
             channelNumber,
             targetGroupId ?? undefined,
             targetNewGroupName,
             undefined, // logoId - will be resolved during commit
-            logoUrl
+            logoUrl,
+            tvgId,
+            tvcGuideStationId
           );
 
           // Assign all streams in this group to the new channel
@@ -1580,15 +1678,16 @@ function App() {
   }, []);
 
   // Filter streams based on multi-select filters (client-side)
+  // Note: search term is handled server-side via loadStreams() API call
   const filteredStreams = useMemo(() => {
     let result = streams;
 
-    // Filter by selected providers
+    // Filter by selected providers (multi-select, client-side)
     if (streamFilters.selectedProviders.length > 0) {
       result = result.filter((s) => s.m3u_account !== null && streamFilters.selectedProviders.includes(s.m3u_account));
     }
 
-    // Filter by selected stream groups
+    // Filter by selected stream groups (multi-select, client-side)
     if (streamFilters.selectedGroups.length > 0) {
       result = result.filter((s) => streamFilters.selectedGroups.includes(s.channel_group_name || ''));
     }
@@ -1885,9 +1984,9 @@ function App() {
               streamGroups={streamGroups}
               streamsLoading={loadingStates.streams}
 
-              // Stream Search & Filter (triggers lazy stream loading)
+              // Stream Search & Filter (server-side search via useEffect debounce)
               streamSearch={streamFilters.search}
-              onStreamSearchChange={(search) => { requestStreamsLoad(); setStreamFilters(prev => ({ ...prev, search })); }}
+              onStreamSearchChange={(search) => setStreamFilters(prev => ({ ...prev, search }))}
               streamProviderFilter={streamFilters.providerFilter}
               onStreamProviderFilterChange={(providerFilter) => { requestStreamsLoad(); setStreamFilters(prev => ({ ...prev, providerFilter })); }}
               streamGroupFilter={streamFilters.groupFilter}
@@ -1944,6 +2043,7 @@ function App() {
               channelProfiles={channelProfiles}
               streamProfiles={streamProfiles}
               onChannelGroupsChange={loadChannelGroups}
+              onAccountsChange={loadProviders}
               hideM3uUrls={hideM3uUrls}
             />
           )}

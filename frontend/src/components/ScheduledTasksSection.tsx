@@ -69,7 +69,7 @@ function TaskCard({ task, onRunNow, onCancel, onToggleEnabled, onEdit, isRunning
 
   const statusIcon = () => {
     if (isRunning || task.status === 'running') {
-      return <span className="material-icons" style={{ color: '#3498db', animation: 'spin 1s linear infinite' }}>sync</span>;
+      return <span className="material-icons" style={{ color: '#3498db', animation: 'spin 1s linear infinite reverse' }}>sync</span>;
     }
     if (!task.enabled) {
       return <span className="material-icons" style={{ color: 'var(--text-muted)' }}>pause_circle</span>;

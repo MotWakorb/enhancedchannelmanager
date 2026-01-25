@@ -3,6 +3,7 @@ import type { Channel, Logo, EPGProgram, EPGData, EPGSource, StreamProfile, Chan
 import * as api from '../../services/api';
 import { EditChannelModal, type ChannelMetadataChanges } from '../EditChannelModal';
 import { PrintGuideModal } from '../PrintGuideModal';
+import { CustomSelect } from '../CustomSelect';
 import './GuideTab.css';
 
 // Constants for grid layout
@@ -18,6 +19,16 @@ const getLocalDateString = (date: Date): string => {
   const month = String(date.getMonth() + 1).padStart(2, '0');
   const day = String(date.getDate()).padStart(2, '0');
   return `${year}-${month}-${day}`;
+};
+
+// Helper to get program start time (handles both start_time and start field names)
+const getProgramStart = (program: EPGProgram): Date => {
+  return new Date(program.start_time || program.start || '');
+};
+
+// Helper to get program end time (handles both end_time and stop field names)
+const getProgramEnd = (program: EPGProgram): Date => {
+  return new Date(program.end_time || program.stop || '');
 };
 
 interface GuideTabProps {
@@ -116,10 +127,11 @@ export function GuideTab({
     });
     // Sort programs by start time within each tvg_id
     map.forEach((progs) => {
-      progs.sort((a, b) => new Date(a.start_time).getTime() - new Date(b.start_time).getTime());
+      progs.sort((a, b) => getProgramStart(a).getTime() - getProgramStart(b).getTime());
     });
     return map;
   }, [programs]);
+
 
   // Get selected profile for filtering
   const selectedProfile = useMemo(() => {
@@ -332,6 +344,7 @@ export function GuideTab({
   // Get programs for a channel within the visible time range
   // Uses epg_data_id -> tvg_id indirection to match programs, similar to Dispatcharr's approach.
   // This allows the guide to display correctly even if channel.tvg_id differs from the EPG's tvg_id.
+  // Also supports dummy EPG sources which use channel_uuid for matching.
   const getChannelPrograms = useCallback((channel: Channel): EPGProgram[] => {
     // First, try to get the tvg_id via the epg_data_id (preferred method)
     // This matches how Dispatcharr displays its guide
@@ -349,22 +362,32 @@ export function GuideTab({
       lookupTvgId = channel.tvg_id;
     }
 
-    if (!lookupTvgId) return [];
+    // Try to find programs by tvg_id first
+    let channelPrograms: EPGProgram[] = [];
+    if (lookupTvgId) {
+      channelPrograms = programsByTvgId.get(lookupTvgId) || [];
+    }
 
-    const channelPrograms = programsByTvgId.get(lookupTvgId) || [];
+    // If no programs found by tvg_id, try matching by channel UUID
+    // Dummy EPG sources set program.tvg_id = channel.uuid, so we look up UUID in programsByTvgId
+    if (channelPrograms.length === 0 && channel.uuid) {
+      channelPrograms = programsByTvgId.get(channel.uuid) || [];
+    }
+
+    if (channelPrograms.length === 0) return [];
 
     // Filter to programs that overlap with our time range
     return channelPrograms.filter(program => {
-      const progStart = new Date(program.start_time);
-      const progEnd = new Date(program.end_time);
+      const progStart = getProgramStart(program);
+      const progEnd = getProgramEnd(program);
       return progStart < timeRange.end && progEnd > timeRange.start;
     });
   }, [programsByTvgId, epgDataById, timeRange]);
 
   // Calculate position and width for a program block
   const getProgramStyle = useCallback((program: EPGProgram): React.CSSProperties => {
-    const progStart = new Date(program.start_time);
-    const progEnd = new Date(program.end_time);
+    const progStart = getProgramStart(program);
+    const progEnd = getProgramEnd(program);
 
     // Clamp to visible time range
     const visibleStart = Math.max(progStart.getTime(), timeRange.start.getTime());
@@ -382,8 +405,8 @@ export function GuideTab({
 
   // Check if a program is currently airing
   const isNowPlaying = useCallback((program: EPGProgram): boolean => {
-    const progStart = new Date(program.start_time);
-    const progEnd = new Date(program.end_time);
+    const progStart = getProgramStart(program);
+    const progEnd = getProgramEnd(program);
     return currentTime >= progStart && currentTime < progEnd;
   }, [currentTime]);
 
@@ -461,7 +484,7 @@ export function GuideTab({
                 key={program.id}
                 className={`program-block ${isNowPlaying(program) ? 'now-playing' : ''}`}
                 style={getProgramStyle(program)}
-                title={`${program.title}${program.sub_title ? ` - ${program.sub_title}` : ''}\n${formatTime(new Date(program.start_time))} - ${formatTime(new Date(program.end_time))}`}
+                title={`${program.title}${program.sub_title ? ` - ${program.sub_title}` : ''}\n${formatTime(getProgramStart(program))} - ${formatTime(getProgramEnd(program))}`}
               >
                 <div className="program-title">{program.title}</div>
                 {program.sub_title && (
@@ -516,55 +539,59 @@ export function GuideTab({
       <div className="guide-controls">
         <div className="control-group">
           <label>Date:</label>
-          <select
+          <CustomSelect
             value={selectedDate}
-            onChange={(e) => setSelectedDate(e.target.value)}
-          >
-            {dateOptions.map(opt => (
-              <option key={opt.value} value={opt.value}>{opt.label}</option>
-            ))}
-          </select>
+            onChange={(val) => setSelectedDate(val)}
+            options={dateOptions.map(opt => ({
+              value: opt.value,
+              label: opt.label,
+            }))}
+          />
         </div>
 
         <div className="control-group">
           <label>Start:</label>
-          <select
-            value={startHour}
-            onChange={(e) => setStartHour(Number(e.target.value))}
-          >
-            {hourOptions.map(opt => (
-              <option key={opt.value} value={opt.value}>{opt.label}</option>
-            ))}
-          </select>
+          <CustomSelect
+            value={String(startHour)}
+            onChange={(val) => setStartHour(Number(val))}
+            options={hourOptions.map(opt => ({
+              value: String(opt.value),
+              label: opt.label,
+            }))}
+          />
         </div>
 
         {channelProfiles.length > 0 && (
           <div className="control-group">
             <label>Profile:</label>
-            <select
-              value={selectedProfileId ?? ''}
-              onChange={(e) => setSelectedProfileId(e.target.value ? Number(e.target.value) : null)}
-            >
-              <option value="">All Channels</option>
-              {channelProfiles.map(profile => (
-                <option key={profile.id} value={profile.id}>{profile.name}</option>
-              ))}
-            </select>
+            <CustomSelect
+              value={selectedProfileId?.toString() ?? ''}
+              onChange={(val) => setSelectedProfileId(val ? Number(val) : null)}
+              options={[
+                { value: '', label: 'All Channels' },
+                ...channelProfiles.map(profile => ({
+                  value: profile.id.toString(),
+                  label: profile.name,
+                })),
+              ]}
+            />
           </div>
         )}
 
         {sortedGroups.length > 0 && (
           <div className="control-group group-filter">
             <label>Group:</label>
-            <select
+            <CustomSelect
               value={selectedGroup}
-              onChange={(e) => handleGroupChange(e.target.value)}
-            >
-              <option value="">{groupFilterMode === 'filter' ? 'All Groups' : 'Jump to group...'}</option>
-              {sortedGroups.map(group => (
-                <option key={group.id} value={group.id.toString()}>{group.name}</option>
-              ))}
-            </select>
+              onChange={(val) => handleGroupChange(val)}
+              options={[
+                { value: '', label: groupFilterMode === 'filter' ? 'All Groups' : 'Jump to group...' },
+                ...sortedGroups.map(group => ({
+                  value: group.id.toString(),
+                  label: group.name,
+                })),
+              ]}
+            />
             <div className="group-mode-toggle">
               <button
                 className={`mode-btn ${groupFilterMode === 'filter' ? 'active' : ''}`}
@@ -673,7 +700,7 @@ export function GuideTab({
             icon_url: e.icon_url,
             epg_source: e.epg_source,
           }))}
-          epgSources={epgSources.map(s => ({ id: s.id, name: s.name }))}
+          epgSources={epgSources.map(s => ({ id: s.id, name: s.name, source_type: s.source_type }))}
           streamProfiles={streamProfiles.map(p => ({ id: p.id, name: p.name, is_active: p.is_active }))}
           epgDataLoading={epgDataLoading}
           onClose={() => {

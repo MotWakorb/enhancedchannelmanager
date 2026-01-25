@@ -1,6 +1,7 @@
 import { useState, useMemo, memo } from 'react';
 import type { M3UAccount } from '../types';
 import { naturalCompare } from '../utils/naturalSort';
+import './ModalBase.css';
 import './M3ULinkedAccountsModal.css';
 
 interface M3ULinkedAccountsModalProps {
@@ -138,11 +139,11 @@ export const M3ULinkedAccountsModal = memo(function M3ULinkedAccountsModal({
 
   return (
     <div className="modal-overlay">
-      <div className="modal-content m3u-linked-accounts-modal" onClick={(e) => e.stopPropagation()}>
+      <div className="modal-container modal-md m3u-linked-accounts-modal" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
           <h2>Manage Linked Accounts</h2>
-          <button className="close-btn" onClick={onClose}>
-            &times;
+          <button className="modal-close-btn" onClick={onClose}>
+            <span className="material-icons">close</span>
           </button>
         </div>
 
@@ -174,11 +175,11 @@ export const M3ULinkedAccountsModal = memo(function M3ULinkedAccountsModal({
               </div>
 
               <div className="edit-actions">
-                <button className="btn-secondary" onClick={handleCancelEdit}>
+                <button className="modal-btn modal-btn-secondary" onClick={handleCancelEdit}>
                   Cancel
                 </button>
                 <button
-                  className="btn-primary"
+                  className="modal-btn modal-btn-primary"
                   onClick={handleSaveGroup}
                   disabled={selectedAccountIds.size < 2}
                   title={selectedAccountIds.size < 2 ? 'Select at least 2 accounts' : ''}
@@ -191,12 +192,10 @@ export const M3ULinkedAccountsModal = memo(function M3ULinkedAccountsModal({
             // View mode
             <>
               {linkGroups.length === 0 ? (
-                <div className="empty-state">
+                <div className="modal-empty-state">
                   <span className="material-icons">link</span>
                   <p>No linked accounts configured.</p>
-                  <p className="hint">
-                    Link accounts from the same provider to sync group settings across them.
-                  </p>
+                  <p>Link accounts from the same provider to sync group settings across them.</p>
                 </div>
               ) : (
                 <div className="link-groups-list">
@@ -249,16 +248,13 @@ export const M3ULinkedAccountsModal = memo(function M3ULinkedAccountsModal({
           )}
         </div>
 
-        <div className="modal-footer">
-          <button className="btn-secondary" onClick={onClose}>
-            {hasChanges ? 'Discard' : 'Close'}
-          </button>
-          {hasChanges && !isEditing && (
-            <button className="btn-primary" onClick={handleSaveAll}>
+        {hasChanges && !isEditing && (
+          <div className="modal-footer">
+            <button className="modal-btn modal-btn-primary" onClick={handleSaveAll}>
               Save Changes
             </button>
-          )}
-        </div>
+          </div>
+        )}
       </div>
     </div>
   );

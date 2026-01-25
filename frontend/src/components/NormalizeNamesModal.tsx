@@ -1,6 +1,7 @@
 import { useMemo, memo } from 'react';
 import { previewNameNormalizations } from '../utils/epgMatching';
 import { naturalCompare } from '../utils/naturalSort';
+import './ModalBase.css';
 import './NormalizeNamesModal.css';
 
 interface Channel {
@@ -30,18 +31,18 @@ export const NormalizeNamesModal = memo(function NormalizeNamesModal({ channels,
   };
 
   return (
-    <div className="normalize-modal-overlay" onClick={onCancel}>
-      <div className="normalize-modal" onClick={e => e.stopPropagation()}>
-        <div className="normalize-modal-header">
+    <div className="modal-overlay" onClick={onCancel}>
+      <div className="modal-container modal-md normalize-names-modal" onClick={e => e.stopPropagation()}>
+        <div className="modal-header">
           <h2>Normalize Channel Names</h2>
-          <button className="normalize-modal-close" onClick={onCancel}>
+          <button className="modal-close-btn" onClick={onCancel}>
             <span className="material-icons">close</span>
           </button>
         </div>
 
-        <div className="normalize-modal-content">
+        <div className="modal-body">
           {normalizations.length === 0 ? (
-            <div className="normalize-no-changes">
+            <div className="modal-empty-state">
               <span className="material-icons">check_circle</span>
               <p>All selected channel names are already normalized.</p>
             </div>
@@ -75,12 +76,9 @@ export const NormalizeNamesModal = memo(function NormalizeNamesModal({ channels,
           )}
         </div>
 
-        <div className="normalize-modal-footer">
-          <button className="normalize-btn-cancel" onClick={onCancel}>
-            Cancel
-          </button>
+        <div className="modal-footer">
           {normalizations.length > 0 && (
-            <button className="normalize-btn-confirm" onClick={handleConfirm}>
+            <button className="modal-btn modal-btn-primary" onClick={handleConfirm}>
               <span className="material-icons">check</span>
               Apply {normalizations.length} Change{normalizations.length !== 1 ? 's' : ''}
             </button>

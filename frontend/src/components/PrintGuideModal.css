@@ -1,14 +1,9 @@
-.print-guide-modal {
-  max-width: 550px;
-  max-height: 80vh;
-  display: flex;
-  flex-direction: column;
-}
+/* Print Guide Modal Styles
+   Component-specific styles - base modal styles are in ModalBase.css */
 
-.print-guide-modal .modal-body {
-  overflow-y: auto;
-  flex: 1;
-  padding: 1rem 1.25rem;
+/* Modal sizing - uses modal-md (550px) from ModalBase.css */
+.print-guide-modal {
+  max-height: 80vh;
 }
 
 .print-guide-description {
@@ -18,6 +13,7 @@
   line-height: 1.4;
 }
 
+/* Group list */
 .group-list {
   display: flex;
   flex-direction: column;
@@ -85,6 +81,7 @@
   color: var(--text-muted);
 }
 
+/* Mode toggle buttons */
 .mode-toggle {
   display: flex;
   gap: 4px;
@@ -121,19 +118,4 @@
 
 .mode-toggle .mode-btn:hover:not(.active) {
   opacity: 0.8;
-}
-
-/* Modal footer adjustments */
-.print-guide-modal .modal-footer {
-  gap: 0.5rem;
-}
-
-.print-guide-modal .modal-footer .btn-primary {
-  display: flex;
-  align-items: center;
-  gap: 0.25rem;
-}
-
-.print-guide-modal .modal-footer .btn-primary .material-icons {
-  font-size: 1rem;
 }

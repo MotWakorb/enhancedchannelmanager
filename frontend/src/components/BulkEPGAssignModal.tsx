@@ -10,6 +10,7 @@ import type { Channel, Stream, EPGData, EPGSource } from '../types';
 import {
   batchFindEPGMatchesAsync,
   getEPGSourceName,
+  matchesEPGSearch,
   type EPGMatchResult,
   type EPGAssignment,
   type BatchMatchProgress,
@@ -476,8 +477,8 @@ export const BulkEPGAssignModal = memo(function BulkEPGAssignModal({
 
   return (
     <div className="modal-overlay">
-      <div className="bulk-epg-modal" onClick={e => e.stopPropagation()}>
-        <div className="bulk-epg-header">
+      <div className="modal-container modal-xxl bulk-epg-modal" onClick={e => e.stopPropagation()}>
+        <div className="modal-header">
           <h2>Bulk EPG Assignment</h2>
           <button className="modal-close-btn" onClick={onClose}>
             <span className="material-icons">close</span>
@@ -562,21 +563,21 @@ export const BulkEPGAssignModal = memo(function BulkEPGAssignModal({
           </div>
         )}
 
-        <div className="bulk-epg-body">
+        <div className="modal-body bulk-epg-body">
           {phase === 'analyzing' ? (
-            <div className="bulk-epg-analyzing">
-              <span className="material-icons spinning">sync</span>
+            <div className="modal-loading bulk-epg-analyzing">
+              <span className="material-icons modal-spinning-ccw">sync</span>
               <div className="analyzing-text">
                 <p>Analyzing {selectedChannels.length} channels...</p>
                 {progress && (
-                  <div className="analyzing-progress">
-                    <div className="progress-bar">
+                  <div className="modal-progress">
+                    <div className="modal-progress-bar">
                       <div
-                        className="progress-fill"
+                        className="modal-progress-fill"
                         style={{ width: `${(progress.current / progress.total) * 100}%` }}
                       />
                     </div>
-                    <p className="progress-detail">
+                    <p className="modal-progress-detail">
                       {progress.current} / {progress.total}: {progress.channelName}
                     </p>
                   </div>
@@ -586,8 +587,8 @@ export const BulkEPGAssignModal = memo(function BulkEPGAssignModal({
           ) : (
             <>
               {/* Summary */}
-              <div className="bulk-epg-summary">
-                <div className="summary-item success">
+              <div className="modal-summary">
+                <div className="modal-summary-item success">
                   <span className="material-icons">check_circle</span>
                   <span>
                     {autoMatched.length} matched
@@ -598,7 +599,7 @@ export const BulkEPGAssignModal = memo(function BulkEPGAssignModal({
                     )}
                   </span>
                 </div>
-                <div className="summary-item warning">
+                <div className="modal-summary-item warning">
                   <span className="material-icons">help</span>
                   <span>
                     {conflicts.length} need review
@@ -609,7 +610,7 @@ export const BulkEPGAssignModal = memo(function BulkEPGAssignModal({
                     )}
                   </span>
                 </div>
-                <div className="summary-item neutral">
+                <div className="modal-summary-item neutral">
                   <span className="material-icons">remove_circle_outline</span>
                   <span>{unmatched.length} unmatched</span>
                 </div>
@@ -617,7 +618,7 @@ export const BulkEPGAssignModal = memo(function BulkEPGAssignModal({
 
               {/* No EPG data warning */}
               {epgData.length === 0 && (
-                <div className="bulk-epg-warning">
+                <div className="modal-warning-banner">
                   <span className="material-icons">warning</span>
                   <p>No EPG data available. Load EPG sources in the EPG Manager tab first.</p>
                 </div>
@@ -625,27 +626,27 @@ export const BulkEPGAssignModal = memo(function BulkEPGAssignModal({
 
               {/* Choice prompt when there are conflicts and user hasn't chosen yet */}
               {conflicts.length > 0 && !showConflictReview && (
-                <div className="bulk-epg-choice">
+                <div className="modal-choice-prompt">
                   <p>There are {conflicts.length} channels with multiple EPG matches. How would you like to proceed?</p>
-                  <div className="choice-buttons">
+                  <div className="modal-choice-buttons">
                     <button
-                      className="choice-btn choice-review"
+                      className="modal-choice-btn choice-review"
                       onClick={() => setShowConflictReview(true)}
                     >
                       <span className="material-icons">rate_review</span>
-                      <div className="choice-content">
-                        <span className="choice-title">Review Changes</span>
-                        <span className="choice-desc">Manually select the best match for each channel</span>
+                      <div className="modal-choice-content">
+                        <span className="modal-choice-title">Review Changes</span>
+                        <span className="modal-choice-desc">Manually select the best match for each channel</span>
                       </div>
                     </button>
                     <button
-                      className="choice-btn choice-accept"
+                      className="modal-choice-btn choice-accept"
                       onClick={handleAcceptAllRecommended}
                     >
                       <span className="material-icons">done_all</span>
-                      <div className="choice-content">
-                        <span className="choice-title">Accept Best Guesses</span>
-                        <span className="choice-desc">Use the recommended match for all conflicts</span>
+                      <div className="modal-choice-content">
+                        <span className="modal-choice-title">Accept Best Guesses</span>
+                        <span className="modal-choice-desc">Use the recommended match for all conflicts</span>
                       </div>
                     </button>
                   </div>
@@ -674,9 +675,9 @@ export const BulkEPGAssignModal = memo(function BulkEPGAssignModal({
                     </div>
                   </div>
                   {/* Navigation above the card */}
-                  <div className="conflict-card-nav">
+                  <div className="modal-nav">
                     <button
-                      className="nav-btn"
+                      className="modal-nav-btn"
                       onClick={handlePrevConflict}
                       disabled={currentConflictIndex === 0}
                       title="Previous"
@@ -684,9 +685,9 @@ export const BulkEPGAssignModal = memo(function BulkEPGAssignModal({
                       <span className="material-icons">chevron_left</span>
                       <span className="nav-label">Previous</span>
                     </button>
-                    <span className="nav-counter">{currentConflictIndex + 1} / {conflicts.length}</span>
+                    <span className="modal-nav-counter">{currentConflictIndex + 1} / {conflicts.length}</span>
                     <button
-                      className="nav-btn"
+                      className="modal-nav-btn"
                       onClick={handleNextConflict}
                       disabled={currentConflictIndex === conflicts.length - 1}
                       title="Next"
@@ -713,9 +714,9 @@ export const BulkEPGAssignModal = memo(function BulkEPGAssignModal({
 
               {/* Auto-Matched Section (Collapsible) */}
               {autoMatched.length > 0 && (
-                <div className="bulk-epg-section collapsible">
+                <div className="modal-collapsible">
                   <button
-                    className="section-header clickable"
+                    className="modal-collapsible-header"
                     onClick={() => setAutoMatchedExpanded(!autoMatchedExpanded)}
                   >
                     <span className="material-icons">check_circle</span>
@@ -794,9 +795,9 @@ export const BulkEPGAssignModal = memo(function BulkEPGAssignModal({
 
               {/* Unmatched Section (Collapsible) */}
               {unmatched.length > 0 && (
-                <div className="bulk-epg-section collapsible">
+                <div className="modal-collapsible">
                   <button
-                    className="section-header clickable"
+                    className="modal-collapsible-header"
                     onClick={() => setUnmatchedExpanded(!unmatchedExpanded)}
                   >
                     <span className="material-icons">remove_circle_outline</span>
@@ -862,12 +863,9 @@ export const BulkEPGAssignModal = memo(function BulkEPGAssignModal({
           )}
         </div>
 
-        <div className="bulk-epg-footer">
-          <button className="btn-cancel" onClick={onClose}>
-            Cancel
-          </button>
+        <div className="modal-footer">
           <button
-            className="btn-primary"
+            className="modal-btn modal-btn-primary"
             onClick={handleAssign}
             disabled={phase === 'analyzing' || assignmentCount === 0}
           >
@@ -897,23 +895,10 @@ const ConflictCard = memo(function ConflictCard({ result, epgSources, allEpgData
   // State for "Search All EPG" mode
   const [searchAllMode, setSearchAllMode] = useState(false);
 
-  // Fuzzy multi-word search matcher
-  // Splits search into words and checks if all words appear in the EPG entry
+  // Fuzzy multi-word search matcher using shared utility
   const matchesSearch = useCallback((epg: EPGData, searchWords: string[]): boolean => {
-    const lowerName = epg.name.toLowerCase();
-    const lowerTvgId = epg.tvg_id.toLowerCase();
-    const normalizedName = lowerName.replace(/[^a-z0-9]/g, '');
-    const normalizedTvgId = lowerTvgId.replace(/[^a-z0-9]/g, '');
-    const sourceName = getEPGSourceName(epg, epgSources).toLowerCase();
-
-    return searchWords.every(word => {
-      const normalizedWord = word.replace(/[^a-z0-9]/g, '');
-      return lowerName.includes(word) ||
-             lowerTvgId.includes(word) ||
-             normalizedName.includes(normalizedWord) ||
-             normalizedTvgId.includes(normalizedWord) ||
-             sourceName.includes(word);
-    });
+    const sourceName = getEPGSourceName(epg, epgSources);
+    return matchesEPGSearch(epg, searchWords, sourceName);
   }, [epgSources]);
 
   // Build a map from EPG id to confidence score for quick lookup
@@ -1083,24 +1068,10 @@ const EPGSearchCard = memo(function EPGSearchCard({
   searchTerm,
   onSearchChange,
 }: EPGSearchCardProps) {
-  // Search across all EPG data with fuzzy multi-word matching
-  // Splits search into words and checks if all words appear in the EPG entry
+  // Fuzzy multi-word search matcher using shared utility
   // This allows "BBC News US" to match "BBCNews(BBCNEEU).us"
   const matchesSearch = useCallback((epg: EPGData, searchWords: string[]): boolean => {
-    const lowerName = epg.name.toLowerCase();
-    const lowerTvgId = epg.tvg_id.toLowerCase();
-    // Also create a version with spaces removed for matching against concatenated names
-    const normalizedName = lowerName.replace(/[^a-z0-9]/g, '');
-    const normalizedTvgId = lowerTvgId.replace(/[^a-z0-9]/g, '');
-
-    // Each search word must appear in either name, tvg_id, or their normalized versions
-    return searchWords.every(word => {
-      const normalizedWord = word.replace(/[^a-z0-9]/g, '');
-      return lowerName.includes(word) ||
-             lowerTvgId.includes(word) ||
-             normalizedName.includes(normalizedWord) ||
-             normalizedTvgId.includes(normalizedWord);
-    });
+    return matchesEPGSearch(epg, searchWords);
   }, []);
 
   const searchResults = useMemo(() => {
@@ -1192,11 +1163,11 @@ const EPGSearchCard = memo(function EPGSearchCard({
         )}
       </div>
       <div className="epg-search-card-footer">
-        <button className="btn-cancel" onClick={onClose}>
+        <button className="modal-btn modal-btn-secondary" onClick={onClose}>
           Cancel
         </button>
         <button
-          className="btn-primary"
+          className="modal-btn modal-btn-primary"
           onClick={() => onSelect(selectedEpg || null)}
           disabled={!selectedEpg}
         >

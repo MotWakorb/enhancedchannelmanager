@@ -7,6 +7,7 @@
  */
 
 import { useState, useMemo, memo } from 'react';
+import './ModalBase.css';
 import './GracenoteConflictModal.css';
 
 export interface GracenoteConflict {
@@ -65,15 +66,15 @@ export const GracenoteConflictModal = memo(function GracenoteConflictModal({
 
   return (
     <div className="modal-overlay">
-      <div className="gracenote-conflict-modal" onClick={e => e.stopPropagation()}>
-        <div className="conflict-modal-header">
+      <div className="modal-container gracenote-conflict-modal" onClick={e => e.stopPropagation()}>
+        <div className="modal-header">
           <h2>Gracenote ID Conflicts</h2>
           <button className="modal-close-btn" onClick={onCancel}>
             <span className="material-icons">close</span>
           </button>
         </div>
 
-        <div className="conflict-modal-body">
+        <div className="modal-body">
           <div className="conflict-info">
             <span className="material-icons info-icon">info</span>
             <p>
@@ -83,10 +84,10 @@ export const GracenoteConflictModal = memo(function GracenoteConflictModal({
           </div>
 
           <div className="conflict-actions">
-            <button className="btn-text" onClick={selectAll}>
+            <button className="modal-btn modal-btn-secondary" onClick={selectAll}>
               Select All
             </button>
-            <button className="btn-text" onClick={deselectAll}>
+            <button className="modal-btn modal-btn-secondary" onClick={deselectAll}>
               Deselect All
             </button>
           </div>
@@ -119,12 +120,12 @@ export const GracenoteConflictModal = memo(function GracenoteConflictModal({
           </div>
         </div>
 
-        <div className="conflict-modal-footer">
-          <button className="btn-cancel" onClick={onCancel}>
+        <div className="modal-footer">
+          <button className="modal-btn modal-btn-secondary" onClick={onCancel}>
             Cancel
           </button>
           <button
-            className="btn-primary"
+            className="modal-btn modal-btn-primary"
             onClick={handleOverwrite}
             disabled={selectedCount === 0}
           >
