@@ -137,18 +137,7 @@
   font-size: 14px;
 }
 
-/* Selection info in header */
-.selection-info {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-}
-
-.selection-count {
-  font-size: 0.85rem;
-  color: var(--accent-primary);
-  font-weight: 500;
-}
+/* Selection info styles are in shared/common.css */
 
 .selection-actions {
   display: flex;
@@ -427,8 +416,8 @@
   flex-direction: column;
   gap: 0.5rem;
   border-bottom: 1px solid var(--border-primary);
-  height: 96px;
   box-sizing: border-box;
+  flex-shrink: 0;
 }
 
 .pane-filters-row {
@@ -441,32 +430,7 @@
   flex: 1;
 }
 
-/* Search row with expand/collapse buttons */
-.search-row {
-  display: flex;
-  gap: 0.5rem;
-  align-items: stretch;
-}
-
-.search-row .search-input {
-  flex: 1;
-  min-width: 0;
-}
-
-.search-input {
-  width: 100%;
-  padding: 0.5rem;
-  background-color: var(--input-bg);
-  border: 1px solid var(--border-secondary);
-  border-radius: 4px;
-  color: var(--text-primary);
-  font-size: 0.9rem;
-}
-
-.search-input:focus {
-  outline: none;
-  border-color: var(--accent-primary);
-}
+/* Search row styles are in shared/common.css */
 
 /* Group filter dropdown */
 .group-filter-dropdown {
@@ -633,47 +597,6 @@
   color: var(--text-secondary);
 }
 
-/* Expand/Collapse All Buttons */
-.expand-collapse-buttons {
-  display: flex;
-  gap: 2px;
-}
-
-.expand-collapse-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 32px;
-  background-color: var(--input-bg);
-  border: 1px solid var(--border-secondary);
-  border-radius: 4px;
-  color: var(--text-secondary);
-  cursor: pointer;
-  transition: background-color 0.15s, border-color 0.15s, color 0.15s;
-  padding: 0;
-}
-
-.expand-collapse-btn:first-child {
-  border-top-right-radius: 0;
-  border-bottom-right-radius: 0;
-  border-right: none;
-}
-
-.expand-collapse-btn:last-child {
-  border-top-left-radius: 0;
-  border-bottom-left-radius: 0;
-}
-
-.expand-collapse-btn:hover {
-  background-color: var(--bg-hover);
-  border-color: var(--border-secondary);
-  color: var(--text-primary);
-}
-
-.expand-collapse-btn .material-icons {
-  font-size: 18px;
-}
-
 /* Filter Settings Dropdown */
 .filter-settings-dropdown {
   position: relative;
@@ -684,7 +607,7 @@
   align-items: center;
   justify-content: center;
   width: 36px;
-  height: 36px;
+  padding: 7px 0;
   background-color: var(--input-bg);
   border: 1px solid var(--border-secondary);
   border-radius: 4px;
@@ -809,11 +732,7 @@
   font-size: 1.2rem;
 }
 
-.loading {
-  padding: 2rem;
-  text-align: center;
-  color: var(--text-muted);
-}
+/* .loading styles are in shared/common.css */
 
 .channel-group {
   margin-bottom: 0.25rem;
@@ -1451,29 +1370,7 @@
   color: var(--error);
 }
 
-/* Copy URL button styles */
-.copy-url-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0.25rem;
-  background: transparent;
-  border: none;
-  color: var(--text-muted);
-  cursor: pointer;
-  border-radius: 4px;
-  transition: color 0.15s, background 0.15s, opacity 0.15s;
-  opacity: 0;
-}
-
-.copy-url-btn:hover {
-  color: var(--accent-primary);
-  background: rgba(100, 108, 255, 0.1);
-}
-
-.copy-url-btn .material-icons {
-  font-size: 1rem;
-}
+/* Base .copy-url-btn and .vlc-btn styles are in shared/common.css */
 
 .inline-stream-item:hover .copy-url-btn,
 .inline-stream-item:hover .vlc-btn {
@@ -1695,25 +1592,6 @@
 
 .channel-vlc-btn {
   margin-right: 0.25rem;
-}
-
-.vlc-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0.25rem;
-  background: transparent;
-  border: none;
-  color: var(--text-muted);
-  cursor: pointer;
-  border-radius: 4px;
-  transition: color 0.15s, background 0.15s, opacity 0.15s;
-  opacity: 0;
-}
-
-.vlc-btn:hover {
-  color: #ff8800;
-  background: rgba(255, 136, 0, 0.1);
 }
 
 /* Modal styles */
