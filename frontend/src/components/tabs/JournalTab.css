@@ -123,96 +123,19 @@
   font-size: 1rem;
 }
 
+/* CustomSelect in filter bar */
 .filter-select {
+  min-width: 140px;
+}
+
+.filter-select .custom-select-trigger {
   padding: 0.5rem 0.75rem;
-  background-color: var(--input-bg);
-  border: 1px solid var(--border-secondary);
-  border-radius: 6px;
-  color: var(--text-primary);
-  font-size: 0.875rem;
-  cursor: pointer;
-  min-width: 120px;
 }
 
-.filter-select:focus {
-  outline: none;
-  border-color: var(--accent-primary);
-}
-
-/* Loading State */
-.loading-state {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 1rem;
-  height: 200px;
-  color: var(--text-secondary);
-}
-
-.loading-state .material-icons {
-  font-size: 48px;
-}
-
+/* .loading-state is defined in shared/common.css */
 /* .spinning is defined in shared/common.css */
-
-/* Empty State */
-.empty-state {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 1rem;
-  padding: 4rem 2rem;
-  background-color: var(--bg-primary);
-  border-radius: 8px;
-  border: 1px dashed #444;
-  text-align: center;
-}
-
-.empty-state .material-icons {
-  font-size: 64px;
-  color: var(--text-muted);
-}
-
-.empty-state h3 {
-  margin: 0;
-  font-size: 1.25rem;
-  color: var(--text-primary);
-}
-
-.empty-state p {
-  margin: 0;
-  color: var(--text-secondary);
-}
-
-/* Error Banner */
-.error-banner {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.75rem 1rem;
-  background-color: rgba(239, 68, 68, 0.15);
-  border: 1px solid rgba(239, 68, 68, 0.3);
-  border-radius: 6px;
-  color: var(--error);
-  margin-bottom: 1rem;
-}
-
-.error-banner .material-icons {
-  font-size: 20px;
-}
-
-.error-banner button {
-  margin-left: auto;
-  background: none;
-  border: none;
-  color: var(--error);
-  font-size: 1.25rem;
-  cursor: pointer;
-  padding: 0;
-  line-height: 1;
-}
+/* .empty-state is defined in shared/common.css */
+/* .error-banner is defined in shared/common.css */
 
 /* Entries List */
 .entries-list {
@@ -468,20 +391,19 @@
   justify-content: flex-end;
 }
 
+/* CustomSelect for page size */
 .page-size-select {
-  padding: 0.375rem 0.5rem;
-  background-color: var(--input-bg);
-  border: 1px solid var(--border-secondary);
-  border-radius: 6px;
-  color: var(--text-primary);
-  font-size: 0.8rem;
-  cursor: pointer;
-  min-width: 60px;
+  min-width: 70px;
 }
 
-.page-size-select:focus {
-  outline: none;
-  border-color: var(--accent-primary);
+.page-size-select .custom-select-trigger {
+  padding: 0.375rem 0.5rem;
+  font-size: 0.8rem;
+}
+
+.page-size-select .custom-select-arrow {
+  font-size: 16px !important;
+  margin-left: 0.25rem;
 }
 
 .page-size-label {

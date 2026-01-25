@@ -3,6 +3,7 @@ import type { Channel, Logo, EPGProgram, EPGData, EPGSource, StreamProfile, Chan
 import * as api from '../../services/api';
 import { EditChannelModal, type ChannelMetadataChanges } from '../EditChannelModal';
 import { PrintGuideModal } from '../PrintGuideModal';
+import { CustomSelect } from '../CustomSelect';
 import './GuideTab.css';
 
 // Constants for grid layout
@@ -538,55 +539,59 @@ export function GuideTab({
       <div className="guide-controls">
         <div className="control-group">
           <label>Date:</label>
-          <select
+          <CustomSelect
             value={selectedDate}
-            onChange={(e) => setSelectedDate(e.target.value)}
-          >
-            {dateOptions.map(opt => (
-              <option key={opt.value} value={opt.value}>{opt.label}</option>
-            ))}
-          </select>
+            onChange={(val) => setSelectedDate(val)}
+            options={dateOptions.map(opt => ({
+              value: opt.value,
+              label: opt.label,
+            }))}
+          />
         </div>
 
         <div className="control-group">
           <label>Start:</label>
-          <select
-            value={startHour}
-            onChange={(e) => setStartHour(Number(e.target.value))}
-          >
-            {hourOptions.map(opt => (
-              <option key={opt.value} value={opt.value}>{opt.label}</option>
-            ))}
-          </select>
+          <CustomSelect
+            value={String(startHour)}
+            onChange={(val) => setStartHour(Number(val))}
+            options={hourOptions.map(opt => ({
+              value: String(opt.value),
+              label: opt.label,
+            }))}
+          />
         </div>
 
         {channelProfiles.length > 0 && (
           <div className="control-group">
             <label>Profile:</label>
-            <select
-              value={selectedProfileId ?? ''}
-              onChange={(e) => setSelectedProfileId(e.target.value ? Number(e.target.value) : null)}
-            >
-              <option value="">All Channels</option>
-              {channelProfiles.map(profile => (
-                <option key={profile.id} value={profile.id}>{profile.name}</option>
-              ))}
-            </select>
+            <CustomSelect
+              value={selectedProfileId?.toString() ?? ''}
+              onChange={(val) => setSelectedProfileId(val ? Number(val) : null)}
+              options={[
+                { value: '', label: 'All Channels' },
+                ...channelProfiles.map(profile => ({
+                  value: profile.id.toString(),
+                  label: profile.name,
+                })),
+              ]}
+            />
           </div>
         )}
 
         {sortedGroups.length > 0 && (
           <div className="control-group group-filter">
             <label>Group:</label>
-            <select
+            <CustomSelect
               value={selectedGroup}
-              onChange={(e) => handleGroupChange(e.target.value)}
-            >
-              <option value="">{groupFilterMode === 'filter' ? 'All Groups' : 'Jump to group...'}</option>
-              {sortedGroups.map(group => (
-                <option key={group.id} value={group.id.toString()}>{group.name}</option>
-              ))}
-            </select>
+              onChange={(val) => handleGroupChange(val)}
+              options={[
+                { value: '', label: groupFilterMode === 'filter' ? 'All Groups' : 'Jump to group...' },
+                ...sortedGroups.map(group => ({
+                  value: group.id.toString(),
+                  label: group.name,
+                })),
+              ]}
+            />
             <div className="group-mode-toggle">
               <button
                 className={`mode-btn ${groupFilterMode === 'filter' ? 'active' : ''}`}

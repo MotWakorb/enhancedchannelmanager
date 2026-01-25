@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import type { JournalEntry, JournalCategory, JournalActionType, JournalStats, JournalQueryParams } from '../../types';
 import * as api from '../../services/api';
+import { CustomSelect } from '../CustomSelect';
 import './JournalTab.css';
 
 // Helper to format timestamp - always show actual date and time
@@ -238,34 +239,36 @@ export function JournalTab() {
             </button>
           )}
         </div>
-        <select
+        <CustomSelect
           value={category}
-          onChange={(e) => setCategory(e.target.value as JournalCategory | '')}
+          onChange={(val) => setCategory(val as JournalCategory | '')}
           className="filter-select"
-        >
-          <option value="">All Categories</option>
-          <option value="channel">Channel</option>
-          <option value="epg">EPG</option>
-          <option value="m3u">M3U</option>
-          <option value="watch">Watch</option>
-        </select>
-        <select
+          options={[
+            { value: '', label: 'All Categories' },
+            { value: 'channel', label: 'Channel' },
+            { value: 'epg', label: 'EPG' },
+            { value: 'm3u', label: 'M3U' },
+            { value: 'watch', label: 'Watch' },
+          ]}
+        />
+        <CustomSelect
           value={actionType}
-          onChange={(e) => setActionType(e.target.value as JournalActionType | '')}
+          onChange={(val) => setActionType(val as JournalActionType | '')}
           className="filter-select"
-        >
-          <option value="">All Actions</option>
-          <option value="create">Create</option>
-          <option value="update">Update</option>
-          <option value="delete">Delete</option>
-          <option value="start">Start</option>
-          <option value="stop">Stop</option>
-          <option value="refresh">Refresh</option>
-          <option value="stream_add">Stream Add</option>
-          <option value="stream_remove">Stream Remove</option>
-          <option value="stream_reorder">Stream Reorder</option>
-          <option value="reorder">Reorder</option>
-        </select>
+          options={[
+            { value: '', label: 'All Actions' },
+            { value: 'create', label: 'Create' },
+            { value: 'update', label: 'Update' },
+            { value: 'delete', label: 'Delete' },
+            { value: 'start', label: 'Start' },
+            { value: 'stop', label: 'Stop' },
+            { value: 'refresh', label: 'Refresh' },
+            { value: 'stream_add', label: 'Stream Add' },
+            { value: 'stream_remove', label: 'Stream Remove' },
+            { value: 'stream_reorder', label: 'Stream Reorder' },
+            { value: 'reorder', label: 'Reorder' },
+          ]}
+        />
       </div>
 
       {/* Error Banner */}
@@ -406,16 +409,17 @@ export function JournalTab() {
               </button>
             </div>
             <div className="pagination-right">
-              <select
-                value={pageSize}
-                onChange={(e) => handlePageSizeChange(Number(e.target.value))}
+              <CustomSelect
+                value={String(pageSize)}
+                onChange={(val) => handlePageSizeChange(Number(val))}
                 className="page-size-select"
-              >
-                <option value={25}>25</option>
-                <option value={50}>50</option>
-                <option value={100}>100</option>
-                <option value={250}>250</option>
-              </select>
+                options={[
+                  { value: '25', label: '25' },
+                  { value: '50', label: '50' },
+                  { value: '100', label: '100' },
+                  { value: '250', label: '250' },
+                ]}
+              />
               <span className="page-size-label">per page</span>
             </div>
           </div>

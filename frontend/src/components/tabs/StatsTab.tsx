@@ -15,6 +15,7 @@ import {
   ReferenceLine,
   ResponsiveContainer,
 } from 'recharts';
+import { CustomSelect } from '../CustomSelect';
 import './StatsTab.css';
 
 // Historical data point for charts
@@ -769,15 +770,15 @@ export function StatsTab() {
             {refreshInterval > 0 ? `Auto-refresh: ${refreshInterval}s` : 'Manual refresh'}
           </div>
 
-          <select
+          <CustomSelect
             className="refresh-select"
-            value={refreshInterval}
-            onChange={(e) => setRefreshInterval(Number(e.target.value))}
-          >
-            {REFRESH_OPTIONS.map(opt => (
-              <option key={opt.value} value={opt.value}>{opt.label}</option>
-            ))}
-          </select>
+            value={String(refreshInterval)}
+            onChange={(val) => setRefreshInterval(Number(val))}
+            options={REFRESH_OPTIONS.map(opt => ({
+              value: String(opt.value),
+              label: opt.label,
+            }))}
+          />
 
           <button
             className="btn-secondary"
@@ -1132,18 +1133,19 @@ export function StatsTab() {
             <div className="events-header">
               <h3 className="section-title">Recent Events</h3>
               <div className="events-filter">
-                <select
+                <CustomSelect
                   value={eventFilter}
-                  onChange={(e) => setEventFilter(e.target.value)}
-                >
-                  <option value="">All Events</option>
-                  <option value="start">Channel Start</option>
-                  <option value="stop">Channel Stop</option>
-                  <option value="connect">Client Connect</option>
-                  <option value="disconnect">Client Disconnect</option>
-                  <option value="buffer">Buffering</option>
-                  <option value="error">Errors</option>
-                </select>
+                  onChange={(val) => setEventFilter(val)}
+                  options={[
+                    { value: '', label: 'All Events' },
+                    { value: 'start', label: 'Channel Start' },
+                    { value: 'stop', label: 'Channel Stop' },
+                    { value: 'connect', label: 'Client Connect' },
+                    { value: 'disconnect', label: 'Client Disconnect' },
+                    { value: 'buffer', label: 'Buffering' },
+                    { value: 'error', label: 'Errors' },
+                  ]}
+                />
               </div>
             </div>
 

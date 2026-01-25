@@ -7,6 +7,7 @@
 import { useState, useCallback } from 'react';
 import './AddTagInput.css';
 import { NormalizationTagMode } from '../services/api';
+import { CustomSelect } from './CustomSelect';
 
 export interface AddTagInputProps {
   /** Callback when a tag is added */
@@ -77,18 +78,12 @@ export function AddTagInput({
         />
       </div>
       <div className="add-tag-input-mode">
-        <select
+        <CustomSelect
           value={mode}
-          onChange={(e) => setMode(e.target.value as NormalizationTagMode)}
+          onChange={(val) => setMode(val as NormalizationTagMode)}
           disabled={disabled}
-          aria-label="Tag matching mode"
-        >
-          {MODE_OPTIONS.map((opt) => (
-            <option key={opt.value} value={opt.value}>
-              {opt.label}
-            </option>
-          ))}
-        </select>
+          options={MODE_OPTIONS}
+        />
       </div>
       <button
         className="add-tag-input-btn"
