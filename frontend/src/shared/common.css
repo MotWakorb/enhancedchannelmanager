@@ -1,0 +1,135 @@
+/**
+ * Shared Common CSS
+ *
+ * This file contains extracted common styles used across multiple components.
+ * Import this file before component-specific CSS files.
+ *
+ * Structure:
+ * 1. Animations
+ * 2. Common Utilities
+ * 3. Buttons
+ * 4. Forms
+ * 5. Status Indicators
+ * 6. Loading States
+ * 7. Empty States
+ * 8. Error/Warning Displays
+ * 9. Miscellaneous Patterns
+ *
+ * CSS Variables are defined in index.css - do not duplicate here.
+ */
+
+/* =============================================================================
+   1. ANIMATIONS
+   ============================================================================= */
+
+/* Spin animation - used by loading spinners across the app
+   Extracted from: App.css, StreamsPane.css, SettingsTab.css, NotificationCenter.css,
+   AlertMethodSettings.css, StatsTab.css, EPGManagerTab.css, LogoManagerTab.css,
+   M3UManagerTab.css, JournalTab.css, GuideTab.css, ChannelsPane.css, TaskEditorModal.css */
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Spinning utility class */
+.spinning {
+  animation: spin 1s linear infinite;
+}
+
+
+/* =============================================================================
+   2. COMMON UTILITIES
+   ============================================================================= */
+
+/* Visually hidden but accessible to screen readers */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* Text truncation with ellipsis */
+.text-truncate {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+
+/* =============================================================================
+   3. BUTTONS
+   ============================================================================= */
+
+/* Base button styles - to be populated by bead cqxt */
+/* Includes: .btn-primary, .btn-secondary, .btn-danger, .btn-cancel */
+
+
+/* =============================================================================
+   4. FORMS
+   ============================================================================= */
+
+/* Base form styles - to be populated by bead j2m4 */
+/* Includes: .form-group, .form-input, .form-select, .form-hint */
+
+
+/* =============================================================================
+   5. STATUS INDICATORS
+   ============================================================================= */
+
+/* Status badge styles - to be populated by bead ciqp */
+/* Includes: .status-success, .status-error, .status-pending, .status-disabled */
+
+
+/* =============================================================================
+   6. LOADING STATES
+   ============================================================================= */
+
+/* Loading state styles - to be populated by bead ybr4 */
+/* Includes: .loading-state with spinner icons and text */
+
+
+/* =============================================================================
+   7. EMPTY STATES
+   ============================================================================= */
+
+/* Empty state styles - to be populated by bead vw3j */
+/* Includes: .empty-state, .no-items with centered content and icons */
+
+
+/* =============================================================================
+   8. ERROR/WARNING DISPLAYS
+   ============================================================================= */
+
+/* Error banner styles - to be populated by bead tfju */
+/* Includes: .error-banner with backgrounds, borders, icons */
+
+
+/* =============================================================================
+   9. MISCELLANEOUS PATTERNS
+   ============================================================================= */
+
+/* Additional patterns will be added as they are extracted:
+   - Collapsible sections (bead hgkl)
+   - Drag handles (bead dc9b)
+   - Search inputs (bead y27b)
+   - Dropdowns (bead 3k6k)
+   - Tab headers (bead i4b8)
+   - Pane headers (bead dknq)
+   - List headers (bead jjt8)
+   - Progress bars (bead wjl3)
+   - Preview lists (bead 6m4c)
+   - Action buttons (bead g0ho)
+   - Selection info (bead amuz)
+   - Checkbox/radio groups (bead 47gn)
+   - Test results (bead ymcf)
+*/
