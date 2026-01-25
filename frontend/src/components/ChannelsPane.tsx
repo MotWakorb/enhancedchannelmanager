@@ -1820,7 +1820,11 @@ export function ChannelsPane({
 
   // Get sort value for a stream based on criterion
   const getSortValue = useCallback((stats: StreamStats | undefined, criterion: SortCriterion): number => {
-    if (!stats || stats.probe_status !== 'success') return -1;
+    if (!stats) return -1;
+    // For m3u_priority and audio_channels, we don't require probe success
+    // since this data comes from the stream/M3U, not from probing
+    if (criterion !== 'm3u_priority' && criterion !== 'audio_channels' && stats.probe_status !== 'success') return -1;
+
     switch (criterion) {
       case 'resolution': {
         if (!stats.resolution) return -1;
@@ -1834,10 +1838,19 @@ export function ChannelsPane({
         const fps = parseFloat(stats.fps);
         return isNaN(fps) ? -1 : fps;
       }
+      case 'm3u_priority': {
+        // Get M3U account priority from settings
+        if (stats.m3u_account_id == null) return -1;
+        const priorities = channelDefaults?.m3uAccountPriorities ?? {};
+        const priority = priorities[String(stats.m3u_account_id)];
+        return priority ?? -1;
+      }
+      case 'audio_channels':
+        return stats.audio_channels ?? -1;
       default:
         return -1;
     }
-  }, []);
+  }, [channelDefaults?.m3uAccountPriorities]);
 
   // Create comparator for multi-criteria sorting
   const createMultiCriteriaSortComparator = useCallback((
@@ -1891,11 +1904,13 @@ export function ChannelsPane({
 
   // Get effective sort priority based on mode, filtered by enabled criteria
   const getEffectivePriority = useCallback((mode: SortMode): SortCriterion[] => {
-    const enabledMap = channelDefaults?.streamSortEnabled ?? { resolution: true, bitrate: true, framerate: true };
+    const enabledMap = channelDefaults?.streamSortEnabled ?? {
+      resolution: true, bitrate: true, framerate: true, m3u_priority: false, audio_channels: false
+    };
 
     if (mode === 'smart') {
       // Filter the priority list to only include enabled criteria
-      const priority = channelDefaults?.streamSortPriority ?? ['resolution', 'bitrate', 'framerate'];
+      const priority = channelDefaults?.streamSortPriority ?? ['resolution', 'bitrate', 'framerate', 'm3u_priority', 'audio_channels'];
       return priority.filter(criterion => enabledMap[criterion]);
     }
     // Single criterion mode - just use that criterion (already enabled check done in UI)

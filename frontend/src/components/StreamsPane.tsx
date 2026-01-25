@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import type { Stream, StreamGroupInfo, M3UAccount, ChannelGroup, ChannelProfile, M3UGroupSetting } from '../types';
 import { useSelection, useExpandCollapse } from '../hooks';
-import { normalizeStreamName, detectRegionalVariants, filterStreamsByTimezone, detectCountryPrefixes, getUniqueCountryPrefixes, detectNetworkPrefixes, detectNetworkSuffixes, type TimezonePreference, type NormalizeOptions, type NumberSeparator, type PrefixOrder, type NormalizationSettings } from '../services/api';
+import { normalizeStreamName, detectRegionalVariants, filterStreamsByTimezone, detectCountryPrefixes, getUniqueCountryPrefixes, detectNetworkPrefixes, detectNetworkSuffixes, type TimezonePreference, type NormalizeOptions, type NumberSeparator, type PrefixOrder, type NormalizationSettings, type SortCriterion, type SortEnabledMap, type M3UAccountPriorities } from '../services/api';
 import { naturalCompare } from '../utils/naturalSort';
 import { openInVLC } from '../utils/vlc';
 import { useCopyFeedback } from '../hooks/useCopyFeedback';
@@ -29,10 +29,11 @@ export interface ChannelDefaults {
   defaultChannelProfileIds?: number[];
   customNetworkPrefixes?: string[];
   customNetworkSuffixes?: string[];
-  streamSortPriority?: ('resolution' | 'bitrate' | 'framerate')[];
-  streamSortEnabled?: Record<'resolution' | 'bitrate' | 'framerate', boolean>;
+  streamSortPriority?: SortCriterion[];
+  streamSortEnabled?: SortEnabledMap;
   deprioritizeFailedStreams?: boolean;
   normalizationSettings?: NormalizationSettings;
+  m3uAccountPriorities?: M3UAccountPriorities;
 }
 
 interface StreamsPaneProps {
