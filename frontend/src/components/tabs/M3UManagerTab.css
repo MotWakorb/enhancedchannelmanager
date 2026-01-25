@@ -259,6 +259,44 @@
   color: var(--text-secondary);
 }
 
+/* Priority Setting */
+.priority-setting {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.priority-icon {
+  font-size: 14px;
+  color: var(--text-muted);
+}
+
+.priority-input {
+  width: 48px;
+  padding: 0.15rem 0.3rem;
+  font-size: 0.75rem;
+  border: 1px solid var(--border-secondary);
+  border-radius: 4px;
+  background-color: var(--input-bg);
+  color: var(--text-primary);
+  text-align: center;
+}
+
+.priority-input:focus {
+  outline: none;
+  border-color: var(--accent-primary);
+}
+
+.priority-input::-webkit-inner-spin-button,
+.priority-input::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.priority-input[type=number] {
+  -moz-appearance: textfield;
+}
+
 /* Account Updated */
 .account-updated {
   display: flex;
