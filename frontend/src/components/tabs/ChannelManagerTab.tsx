@@ -1,6 +1,6 @@
 import { useMemo } from 'react';
 import { SplitPane, ChannelsPane, StreamsPane } from '../';
-import type { Channel, ChannelGroup, ChannelProfile, Stream, M3UAccount, Logo, EPGData, EPGSource, StreamProfile, M3UGroupSetting, ChannelListFilterSettings, ChangeInfo, SavePoint, ChangeRecord } from '../../types';
+import type { Channel, ChannelGroup, ChannelProfile, Stream, StreamGroupInfo, M3UAccount, Logo, EPGData, EPGSource, StreamProfile, M3UGroupSetting, ChannelListFilterSettings, ChangeInfo, SavePoint, ChangeRecord } from '../../types';
 import type { TimezonePreference, NumberSeparator, PrefixOrder } from '../../services/api';
 import type { ChannelDefaults } from '../StreamsPane';
 
@@ -94,7 +94,7 @@ export interface ChannelManagerTabProps {
   allStreams: Stream[];  // All streams (unfiltered) - for ChannelsPane lookups
   streams: Stream[];     // Filtered streams - for StreamsPane display
   providers: M3UAccount[];
-  streamGroups: string[];
+  streamGroups: StreamGroupInfo[];
   streamsLoading: boolean;
 
   // Stream Search & Filter

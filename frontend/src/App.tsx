@@ -8,7 +8,7 @@ import {
 import { ChannelManagerTab } from './components/tabs/ChannelManagerTab';
 import { useChangeHistory, useEditMode } from './hooks';
 import * as api from './services/api';
-import type { Channel, ChannelGroup, ChannelProfile, Stream, M3UAccount, M3UGroupSetting, Logo, ChangeInfo, EPGData, StreamProfile, EPGSource, ChannelListFilterSettings, CommitProgress } from './types';
+import type { Channel, ChannelGroup, ChannelProfile, Stream, StreamGroupInfo, M3UAccount, M3UGroupSetting, Logo, ChangeInfo, EPGData, StreamProfile, EPGSource, ChannelListFilterSettings, CommitProgress } from './types';
 import packageJson from '../package.json';
 import { logger } from './utils/logger';
 import { computeAutoRename } from './utils/channelRename';
@@ -51,7 +51,7 @@ function App() {
   // Streams state
   const [streams, setStreams] = useState<Stream[]>([]);
   const [providers, setProviders] = useState<M3UAccount[]>([]);
-  const [streamGroups, setStreamGroups] = useState<string[]>([]);
+  const [streamGroups, setStreamGroups] = useState<StreamGroupInfo[]>([]);
 
   // Stream filters - grouped state (with localStorage initialization)
   const [streamFilters, setStreamFilters] = useState(() => {
