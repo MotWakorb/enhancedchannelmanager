@@ -31,6 +31,8 @@ function getCategoryIcon(category: JournalCategory): string {
       return 'playlist_play';
     case 'watch':
       return 'visibility';
+    case 'task':
+      return 'schedule';
     default:
       return 'article';
   }
@@ -72,6 +74,10 @@ function formatCategory(category: JournalCategory): string {
       return 'Channel';
     case 'watch':
       return 'Watch';
+    case 'task':
+      return 'Task';
+    default:
+      return category;
   }
 }
 
@@ -248,6 +254,7 @@ export function JournalTab() {
             { value: 'channel', label: 'Channel' },
             { value: 'epg', label: 'EPG' },
             { value: 'm3u', label: 'M3U' },
+            { value: 'task', label: 'Task' },
             { value: 'watch', label: 'Watch' },
           ]}
         />

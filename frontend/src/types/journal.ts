@@ -2,7 +2,7 @@
  * Journal types for tracking changes to channels, EPG sources, and M3U accounts.
  */
 
-export type JournalCategory = 'channel' | 'epg' | 'm3u' | 'watch';
+export type JournalCategory = 'channel' | 'epg' | 'm3u' | 'watch' | 'task';
 
 export type JournalActionType =
   | 'create'
@@ -14,7 +14,11 @@ export type JournalActionType =
   | 'reorder'
   | 'refresh'
   | 'start'
-  | 'stop';
+  | 'stop'
+  | 'complete'
+  | 'cancel'
+  | 'fail'
+  | 'error';
 
 export interface JournalEntry {
   id: number;

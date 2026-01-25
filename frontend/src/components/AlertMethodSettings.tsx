@@ -9,6 +9,7 @@ import type {
   AlertFilterMode,
 } from '../services/api';
 import { CustomSelect } from './CustomSelect';
+import './ModalBase.css';
 import './AlertMethodSettings.css';
 
 interface AlertMethodSettingsProps {
@@ -449,10 +450,10 @@ export function AlertMethodSettings({ className }: AlertMethodSettingsProps) {
       {/* Method Editor Modal */}
       {showModal && (
         <div className="modal-overlay" onClick={() => setShowModal(false)}>
-          <div className="modal-content method-editor-modal" onClick={e => e.stopPropagation()}>
+          <div className="modal-container modal-md method-editor-modal" onClick={e => e.stopPropagation()}>
             <div className="modal-header">
               <h2>{editingMethod ? 'Edit Alert Method' : 'Add Alert Method'}</h2>
-              <button className="close-btn" onClick={() => setShowModal(false)}>
+              <button className="modal-close-btn" onClick={() => setShowModal(false)}>
                 <span className="material-icons">close</span>
               </button>
             </div>
@@ -814,18 +815,13 @@ export function AlertMethodSettings({ className }: AlertMethodSettingsProps) {
                   )}
                 </button>
               )}
-              <div className="footer-right">
-                <button className="btn-cancel" onClick={() => setShowModal(false)}>
-                  Cancel
-                </button>
-                <button
-                  className="btn-primary"
-                  onClick={handleSave}
-                  disabled={saving}
-                >
-                  {saving ? 'Saving...' : 'Save'}
-                </button>
-              </div>
+              <button
+                className="btn-primary"
+                onClick={handleSave}
+                disabled={saving}
+              >
+                {saving ? 'Saving...' : 'Save'}
+              </button>
             </div>
           </div>
         </div>
