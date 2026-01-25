@@ -264,6 +264,14 @@
   margin-bottom: 0.25rem;
 }
 
+/* Override for checkbox labels to keep them inline */
+.form-group-vertical label.checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0;
+}
+
 .form-group-vertical .form-description {
   display: block;
   font-size: 0.75rem;
@@ -310,6 +318,22 @@
 .form-group-vertical button {
   display: block;
   margin-left: auto;
+}
+
+/* Simple checkbox + label inline layout */
+.checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  cursor: pointer;
+}
+
+.checkbox-label input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--accent-primary);
+  cursor: pointer;
+  flex-shrink: 0;
 }
 
 .checkbox-group {
@@ -402,89 +426,7 @@
   font-size: 18px;
 }
 
-.btn-primary {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.625rem 1.25rem;
-  border: none;
-  border-radius: 6px;
-  background-color: var(--button-primary-bg);
-  color: var(--button-primary-text);
-  font-size: 0.875rem;
-  font-weight: 500;
-  cursor: pointer;
-  transition: background-color 0.15s;
-}
-
-.btn-primary:hover:not(:disabled) {
-  background-color: var(--text-muted)8e3;
-}
-
-.btn-primary:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.btn-primary .material-icons {
-  font-size: 18px;
-}
-
-.btn-secondary {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.625rem 1.25rem;
-  border: none;
-  border-radius: 6px;
-  background-color: var(--border-primary);
-  color: var(--text-primary);
-  font-size: 0.875rem;
-  font-weight: 500;
-  cursor: pointer;
-  transition: background-color 0.15s;
-}
-
-.btn-secondary:hover:not(:disabled) {
-  background-color: var(--border-secondary);
-}
-
-.btn-secondary:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.btn-secondary .material-icons {
-  font-size: 18px;
-}
-
-.btn-danger {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.625rem 1.25rem;
-  border: none;
-  border-radius: 6px;
-  background-color: var(--error);
-  color: white;
-  font-size: 0.875rem;
-  font-weight: 500;
-  cursor: pointer;
-  transition: background-color 0.15s;
-}
-
-.btn-danger:hover:not(:disabled) {
-  background-color: #dc2626;
-}
-
-.btn-danger:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.btn-danger .material-icons {
-  font-size: 18px;
-}
+/* .btn-primary, .btn-secondary, .btn-danger, .btn-cancel are defined in shared/common.css */
 
 .error-message {
   display: flex;
