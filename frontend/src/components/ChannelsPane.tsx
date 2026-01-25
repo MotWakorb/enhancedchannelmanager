@@ -1818,12 +1818,29 @@ export function ChannelsPane({
     framerate: 'framerate',
   };
 
+  // Map stream IDs to their M3U account IDs (from stream data, not probe stats)
+  const streamM3uAccountMap = useMemo(() => {
+    const map = new Map<number, number | null>();
+    for (const stream of allStreams) {
+      map.set(stream.id, stream.m3u_account);
+    }
+    return map;
+  }, [allStreams]);
+
   // Get sort value for a stream based on criterion
-  const getSortValue = useCallback((stats: StreamStats | undefined, criterion: SortCriterion): number => {
+  const getSortValue = useCallback((streamId: number, stats: StreamStats | undefined, criterion: SortCriterion): number => {
+    // For m3u_priority, use stream data directly (doesn't require probing)
+    if (criterion === 'm3u_priority') {
+      const m3uAccountId = streamM3uAccountMap.get(streamId);
+      if (m3uAccountId == null) return -1;
+      const priorities = channelDefaults?.m3uAccountPriorities ?? {};
+      const priority = priorities[String(m3uAccountId)];
+      return priority ?? -1;
+    }
+
     if (!stats) return -1;
-    // For m3u_priority and audio_channels, we don't require probe success
-    // since this data comes from the stream/M3U, not from probing
-    if (criterion !== 'm3u_priority' && criterion !== 'audio_channels' && stats.probe_status !== 'success') return -1;
+    // For audio_channels, we don't require probe success since it may come from M3U metadata
+    if (criterion !== 'audio_channels' && stats.probe_status !== 'success') return -1;
 
     switch (criterion) {
       case 'resolution': {
@@ -1838,19 +1855,12 @@ export function ChannelsPane({
         const fps = parseFloat(stats.fps);
         return isNaN(fps) ? -1 : fps;
       }
-      case 'm3u_priority': {
-        // Get M3U account priority from settings
-        if (stats.m3u_account_id == null) return -1;
-        const priorities = channelDefaults?.m3uAccountPriorities ?? {};
-        const priority = priorities[String(stats.m3u_account_id)];
-        return priority ?? -1;
-      }
       case 'audio_channels':
         return stats.audio_channels ?? -1;
       default:
         return -1;
     }
-  }, [channelDefaults?.m3uAccountPriorities]);
+  }, [streamM3uAccountMap, channelDefaults?.m3uAccountPriorities]);
 
   // Create comparator for multi-criteria sorting
   const createMultiCriteriaSortComparator = useCallback((
@@ -1883,8 +1893,8 @@ export function ChannelsPane({
 
       // Both streams succeeded (or setting disabled) - now sort by quality criteria
       for (const criterion of priority) {
-        const aVal = getSortValue(aStats, criterion);
-        const bVal = getSortValue(bStats, criterion);
+        const aVal = getSortValue(aId, aStats, criterion);
+        const bVal = getSortValue(bId, bStats, criterion);
 
         // Both have no data for this criterion - continue to next
         if (aVal === -1 && bVal === -1) continue;
