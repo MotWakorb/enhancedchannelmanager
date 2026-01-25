@@ -457,6 +457,7 @@ function App() {
           })(),
           deprioritizeFailedStreams: settings.deprioritize_failed_streams ?? true,
           normalizationSettings: settings.normalization_settings ?? { disabledBuiltinTags: [], customTags: [] },
+          m3uAccountPriorities: settings.m3u_account_priorities ?? {},
         });
         setDefaultChannelProfileIds(settings.default_channel_profile_ids);
 
@@ -670,6 +671,7 @@ function App() {
         })(),
         deprioritizeFailedStreams: settings.deprioritize_failed_streams ?? true,
         normalizationSettings: settings.normalization_settings ?? { disabledBuiltinTags: [], customTags: [] },
+        m3uAccountPriorities: settings.m3u_account_priorities ?? {},
       });
       setDefaultChannelProfileIds(settings.default_channel_profile_ids);
 
