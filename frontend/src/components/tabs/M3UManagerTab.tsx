@@ -31,6 +31,8 @@ interface M3UAccountRowProps {
   onManageProfiles: (account: M3UAccount) => void;
   linkedAccountNames?: string[];  // Names of accounts linked to this one
   hideM3uUrls?: boolean;
+  priority?: number;  // Sort priority for this account (higher = better)
+  onPriorityChange?: (accountId: number, priority: number) => void;
 }
 
 function M3UAccountRow({
@@ -44,6 +46,8 @@ function M3UAccountRow({
   onManageProfiles,
   linkedAccountNames,
   hideM3uUrls = false,
+  priority = 0,
+  onPriorityChange,
 }: M3UAccountRowProps) {
   const getStatusIcon = (status: M3UAccount['status']) => {
     switch (status) {
@@ -164,6 +168,20 @@ function M3UAccountRow({
         <span className="setting-item">
           Refresh: {account.refresh_interval === 0 ? 'Disabled' : `${account.refresh_interval}h`}
         </span>
+        {onPriorityChange && (
+          <span className="setting-item priority-setting" title="Sort priority for Smart Sort (higher = better)">
+            <span className="material-icons priority-icon">low_priority</span>
+            <input
+              type="number"
+              className="priority-input"
+              value={priority}
+              onChange={(e) => onPriorityChange(account.id, parseInt(e.target.value) || 0)}
+              min={0}
+              max={100}
+              title="Priority (0-100, higher = better)"
+            />
+          </span>
+        )}
       </div>
 
       <div className="account-updated">
@@ -257,6 +275,7 @@ export function M3UManagerTab({
   const [linkedAccountsModalOpen, setLinkedAccountsModalOpen] = useState(false);
   const [linkedM3UAccounts, setLinkedM3UAccounts] = useState<number[][]>([]);
   const [syncingGroups, setSyncingGroups] = useState(false);
+  const [m3uAccountPriorities, setM3uAccountPriorities] = useState<Record<string, number>>({});
 
   const loadData = useCallback(async () => {
     try {
@@ -268,6 +287,7 @@ export function M3UManagerTab({
       setAccounts(accountsData);
       setServerGroups(serverGroupsData);
       setLinkedM3UAccounts(settings.linked_m3u_accounts ?? []);
+      setM3uAccountPriorities(settings.m3u_account_priorities ?? {});
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load M3U accounts');
@@ -436,6 +456,27 @@ export function M3UManagerTab({
   const handleProfilesSaved = () => {
     loadData();
   };
+
+  // Handle M3U account priority change
+  const handlePriorityChange = useCallback(async (accountId: number, priority: number) => {
+    const newPriorities = { ...m3uAccountPriorities };
+    if (priority === 0) {
+      // Remove from priorities if set to 0 (default)
+      delete newPriorities[String(accountId)];
+    } else {
+      newPriorities[String(accountId)] = priority;
+    }
+    setM3uAccountPriorities(newPriorities);
+
+    // Save to settings
+    try {
+      await api.saveSettings({ m3u_account_priorities: newPriorities });
+    } catch (err) {
+      console.error('Failed to save M3U priorities:', err);
+      // Revert on error
+      setM3uAccountPriorities(m3uAccountPriorities);
+    }
+  }, [m3uAccountPriorities]);
 
   const handleAccountSaved = () => {
     loadData();
@@ -649,6 +690,8 @@ export function M3UManagerTab({
                 onManageProfiles={handleManageProfiles}
                 linkedAccountNames={linkedAccountNamesMap.get(account.id)}
                 hideM3uUrls={hideM3uUrls}
+                priority={m3uAccountPriorities[String(account.id)] ?? 0}
+                onPriorityChange={handlePriorityChange}
               />
             ))}
           </div>
