@@ -53,14 +53,7 @@
   font-size: 1.1rem;
 }
 
-.refresh-streams-btn .material-icons.spinning {
-  animation: spin 1s linear infinite;
-}
-
-@keyframes spin {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
-}
+/* .spinning is defined in shared/common.css (counter-clockwise) */
 
 .selection-info {
   display: flex;
@@ -1569,18 +1562,7 @@ button.group-selection-checkbox {
   font-size: 1.1rem;
 }
 
-.spinning {
-  animation: spin 1s linear infinite;
-}
-
-@keyframes spin {
-  from {
-    transform: rotate(0deg);
-  }
-  to {
-    transform: rotate(360deg);
-  }
-}
+/* .spinning is defined in shared/common.css */
 
 /* Searchable Dropdown for Channel Group Selection */
 .searchable-dropdown {

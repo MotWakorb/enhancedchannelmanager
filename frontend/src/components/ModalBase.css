@@ -447,7 +447,7 @@
 
 .modal-loading .material-icons {
   font-size: 2rem;
-  animation: modal-spin 1s linear infinite;
+  animation: modal-spin 1s linear infinite reverse;
 }
 
 @keyframes modal-spin {
@@ -748,7 +748,7 @@
 .dropdown-inline-input .spinning,
 .new-group-input .spinning,
 .logo-url-input .spinning {
-  animation: modal-spin 1s linear infinite;
+  animation: modal-spin 1s linear infinite reverse;
 }
 
 /* Dropdown actions (Select All/Clear All) */

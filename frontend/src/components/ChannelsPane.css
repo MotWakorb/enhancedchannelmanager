@@ -418,7 +418,7 @@
 }
 
 .sort-all-quality-btn.loading .material-icons {
-  animation: spin 1s linear infinite;
+  animation: spin 1s linear infinite reverse;
 }
 
 .pane-filters {
@@ -1598,21 +1598,10 @@
 }
 
 .probe-stream-btn.probing .material-icons {
-  animation: spin 1s linear infinite;
-}
-
-@keyframes spin {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
-}
-
-.spinning {
   animation: spin 1s linear infinite reverse;
 }
 
-.bulk-action-btn .material-icons.spinning {
-  animation: spin 1s linear infinite reverse !important;
-}
+/* .spinning is defined in shared/common.css (counter-clockwise) */
 
 /* Channel Probe Button - probes all streams in a channel */
 .probe-channel-btn {
@@ -1650,7 +1639,7 @@
 }
 
 .probe-channel-btn.probing .material-icons {
-  animation: spin 1s linear infinite;
+  animation: spin 1s linear infinite reverse;
   color: #14b8a6;
 }
 
@@ -1689,7 +1678,7 @@
 }
 
 .probe-group-btn.probing .material-icons {
-  animation: spin 1s linear infinite;
+  animation: spin 1s linear infinite reverse;
   color: #14b8a6;
 }
 
@@ -3744,7 +3733,7 @@
 }
 
 .group-sort-quality-btn.sorting .material-icons {
-  animation: spin 1s linear infinite;
+  animation: spin 1s linear infinite reverse;
   color: var(--accent-primary);
 }
 
@@ -3782,7 +3771,7 @@
 }
 
 .sort-dropdown-btn.loading .material-icons.spinning {
-  animation: spin 1s linear infinite;
+  animation: spin 1s linear infinite reverse;
 }
 
 .sort-dropdown-arrow {

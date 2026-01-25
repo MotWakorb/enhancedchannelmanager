@@ -87,14 +87,7 @@
   font-size: 48px;
 }
 
-.spinning {
-  animation: spin 1s linear infinite;
-}
-
-@keyframes spin {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
-}
+/* .spinning is defined in shared/common.css */
 
 /* Empty State */
 .empty-state {
@@ -300,7 +293,7 @@
 }
 
 .status-pending .spinning {
-  animation: spin 1s linear infinite;
+  animation: spin 1s linear infinite reverse;
 }
 
 .status-disabled {
