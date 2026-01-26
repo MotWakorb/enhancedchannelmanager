@@ -283,8 +283,19 @@ class TaskEngine:
         Returns:
             TaskResult or None if task not found
         """
-        # Execute the task
-        result = await self._execute_task(task_id, triggered_by)
+        # Get parameters from the first triggered schedule (if any)
+        # Multiple schedules could trigger at the same time; use the first one's parameters
+        schedule_parameters = None
+        schedule_id = None
+        if triggered_schedules:
+            first_schedule = triggered_schedules[0]
+            schedule_parameters = first_schedule.get_parameters()
+            schedule_id = first_schedule.id
+            if schedule_parameters:
+                logger.info(f"Task {task_id} using parameters from schedule {schedule_id}: {schedule_parameters}")
+
+        # Execute the task with parameters
+        result = await self._execute_task(task_id, triggered_by, parameters=schedule_parameters, schedule_id=schedule_id)
 
         # Update next_run_at for triggered schedules
         if result:
@@ -296,19 +307,21 @@ class TaskEngine:
                 session = get_session()
                 try:
                     for schedule in triggered_schedules:
-                        # Recalculate next run time
+                        # Update last_run_at and recalculate next run time
                         db_schedule = session.query(TaskSchedule).get(schedule.id)
-                        if db_schedule and db_schedule.enabled:
-                            db_schedule.next_run_at = calculate_next_run(
-                                schedule_type=db_schedule.schedule_type,
-                                interval_seconds=db_schedule.interval_seconds,
-                                schedule_time=db_schedule.schedule_time,
-                                timezone=db_schedule.timezone,
-                                days_of_week=db_schedule.get_days_of_week_list(),
-                                day_of_month=db_schedule.day_of_month,
-                                last_run=result.completed_at,
-                            )
-                            logger.debug(f"Updated schedule {db_schedule.id} next_run_at to {db_schedule.next_run_at}")
+                        if db_schedule:
+                            db_schedule.last_run_at = result.completed_at
+                            if db_schedule.enabled:
+                                db_schedule.next_run_at = calculate_next_run(
+                                    schedule_type=db_schedule.schedule_type,
+                                    interval_seconds=db_schedule.interval_seconds,
+                                    schedule_time=db_schedule.schedule_time,
+                                    timezone=db_schedule.timezone,
+                                    days_of_week=db_schedule.get_days_of_week_list(),
+                                    day_of_month=db_schedule.day_of_month,
+                                    last_run=result.completed_at,
+                                )
+                            logger.debug(f"Updated schedule {db_schedule.id} last_run_at={result.completed_at}, next_run_at={db_schedule.next_run_at}")
 
                     # Update parent task's next_run_at (earliest of all enabled schedules)
                     all_schedules = session.query(TaskSchedule).filter(
@@ -334,13 +347,21 @@ class TaskEngine:
 
         return result
 
-    async def _execute_task(self, task_id: str, triggered_by: str = "manual") -> Optional[TaskResult]:
+    async def _execute_task(
+        self,
+        task_id: str,
+        triggered_by: str = "manual",
+        parameters: Optional[dict] = None,
+        schedule_id: Optional[int] = None,
+    ) -> Optional[TaskResult]:
         """
         Execute a task and record the result.
 
         Args:
             task_id: ID of task to execute
             triggered_by: Who triggered the task ("scheduled", "manual", "api")
+            parameters: Task-specific parameters from the schedule (e.g., channel_groups, batch_size)
+            schedule_id: ID of the schedule that triggered this execution (for tracking)
 
         Returns:
             TaskResult or None if task not found
@@ -382,6 +403,14 @@ class TaskEngine:
             execution_id = None
 
         try:
+            # Apply schedule parameters to the task instance
+            if parameters and hasattr(instance, 'update_config'):
+                try:
+                    instance.update_config(parameters)
+                    logger.info(f"[{task_id}] Applied schedule parameters: {parameters}")
+                except Exception as e:
+                    logger.warning(f"[{task_id}] Failed to apply parameters: {e}")
+
             logger.info(f"[{task_id}] Starting task execution (triggered_by={triggered_by})")
 
             # Log task start to journal
@@ -391,7 +420,7 @@ class TaskEngine:
                 entity_name=instance.task_name,
                 description=f"Started {instance.task_name} ({triggered_by})",
                 entity_id=execution_id,
-                after_value={"task_id": task_id, "triggered_by": triggered_by},
+                after_value={"task_id": task_id, "triggered_by": triggered_by, "parameters": parameters},
                 user_initiated=(triggered_by == "manual"),
             )
 
@@ -602,17 +631,38 @@ class TaskEngine:
             async with self._lock:
                 self._active_tasks.discard(task_id)
 
-    async def run_task(self, task_id: str) -> Optional[TaskResult]:
+    async def run_task(self, task_id: str, schedule_id: Optional[int] = None) -> Optional[TaskResult]:
         """
         Manually run a task (API entry point).
 
         Args:
             task_id: ID of task to run
+            schedule_id: Optional schedule ID to use parameters from
 
         Returns:
             TaskResult or None if task not found
         """
-        return await self._execute_task(task_id, triggered_by="manual")
+        parameters = None
+        if schedule_id:
+            # Load parameters from the specified schedule
+            try:
+                from database import get_session
+                from models import TaskSchedule
+                session = get_session()
+                try:
+                    schedule = session.query(TaskSchedule).filter(
+                        TaskSchedule.id == schedule_id,
+                        TaskSchedule.task_id == task_id
+                    ).first()
+                    if schedule:
+                        parameters = schedule.get_parameters()
+                        logger.info(f"Manual run of {task_id} using schedule {schedule_id} parameters: {parameters}")
+                finally:
+                    session.close()
+            except Exception as e:
+                logger.error(f"Failed to load schedule parameters: {e}")
+
+        return await self._execute_task(task_id, triggered_by="manual", parameters=parameters, schedule_id=schedule_id)
 
     async def cancel_task(self, task_id: str) -> dict:
         """

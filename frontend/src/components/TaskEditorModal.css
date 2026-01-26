@@ -173,6 +173,23 @@
   background-color: rgba(239, 68, 68, 0.1);
 }
 
+.task-editor-modal .schedule-action-btn.run {
+  color: var(--success);
+}
+
+.task-editor-modal .schedule-action-btn.run:hover {
+  background-color: rgba(46, 204, 113, 0.1);
+}
+
+.task-editor-modal .schedule-action-btn.run.running {
+  color: var(--accent-primary);
+}
+
+.task-editor-modal .schedule-action-btn.run:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 .task-editor-modal .schedule-action-btn .material-icons {
   font-size: 18px;
 }

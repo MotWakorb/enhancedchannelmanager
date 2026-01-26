@@ -1,13 +1,25 @@
-import { useState, useEffect, useMemo } from 'react';
-import type { TaskSchedule, TaskScheduleType, TaskScheduleCreate, TaskScheduleUpdate } from '../services/api';
+import { useState, useEffect } from 'react';
+import type { TaskSchedule, TaskScheduleType, TaskScheduleCreate, TaskScheduleUpdate, TaskParameterSchema } from '../services/api';
 import { CustomSelect } from './CustomSelect';
+import './ModalBase.css';
 import './ScheduleEditor.css';
+
+// Option with optional badge for display
+interface ParameterOption {
+  value: string | number;
+  label: string;
+  badge?: string;  // Optional badge text (e.g., "auto")
+}
 
 interface ScheduleEditorProps {
   schedule?: TaskSchedule;  // For editing existing schedule
   onSave: (data: TaskScheduleCreate | TaskScheduleUpdate) => Promise<void>;
   onCancel: () => void;
   saving?: boolean;
+  taskId?: string;  // For fetching parameter options
+  parameterSchema?: TaskParameterSchema[];  // Schema defining what parameters this task accepts
+  parameterOptions?: Record<string, ParameterOption[]>;  // Pre-fetched options for array parameters
+  defaultParameters?: Record<string, unknown>;  // Default parameter values for new schedules
 }
 
 // Common interval presets in seconds
@@ -46,7 +58,7 @@ const TIMEZONE_OPTIONS = [
   { value: 'Australia/Sydney', label: 'Sydney' },
 ];
 
-export function ScheduleEditor({ schedule, onSave, onCancel, saving }: ScheduleEditorProps) {
+export function ScheduleEditor({ schedule, onSave, onCancel, saving, taskId, parameterSchema, parameterOptions, defaultParameters }: ScheduleEditorProps) {
   // Form state
   const [name, setName] = useState(schedule?.name || '');
   const [enabled, setEnabled] = useState(schedule?.enabled ?? true);
@@ -58,6 +70,20 @@ export function ScheduleEditor({ schedule, onSave, onCancel, saving }: ScheduleE
   const [dayOfMonth, setDayOfMonth] = useState(schedule?.day_of_month || 1);
   const [useCustomInterval, setUseCustomInterval] = useState(false);
 
+  // Task-specific parameters state
+  const [parameters, setParameters] = useState<Record<string, unknown>>(() => {
+    // Initialize from schedule parameters (editing)
+    if (schedule?.parameters) return schedule.parameters;
+    // Use provided defaults for new schedules
+    if (defaultParameters && Object.keys(defaultParameters).length > 0) return defaultParameters;
+    // Fall back to schema defaults
+    if (!parameterSchema) return {};
+    return parameterSchema.reduce((acc, param) => {
+      if (param.default !== undefined) acc[param.name] = param.default;
+      return acc;
+    }, {} as Record<string, unknown>);
+  });
+
   // Check if browser timezone is in our list
   const browserTz = Intl.DateTimeFormat().resolvedOptions().timeZone;
   const tzInList = TIMEZONE_OPTIONS.some(tz => tz.value === browserTz);
@@ -67,6 +93,22 @@ export function ScheduleEditor({ schedule, onSave, onCancel, saving }: ScheduleE
     const isPreset = INTERVAL_PRESETS.some(p => p.value === intervalSeconds);
     setUseCustomInterval(!isPreset);
   }, []);
+
+  // Helper to update a single parameter
+  const updateParameter = (name: string, value: unknown) => {
+    setParameters(prev => ({ ...prev, [name]: value }));
+  };
+
+  // Helper to toggle a value in an array parameter
+  const toggleArrayParameter = (name: string, value: string | number) => {
+    setParameters(prev => {
+      const arr = (prev[name] as (string | number)[]) || [];
+      const newArr = arr.includes(value)
+        ? arr.filter(v => v !== value)
+        : [...arr, value];
+      return { ...prev, [name]: newArr };
+    });
+  };
 
   const handleSave = async () => {
     const data: TaskScheduleCreate | TaskScheduleUpdate = {
@@ -89,6 +131,11 @@ export function ScheduleEditor({ schedule, onSave, onCancel, saving }: ScheduleE
       if (scheduleType === 'monthly') {
         data.day_of_month = dayOfMonth;
       }
+    }
+
+    // Include task-specific parameters if we have a schema
+    if (parameterSchema && parameterSchema.length > 0) {
+      data.parameters = parameters;
     }
 
     await onSave(data);
@@ -115,8 +162,10 @@ export function ScheduleEditor({ schedule, onSave, onCancel, saving }: ScheduleE
   const customIntervalMinutes = Math.floor((intervalSeconds % 3600) / 60);
 
   return (
-    <div className="schedule-editor">
-      {/* Schedule Name */}
+    <>
+      {/* Modal Body - scrollable content */}
+      <div className="modal-body schedule-editor">
+        {/* Schedule Name */}
       <div className="form-group">
         <label>Schedule Name (optional)</label>
         <input
@@ -372,16 +421,105 @@ export function ScheduleEditor({ schedule, onSave, onCancel, saving }: ScheduleE
         )}
       </div>
 
-      {/* Actions */}
-      <div className="editor-actions">
-        <button type="button" onClick={onCancel} className="btn-cancel">
+      {/* Task-specific Parameters */}
+      {parameterSchema && parameterSchema.length > 0 && (
+        <div className="parameters-section">
+          <h4 className="section-title">Task Parameters</h4>
+          {parameterSchema.map((param) => (
+            <div key={param.name} className="form-group">
+              {/* Show note before batch_size for stream_probe */}
+              {taskId === 'stream_probe' && param.name === 'batch_size' && (
+                <p className="parameters-note">
+                  Batch Size, Timeout, and Max Concurrent are optional overrides for the global settings in Settings → Maintenance.
+                </p>
+              )}
+              <label>{param.label}</label>
+              <p className="param-description">{param.description}</p>
+
+              {/* Number input */}
+              {param.type === 'number' && (
+                <input
+                  type="number"
+                  value={(parameters[param.name] as number) ?? param.default ?? 0}
+                  onChange={(e) => updateParameter(param.name, parseInt(e.target.value) || 0)}
+                  min={param.min}
+                  max={param.max}
+                  className="form-input number-input"
+                />
+              )}
+
+              {/* String input */}
+              {param.type === 'string' && (
+                <input
+                  type="text"
+                  value={(parameters[param.name] as string) ?? param.default ?? ''}
+                  onChange={(e) => updateParameter(param.name, e.target.value)}
+                  className="form-input"
+                />
+              )}
+
+              {/* Boolean checkbox */}
+              {param.type === 'boolean' && (
+                <label className="checkbox-label">
+                  <input
+                    type="checkbox"
+                    checked={(parameters[param.name] as boolean) ?? param.default ?? false}
+                    onChange={(e) => updateParameter(param.name, e.target.checked)}
+                  />
+                  <span>Enabled</span>
+                </label>
+              )}
+
+              {/* String/Number array with options */}
+              {(param.type === 'string_array' || param.type === 'number_array') && parameterOptions?.[param.source || param.name] && (
+                <div className="array-options">
+                  <div className="array-hint">
+                    {((parameters[param.name] as (string | number)[]) || []).length === 0
+                      ? 'None selected (applies to all)'
+                      : `${((parameters[param.name] as (string | number)[]) || []).length} selected`}
+                  </div>
+                  <div className="option-list">
+                    {parameterOptions[param.source || param.name].map((opt) => {
+                      const selected = ((parameters[param.name] as (string | number)[]) || []).includes(opt.value);
+                      return (
+                        <label key={String(opt.value)} className="option-checkbox">
+                          <input
+                            type="checkbox"
+                            checked={selected}
+                            onChange={() => toggleArrayParameter(param.name, opt.value)}
+                          />
+                          <span>{opt.label}</span>
+                          {opt.badge && <span className="option-badge">{opt.badge}</span>}
+                        </label>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* String/Number array without options - show text hint */}
+              {(param.type === 'string_array' || param.type === 'number_array') && !parameterOptions?.[param.source || param.name] && (
+                <div className="array-hint">
+                  Empty = applies to all. Options not yet loaded.
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
+      </div>
+
+      {/* Modal Footer - action buttons */}
+      <div className="modal-footer">
+        <button type="button" onClick={onCancel} className="modal-btn modal-btn-secondary">
           Cancel
         </button>
         <button
           type="button"
           onClick={handleSave}
           disabled={saving || (scheduleType !== 'interval' && !scheduleTime)}
-          className="btn-save"
+          className="modal-btn modal-btn-primary"
         >
           {saving ? (
             <>
@@ -396,6 +534,6 @@ export function ScheduleEditor({ schedule, onSave, onCancel, saving }: ScheduleE
           )}
         </button>
       </div>
-    </div>
+    </>
   );
 }

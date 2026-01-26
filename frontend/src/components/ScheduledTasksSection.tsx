@@ -101,62 +101,63 @@ function TaskCard({ task, onRunNow, onCancel, onToggleEnabled, onEdit, isRunning
           </div>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-          {/* Enable/Disable toggle */}
-          <label style={{
+          {/* Enabled indicator */}
+          <span style={{
             display: 'flex',
             alignItems: 'center',
-            gap: '0.5rem',
-            cursor: 'pointer',
+            gap: '0.35rem',
             fontSize: '0.85rem',
-            color: 'var(--text-secondary)',
+            color: task.enabled ? 'var(--success)' : 'var(--text-muted)',
+            padding: '0.25rem 0.5rem',
+            backgroundColor: task.enabled ? 'rgba(46, 204, 113, 0.1)' : 'rgba(128, 128, 128, 0.1)',
+            borderRadius: '4px',
           }}>
-            <input
-              type="checkbox"
-              checked={task.enabled}
-              onChange={(e) => onToggleEnabled(task.task_id, e.target.checked)}
-              style={{ accentColor: 'var(--accent-primary)' }}
-            />
-            Enabled
-          </label>
-          {/* Run Now / Cancel button */}
-          {(isRunning || task.status === 'running') ? (
-            <button
-              onClick={() => onCancel(task.task_id)}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '0.25rem',
-                padding: '0.5rem 0.75rem',
-                backgroundColor: '#e74c3c',
-                color: 'white',
-                border: 'none',
-                borderRadius: '4px',
-                cursor: 'pointer',
-                fontSize: '0.85rem',
-              }}
-            >
-              <span className="material-icons" style={{ fontSize: '16px' }}>stop</span>
-              Cancel
-            </button>
-          ) : (
-            <button
-              onClick={() => onRunNow(task.task_id)}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '0.25rem',
-                padding: '0.5rem 0.75rem',
-                backgroundColor: 'var(--success)',
-                color: 'var(--success-text)',
-                border: 'none',
-                borderRadius: '4px',
-                cursor: 'pointer',
-                fontSize: '0.85rem',
-              }}
-            >
-              <span className="material-icons" style={{ fontSize: '16px' }}>play_arrow</span>
-              Run Now
-            </button>
+            <span className="material-icons" style={{ fontSize: '14px' }}>
+              {task.enabled ? 'check_circle' : 'pause_circle'}
+            </span>
+            {task.enabled ? 'Enabled' : 'Disabled'}
+          </span>
+          {/* Run Now / Cancel button - hidden for stream_probe */}
+          {task.task_id !== 'stream_probe' && (
+            (isRunning || task.status === 'running') ? (
+              <button
+                onClick={() => onCancel(task.task_id)}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.25rem',
+                  padding: '0.5rem 0.75rem',
+                  backgroundColor: '#e74c3c',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: '4px',
+                  cursor: 'pointer',
+                  fontSize: '0.85rem',
+                }}
+              >
+                <span className="material-icons" style={{ fontSize: '16px' }}>stop</span>
+                Cancel
+              </button>
+            ) : (
+              <button
+                onClick={() => onRunNow(task.task_id)}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.25rem',
+                  padding: '0.5rem 0.75rem',
+                  backgroundColor: 'var(--success)',
+                  color: 'var(--success-text)',
+                  border: 'none',
+                  borderRadius: '4px',
+                  cursor: 'pointer',
+                  fontSize: '0.85rem',
+                }}
+              >
+                <span className="material-icons" style={{ fontSize: '16px' }}>play_arrow</span>
+                Run Now
+              </button>
+            )
           )}
           {/* Edit button */}
           <button

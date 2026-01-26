@@ -291,10 +291,6 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   const [reorderData, setReorderData] = useState<ProbeHistoryEntry['reordered_channels'] | null>(null);
   const [reorderSortConfig, setReorderSortConfig] = useState<ProbeHistoryEntry['sort_config'] | null>(null);
   const [copiedUrl, setCopiedUrl] = useState<string | null>(null);
-  const [availableChannelGroups, setAvailableChannelGroups] = useState<Array<{ id: number; name: string }>>([]);
-  const [probeChannelGroups, setProbeChannelGroups] = useState<string[]>([]);
-  const [showGroupSelectModal, setShowGroupSelectModal] = useState(false);
-  const [tempProbeChannelGroups, setTempProbeChannelGroups] = useState<string[]>([]);
   // M3U accounts for guidance on max concurrent probes
   const [m3uAccountsMaxStreams, setM3uAccountsMaxStreams] = useState<{ name: string; max_streams: number }[]>([]);
 
@@ -375,7 +371,6 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         linked_m3u_accounts: linkedM3UAccounts,
         stream_probe_batch_size: streamProbeBatchSize,
         stream_probe_timeout: streamProbeTimeout,
-        probe_channel_groups: probeChannelGroups,
         bitrate_sample_duration: bitrateSampleDuration,
         parallel_probing_enabled: parallelProbingEnabled,
         max_concurrent_probes: maxConcurrentProbes,
@@ -402,7 +397,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
     customNetworkPrefixes, customNetworkSuffixes, statsPollInterval,
     userTimezone, backendLogLevel, frontendLogLevel, vlcOpenBehavior,
     linkedM3UAccounts, streamProbeBatchSize,
-    streamProbeTimeout, probeChannelGroups, bitrateSampleDuration,
+    streamProbeTimeout, bitrateSampleDuration,
     parallelProbingEnabled, maxConcurrentProbes, skipRecentlyProbedHours, refreshM3usBeforeProbe,
     autoReorderAfterProbe, streamFetchPageLimit, streamSortPriority,
     streamSortEnabled, deprioritizeFailedStreams
@@ -430,7 +425,6 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   useEffect(() => {
     loadSettings();
     loadStreamCount();
-    loadAvailableChannelGroups();
     loadProbeHistory();
     checkForOngoingProbe();
     loadM3UAccountsMaxStreams();
@@ -463,23 +457,6 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       logger.warn('Failed to check for ongoing probe', err);
     }
   };
-
-  // Auto-populate probe channel groups with all groups if empty (default to all checked)
-  // Also filter out any stale groups that no longer exist
-  useEffect(() => {
-    if (availableChannelGroups.length > 0) {
-      const availableNames = new Set(availableChannelGroups.map(g => g.name));
-      const validGroups = probeChannelGroups.filter(name => availableNames.has(name));
-
-      if (validGroups.length === 0) {
-        // If no valid groups are selected, default to all groups
-        setProbeChannelGroups(availableChannelGroups.map(g => g.name));
-      } else if (validGroups.length !== probeChannelGroups.length) {
-        // Filter out stale groups that no longer exist
-        setProbeChannelGroups(validGroups);
-      }
-    }
-  }, [availableChannelGroups, probeChannelGroups]);
 
   // Periodically check for scheduled probes (runs even when probingAll is false)
   useEffect(() => {
@@ -570,15 +547,6 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
     }
   };
 
-  const loadAvailableChannelGroups = async () => {
-    try {
-      const result = await api.getChannelGroupsWithStreams();
-      setAvailableChannelGroups(result.groups);
-    } catch (err) {
-      logger.warn('Failed to load available channel groups', err);
-    }
-  };
-
   const loadProbeHistory = async () => {
     try {
       const history = await api.getProbeHistory();
@@ -635,7 +603,6 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       // Stream probe settings (scheduled probing is controlled by Task Engine)
       setStreamProbeBatchSize(settings.stream_probe_batch_size ?? 10);
       setStreamProbeTimeout(settings.stream_probe_timeout ?? 30);
-      setProbeChannelGroups(settings.probe_channel_groups ?? []);
       setBitrateSampleDuration(settings.bitrate_sample_duration ?? 10);
       setParallelProbingEnabled(settings.parallel_probing_enabled ?? true);
       setMaxConcurrentProbes(settings.max_concurrent_probes ?? 8);
@@ -743,7 +710,6 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         // Stream probe settings (scheduled probing is controlled by Task Engine)
         stream_probe_batch_size: streamProbeBatchSize,
         stream_probe_timeout: streamProbeTimeout,
-        probe_channel_groups: probeChannelGroups,
         bitrate_sample_duration: bitrateSampleDuration,
         parallel_probing_enabled: parallelProbingEnabled,
         max_concurrent_probes: maxConcurrentProbes,
@@ -832,8 +798,8 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
     setProbeAllResult(null);
     setProbeProgress(null);
     try {
-      // Pass currently selected groups (even if not saved)
-      const result = await api.probeAllStreams(probeChannelGroups);
+      // Probe all streams (empty array = all groups)
+      const result = await api.probeAllStreams([]);
       setProbeAllResult({ success: true, message: result.message || 'Background probe started' });
       // Start polling for progress
     } catch (err) {
@@ -2133,29 +2099,6 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                 {restartResult.message}
               </div>
             )}
-
-            <div className="form-group-vertical">
-              <label>Channel groups to probe</label>
-              <span className="form-description">
-                {availableChannelGroups.length === 0
-                  ? 'No groups with streams available.'
-                  : 'Select which groups to probe. All groups are selected by default.'}
-              </span>
-              <button
-                type="button"
-                className="btn-secondary"
-                onClick={() => {
-                  setTempProbeChannelGroups([...probeChannelGroups]);
-                  setShowGroupSelectModal(true);
-                }}
-                disabled={availableChannelGroups.length === 0}
-              >
-                <span className="material-icons">filter_list</span>
-                {probeChannelGroups.length === availableChannelGroups.length
-                  ? `All ${availableChannelGroups.length} group${availableChannelGroups.length !== 1 ? 's' : ''}`
-                  : `${probeChannelGroups.length} of ${availableChannelGroups.length} group${availableChannelGroups.length !== 1 ? 's' : ''}`}
-              </button>
-            </div>
           </div>
         </div>
 
@@ -3015,145 +2958,6 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
               )}
             </div>
 
-          </div>
-        </div>
-      )}
-
-      {/* Channel Group Selection Modal */}
-      {showGroupSelectModal && (
-        <div className="modal-overlay" onClick={() => setShowGroupSelectModal(false)}>
-          <div className="modal-container modal-md" onClick={(e) => e.stopPropagation()}>
-            <div className="modal-header">
-              <h2>Select Channel Groups to Probe</h2>
-              <button
-                onClick={() => setShowGroupSelectModal(false)}
-                className="modal-close-btn"
-              >
-                <span className="material-icons">close</span>
-              </button>
-            </div>
-
-            <div className="modal-body" style={{ maxHeight: '400px', overflowY: 'auto' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-                <p className="form-hint" style={{ margin: 0 }}>
-                  Select which channel groups to probe. Uncheck groups to exclude them from probing.
-                </p>
-                {availableChannelGroups.length > 0 && (
-                  <div style={{ display: 'flex', gap: '0.5rem' }}>
-                    <button
-                      type="button"
-                      className="btn-secondary"
-                      style={{ padding: '0.3rem 0.6rem', fontSize: '0.85rem' }}
-                      onClick={() => setTempProbeChannelGroups(availableChannelGroups.map(g => g.name))}
-                    >
-                      Select All
-                    </button>
-                    <button
-                      type="button"
-                      className="btn-secondary"
-                      style={{ padding: '0.3rem 0.6rem', fontSize: '0.85rem' }}
-                      onClick={() => setTempProbeChannelGroups([])}
-                    >
-                      Deselect All
-                    </button>
-                  </div>
-                )}
-              </div>
-
-              {availableChannelGroups.length === 0 ? (
-                <div style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>
-                  No groups with streams available
-                </div>
-              ) : (
-                <div className="profile-checkbox-list">
-                  {availableChannelGroups.map((group) => (
-                    <label key={group.id} className="profile-checkbox">
-                      <input
-                        type="checkbox"
-                        checked={tempProbeChannelGroups.includes(group.name)}
-                        onChange={(e) => {
-                          if (e.target.checked) {
-                            setTempProbeChannelGroups([...tempProbeChannelGroups, group.name]);
-                          } else {
-                            setTempProbeChannelGroups(tempProbeChannelGroups.filter(name => name !== group.name));
-                          }
-                        }}
-                      />
-                      <span className="profile-checkbox-label">{group.name}</span>
-                    </label>
-                  ))}
-                </div>
-              )}
-            </div>
-
-            <div className="modal-footer">
-              <button
-                onClick={() => setShowGroupSelectModal(false)}
-                className="btn-secondary"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={async () => {
-                  // Update state and save immediately
-                  setProbeChannelGroups(tempProbeChannelGroups);
-                  setShowGroupSelectModal(false);
-                  // Save settings with the new probe channel groups
-                  // We need to save directly since setState is async
-                  try {
-                    await api.saveSettings({
-                      url,
-                      username,
-                      auto_rename_channel_number: autoRenameChannelNumber,
-                      include_channel_number_in_name: includeChannelNumberInName,
-                      channel_number_separator: channelNumberSeparator,
-                      remove_country_prefix: removeCountryPrefix,
-                      include_country_in_name: includeCountryInName,
-                      country_separator: countrySeparator,
-                      timezone_preference: timezonePreference,
-                      show_stream_urls: showStreamUrls,
-                      hide_auto_sync_groups: hideAutoSyncGroups,
-                      hide_ungrouped_streams: hideUngroupedStreams,
-                      hide_epg_urls: hideEpgUrls,
-                      hide_m3u_urls: hideM3uUrls,
-                      gracenote_conflict_mode: gracenoteConflictMode,
-                      theme: theme,
-                      default_channel_profile_ids: defaultChannelProfileIds,
-                      epg_auto_match_threshold: epgAutoMatchThreshold,
-                      custom_network_prefixes: customNetworkPrefixes,
-                      custom_network_suffixes: customNetworkSuffixes,
-                      normalization_settings: normalizationSettings,
-                      stats_poll_interval: statsPollInterval,
-                      user_timezone: userTimezone,
-                      backend_log_level: backendLogLevel,
-                      frontend_log_level: frontendLogLevel,
-                      vlc_open_behavior: vlcOpenBehavior,
-                      linked_m3u_accounts: linkedM3UAccounts,
-                      stream_probe_batch_size: streamProbeBatchSize,
-                      stream_probe_timeout: streamProbeTimeout,
-                      probe_channel_groups: tempProbeChannelGroups,
-                      bitrate_sample_duration: bitrateSampleDuration,
-                      parallel_probing_enabled: parallelProbingEnabled,
-                      max_concurrent_probes: maxConcurrentProbes,
-                      skip_recently_probed_hours: skipRecentlyProbedHours,
-                      refresh_m3us_before_probe: refreshM3usBeforeProbe,
-                      auto_reorder_after_probe: autoReorderAfterProbe,
-                      stream_fetch_page_limit: streamFetchPageLimit,
-                      stream_sort_priority: streamSortPriority,
-                      stream_sort_enabled: streamSortEnabled,
-                      m3u_account_priorities: m3uAccountPriorities,
-                      deprioritize_failed_streams: deprioritizeFailedStreams,
-                    });
-                    logger.info('Probe channel groups saved');
-                  } catch (err) {
-                    logger.error('Failed to save probe channel groups', err);
-                  }
-                }}
-                className="btn-primary"
-              >
-                OK
-              </button>
-            </div>
           </div>
         </div>
       )}

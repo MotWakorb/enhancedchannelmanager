@@ -758,9 +758,9 @@ export interface SettingsResponse {
   stream_probe_batch_size: number;  // Streams to probe per scheduled cycle
   stream_probe_timeout: number;  // Timeout in seconds for each probe
   stream_probe_schedule_time: string;  // Time of day to run probes (HH:MM, 24h format)
-  probe_channel_groups: string[];  // Channel group names to probe (empty = all groups)
   bitrate_sample_duration: number;  // Duration in seconds to sample stream for bitrate (10, 20, or 30)
   parallel_probing_enabled: boolean;  // Probe streams from different M3Us simultaneously
+  max_concurrent_probes: number;  // Max simultaneous probes when parallel probing is enabled (1-16)
   skip_recently_probed_hours: number;  // Skip streams probed within last N hours (0 = always probe)
   refresh_m3us_before_probe: boolean;  // Refresh all M3U accounts before starting probe
   auto_reorder_after_probe: boolean;  // Automatically reorder streams in channels after probe completes
@@ -813,7 +813,6 @@ export async function saveSettings(settings: {
   stream_probe_batch_size?: number;  // Optional - streams per scheduled cycle, defaults to 10
   stream_probe_timeout?: number;  // Optional - timeout in seconds, defaults to 30
   stream_probe_schedule_time?: string;  // Optional - time of day for probes (HH:MM), defaults to "03:00"
-  probe_channel_groups?: string[];  // Optional - channel group names to probe, empty = all groups
   bitrate_sample_duration?: number;  // Optional - duration in seconds to sample stream for bitrate (10, 20, or 30), defaults to 10
   parallel_probing_enabled?: boolean;  // Optional - probe streams from different M3Us simultaneously, defaults to true
   skip_recently_probed_hours?: number;  // Optional - skip streams probed within last N hours, defaults to 0 (always probe)
@@ -1657,7 +1656,9 @@ export interface TaskSchedule {
   days_of_week: number[] | null;  // 0=Sunday, 6=Saturday
   day_of_month: number | null;  // 1-31, or -1 for last day
   week_parity: number | null;  // For biweekly: 0 or 1
+  parameters: Record<string, unknown>;  // Task-specific parameters
   next_run_at: string | null;
+  last_run_at: string | null;
   description: string;
   created_at: string | null;
   updated_at: string | null;
@@ -1672,6 +1673,7 @@ export interface TaskScheduleCreate {
   timezone?: string | null;
   days_of_week?: number[] | null;
   day_of_month?: number | null;
+  parameters?: Record<string, unknown>;  // Task-specific parameters
 }
 
 export interface TaskScheduleUpdate {
@@ -1683,6 +1685,25 @@ export interface TaskScheduleUpdate {
   timezone?: string | null;
   days_of_week?: number[] | null;
   day_of_month?: number | null;
+  parameters?: Record<string, unknown>;  // Task-specific parameters
+}
+
+// Task parameter schema types
+export interface TaskParameterSchema {
+  name: string;
+  type: 'number' | 'string' | 'boolean' | 'string_array' | 'number_array';
+  label: string;
+  description: string;
+  default?: unknown;
+  min?: number;
+  max?: number;
+  source?: string;  // e.g., 'channel_groups', 'm3u_accounts', 'epg_sources'
+}
+
+export interface TaskParameterSchemaResponse {
+  task_id: string;
+  description: string;
+  parameters: TaskParameterSchema[];
 }
 
 export interface TaskProgress {
@@ -1781,7 +1802,7 @@ export async function updateTask(taskId: string, config: TaskConfigUpdate): Prom
   });
 }
 
-export async function runTask(taskId: string): Promise<{
+export async function runTask(taskId: string, scheduleId?: number): Promise<{
   success: boolean;
   message: string;
   error?: string;  // "CANCELLED" when task was cancelled
@@ -1792,8 +1813,11 @@ export async function runTask(taskId: string): Promise<{
   failed_count: number;
   skipped_count: number;
 }> {
+  const body = scheduleId ? { schedule_id: scheduleId } : undefined;
   return fetchJson(`${API_BASE}/tasks/${encodeURIComponent(taskId)}/run`, {
     method: 'POST',
+    headers: body ? { 'Content-Type': 'application/json' } : undefined,
+    body: body ? JSON.stringify(body) : undefined,
   });
 }
 
@@ -1870,6 +1894,18 @@ export async function updateTaskSchedule(
 export async function deleteTaskSchedule(taskId: string, scheduleId: number): Promise<{ status: string; id: number }> {
   return fetchJson(`${API_BASE}/tasks/${encodeURIComponent(taskId)}/schedules/${scheduleId}`, {
     method: 'DELETE',
+  });
+}
+
+export async function getTaskParameterSchema(taskId: string): Promise<TaskParameterSchemaResponse> {
+  return fetchJson(`${API_BASE}/tasks/${encodeURIComponent(taskId)}/parameter-schema`, {
+    method: 'GET',
+  });
+}
+
+export async function getAllTaskParameterSchemas(): Promise<{ schemas: Record<string, { description: string; parameters: TaskParameterSchema[] }> }> {
+  return fetchJson(`${API_BASE}/tasks/parameter-schemas`, {
+    method: 'GET',
   });
 }
 
