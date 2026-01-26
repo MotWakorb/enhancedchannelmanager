@@ -123,6 +123,9 @@ def _run_migrations(engine) -> None:
             # Remove min_interval_seconds column from alert_methods (v0.8.2-0028)
             _remove_min_interval_seconds_column(conn)
 
+            # Add parameters column to task_schedules (v0.8.6-0025)
+            _add_task_schedule_parameters_column(conn)
+
             logger.debug("All migrations complete - schema is up to date")
     except Exception as e:
         logger.exception(f"Migration failed: {e}")
@@ -445,6 +448,34 @@ def _remove_min_interval_seconds_column(conn) -> None:
 
     conn.commit()
     logger.info("Migration complete: removed min_interval_seconds column from alert_methods")
+
+
+def _add_task_schedule_parameters_column(conn) -> None:
+    """Add parameters column to task_schedules table (v0.8.6-0025)."""
+    from sqlalchemy import text
+
+    # Check if task_schedules table exists
+    result = conn.execute(text(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='task_schedules'"
+    ))
+    if not result.fetchone():
+        logger.debug("task_schedules table doesn't exist yet, skipping migration")
+        return
+
+    # Check if parameters column already exists
+    result = conn.execute(text("PRAGMA table_info(task_schedules)"))
+    columns = [row[1] for row in result.fetchall()]
+
+    if "parameters" in columns:
+        logger.debug("parameters column already exists in task_schedules")
+        return
+
+    logger.info("Adding parameters column to task_schedules table")
+    conn.execute(text(
+        "ALTER TABLE task_schedules ADD COLUMN parameters TEXT"
+    ))
+    conn.commit()
+    logger.info("Migration complete: added parameters column to task_schedules")
 
 
 def _perform_maintenance(engine) -> None:
