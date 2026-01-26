@@ -7,9 +7,8 @@
 
 .custom-select {
   position: relative;
-  display: block;
+  display: inline-block;
   background: transparent;
-  width: 100%;
 }
 
 /* Trigger button - dropdown box style */
@@ -17,7 +16,8 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  width: 100%;
+  min-width: 200px;
+  max-width: 400px;
   padding: 0.5rem 0.75rem;
   background-color: var(--input-bg);
   border: 1px solid var(--border-secondary);
