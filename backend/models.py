@@ -480,6 +480,129 @@ class Notification(Base):
         return f"<Notification(id={self.id}, type={self.type}, read={self.read})>"
 
 
+class NormalizationRuleGroup(Base):
+    """
+    Groups normalization rules for organization and bulk enable/disable.
+    Rules within a group execute in priority order.
+    Groups themselves execute in priority order.
+
+    Built-in groups are created from existing tag-based normalization settings
+    and marked with is_builtin=True. Users can create additional custom groups.
+    """
+    __tablename__ = "normalization_rule_groups"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String(100), nullable=False)  # e.g., "Quality Tags", "Country Prefixes"
+    description = Column(Text, nullable=True)  # Optional description
+    enabled = Column(Boolean, default=True, nullable=False)  # Enable/disable entire group
+    priority = Column(Integer, default=0, nullable=False)  # Lower = runs first
+    is_builtin = Column(Boolean, default=False, nullable=False)  # True for migrated tag groups
+    # Timestamps
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        Index("idx_norm_group_enabled", enabled),
+        Index("idx_norm_group_priority", priority),
+    )
+
+    def to_dict(self) -> dict:
+        """Convert to dictionary for API responses."""
+        return {
+            "id": self.id,
+            "name": self.name,
+            "description": self.description,
+            "enabled": self.enabled,
+            "priority": self.priority,
+            "is_builtin": self.is_builtin,
+            "created_at": self.created_at.isoformat() + "Z" if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() + "Z" if self.updated_at else None,
+        }
+
+    def __repr__(self):
+        return f"<NormalizationRuleGroup(id={self.id}, name={self.name}, enabled={self.enabled})>"
+
+
+class NormalizationRule(Base):
+    """
+    Individual normalization rule with condition and action.
+
+    Condition Types:
+    - 'always': Always matches (useful for unconditional transformations)
+    - 'contains': Match if input contains the pattern
+    - 'starts_with': Match if input starts with the pattern
+    - 'ends_with': Match if input ends with the pattern
+    - 'regex': Match using regular expression
+
+    Action Types:
+    - 'remove': Remove the matched portion
+    - 'replace': Replace matched portion with action_value
+    - 'regex_replace': Use regex substitution (condition must be 'regex')
+    - 'strip_prefix': Remove pattern from start (with optional separator)
+    - 'strip_suffix': Remove pattern from end (with optional separator)
+    - 'normalize_prefix': Keep prefix but standardize format (e.g., "US:" -> "US | ")
+
+    Example Rules:
+    - Strip "HD" suffix: condition_type='ends_with', condition_value='HD',
+                         action_type='strip_suffix'
+    - Remove country prefix: condition_type='regex', condition_value='^(US|UK|CA)[:\\s|]+',
+                             action_type='remove'
+    - Normalize quality: condition_type='regex', condition_value='\\s*(FHD|UHD|4K|HD|SD)\\s*$',
+                        action_type='remove'
+    """
+    __tablename__ = "normalization_rules"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    group_id = Column(Integer, nullable=False)  # References NormalizationRuleGroup.id
+    name = Column(String(100), nullable=False)  # e.g., "Strip HD suffix"
+    description = Column(Text, nullable=True)  # Optional description
+    enabled = Column(Boolean, default=True, nullable=False)  # Enable/disable rule
+    priority = Column(Integer, default=0, nullable=False)  # Order within group (lower = first)
+    # Condition configuration
+    condition_type = Column(String(20), nullable=False)  # always, contains, starts_with, ends_with, regex
+    condition_value = Column(String(500), nullable=True)  # Pattern to match (null for 'always')
+    case_sensitive = Column(Boolean, default=False, nullable=False)  # Case sensitivity for matching
+    # Action configuration
+    action_type = Column(String(20), nullable=False)  # remove, replace, regex_replace, strip_prefix, strip_suffix, normalize_prefix
+    action_value = Column(String(500), nullable=True)  # Replacement value (null for remove actions)
+    # Stop processing flag - if true, no further rules execute after this one matches
+    stop_processing = Column(Boolean, default=False, nullable=False)
+    # Built-in flag for migrated rules
+    is_builtin = Column(Boolean, default=False, nullable=False)
+    # Timestamps
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        Index("idx_norm_rule_group", group_id),
+        Index("idx_norm_rule_enabled", enabled),
+        Index("idx_norm_rule_priority", group_id, priority),
+    )
+
+    def to_dict(self) -> dict:
+        """Convert to dictionary for API responses."""
+        return {
+            "id": self.id,
+            "group_id": self.group_id,
+            "name": self.name,
+            "description": self.description,
+            "enabled": self.enabled,
+            "priority": self.priority,
+            "condition_type": self.condition_type,
+            "condition_value": self.condition_value,
+            "case_sensitive": self.case_sensitive,
+            "action_type": self.action_type,
+            "action_value": self.action_value,
+            "stop_processing": self.stop_processing,
+            "is_builtin": self.is_builtin,
+            "created_at": self.created_at.isoformat() + "Z" if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() + "Z" if self.updated_at else None,
+        }
+
+    def __repr__(self):
+        return f"<NormalizationRule(id={self.id}, name={self.name}, type={self.condition_type})>"
+
+
 class AlertMethod(Base):
     """
     Configuration for an external alert method (Discord, Telegram, Email, etc.).
