@@ -27,7 +27,28 @@ At the start of any session, ensure you're working in the dev worktree or switch
 cd /home/lecaptainc/ecm/enhancedchannelmanager/.git/beads-worktrees/dev
 ```
 
+### Fast Development Workflow - CRITICAL
+
+**IMPORTANT: To speed up development, we use a container-first workflow:**
+
+1. **Copy work to container FIRST** - Before any git commit, copy changed files to the `ecm-ecm-1` container where the live application runs:
+   - The application lives in `/app` in the container (NOT `/app/static`)
+   - Test changes in the running container immediately
+   - Iterate quickly without git commits
+
+2. **Only commit when told to "ship the fix"** - Do NOT create git commits until the user explicitly says to ship/commit the fix:
+   - This allows rapid iteration and testing
+   - Commits happen only after the fix is verified working in the container
+   - User will explicitly tell you when to proceed with the commit workflow
+
+**Container Copy Command:**
+```bash
+docker cp <local-file> ecm-ecm-1:/app/<destination-path>
+```
+
 When doing work on this project, follow these steps in order:
+
+**During Development (iterative, fast cycle):**
 
 1. **Check closed beads for historical context** - Review closed beads to understand features implemented, past bugs fixed, and avoid repeating mistakes:
    ```bash
@@ -42,7 +63,17 @@ When doing work on this project, follow these steps in order:
 
 3. **Update the code** - Make the necessary changes to implement the feature or fix
 
-4. **Run quality gates** (if code changed) - **MANDATORY** before committing:
+4. **Copy to container and test** - Copy changed files to the `ecm-ecm-1` container and verify they work:
+   ```bash
+   docker cp <local-file> ecm-ecm-1:/app/<destination-path>
+   ```
+   - Test in the running container
+   - Iterate on changes as needed
+   - Repeat steps 3-4 until the fix works
+
+**When User Says "Ship the Fix" (commit cycle):**
+
+5. **Run quality gates** (if code changed) - **MANDATORY** before committing:
    ```bash
    # Backend: Python syntax check + unit/integration tests (REQUIRED for backend changes)
    python -m py_compile backend/main.py
@@ -58,12 +89,12 @@ When doing work on this project, follow these steps in order:
    - **Frontend**: Hook tests, service tests, component tests
    - **E2E**: Run on merge to main only (not during regular dev workflow)
 
-5. **Update the bead with work done** - Document what was changed:
+6. **Update the bead with work done** - Document what was changed:
    ```bash
    bd update <id> --description "Detailed description of changes made"
    ```
 
-6. **Increment the version** - Use bug fix build number format (e.g., 0.7.3-0094):
+7. **Increment the version** - Use bug fix build number format (e.g., 0.7.3-0094):
    - Edit `frontend/package.json` to update the version
    - **Re-run quality gates** to verify with new version:
      ```bash
@@ -72,43 +103,25 @@ When doing work on this project, follow these steps in order:
      ```
 
 
-7. **Close the bead**:
+8. **Close the bead**:
    ```bash
    bd close <id>
    ```
 
-8. **Update README.md if needed** - If the change adds, removes, or modifies a feature, update the documentation
+9. **Update README.md if needed** - If the change adds, removes, or modifies a feature, update the documentation
 
-9. **Push updates to dev branch**:
+10. **Push updates to dev branch** - This is MANDATORY:
    ```bash
-   git add -A
+   git add backend/main.py frontend/package.json  # Add only changed files (or use -A for all)
    git commit -m "v0.x.xxxxx: Brief description"
-   git push origin dev
-   ```
-
-10. **File beads for remaining work** - Create beads for anything that needs follow-up
-
-## Landing the Plane (Session Completion)
-
-**When ending a work session**, you MUST complete ALL steps below. Work is NOT complete until `git push` succeeds.
-
-**MANDATORY WORKFLOW:**
-
-1. **File issues for remaining work** - Create issues for anything that needs follow-up
-2. **Run quality gates** (if code changed) - Tests, linters, builds
-3. **Update issue status** - Close finished work, update in-progress items
-4. **PUSH TO REMOTE** - This is MANDATORY:
-   ```bash
-   git pull --rebase
    git push origin dev
    git status  # MUST show "up to date with origin"
    ```
-   **NOTE:** Do NOT run `bd sync` as part of code commits. `bd sync` is ONLY for syncing beads issue tracking data and creates its own separate commit. Run it independently if needed to sync issue status.
-5. **Clean up** - Clear stashes, prune remote branches
-6. **Verify** - All changes committed AND pushed
-7. **Hand off** - Provide context for next session
+   **NOTE:** Do NOT run `bd sync` as part of code commits. `bd sync` is ONLY for syncing beads issue tracking data and creates its own separate commit.
 
-**CRITICAL RULES:**
+11. **File beads for remaining work** - Create beads for anything that needs follow-up
+
+**CRITICAL SHIPPING RULES:**
 - Work is NOT complete until `git push` succeeds
 - NEVER stop before pushing - that leaves work stranded locally
 - NEVER say "ready to push when you are" - YOU must push

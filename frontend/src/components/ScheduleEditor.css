@@ -1,5 +1,6 @@
+/* Schedule editor form content - lives inside modal-body */
 .schedule-editor {
-  padding: 1rem;
+  /* Styling for form content within the modal body */
 }
 
 .schedule-editor .form-group {
@@ -42,6 +43,7 @@
 .schedule-editor .checkbox-label input[type="checkbox"] {
   width: 16px;
   height: 16px;
+  margin-right: 0.5rem;
   accent-color: var(--accent-primary);
 }
 
@@ -263,54 +265,106 @@
   font-size: 0.9rem;
 }
 
-/* Actions */
-.schedule-editor .editor-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 0.75rem;
-  padding-top: 1rem;
-  border-top: 1px solid var(--border-color);
+/* Actions - now uses modal-footer from ModalBase.css */
+/* .spinning is defined in shared/common.css */
+
+/* Parameters Section */
+.schedule-editor .parameters-section {
+  background-color: var(--bg-secondary);
+  border-radius: 6px;
+  padding: 1rem;
+  margin-bottom: 1.5rem;
 }
 
-.schedule-editor .btn-cancel,
-.schedule-editor .btn-save {
+.schedule-editor .parameters-section .section-title {
+  margin: 0 0 1rem 0;
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  border-bottom: 1px solid var(--border-color);
+  padding-bottom: 0.5rem;
+}
+
+.schedule-editor .parameters-note {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  margin: 0 0 1rem 0;
+  padding: 0.5rem 0.75rem;
+  background-color: var(--bg-tertiary);
+  border-radius: 4px;
+  border-left: 3px solid var(--accent-primary);
+}
+
+.schedule-editor .param-description {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  margin: 0 0 0.5rem 0;
+}
+
+.schedule-editor .array-options {
+  margin-top: 0.5rem;
+}
+
+.schedule-editor .array-hint {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  margin-bottom: 0.5rem;
+  font-style: italic;
+}
+
+.schedule-editor .option-list {
+  max-height: 200px;
+  overflow-y: auto;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background-color: var(--bg-secondary);
+}
+
+.schedule-editor .option-checkbox {
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  padding: 0.75rem 1.25rem;
-  border-radius: 6px;
+  padding: 0.5rem 0.75rem;
   cursor: pointer;
-  font-size: 0.9rem;
-  font-weight: 500;
+  border-bottom: 1px solid var(--border-color);
+  transition: background-color 0.15s ease;
 }
 
-.schedule-editor .btn-cancel {
-  border: 1px solid var(--border-color);
-  background-color: var(--bg-secondary);
-  color: var(--text-primary);
+.schedule-editor .option-checkbox:last-child {
+  border-bottom: none;
 }
 
-.schedule-editor .btn-cancel:hover {
+.schedule-editor .option-checkbox:hover {
   background-color: var(--bg-tertiary);
 }
 
-.schedule-editor .btn-save {
-  border: none;
-  background-color: var(--success);
-  color: var(--success-text);
+.schedule-editor .option-checkbox input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent-primary);
+  flex-shrink: 0;
 }
 
-.schedule-editor .btn-save:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
+.schedule-editor .option-checkbox span {
+  font-size: 0.875rem;
+  color: var(--text-primary);
 }
 
-.schedule-editor .btn-save:not(:disabled):hover {
-  filter: brightness(1.1);
+/* Badge for option items (e.g., "auto" for auto-sync groups) */
+.schedule-editor .option-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: 0.5rem;
+  font-size: 0.65rem;
+  font-weight: 500;
+  color: #22d3ee;
+  background-color: rgba(34, 211, 238, 0.15);
+  padding: 0.125rem 0.375rem;
+  border-radius: 4px;
+  text-transform: uppercase;
 }
 
-.schedule-editor .btn-save .material-icons {
-  font-size: 18px;
+.schedule-editor .parameters-section .number-input {
+  width: 100px;
 }
-
-/* .spinning is defined in shared/common.css */

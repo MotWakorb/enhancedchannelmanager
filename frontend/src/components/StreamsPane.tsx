@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import type { Stream, StreamGroupInfo, M3UAccount, ChannelGroup, ChannelProfile, M3UGroupSetting } from '../types';
 import { useSelection, useExpandCollapse } from '../hooks';
-import { normalizeStreamName, detectRegionalVariants, filterStreamsByTimezone, detectCountryPrefixes, getUniqueCountryPrefixes, detectNetworkPrefixes, detectNetworkSuffixes, type TimezonePreference, type NormalizeOptions, type NumberSeparator, type PrefixOrder, type NormalizationSettings } from '../services/api';
+import { normalizeStreamName, detectRegionalVariants, filterStreamsByTimezone, detectCountryPrefixes, getUniqueCountryPrefixes, detectNetworkPrefixes, detectNetworkSuffixes, type TimezonePreference, type NormalizeOptions, type NumberSeparator, type PrefixOrder, type NormalizationSettings, type SortCriterion, type SortEnabledMap, type M3UAccountPriorities } from '../services/api';
 import { naturalCompare } from '../utils/naturalSort';
 import { openInVLC } from '../utils/vlc';
 import { useCopyFeedback } from '../hooks/useCopyFeedback';
@@ -29,10 +29,11 @@ export interface ChannelDefaults {
   defaultChannelProfileIds?: number[];
   customNetworkPrefixes?: string[];
   customNetworkSuffixes?: string[];
-  streamSortPriority?: ('resolution' | 'bitrate' | 'framerate')[];
-  streamSortEnabled?: Record<'resolution' | 'bitrate' | 'framerate', boolean>;
+  streamSortPriority?: SortCriterion[];
+  streamSortEnabled?: SortEnabledMap;
   deprioritizeFailedStreams?: boolean;
   normalizationSettings?: NormalizationSettings;
+  m3uAccountPriorities?: M3UAccountPriorities;
 }
 
 interface StreamsPaneProps {
@@ -221,14 +222,19 @@ export function StreamsPane({
   const sortedStreamGroups = useMemo((): [string, Stream[]][] => {
     const groups = new Map<string, Stream[]>();
     const isSearching = searchTerm.trim().length > 0;
+    const hasGroupFilter = selectedStreamGroups.length > 0;
 
-    // When NOT searching, create empty entries for all known groups from the API
-    // This ensures all groups are visible even before their streams are loaded (lazy loading)
+    // When NOT searching, create empty entries for groups from the API
+    // This ensures groups are visible even before their streams are loaded (lazy loading)
     // When searching, skip this - only show groups that have matching streams
+    // When filtering by groups, only show selected groups
     if (!isSearching) {
       streamGroups.forEach((groupInfo) => {
         if (!hideUngroupedStreams || groupInfo.name !== 'Ungrouped') {
-          groups.set(groupInfo.name, []);
+          // If filtering by groups, only include selected groups
+          if (!hasGroupFilter || selectedStreamGroups.includes(groupInfo.name)) {
+            groups.set(groupInfo.name, []);
+          }
         }
       });
     }
@@ -237,6 +243,10 @@ export function StreamsPane({
     filteredStreams.forEach((stream) => {
       const groupName = stream.channel_group_name || 'Ungrouped';
       if (!hideUngroupedStreams || groupName !== 'Ungrouped') {
+        // When filtering by groups, only include streams from selected groups
+        if (hasGroupFilter && !selectedStreamGroups.includes(groupName)) {
+          return;
+        }
         if (!groups.has(groupName)) {
           groups.set(groupName, []);
         }
@@ -265,7 +275,7 @@ export function StreamsPane({
         if (b === 'Ungrouped') return -1;
         return naturalCompare(a, b);
       });
-  }, [filteredStreams, hideUngroupedStreams, streamGroups, searchTerm]);
+  }, [filteredStreams, hideUngroupedStreams, streamGroups, searchTerm, selectedStreamGroups]);
 
   // Compute streams in display order (flattened array for selection)
   // This must be computed before useSelection so shift-click works correctly

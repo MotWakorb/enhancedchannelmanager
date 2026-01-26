@@ -285,7 +285,12 @@ class DispatcharrClient:
             "POST", "/api/channels/streams/by-ids/", json={"ids": ids}
         )
         response.raise_for_status()
-        return response.json()
+        result = response.json()
+        # Debug logging to see what M3U account data we're getting
+        logger.debug(f"[API-DEBUG] get_streams_by_ids returned {len(result)} streams")
+        for stream in result:
+            logger.debug(f"[API-DEBUG]   Stream {stream.get('id')}: name='{stream.get('name', 'Unknown')[:50]}', m3u_account={stream.get('m3u_account')!r}")
+        return result
 
     async def get_stream_groups(self) -> list:
         """Get all stream groups (for filtering)."""

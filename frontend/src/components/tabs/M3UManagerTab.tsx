@@ -31,6 +31,8 @@ interface M3UAccountRowProps {
   onManageProfiles: (account: M3UAccount) => void;
   linkedAccountNames?: string[];  // Names of accounts linked to this one
   hideM3uUrls?: boolean;
+  priority?: number;  // Sort priority for this account (higher = better)
+  onPriorityChange?: (accountId: number, priority: number) => void;
 }
 
 function M3UAccountRow({
@@ -44,6 +46,8 @@ function M3UAccountRow({
   onManageProfiles,
   linkedAccountNames,
   hideM3uUrls = false,
+  priority = 0,
+  onPriorityChange,
 }: M3UAccountRowProps) {
   const getStatusIcon = (status: M3UAccount['status']) => {
     switch (status) {
@@ -166,6 +170,27 @@ function M3UAccountRow({
         </span>
       </div>
 
+      {onPriorityChange && (
+        <div className="account-priority">
+          <input
+            type="text"
+            className="priority-input"
+            value={priority || ''}
+            onChange={(e) => {
+              const val = e.target.value;
+              // Allow empty or numbers only
+              if (val === '' || /^\d+$/.test(val)) {
+                const num = parseInt(val) || 0;
+                // Clamp to 1-100 range (0 means not set)
+                onPriorityChange(account.id, Math.min(100, Math.max(0, num)));
+              }
+            }}
+            placeholder="-"
+            title="Sort priority (1-100, higher = better)"
+          />
+        </div>
+      )}
+
       <div className="account-updated">
         <span className="updated-label">Updated:</span>
         <span className="updated-time">{formatDate(account.updated_at)}</span>
@@ -257,6 +282,9 @@ export function M3UManagerTab({
   const [linkedAccountsModalOpen, setLinkedAccountsModalOpen] = useState(false);
   const [linkedM3UAccounts, setLinkedM3UAccounts] = useState<number[][]>([]);
   const [syncingGroups, setSyncingGroups] = useState(false);
+  const [m3uAccountPriorities, setM3uAccountPriorities] = useState<Record<string, number>>({});
+  const [pendingPriorities, setPendingPriorities] = useState<Record<string, number>>({});
+  const [savingPriorities, setSavingPriorities] = useState(false);
 
   const loadData = useCallback(async () => {
     try {
@@ -268,6 +296,9 @@ export function M3UManagerTab({
       setAccounts(accountsData);
       setServerGroups(serverGroupsData);
       setLinkedM3UAccounts(settings.linked_m3u_accounts ?? []);
+      const priorities = settings.m3u_account_priorities ?? {};
+      setM3uAccountPriorities(priorities);
+      setPendingPriorities(priorities);
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load M3U accounts');
@@ -437,6 +468,45 @@ export function M3UManagerTab({
     loadData();
   };
 
+  // Handle M3U account priority change (local only, not saved until Save button clicked)
+  const handlePriorityChange = useCallback((accountId: number, priority: number) => {
+    setPendingPriorities(prev => {
+      const newPriorities = { ...prev };
+      if (priority === 0) {
+        delete newPriorities[String(accountId)];
+      } else {
+        newPriorities[String(accountId)] = priority;
+      }
+      return newPriorities;
+    });
+  }, []);
+
+  // Check if there are unsaved priority changes
+  const hasPriorityChanges = useMemo(() => {
+    const savedKeys = Object.keys(m3uAccountPriorities);
+    const pendingKeys = Object.keys(pendingPriorities);
+    if (savedKeys.length !== pendingKeys.length) return true;
+    return savedKeys.some(key => m3uAccountPriorities[key] !== pendingPriorities[key]);
+  }, [m3uAccountPriorities, pendingPriorities]);
+
+  // Save priority changes
+  const handleSavePriorities = useCallback(async () => {
+    setSavingPriorities(true);
+    try {
+      // Load current settings and merge with priority changes
+      const settings = await api.getSettings();
+      await api.saveSettings({
+        ...settings,
+        m3u_account_priorities: pendingPriorities,
+      });
+      setM3uAccountPriorities(pendingPriorities);
+    } catch (err) {
+      console.error('Failed to save M3U priorities:', err);
+    } finally {
+      setSavingPriorities(false);
+    }
+  }, [pendingPriorities]);
+
   const handleAccountSaved = () => {
     loadData();
     onAccountsChange?.();  // Notify parent to reload providers
@@ -568,6 +638,19 @@ export function M3UManagerTab({
           </p>
         </div>
         <div className="header-actions">
+          {hasPriorityChanges && (
+            <button
+              className="btn-primary save-priorities-btn"
+              onClick={handleSavePriorities}
+              disabled={savingPriorities}
+              title="Save priority changes"
+            >
+              <span className={`material-icons ${savingPriorities ? 'spinning' : ''}`}>
+                {savingPriorities ? 'sync' : 'save'}
+              </span>
+              {savingPriorities ? 'Saving...' : 'Save Priorities'}
+            </button>
+          )}
           {serverGroups.length > 0 && (
             <CustomSelect
               className="server-group-filter"
@@ -631,6 +714,7 @@ export function M3UManagerTab({
             <span className="col-info">Account</span>
             <span className="col-groups">Groups</span>
             <span className="col-settings">Settings</span>
+            <span className="col-priority" title="Sort priority for Smart Sort (higher = better)">Priority</span>
             <span className="col-updated">Last Updated</span>
             <span className="col-actions">Actions</span>
           </div>
@@ -649,6 +733,8 @@ export function M3UManagerTab({
                 onManageProfiles={handleManageProfiles}
                 linkedAccountNames={linkedAccountNamesMap.get(account.id)}
                 hideM3uUrls={hideM3uUrls}
+                priority={pendingPriorities[String(account.id)] ?? 0}
+                onPriorityChange={handlePriorityChange}
               />
             ))}
           </div>

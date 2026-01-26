@@ -23,6 +23,7 @@ A professional-grade web interface for managing IPTV configurations with Dispatc
 - **Linked M3U Accounts** - Link multiple accounts (e.g., same provider with different regions) so group enable/disable changes cascade automatically
 - **Sync Groups** - One-click sync of enabled groups across all linked accounts using Union (OR) logic
 - **Manage Groups Modal** - Enable/disable groups per account, configure auto-sync settings
+- **M3U Priority** - Set priority order for each M3U account (used by smart sort to order streams)
 - **Natural Sorting** - Accounts sorted with Standard M3U first, XtreamCodes second, then natural sort by name
 - **Hide Disabled Filter** - Optionally hide disabled groups in the manage groups modal
 - **Auto-Refresh** - New accounts automatically refresh after creation (no "Pending Setup" state)
@@ -287,6 +288,8 @@ Configure how streams are automatically sorted within channels:
   - Resolution - Supports any resolution (2160p → 1440p → 1080p → 720p → 576p → 540p → 480p → etc.)
   - Bitrate (higher bitrate first)
   - Framerate (higher FPS first)
+  - M3U Priority - Sort by M3U account priority (configurable per-account in M3U Manager)
+  - Audio Channels - Sort by audio channel count (7.1 → 5.1 → stereo → mono)
 - **Arbitrary Resolution Support** - Any resolution ending in 'p' or 'i' is automatically parsed and sorted (e.g., 476p, 544p, 1440p)
 - **Deprioritize Failed Streams** - Option to automatically sort failed/dead streams to the bottom
 - **Visual Rank Badges** - See sort priority numbers at a glance
@@ -324,6 +327,8 @@ Automated background tasks with flexible scheduling:
 - **Task Types** - EPG Refresh, M3U Refresh, Stream Probe, Database Cleanup
 - **Multiple Schedules** - Each task can have multiple independent schedules
 - **Schedule Types** - Interval, Daily, Weekly, Bi-weekly, or Monthly (no cron expressions needed)
+- **Per-Schedule Parameters** - Each schedule can have its own configuration (batch size, timeout, channel groups, etc.)
+- **Smart Defaults** - Stream Probe schedules default to values from Settings > Maintenance
 - **Timezone-Aware** - All schedules respect your configured timezone
 - **Real-Time Progress** - Live progress bars with success/failed/skipped counts during execution
 - **Task History** - View execution history with detailed results
@@ -406,13 +411,14 @@ Powerful tag-based system for stream name normalization:
 - **Settings Integration** - Configure default normalization in Settings tab
 - **Backward Compatible** - Migrates old custom prefix/suffix settings automatically
 
-### v0.8.6 - Stream Sorting & Probe Schedules
+### ~~v0.8.6 - Stream Sorting & Probe Schedules~~ ✅ Implemented
 Enhanced stream sorting options and granular probe scheduling:
-- **M3U Priority Sorting** - Sort streams by M3U account priority order
-- **Audio Type Sorting** - Sort by audio codec/quality (AAC, AC3, EAC3, etc.)
-- **Per-Group Probe Schedules** - Configure different probe schedules for different channel groups
-- **Multiple Probe Schedules** - Create multiple independent probe schedules with different settings
-- **Probe Schedule Templates** - Save and reuse common probe configurations
+- **M3U Account Priority Sort** - Sort streams by M3U account priority (configurable in M3U Manager)
+- **Audio Channels Sort** - Sort streams by audio channel count (stereo, 5.1, 7.1, etc.)
+- **Per-Schedule Parameters** - Each probe schedule can have its own batch_size, timeout, max_concurrent, and channel group settings
+- **Multiple Probe Schedules** - Create multiple independent probe schedules with different configurations
+- **Smart Defaults** - Schedule editor for Stream Probe defaults to values from Settings > Maintenance
+- **Auto-Reorder After Probe** - Automatically reorder streams by quality and status after scheduled probes complete
 
 ### v0.8.7 - Granular Normalization Engine
 Advanced rule-based stream name normalization:

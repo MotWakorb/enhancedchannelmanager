@@ -115,6 +115,7 @@ export interface ChannelGroup {
   id: number;
   name: string;
   channel_count: number;
+  is_auto_sync?: boolean;
 }
 
 export interface Stream {

@@ -933,6 +933,8 @@ export function ChannelsPane({
   }, [logos]);
 
   // Load streams when a channel is selected
+  // Always fetch from API to ensure we have the correct streams regardless of
+  // what's loaded in StreamsPane (which uses lazy loading and filtering)
   useEffect(() => {
     const loadStreams = async () => {
       if (!selectedChannelId) {
@@ -946,16 +948,7 @@ export function ChannelsPane({
         return;
       }
 
-      // In edit mode, use the local streams list to avoid API calls for staged changes
-      if (isEditMode) {
-        const orderedStreams = selectedChannel.streams
-          .map((id) => allStreams.find((s) => s.id === id))
-          .filter((s): s is Stream => s !== undefined);
-        setChannelStreams(orderedStreams);
-        return;
-      }
-
-      // Normal mode - fetch from API
+      // Fetch from API
       setStreamsLoading(true);
       try {
         const streamDetails = await api.getChannelStreams(selectedChannelId);
@@ -971,7 +964,7 @@ export function ChannelsPane({
       }
     };
     loadStreams();
-  }, [selectedChannelId, channels, isEditMode, allStreams]);
+  }, [selectedChannelId, channels]);
 
   // Fetch stream stats when channelStreams changes
   useEffect(() => {
@@ -1825,9 +1818,33 @@ export function ChannelsPane({
     framerate: 'framerate',
   };
 
+  // Map stream IDs to their M3U account IDs (from stream data, not probe stats)
+  const streamM3uAccountMap = useMemo(() => {
+    const map = new Map<number, number | null>();
+    for (const stream of allStreams) {
+      map.set(stream.id, stream.m3u_account);
+    }
+    logger.debug(`[SmartSort] Built streamM3uAccountMap with ${map.size} streams`);
+    return map;
+  }, [allStreams]);
+
   // Get sort value for a stream based on criterion
-  const getSortValue = useCallback((stats: StreamStats | undefined, criterion: SortCriterion): number => {
-    if (!stats || stats.probe_status !== 'success') return -1;
+  const getSortValue = useCallback((streamId: number, stats: StreamStats | undefined, criterion: SortCriterion): number => {
+    // For m3u_priority, use stream data directly (doesn't require probing)
+    if (criterion === 'm3u_priority') {
+      const m3uAccountId = streamM3uAccountMap.get(streamId);
+      const priorities = channelDefaults?.m3uAccountPriorities ?? {};
+      const priority = m3uAccountId != null ? priorities[String(m3uAccountId)] : undefined;
+      const result = priority ?? -1;
+      logger.debug(`[SmartSort] getSortValue(${streamId}, m3u_priority): m3uAccountId=${m3uAccountId}, priorities=${JSON.stringify(priorities)}, result=${result}`);
+      if (m3uAccountId == null) return -1;
+      return result;
+    }
+
+    if (!stats) return -1;
+    // For audio_channels, we don't require probe success since it may come from M3U metadata
+    if (criterion !== 'audio_channels' && stats.probe_status !== 'success') return -1;
+
     switch (criterion) {
       case 'resolution': {
         if (!stats.resolution) return -1;
@@ -1841,10 +1858,12 @@ export function ChannelsPane({
         const fps = parseFloat(stats.fps);
         return isNaN(fps) ? -1 : fps;
       }
+      case 'audio_channels':
+        return stats.audio_channels ?? -1;
       default:
         return -1;
     }
-  }, []);
+  }, [streamM3uAccountMap, channelDefaults?.m3uAccountPriorities]);
 
   // Create comparator for multi-criteria sorting
   const createMultiCriteriaSortComparator = useCallback((
@@ -1862,48 +1881,81 @@ export function ChannelsPane({
       const aStats = getStats(aId);
       const bStats = getStats(bId);
 
+      logger.debug(`[SmartSort] Comparing streams ${aId} vs ${bId}`);
+
       // Check probe status FIRST if the setting is enabled - failed/timeout/pending streams sort to bottom
       if (channelDefaults?.deprioritizeFailedStreams) {
         const aProbeSuccess = aStats?.probe_status === 'success';
         const bProbeSuccess = bStats?.probe_status === 'success';
 
+        logger.debug(`[SmartSort] deprioritizeFailedStreams enabled: a(${aId}) probeSuccess=${aProbeSuccess}, b(${bId}) probeSuccess=${bProbeSuccess}`);
+
         // If one stream failed and the other succeeded, prioritize the successful one
-        if (aProbeSuccess && !bProbeSuccess) return -1; // a comes first (successful)
-        if (!aProbeSuccess && bProbeSuccess) return 1;  // b comes first (successful)
+        if (aProbeSuccess && !bProbeSuccess) {
+          logger.debug(`[SmartSort] Result: -1 (a succeeded, b failed)`);
+          return -1;
+        }
+        if (!aProbeSuccess && bProbeSuccess) {
+          logger.debug(`[SmartSort] Result: 1 (a failed, b succeeded)`);
+          return 1;
+        }
 
         // If both failed/timeout/pending, maintain current order (stable sort)
-        if (!aProbeSuccess && !bProbeSuccess) return 0;
+        if (!aProbeSuccess && !bProbeSuccess) {
+          logger.debug(`[SmartSort] Result: 0 (both failed/pending)`);
+          return 0;
+        }
       }
 
       // Both streams succeeded (or setting disabled) - now sort by quality criteria
       for (const criterion of priority) {
-        const aVal = getSortValue(aStats, criterion);
-        const bVal = getSortValue(bStats, criterion);
+        const aVal = getSortValue(aId, aStats, criterion);
+        const bVal = getSortValue(bId, bStats, criterion);
+
+        logger.debug(`[SmartSort] Criterion ${criterion}: a(${aId})=${aVal}, b(${bId})=${bVal}`);
 
         // Both have no data for this criterion - continue to next
-        if (aVal === -1 && bVal === -1) continue;
+        if (aVal === -1 && bVal === -1) {
+          logger.debug(`[SmartSort] Both have no data for ${criterion}, continuing`);
+          continue;
+        }
 
         // One has no data - sort it to the end
-        if (aVal === -1) return 1;
-        if (bVal === -1) return -1;
+        if (aVal === -1) {
+          logger.debug(`[SmartSort] Result: 1 (a has no ${criterion} data)`);
+          return 1;
+        }
+        if (bVal === -1) {
+          logger.debug(`[SmartSort] Result: -1 (b has no ${criterion} data)`);
+          return -1;
+        }
 
         // Both have data - compare (higher is better)
-        if (bVal !== aVal) return bVal - aVal;
+        if (bVal !== aVal) {
+          const result = bVal - aVal;
+          logger.debug(`[SmartSort] Result: ${result} (${criterion}: ${bVal} - ${aVal})`);
+          return result;
+        }
       }
 
       // All criteria equal
+      logger.debug(`[SmartSort] Result: 0 (all criteria equal)`);
       return 0;
     };
   }, [getSortValue, channelDefaults?.deprioritizeFailedStreams]);
 
   // Get effective sort priority based on mode, filtered by enabled criteria
   const getEffectivePriority = useCallback((mode: SortMode): SortCriterion[] => {
-    const enabledMap = channelDefaults?.streamSortEnabled ?? { resolution: true, bitrate: true, framerate: true };
+    const enabledMap = channelDefaults?.streamSortEnabled ?? {
+      resolution: true, bitrate: true, framerate: true, m3u_priority: false, audio_channels: false
+    };
 
     if (mode === 'smart') {
       // Filter the priority list to only include enabled criteria
-      const priority = channelDefaults?.streamSortPriority ?? ['resolution', 'bitrate', 'framerate'];
-      return priority.filter(criterion => enabledMap[criterion]);
+      const priority = channelDefaults?.streamSortPriority ?? ['resolution', 'bitrate', 'framerate', 'm3u_priority', 'audio_channels'];
+      const filtered = priority.filter(criterion => enabledMap[criterion]);
+      logger.debug(`[SmartSort] getEffectivePriority(${mode}): sortPriority=${JSON.stringify(priority)}, enabledMap=${JSON.stringify(enabledMap)}, result=${JSON.stringify(filtered)}`);
+      return filtered;
     }
     // Single criterion mode - just use that criterion (already enabled check done in UI)
     return [mode as SortCriterion];
@@ -1911,22 +1963,40 @@ export function ChannelsPane({
 
   // Sort streams by specified mode (single channel)
   const handleSortStreamsByMode = useCallback((mode: SortMode) => {
-    if (!selectedChannelId || !isEditMode || !onStageReorderStreams) return;
+    logger.info(`[SmartSort] handleSortStreamsByMode called with mode=${mode}`);
+    logger.debug(`[SmartSort] Context: selectedChannelId=${selectedChannelId}, isEditMode=${isEditMode}, channelStreams.length=${channelStreams.length}`);
+
+    if (!selectedChannelId || !isEditMode || !onStageReorderStreams) {
+      logger.warn(`[SmartSort] Early return: selectedChannelId=${selectedChannelId}, isEditMode=${isEditMode}, onStageReorderStreams=${!!onStageReorderStreams}`);
+      return;
+    }
 
     const channel = channels.find((c) => c.id === selectedChannelId);
     const priority = getEffectivePriority(mode);
+    logger.info(`[SmartSort] Effective priority for sorting: ${JSON.stringify(priority)}`);
+
+    // Log stream details before sorting
+    logger.debug(`[SmartSort] Streams before sort: ${channelStreams.map(s => `${s.id}:${s.name}`).join(', ')}`);
+
     const comparator = createMultiCriteriaSortComparator(streamStatsMap, priority);
 
     // Sort streams
     const sortedStreams = [...channelStreams].sort((a, b) => comparator(a.id, b.id));
 
+    // Log stream details after sorting
+    logger.debug(`[SmartSort] Streams after sort: ${sortedStreams.map(s => `${s.id}:${s.name}`).join(', ')}`);
+
     // Check if already sorted
     const alreadySorted = sortedStreams.every((s, i) => s.id === channelStreams[i].id);
-    if (alreadySorted) return;
+    if (alreadySorted) {
+      logger.info(`[SmartSort] No change needed - streams already in sorted order`);
+      return;
+    }
 
     const newStreamIds = sortedStreams.map((s) => s.id);
     const description = `Sorted streams by ${SORT_MODE_LABELS[mode]} in "${channel?.name || 'channel'}"`;
 
+    logger.info(`[SmartSort] Applying new stream order: ${newStreamIds.join(', ')}`);
     setChannelStreams(sortedStreams);
     onStageReorderStreams(selectedChannelId, newStreamIds, description);
   }, [selectedChannelId, isEditMode, onStageReorderStreams, channelStreams, streamStatsMap, channels, getEffectivePriority, createMultiCriteriaSortComparator]);

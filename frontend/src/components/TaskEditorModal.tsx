@@ -1,9 +1,10 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import * as api from '../services/api';
-import type { TaskStatus, TaskSchedule, TaskScheduleCreate, TaskScheduleUpdate } from '../services/api';
-import type { EPGSource, M3UAccount } from '../types';
+import type { TaskStatus, TaskSchedule, TaskScheduleCreate, TaskScheduleUpdate, TaskParameterSchema, SettingsResponse } from '../services/api';
+import type { EPGSource, M3UAccount, ChannelGroup } from '../types';
 import { logger } from '../utils/logger';
 import { ScheduleEditor } from './ScheduleEditor';
+import { useNotifications } from '../contexts/NotificationContext';
 import './ModalBase.css';
 import './TaskEditorModal.css';
 
@@ -23,25 +24,47 @@ export function TaskEditorModal({ task, onClose, onSaved }: TaskEditorModalProps
   const [editingSchedule, setEditingSchedule] = useState<TaskSchedule | null>(null);
   const [isAddingSchedule, setIsAddingSchedule] = useState(false);
 
-  // EPG/M3U data for task-specific config
+  // EPG/M3U/Channel Group data for task-specific config and schedule parameters
   const [epgSources, setEpgSources] = useState<EPGSource[]>([]);
   const [m3uAccounts, setM3uAccounts] = useState<M3UAccount[]>([]);
+  const [channelGroups, setChannelGroups] = useState<ChannelGroup[]>([]);
+
+  // Settings for default parameter values (stream_probe)
+  const [settings, setSettings] = useState<SettingsResponse | null>(null);
+
+  // Parameter schema for schedule parameters
+  const [parameterSchema, setParameterSchema] = useState<TaskParameterSchema[]>([]);
 
   // UI state
   const [saving, setSaving] = useState(false);
   const [savingSchedule, setSavingSchedule] = useState(false);
+  const [runningSchedules, setRunningSchedules] = useState<Set<number>>(new Set());
   const [error, setError] = useState<string | null>(null);
+  const notifications = useNotifications();
 
-  // Load EPG sources and M3U accounts for task-specific config
+  // Load data for task-specific config and schedule parameters
   useEffect(() => {
     async function loadData() {
       try {
+        // Load parameter schema for this task
+        const schemaResponse = await api.getTaskParameterSchema(task.task_id);
+        setParameterSchema(schemaResponse.parameters || []);
+
+        // Load task-specific data based on task type
         if (task.task_id === 'epg_refresh') {
           const sources = await api.getEPGSources();
           setEpgSources(sources);
         } else if (task.task_id === 'm3u_refresh') {
           const accounts = await api.getM3UAccounts();
           setM3uAccounts(accounts);
+        } else if (task.task_id === 'stream_probe') {
+          // Load channel groups and settings for defaults
+          const [groups, settingsData] = await Promise.all([
+            api.getChannelGroups(),
+            api.getSettings(),
+          ]);
+          setChannelGroups(groups);
+          setSettings(settingsData);
         }
       } catch (err) {
         logger.error('Failed to load data for task config', err);
@@ -49,6 +72,64 @@ export function TaskEditorModal({ task, onClose, onSaved }: TaskEditorModalProps
     }
     loadData();
   }, [task.task_id]);
+
+  // Build parameter options for ScheduleEditor based on loaded data
+  const parameterOptions = useMemo(() => {
+    const options: Record<string, { value: string | number; label: string; badge?: string }[]> = {};
+
+    // Channel groups (for stream_probe) - only groups with channels
+    const groupsWithChannels = channelGroups.filter(g => g.channel_count > 0);
+    if (groupsWithChannels.length > 0) {
+      options['channel_groups'] = groupsWithChannels.map(g => ({
+        value: g.name,
+        label: `${g.name} (${g.channel_count})`,
+        badge: g.is_auto_sync ? 'auto' : undefined,
+      }));
+    }
+
+    // M3U accounts (for m3u_refresh)
+    if (m3uAccounts.length > 0) {
+      options['m3u_accounts'] = m3uAccounts.map(a => ({
+        value: a.id,
+        label: a.name,
+      }));
+    }
+
+    // EPG sources (for epg_refresh)
+    if (epgSources.length > 0) {
+      options['epg_sources'] = epgSources.map(s => ({
+        value: s.id,
+        label: s.name,
+      }));
+    }
+
+    return options;
+  }, [channelGroups, m3uAccounts, epgSources]);
+
+  // Compute default parameters for new schedules
+  const defaultParameters = useMemo(() => {
+    const defaults: Record<string, unknown> = {};
+
+    // For stream_probe: default to all non-auto-sync groups with channels
+    // and use settings for batch_size, timeout, max_concurrent
+    if (task.task_id === 'stream_probe') {
+      const nonAutoGroups = channelGroups
+        .filter(g => g.channel_count > 0 && !g.is_auto_sync)
+        .map(g => g.name);
+      if (nonAutoGroups.length > 0) {
+        defaults['channel_groups'] = nonAutoGroups;
+      }
+
+      // Use settings values as defaults for numeric parameters
+      if (settings) {
+        defaults['batch_size'] = settings.stream_probe_batch_size;
+        defaults['timeout'] = settings.stream_probe_timeout;
+        defaults['max_concurrent'] = settings.max_concurrent_probes;
+      }
+    }
+
+    return defaults;
+  }, [task.task_id, channelGroups, settings]);
 
   // Refresh schedules from server
   const refreshSchedules = useCallback(async () => {
@@ -146,6 +227,51 @@ export function TaskEditorModal({ task, onClose, onSaved }: TaskEditorModalProps
       onSaved();
     } catch (err) {
       logger.error('Failed to delete schedule', err);
+    }
+  };
+
+  // Run schedule now (for stream_probe)
+  const handleRunSchedule = async (schedule: TaskSchedule) => {
+    const scheduleName = schedule.name || schedule.description;
+    setRunningSchedules((prev) => new Set(prev).add(schedule.id));
+    notifications.info(`Starting ${task.task_name} with "${scheduleName}" settings...`, 'Task Started');
+
+    try {
+      const result = await api.runTask(task.task_id, schedule.id);
+      logger.info(`Task ${task.task_id} with schedule ${schedule.id} completed`, result);
+
+      if (result.error === 'CANCELLED') {
+        // Task was cancelled
+        notifications.info(
+          `${task.task_name} was cancelled. ${result.success_count} items completed before cancellation`,
+          'Task Cancelled'
+        );
+      } else if (result.success) {
+        notifications.success(
+          `${task.task_name} completed: ${result.success_count} succeeded, ${result.failed_count} failed`,
+          'Task Completed'
+        );
+      } else {
+        notifications.error(
+          result.message || `${task.task_name} failed`,
+          'Task Failed'
+        );
+      }
+
+      await refreshSchedules();
+      onSaved();
+    } catch (err) {
+      logger.error(`Failed to run schedule ${schedule.id}`, err);
+      notifications.error(
+        `Failed to run ${task.task_name}: ${err instanceof Error ? err.message : 'Unknown error'}`,
+        'Task Error'
+      );
+    } finally {
+      setRunningSchedules((prev) => {
+        const next = new Set(prev);
+        next.delete(schedule.id);
+        return next;
+      });
     }
   };
 
@@ -253,6 +379,19 @@ export function TaskEditorModal({ task, onClose, onSaved }: TaskEditorModalProps
 
                     {/* Actions */}
                     <div className="schedule-actions">
+                      {/* Run Now button - only for stream_probe */}
+                      {task.task_id === 'stream_probe' && (
+                        <button
+                          className={`schedule-action-btn run ${runningSchedules.has(schedule.id) ? 'running' : ''}`}
+                          onClick={() => handleRunSchedule(schedule)}
+                          disabled={runningSchedules.has(schedule.id) || runningSchedules.size > 0}
+                          title={runningSchedules.has(schedule.id) ? 'Running...' : 'Run now with this schedule\'s settings'}
+                        >
+                          <span className="material-icons" style={runningSchedules.has(schedule.id) ? { animation: 'spin 1s linear infinite reverse' } : undefined}>
+                            {runningSchedules.has(schedule.id) ? 'sync' : 'play_arrow'}
+                          </span>
+                        </button>
+                      )}
                       <button
                         className="schedule-action-btn"
                         onClick={() => setEditingSchedule(schedule)}
@@ -434,6 +573,10 @@ export function TaskEditorModal({ task, onClose, onSaved }: TaskEditorModalProps
               onSave={handleAddSchedule}
               onCancel={() => setIsAddingSchedule(false)}
               saving={savingSchedule}
+              taskId={task.task_id}
+              parameterSchema={parameterSchema}
+              parameterOptions={parameterOptions}
+              defaultParameters={defaultParameters}
             />
           </div>
         </div>
@@ -458,6 +601,9 @@ export function TaskEditorModal({ task, onClose, onSaved }: TaskEditorModalProps
               onSave={handleUpdateSchedule}
               onCancel={() => setEditingSchedule(null)}
               saving={savingSchedule}
+              taskId={task.task_id}
+              parameterSchema={parameterSchema}
+              parameterOptions={parameterOptions}
             />
           </div>
         </div>

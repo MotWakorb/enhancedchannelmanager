@@ -47,7 +47,6 @@ class StreamProber:
         probe_timeout: int = DEFAULT_PROBE_TIMEOUT,
         probe_batch_size: int = DEFAULT_PROBE_BATCH_SIZE,
         user_timezone: str = "",  # IANA timezone name
-        probe_channel_groups: list[str] = None,  # List of group names to probe (empty/None = all groups)
         bitrate_sample_duration: int = 10,  # Duration in seconds to sample stream for bitrate (10, 20, or 30)
         parallel_probing_enabled: bool = True,  # Probe streams from different M3Us simultaneously
         max_concurrent_probes: int = 8,  # Max simultaneous probes when parallel probing is enabled (1-16)
@@ -58,12 +57,12 @@ class StreamProber:
         stream_sort_priority: list[str] = None,  # Priority order for Smart Sort criteria
         stream_sort_enabled: dict[str, bool] = None,  # Which criteria are enabled for Smart Sort
         stream_fetch_page_limit: int = 200,  # Max pages when fetching streams (200 * 500 = 100K streams)
+        m3u_account_priorities: dict[str, int] = None,  # M3U account priorities (account_id -> priority)
     ):
         self.client = client
         self.probe_timeout = probe_timeout
         self.probe_batch_size = probe_batch_size
         self.user_timezone = user_timezone
-        self.probe_channel_groups = probe_channel_groups or []
         self.bitrate_sample_duration = bitrate_sample_duration
         self.parallel_probing_enabled = parallel_probing_enabled
         self.max_concurrent_probes = max(1, min(16, max_concurrent_probes))  # Clamp to 1-16
@@ -74,8 +73,9 @@ class StreamProber:
         self.stream_fetch_page_limit = stream_fetch_page_limit
         logger.info(f"[PROBER-INIT] auto_reorder_after_probe={auto_reorder_after_probe}")
         # Smart Sort configuration
-        self.stream_sort_priority = stream_sort_priority or ["resolution", "bitrate", "framerate"]
-        self.stream_sort_enabled = stream_sort_enabled or {"resolution": True, "bitrate": True, "framerate": True}
+        self.stream_sort_priority = stream_sort_priority or ["resolution", "bitrate", "framerate", "m3u_priority", "audio_channels"]
+        self.stream_sort_enabled = stream_sort_enabled or {"resolution": True, "bitrate": True, "framerate": True, "m3u_priority": False, "audio_channels": False}
+        self.m3u_account_priorities = m3u_account_priorities or {}
         self._probe_cancelled = False  # Controls cancellation of in-progress probe
         self._probing_in_progress = False
         # Progress tracking for probe all streams
@@ -99,6 +99,29 @@ class StreamProber:
         # Load probe history from disk on initialization
         self._load_probe_history()
 
+    def _extract_m3u_account_id(self, m3u_account):
+        """Extract M3U account ID from stream data.
+
+        Handles both formats:
+        - Direct ID: m3u_account = 3
+        - Nested object: m3u_account = {"id": 3, "name": "..."}
+
+        Args:
+            m3u_account: The m3u_account field from stream data
+
+        Returns:
+            The M3U account ID (int) or None
+        """
+        logger.debug(f"[M3U-EXTRACT] Raw m3u_account value: {m3u_account!r} (type: {type(m3u_account).__name__})")
+        if m3u_account is None:
+            return None
+        if isinstance(m3u_account, dict):
+            extracted_id = m3u_account.get("id")
+            logger.debug(f"[M3U-EXTRACT] Extracted ID from dict: {extracted_id}")
+            return extracted_id
+        logger.debug(f"[M3U-EXTRACT] Returning direct value: {m3u_account}")
+        return m3u_account
+
     def _load_probe_history(self):
         """Load probe history from persistent storage."""
         try:
@@ -111,19 +134,6 @@ class StreamProber:
         except Exception as e:
             logger.error(f"Failed to load probe history from {PROBE_HISTORY_FILE}: {e}")
             self._probe_history = []
-
-    def update_channel_groups(self, channel_groups: list[str]) -> None:
-        """Update the channel groups to probe.
-
-        This allows updating the prober's channel groups without restarting the service.
-        Called when settings are saved to ensure scheduled probes use the latest groups.
-
-        Args:
-            channel_groups: List of channel group names to probe. Empty list means all groups.
-        """
-        old_groups = self.probe_channel_groups
-        self.probe_channel_groups = channel_groups or []
-        logger.info(f"Updated probe_channel_groups: {old_groups} -> {self.probe_channel_groups}")
 
     def update_probing_settings(self, parallel_probing_enabled: bool, max_concurrent_probes: int) -> None:
         """Update the parallel probing settings.
@@ -141,6 +151,32 @@ class StreamProber:
         self.max_concurrent_probes = max(1, min(16, max_concurrent_probes))
         logger.info(f"Updated probing settings: parallel_probing_enabled={old_parallel}->{self.parallel_probing_enabled}, "
                     f"max_concurrent_probes={old_concurrent}->{self.max_concurrent_probes}")
+
+    def update_sort_settings(
+        self,
+        stream_sort_priority: list[str],
+        stream_sort_enabled: dict[str, bool],
+        m3u_account_priorities: dict[str, int]
+    ) -> None:
+        """Update the sort settings.
+
+        This allows updating the prober's sort settings without restarting the service.
+        Called when settings are saved to ensure smart sort uses the latest config.
+
+        Args:
+            stream_sort_priority: Priority order for sort criteria.
+            stream_sort_enabled: Which criteria are enabled.
+            m3u_account_priorities: M3U account priorities (account_id -> priority value).
+        """
+        old_priority = self.stream_sort_priority
+        old_enabled = self.stream_sort_enabled
+        old_m3u_priorities = self.m3u_account_priorities
+        self.stream_sort_priority = stream_sort_priority
+        self.stream_sort_enabled = stream_sort_enabled
+        self.m3u_account_priorities = m3u_account_priorities
+        logger.info(f"Updated sort settings: priority={old_priority}->{self.stream_sort_priority}, "
+                    f"enabled={old_enabled}->{self.stream_sort_enabled}, "
+                    f"m3u_priorities={old_m3u_priorities}->{self.m3u_account_priorities}")
 
     def _persist_probe_history(self):
         """Persist probe history to disk."""
@@ -337,7 +373,7 @@ class StreamProber:
                 name,
                 None,
                 "timeout",
-                f"Probe timed out after {self.probe_timeout}s",
+                f"Probe timed out after {self.probe_timeout}s"
             )
         except Exception as e:
             error_msg = str(e)
@@ -646,23 +682,22 @@ class StreamProber:
     async def _fetch_channel_stream_ids(self, channel_groups_override: list[str] = None) -> tuple[set, dict, dict]:
         """
         Fetch all unique stream IDs from channels (paginated).
-        Only fetches from selected groups if probe_channel_groups is set.
+        Only fetches from selected groups if channel_groups_override is set.
         Returns: (set of stream IDs, dict mapping stream_id -> list of channel names, dict mapping stream_id -> lowest channel number)
 
         Args:
             channel_groups_override: Optional list of channel group names to filter by.
-                                    If None, uses self.probe_channel_groups.
+                                    If None or empty, probes all groups.
         """
         logger.debug(f"[PROBE-FILTER] _fetch_channel_stream_ids called with override={channel_groups_override}")
-        logger.debug(f"[PROBE-FILTER] self.probe_channel_groups={self.probe_channel_groups}")
 
         channel_stream_ids = set()
         stream_to_channels = {}  # stream_id -> list of channel names
         stream_to_channel_number = {}  # stream_id -> lowest channel number (for sorting)
 
         # Determine which groups to filter by
-        groups_to_filter = channel_groups_override if channel_groups_override is not None else self.probe_channel_groups
-        logger.debug(f"[PROBE-FILTER] groups_to_filter (after resolution)={groups_to_filter}")
+        groups_to_filter = channel_groups_override or []
+        logger.debug(f"[PROBE-FILTER] groups_to_filter={groups_to_filter}")
 
         # If specific groups are selected, fetch all groups first to filter
         selected_group_ids = set()
@@ -796,8 +831,8 @@ class StreamProber:
 
         try:
             # Determine which groups to filter by
-            groups_to_filter = channel_groups_override if channel_groups_override is not None else self.probe_channel_groups
-            logger.info(f"[AUTO-REORDER] groups_to_filter={groups_to_filter}, channel_groups_override={channel_groups_override}, self.probe_channel_groups={self.probe_channel_groups}")
+            groups_to_filter = channel_groups_override or []
+            logger.info(f"[AUTO-REORDER] groups_to_filter={groups_to_filter}")
 
             # Get selected group IDs
             selected_group_ids = set()
@@ -859,6 +894,15 @@ class StreamProber:
 
                     logger.info(f"[AUTO-REORDER] Processing channel {channel_id} ({channel_name}) with {len(stream_ids)} streams: {stream_ids}")
 
+                    # Fetch full stream data to get M3U account mapping
+                    streams_data = await self.client.get_streams_by_ids(stream_ids)
+                    # Log raw stream data for debugging
+                    for s in streams_data:
+                        logger.debug(f"[AUTO-REORDER] Channel {channel_id}: Stream {s['id']} ('{s.get('name', 'Unknown')}') has raw m3u_account={s.get('m3u_account')!r}")
+                    # Extract M3U account IDs (handles both direct ID and nested object formats)
+                    stream_m3u_map = {s["id"]: self._extract_m3u_account_id(s.get("m3u_account")) for s in streams_data}
+                    logger.debug(f"[AUTO-REORDER] Channel {channel_id}: Built M3U map for {len(stream_m3u_map)} streams: {stream_m3u_map}")
+
                     # Fetch stream stats for this channel's streams (uses get_session and StreamStats imported at top of file)
                     logger.info(f"[AUTO-REORDER] Channel {channel_id}: Opening database session...")
                     with get_session() as session:
@@ -873,7 +917,7 @@ class StreamProber:
                         logger.info(f"[AUTO-REORDER] Channel {channel_id}: Found stats for {len(stats_map)}/{len(stream_ids)} streams")
 
                         # Sort streams using smart sort logic (similar to frontend)
-                        sorted_stream_ids = self._smart_sort_streams(stream_ids, stats_map, channel_name)
+                        sorted_stream_ids = self._smart_sort_streams(stream_ids, stats_map, stream_m3u_map, channel_name)
                         logger.info(f"[AUTO-REORDER] Channel {channel_id}: Original order: {stream_ids}")
                         logger.info(f"[AUTO-REORDER] Channel {channel_id}: Sorted order:   {sorted_stream_ids}")
                         logger.info(f"[AUTO-REORDER] Channel {channel_id}: Order changed: {sorted_stream_ids != stream_ids}")
@@ -939,7 +983,13 @@ class StreamProber:
 
         return reordered
 
-    def _smart_sort_streams(self, stream_ids: list[int], stats_map: dict, channel_name: str = "unknown") -> list[int]:
+    def _smart_sort_streams(
+        self,
+        stream_ids: list[int],
+        stats_map: dict,
+        stream_m3u_map: dict[int, int] = None,
+        channel_name: str = "unknown"
+    ) -> list[int]:
         """
         Sort stream IDs using smart sort logic based on stream stats.
         Uses configurable sort priority and enabled criteria from settings.
@@ -948,8 +998,11 @@ class StreamProber:
         Args:
             stream_ids: List of stream IDs to sort
             stats_map: Map of stream_id -> StreamStats
+            stream_m3u_map: Map of stream_id -> m3u_account_id (for M3U priority sorting)
             channel_name: Channel name for logging purposes
         """
+        if stream_m3u_map is None:
+            stream_m3u_map = {}
         # Get active sort criteria (enabled and in priority order)
         active_criteria = [
             criterion for criterion in self.stream_sort_priority
@@ -991,20 +1044,21 @@ class StreamProber:
 
             for criterion in active_criteria:
                 if criterion == "resolution":
-                    # Parse resolution (e.g., "1920x1080" -> width * height)
+                    # Parse resolution (e.g., "1920x1080" -> height only, matching frontend)
                     resolution_value = 0
                     if stat.resolution:
                         try:
                             parts = stat.resolution.split('x')
                             if len(parts) == 2:
-                                resolution_value = int(parts[0]) * int(parts[1])
+                                resolution_value = int(parts[1])  # Use height only
                         except:
                             pass
                     # Negate for descending sort (higher values first)
                     sort_values.append(-resolution_value)
 
                 elif criterion == "bitrate":
-                    bitrate_value = stat.bitrate or 0
+                    # Use video_bitrate first (from probe), fallback to overall bitrate
+                    bitrate_value = stat.video_bitrate or stat.bitrate or 0
                     sort_values.append(-bitrate_value)
 
                 elif criterion == "framerate":
@@ -1017,8 +1071,25 @@ class StreamProber:
                             pass
                     sort_values.append(-framerate_value)
 
+                elif criterion == "m3u_priority":
+                    # Get M3U account priority from settings (higher priority = sorted first)
+                    m3u_priority_value = 0
+                    m3u_account_id = stream_m3u_map.get(stream_id)
+                    if m3u_account_id is not None:
+                        # Convert to string since JSON keys are strings
+                        m3u_priority_value = self.m3u_account_priorities.get(str(m3u_account_id), 0)
+                    # Negate for descending sort (higher priority first)
+                    sort_values.append(-m3u_priority_value)
+
+                elif criterion == "audio_channels":
+                    # Sort by audio channels: 5.1/6ch > stereo/2ch > mono/1ch
+                    audio_channels_value = stat.audio_channels or 0
+                    # Negate for descending sort (more channels first)
+                    sort_values.append(-audio_channels_value)
+
+            m3u_account_id = stream_m3u_map.get(stream_id)
             logger.debug(f"[SMART-SORT]   {stream_name}: sort_tuple={tuple(sort_values)} "
-                        f"(res={stat.resolution}, br={stat.bitrate}, fps={stat.fps})")
+                        f"(res={stat.resolution}, br={stat.bitrate}, fps={stat.fps}, m3u={m3u_account_id}, audio_ch={stat.audio_channels})")
             return tuple(sort_values)
 
         # Sort stream IDs by their stats
@@ -1043,8 +1114,7 @@ class StreamProber:
 
         Args:
             channel_groups_override: Optional list of channel group names to filter by.
-                                    If None, uses self.probe_channel_groups.
-                                    If empty list, probes all groups.
+                                    If None or empty list, probes all groups.
             skip_m3u_refresh: If True, skip M3U refresh even if configured.
                              Use this for on-demand probes from the UI.
             stream_ids_filter: Optional list of specific stream IDs to probe.
@@ -1052,7 +1122,6 @@ class StreamProber:
         """
         logger.info(f"[PROBE] probe_all_streams called with channel_groups_override={channel_groups_override}, skip_m3u_refresh={skip_m3u_refresh}, stream_ids_filter={len(stream_ids_filter) if stream_ids_filter else 0}")
         logger.info(f"[PROBE] Settings: parallel_probing_enabled={self.parallel_probing_enabled}, max_concurrent_probes={self.max_concurrent_probes}")
-        logger.debug(f"[PROBE] self.probe_channel_groups={self.probe_channel_groups}")
 
         if self._probing_in_progress:
             logger.warning("Probe already in progress")
@@ -1187,7 +1256,7 @@ class StreamProber:
             if len(streams_to_probe) == 0:
                 logger.warning(f"[PROBE-DIAGNOSTIC] No streams to probe! channel_stream_ids={len(channel_stream_ids)}, "
                               f"all_streams={len(all_streams)}, stream_ids_filter={len(stream_ids_filter) if stream_ids_filter else 'None'}, "
-                              f"groups_override={channel_groups_override}, self.probe_channel_groups={self.probe_channel_groups}")
+                              f"groups_override={channel_groups_override}")
             else:
                 logger.info(f"[PROBE-DIAGNOSTIC] Starting probe of {len(streams_to_probe)} streams")
 
@@ -1218,7 +1287,7 @@ class StreamProber:
                     stream_id = stream["id"]
                     stream_name = stream.get("name", f"Stream {stream_id}")
                     stream_url = stream.get("url", "")
-                    m3u_account_id = stream.get("m3u_account")
+                    m3u_account_id = self._extract_m3u_account_id(stream.get("m3u_account"))
 
                     # Check if host is rate-limited and wait for backoff
                     host = self._extract_host_from_url(stream_url)
@@ -1283,7 +1352,7 @@ class StreamProber:
                     # Try to start new probes for streams that have available M3U capacity
                     streams_started_this_round = []
                     for stream in pending_streams:
-                        m3u_account_id = stream.get("m3u_account")
+                        m3u_account_id = self._extract_m3u_account_id(stream.get("m3u_account"))
                         stream_id = stream["id"]
                         stream_name = stream.get("name", f"Stream {stream_id}")
                         stream_url = stream.get("url", "")
@@ -1443,7 +1512,7 @@ class StreamProber:
 
                     display_parts.append(stream_name)
 
-                    m3u_account_id = stream.get("m3u_account")
+                    m3u_account_id = self._extract_m3u_account_id(stream.get("m3u_account"))
                     if m3u_account_id and m3u_account_id in m3u_accounts_map:
                         m3u_name = m3u_accounts_map[m3u_account_id]
                         display_string = f"{display_parts[0]}: {display_parts[1]} | {m3u_name}"
