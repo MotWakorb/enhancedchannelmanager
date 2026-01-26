@@ -101,6 +101,29 @@ class StreamProber:
         # Load probe history from disk on initialization
         self._load_probe_history()
 
+    def _extract_m3u_account_id(self, m3u_account):
+        """Extract M3U account ID from stream data.
+
+        Handles both formats:
+        - Direct ID: m3u_account = 3
+        - Nested object: m3u_account = {"id": 3, "name": "..."}
+
+        Args:
+            m3u_account: The m3u_account field from stream data
+
+        Returns:
+            The M3U account ID (int) or None
+        """
+        logger.debug(f"[M3U-EXTRACT] Raw m3u_account value: {m3u_account!r} (type: {type(m3u_account).__name__})")
+        if m3u_account is None:
+            return None
+        if isinstance(m3u_account, dict):
+            extracted_id = m3u_account.get("id")
+            logger.debug(f"[M3U-EXTRACT] Extracted ID from dict: {extracted_id}")
+            return extracted_id
+        logger.debug(f"[M3U-EXTRACT] Returning direct value: {m3u_account}")
+        return m3u_account
+
     def _load_probe_history(self):
         """Load probe history from persistent storage."""
         try:
@@ -889,8 +912,12 @@ class StreamProber:
 
                     # Fetch full stream data to get M3U account mapping
                     streams_data = await self.client.get_streams_by_ids(stream_ids)
-                    stream_m3u_map = {s["id"]: s.get("m3u_account") for s in streams_data}
-                    logger.debug(f"[AUTO-REORDER] Channel {channel_id}: Built M3U map for {len(stream_m3u_map)} streams")
+                    # Log raw stream data for debugging
+                    for s in streams_data:
+                        logger.debug(f"[AUTO-REORDER] Channel {channel_id}: Stream {s['id']} ('{s.get('name', 'Unknown')}') has raw m3u_account={s.get('m3u_account')!r}")
+                    # Extract M3U account IDs (handles both direct ID and nested object formats)
+                    stream_m3u_map = {s["id"]: self._extract_m3u_account_id(s.get("m3u_account")) for s in streams_data}
+                    logger.debug(f"[AUTO-REORDER] Channel {channel_id}: Built M3U map for {len(stream_m3u_map)} streams: {stream_m3u_map}")
 
                     # Fetch stream stats for this channel's streams (uses get_session and StreamStats imported at top of file)
                     logger.info(f"[AUTO-REORDER] Channel {channel_id}: Opening database session...")
@@ -1278,7 +1305,7 @@ class StreamProber:
                     stream_id = stream["id"]
                     stream_name = stream.get("name", f"Stream {stream_id}")
                     stream_url = stream.get("url", "")
-                    m3u_account_id = stream.get("m3u_account")
+                    m3u_account_id = self._extract_m3u_account_id(stream.get("m3u_account"))
 
                     # Check if host is rate-limited and wait for backoff
                     host = self._extract_host_from_url(stream_url)
@@ -1343,7 +1370,7 @@ class StreamProber:
                     # Try to start new probes for streams that have available M3U capacity
                     streams_started_this_round = []
                     for stream in pending_streams:
-                        m3u_account_id = stream.get("m3u_account")
+                        m3u_account_id = self._extract_m3u_account_id(stream.get("m3u_account"))
                         stream_id = stream["id"]
                         stream_name = stream.get("name", f"Stream {stream_id}")
                         stream_url = stream.get("url", "")
@@ -1503,7 +1530,7 @@ class StreamProber:
 
                     display_parts.append(stream_name)
 
-                    m3u_account_id = stream.get("m3u_account")
+                    m3u_account_id = self._extract_m3u_account_id(stream.get("m3u_account"))
                     if m3u_account_id and m3u_account_id in m3u_accounts_map:
                         m3u_name = m3u_accounts_map[m3u_account_id]
                         display_string = f"{display_parts[0]}: {display_parts[1]} | {m3u_name}"

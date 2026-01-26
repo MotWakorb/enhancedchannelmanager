@@ -228,6 +228,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
 
   const [streamSortPriority, setStreamSortPriority] = useState<SortCriterion[]>(['resolution', 'bitrate', 'framerate', 'm3u_priority', 'audio_channels']);
   const [streamSortEnabled, setStreamSortEnabled] = useState<SortEnabledMap>({ resolution: true, bitrate: true, framerate: true, m3u_priority: false, audio_channels: false });
+  const [m3uAccountPriorities, setM3uAccountPriorities] = useState<Record<string, number>>({});
   const [deprioritizeFailedStreams, setDeprioritizeFailedStreams] = useState(true);
 
   // Appearance settings
@@ -384,6 +385,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         stream_fetch_page_limit: streamFetchPageLimit,
         stream_sort_priority: streamSortPriority,
         stream_sort_enabled: streamSortEnabled,
+        m3u_account_priorities: m3uAccountPriorities,
         deprioritize_failed_streams: deprioritizeFailedStreams,
       });
       logger.debug('Normalization settings saved automatically');
@@ -647,6 +649,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       const merged = mergeSortCriteria(settings.stream_sort_priority, settings.stream_sort_enabled);
       setStreamSortPriority(merged.priority);
       setStreamSortEnabled(merged.enabled);
+      setM3uAccountPriorities(settings.m3u_account_priorities ?? {});
       setDeprioritizeFailedStreams(settings.deprioritize_failed_streams ?? true);
       setNeedsRestart(false);
       setRestartResult(null);
@@ -750,6 +753,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         stream_fetch_page_limit: streamFetchPageLimit,
         stream_sort_priority: streamSortPriority,
         stream_sort_enabled: streamSortEnabled,
+        m3u_account_priorities: m3uAccountPriorities,
         deprioritize_failed_streams: deprioritizeFailedStreams,
       });
       // Apply frontend log level immediately
@@ -3137,6 +3141,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                       stream_fetch_page_limit: streamFetchPageLimit,
                       stream_sort_priority: streamSortPriority,
                       stream_sort_enabled: streamSortEnabled,
+                      m3u_account_priorities: m3uAccountPriorities,
                       deprioritize_failed_streams: deprioritizeFailedStreams,
                     });
                     logger.info('Probe channel groups saved');
