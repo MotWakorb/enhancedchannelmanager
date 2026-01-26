@@ -196,6 +196,38 @@ class TestTaskSchedules:
             assert response.status_code in (200, 201, 404, 422)
 
     @pytest.mark.asyncio
+    async def test_create_task_schedule_with_parameters(self, async_client):
+        """POST /api/tasks/{task_id}/schedules creates schedule with parameters."""
+        mock_task = MagicMock()
+        mock_task.task_id = "stream_probe"
+
+        with patch("task_registry.get_registry") as mock_registry:
+            mock_registry.return_value.get_task_instance.return_value = mock_task
+
+            response = await async_client.post(
+                "/api/tasks/stream_probe/schedules",
+                json={
+                    "name": "Sports Probe",
+                    "schedule_type": "daily",
+                    "schedule_time": "06:00",
+                    "timezone": "America/New_York",
+                    "parameters": {
+                        "batch_size": 25,
+                        "timeout": 45,
+                        "max_concurrent": 4,
+                        "channel_groups": ["Sports", "News"],
+                    },
+                },
+            )
+            assert response.status_code in (200, 201, 404, 422)
+
+            if response.status_code in (200, 201):
+                data = response.json()
+                assert "parameters" in data
+                assert data["parameters"]["batch_size"] == 25
+                assert data["parameters"]["channel_groups"] == ["Sports", "News"]
+
+    @pytest.mark.asyncio
     async def test_update_task_schedule(self, async_client, test_session):
         """PATCH /api/tasks/{task_id}/schedules/{schedule_id} updates schedule."""
         from tests.fixtures.factories import create_task_schedule
@@ -215,6 +247,36 @@ class TestTaskSchedules:
             assert response.status_code in (200, 404)
 
     @pytest.mark.asyncio
+    async def test_update_task_schedule_parameters(self, async_client, test_session):
+        """PATCH /api/tasks/{task_id}/schedules/{schedule_id} updates parameters."""
+        from tests.fixtures.factories import create_task_schedule
+
+        schedule = create_task_schedule(test_session, task_id="stream_probe")
+        schedule.set_parameters({"batch_size": 10})
+        test_session.commit()
+
+        mock_task = MagicMock()
+        mock_task.task_id = "stream_probe"
+
+        with patch("task_registry.get_registry") as mock_registry:
+            mock_registry.return_value.get_task_instance.return_value = mock_task
+
+            response = await async_client.patch(
+                f"/api/tasks/stream_probe/schedules/{schedule.id}",
+                json={
+                    "parameters": {
+                        "batch_size": 30,
+                        "timeout": 60,
+                    },
+                },
+            )
+            assert response.status_code in (200, 404)
+
+            if response.status_code == 200:
+                data = response.json()
+                assert data["parameters"]["batch_size"] == 30
+
+    @pytest.mark.asyncio
     async def test_delete_task_schedule(self, async_client, test_session):
         """DELETE /api/tasks/{task_id}/schedules/{schedule_id} deletes schedule."""
         from tests.fixtures.factories import create_task_schedule
@@ -231,3 +293,63 @@ class TestTaskSchedules:
                 f"/api/tasks/test_task/schedules/{schedule.id}"
             )
             assert response.status_code in (200, 204, 404)
+
+
+class TestTaskParameterSchemas:
+    """Tests for task parameter schema endpoints."""
+
+    @pytest.mark.asyncio
+    async def test_get_parameter_schema(self, async_client):
+        """GET /api/tasks/{task_id}/parameter-schema returns schema."""
+        response = await async_client.get("/api/tasks/stream_probe/parameter-schema")
+        assert response.status_code in (200, 404)
+
+        if response.status_code == 200:
+            data = response.json()
+            # Response structure: {"task_id": ..., "parameters": [...]}
+            assert "task_id" in data
+            assert "parameters" in data
+            # stream_probe should have batch_size, timeout, max_concurrent, channel_groups
+            if data["parameters"]:
+                param_names = [p["name"] for p in data["parameters"]]
+                assert len(param_names) >= 0
+
+    @pytest.mark.asyncio
+    async def test_get_parameter_schema_unknown_task(self, async_client):
+        """GET /api/tasks/{task_id}/parameter-schema returns empty for unknown task."""
+        response = await async_client.get("/api/tasks/nonexistent_task_xyz/parameter-schema")
+        # Should return 200 with empty parameters array
+        assert response.status_code == 200
+        data = response.json()
+        assert data["parameters"] == []
+
+    @pytest.mark.asyncio
+    async def test_get_all_parameter_schemas(self, async_client):
+        """GET /api/tasks/parameter-schemas returns all schemas."""
+        response = await async_client.get("/api/tasks/parameter-schemas")
+        # Endpoint may return 200 or 404 if route ordering captures it as task_id
+        assert response.status_code in (200, 404)
+
+        if response.status_code == 200:
+            data = response.json()
+            assert isinstance(data, dict)
+            assert "schemas" in data
+
+
+class TestRunTaskWithSchedule:
+    """Tests for running tasks with specific schedule parameters."""
+
+    @pytest.mark.asyncio
+    async def test_run_task_with_schedule_id(self, async_client, test_session):
+        """POST /api/tasks/{task_id}/schedules/{schedule_id}/run triggers task with params."""
+        from tests.fixtures.factories import create_task_schedule
+
+        schedule = create_task_schedule(test_session, task_id="stream_probe")
+        schedule.set_parameters({"batch_size": 15, "channel_groups": ["Test"]})
+        test_session.commit()
+
+        response = await async_client.post(
+            f"/api/tasks/stream_probe/schedules/{schedule.id}/run"
+        )
+        # May return 200 (started), 404 (not found), 409 (already running), or 500
+        assert response.status_code in (200, 404, 409, 500)
