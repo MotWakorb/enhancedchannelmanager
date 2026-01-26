@@ -1167,7 +1167,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
           </div>
 
           {needsRestart && (
-            <div className="restart-notice">
+            <div className="warning-message">
               <span className="material-icons">info</span>
               <span>Stats settings changed. Restart services to apply.</span>
               <button
@@ -1279,7 +1279,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       </div>
 
       {saveSuccess && (
-        <div className="save-success">
+        <div className="success-message">
           <span className="material-icons">check_circle</span>
           Settings saved successfully
         </div>
@@ -1545,7 +1545,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       </div>
 
       {saveSuccess && (
-        <div className="save-success">
+        <div className="success-message">
           <span className="material-icons">check_circle</span>
           Settings saved successfully
         </div>
@@ -1786,7 +1786,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       </div>
 
       {saveSuccess && (
-        <div className="save-success">
+        <div className="success-message">
           <span className="material-icons">check_circle</span>
           Settings saved successfully
         </div>
@@ -1908,7 +1908,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       </div>
 
       {saveSuccess && (
-        <div className="save-success">
+        <div className="success-message">
           <span className="material-icons">check_circle</span>
           Settings saved successfully
         </div>
@@ -2105,7 +2105,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
             </div>
 
             {needsRestart && (
-              <div className="restart-notice">
+              <div className="warning-message">
                 <span className="material-icons">info</span>
                 <span>Probe settings changed. Restart services for schedule changes to take effect.</span>
                 <button
@@ -2621,7 +2621,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       </div>
 
       {saveSuccess && (
-        <div className="save-success">
+        <div className="success-message">
           <span className="material-icons">check_circle</span>
           Settings saved successfully
         </div>
