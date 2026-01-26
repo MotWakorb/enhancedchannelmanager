@@ -7,30 +7,36 @@
 
 .custom-select {
   position: relative;
-  display: inline-block;
+  display: block;
   background: transparent;
+  width: 100%;
 }
 
-/* Trigger button - plain text style */
+/* Trigger button - dropdown box style */
 .custom-select-trigger {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0;
-  background: none;
-  border: none;
+  width: 100%;
+  padding: 0.5rem 0.75rem;
+  background-color: var(--input-bg);
+  border: 1px solid var(--border-secondary);
+  border-radius: 6px;
   color: var(--text-primary);
   font-size: 0.875rem;
   cursor: pointer;
   text-align: left;
+  transition: border-color 0.15s, box-shadow 0.15s;
 }
 
 .custom-select-trigger:hover:not(:disabled) {
-  color: var(--accent-primary);
+  border-color: var(--accent-primary);
 }
 
 .custom-select-trigger:focus {
   outline: none;
+  border-color: var(--accent-primary);
+  box-shadow: 0 0 0 2px rgba(100, 108, 255, 0.2);
 }
 
 .custom-select-trigger:disabled {
@@ -39,7 +45,8 @@
 }
 
 .custom-select.open .custom-select-trigger {
-  color: var(--accent-primary);
+  border-color: var(--accent-primary);
+  box-shadow: 0 0 0 2px rgba(100, 108, 255, 0.2);
 }
 
 /* Value display */

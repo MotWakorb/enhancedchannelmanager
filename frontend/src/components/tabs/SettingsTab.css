@@ -277,7 +277,7 @@
 
 .checkbox-group {
   display: flex;
-  align-items: flex-start;
+  align-items: start;
   gap: 0.75rem;
   padding: 1rem;
   background-color: var(--input-bg);
@@ -293,7 +293,7 @@
 .checkbox-group input[type="checkbox"] {
   width: 18px;
   height: 18px;
-  margin-top: 2px;
+  margin-top: 0.125rem;
   accent-color: var(--accent-primary);
   cursor: pointer;
   flex-shrink: 0;
