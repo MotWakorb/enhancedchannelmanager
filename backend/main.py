@@ -242,7 +242,6 @@ async def startup_event():
                 probe_timeout=settings.stream_probe_timeout,
                 probe_batch_size=settings.stream_probe_batch_size,
                 user_timezone=settings.user_timezone,
-                probe_channel_groups=settings.probe_channel_groups,
                 bitrate_sample_duration=settings.bitrate_sample_duration,
                 parallel_probing_enabled=settings.parallel_probing_enabled,
                 max_concurrent_probes=settings.max_concurrent_probes,
@@ -253,6 +252,7 @@ async def startup_event():
                 stream_sort_priority=settings.stream_sort_priority,
                 stream_sort_enabled=settings.stream_sort_enabled,
                 stream_fetch_page_limit=settings.stream_fetch_page_limit,
+                m3u_account_priorities=settings.m3u_account_priorities,
             )
             logger.info(f"StreamProber instance created: {prober is not None}")
 
@@ -531,7 +531,6 @@ class SettingsRequest(BaseModel):
     stream_probe_batch_size: int = 10
     stream_probe_timeout: int = 30
     stream_probe_schedule_time: str = "03:00"  # HH:MM format, 24h
-    probe_channel_groups: list[str] = []  # Channel groups to probe
     bitrate_sample_duration: int = 10  # Duration in seconds to sample stream for bitrate (10, 20, or 30)
     parallel_probing_enabled: bool = True  # Probe multiple streams from different M3Us simultaneously
     max_concurrent_probes: int = 8  # Max simultaneous probes when parallel probing is enabled (1-16)
@@ -539,8 +538,9 @@ class SettingsRequest(BaseModel):
     refresh_m3us_before_probe: bool = True  # Refresh all M3U accounts before starting probe
     auto_reorder_after_probe: bool = False  # Automatically reorder streams in channels after probe completes
     stream_fetch_page_limit: int = 200  # Max pages when fetching streams (200 pages * 500 = 100K streams)
-    stream_sort_priority: list[str] = ["resolution", "bitrate", "framerate"]  # Priority order for Smart Sort
-    stream_sort_enabled: dict[str, bool] = {"resolution": True, "bitrate": True, "framerate": True}  # Which criteria are enabled
+    stream_sort_priority: list[str] = ["resolution", "bitrate", "framerate", "m3u_priority", "audio_channels"]  # Priority order for Smart Sort
+    stream_sort_enabled: dict[str, bool] = {"resolution": True, "bitrate": True, "framerate": True, "m3u_priority": False, "audio_channels": False}  # Which criteria are enabled
+    m3u_account_priorities: dict[str, int] = {}  # M3U account priorities (account_id -> priority value)
     deprioritize_failed_streams: bool = True  # When enabled, failed/timeout/pending streams sort to bottom
     normalization_settings: Optional[NormalizationSettings] = None  # User-configurable normalization tags
 
@@ -577,7 +577,6 @@ class SettingsResponse(BaseModel):
     stream_probe_batch_size: int
     stream_probe_timeout: int
     stream_probe_schedule_time: str  # HH:MM format, 24h
-    probe_channel_groups: list[str]
     bitrate_sample_duration: int
     parallel_probing_enabled: bool  # Probe multiple streams from different M3Us simultaneously
     max_concurrent_probes: int  # Max simultaneous probes when parallel probing is enabled (1-16)
@@ -587,6 +586,7 @@ class SettingsResponse(BaseModel):
     stream_fetch_page_limit: int  # Max pages when fetching streams (200 pages * 500 = 100K streams)
     stream_sort_priority: list[str]  # Priority order for Smart Sort
     stream_sort_enabled: dict[str, bool]  # Which criteria are enabled
+    m3u_account_priorities: dict[str, int]  # M3U account priorities (account_id -> priority value)
     deprioritize_failed_streams: bool  # When enabled, failed/timeout/pending streams sort to bottom
     normalization_settings: NormalizationSettings  # User-configurable normalization tags
 
@@ -634,7 +634,6 @@ async def get_current_settings():
         stream_probe_batch_size=settings.stream_probe_batch_size,
         stream_probe_timeout=settings.stream_probe_timeout,
         stream_probe_schedule_time=settings.stream_probe_schedule_time,
-        probe_channel_groups=settings.probe_channel_groups,
         bitrate_sample_duration=settings.bitrate_sample_duration,
         parallel_probing_enabled=settings.parallel_probing_enabled,
         max_concurrent_probes=settings.max_concurrent_probes,
@@ -644,6 +643,7 @@ async def get_current_settings():
         stream_fetch_page_limit=settings.stream_fetch_page_limit,
         stream_sort_priority=settings.stream_sort_priority,
         stream_sort_enabled=settings.stream_sort_enabled,
+        m3u_account_priorities=settings.m3u_account_priorities,
         deprioritize_failed_streams=settings.deprioritize_failed_streams,
         normalization_settings=NormalizationSettings(
             disabledBuiltinTags=settings.disabled_builtin_tags,
@@ -708,7 +708,6 @@ async def update_settings(request: SettingsRequest):
         stream_probe_batch_size=request.stream_probe_batch_size,
         stream_probe_timeout=request.stream_probe_timeout,
         stream_probe_schedule_time=request.stream_probe_schedule_time,
-        probe_channel_groups=request.probe_channel_groups,
         bitrate_sample_duration=request.bitrate_sample_duration,
         parallel_probing_enabled=request.parallel_probing_enabled,
         max_concurrent_probes=request.max_concurrent_probes,
@@ -718,6 +717,7 @@ async def update_settings(request: SettingsRequest):
         stream_fetch_page_limit=request.stream_fetch_page_limit,
         stream_sort_priority=request.stream_sort_priority,
         stream_sort_enabled=request.stream_sort_enabled,
+        m3u_account_priorities=request.m3u_account_priorities,
         deprioritize_failed_streams=request.deprioritize_failed_streams,
         # Convert normalization_settings from API format to backend format
         disabled_builtin_tags=(
@@ -738,14 +738,6 @@ async def update_settings(request: SettingsRequest):
         logger.info(f"Applying new backend log level: {new_settings.backend_log_level}")
         set_log_level(new_settings.backend_log_level)
 
-    # Update prober's channel groups without requiring restart
-    # This ensures scheduled probes use the latest group selection
-    if new_settings.probe_channel_groups != current_settings.probe_channel_groups:
-        prober = get_prober()
-        if prober:
-            prober.update_channel_groups(new_settings.probe_channel_groups)
-            logger.info("Updated prober channel groups from settings")
-
     # Update prober's parallel probing settings without requiring restart
     if (new_settings.parallel_probing_enabled != current_settings.parallel_probing_enabled or
             new_settings.max_concurrent_probes != current_settings.max_concurrent_probes):
@@ -756,6 +748,19 @@ async def update_settings(request: SettingsRequest):
                 new_settings.max_concurrent_probes
             )
             logger.info("Updated prober parallel probing settings from settings")
+
+    # Update prober's sort settings without requiring restart
+    if (new_settings.stream_sort_priority != current_settings.stream_sort_priority or
+            new_settings.stream_sort_enabled != current_settings.stream_sort_enabled or
+            new_settings.m3u_account_priorities != current_settings.m3u_account_priorities):
+        prober = get_prober()
+        if prober:
+            prober.update_sort_settings(
+                new_settings.stream_sort_priority,
+                new_settings.stream_sort_enabled,
+                new_settings.m3u_account_priorities
+            )
+            logger.info("Updated prober sort settings from settings")
 
     logger.info(f"Settings saved successfully - configured: {new_settings.is_configured()}, auth_changed: {auth_changed}")
     return {"status": "saved", "configured": new_settings.is_configured()}
@@ -829,7 +834,6 @@ async def restart_services():
                 probe_timeout=settings.stream_probe_timeout,
                 probe_batch_size=settings.stream_probe_batch_size,
                 user_timezone=settings.user_timezone,
-                probe_channel_groups=settings.probe_channel_groups,
                 bitrate_sample_duration=settings.bitrate_sample_duration,
                 parallel_probing_enabled=settings.parallel_probing_enabled,
                 max_concurrent_probes=settings.max_concurrent_probes,
@@ -840,6 +844,7 @@ async def restart_services():
                 stream_sort_priority=settings.stream_sort_priority,
                 stream_sort_enabled=settings.stream_sort_enabled,
                 stream_fetch_page_limit=settings.stream_fetch_page_limit,
+                m3u_account_priorities=settings.m3u_account_priorities,
             )
             set_prober(new_prober)
 
@@ -855,7 +860,7 @@ async def restart_services():
                 logger.warning(f"Failed to connect prober to task: {e}")
 
             await new_prober.start()
-            logger.info(f"Restarted stream prober with updated settings (groups: {len(settings.probe_channel_groups)} selected)")
+            logger.info("Restarted stream prober with updated settings")
 
             return {"success": True, "message": "Services restarted with new settings"}
         except Exception as e:
@@ -1809,8 +1814,21 @@ async def get_channel_groups():
         with get_session() as db:
             hidden_ids = {h.group_id for h in db.query(HiddenChannelGroup).all()}
 
-        # Return only groups that aren't hidden
-        return [g for g in groups if g.get("id") not in hidden_ids]
+        # Get M3U group settings to identify auto-sync groups
+        m3u_group_settings = await client.get_all_m3u_group_settings()
+        auto_sync_group_ids = {
+            gid for gid, settings in m3u_group_settings.items()
+            if settings.get("auto_channel_sync")
+        }
+
+        # Return groups with is_auto_sync flag, filtered by hidden status
+        result = []
+        for g in groups:
+            if g.get("id") not in hidden_ids:
+                group_data = dict(g)
+                group_data["is_auto_sync"] = g.get("id") in auto_sync_group_ids
+                result.append(group_data)
+        return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -5527,13 +5545,19 @@ async def update_task(task_id: str, config: TaskConfigUpdate):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+class TaskRunRequest(BaseModel):
+    """Request body for running a task."""
+    schedule_id: Optional[int] = None  # Run with parameters from a specific schedule
+
+
 @app.post("/api/tasks/{task_id}/run")
-async def run_task(task_id: str):
+async def run_task(task_id: str, request: Optional[TaskRunRequest] = None):
     """Manually trigger a task execution."""
     try:
         from task_engine import get_engine
         engine = get_engine()
-        result = await engine.run_task(task_id)
+        schedule_id = request.schedule_id if request else None
+        result = await engine.run_task(task_id, schedule_id=schedule_id)
 
         if result is None:
             raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
@@ -5658,6 +5682,7 @@ class TaskScheduleCreate(BaseModel):
     timezone: Optional[str] = None
     days_of_week: Optional[list] = None  # List of day numbers (0=Sunday, 6=Saturday)
     day_of_month: Optional[int] = None  # 1-31, or -1 for last day
+    parameters: Optional[dict] = None  # Task-specific parameters (e.g., channel_groups, batch_size)
 
 
 class TaskScheduleUpdate(BaseModel):
@@ -5670,6 +5695,109 @@ class TaskScheduleUpdate(BaseModel):
     timezone: Optional[str] = None
     days_of_week: Optional[list] = None
     day_of_month: Optional[int] = None
+    parameters: Optional[dict] = None  # Task-specific parameters
+
+
+# Task parameter schemas - defines what parameters each task type accepts
+# This is used by the frontend to render appropriate form fields
+TASK_PARAMETER_SCHEMAS = {
+    "stream_probe": {
+        "description": "Stream health probing parameters",
+        "parameters": [
+            {
+                "name": "channel_groups",
+                "type": "string_array",
+                "label": "Channel Groups",
+                "description": "Which channel groups to probe (empty = all groups)",
+                "default": [],
+                "source": "channel_groups",  # Tells UI to fetch from channel groups API
+            },
+            {
+                "name": "batch_size",
+                "type": "number",
+                "label": "Batch Size",
+                "description": "Number of streams to probe per batch",
+                "default": 10,
+                "min": 1,
+                "max": 100,
+            },
+            {
+                "name": "timeout",
+                "type": "number",
+                "label": "Timeout (seconds)",
+                "description": "Timeout per stream probe in seconds",
+                "default": 30,
+                "min": 5,
+                "max": 300,
+            },
+            {
+                "name": "max_concurrent",
+                "type": "number",
+                "label": "Max Concurrent",
+                "description": "Maximum concurrent probe operations",
+                "default": 3,
+                "min": 1,
+                "max": 20,
+            },
+        ],
+    },
+    "m3u_refresh": {
+        "description": "M3U account refresh parameters",
+        "parameters": [
+            {
+                "name": "account_ids",
+                "type": "number_array",
+                "label": "M3U Accounts",
+                "description": "Which M3U accounts to refresh (empty = all accounts)",
+                "default": [],
+                "source": "m3u_accounts",  # Tells UI to fetch from M3U accounts API
+            },
+        ],
+    },
+    "epg_refresh": {
+        "description": "EPG data refresh parameters",
+        "parameters": [
+            {
+                "name": "source_ids",
+                "type": "number_array",
+                "label": "EPG Sources",
+                "description": "Which EPG sources to refresh (empty = all sources)",
+                "default": [],
+                "source": "epg_sources",  # Tells UI to fetch from EPG sources API
+            },
+        ],
+    },
+    "cleanup": {
+        "description": "Cleanup task parameters",
+        "parameters": [
+            {
+                "name": "retention_days",
+                "type": "number",
+                "label": "Retention Days",
+                "description": "Keep data for this many days (0 = use default)",
+                "default": 0,
+                "min": 0,
+                "max": 365,
+            },
+        ],
+    },
+}
+
+
+@app.get("/api/tasks/{task_id}/parameter-schema")
+async def get_task_parameter_schema(task_id: str):
+    """Get the parameter schema for a task type."""
+    schema = TASK_PARAMETER_SCHEMAS.get(task_id)
+    if not schema:
+        # Return empty schema for tasks without special parameters
+        return {"task_id": task_id, "description": "No configurable parameters", "parameters": []}
+    return {"task_id": task_id, **schema}
+
+
+@app.get("/api/tasks/parameter-schemas")
+async def get_all_task_parameter_schemas():
+    """Get parameter schemas for all task types."""
+    return {"schemas": TASK_PARAMETER_SCHEMAS}
 
 
 @app.get("/api/tasks/{task_id}/schedules")
@@ -5742,6 +5870,10 @@ async def create_task_schedule(task_id: str, data: TaskScheduleCreate):
             # Set days_of_week if provided
             if data.days_of_week:
                 schedule.set_days_of_week_list(data.days_of_week)
+
+            # Set task-specific parameters if provided
+            if data.parameters:
+                schedule.set_parameters(data.parameters)
 
             # Calculate next run time
             if data.enabled:
@@ -5818,6 +5950,8 @@ async def update_task_schedule(task_id: str, schedule_id: int, data: TaskSchedul
                 schedule.set_days_of_week_list(data.days_of_week)
             if data.day_of_month is not None:
                 schedule.day_of_month = data.day_of_month
+            if data.parameters is not None:
+                schedule.set_parameters(data.parameters)
 
             # Recalculate next run time
             if schedule.enabled:

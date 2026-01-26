@@ -19,6 +19,31 @@ import { NotificationProvider } from './contexts/NotificationContext';
 import ECMLogo from './assets/ECMLogo.png';
 import './App.css';
 
+// All known sort criteria - used to merge new criteria into saved settings
+const ALL_SORT_CRITERIA: api.SortCriterion[] = ['resolution', 'bitrate', 'framerate', 'm3u_priority', 'audio_channels'];
+const DEFAULT_SORT_ENABLED: api.SortEnabledMap = {
+  resolution: true, bitrate: true, framerate: true, m3u_priority: false, audio_channels: false
+};
+
+// Merge saved sort criteria with any new criteria that may have been added
+function mergeSortCriteria(
+  savedPriority: api.SortCriterion[] | undefined,
+  savedEnabled: api.SortEnabledMap | undefined
+): { priority: api.SortCriterion[]; enabled: api.SortEnabledMap } {
+  if (!savedPriority || savedPriority.length === 0) {
+    return { priority: ALL_SORT_CRITERIA, enabled: DEFAULT_SORT_ENABLED };
+  }
+  const priority = [...savedPriority];
+  const enabled = { ...DEFAULT_SORT_ENABLED, ...savedEnabled };
+  for (const criterion of ALL_SORT_CRITERIA) {
+    if (!priority.includes(criterion)) {
+      priority.push(criterion);
+      enabled[criterion] = false;
+    }
+  }
+  return { priority, enabled };
+}
+
 // Lazy load non-primary tabs
 const M3UManagerTab = lazy(() => import('./components/tabs/M3UManagerTab').then(m => ({ default: m.M3UManagerTab })));
 const EPGManagerTab = lazy(() => import('./components/tabs/EPGManagerTab').then(m => ({ default: m.EPGManagerTab })));
@@ -426,10 +451,13 @@ function App() {
           timezonePreference: settings.timezone_preference,
           defaultChannelProfileIds: settings.default_channel_profile_ids,
           customNetworkPrefixes: settings.custom_network_prefixes ?? [],
-          streamSortPriority: settings.stream_sort_priority ?? ['resolution', 'bitrate', 'framerate'],
-          streamSortEnabled: settings.stream_sort_enabled ?? { resolution: true, bitrate: true, framerate: true },
+          ...(() => {
+            const merged = mergeSortCriteria(settings.stream_sort_priority, settings.stream_sort_enabled);
+            return { streamSortPriority: merged.priority, streamSortEnabled: merged.enabled };
+          })(),
           deprioritizeFailedStreams: settings.deprioritize_failed_streams ?? true,
           normalizationSettings: settings.normalization_settings ?? { disabledBuiltinTags: [], customTags: [] },
+          m3uAccountPriorities: settings.m3u_account_priorities ?? {},
         });
         setDefaultChannelProfileIds(settings.default_channel_profile_ids);
 
@@ -637,10 +665,13 @@ function App() {
         timezonePreference: settings.timezone_preference,
         defaultChannelProfileIds: settings.default_channel_profile_ids,
         customNetworkPrefixes: settings.custom_network_prefixes ?? [],
-        streamSortPriority: settings.stream_sort_priority ?? ['resolution', 'bitrate', 'framerate'],
-        streamSortEnabled: settings.stream_sort_enabled ?? { resolution: true, bitrate: true, framerate: true },
+        ...(() => {
+          const merged = mergeSortCriteria(settings.stream_sort_priority, settings.stream_sort_enabled);
+          return { streamSortPriority: merged.priority, streamSortEnabled: merged.enabled };
+        })(),
         deprioritizeFailedStreams: settings.deprioritize_failed_streams ?? true,
         normalizationSettings: settings.normalization_settings ?? { disabledBuiltinTags: [], customTags: [] },
+        m3uAccountPriorities: settings.m3u_account_priorities ?? {},
       });
       setDefaultChannelProfileIds(settings.default_channel_profile_ids);
 

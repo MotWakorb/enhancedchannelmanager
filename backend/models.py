@@ -267,6 +267,10 @@ class TaskSchedule(Base):
     - weekly: Run on specific days each week
     - biweekly: Run every other week on specific days
     - monthly: Run on a specific day of month
+
+    Each schedule can have task-specific parameters stored as JSON.
+    For example, a StreamProber schedule might have:
+    {"channel_groups": ["Sports", "News"], "batch_size": 10, "timeout": 30}
     """
     __tablename__ = "task_schedules"
 
@@ -288,8 +292,12 @@ class TaskSchedule(Base):
     day_of_month = Column(Integer, nullable=True)
     # For biweekly: which week (0 or 1) - used to track odd/even weeks
     week_parity = Column(Integer, nullable=True)  # 0 = even weeks, 1 = odd weeks
+    # Task-specific parameters as JSON
+    parameters = Column(Text, nullable=True)  # JSON object with task-specific settings
     # Calculated next run time
     next_run_at = Column(DateTime, nullable=True)
+    # Last execution time for this specific schedule
+    last_run_at = Column(DateTime, nullable=True)
     # Timestamps
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
@@ -313,6 +321,25 @@ class TaskSchedule(Base):
         """Set days_of_week from list of integers."""
         self.days_of_week = ",".join(str(d) for d in sorted(days)) if days else None
 
+    def get_parameters(self) -> dict:
+        """Parse parameters JSON into dictionary."""
+        if not self.parameters:
+            return {}
+        try:
+            import json
+            return json.loads(self.parameters)
+        except (ValueError, TypeError):
+            return {}
+
+    def set_parameters(self, params: dict) -> None:
+        """Set parameters from dictionary."""
+        import json
+        self.parameters = json.dumps(params) if params else None
+
+    def get_parameter(self, key: str, default=None):
+        """Get a specific parameter value."""
+        return self.get_parameters().get(key, default)
+
     def to_dict(self) -> dict:
         """Convert to dictionary for API responses."""
         return {
@@ -327,13 +354,15 @@ class TaskSchedule(Base):
             "days_of_week": self.get_days_of_week_list(),
             "day_of_month": self.day_of_month,
             "week_parity": self.week_parity,
+            "parameters": self.get_parameters(),
             "next_run_at": self.next_run_at.isoformat() + "Z" if self.next_run_at else None,
+            "last_run_at": self.last_run_at.isoformat() + "Z" if self.last_run_at else None,
             "created_at": self.created_at.isoformat() + "Z" if self.created_at else None,
             "updated_at": self.updated_at.isoformat() + "Z" if self.updated_at else None,
         }
 
     def __repr__(self):
-        return f"<TaskSchedule(id={self.id}, task_id={self.task_id}, type={self.schedule_type})>"
+        return f"<TaskSchedule(id={self.id}, task_id={self.task_id}, name={self.name}, type={self.schedule_type})>"
 
 
 class TaskExecution(Base):

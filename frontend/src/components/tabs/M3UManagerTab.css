@@ -77,7 +77,7 @@
 
 .list-header {
   display: grid;
-  grid-template-columns: 100px 1fr 130px 140px 160px 180px;
+  grid-template-columns: 100px 1fr 130px 140px 70px 160px 180px;
   gap: 1rem;
   padding: 0.75rem 1rem;
   background-color: var(--input-bg);
@@ -91,7 +91,7 @@
 
 .m3u-account-row {
   display: grid;
-  grid-template-columns: 100px 1fr 130px 140px 160px 180px;
+  grid-template-columns: 100px 1fr 130px 140px 70px 160px 180px;
   gap: 1rem;
   padding: 1rem;
   border-bottom: 1px solid var(--border-primary);
@@ -257,6 +257,43 @@
 .setting-item {
   font-size: 0.8rem;
   color: var(--text-secondary);
+}
+
+/* Account Priority Column */
+.account-priority {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.col-priority {
+  text-align: center;
+}
+
+.priority-input {
+  width: 54px;
+  padding: 0.35rem 0.5rem;
+  font-size: 0.875rem;
+  border: 1px solid var(--border-secondary);
+  border-radius: 4px;
+  background-color: var(--input-bg);
+  color: var(--text-primary);
+  text-align: center;
+}
+
+.priority-input:focus {
+  outline: none;
+  border-color: var(--accent-primary);
+}
+
+.priority-input::-webkit-inner-spin-button,
+.priority-input::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.priority-input[type=number] {
+  -moz-appearance: textfield;
 }
 
 /* Account Updated */
