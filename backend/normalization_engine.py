@@ -126,20 +126,28 @@ class NormalizationEngine:
 
         elif condition_type == "starts_with":
             if match_text.startswith(match_pattern):
-                return RuleMatch(
-                    matched=True,
-                    match_start=0,
-                    match_end=len(pattern)
-                )
+                # Check that pattern is followed by separator or end of string
+                # This prevents "ES" from matching "ESPN" - it should only match "ES: ..." or "ES | ..."
+                remaining = match_text[len(match_pattern):]
+                if not remaining or re.match(r'^[\s:\-|/]', remaining):
+                    return RuleMatch(
+                        matched=True,
+                        match_start=0,
+                        match_end=len(pattern)
+                    )
             return RuleMatch(matched=False)
 
         elif condition_type == "ends_with":
             if match_text.endswith(match_pattern):
-                return RuleMatch(
-                    matched=True,
-                    match_start=len(text) - len(pattern),
-                    match_end=len(text)
-                )
+                # Check that pattern is preceded by separator or start of string
+                # This prevents "HD" from matching "ADHD" - it should only match "... HD" or "...|HD"
+                prefix_len = len(text) - len(pattern)
+                if prefix_len == 0 or re.search(r'[\s:\-|/]$', text[:prefix_len]):
+                    return RuleMatch(
+                        matched=True,
+                        match_start=prefix_len,
+                        match_end=len(text)
+                    )
             return RuleMatch(matched=False)
 
         elif condition_type == "regex":

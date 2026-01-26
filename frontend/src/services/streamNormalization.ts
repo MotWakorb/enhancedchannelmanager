@@ -775,3 +775,52 @@ export function filterStreamsByTimezone<T extends { name: string }>(
     }
   });
 }
+
+// =============================================================================
+// Backend Normalization API Integration
+// =============================================================================
+
+import { normalizeTexts } from './api';
+
+/**
+ * Normalize stream names using the backend normalization engine.
+ * This uses the configurable rules defined in the Settings tab.
+ *
+ * @param names Array of stream names to normalize
+ * @returns Promise resolving to map of original name -> normalized name
+ */
+export async function normalizeStreamNamesWithBackend(names: string[]): Promise<Map<string, string>> {
+  if (names.length === 0) {
+    return new Map();
+  }
+
+  try {
+    const response = await normalizeTexts(names);
+    const resultMap = new Map<string, string>();
+
+    for (const result of response.results) {
+      resultMap.set(result.original, result.normalized);
+    }
+
+    return resultMap;
+  } catch (error) {
+    console.error('Backend normalization failed, falling back to frontend normalization:', error);
+    // Fall back to frontend normalization
+    const resultMap = new Map<string, string>();
+    for (const name of names) {
+      resultMap.set(name, normalizeStreamName(name));
+    }
+    return resultMap;
+  }
+}
+
+/**
+ * Normalize a single stream name using the backend normalization engine.
+ *
+ * @param name Stream name to normalize
+ * @returns Promise resolving to normalized name
+ */
+export async function normalizeStreamNameWithBackend(name: string): Promise<string> {
+  const results = await normalizeStreamNamesWithBackend([name]);
+  return results.get(name) ?? name;
+}

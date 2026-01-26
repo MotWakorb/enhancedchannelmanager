@@ -4,6 +4,7 @@ import { NETWORK_PREFIXES, NETWORK_SUFFIXES } from '../../constants/streamNormal
 import { normalizeStreamName } from '../../services/streamNormalization';
 import type { Theme, ProbeHistoryEntry, SortCriterion, SortEnabledMap, GracenoteConflictMode, NormalizationSettings } from '../../services/api';
 import { NormalizationTagsSection } from '../settings/NormalizationTagsSection';
+import { NormalizationEngineSection } from '../settings/NormalizationEngineSection';
 import type { ChannelProfile } from '../../types';
 import { logger } from '../../utils/logger';
 import { copyToClipboard } from '../../utils/clipboard';
@@ -1876,6 +1877,9 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
           </div>
         )}
       </div>
+
+      {/* Advanced Normalization Rules Engine */}
+      <NormalizationEngineSection />
 
       {saveSuccess && (
         <div className="success-message">

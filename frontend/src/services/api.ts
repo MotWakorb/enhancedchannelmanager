@@ -25,6 +25,17 @@ import type {
   ChannelStatsResponse,
   ChannelStats,
   SystemEventsResponse,
+  NormalizationRuleGroup,
+  NormalizationRule,
+  CreateRuleGroupRequest,
+  UpdateRuleGroupRequest,
+  CreateRuleRequest,
+  UpdateRuleRequest,
+  TestRuleRequest,
+  TestRuleResult,
+  NormalizationBatchResponse,
+  NormalizationMigrationStatus,
+  NormalizationMigrationResult,
 } from '../types';
 import { logger } from '../utils/logger';
 import {
@@ -2116,6 +2127,164 @@ export async function deleteAlertMethod(methodId: number): Promise<{ success: bo
 
 export async function testAlertMethod(methodId: number): Promise<{ success: boolean; message: string }> {
   return fetchJson(`${API_BASE}/alert-methods/${methodId}/test`, {
+    method: 'POST',
+  });
+}
+
+// =============================================================================
+// Normalization Rules API
+// =============================================================================
+
+/**
+ * Get all normalization rule groups
+ */
+export async function getNormalizationGroups(): Promise<{ groups: NormalizationRuleGroup[] }> {
+  return fetchJson(`${API_BASE}/normalization/groups`);
+}
+
+/**
+ * Get a single normalization rule group by ID
+ */
+export async function getNormalizationGroup(groupId: number): Promise<NormalizationRuleGroup> {
+  return fetchJson(`${API_BASE}/normalization/groups/${groupId}`);
+}
+
+/**
+ * Create a new normalization rule group
+ */
+export async function createNormalizationGroup(data: CreateRuleGroupRequest): Promise<NormalizationRuleGroup> {
+  return fetchJson(`${API_BASE}/normalization/groups`, {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
+/**
+ * Update a normalization rule group
+ */
+export async function updateNormalizationGroup(groupId: number, data: UpdateRuleGroupRequest): Promise<NormalizationRuleGroup> {
+  return fetchJson(`${API_BASE}/normalization/groups/${groupId}`, {
+    method: 'PATCH',
+    body: JSON.stringify(data),
+  });
+}
+
+/**
+ * Delete a normalization rule group
+ */
+export async function deleteNormalizationGroup(groupId: number): Promise<{ status: string; id: number }> {
+  return fetchJson(`${API_BASE}/normalization/groups/${groupId}`, {
+    method: 'DELETE',
+  });
+}
+
+/**
+ * Reorder normalization rule groups
+ */
+export async function reorderNormalizationGroups(groupIds: number[]): Promise<{ status: string }> {
+  return fetchJson(`${API_BASE}/normalization/groups/reorder`, {
+    method: 'POST',
+    body: JSON.stringify({ group_ids: groupIds }),
+  });
+}
+
+/**
+ * Get all normalization rules (optionally filtered by group)
+ */
+export async function getNormalizationRules(groupId?: number): Promise<{ groups: NormalizationRuleGroup[] }> {
+  const query = groupId ? `?group_id=${groupId}` : '';
+  return fetchJson(`${API_BASE}/normalization/rules${query}`);
+}
+
+/**
+ * Get a single normalization rule by ID
+ */
+export async function getNormalizationRule(ruleId: number): Promise<NormalizationRule> {
+  return fetchJson(`${API_BASE}/normalization/rules/${ruleId}`);
+}
+
+/**
+ * Create a new normalization rule
+ */
+export async function createNormalizationRule(data: CreateRuleRequest): Promise<NormalizationRule> {
+  return fetchJson(`${API_BASE}/normalization/rules`, {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
+/**
+ * Update a normalization rule
+ */
+export async function updateNormalizationRule(ruleId: number, data: UpdateRuleRequest): Promise<NormalizationRule> {
+  return fetchJson(`${API_BASE}/normalization/rules/${ruleId}`, {
+    method: 'PATCH',
+    body: JSON.stringify(data),
+  });
+}
+
+/**
+ * Delete a normalization rule
+ */
+export async function deleteNormalizationRule(ruleId: number): Promise<{ status: string; id: number }> {
+  return fetchJson(`${API_BASE}/normalization/rules/${ruleId}`, {
+    method: 'DELETE',
+  });
+}
+
+/**
+ * Reorder rules within a group
+ */
+export async function reorderNormalizationRules(groupId: number, ruleIds: number[]): Promise<{ status: string }> {
+  return fetchJson(`${API_BASE}/normalization/groups/${groupId}/rules/reorder`, {
+    method: 'POST',
+    body: JSON.stringify({ rule_ids: ruleIds }),
+  });
+}
+
+/**
+ * Test a single rule configuration without saving
+ */
+export async function testNormalizationRule(data: TestRuleRequest): Promise<TestRuleResult> {
+  return fetchJson(`${API_BASE}/normalization/test`, {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
+/**
+ * Test multiple texts through all enabled rules (with transformation details)
+ */
+export async function testNormalizationBatch(texts: string[]): Promise<NormalizationBatchResponse> {
+  return fetchJson(`${API_BASE}/normalization/test-batch`, {
+    method: 'POST',
+    body: JSON.stringify({ texts }),
+  });
+}
+
+/**
+ * Normalize texts through all enabled rules (simple result)
+ */
+export async function normalizeTexts(texts: string[]): Promise<NormalizationBatchResponse> {
+  return fetchJson(`${API_BASE}/normalization/normalize`, {
+    method: 'POST',
+    body: JSON.stringify({ texts }),
+  });
+}
+
+/**
+ * Get normalization migration status
+ */
+export async function getNormalizationMigrationStatus(): Promise<NormalizationMigrationStatus> {
+  return fetchJson(`${API_BASE}/normalization/migration/status`);
+}
+
+/**
+ * Run normalization migration to create built-in rules
+ */
+export async function runNormalizationMigration(force?: boolean): Promise<NormalizationMigrationResult> {
+  const query = force ? '?force=true' : '';
+  return fetchJson(`${API_BASE}/normalization/migration/run${query}`, {
     method: 'POST',
   });
 }
