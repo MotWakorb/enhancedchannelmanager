@@ -1,0 +1,870 @@
+/**
+ * NormalizationEngineSection Component
+ *
+ * Advanced normalization rules management UI for the Settings tab.
+ * Allows viewing, creating, editing, and testing normalization rules.
+ */
+import { useState, useEffect, useCallback, useMemo } from 'react';
+import * as api from '../../services/api';
+import type {
+  NormalizationRuleGroup,
+  NormalizationRule,
+  NormalizationConditionType,
+  NormalizationActionType,
+  NormalizationResult,
+  TestRuleResult,
+} from '../../types';
+import './NormalizationEngineSection.css';
+
+// Condition type options for dropdowns
+const CONDITION_TYPES: { value: NormalizationConditionType; label: string; description: string }[] = [
+  { value: 'starts_with', label: 'Starts With', description: 'Match text at the beginning' },
+  { value: 'ends_with', label: 'Ends With', description: 'Match text at the end' },
+  { value: 'contains', label: 'Contains', description: 'Match text anywhere' },
+  { value: 'regex', label: 'Regex', description: 'Match using regular expression' },
+  { value: 'always', label: 'Always', description: 'Always match (use with caution)' },
+];
+
+// Action type options for dropdowns
+const ACTION_TYPES: { value: NormalizationActionType; label: string; description: string }[] = [
+  { value: 'strip_prefix', label: 'Strip Prefix', description: 'Remove matched text from start' },
+  { value: 'strip_suffix', label: 'Strip Suffix', description: 'Remove matched text from end' },
+  { value: 'remove', label: 'Remove', description: 'Remove matched text' },
+  { value: 'replace', label: 'Replace', description: 'Replace matched text with value' },
+  { value: 'regex_replace', label: 'Regex Replace', description: 'Replace using regex substitution' },
+  { value: 'normalize_prefix', label: 'Normalize Prefix', description: 'Standardize prefix format' },
+];
+
+// Sample stream names for testing
+const SAMPLE_STREAMS = [
+  'US: ESPN HD',
+  'UK | BBC One FHD',
+  'NFL: FOX Sports 1 EAST',
+  'CA: TSN 4K',
+  'ESPN+ Live',
+  'NBA TV HD',
+];
+
+interface RuleEditorState {
+  isOpen: boolean;
+  editingRule: NormalizationRule | null;
+  groupId: number | null;
+  name: string;
+  description: string;
+  conditionType: NormalizationConditionType;
+  conditionValue: string;
+  caseSensitive: boolean;
+  actionType: NormalizationActionType;
+  actionValue: string;
+  stopProcessing: boolean;
+}
+
+interface GroupEditorState {
+  isOpen: boolean;
+  editingGroup: NormalizationRuleGroup | null;
+  name: string;
+  description: string;
+}
+
+export function NormalizationEngineSection() {
+  // Data state
+  const [groups, setGroups] = useState<NormalizationRuleGroup[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  // UI state
+  const [expandedGroups, setExpandedGroups] = useState<Set<number>>(new Set());
+  const [selectedRule, setSelectedRule] = useState<NormalizationRule | null>(null);
+
+  // Test panel state
+  const [testInput, setTestInput] = useState('');
+  const [testResults, setTestResults] = useState<NormalizationResult[]>([]);
+  const [testing, setTesting] = useState(false);
+
+  // Rule editor state
+  const [ruleEditor, setRuleEditor] = useState<RuleEditorState>({
+    isOpen: false,
+    editingRule: null,
+    groupId: null,
+    name: '',
+    description: '',
+    conditionType: 'starts_with',
+    conditionValue: '',
+    caseSensitive: false,
+    actionType: 'strip_prefix',
+    actionValue: '',
+    stopProcessing: false,
+  });
+
+  // Group editor state
+  const [groupEditor, setGroupEditor] = useState<GroupEditorState>({
+    isOpen: false,
+    editingGroup: null,
+    name: '',
+    description: '',
+  });
+
+  // Live preview state
+  const [previewResult, setPreviewResult] = useState<TestRuleResult | null>(null);
+
+  // Load groups and rules
+  const loadData = useCallback(async () => {
+    try {
+      setLoading(true);
+      setError(null);
+      const response = await api.getNormalizationRules();
+      setGroups(response.groups);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to load rules');
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadData();
+  }, [loadData]);
+
+  // Toggle group expansion
+  const toggleGroup = useCallback((groupId: number) => {
+    setExpandedGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(groupId)) {
+        next.delete(groupId);
+      } else {
+        next.add(groupId);
+      }
+      return next;
+    });
+  }, []);
+
+  // Toggle group enabled state
+  const toggleGroupEnabled = useCallback(async (group: NormalizationRuleGroup) => {
+    try {
+      await api.updateNormalizationGroup(group.id, { enabled: !group.enabled });
+      await loadData();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to update group');
+    }
+  }, [loadData]);
+
+  // Toggle rule enabled state
+  const toggleRuleEnabled = useCallback(async (rule: NormalizationRule) => {
+    try {
+      await api.updateNormalizationRule(rule.id, { enabled: !rule.enabled });
+      await loadData();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to update rule');
+    }
+  }, [loadData]);
+
+  // Delete rule
+  const deleteRule = useCallback(async (rule: NormalizationRule) => {
+    if (!confirm(`Delete rule "${rule.name}"?`)) return;
+    try {
+      await api.deleteNormalizationRule(rule.id);
+      await loadData();
+      if (selectedRule?.id === rule.id) {
+        setSelectedRule(null);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to delete rule');
+    }
+  }, [loadData, selectedRule]);
+
+  // Delete group
+  const deleteGroup = useCallback(async (group: NormalizationRuleGroup) => {
+    if (!confirm(`Delete group "${group.name}" and all its rules?`)) return;
+    try {
+      await api.deleteNormalizationGroup(group.id);
+      await loadData();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to delete group');
+    }
+  }, [loadData]);
+
+  // Open rule editor for new rule
+  const openNewRuleEditor = useCallback((groupId: number) => {
+    setRuleEditor({
+      isOpen: true,
+      editingRule: null,
+      groupId,
+      name: '',
+      description: '',
+      conditionType: 'starts_with',
+      conditionValue: '',
+      caseSensitive: false,
+      actionType: 'strip_prefix',
+      actionValue: '',
+      stopProcessing: false,
+    });
+    setPreviewResult(null);
+  }, []);
+
+  // Open rule editor for editing
+  const openEditRuleEditor = useCallback((rule: NormalizationRule) => {
+    setRuleEditor({
+      isOpen: true,
+      editingRule: rule,
+      groupId: rule.group_id,
+      name: rule.name,
+      description: rule.description || '',
+      conditionType: rule.condition_type,
+      conditionValue: rule.condition_value || '',
+      caseSensitive: rule.case_sensitive,
+      actionType: rule.action_type,
+      actionValue: rule.action_value || '',
+      stopProcessing: rule.stop_processing,
+    });
+    setPreviewResult(null);
+  }, []);
+
+  // Close rule editor
+  const closeRuleEditor = useCallback(() => {
+    setRuleEditor((prev) => ({ ...prev, isOpen: false }));
+    setPreviewResult(null);
+  }, []);
+
+  // Save rule
+  const saveRule = useCallback(async () => {
+    try {
+      if (ruleEditor.editingRule) {
+        // Update existing rule
+        await api.updateNormalizationRule(ruleEditor.editingRule.id, {
+          name: ruleEditor.name,
+          description: ruleEditor.description || undefined,
+          condition_type: ruleEditor.conditionType,
+          condition_value: ruleEditor.conditionValue || undefined,
+          case_sensitive: ruleEditor.caseSensitive,
+          action_type: ruleEditor.actionType,
+          action_value: ruleEditor.actionValue || undefined,
+          stop_processing: ruleEditor.stopProcessing,
+        });
+      } else if (ruleEditor.groupId) {
+        // Create new rule
+        await api.createNormalizationRule({
+          group_id: ruleEditor.groupId,
+          name: ruleEditor.name,
+          description: ruleEditor.description || undefined,
+          condition_type: ruleEditor.conditionType,
+          condition_value: ruleEditor.conditionValue || undefined,
+          case_sensitive: ruleEditor.caseSensitive,
+          action_type: ruleEditor.actionType,
+          action_value: ruleEditor.actionValue || undefined,
+          stop_processing: ruleEditor.stopProcessing,
+        });
+      }
+      closeRuleEditor();
+      await loadData();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to save rule');
+    }
+  }, [ruleEditor, closeRuleEditor, loadData]);
+
+  // Open group editor for new group
+  const openNewGroupEditor = useCallback(() => {
+    setGroupEditor({
+      isOpen: true,
+      editingGroup: null,
+      name: '',
+      description: '',
+    });
+  }, []);
+
+  // Open group editor for editing
+  const openEditGroupEditor = useCallback((group: NormalizationRuleGroup) => {
+    setGroupEditor({
+      isOpen: true,
+      editingGroup: group,
+      name: group.name,
+      description: group.description || '',
+    });
+  }, []);
+
+  // Close group editor
+  const closeGroupEditor = useCallback(() => {
+    setGroupEditor((prev) => ({ ...prev, isOpen: false }));
+  }, []);
+
+  // Save group
+  const saveGroup = useCallback(async () => {
+    try {
+      if (groupEditor.editingGroup) {
+        await api.updateNormalizationGroup(groupEditor.editingGroup.id, {
+          name: groupEditor.name,
+          description: groupEditor.description || undefined,
+        });
+      } else {
+        const maxPriority = groups.length > 0 ? Math.max(...groups.map((g) => g.priority)) + 1 : 0;
+        await api.createNormalizationGroup({
+          name: groupEditor.name,
+          description: groupEditor.description || undefined,
+          priority: maxPriority,
+        });
+      }
+      closeGroupEditor();
+      await loadData();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to save group');
+    }
+  }, [groupEditor, groups, closeGroupEditor, loadData]);
+
+  // Test normalization
+  const runTest = useCallback(async () => {
+    const texts = testInput.trim()
+      ? testInput.split('\n').filter((t) => t.trim())
+      : SAMPLE_STREAMS;
+
+    try {
+      setTesting(true);
+      const response = await api.testNormalizationBatch(texts);
+      setTestResults(response.results);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to test normalization');
+    } finally {
+      setTesting(false);
+    }
+  }, [testInput]);
+
+  // Live preview for rule editor
+  const updatePreview = useCallback(async () => {
+    if (!ruleEditor.conditionValue && ruleEditor.conditionType !== 'always') {
+      setPreviewResult(null);
+      return;
+    }
+
+    const sampleText = testInput.trim().split('\n')[0] || SAMPLE_STREAMS[0];
+
+    try {
+      const result = await api.testNormalizationRule({
+        text: sampleText,
+        condition_type: ruleEditor.conditionType,
+        condition_value: ruleEditor.conditionValue,
+        case_sensitive: ruleEditor.caseSensitive,
+        action_type: ruleEditor.actionType,
+        action_value: ruleEditor.actionValue || undefined,
+      });
+      setPreviewResult(result);
+    } catch {
+      setPreviewResult(null);
+    }
+  }, [ruleEditor, testInput]);
+
+  // Update preview when rule editor changes
+  useEffect(() => {
+    if (ruleEditor.isOpen) {
+      const timer = setTimeout(updatePreview, 300);
+      return () => clearTimeout(timer);
+    }
+  }, [ruleEditor.isOpen, ruleEditor.conditionType, ruleEditor.conditionValue, ruleEditor.caseSensitive, ruleEditor.actionType, ruleEditor.actionValue, updatePreview]);
+
+  // Stats
+  const stats = useMemo(() => {
+    let totalRules = 0;
+    let enabledRules = 0;
+    let builtinRules = 0;
+
+    groups.forEach((group) => {
+      group.rules?.forEach((rule) => {
+        totalRules++;
+        if (rule.enabled) enabledRules++;
+        if (rule.is_builtin) builtinRules++;
+      });
+    });
+
+    return {
+      totalGroups: groups.length,
+      enabledGroups: groups.filter((g) => g.enabled).length,
+      totalRules,
+      enabledRules,
+      builtinRules,
+      customRules: totalRules - builtinRules,
+    };
+  }, [groups]);
+
+  if (loading) {
+    return (
+      <div className="norm-engine-section">
+        <div className="norm-engine-loading">
+          <span className="material-icons spin">sync</span>
+          Loading normalization rules...
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="norm-engine-section">
+      {/* Header */}
+      <div className="norm-engine-header">
+        <div className="norm-engine-title-wrapper">
+          <span className="material-icons norm-engine-icon">auto_fix_high</span>
+          <h3 className="norm-engine-title">Normalization Rules Engine</h3>
+        </div>
+        <button
+          className="norm-engine-btn norm-engine-btn-primary"
+          onClick={openNewGroupEditor}
+          type="button"
+        >
+          <span className="material-icons">add</span>
+          New Group
+        </button>
+      </div>
+
+      <p className="norm-engine-subtitle">
+        Configure rules to automatically normalize stream names when creating channels.
+        Rules are processed in priority order within each group.
+      </p>
+
+      {/* Error message */}
+      {error && (
+        <div className="norm-engine-error">
+          <span className="material-icons">error</span>
+          {error}
+          <button onClick={() => setError(null)} type="button">
+            <span className="material-icons">close</span>
+          </button>
+        </div>
+      )}
+
+      {/* Stats */}
+      <div className="norm-engine-stats">
+        <div className="norm-engine-stat">
+          <span className="norm-engine-stat-value">{stats.enabledGroups}/{stats.totalGroups}</span>
+          <span className="norm-engine-stat-label">Groups Active</span>
+        </div>
+        <div className="norm-engine-stat">
+          <span className="norm-engine-stat-value">{stats.enabledRules}/{stats.totalRules}</span>
+          <span className="norm-engine-stat-label">Rules Active</span>
+        </div>
+        <div className="norm-engine-stat">
+          <span className="norm-engine-stat-value">{stats.builtinRules}</span>
+          <span className="norm-engine-stat-label">Built-in</span>
+        </div>
+        <div className="norm-engine-stat">
+          <span className="norm-engine-stat-value">{stats.customRules}</span>
+          <span className="norm-engine-stat-label">Custom</span>
+        </div>
+      </div>
+
+      {/* Two-column layout: Groups/Rules + Test Panel */}
+      <div className="norm-engine-content">
+        {/* Left: Groups and Rules */}
+        <div className="norm-engine-groups">
+          {groups.map((group) => (
+            <div
+              key={group.id}
+              className={`norm-engine-group ${!group.enabled ? 'disabled' : ''}`}
+            >
+              <div className="norm-engine-group-header" onClick={() => toggleGroup(group.id)}>
+                <span className={`material-icons norm-engine-expand ${expandedGroups.has(group.id) ? 'expanded' : ''}`}>
+                  chevron_right
+                </span>
+                <div className="norm-engine-group-info">
+                  <span className="norm-engine-group-name">{group.name}</span>
+                  {group.is_builtin && (
+                    <span className="norm-engine-badge builtin">Built-in</span>
+                  )}
+                  <span className="norm-engine-group-count">
+                    {group.rules?.length || 0} rules
+                  </span>
+                </div>
+                <div className="norm-engine-group-actions" onClick={(e) => e.stopPropagation()}>
+                  <label className="norm-engine-toggle">
+                    <input
+                      type="checkbox"
+                      checked={group.enabled}
+                      onChange={() => toggleGroupEnabled(group)}
+                    />
+                    <span className="norm-engine-toggle-slider"></span>
+                  </label>
+                  {!group.is_builtin && (
+                    <>
+                      <button
+                        className="norm-engine-btn-icon"
+                        onClick={() => openEditGroupEditor(group)}
+                        title="Edit group"
+                        type="button"
+                      >
+                        <span className="material-icons">edit</span>
+                      </button>
+                      <button
+                        className="norm-engine-btn-icon danger"
+                        onClick={() => deleteGroup(group)}
+                        title="Delete group"
+                        type="button"
+                      >
+                        <span className="material-icons">delete</span>
+                      </button>
+                    </>
+                  )}
+                </div>
+              </div>
+
+              {expandedGroups.has(group.id) && (
+                <div className="norm-engine-rules">
+                  {group.description && (
+                    <p className="norm-engine-group-description">{group.description}</p>
+                  )}
+
+                  {group.rules?.map((rule) => (
+                    <div
+                      key={rule.id}
+                      className={`norm-engine-rule ${!rule.enabled ? 'disabled' : ''} ${selectedRule?.id === rule.id ? 'selected' : ''}`}
+                      onClick={() => setSelectedRule(rule)}
+                    >
+                      <div className="norm-engine-rule-info">
+                        <span className="norm-engine-rule-name">{rule.name}</span>
+                        <span className="norm-engine-rule-pattern">
+                          {rule.condition_type}: "{rule.condition_value}"
+                        </span>
+                      </div>
+                      <div className="norm-engine-rule-actions" onClick={(e) => e.stopPropagation()}>
+                        <label className="norm-engine-toggle small">
+                          <input
+                            type="checkbox"
+                            checked={rule.enabled}
+                            onChange={() => toggleRuleEnabled(rule)}
+                          />
+                          <span className="norm-engine-toggle-slider"></span>
+                        </label>
+                        {!rule.is_builtin && (
+                          <>
+                            <button
+                              className="norm-engine-btn-icon small"
+                              onClick={() => openEditRuleEditor(rule)}
+                              title="Edit rule"
+                              type="button"
+                            >
+                              <span className="material-icons">edit</span>
+                            </button>
+                            <button
+                              className="norm-engine-btn-icon small danger"
+                              onClick={() => deleteRule(rule)}
+                              title="Delete rule"
+                              type="button"
+                            >
+                              <span className="material-icons">delete</span>
+                            </button>
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+
+                  <button
+                    className="norm-engine-add-rule"
+                    onClick={() => openNewRuleEditor(group.id)}
+                    type="button"
+                  >
+                    <span className="material-icons">add</span>
+                    Add Rule
+                  </button>
+                </div>
+              )}
+            </div>
+          ))}
+
+          {groups.length === 0 && (
+            <div className="norm-engine-empty">
+              <span className="material-icons">rule</span>
+              <p>No normalization rules configured.</p>
+              <button
+                className="norm-engine-btn norm-engine-btn-primary"
+                onClick={openNewGroupEditor}
+                type="button"
+              >
+                Create First Group
+              </button>
+            </div>
+          )}
+        </div>
+
+        {/* Right: Test Panel */}
+        <div className="norm-engine-test-panel">
+          <div className="norm-engine-test-header">
+            <span className="material-icons">science</span>
+            <h4>Test Rules</h4>
+          </div>
+
+          <div className="norm-engine-test-input">
+            <textarea
+              placeholder="Enter stream names to test (one per line)&#10;or leave empty to use samples..."
+              value={testInput}
+              onChange={(e) => setTestInput(e.target.value)}
+              rows={4}
+            />
+            <button
+              className="norm-engine-btn norm-engine-btn-primary"
+              onClick={runTest}
+              disabled={testing}
+              type="button"
+            >
+              {testing ? (
+                <>
+                  <span className="material-icons spin">sync</span>
+                  Testing...
+                </>
+              ) : (
+                <>
+                  <span className="material-icons">play_arrow</span>
+                  Run Test
+                </>
+              )}
+            </button>
+          </div>
+
+          {testResults.length > 0 && (
+            <div className="norm-engine-test-results">
+              <h5>Results</h5>
+              {testResults.map((result, index) => (
+                <div key={index} className="norm-engine-test-result">
+                  <div className="norm-engine-test-original">
+                    <span className="label">Original:</span>
+                    <span className="value">{result.original}</span>
+                  </div>
+                  <div className="norm-engine-test-arrow">
+                    <span className="material-icons">arrow_downward</span>
+                  </div>
+                  <div className="norm-engine-test-normalized">
+                    <span className="label">Normalized:</span>
+                    <span className="value">{result.normalized}</span>
+                  </div>
+                  {result.transformations && result.transformations.length > 0 && (
+                    <div className="norm-engine-test-transforms">
+                      {result.transformations.map((t, i) => (
+                        <div key={i} className="norm-engine-test-transform">
+                          <span className="material-icons">chevron_right</span>
+                          Rule {t.rule_id}: "{t.before}" → "{t.after}"
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Rule Editor Modal */}
+      {ruleEditor.isOpen && (
+        <div className="norm-engine-modal-overlay" onClick={closeRuleEditor}>
+          <div className="norm-engine-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="norm-engine-modal-header">
+              <h3>{ruleEditor.editingRule ? 'Edit Rule' : 'New Rule'}</h3>
+              <button
+                className="norm-engine-btn-icon"
+                onClick={closeRuleEditor}
+                type="button"
+              >
+                <span className="material-icons">close</span>
+              </button>
+            </div>
+
+            <div className="norm-engine-modal-body">
+              <div className="norm-engine-form-group">
+                <label>Name</label>
+                <input
+                  type="text"
+                  value={ruleEditor.name}
+                  onChange={(e) => setRuleEditor((prev) => ({ ...prev, name: e.target.value }))}
+                  placeholder="e.g., Strip HD suffix"
+                />
+              </div>
+
+              <div className="norm-engine-form-group">
+                <label>Description (optional)</label>
+                <input
+                  type="text"
+                  value={ruleEditor.description}
+                  onChange={(e) => setRuleEditor((prev) => ({ ...prev, description: e.target.value }))}
+                  placeholder="What this rule does..."
+                />
+              </div>
+
+              <div className="norm-engine-form-row">
+                <div className="norm-engine-form-group">
+                  <label>Condition Type</label>
+                  <select
+                    value={ruleEditor.conditionType}
+                    onChange={(e) => setRuleEditor((prev) => ({
+                      ...prev,
+                      conditionType: e.target.value as NormalizationConditionType,
+                    }))}
+                  >
+                    {CONDITION_TYPES.map((ct) => (
+                      <option key={ct.value} value={ct.value}>
+                        {ct.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="norm-engine-form-group">
+                  <label>Pattern</label>
+                  <input
+                    type="text"
+                    value={ruleEditor.conditionValue}
+                    onChange={(e) => setRuleEditor((prev) => ({ ...prev, conditionValue: e.target.value }))}
+                    placeholder="e.g., HD"
+                    disabled={ruleEditor.conditionType === 'always'}
+                  />
+                </div>
+              </div>
+
+              <div className="norm-engine-form-row">
+                <div className="norm-engine-form-group">
+                  <label>Action Type</label>
+                  <select
+                    value={ruleEditor.actionType}
+                    onChange={(e) => setRuleEditor((prev) => ({
+                      ...prev,
+                      actionType: e.target.value as NormalizationActionType,
+                    }))}
+                  >
+                    {ACTION_TYPES.map((at) => (
+                      <option key={at.value} value={at.value}>
+                        {at.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="norm-engine-form-group">
+                  <label>Replacement Value</label>
+                  <input
+                    type="text"
+                    value={ruleEditor.actionValue}
+                    onChange={(e) => setRuleEditor((prev) => ({ ...prev, actionValue: e.target.value }))}
+                    placeholder="Leave empty to remove"
+                    disabled={!['replace', 'regex_replace', 'normalize_prefix'].includes(ruleEditor.actionType)}
+                  />
+                </div>
+              </div>
+
+              <div className="norm-engine-form-checkboxes">
+                <label className="norm-engine-checkbox">
+                  <input
+                    type="checkbox"
+                    checked={ruleEditor.caseSensitive}
+                    onChange={(e) => setRuleEditor((prev) => ({ ...prev, caseSensitive: e.target.checked }))}
+                  />
+                  Case Sensitive
+                </label>
+                <label className="norm-engine-checkbox">
+                  <input
+                    type="checkbox"
+                    checked={ruleEditor.stopProcessing}
+                    onChange={(e) => setRuleEditor((prev) => ({ ...prev, stopProcessing: e.target.checked }))}
+                  />
+                  Stop Processing After Match
+                </label>
+              </div>
+
+              {/* Live Preview */}
+              {previewResult && (
+                <div className="norm-engine-preview">
+                  <h5>Live Preview</h5>
+                  <div className={`norm-engine-preview-result ${previewResult.matched ? 'matched' : 'no-match'}`}>
+                    {previewResult.matched ? (
+                      <>
+                        <span className="material-icons">check_circle</span>
+                        <span className="before">{previewResult.before}</span>
+                        <span className="arrow">→</span>
+                        <span className="after">{previewResult.after}</span>
+                      </>
+                    ) : (
+                      <>
+                        <span className="material-icons">cancel</span>
+                        <span>No match</span>
+                      </>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="norm-engine-modal-footer">
+              <button
+                className="norm-engine-btn"
+                onClick={closeRuleEditor}
+                type="button"
+              >
+                Cancel
+              </button>
+              <button
+                className="norm-engine-btn norm-engine-btn-primary"
+                onClick={saveRule}
+                disabled={!ruleEditor.name.trim()}
+                type="button"
+              >
+                {ruleEditor.editingRule ? 'Save Changes' : 'Create Rule'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Group Editor Modal */}
+      {groupEditor.isOpen && (
+        <div className="norm-engine-modal-overlay" onClick={closeGroupEditor}>
+          <div className="norm-engine-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="norm-engine-modal-header">
+              <h3>{groupEditor.editingGroup ? 'Edit Group' : 'New Rule Group'}</h3>
+              <button
+                className="norm-engine-btn-icon"
+                onClick={closeGroupEditor}
+                type="button"
+              >
+                <span className="material-icons">close</span>
+              </button>
+            </div>
+
+            <div className="norm-engine-modal-body">
+              <div className="norm-engine-form-group">
+                <label>Name</label>
+                <input
+                  type="text"
+                  value={groupEditor.name}
+                  onChange={(e) => setGroupEditor((prev) => ({ ...prev, name: e.target.value }))}
+                  placeholder="e.g., My Custom Rules"
+                />
+              </div>
+
+              <div className="norm-engine-form-group">
+                <label>Description (optional)</label>
+                <textarea
+                  value={groupEditor.description}
+                  onChange={(e) => setGroupEditor((prev) => ({ ...prev, description: e.target.value }))}
+                  placeholder="What rules in this group do..."
+                  rows={3}
+                />
+              </div>
+            </div>
+
+            <div className="norm-engine-modal-footer">
+              <button
+                className="norm-engine-btn"
+                onClick={closeGroupEditor}
+                type="button"
+              >
+                Cancel
+              </button>
+              <button
+                className="norm-engine-btn norm-engine-btn-primary"
+                onClick={saveGroup}
+                disabled={!groupEditor.name.trim()}
+                type="button"
+              >
+                {groupEditor.editingGroup ? 'Save Changes' : 'Create Group'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+export default NormalizationEngineSection;

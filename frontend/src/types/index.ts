@@ -459,3 +459,147 @@ export interface ChannelWatchStats {
 
 // Sort mode for top watched channels
 export type TopWatchedSortBy = 'views' | 'time';
+
+// =============================================================================
+// Normalization Engine Types
+// =============================================================================
+
+// Condition types for normalization rules
+export type NormalizationConditionType = 'always' | 'contains' | 'starts_with' | 'ends_with' | 'regex';
+
+// Action types for normalization rules
+export type NormalizationActionType = 'remove' | 'replace' | 'regex_replace' | 'strip_prefix' | 'strip_suffix' | 'normalize_prefix';
+
+// A single normalization rule
+export interface NormalizationRule {
+  id: number;
+  group_id: number;
+  name: string;
+  description: string | null;
+  enabled: boolean;
+  priority: number;
+  condition_type: NormalizationConditionType;
+  condition_value: string | null;
+  case_sensitive: boolean;
+  action_type: NormalizationActionType;
+  action_value: string | null;
+  stop_processing: boolean;
+  is_builtin: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+// A group of normalization rules
+export interface NormalizationRuleGroup {
+  id: number;
+  name: string;
+  description: string | null;
+  enabled: boolean;
+  priority: number;
+  is_builtin: boolean;
+  created_at: string;
+  updated_at: string;
+  rules?: NormalizationRule[];
+}
+
+// Request to create a rule group
+export interface CreateRuleGroupRequest {
+  name: string;
+  description?: string;
+  enabled?: boolean;
+  priority?: number;
+}
+
+// Request to update a rule group
+export interface UpdateRuleGroupRequest {
+  name?: string;
+  description?: string;
+  enabled?: boolean;
+  priority?: number;
+}
+
+// Request to create a rule
+export interface CreateRuleRequest {
+  group_id: number;
+  name: string;
+  description?: string;
+  enabled?: boolean;
+  priority?: number;
+  condition_type: NormalizationConditionType;
+  condition_value?: string;
+  case_sensitive?: boolean;
+  action_type: NormalizationActionType;
+  action_value?: string;
+  stop_processing?: boolean;
+}
+
+// Request to update a rule
+export interface UpdateRuleRequest {
+  name?: string;
+  description?: string;
+  enabled?: boolean;
+  priority?: number;
+  condition_type?: NormalizationConditionType;
+  condition_value?: string;
+  case_sensitive?: boolean;
+  action_type?: NormalizationActionType;
+  action_value?: string;
+  stop_processing?: boolean;
+}
+
+// Request to test a single rule
+export interface TestRuleRequest {
+  text: string;
+  condition_type: NormalizationConditionType;
+  condition_value: string;
+  case_sensitive: boolean;
+  action_type: NormalizationActionType;
+  action_value?: string;
+}
+
+// Result of testing a single rule
+export interface TestRuleResult {
+  matched: boolean;
+  before: string;
+  after: string;
+  match_start: number | null;
+  match_end: number | null;
+}
+
+// Transformation detail in batch test result
+export interface NormalizationTransformation {
+  rule_id: number;
+  before: string;
+  after: string;
+}
+
+// Result of normalizing a single text through all rules
+export interface NormalizationResult {
+  original: string;
+  normalized: string;
+  rules_applied?: number[];
+  transformations?: NormalizationTransformation[];
+}
+
+// Response from batch normalization
+export interface NormalizationBatchResponse {
+  results: NormalizationResult[];
+}
+
+// Migration status response
+export interface NormalizationMigrationStatus {
+  builtin_groups: number;
+  custom_groups: number;
+  builtin_rules: number;
+  custom_rules: number;
+  total_groups: number;
+  total_rules: number;
+  migration_complete: boolean;
+}
+
+// Migration run response
+export interface NormalizationMigrationResult {
+  groups_created: number;
+  rules_created: number;
+  skipped: boolean;
+}
