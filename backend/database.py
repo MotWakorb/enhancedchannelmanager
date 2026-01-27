@@ -451,7 +451,7 @@ def _remove_min_interval_seconds_column(conn) -> None:
 
 
 def _add_task_schedule_parameters_column(conn) -> None:
-    """Add parameters column to task_schedules table (v0.8.6-0025)."""
+    """Add missing columns to task_schedules table (v0.8.6-0025)."""
     from sqlalchemy import text
 
     # Check if task_schedules table exists
@@ -462,20 +462,27 @@ def _add_task_schedule_parameters_column(conn) -> None:
         logger.debug("task_schedules table doesn't exist yet, skipping migration")
         return
 
-    # Check if parameters column already exists
+    # Check which columns already exist
     result = conn.execute(text("PRAGMA table_info(task_schedules)"))
     columns = [row[1] for row in result.fetchall()]
 
-    if "parameters" in columns:
-        logger.debug("parameters column already exists in task_schedules")
-        return
+    # Add parameters column if missing
+    if "parameters" not in columns:
+        logger.info("Adding parameters column to task_schedules table")
+        conn.execute(text(
+            "ALTER TABLE task_schedules ADD COLUMN parameters TEXT"
+        ))
+        conn.commit()
+        logger.info("Migration complete: added parameters column to task_schedules")
 
-    logger.info("Adding parameters column to task_schedules table")
-    conn.execute(text(
-        "ALTER TABLE task_schedules ADD COLUMN parameters TEXT"
-    ))
-    conn.commit()
-    logger.info("Migration complete: added parameters column to task_schedules")
+    # Add last_run_at column if missing
+    if "last_run_at" not in columns:
+        logger.info("Adding last_run_at column to task_schedules table")
+        conn.execute(text(
+            "ALTER TABLE task_schedules ADD COLUMN last_run_at DATETIME"
+        ))
+        conn.commit()
+        logger.info("Migration complete: added last_run_at column to task_schedules")
 
 
 def _perform_maintenance(engine) -> None:
