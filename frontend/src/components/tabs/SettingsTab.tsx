@@ -3,6 +3,7 @@ import * as api from '../../services/api';
 import { NETWORK_PREFIXES, NETWORK_SUFFIXES } from '../../constants/streamNormalization';
 import type { Theme, ProbeHistoryEntry, SortCriterion, SortEnabledMap, GracenoteConflictMode } from '../../services/api';
 import { NormalizationEngineSection } from '../settings/NormalizationEngineSection';
+import { TagEngineSection } from '../settings/TagEngineSection';
 import type { ChannelProfile } from '../../types';
 import { logger } from '../../utils/logger';
 import { copyToClipboard } from '../../utils/clipboard';
@@ -180,7 +181,7 @@ interface SettingsTabProps {
   onProbeComplete?: () => void;
 }
 
-type SettingsPage = 'general' | 'channel-defaults' | 'normalization' | 'appearance' | 'scheduled-tasks' | 'alert-methods' | 'maintenance';
+type SettingsPage = 'general' | 'channel-defaults' | 'normalization' | 'tag-engine' | 'appearance' | 'scheduled-tasks' | 'alert-methods' | 'maintenance';
 
 export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onProbeComplete }: SettingsTabProps) {
   const [activePage, setActivePage] = useState<SettingsPage>('general');
@@ -2472,8 +2473,15 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
             className={`settings-nav-item ${activePage === 'normalization' ? 'active' : ''}`}
             onClick={() => setActivePage('normalization')}
           >
-            <span className="material-icons">label</span>
+            <span className="material-icons">auto_fix_high</span>
             Channel Normalization
+          </li>
+          <li
+            className={`settings-nav-item ${activePage === 'tag-engine' ? 'active' : ''}`}
+            onClick={() => setActivePage('tag-engine')}
+          >
+            <span className="material-icons">label</span>
+            Tags
           </li>
           <li
             className={`settings-nav-item ${activePage === 'appearance' ? 'active' : ''}`}
@@ -2510,6 +2518,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         {activePage === 'general' && renderGeneralPage()}
         {activePage === 'channel-defaults' && renderChannelDefaultsPage()}
         {activePage === 'normalization' && renderNormalizationPage()}
+        {activePage === 'tag-engine' && <TagEngineSection />}
         {activePage === 'appearance' && renderAppearancePage()}
         {activePage === 'scheduled-tasks' && <ScheduledTasksSection userTimezone={userTimezone} />}
         {activePage === 'alert-methods' && <AlertMethodSettings />}

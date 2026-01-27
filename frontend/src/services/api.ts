@@ -36,6 +36,14 @@ import type {
   NormalizationBatchResponse,
   NormalizationMigrationStatus,
   NormalizationMigrationResult,
+  TagGroup,
+  Tag,
+  CreateTagGroupRequest,
+  UpdateTagGroupRequest,
+  AddTagsRequest,
+  AddTagsResponse,
+  UpdateTagRequest,
+  TestTagsResponse,
 } from '../types';
 import { logger } from '../utils/logger';
 import {
@@ -2268,5 +2276,91 @@ export async function runNormalizationMigration(force?: boolean): Promise<Normal
   const query = force ? '?force=true' : '';
   return fetchJson(`${API_BASE}/normalization/migration/run${query}`, {
     method: 'POST',
+  });
+}
+
+// =============================================================================
+// Tag Engine API
+// =============================================================================
+
+/**
+ * Get all tag groups with tag counts
+ */
+export async function getTagGroups(): Promise<{ groups: TagGroup[] }> {
+  return fetchJson(`${API_BASE}/tags/groups`);
+}
+
+/**
+ * Get a single tag group with all its tags
+ */
+export async function getTagGroup(groupId: number): Promise<TagGroup> {
+  return fetchJson(`${API_BASE}/tags/groups/${groupId}`);
+}
+
+/**
+ * Create a new tag group
+ */
+export async function createTagGroup(data: CreateTagGroupRequest): Promise<TagGroup> {
+  return fetchJson(`${API_BASE}/tags/groups`, {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
+/**
+ * Update a tag group
+ */
+export async function updateTagGroup(groupId: number, data: UpdateTagGroupRequest): Promise<TagGroup> {
+  return fetchJson(`${API_BASE}/tags/groups/${groupId}`, {
+    method: 'PATCH',
+    body: JSON.stringify(data),
+  });
+}
+
+/**
+ * Delete a tag group (cannot delete built-in groups)
+ */
+export async function deleteTagGroup(groupId: number): Promise<{ status: string; id: number }> {
+  return fetchJson(`${API_BASE}/tags/groups/${groupId}`, {
+    method: 'DELETE',
+  });
+}
+
+/**
+ * Add tags to a group (supports bulk add)
+ */
+export async function addTagsToGroup(groupId: number, data: AddTagsRequest): Promise<AddTagsResponse> {
+  return fetchJson(`${API_BASE}/tags/groups/${groupId}/tags`, {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
+/**
+ * Update a tag (enabled, case_sensitive)
+ */
+export async function updateTag(groupId: number, tagId: number, data: UpdateTagRequest): Promise<Tag> {
+  return fetchJson(`${API_BASE}/tags/groups/${groupId}/tags/${tagId}`, {
+    method: 'PATCH',
+    body: JSON.stringify(data),
+  });
+}
+
+/**
+ * Delete a tag from a group (cannot delete built-in tags)
+ */
+export async function deleteTag(groupId: number, tagId: number): Promise<{ status: string; id: number }> {
+  return fetchJson(`${API_BASE}/tags/groups/${groupId}/tags/${tagId}`, {
+    method: 'DELETE',
+  });
+}
+
+/**
+ * Test text against a tag group to find matches
+ */
+export async function testTagGroup(groupId: number, text: string): Promise<TestTagsResponse> {
+  return fetchJson(`${API_BASE}/tags/test`, {
+    method: 'POST',
+    body: JSON.stringify({ group_id: groupId, text }),
   });
 }

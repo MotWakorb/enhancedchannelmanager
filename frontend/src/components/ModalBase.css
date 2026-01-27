@@ -334,6 +334,11 @@
   box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.15);
 }
 
+.modal-form-group select option {
+  background-color: #1a1a2e;
+  color: #ffffff;
+}
+
 .modal-form-group input.error,
 .modal-form-group select.error,
 .modal-form-group textarea.error {

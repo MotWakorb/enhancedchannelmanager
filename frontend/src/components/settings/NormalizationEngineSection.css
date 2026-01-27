@@ -707,6 +707,11 @@
   cursor: not-allowed;
 }
 
+.norm-engine-form-group select option {
+  background-color: #1a1a2e;
+  color: #ffffff;
+}
+
 .norm-engine-form-row {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -780,6 +785,39 @@
   font-weight: 500;
 }
 
+.norm-engine-preview-result.else-applied .material-icons {
+  color: var(--warning-text, #eab308);
+}
+
+.norm-engine-preview-result .matched-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  margin-left: 0.5rem;
+  padding: 0.125rem 0.5rem;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-primary);
+  border-radius: 4px;
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+
+.norm-engine-preview-result .matched-tag .material-icons {
+  font-size: 0.875rem;
+  color: var(--text-muted);
+}
+
+.norm-engine-preview-result .else-badge {
+  margin-left: 0.5rem;
+  padding: 0.125rem 0.375rem;
+  background: var(--warning-bg, rgba(234, 179, 8, 0.2));
+  color: var(--warning-text, #eab308);
+  border-radius: 4px;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
 /* Compound Conditions */
 .norm-engine-condition-mode {
   display: flex;
@@ -848,12 +886,24 @@
 }
 
 .norm-engine-logic-select {
+  min-width: 180px;
+}
+
+.norm-engine-logic-select .custom-select-trigger {
   padding: 0.375rem 0.75rem;
-  background: var(--card-bg);
-  border: 1px solid var(--border-primary);
-  border-radius: 4px;
-  color: var(--text-primary);
+  min-width: 180px;
   font-size: 0.875rem;
+}
+
+.norm-engine-condition-type-select {
+  min-width: 140px;
+}
+
+.norm-engine-condition-type-select .custom-select-trigger {
+  padding: 0.375rem 0.5rem;
+  min-width: 140px;
+  max-width: 140px;
+  font-size: 0.8125rem;
 }
 
 .norm-engine-conditions-list {
@@ -878,15 +928,6 @@
   gap: 0.5rem;
 }
 
-.norm-engine-condition-fields select {
-  width: 140px;
-  padding: 0.375rem 0.5rem;
-  background: var(--input-bg);
-  border: 1px solid var(--border-primary);
-  border-radius: 4px;
-  color: var(--text-primary);
-  font-size: 0.8125rem;
-}
 
 .norm-engine-condition-fields input {
   flex: 1;
@@ -957,4 +998,24 @@
 
 .norm-engine-add-condition .material-icons {
   font-size: 1rem;
+}
+
+/* Else Branch Styles */
+.norm-engine-else-branch {
+  margin-top: 1rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border-primary);
+}
+
+.norm-engine-else-branch > .modal-checkbox-label {
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
+.norm-engine-else-actions {
+  margin-top: 0.75rem;
+  padding: 0.75rem;
+  background: var(--bg-secondary);
+  border-radius: 6px;
+  border: 1px solid var(--border-primary);
 }

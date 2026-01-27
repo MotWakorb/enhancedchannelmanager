@@ -2,7 +2,8 @@
 SQLAlchemy ORM models for the Journal and Bandwidth tracking features.
 """
 from datetime import datetime, date
-from sqlalchemy import Column, Integer, BigInteger, String, Text, Boolean, DateTime, Date, Float, Index
+from sqlalchemy import Column, Integer, BigInteger, String, Text, Boolean, DateTime, Date, Float, Index, ForeignKey, UniqueConstraint
+from sqlalchemy.orm import relationship
 from database import Base
 
 
@@ -533,6 +534,7 @@ class NormalizationRule(Base):
     - 'starts_with': Match if input starts with the pattern
     - 'ends_with': Match if input ends with the pattern
     - 'regex': Match using regular expression
+    - 'tag_group': Match if text contains ANY tag from specified tag group
 
     Action Types:
     - 'remove': Remove the matched portion
@@ -542,12 +544,18 @@ class NormalizationRule(Base):
     - 'strip_suffix': Remove pattern from end (with optional separator)
     - 'normalize_prefix': Keep prefix but standardize format (e.g., "US:" -> "US | ")
 
+    If/Then/Else Logic:
+    - IF condition matches: apply action_type/action_value
+    - ELSE (if else_action_type is set): apply else_action_type/else_action_value
+
     Example Rules:
     - Strip "HD" suffix: condition_type='ends_with', condition_value='HD',
                          action_type='strip_suffix'
     - Remove country prefix: condition_type='regex', condition_value='^(US|UK|CA)[:\\s|]+',
                              action_type='remove'
     - Normalize quality: condition_type='regex', condition_value='\\s*(FHD|UHD|4K|HD|SD)\\s*$',
+                        action_type='remove'
+    - Strip quality tag: condition_type='tag_group', tag_group_id=1, tag_match_position='suffix',
                         action_type='remove'
     """
     __tablename__ = "normalization_rules"
@@ -559,15 +567,21 @@ class NormalizationRule(Base):
     enabled = Column(Boolean, default=True, nullable=False)  # Enable/disable rule
     priority = Column(Integer, default=0, nullable=False)  # Order within group (lower = first)
     # Condition configuration (legacy single condition - kept for backward compatibility)
-    condition_type = Column(String(20), nullable=True)  # always, contains, starts_with, ends_with, regex
-    condition_value = Column(String(500), nullable=True)  # Pattern to match (null for 'always')
+    condition_type = Column(String(20), nullable=True)  # always, contains, starts_with, ends_with, regex, tag_group
+    condition_value = Column(String(500), nullable=True)  # Pattern to match (null for 'always' or 'tag_group')
     case_sensitive = Column(Boolean, default=False, nullable=False)  # Case sensitivity for matching
+    # Tag group condition (v0.8.7) - used when condition_type='tag_group'
+    tag_group_id = Column(Integer, ForeignKey("tag_groups.id", ondelete="SET NULL"), nullable=True)
+    tag_match_position = Column(String(20), nullable=True)  # 'prefix', 'suffix', or 'contains'
     # Compound conditions (new - takes precedence over legacy fields if set)
     conditions = Column(Text, nullable=True)  # JSON array of condition objects: [{type, value, negate, case_sensitive}]
     condition_logic = Column(String(3), default="AND", nullable=False)  # "AND" or "OR" for combining conditions
     # Action configuration
     action_type = Column(String(20), nullable=False)  # remove, replace, regex_replace, strip_prefix, strip_suffix, normalize_prefix
     action_value = Column(String(500), nullable=True)  # Replacement value (null for remove actions)
+    # Else action (v0.8.7) - executed when condition does NOT match
+    else_action_type = Column(String(20), nullable=True)  # Same values as action_type
+    else_action_value = Column(String(500), nullable=True)  # Replacement value for else action
     # Stop processing flag - if true, no further rules execute after this one matches
     stop_processing = Column(Boolean, default=False, nullable=False)
     # Built-in flag for migrated rules
@@ -576,10 +590,14 @@ class NormalizationRule(Base):
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
+    # Relationship to TagGroup (for tag_group condition type)
+    tag_group = relationship("TagGroup", lazy="joined")
+
     __table_args__ = (
         Index("idx_norm_rule_group", group_id),
         Index("idx_norm_rule_enabled", enabled),
         Index("idx_norm_rule_priority", group_id, priority),
+        Index("idx_norm_rule_tag_group", tag_group_id),
     )
 
     def get_conditions(self) -> list:
@@ -604,10 +622,15 @@ class NormalizationRule(Base):
             "condition_type": self.condition_type,
             "condition_value": self.condition_value,
             "case_sensitive": self.case_sensitive,
+            "tag_group_id": self.tag_group_id,
+            "tag_match_position": self.tag_match_position,
+            "tag_group_name": self.tag_group.name if self.tag_group else None,
             "conditions": self.get_conditions(),
             "condition_logic": self.condition_logic,
             "action_type": self.action_type,
             "action_value": self.action_value,
+            "else_action_type": self.else_action_type,
+            "else_action_value": self.else_action_value,
             "stop_processing": self.stop_processing,
             "is_builtin": self.is_builtin,
             "created_at": self.created_at.isoformat() + "Z" if self.created_at else None,
@@ -699,3 +722,83 @@ class AlertMethod(Base):
 
     def __repr__(self):
         return f"<AlertMethod(id={self.id}, name={self.name}, type={self.method_type})>"
+
+
+class TagGroup(Base):
+    """
+    Groups of tags for vocabulary management in the normalization engine.
+    Tag groups organize related strings (e.g., Quality, Country, Timezone).
+    Built-in groups are created automatically and cannot be deleted.
+    """
+    __tablename__ = "tag_groups"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String(100), nullable=False, unique=True)  # e.g., "Quality Tags", "Country Tags"
+    description = Column(Text, nullable=True)  # Optional description
+    is_builtin = Column(Boolean, default=False, nullable=False)  # True for system-created groups
+    # Timestamps
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    # Relationship to tags - cascade delete removes all tags when group is deleted
+    tags = relationship("Tag", back_populates="group", cascade="all, delete-orphan", lazy="dynamic")
+
+    __table_args__ = (
+        Index("idx_tag_group_name", name),
+        Index("idx_tag_group_builtin", is_builtin),
+    )
+
+    def to_dict(self, include_tags: bool = False) -> dict:
+        """Convert to dictionary for API responses."""
+        result = {
+            "id": self.id,
+            "name": self.name,
+            "description": self.description,
+            "is_builtin": self.is_builtin,
+            "created_at": self.created_at.isoformat() + "Z" if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() + "Z" if self.updated_at else None,
+        }
+        if include_tags:
+            result["tags"] = [tag.to_dict() for tag in self.tags]
+        return result
+
+    def __repr__(self):
+        return f"<TagGroup(id={self.id}, name={self.name}, is_builtin={self.is_builtin})>"
+
+
+class Tag(Base):
+    """
+    Individual tag within a tag group.
+    Tags are string values used for pattern matching in normalization rules.
+    """
+    __tablename__ = "tags"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    group_id = Column(Integer, ForeignKey("tag_groups.id", ondelete="CASCADE"), nullable=False)
+    value = Column(String(100), nullable=False)  # The tag value, e.g., "HD", "US", "NFL"
+    case_sensitive = Column(Boolean, default=False, nullable=False)  # Match case when searching
+    enabled = Column(Boolean, default=True, nullable=False)  # Can be disabled without deleting
+    is_builtin = Column(Boolean, default=False, nullable=False)  # True for system-created tags
+
+    # Relationship back to group
+    group = relationship("TagGroup", back_populates="tags")
+
+    __table_args__ = (
+        UniqueConstraint("group_id", "value", name="uq_tag_group_value"),
+        Index("idx_tag_group_id", group_id),
+        Index("idx_tag_enabled", enabled),
+    )
+
+    def to_dict(self) -> dict:
+        """Convert to dictionary for API responses."""
+        return {
+            "id": self.id,
+            "group_id": self.group_id,
+            "value": self.value,
+            "case_sensitive": self.case_sensitive,
+            "enabled": self.enabled,
+            "is_builtin": self.is_builtin,
+        }
+
+    def __repr__(self):
+        return f"<Tag(id={self.id}, group_id={self.group_id}, value={self.value})>"

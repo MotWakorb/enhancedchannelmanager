@@ -5678,15 +5678,21 @@ class CreateRuleRequest(BaseModel):
     enabled: bool = True
     priority: int = 0
     # Legacy single condition (optional if using compound conditions)
-    condition_type: Optional[str] = None  # always, contains, starts_with, ends_with, regex
+    condition_type: Optional[str] = None  # always, contains, starts_with, ends_with, regex, tag_group
     condition_value: Optional[str] = None
     case_sensitive: bool = False
+    # Tag group condition (for condition_type='tag_group')
+    tag_group_id: Optional[int] = None
+    tag_match_position: Optional[str] = None  # 'prefix', 'suffix', or 'contains'
     # Compound conditions (takes precedence over legacy fields if set)
     conditions: Optional[List[dict]] = None  # [{type, value, negate, case_sensitive}]
     condition_logic: str = "AND"  # "AND" or "OR"
     # Action configuration
     action_type: str  # remove, replace, regex_replace, strip_prefix, strip_suffix, normalize_prefix
     action_value: Optional[str] = None
+    # Else action (executed when condition doesn't match)
+    else_action_type: Optional[str] = None
+    else_action_value: Optional[str] = None
     stop_processing: bool = False
 
 
@@ -5699,12 +5705,18 @@ class UpdateRuleRequest(BaseModel):
     condition_type: Optional[str] = None
     condition_value: Optional[str] = None
     case_sensitive: Optional[bool] = None
+    # Tag group condition
+    tag_group_id: Optional[int] = None
+    tag_match_position: Optional[str] = None
     # Compound conditions
     conditions: Optional[List[dict]] = None
     condition_logic: Optional[str] = None
     # Action configuration
     action_type: Optional[str] = None
     action_value: Optional[str] = None
+    # Else action
+    else_action_type: Optional[str] = None
+    else_action_value: Optional[str] = None
     stop_processing: Optional[bool] = None
 
 
@@ -5713,11 +5725,17 @@ class TestRuleRequest(BaseModel):
     condition_type: str
     condition_value: Optional[str] = None
     case_sensitive: bool = False
+    # Tag group condition
+    tag_group_id: Optional[int] = None
+    tag_match_position: Optional[str] = None  # 'prefix', 'suffix', or 'contains'
     # Compound conditions (takes precedence if set)
     conditions: Optional[List[dict]] = None  # [{type, value, negate, case_sensitive}]
     condition_logic: str = "AND"  # "AND" or "OR"
     action_type: str
     action_value: Optional[str] = None
+    # Else action
+    else_action_type: Optional[str] = None
+    else_action_value: Optional[str] = None
 
 
 class TestRulesBatchRequest(BaseModel):
@@ -6352,10 +6370,14 @@ async def create_normalization_rule(request: CreateRuleRequest):
                 condition_type=request.condition_type,
                 condition_value=request.condition_value,
                 case_sensitive=request.case_sensitive,
+                tag_group_id=request.tag_group_id,
+                tag_match_position=request.tag_match_position,
                 conditions=conditions_json,
                 condition_logic=request.condition_logic,
                 action_type=request.action_type,
                 action_value=request.action_value,
+                else_action_type=request.else_action_type,
+                else_action_value=request.else_action_value,
                 stop_processing=request.stop_processing,
                 is_builtin=False
             )
@@ -6401,6 +6423,10 @@ async def update_normalization_rule(rule_id: int, request: UpdateRuleRequest):
                 rule.condition_value = request.condition_value
             if request.case_sensitive is not None:
                 rule.case_sensitive = request.case_sensitive
+            if request.tag_group_id is not None:
+                rule.tag_group_id = request.tag_group_id
+            if request.tag_match_position is not None:
+                rule.tag_match_position = request.tag_match_position
             if request.conditions is not None:
                 rule.conditions = json.dumps(request.conditions) if request.conditions else None
             if request.condition_logic is not None:
@@ -6409,6 +6435,10 @@ async def update_normalization_rule(rule_id: int, request: UpdateRuleRequest):
                 rule.action_type = request.action_type
             if request.action_value is not None:
                 rule.action_value = request.action_value
+            if request.else_action_type is not None:
+                rule.else_action_type = request.else_action_type
+            if request.else_action_value is not None:
+                rule.else_action_value = request.else_action_value
             if request.stop_processing is not None:
                 rule.stop_processing = request.stop_processing
 
@@ -6486,7 +6516,11 @@ async def test_normalization_rule(request: TestRuleRequest):
                 action_type=request.action_type,
                 action_value=request.action_value or "",
                 conditions=request.conditions,
-                condition_logic=request.condition_logic
+                condition_logic=request.condition_logic,
+                tag_group_id=request.tag_group_id,
+                tag_match_position=request.tag_match_position or "contains",
+                else_action_type=request.else_action_type,
+                else_action_value=request.else_action_value
             )
             return result
         finally:
@@ -6676,6 +6710,356 @@ async def run_normalization_migration(force: bool = False, migrate_settings: boo
             session.close()
     except Exception as e:
         logger.error(f"Failed to run migration: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# =============================================================================
+# Tag Engine API
+# =============================================================================
+
+# Tag Engine request/response models
+class CreateTagGroupRequest(BaseModel):
+    name: str
+    description: Optional[str] = None
+
+
+class UpdateTagGroupRequest(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+
+
+class CreateTagsRequest(BaseModel):
+    tags: List[str]  # List of tag values to add
+    case_sensitive: bool = False
+
+
+class UpdateTagRequest(BaseModel):
+    enabled: Optional[bool] = None
+    case_sensitive: Optional[bool] = None
+
+
+class TestTagsRequest(BaseModel):
+    text: str
+    group_id: int
+
+
+@app.get("/api/tags/groups")
+async def list_tag_groups():
+    """List all tag groups with tag counts."""
+    try:
+        from models import TagGroup, Tag
+        from sqlalchemy import func
+        session = get_session()
+        try:
+            # Get groups with tag counts
+            groups = session.query(
+                TagGroup,
+                func.count(Tag.id).label("tag_count")
+            ).outerjoin(Tag).group_by(TagGroup.id).order_by(TagGroup.name).all()
+
+            result = []
+            for group, tag_count in groups:
+                group_dict = group.to_dict()
+                group_dict["tag_count"] = tag_count
+                result.append(group_dict)
+
+            return {"groups": result}
+        finally:
+            session.close()
+    except Exception as e:
+        logger.error(f"Failed to list tag groups: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/tags/groups")
+async def create_tag_group(request: CreateTagGroupRequest):
+    """Create a new tag group."""
+    try:
+        from models import TagGroup
+        session = get_session()
+        try:
+            # Check for duplicate name
+            existing = session.query(TagGroup).filter(TagGroup.name == request.name).first()
+            if existing:
+                raise HTTPException(status_code=400, detail=f"Tag group '{request.name}' already exists")
+
+            group = TagGroup(
+                name=request.name,
+                description=request.description,
+                is_builtin=False
+            )
+            session.add(group)
+            session.commit()
+            session.refresh(group)
+            logger.info(f"Created tag group: id={group.id}, name={group.name}")
+            return group.to_dict()
+        finally:
+            session.close()
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to create tag group: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/tags/groups/{group_id}")
+async def get_tag_group(group_id: int):
+    """Get a tag group with all its tags."""
+    try:
+        from models import TagGroup
+        session = get_session()
+        try:
+            group = session.query(TagGroup).filter(TagGroup.id == group_id).first()
+            if not group:
+                raise HTTPException(status_code=404, detail="Tag group not found")
+
+            return group.to_dict(include_tags=True)
+        finally:
+            session.close()
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get tag group {group_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.patch("/api/tags/groups/{group_id}")
+async def update_tag_group(group_id: int, request: UpdateTagGroupRequest):
+    """Update a tag group name/description."""
+    try:
+        from models import TagGroup
+        session = get_session()
+        try:
+            group = session.query(TagGroup).filter(TagGroup.id == group_id).first()
+            if not group:
+                raise HTTPException(status_code=404, detail="Tag group not found")
+
+            # Prevent modifying built-in group name
+            if group.is_builtin and request.name is not None and request.name != group.name:
+                raise HTTPException(status_code=400, detail="Cannot rename built-in tag group")
+
+            if request.name is not None:
+                # Check for duplicate name
+                existing = session.query(TagGroup).filter(
+                    TagGroup.name == request.name,
+                    TagGroup.id != group_id
+                ).first()
+                if existing:
+                    raise HTTPException(status_code=400, detail=f"Tag group '{request.name}' already exists")
+                group.name = request.name
+
+            if request.description is not None:
+                group.description = request.description
+
+            session.commit()
+            session.refresh(group)
+            logger.info(f"Updated tag group: id={group.id}, name={group.name}")
+            return group.to_dict()
+        finally:
+            session.close()
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to update tag group {group_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/api/tags/groups/{group_id}")
+async def delete_tag_group(group_id: int):
+    """Delete a tag group and all its tags."""
+    try:
+        from models import TagGroup
+        session = get_session()
+        try:
+            group = session.query(TagGroup).filter(TagGroup.id == group_id).first()
+            if not group:
+                raise HTTPException(status_code=404, detail="Tag group not found")
+
+            if group.is_builtin:
+                raise HTTPException(status_code=400, detail="Cannot delete built-in tag group")
+
+            group_name = group.name
+            session.delete(group)  # Cascade deletes all tags
+            session.commit()
+            logger.info(f"Deleted tag group: id={group_id}, name={group_name}")
+            return {"status": "deleted", "id": group_id}
+        finally:
+            session.close()
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to delete tag group {group_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/tags/groups/{group_id}/tags")
+async def add_tags_to_group(group_id: int, request: CreateTagsRequest):
+    """Add one or more tags to a group."""
+    try:
+        from models import TagGroup, Tag
+        session = get_session()
+        try:
+            group = session.query(TagGroup).filter(TagGroup.id == group_id).first()
+            if not group:
+                raise HTTPException(status_code=404, detail="Tag group not found")
+
+            created_tags = []
+            skipped_tags = []
+
+            for tag_value in request.tags:
+                tag_value = tag_value.strip()
+                if not tag_value:
+                    continue
+
+                # Check if tag already exists in this group
+                existing = session.query(Tag).filter(
+                    Tag.group_id == group_id,
+                    Tag.value == tag_value
+                ).first()
+
+                if existing:
+                    skipped_tags.append(tag_value)
+                    continue
+
+                tag = Tag(
+                    group_id=group_id,
+                    value=tag_value,
+                    case_sensitive=request.case_sensitive,
+                    enabled=True,
+                    is_builtin=False
+                )
+                session.add(tag)
+                created_tags.append(tag_value)
+
+            session.commit()
+            logger.info(f"Added {len(created_tags)} tags to group {group_id}, skipped {len(skipped_tags)} duplicates")
+
+            return {
+                "created": created_tags,
+                "skipped": skipped_tags,
+                "group_id": group_id
+            }
+        finally:
+            session.close()
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to add tags to group {group_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.patch("/api/tags/groups/{group_id}/tags/{tag_id}")
+async def update_tag(group_id: int, tag_id: int, request: UpdateTagRequest):
+    """Update a tag's enabled or case_sensitive status."""
+    try:
+        from models import Tag
+        session = get_session()
+        try:
+            tag = session.query(Tag).filter(
+                Tag.id == tag_id,
+                Tag.group_id == group_id
+            ).first()
+            if not tag:
+                raise HTTPException(status_code=404, detail="Tag not found")
+
+            if request.enabled is not None:
+                tag.enabled = request.enabled
+            if request.case_sensitive is not None:
+                tag.case_sensitive = request.case_sensitive
+
+            session.commit()
+            session.refresh(tag)
+            logger.info(f"Updated tag: id={tag.id}, value={tag.value}")
+            return tag.to_dict()
+        finally:
+            session.close()
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to update tag {tag_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/api/tags/groups/{group_id}/tags/{tag_id}")
+async def delete_tag(group_id: int, tag_id: int):
+    """Delete a tag from a group."""
+    try:
+        from models import Tag
+        session = get_session()
+        try:
+            tag = session.query(Tag).filter(
+                Tag.id == tag_id,
+                Tag.group_id == group_id
+            ).first()
+            if not tag:
+                raise HTTPException(status_code=404, detail="Tag not found")
+
+            if tag.is_builtin:
+                raise HTTPException(status_code=400, detail="Cannot delete built-in tag")
+
+            tag_value = tag.value
+            session.delete(tag)
+            session.commit()
+            logger.info(f"Deleted tag: id={tag_id}, value={tag_value}")
+            return {"status": "deleted", "id": tag_id}
+        finally:
+            session.close()
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to delete tag {tag_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/tags/test")
+async def test_tags(request: TestTagsRequest):
+    """Test text against a tag group to find matches."""
+    try:
+        from models import TagGroup, Tag
+        session = get_session()
+        try:
+            group = session.query(TagGroup).filter(TagGroup.id == request.group_id).first()
+            if not group:
+                raise HTTPException(status_code=404, detail="Tag group not found")
+
+            # Get all enabled tags in the group
+            tags = session.query(Tag).filter(
+                Tag.group_id == request.group_id,
+                Tag.enabled == True
+            ).all()
+
+            matches = []
+            text = request.text
+
+            for tag in tags:
+                if tag.case_sensitive:
+                    if tag.value in text:
+                        matches.append({
+                            "tag_id": tag.id,
+                            "value": tag.value,
+                            "case_sensitive": True
+                        })
+                else:
+                    if tag.value.lower() in text.lower():
+                        matches.append({
+                            "tag_id": tag.id,
+                            "value": tag.value,
+                            "case_sensitive": False
+                        })
+
+            return {
+                "text": request.text,
+                "group_id": request.group_id,
+                "group_name": group.name,
+                "matches": matches,
+                "match_count": len(matches)
+            }
+        finally:
+            session.close()
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to test tags: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

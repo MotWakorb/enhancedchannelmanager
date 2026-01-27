@@ -16,9 +16,13 @@ from dataclasses import dataclass
 
 from sqlalchemy.orm import Session
 
-from models import NormalizationRule, NormalizationRuleGroup
+from models import NormalizationRule, NormalizationRuleGroup, TagGroup, Tag
 
 logger = logging.getLogger(__name__)
+
+
+# Cache for tag groups to avoid repeated database queries
+_tag_group_cache: dict[int, list[tuple[str, bool]]] = {}  # group_id -> [(value, case_sensitive), ...]
 
 
 @dataclass
@@ -28,6 +32,7 @@ class RuleMatch:
     match_start: int = -1
     match_end: int = -1
     groups: tuple = ()  # Captured groups for regex
+    matched_tag: str = ""  # The tag value that matched (for tag_group conditions)
 
 
 @dataclass
@@ -57,6 +62,36 @@ class NormalizationEngine:
         """Clear cached rules to force reload from database."""
         self._rules_cache = None
         self._groups_cache = None
+        # Also clear tag group cache
+        global _tag_group_cache
+        _tag_group_cache.clear()
+
+    def _load_tag_group(self, tag_group_id: int) -> list[tuple[str, bool]]:
+        """
+        Load tags from a tag group with caching.
+
+        Args:
+            tag_group_id: ID of the tag group to load
+
+        Returns:
+            List of (tag_value, case_sensitive) tuples for enabled tags
+        """
+        global _tag_group_cache
+
+        if tag_group_id in _tag_group_cache:
+            return _tag_group_cache[tag_group_id]
+
+        # Load from database
+        tags = (
+            self.db.query(Tag)
+            .filter(Tag.group_id == tag_group_id, Tag.enabled == True)
+            .all()
+        )
+
+        tag_list = [(tag.value, tag.case_sensitive) for tag in tags]
+        _tag_group_cache[tag_group_id] = tag_list
+
+        return tag_list
 
     def _load_rules(self) -> list[tuple[NormalizationRuleGroup, list[NormalizationRule]]]:
         """
@@ -171,6 +206,65 @@ class NormalizationEngine:
             logger.warning(f"Unknown condition type: {condition_type}")
             return RuleMatch(matched=False)
 
+    def _match_tag_group(
+        self,
+        text: str,
+        tag_group_id: int,
+        position: str = "contains"
+    ) -> RuleMatch:
+        """
+        Check if text matches any tag from a tag group.
+
+        Args:
+            text: Text to match against
+            tag_group_id: ID of the tag group
+            position: 'prefix', 'suffix', or 'contains' (default)
+
+        Returns:
+            RuleMatch with match details and matched_tag
+        """
+        tags = self._load_tag_group(tag_group_id)
+
+        for tag_value, case_sensitive in tags:
+            match_text = text if case_sensitive else text.lower()
+            match_tag = tag_value if case_sensitive else tag_value.lower()
+
+            if position == "prefix":
+                # Match at start with separator check
+                if match_text.startswith(match_tag):
+                    remaining = match_text[len(match_tag):]
+                    if not remaining or re.match(r'^[\s:\-|/]', remaining):
+                        return RuleMatch(
+                            matched=True,
+                            match_start=0,
+                            match_end=len(tag_value),
+                            matched_tag=tag_value
+                        )
+
+            elif position == "suffix":
+                # Match at end with separator check
+                if match_text.endswith(match_tag):
+                    prefix_len = len(text) - len(tag_value)
+                    if prefix_len == 0 or re.search(r'[\s:\-|/]$', text[:prefix_len]):
+                        return RuleMatch(
+                            matched=True,
+                            match_start=prefix_len,
+                            match_end=len(text),
+                            matched_tag=tag_value
+                        )
+
+            else:  # contains
+                idx = match_text.find(match_tag)
+                if idx >= 0:
+                    return RuleMatch(
+                        matched=True,
+                        match_start=idx,
+                        match_end=idx + len(tag_value),
+                        matched_tag=tag_value
+                    )
+
+        return RuleMatch(matched=False)
+
     def _match_condition(self, text: str, rule: NormalizationRule) -> RuleMatch:
         """
         Check if text matches the rule's condition(s).
@@ -181,6 +275,16 @@ class NormalizationEngine:
         conditions = rule.get_conditions()
         if conditions:
             return self._match_compound_conditions(text, conditions, rule.condition_logic)
+
+        # Handle tag_group condition type
+        if rule.condition_type == "tag_group":
+            if rule.tag_group_id:
+                return self._match_tag_group(
+                    text,
+                    rule.tag_group_id,
+                    rule.tag_match_position or "contains"
+                )
+            return RuleMatch(matched=False)
 
         # Fall back to legacy single condition
         return self._match_single_condition(
@@ -309,6 +413,67 @@ class NormalizationEngine:
             logger.warning(f"Unknown action type: {action_type}")
             return text
 
+    def _apply_else_action(self, text: str, rule: NormalizationRule) -> str:
+        """
+        Apply the rule's else action when the condition does NOT match.
+        Only applies if else_action_type is set.
+
+        Args:
+            text: The current text
+            rule: The rule with else action configuration
+
+        Returns:
+            Transformed text or original if no else action
+        """
+        if not rule.else_action_type:
+            return text
+
+        action_type = rule.else_action_type
+        action_value = rule.else_action_value or ""
+
+        # For else actions, we operate on the full text
+        # Create a synthetic match covering the full string for actions like replace
+        full_match = RuleMatch(matched=True, match_start=0, match_end=len(text))
+
+        if action_type == "remove":
+            # Remove doesn't make sense without a specific match
+            # In else context, this would clear the entire text - probably not intended
+            logger.warning(f"Rule {rule.id}: 'remove' as else_action has no effect (no match to remove)")
+            return text
+
+        elif action_type == "replace":
+            # Replace entire text with else_action_value
+            return action_value
+
+        elif action_type == "regex_replace":
+            # For else, apply the regex pattern to the whole text
+            if rule.condition_value:
+                try:
+                    flags = 0 if rule.case_sensitive else re.IGNORECASE
+                    return re.sub(rule.condition_value, action_value, text, flags=flags)
+                except re.error as e:
+                    logger.warning(f"Regex replace error in else action of rule {rule.id}: {e}")
+            return text
+
+        elif action_type == "strip_prefix":
+            # Strip any leading separators and whitespace
+            result = re.sub(r'^[\s:\-|/]+', '', text)
+            return result.strip()
+
+        elif action_type == "strip_suffix":
+            # Strip any trailing separators and whitespace
+            result = re.sub(r'[\s:\-|/]+$', '', text)
+            return result.strip()
+
+        elif action_type == "normalize_prefix":
+            # No specific prefix matched, so can't normalize
+            logger.warning(f"Rule {rule.id}: 'normalize_prefix' as else_action has no effect (no match)")
+            return text
+
+        else:
+            logger.warning(f"Unknown else action type: {action_type}")
+            return text
+
     def normalize(self, name: str) -> NormalizationResult:
         """
         Apply all enabled rules to normalize a stream name.
@@ -353,6 +518,24 @@ class NormalizationEngine:
                     if rule.stop_processing:
                         break
 
+                elif rule.else_action_type:
+                    # Condition didn't match but rule has an else action
+                    before = current
+                    current = self._apply_else_action(current, rule)
+
+                    # Track what changed
+                    if before != current:
+                        result.rules_applied.append(rule.id)
+                        result.transformations.append((rule.id, before, current))
+
+                        logger.debug(
+                            f"Rule {rule.id} ({rule.name}) [ELSE]: '{before}' -> '{current}'"
+                        )
+
+                    # Stop processing applies to else branch too
+                    if rule.stop_processing:
+                        break
+
         # Final cleanup - normalize whitespace
         current = re.sub(r'\s+', ' ', current).strip()
 
@@ -368,7 +551,11 @@ class NormalizationEngine:
         action_type: str,
         action_value: str = "",
         conditions: Optional[list] = None,
-        condition_logic: str = "AND"
+        condition_logic: str = "AND",
+        tag_group_id: Optional[int] = None,
+        tag_match_position: str = "contains",
+        else_action_type: Optional[str] = None,
+        else_action_value: Optional[str] = None
     ) -> dict:
         """
         Test a rule configuration against sample text without saving.
@@ -382,6 +569,10 @@ class NormalizationEngine:
             action_value: Replacement value for replace actions
             conditions: Compound conditions list (takes precedence if set)
             condition_logic: "AND" or "OR" for combining conditions
+            tag_group_id: Tag group ID for tag_group condition type
+            tag_match_position: Position for tag matching ('prefix', 'suffix', 'contains')
+            else_action_type: Action to apply when condition doesn't match
+            else_action_value: Value for else action
 
         Returns:
             Dict with matched, before, after, match_details
@@ -396,8 +587,12 @@ class NormalizationEngine:
             condition_type=condition_type,
             condition_value=condition_value,
             case_sensitive=case_sensitive,
+            tag_group_id=tag_group_id,
+            tag_match_position=tag_match_position,
             action_type=action_type,
             action_value=action_value,
+            else_action_type=else_action_type,
+            else_action_value=else_action_value,
             conditions=json.dumps(conditions) if conditions else None,
             condition_logic=condition_logic
         )
@@ -410,12 +605,19 @@ class NormalizationEngine:
             "after": text,
             "match_start": match.match_start if match.matched else None,
             "match_end": match.match_end if match.matched else None,
+            "matched_tag": match.matched_tag if match.matched_tag else None,
+            "else_applied": False,
         }
 
         if match.matched:
             result["after"] = self._apply_action(text, rule, match)
             # Final cleanup
             result["after"] = re.sub(r'\s+', ' ', result["after"]).strip()
+        elif else_action_type:
+            # Condition didn't match, apply else action
+            result["after"] = self._apply_else_action(text, rule)
+            result["after"] = re.sub(r'\s+', ' ', result["after"]).strip()
+            result["else_applied"] = True
 
         return result
 

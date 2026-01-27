@@ -461,14 +461,96 @@ export interface ChannelWatchStats {
 export type TopWatchedSortBy = 'views' | 'time';
 
 // =============================================================================
+// Tag Engine Types
+// =============================================================================
+
+// A tag group containing multiple tags
+export interface TagGroup {
+  id: number;
+  name: string;
+  description: string | null;
+  is_builtin: boolean;
+  tag_count?: number;  // Only included in list responses
+  created_at: string;
+  updated_at: string;
+  tags?: Tag[];  // Only included when fetching single group
+}
+
+// An individual tag within a group
+export interface Tag {
+  id: number;
+  group_id: number;
+  value: string;
+  case_sensitive: boolean;
+  enabled: boolean;
+  is_builtin: boolean;
+}
+
+// Request to create a tag group
+export interface CreateTagGroupRequest {
+  name: string;
+  description?: string;
+}
+
+// Request to update a tag group
+export interface UpdateTagGroupRequest {
+  name?: string;
+  description?: string;
+}
+
+// Request to add tags to a group
+export interface AddTagsRequest {
+  tags: string[];
+  case_sensitive?: boolean;
+}
+
+// Response from adding tags
+export interface AddTagsResponse {
+  created: string[];
+  skipped: string[];
+  group_id: number;
+}
+
+// Request to update a tag
+export interface UpdateTagRequest {
+  enabled?: boolean;
+  case_sensitive?: boolean;
+}
+
+// Request to test tags against text
+export interface TestTagsRequest {
+  text: string;
+  group_id: number;
+}
+
+// Match result from testing tags
+export interface TagMatch {
+  tag_id: number;
+  value: string;
+  case_sensitive: boolean;
+}
+
+// Response from testing tags
+export interface TestTagsResponse {
+  text: string;
+  group_id: number;
+  group_name: string;
+  matches: TagMatch[];
+  match_count: number;
+}
+
+// =============================================================================
 // Normalization Engine Types
 // =============================================================================
 
 // Condition types for normalization rules
-export type NormalizationConditionType = 'always' | 'contains' | 'starts_with' | 'ends_with' | 'regex';
+export type NormalizationConditionType = 'always' | 'contains' | 'starts_with' | 'ends_with' | 'regex' | 'tag_group';
 
 // Action types for normalization rules
 export type NormalizationActionType = 'remove' | 'replace' | 'regex_replace' | 'strip_prefix' | 'strip_suffix' | 'normalize_prefix';
+
+// Tag match position for tag_group conditions
+export type TagMatchPosition = 'prefix' | 'suffix' | 'contains';
 
 // Logic for combining multiple conditions
 export type NormalizationConditionLogic = 'AND' | 'OR';
@@ -493,12 +575,19 @@ export interface NormalizationRule {
   condition_type: NormalizationConditionType;
   condition_value: string | null;
   case_sensitive: boolean;
+  // Tag group condition (for condition_type='tag_group')
+  tag_group_id: number | null;
+  tag_match_position: TagMatchPosition | null;
+  tag_group_name: string | null;  // Included in API response for display
   // Compound conditions (takes precedence if set)
   conditions: NormalizationCondition[] | null;
   condition_logic: NormalizationConditionLogic;
   // Action fields
   action_type: NormalizationActionType;
   action_value: string | null;
+  // Else action (executed when condition doesn't match)
+  else_action_type: NormalizationActionType | null;
+  else_action_value: string | null;
   stop_processing: boolean;
   is_builtin: boolean;
   created_at: string;
@@ -545,12 +634,18 @@ export interface CreateRuleRequest {
   condition_type: NormalizationConditionType;
   condition_value?: string;
   case_sensitive?: boolean;
+  // Tag group condition (for condition_type='tag_group')
+  tag_group_id?: number;
+  tag_match_position?: TagMatchPosition;
   // Compound conditions (takes precedence if set)
   conditions?: NormalizationCondition[];
   condition_logic?: NormalizationConditionLogic;
   // Action fields
   action_type: NormalizationActionType;
   action_value?: string;
+  // Else action (executed when condition doesn't match)
+  else_action_type?: NormalizationActionType;
+  else_action_value?: string;
   stop_processing?: boolean;
 }
 
@@ -564,12 +659,18 @@ export interface UpdateRuleRequest {
   condition_type?: NormalizationConditionType;
   condition_value?: string;
   case_sensitive?: boolean;
+  // Tag group condition
+  tag_group_id?: number | null;
+  tag_match_position?: TagMatchPosition | null;
   // Compound conditions
   conditions?: NormalizationCondition[] | null;  // null to clear compound conditions
   condition_logic?: NormalizationConditionLogic;
   // Action fields
   action_type?: NormalizationActionType;
   action_value?: string;
+  // Else action
+  else_action_type?: NormalizationActionType | null;
+  else_action_value?: string | null;
   stop_processing?: boolean;
 }
 
@@ -580,12 +681,18 @@ export interface TestRuleRequest {
   condition_type: NormalizationConditionType;
   condition_value: string;
   case_sensitive: boolean;
+  // Tag group condition
+  tag_group_id?: number;
+  tag_match_position?: TagMatchPosition;
   // Compound conditions (takes precedence if set)
   conditions?: NormalizationCondition[];
   condition_logic?: NormalizationConditionLogic;
   // Action fields
   action_type: NormalizationActionType;
   action_value?: string;
+  // Else action
+  else_action_type?: NormalizationActionType;
+  else_action_value?: string;
 }
 
 // Result of testing a single rule
@@ -595,6 +702,8 @@ export interface TestRuleResult {
   after: string;
   match_start: number | null;
   match_end: number | null;
+  matched_tag: string | null;  // The tag that matched (for tag_group conditions)
+  else_applied: boolean;  // True if else action was applied
 }
 
 // Transformation detail in batch test result

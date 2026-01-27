@@ -80,8 +80,8 @@
   left: 0;
   right: 0;
   margin-top: 4px;
-  background-color: var(--bg-secondary);
-  border: 1px solid var(--border-secondary);
+  background-color: var(--bg-secondary, #252530);
+  border: 1px solid var(--border-secondary, #4a4a55);
   border-radius: 6px;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
   z-index: 1000;
@@ -186,25 +186,26 @@
   border-radius: 4px;
   cursor: pointer;
   font-size: 0.875rem;
-  color: var(--text-primary);
+  color: var(--text-primary, rgba(255, 255, 255, 0.95));
+  background: transparent;
   transition: background-color 0.15s;
 }
 
 .custom-select-option:hover {
-  background-color: var(--input-bg);
+  background-color: var(--bg-hover, #3a3a45);
 }
 
 .custom-select-option.highlighted {
-  background-color: var(--input-bg);
+  background-color: var(--bg-hover, #3a3a45);
 }
 
 .custom-select-option.selected {
-  background-color: rgba(100, 108, 255, 0.15);
-  color: var(--accent-primary);
+  background-color: var(--bg-selected, rgba(255, 255, 255, 0.15));
+  color: var(--text-primary, rgba(255, 255, 255, 0.95));
 }
 
 .custom-select-option.selected.highlighted {
-  background-color: rgba(100, 108, 255, 0.25);
+  background-color: var(--bg-hover, #3a3a45);
 }
 
 .custom-select-option.disabled {

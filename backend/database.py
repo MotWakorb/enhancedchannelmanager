@@ -53,7 +53,7 @@ def init_db() -> None:
         _SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=_engine)
 
         # Import models to register them with Base
-        from models import JournalEntry, BandwidthDaily, ChannelWatchStats, HiddenChannelGroup, StreamStats, ScheduledTask, TaskSchedule, TaskExecution, Notification, AlertMethod  # noqa: F401
+        from models import JournalEntry, BandwidthDaily, ChannelWatchStats, HiddenChannelGroup, StreamStats, ScheduledTask, TaskSchedule, TaskExecution, Notification, AlertMethod, TagGroup, Tag  # noqa: F401
 
         # Create all tables
         Base.metadata.create_all(bind=_engine)
@@ -128,6 +128,12 @@ def _run_migrations(engine) -> None:
 
             # Add compound conditions columns to normalization_rules (v0.8.7)
             _add_compound_conditions_columns(conn)
+
+            # Add tag_group and else_action columns to normalization_rules (v0.8.7)
+            _add_tag_group_and_else_columns(conn)
+
+            # Populate built-in tag groups (v0.8.7)
+            _populate_builtin_tags(conn)
 
             logger.debug("All migrations complete - schema is up to date")
     except Exception as e:
@@ -521,6 +527,237 @@ def _add_compound_conditions_columns(conn) -> None:
         ))
         conn.commit()
         logger.info("Migration complete: added condition_logic column to normalization_rules")
+
+
+def _add_tag_group_and_else_columns(conn) -> None:
+    """Add tag_group and else_action columns to normalization_rules table (v0.8.7)."""
+    from sqlalchemy import text
+
+    # Check if normalization_rules table exists
+    result = conn.execute(text(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='normalization_rules'"
+    ))
+    if not result.fetchone():
+        logger.debug("normalization_rules table doesn't exist yet, skipping migration")
+        return
+
+    # Get current columns
+    result = conn.execute(text("PRAGMA table_info(normalization_rules)"))
+    columns = [row[1] for row in result.fetchall()]
+
+    # Add tag_group_id column if missing
+    if "tag_group_id" not in columns:
+        logger.info("Adding tag_group_id column to normalization_rules table")
+        conn.execute(text(
+            "ALTER TABLE normalization_rules ADD COLUMN tag_group_id INTEGER REFERENCES tag_groups(id) ON DELETE SET NULL"
+        ))
+        conn.commit()
+        logger.info("Migration complete: added tag_group_id column to normalization_rules")
+
+    # Add tag_match_position column if missing
+    if "tag_match_position" not in columns:
+        logger.info("Adding tag_match_position column to normalization_rules table")
+        conn.execute(text(
+            "ALTER TABLE normalization_rules ADD COLUMN tag_match_position VARCHAR(20)"
+        ))
+        conn.commit()
+        logger.info("Migration complete: added tag_match_position column to normalization_rules")
+
+    # Add else_action_type column if missing
+    if "else_action_type" not in columns:
+        logger.info("Adding else_action_type column to normalization_rules table")
+        conn.execute(text(
+            "ALTER TABLE normalization_rules ADD COLUMN else_action_type VARCHAR(20)"
+        ))
+        conn.commit()
+        logger.info("Migration complete: added else_action_type column to normalization_rules")
+
+    # Add else_action_value column if missing
+    if "else_action_value" not in columns:
+        logger.info("Adding else_action_value column to normalization_rules table")
+        conn.execute(text(
+            "ALTER TABLE normalization_rules ADD COLUMN else_action_value VARCHAR(500)"
+        ))
+        conn.commit()
+        logger.info("Migration complete: added else_action_value column to normalization_rules")
+
+
+def _populate_builtin_tags(conn) -> None:
+    """Populate built-in tag groups and tags (v0.8.7).
+
+    Creates the following built-in tag groups:
+    - Quality Tags: HD, FHD, UHD, 4K, SD, 1080P, etc.
+    - Country Tags: US, UK, CA, AU, BR, etc.
+    - Timezone Tags: EST, PST, ET, PT, etc.
+    - League Tags: NFL, NBA, MLB, NHL, etc.
+    - Network Tags: PPV, LIVE, BACKUP, VIP, etc.
+    """
+    from sqlalchemy import text
+
+    # Check if tag_groups table exists
+    result = conn.execute(text(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='tag_groups'"
+    ))
+    if not result.fetchone():
+        logger.debug("tag_groups table doesn't exist yet, skipping built-in tags population")
+        return
+
+    # Sync built-in tags - adds any missing groups and tags
+    # This runs on every startup to ensure new built-in tags are added to existing installations
+    logger.debug("Syncing built-in tag groups and tags")
+
+    # Define built-in tag groups and their tags
+    builtin_groups = {
+        "Quality Tags": {
+            "description": "Video quality indicators (HD, 4K, etc.)",
+            "tags": ["HD", "FHD", "UHD", "4K", "SD", "1080P", "1080I", "720P", "480P", "HEVC", "H264", "H265"]
+        },
+        "Country Tags": {
+            "description": "Country codes and abbreviations",
+            "tags": [
+                # North America
+                "US", "CA", "MX",
+                # Central America & Caribbean
+                "CR", "PA", "CU", "DO", "PR", "JM",
+                # South America
+                "BR", "AR", "CL", "CO", "PE", "VE", "EC", "UY", "PY", "BO",
+                # Western Europe
+                "UK", "GB", "DE", "FR", "ES", "IT", "NL", "BE", "PT", "AT", "CH", "IE",
+                # Northern Europe
+                "SE", "NO", "DK", "FI", "IS",
+                # Eastern Europe
+                "PL", "CZ", "SK", "HU", "RO", "BG", "HR", "SI", "RS", "UA", "RU", "BY",
+                # Southern Europe
+                "GR", "TR", "CY", "MT",
+                # Middle East
+                "AE", "SA", "QA", "KW", "BH", "OM", "IL", "JO", "LB", "IQ", "IR", "SY",
+                # North Africa
+                "EG", "MA", "DZ", "TN", "LY",
+                # Sub-Saharan Africa
+                "ZA", "NG", "KE", "GH", "ET", "TZ", "UG",
+                # South Asia
+                "IN", "PK", "BD", "LK", "NP",
+                # East Asia
+                "CN", "JP", "KR", "TW", "HK", "MO",
+                # Southeast Asia
+                "SG", "MY", "TH", "VN", "PH", "ID", "MM",
+                # Oceania
+                "AU", "NZ", "FJ"
+            ]
+        },
+        "Timezone Tags": {
+            "description": "Timezone abbreviations",
+            "tags": [
+                # Universal
+                "UTC", "GMT",
+                # US/Canada
+                "EST", "EDT", "ET", "CST", "CDT", "CT", "MST", "MDT", "MT",
+                "PST", "PDT", "PT", "AST", "ADT", "HST", "AKST", "AKDT",
+                # Europe
+                "CET", "CEST", "EET", "EEST", "WET", "WEST", "BST", "IST",
+                # Asia - East
+                "JST", "KST", "CST", "HKT", "PHT", "SGT", "MYT", "WIB", "WITA", "WIT",
+                # Asia - South
+                "IST", "PKT", "BST", "NPT", "BTT",
+                # Asia - Central/West
+                "ICT", "THA", "MMT",
+                # Middle East
+                "GST", "AST", "IRST", "TRT", "IDT",
+                # Australia/Pacific
+                "AEST", "AEDT", "ACST", "ACDT", "AWST", "NZST", "NZDT", "FJT",
+                # Americas (non-US)
+                "BRT", "BRST", "ART", "CLT", "CLST", "COT", "PET", "VET", "ECT",
+                # Africa
+                "CAT", "EAT", "WAT", "SAST", "CET"
+            ]
+        },
+        "League Tags": {
+            "description": "Sports league abbreviations",
+            "tags": [
+                # US Major Leagues
+                "NFL", "NBA", "MLB", "NHL", "MLS",
+                # US College & Other
+                "NCAA", "NCAAF", "NCAAB", "WNBA", "NWSL", "CFL", "XFL", "USFL",
+                # Soccer/Football - International
+                "FIFA", "UEFA", "UCL", "UEL",
+                # Soccer/Football - Europe
+                "EPL", "LA LIGA", "SERIE A", "BUNDESLIGA", "LIGUE 1",
+                "PREMIER LEAGUE", "FA CUP", "EREDIVISIE",
+                # Soccer/Football - Americas
+                "LIGA MX", "CPL", "CONMEBOL", "CONCACAF",
+                # Combat Sports
+                "UFC", "WWE", "AEW", "BELLATOR", "ONE", "PFL", "BOXING",
+                # Golf
+                "PGA", "LPGA", "LIV", "DP WORLD",
+                # Tennis
+                "ATP", "WTA", "US OPEN", "WIMBLEDON", "ROLAND GARROS",
+                # Motorsports
+                "F1", "NASCAR", "INDYCAR", "MOTOGP", "WRC", "NHRA",
+                # Basketball - International
+                "FIBA", "EUROLEAGUE",
+                # Hockey - US Minor Leagues
+                "AHL", "ECHL", "USHL", "SPHL",
+                # Hockey - International
+                "IIHF", "KHL",
+                # Cricket (CPL already listed under Soccer/Football - Americas)
+                "IPL", "BBL", "PSL", "ICC",
+                # Rugby
+                "SIX NATIONS", "SUPER RUGBY", "NRL", "PREMIERSHIP RUGBY",
+                # Australian Sports
+                "AFL", "A-LEAGUE",
+                # Other
+                "OLYMPICS", "X GAMES", "ESPN", "PPV"
+            ]
+        },
+        "Network Tags": {
+            "description": "Network and stream type indicators",
+            "tags": ["PPV", "LIVE", "BACKUP", "VIP", "PREMIUM", "24/7", "REPLAY"]
+        }
+    }
+
+    groups_created = 0
+    tags_added = 0
+
+    for group_name, group_data in builtin_groups.items():
+        # Check if group exists
+        result = conn.execute(text("SELECT id FROM tag_groups WHERE name = :name"), {"name": group_name})
+        row = result.fetchone()
+
+        if row:
+            group_id = row[0]
+        else:
+            # Create the group
+            conn.execute(text("""
+                INSERT INTO tag_groups (name, description, is_builtin, created_at, updated_at)
+                VALUES (:name, :description, 1, datetime('now'), datetime('now'))
+            """), {"name": group_name, "description": group_data["description"]})
+            result = conn.execute(text("SELECT id FROM tag_groups WHERE name = :name"), {"name": group_name})
+            group_id = result.fetchone()[0]
+            groups_created += 1
+            logger.info(f"Created built-in group '{group_name}'")
+
+        # Get existing tags for this group
+        result = conn.execute(text("SELECT value FROM tags WHERE group_id = :group_id"), {"group_id": group_id})
+        existing_tags = set(row[0] for row in result.fetchall())
+
+        # Deduplicate the tag list (in case of duplicates like CPL)
+        unique_tags = list(dict.fromkeys(group_data["tags"]))
+
+        # Insert missing tags
+        for tag_value in unique_tags:
+            if tag_value not in existing_tags:
+                conn.execute(text("""
+                    INSERT INTO tags (group_id, value, case_sensitive, enabled, is_builtin)
+                    VALUES (:group_id, :value, 0, 1, 1)
+                """), {"group_id": group_id, "value": tag_value})
+                tags_added += 1
+
+    conn.commit()
+
+    if groups_created > 0 or tags_added > 0:
+        logger.info(f"Built-in tags sync complete: {groups_created} groups created, {tags_added} tags added")
+    else:
+        logger.debug("Built-in tags sync complete: no changes needed")
 
 
 def _perform_maintenance(engine) -> None:

@@ -32,9 +32,12 @@ import type {
   NormalizationCondition,
   NormalizationResult,
   TestRuleResult,
+  TagGroup,
+  TagMatchPosition,
 } from '../../types';
 import './NormalizationEngineSection.css';
 import '../ModalBase.css';
+import { CustomSelect, type SelectOption } from '../CustomSelect';
 
 // Condition type options for dropdowns
 const CONDITION_TYPES: { value: NormalizationConditionType; label: string; description: string }[] = [
@@ -42,7 +45,15 @@ const CONDITION_TYPES: { value: NormalizationConditionType; label: string; descr
   { value: 'ends_with', label: 'Ends With', description: 'Match text at the end' },
   { value: 'contains', label: 'Contains', description: 'Match text anywhere' },
   { value: 'regex', label: 'Regex', description: 'Match using regular expression' },
+  { value: 'tag_group', label: 'Tag Group', description: 'Match against a tag vocabulary' },
   { value: 'always', label: 'Always', description: 'Always match (use with caution)' },
+];
+
+// Tag match position options
+const TAG_MATCH_POSITIONS: { value: TagMatchPosition; label: string; description: string }[] = [
+  { value: 'prefix', label: 'Prefix', description: 'Tag appears at the start' },
+  { value: 'suffix', label: 'Suffix', description: 'Tag appears at the end' },
+  { value: 'contains', label: 'Anywhere', description: 'Tag appears anywhere in text' },
 ];
 
 // Action type options for dropdowns
@@ -79,10 +90,17 @@ interface RuleEditorState {
   useCompoundConditions: boolean;
   conditions: NormalizationCondition[];
   conditionLogic: NormalizationConditionLogic;
+  // Tag group condition settings
+  tagGroupId: number | null;
+  tagMatchPosition: TagMatchPosition;
   // Action settings
   actionType: NormalizationActionType;
   actionValue: string;
   stopProcessing: boolean;
+  // Else branch settings
+  hasElseBranch: boolean;
+  elseActionType: NormalizationActionType;
+  elseActionValue: string;
 }
 
 interface GroupEditorState {
@@ -145,7 +163,11 @@ function SortableRuleItem({
       <div className="norm-engine-rule-info">
         <span className="norm-engine-rule-name">{rule.name}</span>
         <span className="norm-engine-rule-pattern">
-          {rule.condition_type}: "{rule.condition_value}"
+          {rule.condition_type === 'tag_group' ? (
+            <>tag_group: {rule.tag_group_name || 'Unknown'} ({rule.tag_match_position})</>
+          ) : (
+            <>{rule.condition_type}: "{rule.condition_value}"</>
+          )}
         </span>
       </div>
       <div className="norm-engine-rule-actions" onClick={(e) => e.stopPropagation()}>
@@ -185,6 +207,7 @@ function SortableRuleItem({
 export function NormalizationEngineSection() {
   // Data state
   const [groups, setGroups] = useState<NormalizationRuleGroup[]>([]);
+  const [tagGroups, setTagGroups] = useState<TagGroup[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -210,9 +233,14 @@ export function NormalizationEngineSection() {
     useCompoundConditions: false,
     conditions: [],
     conditionLogic: 'AND',
+    tagGroupId: null,
+    tagMatchPosition: 'prefix',
     actionType: 'strip_prefix',
     actionValue: '',
     stopProcessing: false,
+    hasElseBranch: false,
+    elseActionType: 'remove',
+    elseActionValue: '',
   });
 
   // Group editor state
@@ -238,13 +266,17 @@ export function NormalizationEngineSection() {
     })
   );
 
-  // Load groups and rules
+  // Load groups, rules, and tag groups
   const loadData = useCallback(async () => {
     try {
       setLoading(true);
       setError(null);
-      const response = await api.getNormalizationRules();
-      setGroups(response.groups);
+      const [rulesResponse, tagsResponse] = await Promise.all([
+        api.getNormalizationRules(),
+        api.getTagGroups(),
+      ]);
+      setGroups(rulesResponse.groups);
+      setTagGroups(tagsResponse.groups);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load rules');
     } finally {
@@ -362,9 +394,14 @@ export function NormalizationEngineSection() {
       useCompoundConditions: false,
       conditions: [],
       conditionLogic: 'AND',
+      tagGroupId: null,
+      tagMatchPosition: 'prefix',
       actionType: 'strip_prefix',
       actionValue: '',
       stopProcessing: false,
+      hasElseBranch: false,
+      elseActionType: 'remove',
+      elseActionValue: '',
     });
     setPreviewResult(null);
   }, []);
@@ -384,9 +421,14 @@ export function NormalizationEngineSection() {
       useCompoundConditions: hasCompoundConditions,
       conditions: rule.conditions || [],
       conditionLogic: rule.condition_logic || 'AND',
+      tagGroupId: rule.tag_group_id || null,
+      tagMatchPosition: rule.tag_match_position || 'prefix',
       actionType: rule.action_type,
       actionValue: rule.action_value || '',
       stopProcessing: rule.stop_processing,
+      hasElseBranch: !!(rule.else_action_type),
+      elseActionType: rule.else_action_type || 'remove',
+      elseActionValue: rule.else_action_value || '',
     });
     setPreviewResult(null);
   }, []);
@@ -408,6 +450,14 @@ export function NormalizationEngineSection() {
         ? ruleEditor.conditionLogic
         : undefined;
 
+      // Tag group fields (only when condition type is tag_group)
+      const tagGroupId = ruleEditor.conditionType === 'tag_group' ? ruleEditor.tagGroupId : null;
+      const tagMatchPosition = ruleEditor.conditionType === 'tag_group' ? ruleEditor.tagMatchPosition : null;
+
+      // Else branch fields (only when enabled)
+      const elseActionType = ruleEditor.hasElseBranch ? ruleEditor.elseActionType : null;
+      const elseActionValue = ruleEditor.hasElseBranch ? (ruleEditor.elseActionValue || null) : null;
+
       if (ruleEditor.editingRule) {
         // Update existing rule
         await api.updateNormalizationRule(ruleEditor.editingRule.id, {
@@ -418,9 +468,13 @@ export function NormalizationEngineSection() {
           case_sensitive: ruleEditor.caseSensitive,
           conditions: ruleEditor.useCompoundConditions ? conditionsData : null,  // null to clear compound conditions
           condition_logic: conditionLogicData,
+          tag_group_id: tagGroupId,
+          tag_match_position: tagMatchPosition,
           action_type: ruleEditor.actionType,
           action_value: ruleEditor.actionValue || undefined,
           stop_processing: ruleEditor.stopProcessing,
+          else_action_type: elseActionType,
+          else_action_value: elseActionValue,
         });
       } else if (ruleEditor.groupId) {
         // Create new rule
@@ -433,9 +487,13 @@ export function NormalizationEngineSection() {
           case_sensitive: ruleEditor.caseSensitive,
           conditions: conditionsData,
           condition_logic: conditionLogicData,
+          tag_group_id: tagGroupId ?? undefined,
+          tag_match_position: tagMatchPosition ?? undefined,
           action_type: ruleEditor.actionType,
           action_value: ruleEditor.actionValue || undefined,
           stop_processing: ruleEditor.stopProcessing,
+          else_action_type: elseActionType ?? undefined,
+          else_action_value: elseActionValue ?? undefined,
         });
       }
       closeRuleEditor();
@@ -512,15 +570,21 @@ export function NormalizationEngineSection() {
 
   // Live preview for rule editor
   const updatePreview = useCallback(async () => {
-    // For simple mode, need condition value (unless 'always')
-    // For compound mode, need at least one condition
+    // Check if we have enough info to preview
     if (ruleEditor.useCompoundConditions) {
       if (ruleEditor.conditions.length === 0) {
         setPreviewResult(null);
         return;
       }
-    } else {
-      if (!ruleEditor.conditionValue && ruleEditor.conditionType !== 'always') {
+    } else if (ruleEditor.conditionType === 'tag_group') {
+      // Tag group condition needs a tag group selected
+      if (!ruleEditor.tagGroupId) {
+        setPreviewResult(null);
+        return;
+      }
+    } else if (ruleEditor.conditionType !== 'always') {
+      // Other simple conditions need a value
+      if (!ruleEditor.conditionValue) {
         setPreviewResult(null);
         return;
       }
@@ -536,8 +600,12 @@ export function NormalizationEngineSection() {
         case_sensitive: ruleEditor.caseSensitive,
         conditions: ruleEditor.useCompoundConditions ? ruleEditor.conditions : undefined,
         condition_logic: ruleEditor.useCompoundConditions ? ruleEditor.conditionLogic : undefined,
+        tag_group_id: ruleEditor.conditionType === 'tag_group' ? ruleEditor.tagGroupId ?? undefined : undefined,
+        tag_match_position: ruleEditor.conditionType === 'tag_group' ? ruleEditor.tagMatchPosition : undefined,
         action_type: ruleEditor.actionType,
         action_value: ruleEditor.actionValue || undefined,
+        else_action_type: ruleEditor.hasElseBranch ? ruleEditor.elseActionType : undefined,
+        else_action_value: ruleEditor.hasElseBranch ? (ruleEditor.elseActionValue || undefined) : undefined,
       });
       setPreviewResult(result);
     } catch {
@@ -551,7 +619,7 @@ export function NormalizationEngineSection() {
       const timer = setTimeout(updatePreview, 300);
       return () => clearTimeout(timer);
     }
-  }, [ruleEditor.isOpen, ruleEditor.conditionType, ruleEditor.conditionValue, ruleEditor.caseSensitive, ruleEditor.useCompoundConditions, ruleEditor.conditions, ruleEditor.conditionLogic, ruleEditor.actionType, ruleEditor.actionValue, updatePreview]);
+  }, [ruleEditor.isOpen, ruleEditor.conditionType, ruleEditor.conditionValue, ruleEditor.caseSensitive, ruleEditor.useCompoundConditions, ruleEditor.conditions, ruleEditor.conditionLogic, ruleEditor.tagGroupId, ruleEditor.tagMatchPosition, ruleEditor.actionType, ruleEditor.actionValue, ruleEditor.hasElseBranch, ruleEditor.elseActionType, ruleEditor.elseActionValue, updatePreview]);
 
   // Stats
   const stats = useMemo(() => {
@@ -887,35 +955,80 @@ export function NormalizationEngineSection() {
 
               {/* Simple Condition Mode */}
               {!ruleEditor.useCompoundConditions && (
-                <div className="modal-form-row">
-                  <div className="modal-form-group">
-                    <label>Condition Type</label>
-                    <select
-                      value={ruleEditor.conditionType}
-                      onChange={(e) => setRuleEditor((prev) => ({
-                        ...prev,
-                        conditionType: e.target.value as NormalizationConditionType,
-                      }))}
-                    >
-                      {CONDITION_TYPES.map((ct) => (
-                        <option key={ct.value} value={ct.value}>
-                          {ct.label}
-                        </option>
-                      ))}
-                    </select>
+                <>
+                  <div className="modal-form-row">
+                    <div className="modal-form-group">
+                      <label>Condition Type</label>
+                      <select
+                        value={ruleEditor.conditionType}
+                        onChange={(e) => setRuleEditor((prev) => ({
+                          ...prev,
+                          conditionType: e.target.value as NormalizationConditionType,
+                        }))}
+                      >
+                        {CONDITION_TYPES.map((ct) => (
+                          <option key={ct.value} value={ct.value}>
+                            {ct.label}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    {/* Pattern input for non-tag_group conditions */}
+                    {ruleEditor.conditionType !== 'tag_group' && (
+                      <div className="modal-form-group">
+                        <label>Pattern</label>
+                        <input
+                          type="text"
+                          value={ruleEditor.conditionValue}
+                          onChange={(e) => setRuleEditor((prev) => ({ ...prev, conditionValue: e.target.value }))}
+                          placeholder="e.g., HD"
+                          disabled={ruleEditor.conditionType === 'always'}
+                        />
+                      </div>
+                    )}
                   </div>
 
-                  <div className="modal-form-group">
-                    <label>Pattern</label>
-                    <input
-                      type="text"
-                      value={ruleEditor.conditionValue}
-                      onChange={(e) => setRuleEditor((prev) => ({ ...prev, conditionValue: e.target.value }))}
-                      placeholder="e.g., HD"
-                      disabled={ruleEditor.conditionType === 'always'}
-                    />
-                  </div>
-                </div>
+                  {/* Tag Group selector (when condition type is tag_group) */}
+                  {ruleEditor.conditionType === 'tag_group' && (
+                    <div className="modal-form-row">
+                      <div className="modal-form-group">
+                        <label>Tag Group</label>
+                        <select
+                          value={ruleEditor.tagGroupId ?? ''}
+                          onChange={(e) => setRuleEditor((prev) => ({
+                            ...prev,
+                            tagGroupId: e.target.value ? Number(e.target.value) : null,
+                          }))}
+                        >
+                          <option value="">Select a tag group...</option>
+                          {tagGroups.map((tg) => (
+                            <option key={tg.id} value={tg.id}>
+                              {tg.name} ({tg.tag_count ?? 0} tags)
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+
+                      <div className="modal-form-group">
+                        <label>Match Position</label>
+                        <select
+                          value={ruleEditor.tagMatchPosition}
+                          onChange={(e) => setRuleEditor((prev) => ({
+                            ...prev,
+                            tagMatchPosition: e.target.value as TagMatchPosition,
+                          }))}
+                        >
+                          {TAG_MATCH_POSITIONS.map((pos) => (
+                            <option key={pos.value} value={pos.value}>
+                              {pos.label}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+                  )}
+                </>
               )}
 
               {/* Compound Conditions Mode */}
@@ -923,37 +1036,37 @@ export function NormalizationEngineSection() {
                 <div className="norm-engine-compound-conditions">
                   <div className="norm-engine-compound-header">
                     <label>Combine conditions with:</label>
-                    <select
+                    <CustomSelect
                       value={ruleEditor.conditionLogic}
-                      onChange={(e) => setRuleEditor((prev) => ({
+                      onChange={(value) => setRuleEditor((prev) => ({
                         ...prev,
-                        conditionLogic: e.target.value as NormalizationConditionLogic,
+                        conditionLogic: value as NormalizationConditionLogic,
                       }))}
+                      options={[
+                        { value: 'AND', label: 'AND (all must match)' },
+                        { value: 'OR', label: 'OR (any must match)' },
+                      ]}
                       className="norm-engine-logic-select"
-                    >
-                      <option value="AND">AND (all must match)</option>
-                      <option value="OR">OR (any must match)</option>
-                    </select>
+                    />
                   </div>
 
                   <div className="norm-engine-conditions-list">
                     {ruleEditor.conditions.map((condition, index) => (
                       <div key={index} className="norm-engine-condition-row">
                         <div className="norm-engine-condition-fields">
-                          <select
+                          <CustomSelect
                             value={condition.type}
-                            onChange={(e) => {
+                            onChange={(value) => {
                               const newConditions = [...ruleEditor.conditions];
-                              newConditions[index] = { ...condition, type: e.target.value as NormalizationConditionType };
+                              newConditions[index] = { ...condition, type: value as NormalizationConditionType };
                               setRuleEditor((prev) => ({ ...prev, conditions: newConditions }));
                             }}
-                          >
-                            {CONDITION_TYPES.map((ct) => (
-                              <option key={ct.value} value={ct.value}>
-                                {ct.label}
-                              </option>
-                            ))}
-                          </select>
+                            options={CONDITION_TYPES.map((ct) => ({
+                              value: ct.value,
+                              label: ct.label,
+                            }))}
+                            className="norm-engine-condition-type-select"
+                          />
                           <input
                             type="text"
                             value={condition.value}
@@ -1055,8 +1168,8 @@ export function NormalizationEngineSection() {
               </div>
 
               <div className="norm-engine-form-checkboxes">
-                {/* Case Sensitive only shown in simple mode - compound mode has per-condition settings */}
-                {!ruleEditor.useCompoundConditions && (
+                {/* Case Sensitive only shown in simple mode (non-tag_group) - compound mode has per-condition settings */}
+                {!ruleEditor.useCompoundConditions && ruleEditor.conditionType !== 'tag_group' && (
                   <label className="modal-checkbox-label">
                     <input
                       type="checkbox"
@@ -1076,17 +1189,77 @@ export function NormalizationEngineSection() {
                 </label>
               </div>
 
+              {/* Else Branch Configuration */}
+              <div className="norm-engine-else-branch">
+                <label className="modal-checkbox-label">
+                  <input
+                    type="checkbox"
+                    checked={ruleEditor.hasElseBranch}
+                    onChange={(e) => setRuleEditor((prev) => ({ ...prev, hasElseBranch: e.target.checked }))}
+                  />
+                  Execute alternate action if condition doesn't match (Else)
+                </label>
+
+                {ruleEditor.hasElseBranch && (
+                  <div className="norm-engine-else-actions">
+                    <div className="modal-form-row">
+                      <div className="modal-form-group">
+                        <label>Else Action Type</label>
+                        <select
+                          value={ruleEditor.elseActionType}
+                          onChange={(e) => setRuleEditor((prev) => ({
+                            ...prev,
+                            elseActionType: e.target.value as NormalizationActionType,
+                          }))}
+                        >
+                          {ACTION_TYPES.map((at) => (
+                            <option key={at.value} value={at.value}>
+                              {at.label}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+
+                      <div className="modal-form-group">
+                        <label>Else Replacement Value</label>
+                        <input
+                          type="text"
+                          value={ruleEditor.elseActionValue}
+                          onChange={(e) => setRuleEditor((prev) => ({ ...prev, elseActionValue: e.target.value }))}
+                          placeholder="Leave empty to remove"
+                          disabled={!['replace', 'regex_replace', 'normalize_prefix'].includes(ruleEditor.elseActionType)}
+                        />
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+
               {/* Live Preview */}
               {previewResult && (
                 <div className="norm-engine-preview">
                   <h5>Live Preview</h5>
-                  <div className={`norm-engine-preview-result ${previewResult.matched ? 'matched' : 'no-match'}`}>
+                  <div className={`norm-engine-preview-result ${previewResult.matched ? 'matched' : previewResult.else_applied ? 'else-applied' : 'no-match'}`}>
                     {previewResult.matched ? (
                       <>
                         <span className="material-icons">check_circle</span>
                         <span className="before">{previewResult.before}</span>
                         <span className="arrow">→</span>
                         <span className="after">{previewResult.after}</span>
+                        {previewResult.matched_tag && (
+                          <span className="matched-tag" title="Matched tag">
+                            <span className="material-icons">label</span>
+                            {previewResult.matched_tag}
+                          </span>
+                        )}
+                      </>
+                    ) : previewResult.else_applied ? (
+                      <>
+                        <span className="material-icons">swap_horiz</span>
+                        <span className="before">{previewResult.before}</span>
+                        <span className="arrow">→</span>
+                        <span className="after">{previewResult.after}</span>
+                        <span className="else-badge">Else</span>
                       </>
                     ) : (
                       <>
