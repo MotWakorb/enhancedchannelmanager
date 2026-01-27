@@ -740,6 +740,10 @@ function App() {
     streamsExplicitlyRequested.current = true;
     setStreamFilters(prev => ({ ...prev, selectedProviders: providerIds }));
     localStorage.setItem('streamProviderFilters', JSON.stringify(providerIds));
+    // Reload stream groups filtered by provider (if exactly one selected)
+    // When 0 or multiple providers selected, load all groups
+    const m3uAccountId = providerIds.length === 1 ? providerIds[0] : null;
+    loadStreamGroups(m3uAccountId);
   }, []);
 
   const updateSelectedStreamGroupFilters = useCallback((groups: string[]) => {
@@ -753,6 +757,8 @@ function App() {
     setStreamFilters(prev => ({ ...prev, selectedProviders: [], selectedGroups: [] }));
     localStorage.removeItem('streamProviderFilters');
     localStorage.removeItem('streamGroupFilters');
+    // Reload all stream groups (no provider filter)
+    loadStreamGroups(null);
   }, []);
 
   const trackNewlyCreatedGroup = useCallback((groupId: number) => {
@@ -799,9 +805,9 @@ function App() {
     }
   };
 
-  const loadStreamGroups = async () => {
+  const loadStreamGroups = async (m3uAccountId?: number | null) => {
     try {
-      const groups = await api.getStreamGroups();
+      const groups = await api.getStreamGroups(false, m3uAccountId);
       setStreamGroups(groups);
     } catch (err) {
       logger.error('Failed to load stream groups:', err);

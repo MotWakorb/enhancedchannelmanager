@@ -161,6 +161,7 @@ export function StreamsPane({
   const { copySuccess, copyError, handleCopy } = useCopyFeedback();
 
   // Filter out mapped streams if toggle is enabled
+  // Note: Provider filtering is handled by App.tsx before streams reach this component
   const filteredStreams = useMemo(() => {
     if (!hideMappedStreams || !mappedStreamIds || mappedStreamIds.size === 0) {
       return streams;
@@ -217,6 +218,7 @@ export function StreamsPane({
   }, [streamGroups]);
 
   // When not searching: show all groups for lazy loading
+  // Note: streamGroups is already filtered by provider from the API
   const sortedStreamGroups = useMemo((): [string, Stream[]][] => {
     const groups = new Map<string, Stream[]>();
     const isSearching = searchTerm.trim().length > 0;

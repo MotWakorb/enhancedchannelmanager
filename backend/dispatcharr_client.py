@@ -298,8 +298,13 @@ class DispatcharrClient:
         response.raise_for_status()
         return response.json()
 
-    async def get_stream_groups_with_counts(self) -> list:
+    async def get_stream_groups_with_counts(self, m3u_account_id: Optional[int] = None) -> list:
         """Get all stream groups with their stream counts.
+
+        Args:
+            m3u_account_id: Optional M3U account ID to filter groups by provider.
+                           When provided, only returns groups that have streams
+                           from this provider, with counts reflecting only that provider's streams.
 
         Returns list of dicts: [{"name": "Group Name", "count": 42}, ...]
 
@@ -315,10 +320,13 @@ class DispatcharrClient:
         # For each group, query with page_size=1 to get just the count
         async def get_group_count(group_name: str) -> dict:
             try:
+                params = {"channel_group_name": group_name, "page_size": 1}
+                if m3u_account_id is not None:
+                    params["m3u_account"] = m3u_account_id
                 response = await self._request(
                     "GET",
                     "/api/channels/streams/",
-                    params={"channel_group_name": group_name, "page_size": 1}
+                    params=params
                 )
                 response.raise_for_status()
                 data = response.json()
@@ -329,8 +337,12 @@ class DispatcharrClient:
         # Fetch counts concurrently for all groups
         results = await asyncio.gather(*[get_group_count(name) for name in group_names])
 
-        # Sort by name
+        # Filter out groups with 0 streams when filtering by provider
         results = list(results)
+        if m3u_account_id is not None:
+            results = [r for r in results if r["count"] > 0]
+
+        # Sort by name
         results.sort(key=lambda x: x["name"].lower())
 
         return results
