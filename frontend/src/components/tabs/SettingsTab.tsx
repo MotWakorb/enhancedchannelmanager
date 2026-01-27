@@ -1,9 +1,7 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
 import * as api from '../../services/api';
 import { NETWORK_PREFIXES, NETWORK_SUFFIXES } from '../../constants/streamNormalization';
-import { normalizeStreamName } from '../../services/streamNormalization';
-import type { Theme, ProbeHistoryEntry, SortCriterion, SortEnabledMap, GracenoteConflictMode, NormalizationSettings } from '../../services/api';
-import { NormalizationTagsSection } from '../settings/NormalizationTagsSection';
+import type { Theme, ProbeHistoryEntry, SortCriterion, SortEnabledMap, GracenoteConflictMode } from '../../services/api';
 import { NormalizationEngineSection } from '../settings/NormalizationEngineSection';
 import type { ChannelProfile } from '../../types';
 import { logger } from '../../utils/logger';
@@ -206,26 +204,6 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   const [newPrefixInput, setNewPrefixInput] = useState('');
   const [customNetworkSuffixes, setCustomNetworkSuffixes] = useState<string[]>([]);
   const [newSuffixInput, setNewSuffixInput] = useState('');
-  // New tag-based normalization settings
-  const [normalizationSettings, setNormalizationSettings] = useState<NormalizationSettings>({
-    disabledBuiltinTags: [],
-    customTags: [],
-  });
-  const [normalizationPreviewInput, setNormalizationPreviewInput] = useState('');
-
-  // Compute normalized preview based on current settings
-  const normalizedPreviewResult = useMemo(() => {
-    if (!normalizationPreviewInput.trim()) return '';
-    return normalizeStreamName(normalizationPreviewInput, {
-      timezonePreference: 'both',
-      stripCountryPrefix: true, // Enable tag-based country stripping (keepCountryPrefix overrides if true)
-      keepCountryPrefix: includeCountryInName,
-      countrySeparator: countrySeparator as '-' | ':' | '|',
-      stripNetworkPrefix: true,
-      stripNetworkSuffix: true,
-      normalizationSettings,
-    });
-  }, [normalizationPreviewInput, includeCountryInName, countrySeparator, normalizationSettings]);
 
   const [streamSortPriority, setStreamSortPriority] = useState<SortCriterion[]>(['resolution', 'bitrate', 'framerate', 'm3u_priority', 'audio_channels']);
   const [streamSortEnabled, setStreamSortEnabled] = useState<SortEnabledMap>({ resolution: true, bitrate: true, framerate: true, m3u_priority: false, audio_channels: false });
@@ -333,76 +311,6 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   const [needsRestart, setNeedsRestart] = useState(false);
   const [restarting, setRestarting] = useState(false);
   const [restartResult, setRestartResult] = useState<{ success: boolean; message: string } | null>(null);
-
-  // Handler to save normalization settings immediately when tags change
-  // NOTE: This callback must be defined AFTER all state declarations to avoid temporal dead zone errors
-  const handleNormalizationSettingsChange = useCallback(async (newSettings: NormalizationSettings) => {
-    // Update local state first for immediate UI response
-    setNormalizationSettings(newSettings);
-
-    // Save to backend immediately (with all current settings)
-    try {
-      await api.saveSettings({
-        url,
-        username,
-        auto_rename_channel_number: autoRenameChannelNumber,
-        include_channel_number_in_name: includeChannelNumberInName,
-        channel_number_separator: channelNumberSeparator,
-        remove_country_prefix: removeCountryPrefix,
-        include_country_in_name: includeCountryInName,
-        country_separator: countrySeparator,
-        timezone_preference: timezonePreference,
-        show_stream_urls: showStreamUrls,
-        hide_auto_sync_groups: hideAutoSyncGroups,
-        hide_ungrouped_streams: hideUngroupedStreams,
-        hide_epg_urls: hideEpgUrls,
-        hide_m3u_urls: hideM3uUrls,
-        gracenote_conflict_mode: gracenoteConflictMode,
-        theme: theme,
-        default_channel_profile_ids: defaultChannelProfileIds,
-        epg_auto_match_threshold: epgAutoMatchThreshold,
-        custom_network_prefixes: customNetworkPrefixes,
-        custom_network_suffixes: customNetworkSuffixes,
-        normalization_settings: newSettings, // Use the new settings
-        stats_poll_interval: statsPollInterval,
-        user_timezone: userTimezone,
-        backend_log_level: backendLogLevel,
-        frontend_log_level: frontendLogLevel,
-        vlc_open_behavior: vlcOpenBehavior,
-        linked_m3u_accounts: linkedM3UAccounts,
-        stream_probe_batch_size: streamProbeBatchSize,
-        stream_probe_timeout: streamProbeTimeout,
-        bitrate_sample_duration: bitrateSampleDuration,
-        parallel_probing_enabled: parallelProbingEnabled,
-        max_concurrent_probes: maxConcurrentProbes,
-        skip_recently_probed_hours: skipRecentlyProbedHours,
-        refresh_m3us_before_probe: refreshM3usBeforeProbe,
-        auto_reorder_after_probe: autoReorderAfterProbe,
-        stream_fetch_page_limit: streamFetchPageLimit,
-        stream_sort_priority: streamSortPriority,
-        stream_sort_enabled: streamSortEnabled,
-        m3u_account_priorities: m3uAccountPriorities,
-        deprioritize_failed_streams: deprioritizeFailedStreams,
-      });
-      logger.debug('Normalization settings saved automatically');
-    } catch (err) {
-      logger.error('Failed to auto-save normalization settings:', err);
-      // Don't show error to user for auto-save, just log it
-    }
-  }, [
-    url, username, autoRenameChannelNumber, includeChannelNumberInName,
-    channelNumberSeparator, removeCountryPrefix, includeCountryInName,
-    countrySeparator, timezonePreference, showStreamUrls, hideAutoSyncGroups,
-    hideUngroupedStreams, hideEpgUrls, hideM3uUrls, gracenoteConflictMode,
-    theme, defaultChannelProfileIds, epgAutoMatchThreshold,
-    customNetworkPrefixes, customNetworkSuffixes, statsPollInterval,
-    userTimezone, backendLogLevel, frontendLogLevel, vlcOpenBehavior,
-    linkedM3UAccounts, streamProbeBatchSize,
-    streamProbeTimeout, bitrateSampleDuration,
-    parallelProbingEnabled, maxConcurrentProbes, skipRecentlyProbedHours, refreshM3usBeforeProbe,
-    autoReorderAfterProbe, streamFetchPageLimit, streamSortPriority,
-    streamSortEnabled, deprioritizeFailedStreams
-  ]);
 
   // DnD sensors for sort priority
   const sensors = useSensors(
@@ -584,10 +492,6 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       setEpgAutoMatchThreshold(settings.epg_auto_match_threshold ?? 80);
       setCustomNetworkPrefixes(settings.custom_network_prefixes ?? []);
       setCustomNetworkSuffixes(settings.custom_network_suffixes ?? []);
-      setNormalizationSettings(settings.normalization_settings ?? {
-        disabledBuiltinTags: [],
-        customTags: [],
-      });
       setStatsPollInterval(settings.stats_poll_interval ?? 10);
       setOriginalPollInterval(settings.stats_poll_interval ?? 10);
       setUserTimezone(settings.user_timezone ?? '');
@@ -701,7 +605,6 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         epg_auto_match_threshold: epgAutoMatchThreshold,
         custom_network_prefixes: customNetworkPrefixes,
         custom_network_suffixes: customNetworkSuffixes,
-        normalization_settings: normalizationSettings,
         stats_poll_interval: statsPollInterval,
         user_timezone: userTimezone,
         backend_log_level: backendLogLevel,
@@ -1833,47 +1736,6 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
               </button>
             </div>
             <span className="separator-preview">e.g., "US {countrySeparator} Sports Channel"</span>
-          </div>
-        )}
-      </div>
-
-      <NormalizationTagsSection
-        settings={normalizationSettings}
-        onChange={handleNormalizationSettingsChange}
-      />
-
-      {/* Preview Section */}
-      <div className="settings-section">
-        <div className="settings-section-header">
-          <span className="material-icons">preview</span>
-          <h3>Preview Normalization</h3>
-        </div>
-        <p className="form-hint" style={{ marginBottom: '1rem' }}>
-          Test how a stream name will be normalized with the current settings.
-        </p>
-        <div className="form-group">
-          <label htmlFor="normalization-preview-input">Stream Name</label>
-          <input
-            id="normalization-preview-input"
-            type="text"
-            value={normalizationPreviewInput}
-            onChange={(e) => setNormalizationPreviewInput(e.target.value)}
-            placeholder="Enter a stream name to preview (e.g., US: ESPN HD 1080p)"
-            style={{ width: '100%' }}
-          />
-        </div>
-        {normalizationPreviewInput.trim() && (
-          <div className="normalization-preview-result">
-            <div className="normalization-preview-label">Result:</div>
-            <div className="normalization-preview-value">
-              {normalizedPreviewResult || <span className="text-muted">(empty result)</span>}
-            </div>
-            {normalizedPreviewResult !== normalizationPreviewInput && (
-              <div className="normalization-preview-comparison">
-                <span className="material-icons" style={{ fontSize: '16px', color: 'var(--success-color)' }}>check_circle</span>
-                <span className="text-muted">Name was normalized</span>
-              </div>
-            )}
           </div>
         )}
       </div>

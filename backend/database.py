@@ -126,6 +126,9 @@ def _run_migrations(engine) -> None:
             # Add parameters column to task_schedules (v0.8.7)
             _add_task_schedule_parameters_column(conn)
 
+            # Add compound conditions columns to normalization_rules (v0.8.7)
+            _add_compound_conditions_columns(conn)
+
             logger.debug("All migrations complete - schema is up to date")
     except Exception as e:
         logger.exception(f"Migration failed: {e}")
@@ -451,7 +454,7 @@ def _remove_min_interval_seconds_column(conn) -> None:
 
 
 def _add_task_schedule_parameters_column(conn) -> None:
-    """Add parameters column to task_schedules table (v0.8.7)."""
+    """Add missing columns to task_schedules table (v0.8.7)."""
     from sqlalchemy import text
 
     # Check if task_schedules table exists
@@ -462,20 +465,62 @@ def _add_task_schedule_parameters_column(conn) -> None:
         logger.debug("task_schedules table doesn't exist yet, skipping migration")
         return
 
-    # Check if parameters column already exists
+    # Check which columns already exist
     result = conn.execute(text("PRAGMA table_info(task_schedules)"))
     columns = [row[1] for row in result.fetchall()]
 
-    if "parameters" in columns:
-        logger.debug("parameters column already exists in task_schedules")
+    # Add parameters column if missing
+    if "parameters" not in columns:
+        logger.info("Adding parameters column to task_schedules table")
+        conn.execute(text(
+            "ALTER TABLE task_schedules ADD COLUMN parameters TEXT"
+        ))
+        conn.commit()
+        logger.info("Migration complete: added parameters column to task_schedules")
+
+    # Add last_run_at column if missing
+    if "last_run_at" not in columns:
+        logger.info("Adding last_run_at column to task_schedules table")
+        conn.execute(text(
+            "ALTER TABLE task_schedules ADD COLUMN last_run_at DATETIME"
+        ))
+        conn.commit()
+        logger.info("Migration complete: added last_run_at column to task_schedules")
+
+
+def _add_compound_conditions_columns(conn) -> None:
+    """Add compound conditions columns to normalization_rules table (v0.8.7)."""
+    from sqlalchemy import text
+
+    # Check if normalization_rules table exists
+    result = conn.execute(text(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='normalization_rules'"
+    ))
+    if not result.fetchone():
+        logger.debug("normalization_rules table doesn't exist yet, skipping migration")
         return
 
-    logger.info("Adding parameters column to task_schedules table")
-    conn.execute(text(
-        "ALTER TABLE task_schedules ADD COLUMN parameters TEXT"
-    ))
-    conn.commit()
-    logger.info("Migration complete: added parameters column to task_schedules")
+    # Get current columns
+    result = conn.execute(text("PRAGMA table_info(normalization_rules)"))
+    columns = [row[1] for row in result.fetchall()]
+
+    # Add conditions column if missing (JSON array of condition objects)
+    if "conditions" not in columns:
+        logger.info("Adding conditions column to normalization_rules table")
+        conn.execute(text(
+            "ALTER TABLE normalization_rules ADD COLUMN conditions TEXT"
+        ))
+        conn.commit()
+        logger.info("Migration complete: added conditions column to normalization_rules")
+
+    # Add condition_logic column if missing ("AND" or "OR")
+    if "condition_logic" not in columns:
+        logger.info("Adding condition_logic column to normalization_rules table")
+        conn.execute(text(
+            "ALTER TABLE normalization_rules ADD COLUMN condition_logic VARCHAR(3) DEFAULT 'AND' NOT NULL"
+        ))
+        conn.commit()
+        logger.info("Migration complete: added condition_logic column to normalization_rules")
 
 
 def _perform_maintenance(engine) -> None:

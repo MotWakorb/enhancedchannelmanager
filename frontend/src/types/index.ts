@@ -470,6 +470,17 @@ export type NormalizationConditionType = 'always' | 'contains' | 'starts_with' |
 // Action types for normalization rules
 export type NormalizationActionType = 'remove' | 'replace' | 'regex_replace' | 'strip_prefix' | 'strip_suffix' | 'normalize_prefix';
 
+// Logic for combining multiple conditions
+export type NormalizationConditionLogic = 'AND' | 'OR';
+
+// A single condition in a compound condition rule
+export interface NormalizationCondition {
+  type: NormalizationConditionType;
+  value: string;
+  negate?: boolean;        // NOT logic - match when condition does NOT match
+  case_sensitive?: boolean;
+}
+
 // A single normalization rule
 export interface NormalizationRule {
   id: number;
@@ -478,9 +489,14 @@ export interface NormalizationRule {
   description: string | null;
   enabled: boolean;
   priority: number;
+  // Legacy single condition fields (still supported)
   condition_type: NormalizationConditionType;
   condition_value: string | null;
   case_sensitive: boolean;
+  // Compound conditions (takes precedence if set)
+  conditions: NormalizationCondition[] | null;
+  condition_logic: NormalizationConditionLogic;
+  // Action fields
   action_type: NormalizationActionType;
   action_value: string | null;
   stop_processing: boolean;
@@ -525,9 +541,14 @@ export interface CreateRuleRequest {
   description?: string;
   enabled?: boolean;
   priority?: number;
+  // Legacy single condition (use this OR compound conditions)
   condition_type: NormalizationConditionType;
   condition_value?: string;
   case_sensitive?: boolean;
+  // Compound conditions (takes precedence if set)
+  conditions?: NormalizationCondition[];
+  condition_logic?: NormalizationConditionLogic;
+  // Action fields
   action_type: NormalizationActionType;
   action_value?: string;
   stop_processing?: boolean;
@@ -539,9 +560,14 @@ export interface UpdateRuleRequest {
   description?: string;
   enabled?: boolean;
   priority?: number;
+  // Legacy single condition
   condition_type?: NormalizationConditionType;
   condition_value?: string;
   case_sensitive?: boolean;
+  // Compound conditions
+  conditions?: NormalizationCondition[] | null;  // null to clear compound conditions
+  condition_logic?: NormalizationConditionLogic;
+  // Action fields
   action_type?: NormalizationActionType;
   action_value?: string;
   stop_processing?: boolean;
@@ -550,9 +576,14 @@ export interface UpdateRuleRequest {
 // Request to test a single rule
 export interface TestRuleRequest {
   text: string;
+  // Legacy single condition (use this OR compound conditions)
   condition_type: NormalizationConditionType;
   condition_value: string;
   case_sensitive: boolean;
+  // Compound conditions (takes precedence if set)
+  conditions?: NormalizationCondition[];
+  condition_logic?: NormalizationConditionLogic;
+  // Action fields
   action_type: NormalizationActionType;
   action_value?: string;
 }

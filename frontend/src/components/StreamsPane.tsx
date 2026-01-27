@@ -1,14 +1,13 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import type { Stream, StreamGroupInfo, M3UAccount, ChannelGroup, ChannelProfile, M3UGroupSetting } from '../types';
 import { useSelection, useExpandCollapse } from '../hooks';
-import { normalizeStreamName, detectRegionalVariants, filterStreamsByTimezone, detectCountryPrefixes, getUniqueCountryPrefixes, detectNetworkPrefixes, detectNetworkSuffixes, type TimezonePreference, type NormalizeOptions, type NumberSeparator, type PrefixOrder, type NormalizationSettings, type SortCriterion, type SortEnabledMap, type M3UAccountPriorities } from '../services/api';
+import { detectRegionalVariants, filterStreamsByTimezone, detectCountryPrefixes, getUniqueCountryPrefixes, detectNetworkPrefixes, detectNetworkSuffixes, type TimezonePreference, type NumberSeparator, type SortCriterion, type SortEnabledMap, type M3UAccountPriorities } from '../services/api';
 import { naturalCompare } from '../utils/naturalSort';
 import { openInVLC } from '../utils/vlc';
 import { useCopyFeedback } from '../hooks/useCopyFeedback';
 import { useDropdown } from '../hooks/useDropdown';
 import { useContextMenu } from '../hooks/useContextMenu';
 import { useKeyboardShortcuts } from '../hooks/useKeyboardShortcuts';
-import { QuickTagManager } from './QuickTagManager';
 import { CustomSelect } from './CustomSelect';
 import './StreamsPane.css';
 
@@ -32,7 +31,6 @@ export interface ChannelDefaults {
   streamSortPriority?: SortCriterion[];
   streamSortEnabled?: SortEnabledMap;
   deprioritizeFailedStreams?: boolean;
-  normalizationSettings?: NormalizationSettings;
   m3uAccountPriorities?: M3UAccountPriorities;
 }
 
@@ -332,10 +330,6 @@ export function StreamsPane({
   const [bulkCreateSelectedProfiles, setBulkCreateSelectedProfiles] = useState<Set<number>>(new Set());
   const [bulkCreateGroupSearch, setBulkCreateGroupSearch] = useState('');
   const [profilesExpanded, setProfilesExpanded] = useState(false);
-  const [bulkCreateNormalizationSettings, setBulkCreateNormalizationSettings] = useState<NormalizationSettings>({
-    disabledBuiltinTags: [],
-    customTags: [],
-  });
 
   // Bulk create group dropdown management
   const {
@@ -565,7 +559,6 @@ export function StreamsPane({
     setNamingOptionsExpanded(false); // Collapse naming options
     setChannelGroupExpanded(false); // Collapse channel group options
     setTimezoneExpanded(false); // Collapse timezone options
-    setBulkCreateNormalizationSettings(channelDefaults?.normalizationSettings ?? { disabledBuiltinTags: [], customTags: [] });
     setBulkCreateModalOpen(true);
   }, [channelDefaults]);
 
@@ -594,7 +587,6 @@ export function StreamsPane({
     setNamingOptionsExpanded(false); // Collapse naming options
     setChannelGroupExpanded(false); // Collapse channel group options
     setTimezoneExpanded(false); // Collapse timezone options
-    setBulkCreateNormalizationSettings(channelDefaults?.normalizationSettings ?? { disabledBuiltinTags: [], customTags: [] });
     setBulkCreateModalOpen(true);
   }, [streams, selectedIds, channelDefaults]);
 
@@ -637,7 +629,6 @@ export function StreamsPane({
     setNamingOptionsExpanded(false);
     setChannelGroupExpanded(false);
     setTimezoneExpanded(false);
-    setBulkCreateNormalizationSettings(channelDefaults?.normalizationSettings ?? { disabledBuiltinTags: [], customTags: [] });
     setBulkCreateModalOpen(true);
   }, [streams, channelDefaults]);
 
@@ -687,7 +678,6 @@ export function StreamsPane({
     setNamingOptionsExpanded(false);
     setChannelGroupExpanded(false);
     setTimezoneExpanded(false);
-    setBulkCreateNormalizationSettings(channelDefaults?.normalizationSettings ?? { disabledBuiltinTags: [], customTags: [] });
     setBulkCreateModalOpen(true);
   }, [channelDefaults]);
 
@@ -746,7 +736,6 @@ export function StreamsPane({
     setNamingOptionsExpanded(false);
     setChannelGroupExpanded(true); // Expand channel group section so user sees the "new group" option
     setTimezoneExpanded(false);
-    setBulkCreateNormalizationSettings(channelDefaults?.normalizationSettings ?? { disabledBuiltinTags: [], customTags: [] });
     setBulkCreateModalOpen(true);
     closeContextMenu();
   }, [contextMenu, streams, channelDefaults, closeContextMenu]);
@@ -876,7 +865,6 @@ export function StreamsPane({
     setNamingOptionsExpanded(false);
     setChannelGroupExpanded(false);
     setTimezoneExpanded(false);
-    setBulkCreateNormalizationSettings(channelDefaults?.normalizationSettings ?? { disabledBuiltinTags: [], customTags: [] });
     setBulkCreateModalOpen(true);
   }, [groupedStreams, selectedIds, channelDefaults]);
 
@@ -912,7 +900,6 @@ export function StreamsPane({
     setNamingOptionsExpanded(false);
     setChannelGroupExpanded(false);
     setTimezoneExpanded(false);
-    setBulkCreateNormalizationSettings(channelDefaults?.normalizationSettings ?? { disabledBuiltinTags: [], customTags: [] });
     setBulkCreateModalOpen(true);
   }, [channelDefaults]);
 
@@ -1003,69 +990,16 @@ export function StreamsPane({
     return getUniqueCountryPrefixes(streamsToCreate);
   }, [streamsToCreate]);
 
-  // Compute unique stream names and duplicate count for the modal display
-  // Uses normalized names to match quality variants (e.g., "Sports Channel" and "Sports Channel FHD" become one channel)
-  // Also applies timezone filtering when a preference is selected
+  // Compute stream stats for the modal display
+  // Applies timezone filtering when a preference is selected
+  // Note: Actual channel naming/grouping is handled by the backend normalization engine
   const bulkCreateStats = useMemo(() => {
-    // Filter streams based on timezone preference first
+    // Filter streams based on timezone preference
     const filteredStreams = filterStreamsByTimezone(streamsToCreate, bulkCreateTimezone);
-
-    // Build normalize options
-    const normalizeOptions: NormalizeOptions = {
-      timezonePreference: bulkCreateTimezone,
-      stripCountryPrefix: bulkCreateStripCountry,
-      keepCountryPrefix: bulkCreateKeepCountry,
-      countrySeparator: bulkCreateCountrySeparator,
-      stripNetworkPrefix: bulkCreateStripNetwork,
-      customNetworkPrefixes: channelDefaults?.customNetworkPrefixes,
-      stripNetworkSuffix: bulkCreateStripSuffix,
-      customNetworkSuffixes: channelDefaults?.customNetworkSuffixes,
-      normalizationSettings: bulkCreateNormalizationSettings,
-    };
-
-    const unsortedStreamsByNormalizedName = new Map<string, Stream[]>();
-    for (const stream of filteredStreams) {
-      const normalizedName = normalizeStreamName(stream.name, normalizeOptions);
-      const existing = unsortedStreamsByNormalizedName.get(normalizedName);
-      if (existing) {
-        existing.push(stream);
-      } else {
-        unsortedStreamsByNormalizedName.set(normalizedName, [stream]);
-      }
-    }
-
-    // Sort entries using natural sort (same logic as App.tsx handleBulkCreateFromGroup)
-    // This ensures preview matches actual creation order
-    const sortedEntries = Array.from(unsortedStreamsByNormalizedName.entries()).sort((a, b) => {
-      const nameA = a[0];
-      const nameB = b[0];
-
-      // Extract base name and trailing number (if any)
-      const matchA = nameA.match(/^(.+?)(\s*\d+)?$/);
-      const matchB = nameB.match(/^(.+?)(\s*\d+)?$/);
-
-      const baseA = matchA?.[1]?.trim() || nameA;
-      const baseB = matchB?.[1]?.trim() || nameB;
-      const numA = matchA?.[2] ? parseInt(matchA[2].trim(), 10) : 0;
-      const numB = matchB?.[2] ? parseInt(matchB[2].trim(), 10) : 0;
-
-      // First compare base names
-      const baseCompare = baseA.localeCompare(baseB, undefined, { sensitivity: 'base' });
-      if (baseCompare !== 0) return baseCompare;
-
-      // If base names are equal, sort by number (0 = no number, comes first)
-      return numA - numB;
-    });
-
-    // Rebuild Map in sorted order
-    const streamsByNormalizedName = new Map<string, Stream[]>(sortedEntries);
-
-    const uniqueCount = streamsByNormalizedName.size;
-    const duplicateCount = filteredStreams.length - uniqueCount;
-    const hasDuplicates = duplicateCount > 0;
+    const streamCount = filteredStreams.length;
     const excludedCount = streamsToCreate.length - filteredStreams.length;
-    return { uniqueCount, duplicateCount, hasDuplicates, streamsByNormalizedName, excludedCount };
-  }, [streamsToCreate, bulkCreateTimezone, bulkCreateStripCountry, bulkCreateKeepCountry, bulkCreateCountrySeparator, bulkCreateStripNetwork, bulkCreateStripSuffix, bulkCreateNormalizationSettings]);
+    return { streamCount, excludedCount, filteredStreams };
+  }, [streamsToCreate, bulkCreateTimezone]);
 
   // Actually perform the bulk create with the specified pushDown option
   // startingNumberOverride: optionally override the starting number (used by "insert at end" option)
@@ -1235,7 +1169,7 @@ export function StreamsPane({
     // Check for conflicts before proceeding (use floor for conflict check since it checks integer ranges)
     if (onCheckConflicts && !useSeparateMode) {
       const startingNum = Math.floor(parseFloat(bulkCreateStartingNumber));
-      const conflictCount = onCheckConflicts(startingNum, bulkCreateStats.uniqueCount);
+      const conflictCount = onCheckConflicts(startingNum, bulkCreateStats.streamCount);
       if (conflictCount > 0) {
         // Calculate end-of-sequence number (highest existing + 1)
         const highestNumber = onGetHighestChannelNumber ? onGetHighestChannelNumber() : 0;
@@ -1256,7 +1190,7 @@ export function StreamsPane({
     bulkCreateGroupStartNumbers,
     bulkCreateGroups,
     bulkCreateStartingNumber,
-    bulkCreateStats.uniqueCount,
+    bulkCreateStats.streamCount,
     onBulkCreateFromGroup,
     onCheckConflicts,
     onGetHighestChannelNumber,
@@ -1966,17 +1900,12 @@ export function StreamsPane({
 
               <div className="bulk-create-info">
                 <span className="material-icons">info</span>
-                {bulkCreateStats.hasDuplicates ? (
-                  <span>
-                    <strong>{bulkCreateStats.uniqueCount}</strong> channels will be created from {streamsToCreate.length} streams
-                    <br />
-                    <span className="duplicate-info">
-                      ({bulkCreateStats.duplicateCount} duplicate names will be merged — same-name streams from different providers get assigned to one channel)
-                    </span>
-                  </span>
-                ) : (
-                  <span>{streamsToCreate.length} channels will be created, each with its stream assigned</span>
-                )}
+                <span>
+                  <strong>{bulkCreateStats.streamCount}</strong> stream{bulkCreateStats.streamCount !== 1 ? 's' : ''} selected
+                  {bulkCreateStats.excludedCount > 0 && (
+                    <span className="excluded-info"> ({bulkCreateStats.excludedCount} excluded by timezone filter)</span>
+                  )}
+                </span>
               </div>
 
               {/* Starting Channel Number - hide when multi-group with separate mode (per-group numbers used instead) */}
@@ -1999,7 +1928,7 @@ export function StreamsPane({
                         const startNum = parseFloat(bulkCreateStartingNumber);
                         const hasDecimal = bulkCreateStartingNumber.includes('.');
                         const increment = hasDecimal ? 0.1 : 1;
-                        const endNum = startNum + (bulkCreateStats.uniqueCount - 1) * increment;
+                        const endNum = startNum + (bulkCreateStats.streamCount - 1) * increment;
                         // Format end number to match decimal places of start
                         const endNumStr = hasDecimal ? endNum.toFixed(1) : Math.floor(endNum).toString();
                         return `Channels ${bulkCreateStartingNumber} - ${endNumStr}`;
@@ -2231,16 +2160,7 @@ export function StreamsPane({
                   <span className="naming-options-summary">
                     {(() => {
                       const options: string[] = [];
-                      // Tag normalization
-                      const disabledTagCount = bulkCreateNormalizationSettings.disabledBuiltinTags.length;
-                      const customTagCount = bulkCreateNormalizationSettings.customTags.length;
-                      if (disabledTagCount > 0 || customTagCount > 0) {
-                        const tagParts: string[] = [];
-                        if (disabledTagCount > 0) tagParts.push(`${disabledTagCount} tags disabled`);
-                        if (customTagCount > 0) tagParts.push(`${customTagCount} custom`);
-                        options.push(tagParts.join(', '));
-                      }
-                      // Other normalization options
+                      // Normalization options
                       if (bulkCreateStripNetwork) options.push('Strip prefix');
                       if (bulkCreateStripSuffix) options.push('Strip suffix');
                       if (bulkCreateStripCountry) options.push('Remove country');
@@ -2260,14 +2180,6 @@ export function StreamsPane({
 
                 {namingOptionsExpanded && (
                   <div className="naming-options-content">
-                    {/* Tag-Based Normalization */}
-                    <div className="naming-option-group">
-                      <QuickTagManager
-                        settings={bulkCreateNormalizationSettings}
-                        onChange={setBulkCreateNormalizationSettings}
-                      />
-                    </div>
-
                     {/* Network prefix option - only show if network prefixes detected */}
                     {hasNetworkPrefixes && (
                       <div className="naming-option-group">
@@ -2559,9 +2471,9 @@ export function StreamsPane({
                 </div>
               ) : (
                 <div className="bulk-create-preview">
-                  <label>Preview (first 10 channels)</label>
+                  <label>Streams (first 10)</label>
                   <div className="preview-list">
-                    {Array.from(bulkCreateStats.streamsByNormalizedName.entries()).slice(0, 10).map(([normalizedName, groupedStreams], idx) => {
+                    {bulkCreateStats.filteredStreams.slice(0, 10).map((stream, idx) => {
                       // Support decimal channel numbers (e.g., 38.1, 38.2, 38.3)
                       let num: string | number = '?';
                       if (bulkCreateStartingNumber) {
@@ -2573,39 +2485,16 @@ export function StreamsPane({
                           num = hasDecimal ? channelNum.toFixed(1) : Math.floor(channelNum);
                         }
                       }
-                      // Build display name based on options and prefix order
-                      let displayName = normalizedName;
-                      if (bulkCreateAddNumber && bulkCreateKeepCountry) {
-                        // Both enabled - extract country from normalized name and apply order
-                        const countryMatch = normalizedName.match(new RegExp(`^([A-Z]{2,6})\\s*[${bulkCreateCountrySeparator}]\\s*(.+)$`));
-                        if (countryMatch) {
-                          const [, countryCode, baseName] = countryMatch;
-                          if (bulkCreatePrefixOrder === 'country-first') {
-                            displayName = `${countryCode} ${bulkCreateCountrySeparator} ${num} ${bulkCreateSeparator} ${baseName}`;
-                          } else {
-                            displayName = `${num} ${bulkCreateSeparator} ${countryCode} ${bulkCreateCountrySeparator} ${baseName}`;
-                          }
-                        } else {
-                          displayName = `${num} ${bulkCreateSeparator} ${normalizedName}`;
-                        }
-                      } else if (bulkCreateAddNumber) {
-                        displayName = `${num} ${bulkCreateSeparator} ${normalizedName}`;
-                      }
                       return (
-                        <div key={normalizedName} className="preview-item">
+                        <div key={stream.id} className="preview-item">
                           <span className="preview-number">{num}</span>
-                          <span className="preview-name">{displayName}</span>
-                          {groupedStreams.length > 1 && (
-                            <span className="preview-stream-count" title={groupedStreams.map(s => s.name).join('\n')}>
-                              {groupedStreams.length} streams
-                            </span>
-                          )}
+                          <span className="preview-name">{stream.name}</span>
                         </div>
                       );
                     })}
-                    {bulkCreateStats.streamsByNormalizedName.size > 10 && (
+                    {bulkCreateStats.filteredStreams.length > 10 && (
                       <div className="preview-more">
-                        ... and {bulkCreateStats.streamsByNormalizedName.size - 10} more channels
+                        ... and {bulkCreateStats.filteredStreams.length - 10} more
                       </div>
                     )}
                   </div>
@@ -2635,7 +2524,7 @@ export function StreamsPane({
                 ) : (
                   <>
                     <span className="material-icons">add</span>
-                    Create {bulkCreateStats.uniqueCount} Channels
+                    Create {bulkCreateStats.streamCount} Channels
                   </>
                 )}
               </button>
@@ -2665,7 +2554,7 @@ export function StreamsPane({
                 <span className="material-icons">vertical_align_bottom</span>
                 <div className="conflict-option-text">
                   <strong>Push channels down</strong>
-                  <span>Insert at {bulkCreateStartingNumber} and shift existing channels by {bulkCreateStats.uniqueCount}</span>
+                  <span>Insert at {bulkCreateStartingNumber} and shift existing channels by {bulkCreateStats.streamCount}</span>
                 </div>
               </button>
               <button

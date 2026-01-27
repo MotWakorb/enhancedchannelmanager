@@ -132,7 +132,6 @@ function App() {
     streamSortPriority: ['resolution', 'bitrate', 'framerate'] as ('resolution' | 'bitrate' | 'framerate')[],
     streamSortEnabled: { resolution: true, bitrate: true, framerate: true } as Record<'resolution' | 'bitrate' | 'framerate', boolean>,
     deprioritizeFailedStreams: true,
-    normalizationSettings: { disabledBuiltinTags: [], customTags: [] } as api.NormalizationSettings,
   });
   // Also keep separate state for use in callbacks (to avoid stale closure issues)
   const [defaultChannelProfileIds, setDefaultChannelProfileIds] = useState<number[]>([]);
@@ -456,7 +455,6 @@ function App() {
             return { streamSortPriority: merged.priority, streamSortEnabled: merged.enabled };
           })(),
           deprioritizeFailedStreams: settings.deprioritize_failed_streams ?? true,
-          normalizationSettings: settings.normalization_settings ?? { disabledBuiltinTags: [], customTags: [] },
           m3uAccountPriorities: settings.m3u_account_priorities ?? {},
         });
         setDefaultChannelProfileIds(settings.default_channel_profile_ids);
@@ -670,7 +668,6 @@ function App() {
           return { streamSortPriority: merged.priority, streamSortEnabled: merged.enabled };
         })(),
         deprioritizeFailedStreams: settings.deprioritize_failed_streams ?? true,
-        normalizationSettings: settings.normalization_settings ?? { disabledBuiltinTags: [], customTags: [] },
         m3uAccountPriorities: settings.m3u_account_priorities ?? {},
       });
       setDefaultChannelProfileIds(settings.default_channel_profile_ids);
@@ -1380,36 +1377,33 @@ function App() {
         const targetNewGroupName = newGroupName;
 
         // Create channels locally without calling Dispatcharr API (edit mode only)
-        // Build options for filtering/grouping
-        const options: api.NormalizeOptions = {
-          timezonePreference: timezonePreference ?? 'both',
-          stripCountryPrefix: stripCountryPrefix ?? false,
-          keepCountryPrefix: keepCountryPrefix ?? false,
-          countrySeparator: countrySeparator ?? '|',
-          stripNetworkPrefix: stripNetworkPrefix ?? false,
-          customNetworkPrefixes: customNetworkPrefixes,
-          stripNetworkSuffix: stripNetworkSuffix ?? false,
-          customNetworkSuffixes: customNetworkSuffixes,
-          normalizationSettings: channelDefaults.normalizationSettings,
-        };
-
         // Filter streams by timezone preference
         const filteredStreams = api.filterStreamsByTimezone(streamsToCreate, timezonePreference ?? 'both');
 
-        // Group streams by normalized name
-        const streamsByNormalizedName = new Map<string, Stream[]>();
+        // Normalize stream names using the backend normalization engine
+        // This applies all configured rules (country prefixes, network tags, etc.)
+        const streamNames = filteredStreams.map(s => s.name);
+        const normalizedNames = await api.normalizeStreamNamesWithBackend(streamNames);
+
+        // Group streams by normalized base name (also stripping quality suffixes to merge variants)
+        // The grouping key is the normalized name with quality suffixes stripped
+        // The channel name will be the normalized name (without quality stripping)
+        const streamsByBaseName = new Map<string, { normalizedName: string; streams: Stream[] }>();
         for (const stream of filteredStreams) {
-          const normalizedName = api.normalizeStreamName(stream.name, options);
-          const existing = streamsByNormalizedName.get(normalizedName);
+          // Get the backend-normalized name, fallback to original if not found
+          const normalizedName = normalizedNames.get(stream.name) || stream.name;
+          // Strip quality suffixes for grouping (so HD/FHD/4K/SD variants merge together)
+          const groupingKey = api.stripQualitySuffixes(normalizedName);
+          const existing = streamsByBaseName.get(groupingKey);
           if (existing) {
-            existing.push(stream);
+            existing.streams.push(stream);
           } else {
-            streamsByNormalizedName.set(normalizedName, [stream]);
+            streamsByBaseName.set(groupingKey, { normalizedName, streams: [stream] });
           }
         }
 
-        const mergedCount = filteredStreams.length - streamsByNormalizedName.size;
-        const channelCount = streamsByNormalizedName.size;
+        const mergedCount = filteredStreams.length - streamsByBaseName.size;
+        const channelCount = streamsByBaseName.size;
 
         // Fetch M3U metadata to get tvc-guide-stationid (Gracenote ID) for streams
         // This data isn't exposed by Dispatcharr's API, so we parse the M3U file directly
@@ -1510,7 +1504,7 @@ function App() {
         // Create channels and assign streams
         // Sort entries alphabetically by normalized name for consistent ordering
         // Use natural sort so "C-SPAN" comes before "C-SPAN 2" which comes before "C-SPAN 3"
-        const sortedEntries = Array.from(streamsByNormalizedName.entries()).sort((a, b) => {
+        const sortedEntries = Array.from(streamsByBaseName.entries()).sort((a, b) => {
           // Natural sort comparison that handles trailing numbers properly
           const nameA = a[0];
           const nameB = b[0];
@@ -1538,7 +1532,7 @@ function App() {
         const increment = hasDecimal ? 0.1 : 1;
 
         let channelIndex = 0;
-        for (const [normalizedName, groupedStreams] of sortedEntries) {
+        for (const [_groupingKey, { normalizedName, streams: groupedStreams }] of sortedEntries) {
           // Calculate channel number with proper decimal handling
           const rawChannelNumber = startingNumber + channelIndex * increment;
           // Round to 1 decimal place to avoid floating point precision issues
@@ -1637,7 +1631,7 @@ function App() {
         const groupInfo = targetNewGroupName
           ? `\n\nA new group "${targetNewGroupName}" will be created.`
           : '';
-        alert(`Staged ${streamsByNormalizedName.size} channels for creation!${mergeInfo}${groupInfo}\n\nThey will be created in Dispatcharr when you click "Done".`);
+        alert(`Staged ${streamsByBaseName.size} channels for creation!${mergeInfo}${groupInfo}\n\nThey will be created in Dispatcharr when you click "Done".`);
 
         // If we used an existing group, add it to the visible filter now
         // (New groups will be added to filter after commit when they actually exist)
@@ -1659,7 +1653,7 @@ function App() {
         if (profileIdsToApply.length > 0) {
           pendingProfileAssignmentsRef.current.push({
             startNumber: startingNumber,
-            count: streamsByNormalizedName.size,
+            count: streamsByBaseName.size,
             profileIds: profileIdsToApply,
             increment, // Use the same increment calculated for channel creation
           });

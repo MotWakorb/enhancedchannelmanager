@@ -98,15 +98,17 @@ class NormalizationEngine:
 
         return result
 
-    def _match_condition(self, text: str, rule: NormalizationRule) -> RuleMatch:
+    def _match_single_condition(
+        self,
+        text: str,
+        condition_type: str,
+        pattern: str,
+        case_sensitive: bool = False
+    ) -> RuleMatch:
         """
-        Check if text matches the rule's condition.
+        Check if text matches a single condition.
         Returns RuleMatch with match details.
         """
-        condition_type = rule.condition_type
-        pattern = rule.condition_value or ""
-        case_sensitive = rule.case_sensitive
-
         # Prepare text for matching
         match_text = text if case_sensitive else text.lower()
         match_pattern = pattern if case_sensitive else pattern.lower()
@@ -162,12 +164,81 @@ class NormalizationEngine:
                         groups=match.groups()
                     )
             except re.error as e:
-                logger.warning(f"Invalid regex pattern in rule {rule.id}: {e}")
+                logger.warning(f"Invalid regex pattern: {e}")
             return RuleMatch(matched=False)
 
         else:
             logger.warning(f"Unknown condition type: {condition_type}")
             return RuleMatch(matched=False)
+
+    def _match_condition(self, text: str, rule: NormalizationRule) -> RuleMatch:
+        """
+        Check if text matches the rule's condition(s).
+        Supports both legacy single conditions and compound conditions.
+        Returns RuleMatch with match details.
+        """
+        # Check for compound conditions first
+        conditions = rule.get_conditions()
+        if conditions:
+            return self._match_compound_conditions(text, conditions, rule.condition_logic)
+
+        # Fall back to legacy single condition
+        return self._match_single_condition(
+            text,
+            rule.condition_type or "always",
+            rule.condition_value or "",
+            rule.case_sensitive
+        )
+
+    def _match_compound_conditions(
+        self,
+        text: str,
+        conditions: list,
+        logic: str = "AND"
+    ) -> RuleMatch:
+        """
+        Match text against multiple conditions with AND/OR logic.
+        The first condition's match info is used for the action (primary condition).
+        """
+        if not conditions:
+            return RuleMatch(matched=False)
+
+        results = []
+        primary_match = None  # Match info from first condition for action application
+
+        for i, cond in enumerate(conditions):
+            cond_type = cond.get("type", "always")
+            cond_value = cond.get("value", "")
+            cond_case_sensitive = cond.get("case_sensitive", False)
+            cond_negate = cond.get("negate", False)
+
+            match = self._match_single_condition(text, cond_type, cond_value, cond_case_sensitive)
+
+            # Apply negation
+            if cond_negate:
+                matched = not match.matched
+            else:
+                matched = match.matched
+
+            results.append(matched)
+
+            # Store the first non-negated match as the primary match for action application
+            if i == 0 and match.matched and not cond_negate:
+                primary_match = match
+
+        # Combine results based on logic
+        if logic == "OR":
+            final_matched = any(results)
+        else:  # AND (default)
+            final_matched = all(results)
+
+        if final_matched:
+            # Return primary match info if available, otherwise generic match
+            if primary_match:
+                return primary_match
+            return RuleMatch(matched=True, match_start=0, match_end=len(text))
+
+        return RuleMatch(matched=False)
 
     def _apply_action(self, text: str, rule: NormalizationRule, match: RuleMatch) -> str:
         """
@@ -295,22 +366,28 @@ class NormalizationEngine:
         condition_value: str,
         case_sensitive: bool,
         action_type: str,
-        action_value: str = ""
+        action_value: str = "",
+        conditions: Optional[list] = None,
+        condition_logic: str = "AND"
     ) -> dict:
         """
         Test a rule configuration against sample text without saving.
 
         Args:
             text: Sample text to test
-            condition_type: Rule condition type
-            condition_value: Pattern to match
-            case_sensitive: Case sensitivity flag
+            condition_type: Rule condition type (legacy single condition)
+            condition_value: Pattern to match (legacy single condition)
+            case_sensitive: Case sensitivity flag (legacy single condition)
             action_type: Action to apply
             action_value: Replacement value for replace actions
+            conditions: Compound conditions list (takes precedence if set)
+            condition_logic: "AND" or "OR" for combining conditions
 
         Returns:
             Dict with matched, before, after, match_details
         """
+        import json
+
         # Create a temporary rule object for testing
         rule = NormalizationRule(
             id=0,
@@ -320,7 +397,9 @@ class NormalizationEngine:
             condition_value=condition_value,
             case_sensitive=case_sensitive,
             action_type=action_type,
-            action_value=action_value
+            action_value=action_value,
+            conditions=json.dumps(conditions) if conditions else None,
+            condition_logic=condition_logic
         )
 
         match = self._match_condition(text, rule)

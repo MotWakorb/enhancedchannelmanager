@@ -273,6 +273,38 @@
   gap: 0.375rem;
 }
 
+/* Drag handle for reordering rules */
+.norm-engine-rule-drag-handle {
+  display: flex;
+  align-items: center;
+  cursor: grab;
+  color: var(--text-muted);
+  padding: 0.25rem;
+  margin-right: 0.25rem;
+  border-radius: 4px;
+  touch-action: none;
+}
+
+.norm-engine-rule-drag-handle:hover {
+  color: var(--text-primary);
+  background: var(--hover-bg);
+}
+
+.norm-engine-rule-drag-handle:active {
+  cursor: grabbing;
+}
+
+.norm-engine-rule-drag-handle .material-icons {
+  font-size: 18px;
+}
+
+/* Dragging state */
+.norm-engine-rule.dragging {
+  background: var(--card-bg);
+  border: 1px solid var(--accent-primary);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
 .norm-engine-add-rule {
   display: flex;
   align-items: center;
@@ -351,14 +383,16 @@
 }
 
 .norm-engine-toggle input:checked + .norm-engine-toggle-slider {
-  background-color: var(--accent-primary);
+  background-color: var(--button-primary-bg);
 }
 
 .norm-engine-toggle input:checked + .norm-engine-toggle-slider:before {
+  background-color: var(--button-primary-text);
   transform: translateX(16px);
 }
 
 .norm-engine-toggle.small input:checked + .norm-engine-toggle-slider:before {
+  background-color: var(--button-primary-text);
   transform: translateX(12px);
 }
 
@@ -744,4 +778,183 @@
 .norm-engine-preview-result .after {
   color: var(--accent-primary);
   font-weight: 500;
+}
+
+/* Compound Conditions */
+.norm-engine-condition-mode {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  margin-bottom: 1rem;
+  padding: 0.75rem;
+  background: var(--input-bg);
+  border-radius: 6px;
+}
+
+.norm-engine-mode-label {
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
+.norm-engine-mode-toggle {
+  display: flex;
+  gap: 0;
+  background: var(--card-bg);
+  border: 1px solid var(--border-primary);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.norm-engine-mode-btn {
+  padding: 0.5rem 0.75rem;
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  font-size: 0.8125rem;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.norm-engine-mode-btn:hover:not(.active) {
+  background: var(--hover-bg);
+  color: var(--text-primary);
+}
+
+.norm-engine-mode-btn.active {
+  background: var(--button-primary-bg);
+  color: var(--button-primary-text);
+}
+
+.norm-engine-compound-conditions {
+  background: var(--input-bg);
+  border: 1px solid var(--border-primary);
+  border-radius: 6px;
+  padding: 1rem;
+  margin-bottom: 1rem;
+}
+
+.norm-engine-compound-header {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+
+.norm-engine-compound-header label {
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
+.norm-engine-logic-select {
+  padding: 0.375rem 0.75rem;
+  background: var(--card-bg);
+  border: 1px solid var(--border-primary);
+  border-radius: 4px;
+  color: var(--text-primary);
+  font-size: 0.875rem;
+}
+
+.norm-engine-conditions-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.norm-engine-condition-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem;
+  background: var(--card-bg);
+  border: 1px solid var(--border-secondary);
+  border-radius: 4px;
+}
+
+.norm-engine-condition-fields {
+  display: flex;
+  flex: 1;
+  gap: 0.5rem;
+}
+
+.norm-engine-condition-fields select {
+  width: 140px;
+  padding: 0.375rem 0.5rem;
+  background: var(--input-bg);
+  border: 1px solid var(--border-primary);
+  border-radius: 4px;
+  color: var(--text-primary);
+  font-size: 0.8125rem;
+}
+
+.norm-engine-condition-fields input {
+  flex: 1;
+  padding: 0.375rem 0.5rem;
+  background: var(--input-bg);
+  border: 1px solid var(--border-primary);
+  border-radius: 4px;
+  color: var(--text-primary);
+  font-size: 0.8125rem;
+  font-family: monospace;
+}
+
+.norm-engine-condition-fields input:disabled {
+  opacity: 0.5;
+}
+
+.norm-engine-condition-options {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.norm-engine-condition-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 0.25rem 0.375rem;
+  border-radius: 3px;
+  transition: all 0.15s;
+}
+
+.norm-engine-condition-checkbox:hover {
+  background: var(--hover-bg);
+  color: var(--text-primary);
+}
+
+.norm-engine-condition-checkbox input {
+  width: 12px;
+  height: 12px;
+  accent-color: var(--accent-primary);
+}
+
+.norm-engine-add-condition {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.25rem;
+  width: 100%;
+  padding: 0.5rem;
+  margin-top: 0.75rem;
+  background: transparent;
+  border: 1px dashed var(--border-primary);
+  border-radius: 4px;
+  color: var(--text-muted);
+  font-size: 0.8125rem;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.norm-engine-add-condition:hover {
+  border-color: var(--accent-primary);
+  color: var(--accent-primary);
+  background: var(--accent-primary-transparent);
+}
+
+.norm-engine-add-condition .material-icons {
+  font-size: 1rem;
 }

@@ -197,6 +197,20 @@ async def startup_event():
 
     # Initialize journal database
     init_db()
+
+    # Remove directional suffixes from Timezone Tags (East/West affect EPG timing)
+    try:
+        from normalization_migration import fix_timezone_tags_remove_directional
+        session = get_session()
+        try:
+            result = fix_timezone_tags_remove_directional(session)
+            if result.get("rules_deleted", 0) > 0:
+                logger.info(f"Removed {result['rules_deleted']} directional suffix rules from Timezone Tags")
+        finally:
+            session.close()
+    except Exception as e:
+        logger.warning(f"Could not apply timezone tags fix: {e}")
+
     logger.info(f"CONFIG_DIR: {CONFIG_DIR}")
     logger.info(f"CONFIG_FILE: {CONFIG_FILE}")
     logger.info(f"CONFIG_DIR exists: {CONFIG_DIR.exists()}")
@@ -5657,9 +5671,14 @@ class CreateRuleRequest(BaseModel):
     description: Optional[str] = None
     enabled: bool = True
     priority: int = 0
-    condition_type: str  # always, contains, starts_with, ends_with, regex
+    # Legacy single condition (optional if using compound conditions)
+    condition_type: Optional[str] = None  # always, contains, starts_with, ends_with, regex
     condition_value: Optional[str] = None
     case_sensitive: bool = False
+    # Compound conditions (takes precedence over legacy fields if set)
+    conditions: Optional[List[dict]] = None  # [{type, value, negate, case_sensitive}]
+    condition_logic: str = "AND"  # "AND" or "OR"
+    # Action configuration
     action_type: str  # remove, replace, regex_replace, strip_prefix, strip_suffix, normalize_prefix
     action_value: Optional[str] = None
     stop_processing: bool = False
@@ -5670,9 +5689,14 @@ class UpdateRuleRequest(BaseModel):
     description: Optional[str] = None
     enabled: Optional[bool] = None
     priority: Optional[int] = None
+    # Legacy single condition
     condition_type: Optional[str] = None
     condition_value: Optional[str] = None
     case_sensitive: Optional[bool] = None
+    # Compound conditions
+    conditions: Optional[List[dict]] = None
+    condition_logic: Optional[str] = None
+    # Action configuration
     action_type: Optional[str] = None
     action_value: Optional[str] = None
     stop_processing: Optional[bool] = None
@@ -5683,6 +5707,9 @@ class TestRuleRequest(BaseModel):
     condition_type: str
     condition_value: Optional[str] = None
     case_sensitive: bool = False
+    # Compound conditions (takes precedence if set)
+    conditions: Optional[List[dict]] = None  # [{type, value, negate, case_sensitive}]
+    condition_logic: str = "AND"  # "AND" or "OR"
     action_type: str
     action_value: Optional[str] = None
 
@@ -6306,6 +6333,10 @@ async def create_normalization_rule(request: CreateRuleRequest):
             if not group:
                 raise HTTPException(status_code=404, detail="Group not found")
 
+            # Serialize conditions to JSON if provided
+            import json
+            conditions_json = json.dumps(request.conditions) if request.conditions else None
+
             rule = NormalizationRule(
                 group_id=request.group_id,
                 name=request.name,
@@ -6315,6 +6346,8 @@ async def create_normalization_rule(request: CreateRuleRequest):
                 condition_type=request.condition_type,
                 condition_value=request.condition_value,
                 case_sensitive=request.case_sensitive,
+                conditions=conditions_json,
+                condition_logic=request.condition_logic,
                 action_type=request.action_type,
                 action_value=request.action_value,
                 stop_processing=request.stop_processing,
@@ -6346,6 +6379,8 @@ async def update_normalization_rule(rule_id: int, request: UpdateRuleRequest):
             if not rule:
                 raise HTTPException(status_code=404, detail="Rule not found")
 
+            import json
+
             if request.name is not None:
                 rule.name = request.name
             if request.description is not None:
@@ -6360,6 +6395,10 @@ async def update_normalization_rule(rule_id: int, request: UpdateRuleRequest):
                 rule.condition_value = request.condition_value
             if request.case_sensitive is not None:
                 rule.case_sensitive = request.case_sensitive
+            if request.conditions is not None:
+                rule.conditions = json.dumps(request.conditions) if request.conditions else None
+            if request.condition_logic is not None:
+                rule.condition_logic = request.condition_logic
             if request.action_type is not None:
                 rule.action_type = request.action_type
             if request.action_value is not None:
@@ -6439,7 +6478,9 @@ async def test_normalization_rule(request: TestRuleRequest):
                 condition_value=request.condition_value or "",
                 case_sensitive=request.case_sensitive,
                 action_type=request.action_type,
-                action_value=request.action_value or ""
+                action_value=request.action_value or "",
+                conditions=request.conditions,
+                condition_logic=request.condition_logic
             )
             return result
         finally:
@@ -6501,6 +6542,85 @@ async def normalize_text(request: TestRulesBatchRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/api/normalization/rule-stats")
+async def get_normalization_rule_stats(limit: int = 500):
+    """Get statistics on how many streams each rule matches.
+
+    Fetches streams from Dispatcharr and tests each enabled rule individually
+    to count how many streams it would match.
+
+    Args:
+        limit: Maximum number of streams to test (default 500, max 2000)
+
+    Returns:
+        Dict with rule_stats (list of {rule_id, rule_name, group_name, match_count})
+        and metadata (total_streams_tested, total_rules)
+    """
+    try:
+        from models import NormalizationRule, NormalizationRuleGroup
+        from normalization_engine import get_normalization_engine
+
+        # Cap the limit to avoid performance issues
+        limit = min(limit, 2000)
+
+        # Fetch streams from Dispatcharr
+        client = get_client()
+        streams_result = await client.get_streams(page=1, page_size=limit)
+        streams = streams_result.get("results", [])
+        stream_names = [s.get("name", "") for s in streams if s.get("name")]
+
+        if not stream_names:
+            return {
+                "rule_stats": [],
+                "total_streams_tested": 0,
+                "total_rules": 0
+            }
+
+        session = get_session()
+        try:
+            engine = get_normalization_engine(session)
+
+            # Get all rules with their groups
+            groups = session.query(NormalizationRuleGroup).order_by(
+                NormalizationRuleGroup.priority
+            ).all()
+            group_map = {g.id: g.name for g in groups}
+
+            rules = session.query(NormalizationRule).order_by(
+                NormalizationRule.group_id,
+                NormalizationRule.priority
+            ).all()
+
+            rule_stats = []
+            for rule in rules:
+                match_count = 0
+                for name in stream_names:
+                    match = engine._match_condition(name, rule)
+                    if match.matched:
+                        match_count += 1
+
+                rule_stats.append({
+                    "rule_id": rule.id,
+                    "rule_name": rule.name,
+                    "group_id": rule.group_id,
+                    "group_name": group_map.get(rule.group_id, "Unknown"),
+                    "enabled": rule.enabled,
+                    "match_count": match_count,
+                    "match_percentage": round(match_count / len(stream_names) * 100, 1) if stream_names else 0
+                })
+
+            return {
+                "rule_stats": rule_stats,
+                "total_streams_tested": len(stream_names),
+                "total_rules": len(rules)
+            }
+        finally:
+            session.close()
+    except Exception as e:
+        logger.error(f"Failed to get rule stats: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/api/normalization/migration/status")
 async def get_normalization_migration_status():
     """Get the status of the normalization rules migration."""
@@ -6518,13 +6638,33 @@ async def get_normalization_migration_status():
 
 
 @app.post("/api/normalization/migration/run")
-async def run_normalization_migration(force: bool = False):
-    """Run the built-in rules migration."""
+async def run_normalization_migration(force: bool = False, migrate_settings: bool = True):
+    """Run the built-in rules migration.
+
+    Args:
+        force: If True, recreate rules even if they already exist
+        migrate_settings: If True, also migrate user's disabled_builtin_tags and custom_normalization_tags
+    """
     try:
         from normalization_migration import create_builtin_rules
+
+        # Get user settings to migrate
+        disabled_builtin_tags = []
+        custom_normalization_tags = []
+
+        if migrate_settings:
+            settings = load_settings()
+            disabled_builtin_tags = settings.disabled_builtin_tags or []
+            custom_normalization_tags = settings.custom_normalization_tags or []
+
         session = get_session()
         try:
-            result = create_builtin_rules(session, force=force)
+            result = create_builtin_rules(
+                session,
+                force=force,
+                disabled_builtin_tags=disabled_builtin_tags,
+                custom_normalization_tags=custom_normalization_tags
+            )
             return result
         finally:
             session.close()

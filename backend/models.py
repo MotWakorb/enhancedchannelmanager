@@ -558,10 +558,13 @@ class NormalizationRule(Base):
     description = Column(Text, nullable=True)  # Optional description
     enabled = Column(Boolean, default=True, nullable=False)  # Enable/disable rule
     priority = Column(Integer, default=0, nullable=False)  # Order within group (lower = first)
-    # Condition configuration
-    condition_type = Column(String(20), nullable=False)  # always, contains, starts_with, ends_with, regex
+    # Condition configuration (legacy single condition - kept for backward compatibility)
+    condition_type = Column(String(20), nullable=True)  # always, contains, starts_with, ends_with, regex
     condition_value = Column(String(500), nullable=True)  # Pattern to match (null for 'always')
     case_sensitive = Column(Boolean, default=False, nullable=False)  # Case sensitivity for matching
+    # Compound conditions (new - takes precedence over legacy fields if set)
+    conditions = Column(Text, nullable=True)  # JSON array of condition objects: [{type, value, negate, case_sensitive}]
+    condition_logic = Column(String(3), default="AND", nullable=False)  # "AND" or "OR" for combining conditions
     # Action configuration
     action_type = Column(String(20), nullable=False)  # remove, replace, regex_replace, strip_prefix, strip_suffix, normalize_prefix
     action_value = Column(String(500), nullable=True)  # Replacement value (null for remove actions)
@@ -579,6 +582,16 @@ class NormalizationRule(Base):
         Index("idx_norm_rule_priority", group_id, priority),
     )
 
+    def get_conditions(self) -> list:
+        """Parse conditions JSON into list of condition objects."""
+        if not self.conditions:
+            return []
+        try:
+            import json
+            return json.loads(self.conditions)
+        except (json.JSONDecodeError, TypeError):
+            return []
+
     def to_dict(self) -> dict:
         """Convert to dictionary for API responses."""
         return {
@@ -591,6 +604,8 @@ class NormalizationRule(Base):
             "condition_type": self.condition_type,
             "condition_value": self.condition_value,
             "case_sensitive": self.case_sensitive,
+            "conditions": self.get_conditions(),
+            "condition_logic": self.condition_logic,
             "action_type": self.action_type,
             "action_value": self.action_value,
             "stop_processing": self.stop_processing,

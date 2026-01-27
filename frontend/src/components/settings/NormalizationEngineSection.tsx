@@ -5,16 +5,36 @@
  * Allows viewing, creating, editing, and testing normalization rules.
  */
 import { useState, useEffect, useCallback, useMemo } from 'react';
+import {
+  DndContext,
+  closestCenter,
+  KeyboardSensor,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from '@dnd-kit/core';
+import {
+  arrayMove,
+  SortableContext,
+  sortableKeyboardCoordinates,
+  useSortable,
+  verticalListSortingStrategy,
+} from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
 import * as api from '../../services/api';
 import type {
   NormalizationRuleGroup,
   NormalizationRule,
   NormalizationConditionType,
   NormalizationActionType,
+  NormalizationConditionLogic,
+  NormalizationCondition,
   NormalizationResult,
   TestRuleResult,
 } from '../../types';
 import './NormalizationEngineSection.css';
+import '../ModalBase.css';
 
 // Condition type options for dropdowns
 const CONDITION_TYPES: { value: NormalizationConditionType; label: string; description: string }[] = [
@@ -51,9 +71,15 @@ interface RuleEditorState {
   groupId: number | null;
   name: string;
   description: string;
+  // Simple condition mode (legacy)
   conditionType: NormalizationConditionType;
   conditionValue: string;
   caseSensitive: boolean;
+  // Compound conditions mode
+  useCompoundConditions: boolean;
+  conditions: NormalizationCondition[];
+  conditionLogic: NormalizationConditionLogic;
+  // Action settings
   actionType: NormalizationActionType;
   actionValue: string;
   stopProcessing: boolean;
@@ -64,6 +90,96 @@ interface GroupEditorState {
   editingGroup: NormalizationRuleGroup | null;
   name: string;
   description: string;
+}
+
+// Sortable rule item for drag-and-drop reordering
+function SortableRuleItem({
+  rule,
+  isSelected,
+  canDrag,
+  onSelect,
+  onToggleEnabled,
+  onEdit,
+  onDelete,
+}: {
+  rule: NormalizationRule;
+  isSelected: boolean;
+  canDrag: boolean;
+  onSelect: () => void;
+  onToggleEnabled: () => void;
+  onEdit: () => void;
+  onDelete: () => void;
+}) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: rule.id, disabled: !canDrag });
+
+  const style: React.CSSProperties = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.5 : 1,
+    zIndex: isDragging ? 1000 : undefined,
+  };
+
+  return (
+    <div
+      ref={setNodeRef}
+      style={style}
+      className={`norm-engine-rule ${!rule.enabled ? 'disabled' : ''} ${isSelected ? 'selected' : ''} ${isDragging ? 'dragging' : ''}`}
+      onClick={onSelect}
+    >
+      {canDrag && (
+        <span
+          className="norm-engine-rule-drag-handle"
+          {...attributes}
+          {...listeners}
+        >
+          <span className="material-icons">drag_indicator</span>
+        </span>
+      )}
+      <div className="norm-engine-rule-info">
+        <span className="norm-engine-rule-name">{rule.name}</span>
+        <span className="norm-engine-rule-pattern">
+          {rule.condition_type}: "{rule.condition_value}"
+        </span>
+      </div>
+      <div className="norm-engine-rule-actions" onClick={(e) => e.stopPropagation()}>
+        <label className="norm-engine-toggle small">
+          <input
+            type="checkbox"
+            checked={rule.enabled}
+            onChange={onToggleEnabled}
+          />
+          <span className="norm-engine-toggle-slider"></span>
+        </label>
+        {!rule.is_builtin && (
+          <>
+            <button
+              className="norm-engine-btn-icon small"
+              onClick={onEdit}
+              title="Edit rule"
+              type="button"
+            >
+              <span className="material-icons">edit</span>
+            </button>
+            <button
+              className="norm-engine-btn-icon small danger"
+              onClick={onDelete}
+              title="Delete rule"
+              type="button"
+            >
+              <span className="material-icons">delete</span>
+            </button>
+          </>
+        )}
+      </div>
+    </div>
+  );
 }
 
 export function NormalizationEngineSection() {
@@ -91,6 +207,9 @@ export function NormalizationEngineSection() {
     conditionType: 'starts_with',
     conditionValue: '',
     caseSensitive: false,
+    useCompoundConditions: false,
+    conditions: [],
+    conditionLogic: 'AND',
     actionType: 'strip_prefix',
     actionValue: '',
     stopProcessing: false,
@@ -106,6 +225,18 @@ export function NormalizationEngineSection() {
 
   // Live preview state
   const [previewResult, setPreviewResult] = useState<TestRuleResult | null>(null);
+
+  // Drag-and-drop sensors for rule reordering
+  const sensors = useSensors(
+    useSensor(PointerSensor, {
+      activationConstraint: {
+        distance: 8,
+      },
+    }),
+    useSensor(KeyboardSensor, {
+      coordinateGetter: sortableKeyboardCoordinates,
+    })
+  );
 
   // Load groups and rules
   const loadData = useCallback(async () => {
@@ -137,6 +268,40 @@ export function NormalizationEngineSection() {
       return next;
     });
   }, []);
+
+  // Handle rule drag end for reordering
+  const handleRuleDragEnd = useCallback(async (event: DragEndEvent, group: NormalizationRuleGroup) => {
+    const { active, over } = event;
+
+    if (!over || active.id === over.id || !group.rules) {
+      return;
+    }
+
+    const oldIndex = group.rules.findIndex((r) => r.id === active.id);
+    const newIndex = group.rules.findIndex((r) => r.id === over.id);
+
+    if (oldIndex === -1 || newIndex === -1) {
+      return;
+    }
+
+    // Optimistically update local state
+    const newRules = arrayMove(group.rules, oldIndex, newIndex);
+    setGroups((prev) =>
+      prev.map((g) =>
+        g.id === group.id ? { ...g, rules: newRules } : g
+      )
+    );
+
+    // Persist to backend
+    try {
+      const ruleIds = newRules.map((r) => r.id);
+      await api.reorderNormalizationRules(group.id, ruleIds);
+    } catch (err) {
+      // Revert on error
+      setError(err instanceof Error ? err.message : 'Failed to reorder rules');
+      await loadData();
+    }
+  }, [loadData]);
 
   // Toggle group enabled state
   const toggleGroupEnabled = useCallback(async (group: NormalizationRuleGroup) => {
@@ -194,6 +359,9 @@ export function NormalizationEngineSection() {
       conditionType: 'starts_with',
       conditionValue: '',
       caseSensitive: false,
+      useCompoundConditions: false,
+      conditions: [],
+      conditionLogic: 'AND',
       actionType: 'strip_prefix',
       actionValue: '',
       stopProcessing: false,
@@ -203,6 +371,7 @@ export function NormalizationEngineSection() {
 
   // Open rule editor for editing
   const openEditRuleEditor = useCallback((rule: NormalizationRule) => {
+    const hasCompoundConditions = rule.conditions && rule.conditions.length > 0;
     setRuleEditor({
       isOpen: true,
       editingRule: rule,
@@ -212,6 +381,9 @@ export function NormalizationEngineSection() {
       conditionType: rule.condition_type,
       conditionValue: rule.condition_value || '',
       caseSensitive: rule.case_sensitive,
+      useCompoundConditions: hasCompoundConditions,
+      conditions: rule.conditions || [],
+      conditionLogic: rule.condition_logic || 'AND',
       actionType: rule.action_type,
       actionValue: rule.action_value || '',
       stopProcessing: rule.stop_processing,
@@ -228,6 +400,14 @@ export function NormalizationEngineSection() {
   // Save rule
   const saveRule = useCallback(async () => {
     try {
+      // Build the request with compound conditions if enabled
+      const conditionsData = ruleEditor.useCompoundConditions && ruleEditor.conditions.length > 0
+        ? ruleEditor.conditions
+        : undefined;
+      const conditionLogicData = ruleEditor.useCompoundConditions
+        ? ruleEditor.conditionLogic
+        : undefined;
+
       if (ruleEditor.editingRule) {
         // Update existing rule
         await api.updateNormalizationRule(ruleEditor.editingRule.id, {
@@ -236,6 +416,8 @@ export function NormalizationEngineSection() {
           condition_type: ruleEditor.conditionType,
           condition_value: ruleEditor.conditionValue || undefined,
           case_sensitive: ruleEditor.caseSensitive,
+          conditions: ruleEditor.useCompoundConditions ? conditionsData : null,  // null to clear compound conditions
+          condition_logic: conditionLogicData,
           action_type: ruleEditor.actionType,
           action_value: ruleEditor.actionValue || undefined,
           stop_processing: ruleEditor.stopProcessing,
@@ -249,6 +431,8 @@ export function NormalizationEngineSection() {
           condition_type: ruleEditor.conditionType,
           condition_value: ruleEditor.conditionValue || undefined,
           case_sensitive: ruleEditor.caseSensitive,
+          conditions: conditionsData,
+          condition_logic: conditionLogicData,
           action_type: ruleEditor.actionType,
           action_value: ruleEditor.actionValue || undefined,
           stop_processing: ruleEditor.stopProcessing,
@@ -328,9 +512,18 @@ export function NormalizationEngineSection() {
 
   // Live preview for rule editor
   const updatePreview = useCallback(async () => {
-    if (!ruleEditor.conditionValue && ruleEditor.conditionType !== 'always') {
-      setPreviewResult(null);
-      return;
+    // For simple mode, need condition value (unless 'always')
+    // For compound mode, need at least one condition
+    if (ruleEditor.useCompoundConditions) {
+      if (ruleEditor.conditions.length === 0) {
+        setPreviewResult(null);
+        return;
+      }
+    } else {
+      if (!ruleEditor.conditionValue && ruleEditor.conditionType !== 'always') {
+        setPreviewResult(null);
+        return;
+      }
     }
 
     const sampleText = testInput.trim().split('\n')[0] || SAMPLE_STREAMS[0];
@@ -341,6 +534,8 @@ export function NormalizationEngineSection() {
         condition_type: ruleEditor.conditionType,
         condition_value: ruleEditor.conditionValue,
         case_sensitive: ruleEditor.caseSensitive,
+        conditions: ruleEditor.useCompoundConditions ? ruleEditor.conditions : undefined,
+        condition_logic: ruleEditor.useCompoundConditions ? ruleEditor.conditionLogic : undefined,
         action_type: ruleEditor.actionType,
         action_value: ruleEditor.actionValue || undefined,
       });
@@ -356,7 +551,7 @@ export function NormalizationEngineSection() {
       const timer = setTimeout(updatePreview, 300);
       return () => clearTimeout(timer);
     }
-  }, [ruleEditor.isOpen, ruleEditor.conditionType, ruleEditor.conditionValue, ruleEditor.caseSensitive, ruleEditor.actionType, ruleEditor.actionValue, updatePreview]);
+  }, [ruleEditor.isOpen, ruleEditor.conditionType, ruleEditor.conditionValue, ruleEditor.caseSensitive, ruleEditor.useCompoundConditions, ruleEditor.conditions, ruleEditor.conditionLogic, ruleEditor.actionType, ruleEditor.actionValue, updatePreview]);
 
   // Stats
   const stats = useMemo(() => {
@@ -507,50 +702,29 @@ export function NormalizationEngineSection() {
                     <p className="norm-engine-group-description">{group.description}</p>
                   )}
 
-                  {group.rules?.map((rule) => (
-                    <div
-                      key={rule.id}
-                      className={`norm-engine-rule ${!rule.enabled ? 'disabled' : ''} ${selectedRule?.id === rule.id ? 'selected' : ''}`}
-                      onClick={() => setSelectedRule(rule)}
+                  <DndContext
+                    sensors={sensors}
+                    collisionDetection={closestCenter}
+                    onDragEnd={(event) => handleRuleDragEnd(event, group)}
+                  >
+                    <SortableContext
+                      items={group.rules?.map((r) => r.id) || []}
+                      strategy={verticalListSortingStrategy}
                     >
-                      <div className="norm-engine-rule-info">
-                        <span className="norm-engine-rule-name">{rule.name}</span>
-                        <span className="norm-engine-rule-pattern">
-                          {rule.condition_type}: "{rule.condition_value}"
-                        </span>
-                      </div>
-                      <div className="norm-engine-rule-actions" onClick={(e) => e.stopPropagation()}>
-                        <label className="norm-engine-toggle small">
-                          <input
-                            type="checkbox"
-                            checked={rule.enabled}
-                            onChange={() => toggleRuleEnabled(rule)}
-                          />
-                          <span className="norm-engine-toggle-slider"></span>
-                        </label>
-                        {!rule.is_builtin && (
-                          <>
-                            <button
-                              className="norm-engine-btn-icon small"
-                              onClick={() => openEditRuleEditor(rule)}
-                              title="Edit rule"
-                              type="button"
-                            >
-                              <span className="material-icons">edit</span>
-                            </button>
-                            <button
-                              className="norm-engine-btn-icon small danger"
-                              onClick={() => deleteRule(rule)}
-                              title="Delete rule"
-                              type="button"
-                            >
-                              <span className="material-icons">delete</span>
-                            </button>
-                          </>
-                        )}
-                      </div>
-                    </div>
-                  ))}
+                      {group.rules?.map((rule) => (
+                        <SortableRuleItem
+                          key={rule.id}
+                          rule={rule}
+                          isSelected={selectedRule?.id === rule.id}
+                          canDrag={!group.is_builtin}
+                          onSelect={() => setSelectedRule(rule)}
+                          onToggleEnabled={() => toggleRuleEnabled(rule)}
+                          onEdit={() => openEditRuleEditor(rule)}
+                          onDelete={() => deleteRule(rule)}
+                        />
+                      ))}
+                    </SortableContext>
+                  </DndContext>
 
                   <button
                     className="norm-engine-add-rule"
@@ -649,12 +823,12 @@ export function NormalizationEngineSection() {
 
       {/* Rule Editor Modal */}
       {ruleEditor.isOpen && (
-        <div className="norm-engine-modal-overlay" onClick={closeRuleEditor}>
-          <div className="norm-engine-modal" onClick={(e) => e.stopPropagation()}>
-            <div className="norm-engine-modal-header">
-              <h3>{ruleEditor.editingRule ? 'Edit Rule' : 'New Rule'}</h3>
+        <div className="modal-overlay" onClick={closeRuleEditor}>
+          <div className="modal-container modal-md" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h2 className="modal-title">{ruleEditor.editingRule ? 'Edit Rule' : 'New Rule'}</h2>
               <button
-                className="norm-engine-btn-icon"
+                className="modal-close-btn"
                 onClick={closeRuleEditor}
                 type="button"
               >
@@ -662,8 +836,8 @@ export function NormalizationEngineSection() {
               </button>
             </div>
 
-            <div className="norm-engine-modal-body">
-              <div className="norm-engine-form-group">
+            <div className="modal-body">
+              <div className="modal-form-group">
                 <label>Name</label>
                 <input
                   type="text"
@@ -673,7 +847,7 @@ export function NormalizationEngineSection() {
                 />
               </div>
 
-              <div className="norm-engine-form-group">
+              <div className="modal-form-group">
                 <label>Description (optional)</label>
                 <input
                   type="text"
@@ -683,38 +857,175 @@ export function NormalizationEngineSection() {
                 />
               </div>
 
-              <div className="norm-engine-form-row">
-                <div className="norm-engine-form-group">
-                  <label>Condition Type</label>
-                  <select
-                    value={ruleEditor.conditionType}
-                    onChange={(e) => setRuleEditor((prev) => ({
+              {/* Condition Mode Toggle */}
+              <div className="norm-engine-condition-mode">
+                <label className="norm-engine-mode-label">Condition Mode:</label>
+                <div className="norm-engine-mode-toggle">
+                  <button
+                    type="button"
+                    className={`norm-engine-mode-btn ${!ruleEditor.useCompoundConditions ? 'active' : ''}`}
+                    onClick={() => setRuleEditor((prev) => ({ ...prev, useCompoundConditions: false }))}
+                  >
+                    Simple
+                  </button>
+                  <button
+                    type="button"
+                    className={`norm-engine-mode-btn ${ruleEditor.useCompoundConditions ? 'active' : ''}`}
+                    onClick={() => setRuleEditor((prev) => ({
                       ...prev,
-                      conditionType: e.target.value as NormalizationConditionType,
+                      useCompoundConditions: true,
+                      // Initialize with one condition if empty
+                      conditions: prev.conditions.length === 0
+                        ? [{ type: prev.conditionType, value: prev.conditionValue, negate: false, case_sensitive: prev.caseSensitive }]
+                        : prev.conditions,
                     }))}
                   >
-                    {CONDITION_TYPES.map((ct) => (
-                      <option key={ct.value} value={ct.value}>
-                        {ct.label}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                <div className="norm-engine-form-group">
-                  <label>Pattern</label>
-                  <input
-                    type="text"
-                    value={ruleEditor.conditionValue}
-                    onChange={(e) => setRuleEditor((prev) => ({ ...prev, conditionValue: e.target.value }))}
-                    placeholder="e.g., HD"
-                    disabled={ruleEditor.conditionType === 'always'}
-                  />
+                    Compound (AND/OR/NOT)
+                  </button>
                 </div>
               </div>
 
-              <div className="norm-engine-form-row">
-                <div className="norm-engine-form-group">
+              {/* Simple Condition Mode */}
+              {!ruleEditor.useCompoundConditions && (
+                <div className="modal-form-row">
+                  <div className="modal-form-group">
+                    <label>Condition Type</label>
+                    <select
+                      value={ruleEditor.conditionType}
+                      onChange={(e) => setRuleEditor((prev) => ({
+                        ...prev,
+                        conditionType: e.target.value as NormalizationConditionType,
+                      }))}
+                    >
+                      {CONDITION_TYPES.map((ct) => (
+                        <option key={ct.value} value={ct.value}>
+                          {ct.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div className="modal-form-group">
+                    <label>Pattern</label>
+                    <input
+                      type="text"
+                      value={ruleEditor.conditionValue}
+                      onChange={(e) => setRuleEditor((prev) => ({ ...prev, conditionValue: e.target.value }))}
+                      placeholder="e.g., HD"
+                      disabled={ruleEditor.conditionType === 'always'}
+                    />
+                  </div>
+                </div>
+              )}
+
+              {/* Compound Conditions Mode */}
+              {ruleEditor.useCompoundConditions && (
+                <div className="norm-engine-compound-conditions">
+                  <div className="norm-engine-compound-header">
+                    <label>Combine conditions with:</label>
+                    <select
+                      value={ruleEditor.conditionLogic}
+                      onChange={(e) => setRuleEditor((prev) => ({
+                        ...prev,
+                        conditionLogic: e.target.value as NormalizationConditionLogic,
+                      }))}
+                      className="norm-engine-logic-select"
+                    >
+                      <option value="AND">AND (all must match)</option>
+                      <option value="OR">OR (any must match)</option>
+                    </select>
+                  </div>
+
+                  <div className="norm-engine-conditions-list">
+                    {ruleEditor.conditions.map((condition, index) => (
+                      <div key={index} className="norm-engine-condition-row">
+                        <div className="norm-engine-condition-fields">
+                          <select
+                            value={condition.type}
+                            onChange={(e) => {
+                              const newConditions = [...ruleEditor.conditions];
+                              newConditions[index] = { ...condition, type: e.target.value as NormalizationConditionType };
+                              setRuleEditor((prev) => ({ ...prev, conditions: newConditions }));
+                            }}
+                          >
+                            {CONDITION_TYPES.map((ct) => (
+                              <option key={ct.value} value={ct.value}>
+                                {ct.label}
+                              </option>
+                            ))}
+                          </select>
+                          <input
+                            type="text"
+                            value={condition.value}
+                            onChange={(e) => {
+                              const newConditions = [...ruleEditor.conditions];
+                              newConditions[index] = { ...condition, value: e.target.value };
+                              setRuleEditor((prev) => ({ ...prev, conditions: newConditions }));
+                            }}
+                            placeholder="Pattern"
+                            disabled={condition.type === 'always'}
+                          />
+                        </div>
+                        <div className="norm-engine-condition-options">
+                          <label className="norm-engine-condition-checkbox" title="Negate (NOT)">
+                            <input
+                              type="checkbox"
+                              checked={condition.negate || false}
+                              onChange={(e) => {
+                                const newConditions = [...ruleEditor.conditions];
+                                newConditions[index] = { ...condition, negate: e.target.checked };
+                                setRuleEditor((prev) => ({ ...prev, conditions: newConditions }));
+                              }}
+                            />
+                            NOT
+                          </label>
+                          <label className="norm-engine-condition-checkbox" title="Case Sensitive">
+                            <input
+                              type="checkbox"
+                              checked={condition.case_sensitive || false}
+                              onChange={(e) => {
+                                const newConditions = [...ruleEditor.conditions];
+                                newConditions[index] = { ...condition, case_sensitive: e.target.checked };
+                                setRuleEditor((prev) => ({ ...prev, conditions: newConditions }));
+                              }}
+                            />
+                            Aa
+                          </label>
+                          <button
+                            type="button"
+                            className="norm-engine-btn-icon small danger"
+                            onClick={() => {
+                              const newConditions = ruleEditor.conditions.filter((_, i) => i !== index);
+                              setRuleEditor((prev) => ({ ...prev, conditions: newConditions }));
+                            }}
+                            disabled={ruleEditor.conditions.length <= 1}
+                            title="Remove condition"
+                          >
+                            <span className="material-icons">remove_circle</span>
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
+                  <button
+                    type="button"
+                    className="norm-engine-add-condition"
+                    onClick={() => {
+                      setRuleEditor((prev) => ({
+                        ...prev,
+                        conditions: [...prev.conditions, { type: 'contains', value: '', negate: false, case_sensitive: false }],
+                      }));
+                    }}
+                  >
+                    <span className="material-icons">add</span>
+                    Add Condition
+                  </button>
+                </div>
+              )}
+
+              <div className="modal-form-row">
+                <div className="modal-form-group">
                   <label>Action Type</label>
                   <select
                     value={ruleEditor.actionType}
@@ -731,7 +1042,7 @@ export function NormalizationEngineSection() {
                   </select>
                 </div>
 
-                <div className="norm-engine-form-group">
+                <div className="modal-form-group">
                   <label>Replacement Value</label>
                   <input
                     type="text"
@@ -744,15 +1055,18 @@ export function NormalizationEngineSection() {
               </div>
 
               <div className="norm-engine-form-checkboxes">
-                <label className="norm-engine-checkbox">
-                  <input
-                    type="checkbox"
-                    checked={ruleEditor.caseSensitive}
-                    onChange={(e) => setRuleEditor((prev) => ({ ...prev, caseSensitive: e.target.checked }))}
-                  />
-                  Case Sensitive
-                </label>
-                <label className="norm-engine-checkbox">
+                {/* Case Sensitive only shown in simple mode - compound mode has per-condition settings */}
+                {!ruleEditor.useCompoundConditions && (
+                  <label className="modal-checkbox-label">
+                    <input
+                      type="checkbox"
+                      checked={ruleEditor.caseSensitive}
+                      onChange={(e) => setRuleEditor((prev) => ({ ...prev, caseSensitive: e.target.checked }))}
+                    />
+                    Case Sensitive
+                  </label>
+                )}
+                <label className="modal-checkbox-label">
                   <input
                     type="checkbox"
                     checked={ruleEditor.stopProcessing}
@@ -785,16 +1099,16 @@ export function NormalizationEngineSection() {
               )}
             </div>
 
-            <div className="norm-engine-modal-footer">
+            <div className="modal-footer">
               <button
-                className="norm-engine-btn"
+                className="modal-btn modal-btn-secondary"
                 onClick={closeRuleEditor}
                 type="button"
               >
                 Cancel
               </button>
               <button
-                className="norm-engine-btn norm-engine-btn-primary"
+                className="modal-btn modal-btn-primary"
                 onClick={saveRule}
                 disabled={!ruleEditor.name.trim()}
                 type="button"
@@ -808,12 +1122,12 @@ export function NormalizationEngineSection() {
 
       {/* Group Editor Modal */}
       {groupEditor.isOpen && (
-        <div className="norm-engine-modal-overlay" onClick={closeGroupEditor}>
-          <div className="norm-engine-modal" onClick={(e) => e.stopPropagation()}>
-            <div className="norm-engine-modal-header">
-              <h3>{groupEditor.editingGroup ? 'Edit Group' : 'New Rule Group'}</h3>
+        <div className="modal-overlay" onClick={closeGroupEditor}>
+          <div className="modal-container modal-sm" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h2 className="modal-title">{groupEditor.editingGroup ? 'Edit Group' : 'New Rule Group'}</h2>
               <button
-                className="norm-engine-btn-icon"
+                className="modal-close-btn"
                 onClick={closeGroupEditor}
                 type="button"
               >
@@ -821,8 +1135,8 @@ export function NormalizationEngineSection() {
               </button>
             </div>
 
-            <div className="norm-engine-modal-body">
-              <div className="norm-engine-form-group">
+            <div className="modal-body">
+              <div className="modal-form-group">
                 <label>Name</label>
                 <input
                   type="text"
@@ -832,7 +1146,7 @@ export function NormalizationEngineSection() {
                 />
               </div>
 
-              <div className="norm-engine-form-group">
+              <div className="modal-form-group">
                 <label>Description (optional)</label>
                 <textarea
                   value={groupEditor.description}
@@ -843,16 +1157,16 @@ export function NormalizationEngineSection() {
               </div>
             </div>
 
-            <div className="norm-engine-modal-footer">
+            <div className="modal-footer">
               <button
-                className="norm-engine-btn"
+                className="modal-btn modal-btn-secondary"
                 onClick={closeGroupEditor}
                 type="button"
               >
                 Cancel
               </button>
               <button
-                className="norm-engine-btn norm-engine-btn-primary"
+                className="modal-btn modal-btn-primary"
                 onClick={saveGroup}
                 disabled={!groupEditor.name.trim()}
                 type="button"
