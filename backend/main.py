@@ -2658,13 +2658,19 @@ async def get_streams(
 
 
 @app.get("/api/stream-groups")
-async def get_stream_groups(bypass_cache: bool = False):
+async def get_stream_groups(bypass_cache: bool = False, m3u_account_id: Optional[int] = None):
     """Get all stream groups with their stream counts.
+
+    Args:
+        bypass_cache: Skip cache and fetch fresh data
+        m3u_account_id: Optional provider ID to filter groups. When provided,
+                       only returns groups that have streams from this provider.
 
     Returns list of objects: [{"name": "Group Name", "count": 42}, ...]
     """
     cache = get_cache()
-    cache_key = "stream_groups_with_counts"
+    # Include provider filter in cache key for proper cache isolation
+    cache_key = f"stream_groups_with_counts:{m3u_account_id}" if m3u_account_id else "stream_groups_with_counts"
 
     # Try cache first (unless bypassed)
     if not bypass_cache:
@@ -2674,7 +2680,7 @@ async def get_stream_groups(bypass_cache: bool = False):
 
     client = get_client()
     try:
-        result = await client.get_stream_groups_with_counts()
+        result = await client.get_stream_groups_with_counts(m3u_account_id=m3u_account_id)
         cache.set(cache_key, result)
         return result
     except Exception as e:

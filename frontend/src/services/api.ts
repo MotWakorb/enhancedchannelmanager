@@ -402,9 +402,12 @@ export async function getStreams(params?: {
   return fetchJson(`${API_BASE}/streams${query}`, { signal: params?.signal });
 }
 
-export async function getStreamGroups(bypassCache?: boolean): Promise<StreamGroupInfo[]> {
-  const params = bypassCache ? '?bypass_cache=true' : '';
-  return fetchJson(`${API_BASE}/stream-groups${params}`);
+export async function getStreamGroups(bypassCache?: boolean, m3uAccountId?: number | null): Promise<StreamGroupInfo[]> {
+  const queryParams: string[] = [];
+  if (bypassCache) queryParams.push('bypass_cache=true');
+  if (m3uAccountId !== undefined && m3uAccountId !== null) queryParams.push(`m3u_account_id=${m3uAccountId}`);
+  const query = queryParams.length > 0 ? `?${queryParams.join('&')}` : '';
+  return fetchJson(`${API_BASE}/stream-groups${query}`);
 }
 
 export async function invalidateCache(prefix?: string): Promise<{ message: string }> {
