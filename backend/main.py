@@ -5,7 +5,7 @@ from fastapi.responses import FileResponse
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
-from typing import Optional, Literal, Union
+from typing import Optional, Literal, Union, List
 import httpx
 import os
 import re
