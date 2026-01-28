@@ -117,6 +117,7 @@ function App() {
   const [hideM3uUrls, setHideM3uUrls] = useState(false);
   const [gracenoteConflictMode, setGracenoteConflictMode] = useState<'ask' | 'skip' | 'overwrite'>('ask');
   const [epgAutoMatchThreshold, setEpgAutoMatchThreshold] = useState(80);
+  const [normalizeOnChannelCreate, setNormalizeOnChannelCreate] = useState(false);
   const [showVLCHelperModal, setShowVLCHelperModal] = useState(false);
   const [vlcModalStreamUrl, setVlcModalStreamUrl] = useState('');
   const [vlcModalStreamName, setVlcModalStreamName] = useState('');
@@ -438,6 +439,7 @@ function App() {
         setHideM3uUrls(settings.hide_m3u_urls ?? false);
         setGracenoteConflictMode(settings.gracenote_conflict_mode || 'ask');
         setEpgAutoMatchThreshold(settings.epg_auto_match_threshold ?? 80);
+        setNormalizeOnChannelCreate(settings.normalize_on_channel_create ?? false);
         // Store VLC settings globally for vlc utility to access
         const vlcBehavior = (settings.vlc_open_behavior as 'protocol_only' | 'm3u_fallback' | 'm3u_only') || 'm3u_fallback';
         (window as any).__vlcSettings = { behavior: vlcBehavior };
@@ -1367,7 +1369,8 @@ function App() {
       stripNetworkSuffix?: boolean,
       customNetworkSuffixes?: string[],
       profileIds?: number[],
-      pushDownOnConflict?: boolean
+      pushDownOnConflict?: boolean,
+      normalize?: boolean
     ) => {
       try {
         // Bulk creation requires edit mode
@@ -1610,6 +1613,7 @@ function App() {
           // If targetNewGroupName is set, pass it so the commit logic can create the group first
           // Pass logoUrl - the commit logic will create the logo if needed
           // Pass tvgId and tvcGuideStationId - auto-populate from stream metadata for EPG matching
+          // Pass normalize flag to apply normalization rules during channel creation
           const tempChannelId = stageCreateChannel(
             channelName,
             channelNumber,
@@ -1618,7 +1622,8 @@ function App() {
             undefined, // logoId - will be resolved during commit
             logoUrl,
             tvgId,
-            tvcGuideStationId
+            tvcGuideStationId,
+            normalize
           );
 
           // Assign all streams in this group to the new channel
@@ -2040,6 +2045,7 @@ function App() {
               onBulkStreamsDrop={handleBulkStreamsDrop}
               onOpenCreateChannelModal={handleOpenCreateChannelModal}
               onBulkCreateFromGroup={handleBulkCreateFromGroup}
+              defaultNormalizeOnCreate={normalizeOnChannelCreate}
               onCheckConflicts={handleCheckConflicts}
               onGetHighestChannelNumber={handleGetHighestChannelNumber}
 

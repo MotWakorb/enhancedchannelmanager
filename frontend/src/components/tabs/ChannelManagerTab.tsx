@@ -161,8 +161,11 @@ export interface ChannelManagerTabProps {
     stripNetworkSuffix?: boolean,
     customNetworkSuffixes?: string[],
     profileIds?: number[],
-    pushDownOnConflict?: boolean
+    pushDownOnConflict?: boolean,
+    normalize?: boolean
   ) => Promise<void>;
+  // Default value for normalization toggle (from settings)
+  defaultNormalizeOnCreate?: boolean;
   // Callback to check for conflicts with existing channel numbers
   onCheckConflicts?: (startingNumber: number, count: number) => number;
   // Callback to get the highest existing channel number (for "insert at end" option)
@@ -311,6 +314,7 @@ export function ChannelManagerTab({
   onBulkStreamsDrop,
   onOpenCreateChannelModal,
   onBulkCreateFromGroup,
+  defaultNormalizeOnCreate = false,
   onCheckConflicts,
   onGetHighestChannelNumber,
 
@@ -448,6 +452,7 @@ export function ChannelManagerTab({
           onRefreshStreams={onRefreshStreams}
           mappedStreamIds={mappedStreamIds}
           onGroupExpand={onStreamGroupExpand}
+          defaultNormalizeOnCreate={defaultNormalizeOnCreate}
         />
       }
     />

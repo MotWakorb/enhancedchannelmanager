@@ -25,6 +25,68 @@ logger = logging.getLogger(__name__)
 _tag_group_cache: dict[int, list[tuple[str, bool]]] = {}  # group_id -> [(value, case_sensitive), ...]
 
 
+# Unicode superscript to ASCII mapping for quality tags
+# Common patterns: ᴴᴰ (HD), ᶠᴴᴰ (FHD), ᵁᴴᴰ (UHD), ᴿᴬᵂ (RAW), ˢᴰ (SD), etc.
+SUPERSCRIPT_MAP = {
+    # Uppercase superscripts
+    '\u1d2c': 'A',  # ᴬ
+    '\u1d2e': 'B',  # ᴮ
+    '\u1d30': 'D',  # ᴰ
+    '\u1d31': 'E',  # ᴱ
+    '\u1d33': 'G',  # ᴳ
+    '\u1d34': 'H',  # ᴴ
+    '\u1d35': 'I',  # ᴵ
+    '\u1d36': 'J',  # ᴶ
+    '\u1d37': 'K',  # ᴷ
+    '\u1d38': 'L',  # ᴸ
+    '\u1d39': 'M',  # ᴹ
+    '\u1d3a': 'N',  # ᴺ
+    '\u1d3c': 'O',  # ᴼ
+    '\u1d3e': 'P',  # ᴾ
+    '\u1d3f': 'R',  # ᴿ
+    '\u1d40': 'T',  # ᵀ
+    '\u1d41': 'U',  # ᵁ
+    '\u1d42': 'W',  # ᵂ
+    '\u2c7d': 'V',  # ⱽ
+    # Lowercase superscripts
+    '\u1d43': 'a',  # ᵃ
+    '\u1d47': 'b',  # ᵇ
+    '\u1d48': 'd',  # ᵈ
+    '\u1d49': 'e',  # ᵉ
+    '\u1da0': 'f',  # ᶠ
+    '\u1d4d': 'g',  # ᵍ
+    '\u02b0': 'h',  # ʰ
+    '\u2071': 'i',  # ⁱ
+    '\u02b2': 'j',  # ʲ
+    '\u1d4f': 'k',  # ᵏ
+    '\u02e1': 'l',  # ˡ
+    '\u1d50': 'm',  # ᵐ
+    '\u207f': 'n',  # ⁿ
+    '\u1d52': 'o',  # ᵒ
+    '\u1d56': 'p',  # ᵖ
+    '\u02b3': 'r',  # ʳ
+    '\u02e2': 's',  # ˢ
+    '\u1d57': 't',  # ᵗ
+    '\u1d58': 'u',  # ᵘ
+    '\u1d5b': 'v',  # ᵛ
+    '\u02b7': 'w',  # ʷ
+    '\u02e3': 'x',  # ˣ
+    '\u02b8': 'y',  # ʸ
+    '\u1dbb': 'z',  # ᶻ
+}
+
+
+def convert_superscripts(text: str) -> str:
+    """
+    Convert Unicode superscript characters to their ASCII equivalents.
+    This allows quality tags like ᴴᴰ, ᵁᴴᴰ, ᴿᴬᵂ to be matched by normal rules.
+    """
+    result = []
+    for char in text:
+        result.append(SUPERSCRIPT_MAP.get(char, char))
+    return ''.join(result)
+
+
 @dataclass
 class RuleMatch:
     """Result of a rule match attempt."""
@@ -88,7 +150,8 @@ class NormalizationEngine:
             .all()
         )
 
-        tag_list = [(tag.value, tag.case_sensitive) for tag in tags]
+        # Convert superscripts in tag values (so tags with ᴿᴬᵂ match RAW)
+        tag_list = [(convert_superscripts(tag.value), tag.case_sensitive) for tag in tags]
         _tag_group_cache[tag_group_id] = tag_list
 
         return tag_list
@@ -144,6 +207,9 @@ class NormalizationEngine:
         Check if text matches a single condition.
         Returns RuleMatch with match details.
         """
+        # Convert superscripts in pattern (so rules with ᴿᴬᵂ match RAW)
+        pattern = convert_superscripts(pattern)
+
         # Prepare text for matching
         match_text = text if case_sensitive else text.lower()
         match_pattern = pattern if case_sensitive else pattern.lower()
@@ -163,10 +229,11 @@ class NormalizationEngine:
 
         elif condition_type == "starts_with":
             if match_text.startswith(match_pattern):
-                # Check that pattern is followed by separator or end of string
+                # Check that pattern is followed by separator (NOT end of string)
                 # This prevents "ES" from matching "ESPN" - it should only match "ES: ..." or "ES | ..."
+                # Also prevents matching if the pattern IS the entire string (nothing would remain)
                 remaining = match_text[len(match_pattern):]
-                if not remaining or re.match(r'^[\s:\-|/]', remaining):
+                if remaining and re.match(r'^[\s:\-|/]', remaining):
                     return RuleMatch(
                         matched=True,
                         match_start=0,
@@ -176,10 +243,11 @@ class NormalizationEngine:
 
         elif condition_type == "ends_with":
             if match_text.endswith(match_pattern):
-                # Check that pattern is preceded by separator or start of string
+                # Check that pattern is preceded by separator (NOT start of string)
                 # This prevents "HD" from matching "ADHD" - it should only match "... HD" or "...|HD"
+                # Also prevents matching if the pattern IS the entire string (nothing would remain)
                 prefix_len = len(text) - len(pattern)
-                if prefix_len == 0 or re.search(r'[\s:\-|/]$', text[:prefix_len]):
+                if prefix_len > 0 and re.search(r'[\s:\-|/]$', text[:prefix_len]):
                     return RuleMatch(
                         matched=True,
                         match_start=prefix_len,
@@ -231,9 +299,10 @@ class NormalizationEngine:
 
             if position == "prefix":
                 # Match at start with separator check
+                # Requires something after the tag (don't match if tag IS the entire string)
                 if match_text.startswith(match_tag):
                     remaining = match_text[len(match_tag):]
-                    if not remaining or re.match(r'^[\s:\-|/]', remaining):
+                    if remaining and re.match(r'^[\s:\-|/]', remaining):
                         return RuleMatch(
                             matched=True,
                             match_start=0,
@@ -243,12 +312,27 @@ class NormalizationEngine:
 
             elif position == "suffix":
                 # Match at end with separator check
+                # Requires something before the tag (don't match if tag IS the entire string)
                 if match_text.endswith(match_tag):
                     prefix_len = len(text) - len(tag_value)
-                    if prefix_len == 0 or re.search(r'[\s:\-|/]$', text[:prefix_len]):
+                    if prefix_len > 0 and re.search(r'[\s:\-|/]$', text[:prefix_len]):
                         return RuleMatch(
                             matched=True,
                             match_start=prefix_len,
+                            match_end=len(text),
+                            matched_tag=tag_value
+                        )
+
+                # Also check for parenthesized version: (TAG)
+                # Common pattern in stream names like "Channel Name (HD)" or "Movie (NA)"
+                paren_tag = f"({match_tag})"
+                if match_text.endswith(paren_tag):
+                    prefix_len = len(text) - len(paren_tag)
+                    # Parenthesized suffixes typically have a space before them
+                    if prefix_len > 0 and text[prefix_len - 1] == ' ':
+                        return RuleMatch(
+                            matched=True,
+                            match_start=prefix_len - 1,  # Include the space before
                             match_end=len(text),
                             matched_tag=tag_value
                         )
@@ -478,8 +562,9 @@ class NormalizationEngine:
         """
         Apply all enabled rules to normalize a stream name.
 
-        Rules are applied in priority order by group, then by rule within group.
-        Processing stops for a group if a rule with stop_processing matches.
+        Rules are applied in multiple passes until no more changes occur.
+        This handles cases like "4K/UHD" (both quality tags) or "HD (NA)"
+        where stripping one suffix reveals another that should also be stripped.
 
         Args:
             name: The stream name to normalize
@@ -495,7 +580,43 @@ class NormalizationEngine:
         )
 
         current = name.strip()
+
+        # Convert Unicode superscripts to ASCII (e.g., ᴴᴰ -> HD, ᵁᴴᴰ -> UHD, ᴿᴬᵂ -> RAW)
+        current = convert_superscripts(current)
+
         grouped_rules = self._load_rules()
+
+        # Multi-pass normalization: keep applying rules until no changes occur
+        max_passes = 10  # Safety limit to prevent infinite loops
+        for pass_num in range(max_passes):
+            before_pass = current
+
+            # Apply database rules
+            current = self._apply_rules_single_pass(current, grouped_rules, result)
+
+            # Apply legacy custom_normalization_tags from settings
+            current = self._apply_legacy_custom_tags(current, result)
+
+            # Normalize whitespace between passes
+            current = re.sub(r'\s+', ' ', current).strip()
+
+            # If nothing changed this pass, we're done
+            if current == before_pass:
+                break
+
+            logger.debug(f"Normalization pass {pass_num + 1}: '{before_pass}' -> '{current}'")
+
+        result.normalized = current
+        return result
+
+    def _apply_rules_single_pass(
+        self,
+        text: str,
+        grouped_rules: list,
+        result: NormalizationResult
+    ) -> str:
+        """Apply all database rules once through the text."""
+        current = text
 
         for group, rules in grouped_rules:
             for rule in rules:
@@ -536,11 +657,68 @@ class NormalizationEngine:
                     if rule.stop_processing:
                         break
 
-        # Final cleanup - normalize whitespace
-        current = re.sub(r'\s+', ' ', current).strip()
+        return current
 
-        result.normalized = current
-        return result
+    def _apply_legacy_custom_tags(self, text: str, result: NormalizationResult) -> str:
+        """
+        Apply custom_normalization_tags from settings.json for backward compatibility.
+        These are user-defined tags that predate the database-based tag system.
+        """
+        try:
+            from config import get_settings
+            settings = get_settings()
+            custom_tags = settings.custom_normalization_tags or []
+        except Exception:
+            return text
+
+        current = text
+        for tag_config in custom_tags:
+            tag_value = tag_config.get("value", "")
+            mode = tag_config.get("mode", "both")  # prefix, suffix, or both
+
+            if not tag_value:
+                continue
+
+            before = current
+
+            # Handle suffix mode
+            if mode in ("suffix", "both"):
+                # Check for plain suffix with separator
+                lower_current = current.lower()
+                lower_tag = tag_value.lower()
+
+                # Check if ends with tag (with separator before it)
+                if lower_current.endswith(lower_tag):
+                    prefix_len = len(current) - len(tag_value)
+                    if prefix_len > 0 and current[prefix_len - 1] in ' :-|/':
+                        current = current[:prefix_len].rstrip(' :-|/')
+                        continue
+
+                # Check for parenthesized suffix: (TAG)
+                paren_tag = f"({tag_value})"
+                lower_paren = paren_tag.lower()
+                if lower_current.endswith(lower_paren):
+                    prefix_len = len(current) - len(paren_tag)
+                    if prefix_len > 0:
+                        current = current[:prefix_len].rstrip()
+                        continue
+
+            # Handle prefix mode
+            if mode in ("prefix", "both"):
+                lower_current = current.lower()
+                lower_tag = tag_value.lower()
+
+                if lower_current.startswith(lower_tag):
+                    remaining = current[len(tag_value):]
+                    if remaining and remaining[0] in ' :-|/':
+                        current = remaining.lstrip(' :-|/')
+
+            # Track if changed
+            if before != current:
+                result.transformations.append(("legacy_tag", before, current))
+                logger.debug(f"Legacy tag '{tag_value}': '{before}' -> '{current}'")
+
+        return current
 
     def test_rule(
         self,
