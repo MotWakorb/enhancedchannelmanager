@@ -53,7 +53,7 @@ def init_db() -> None:
         _SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=_engine)
 
         # Import models to register them with Base
-        from models import JournalEntry, BandwidthDaily, ChannelWatchStats, HiddenChannelGroup, StreamStats, ScheduledTask, TaskSchedule, TaskExecution, Notification, AlertMethod, TagGroup, Tag  # noqa: F401
+        from models import JournalEntry, BandwidthDaily, ChannelWatchStats, HiddenChannelGroup, StreamStats, ScheduledTask, TaskSchedule, TaskExecution, Notification, AlertMethod, TagGroup, Tag, NormalizationRuleGroup, NormalizationRule  # noqa: F401
 
         # Create all tables
         Base.metadata.create_all(bind=_engine)
@@ -61,6 +61,9 @@ def init_db() -> None:
 
         # Run migrations for existing tables (add new columns if missing)
         _run_migrations(_engine)
+
+        # Create demo normalization rule groups if none exist
+        _create_demo_normalization_rules()
 
         # Perform maintenance: purge old entries and vacuum
         _perform_maintenance(_engine)
@@ -145,6 +148,31 @@ def _run_migrations(engine) -> None:
     except Exception as e:
         logger.exception(f"Migration failed: {e}")
         raise
+
+
+def _create_demo_normalization_rules() -> None:
+    """Create demo normalization rule groups if none exist.
+
+    This creates the 5 demo rule groups (Strip Quality Suffixes, Strip Country Prefixes,
+    etc.) that use tag-group-based conditions. Rules are disabled by default.
+    """
+    try:
+        db = _SessionLocal()
+        try:
+            from normalization_migration import create_demo_rules
+            result = create_demo_rules(db, force=False)
+            if result.get("skipped"):
+                logger.debug("Demo normalization rules already exist, skipping creation")
+            else:
+                groups = result.get("groups_created", 0)
+                rules = result.get("rules_created", 0)
+                if groups > 0:
+                    logger.info(f"Created {groups} demo normalization rule groups with {rules} rules")
+        finally:
+            db.close()
+    except Exception as e:
+        logger.warning(f"Could not create demo normalization rules: {e}")
+        # Non-fatal - don't block startup
 
 
 def _migrate_task_schedules(conn) -> None:
