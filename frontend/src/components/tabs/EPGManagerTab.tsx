@@ -352,11 +352,12 @@ function EPGSourceModal({ isOpen, source, onClose, onSave }: EPGSourceModalProps
                 <input
                   id="refreshInterval"
                   type="number"
-                  min="1"
+                  min="0"
                   max="168"
                   value={refreshInterval}
-                  onChange={(e) => setRefreshInterval(parseInt(e.target.value) || 24)}
+                  onChange={(e) => setRefreshInterval(parseInt(e.target.value))}
                 />
+                <span className="form-hint">0 = manual refresh only</span>
               </div>
 
               <div className="form-group">
