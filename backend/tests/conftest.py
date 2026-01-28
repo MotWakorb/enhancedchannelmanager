@@ -23,7 +23,8 @@ Path("/tmp/ecm_test_config").mkdir(parents=True, exist_ok=True)
 from database import Base
 from models import (
     JournalEntry, BandwidthDaily, ChannelWatchStats, HiddenChannelGroup,
-    StreamStats, ScheduledTask, TaskSchedule, TaskExecution, Notification, AlertMethod
+    StreamStats, ScheduledTask, TaskSchedule, TaskExecution, Notification, AlertMethod,
+    TagGroup, Tag, NormalizationRuleGroup, NormalizationRule
 )
 
 
