@@ -103,6 +103,9 @@ class DispatcharrSettings(BaseModel):
     # custom_normalization_tags: User-added custom tags
     # Each dict has "value" (str) and "mode" (prefix/suffix/both)
     custom_normalization_tags: list[dict] = []
+    # normalize_on_channel_create: Default state for normalization toggle when creating channels
+    # When true, the "Apply normalization" checkbox will be checked by default
+    normalize_on_channel_create: bool = False
 
     def is_configured(self) -> bool:
         return bool(self.url and self.username and self.password)
