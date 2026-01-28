@@ -5,6 +5,7 @@
   background: var(--card-bg);
   border-radius: 8px;
   border: 1px solid var(--border-primary);
+  overflow: hidden;
 }
 
 /* Header */
@@ -112,24 +113,14 @@
   letter-spacing: 0.5px;
 }
 
-/* Content - Two Column Layout */
-.norm-engine-content {
-  display: grid;
-  grid-template-columns: 1fr 380px;
-  gap: 1.5rem;
-}
-
-@media (max-width: 1200px) {
-  .norm-engine-content {
-    grid-template-columns: 1fr;
-  }
-}
 
 /* Groups List */
 .norm-engine-groups {
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
+  min-width: 0;
+  overflow: hidden;
 }
 
 .norm-engine-group {
@@ -137,10 +128,50 @@
   border: 1px solid var(--border-primary);
   border-radius: 6px;
   overflow: hidden;
+  position: relative;
+  display: flex;
+  flex-direction: row;
+}
+
+.norm-engine-group-content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
 }
 
 .norm-engine-group.disabled {
   opacity: 0.6;
+}
+
+.norm-engine-group.dragging {
+  background: var(--card-bg);
+  border: 1px solid var(--accent-primary);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
+.norm-engine-group-drag-handle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: grab;
+  color: var(--text-muted);
+  padding: 0.5rem 0.25rem;
+  touch-action: none;
+  flex-shrink: 0;
+}
+
+.norm-engine-group-drag-handle:hover {
+  color: var(--text-primary);
+  background: var(--hover-bg);
+}
+
+.norm-engine-group-drag-handle:active {
+  cursor: grabbing;
+}
+
+.norm-engine-group-drag-handle .material-icons {
+  font-size: 20px;
 }
 
 .norm-engine-group-header {
@@ -148,9 +179,11 @@
   align-items: center;
   gap: 0.5rem;
   padding: 0.75rem 1rem;
+  padding-left: 0.5rem;
   cursor: pointer;
   user-select: none;
   transition: background 0.15s;
+  flex: 1;
 }
 
 .norm-engine-group-header:hover {
@@ -462,22 +495,35 @@
   color: var(--status-error-text);
 }
 
-/* Test Panel */
+/* Test Panel - Collapsible */
 .norm-engine-test-panel {
   background: var(--input-bg);
   border: 1px solid var(--border-primary);
   border-radius: 6px;
-  padding: 1rem;
-  height: fit-content;
-  position: sticky;
-  top: 1rem;
+  margin-bottom: 1rem;
+  overflow: hidden;
+}
+
+.norm-engine-test-panel.collapsible .norm-engine-test-header {
+  cursor: pointer;
+  user-select: none;
+  padding: 0.75rem 1rem;
+  margin-bottom: 0;
+  transition: background 0.15s;
+}
+
+.norm-engine-test-panel.collapsible .norm-engine-test-header:hover {
+  background: var(--hover-bg);
 }
 
 .norm-engine-test-header {
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  margin-bottom: 1rem;
+}
+
+.norm-engine-test-header.clickable {
+  cursor: pointer;
 }
 
 .norm-engine-test-header h4 {
@@ -491,13 +537,24 @@
   color: var(--accent-primary);
 }
 
+.norm-engine-test-header .norm-engine-expand {
+  color: var(--text-muted);
+}
+
+.norm-engine-test-body {
+  padding: 0 1rem 1rem 1rem;
+  border-top: 1px solid var(--border-secondary);
+}
+
 .norm-engine-test-input {
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
+  align-items: flex-end;
 }
 
 .norm-engine-test-input textarea {
+  align-self: stretch;
   width: 100%;
   padding: 0.75rem;
   background: var(--card-bg);

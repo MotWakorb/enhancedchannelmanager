@@ -135,6 +135,12 @@ def _run_migrations(engine) -> None:
             # Populate built-in tag groups (v0.8.7)
             _populate_builtin_tags(conn)
 
+            # Convert normalization rules from built-in to editable (v0.8.7)
+            _convert_normalization_rules_to_editable(conn)
+
+            # Fix tag-group rule action types (v0.8.7)
+            _fix_tag_group_action_types(conn)
+
             logger.debug("All migrations complete - schema is up to date")
     except Exception as e:
         logger.exception(f"Migration failed: {e}")
@@ -591,6 +597,8 @@ def _populate_builtin_tags(conn) -> None:
     - Timezone Tags: EST, PST, ET, PT, etc.
     - League Tags: NFL, NBA, MLB, NHL, etc.
     - Network Tags: PPV, LIVE, BACKUP, VIP, etc.
+
+    Tag groups are built-in (immutable group names) but users can add custom tags.
     """
     from sqlalchemy import text
 
@@ -706,7 +714,7 @@ def _populate_builtin_tags(conn) -> None:
                 # Australian Sports
                 "AFL", "A-LEAGUE",
                 # Other
-                "OLYMPICS", "X GAMES", "ESPN", "PPV"
+                "OLYMPICS", "X GAMES"
             ]
         },
         "Network Tags": {
@@ -758,6 +766,92 @@ def _populate_builtin_tags(conn) -> None:
         logger.info(f"Built-in tags sync complete: {groups_created} groups created, {tags_added} tags added")
     else:
         logger.debug("Built-in tags sync complete: no changes needed")
+
+
+def _convert_normalization_rules_to_editable(conn) -> None:
+    """Convert normalization rule groups and rules from built-in to editable (v0.8.7).
+
+    This migration changes is_builtin from 1 to 0 for all normalization rules,
+    making them fully editable and deletable by users. Preserves all other
+    settings (enabled status, customizations, etc.).
+    """
+    from sqlalchemy import text
+
+    # Check if normalization_rule_groups table exists
+    result = conn.execute(text(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='normalization_rule_groups'"
+    ))
+    if not result.fetchone():
+        logger.debug("normalization_rule_groups table doesn't exist yet, skipping conversion")
+        return
+
+    # Count how many built-in rules exist
+    result = conn.execute(text("SELECT COUNT(*) FROM normalization_rule_groups WHERE is_builtin = 1"))
+    builtin_groups = result.fetchone()[0]
+
+    result = conn.execute(text("SELECT COUNT(*) FROM normalization_rules WHERE is_builtin = 1"))
+    builtin_rules = result.fetchone()[0]
+
+    if builtin_groups == 0 and builtin_rules == 0:
+        logger.debug("No built-in normalization rules to convert")
+        return
+
+    # Convert all built-in rule groups to editable
+    if builtin_groups > 0:
+        conn.execute(text("UPDATE normalization_rule_groups SET is_builtin = 0 WHERE is_builtin = 1"))
+        logger.info(f"Converted {builtin_groups} normalization rule groups from built-in to editable")
+
+    # Convert all built-in rules to editable
+    if builtin_rules > 0:
+        conn.execute(text("UPDATE normalization_rules SET is_builtin = 0 WHERE is_builtin = 1"))
+        logger.info(f"Converted {builtin_rules} normalization rules from built-in to editable")
+
+    conn.commit()
+
+
+def _fix_tag_group_action_types(conn) -> None:
+    """Fix action types for tag-group-based normalization rules (v0.8.7).
+
+    Rules using tag_group conditions with prefix/suffix position should use
+    strip_prefix/strip_suffix instead of 'remove' to properly handle
+    separator characters (: | - /).
+    """
+    from sqlalchemy import text
+
+    # Check if normalization_rules table exists
+    result = conn.execute(text(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='normalization_rules'"
+    ))
+    if not result.fetchone():
+        logger.debug("normalization_rules table doesn't exist yet, skipping action type fix")
+        return
+
+    # Update prefix rules: remove -> strip_prefix
+    result = conn.execute(text("""
+        UPDATE normalization_rules
+        SET action_type = 'strip_prefix'
+        WHERE condition_type = 'tag_group'
+          AND tag_match_position = 'prefix'
+          AND action_type = 'remove'
+    """))
+    prefix_updated = result.rowcount
+
+    # Update suffix rules: remove -> strip_suffix
+    result = conn.execute(text("""
+        UPDATE normalization_rules
+        SET action_type = 'strip_suffix'
+        WHERE condition_type = 'tag_group'
+          AND tag_match_position = 'suffix'
+          AND action_type = 'remove'
+    """))
+    suffix_updated = result.rowcount
+
+    total_updated = prefix_updated + suffix_updated
+    if total_updated > 0:
+        conn.commit()
+        logger.info(f"Fixed {total_updated} tag-group rules to use strip_prefix/strip_suffix actions")
+    else:
+        logger.debug("No tag-group rules needed action type fixes")
 
 
 def _perform_maintenance(engine) -> None:
