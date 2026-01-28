@@ -413,6 +413,7 @@ class BulkCreateChannelOp(BaseModel):
     logoUrl: Optional[str] = None
     tvgId: Optional[str] = None
     tvcGuideStationId: Optional[str] = None  # Gracenote ID from M3U tvc-guide-stationid
+    normalize: Optional[bool] = False  # Apply normalization rules to channel name
 
 
 class BulkDeleteChannelOp(BaseModel):
@@ -557,6 +558,7 @@ class SettingsRequest(BaseModel):
     m3u_account_priorities: dict[str, int] = {}  # M3U account priorities (account_id -> priority value)
     deprioritize_failed_streams: bool = True  # When enabled, failed/timeout/pending streams sort to bottom
     normalization_settings: Optional[NormalizationSettings] = None  # User-configurable normalization tags
+    normalize_on_channel_create: bool = False  # Default state for normalization toggle when creating channels
 
 
 class SettingsResponse(BaseModel):
@@ -603,6 +605,7 @@ class SettingsResponse(BaseModel):
     m3u_account_priorities: dict[str, int]  # M3U account priorities (account_id -> priority value)
     deprioritize_failed_streams: bool  # When enabled, failed/timeout/pending streams sort to bottom
     normalization_settings: NormalizationSettings  # User-configurable normalization tags
+    normalize_on_channel_create: bool  # Default state for normalization toggle when creating channels
 
 
 class TestConnectionRequest(BaseModel):
@@ -666,6 +669,7 @@ async def get_current_settings():
                 for tag in settings.custom_normalization_tags
             ]
         ),
+        normalize_on_channel_create=settings.normalize_on_channel_create,
     )
 
 
@@ -742,6 +746,7 @@ async def update_settings(request: SettingsRequest):
             [{"value": tag.value, "mode": tag.mode} for tag in request.normalization_settings.customTags]
             if request.normalization_settings else current_settings.custom_normalization_tags
         ),
+        normalize_on_channel_create=request.normalize_on_channel_create,
     )
     save_settings(new_settings)
     clear_settings_cache()
@@ -891,6 +896,7 @@ class CreateChannelRequest(BaseModel):
     channel_group_id: Optional[int] = None
     logo_id: Optional[int] = None
     tvg_id: Optional[str] = None
+    normalize: Optional[bool] = False  # Apply normalization rules to channel name
 
 
 @app.get("/api/channels")
@@ -953,10 +959,25 @@ async def get_channels(
 
 @app.post("/api/channels")
 async def create_channel(request: CreateChannelRequest):
-    logger.debug(f"POST /api/channels - Creating channel: {request.name}, number: {request.channel_number}")
+    logger.debug(f"POST /api/channels - Creating channel: {request.name}, number: {request.channel_number}, normalize: {request.normalize}")
     client = get_client()
     try:
-        data = {"name": request.name}
+        # Apply normalization if requested
+        channel_name = request.name
+        if request.normalize:
+            try:
+                from normalization_engine import get_normalization_engine
+                with get_session() as db:
+                    engine = get_normalization_engine(db)
+                    norm_result = engine.normalize(request.name)
+                    channel_name = norm_result.normalized
+                    if channel_name != request.name:
+                        logger.debug(f"Normalized channel name: '{request.name}' -> '{channel_name}'")
+            except Exception as norm_err:
+                logger.warning(f"Failed to normalize channel name '{request.name}': {norm_err}")
+                # Continue with original name
+
+        data = {"name": channel_name}
         if request.channel_number is not None:
             data["channel_number"] = request.channel_number
         if request.channel_group_id is not None:
@@ -1654,9 +1675,24 @@ async def bulk_commit_operations(request: BulkCommitRequest):
                     result["operationsApplied"] += 1
 
                 elif op.type == "createChannel":
-                    logger.debug(f"[BULK-APPLY] [{idx+1}/{len(request.operations)}] createChannel: name='{op.name}', tempId={op.tempId}, groupId={op.groupId}, newGroupName={op.newGroupName}")
+                    logger.debug(f"[BULK-APPLY] [{idx+1}/{len(request.operations)}] createChannel: name='{op.name}', tempId={op.tempId}, groupId={op.groupId}, newGroupName={op.newGroupName}, normalize={op.normalize}")
                     # Resolve group ID
                     group_id = resolve_group_id(op.groupId, op.newGroupName)
+
+                    # Apply normalization if requested
+                    channel_name = op.name
+                    if op.normalize:
+                        try:
+                            from normalization_engine import get_normalization_engine
+                            with get_session() as db:
+                                engine = get_normalization_engine(db)
+                                norm_result = engine.normalize(op.name)
+                                channel_name = norm_result.normalized
+                                if channel_name != op.name:
+                                    logger.debug(f"[BULK-APPLY] Normalized channel name: '{op.name}' -> '{channel_name}'")
+                        except Exception as norm_err:
+                            logger.warning(f"[BULK-APPLY] Failed to normalize channel name '{op.name}': {norm_err}")
+                            # Continue with original name
 
                     # Handle logo - if logoUrl provided but no logoId, try to find/create logo
                     logo_id = op.logoId
@@ -1670,15 +1706,15 @@ async def bulk_commit_operations(request: BulkCommitRequest):
                                 logger.debug(f"[BULK-APPLY] Found existing logo ID {logo_id}")
                             else:
                                 # Create new logo
-                                new_logo = await client.create_logo({"name": op.name, "url": op.logoUrl})
+                                new_logo = await client.create_logo({"name": channel_name, "url": op.logoUrl})
                                 logo_id = new_logo["id"]
                                 logger.debug(f"[BULK-APPLY] Created new logo ID {logo_id}")
                         except Exception as logo_err:
-                            logger.warning(f"[BULK-APPLY] Failed to create/find logo for channel '{op.name}': {logo_err}")
+                            logger.warning(f"[BULK-APPLY] Failed to create/find logo for channel '{channel_name}': {logo_err}")
                             # Continue without logo
 
                     # Create the channel
-                    channel_data = {"name": op.name}
+                    channel_data = {"name": channel_name}
                     if op.channelNumber is not None:
                         channel_data["channel_number"] = op.channelNumber
                     if group_id is not None:
@@ -1699,7 +1735,7 @@ async def bulk_commit_operations(request: BulkCommitRequest):
                         result["tempIdMap"][op.tempId] = new_channel["id"]
 
                     result["operationsApplied"] += 1
-                    logger.debug(f"[BULK-APPLY] Created channel '{op.name}' (temp: {op.tempId} -> real: {new_channel['id']})")
+                    logger.debug(f"[BULK-APPLY] Created channel '{channel_name}' (temp: {op.tempId} -> real: {new_channel['id']})")
 
                 elif op.type == "deleteChannel":
                     channel_id = resolve_id(op.channelId)
@@ -6679,37 +6715,37 @@ async def get_normalization_migration_status():
 
 @app.post("/api/normalization/migration/run")
 async def run_normalization_migration(force: bool = False, migrate_settings: bool = True):
-    """Run the built-in rules migration.
+    """Create demo normalization rules.
+
+    Creates editable demo rules that are disabled by default. Users can enable
+    the rule groups they want to use.
 
     Args:
         force: If True, recreate rules even if they already exist
-        migrate_settings: If True, also migrate user's disabled_builtin_tags and custom_normalization_tags
+        migrate_settings: If True, also migrate user's custom_normalization_tags
     """
     try:
-        from normalization_migration import create_builtin_rules
+        from normalization_migration import create_demo_rules
 
         # Get user settings to migrate
-        disabled_builtin_tags = []
         custom_normalization_tags = []
 
         if migrate_settings:
-            settings = load_settings()
-            disabled_builtin_tags = settings.disabled_builtin_tags or []
+            settings = get_settings()
             custom_normalization_tags = settings.custom_normalization_tags or []
 
         session = get_session()
         try:
-            result = create_builtin_rules(
+            result = create_demo_rules(
                 session,
                 force=force,
-                disabled_builtin_tags=disabled_builtin_tags,
                 custom_normalization_tags=custom_normalization_tags
             )
             return result
         finally:
             session.close()
     except Exception as e:
-        logger.error(f"Failed to run migration: {e}")
+        logger.error(f"Failed to create demo rules: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

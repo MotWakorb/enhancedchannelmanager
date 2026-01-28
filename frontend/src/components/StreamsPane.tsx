@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import type { Stream, StreamGroupInfo, M3UAccount, ChannelGroup, ChannelProfile, M3UGroupSetting } from '../types';
 import { useSelection, useExpandCollapse } from '../hooks';
-import { detectRegionalVariants, filterStreamsByTimezone, detectCountryPrefixes, getUniqueCountryPrefixes, detectNetworkPrefixes, detectNetworkSuffixes, type TimezonePreference, type NumberSeparator, type SortCriterion, type SortEnabledMap, type M3UAccountPriorities } from '../services/api';
+import { detectRegionalVariants, filterStreamsByTimezone, detectCountryPrefixes, getUniqueCountryPrefixes, detectNetworkPrefixes, detectNetworkSuffixes, normalizeStreamNamesWithBackend, type TimezonePreference, type NumberSeparator, type SortCriterion, type SortEnabledMap, type M3UAccountPriorities } from '../services/api';
 import { naturalCompare } from '../utils/naturalSort';
 import { openInVLC } from '../utils/vlc';
 import { useCopyFeedback } from '../hooks/useCopyFeedback';
@@ -88,8 +88,11 @@ interface StreamsPaneProps {
     stripNetworkSuffix?: boolean,
     customNetworkSuffixes?: string[],
     profileIds?: number[],
-    pushDownOnConflict?: boolean
+    pushDownOnConflict?: boolean,
+    normalize?: boolean
   ) => Promise<void>;
+  // Default value for normalize toggle (from settings)
+  defaultNormalizeOnCreate?: boolean;
   // Callback to check for conflicts with existing channel numbers
   // Returns the number of conflicting channels
   onCheckConflicts?: (startingNumber: number, count: number) => number;
@@ -144,6 +147,7 @@ export function StreamsPane({
   onRefreshStreams,
   mappedStreamIds,
   onGroupExpand,
+  defaultNormalizeOnCreate = false,
 }: StreamsPaneProps) {
   // Expand/collapse groups with useExpandCollapse hook
   const {
@@ -332,6 +336,16 @@ export function StreamsPane({
   const [bulkCreateSelectedProfiles, setBulkCreateSelectedProfiles] = useState<Set<number>>(new Set());
   const [bulkCreateGroupSearch, setBulkCreateGroupSearch] = useState('');
   const [profilesExpanded, setProfilesExpanded] = useState(false);
+  // Normalization toggle and preview
+  const [bulkCreateNormalize, setBulkCreateNormalize] = useState(defaultNormalizeOnCreate);
+  const [normalizedNamesPreview, setNormalizedNamesPreview] = useState<Map<string, string>>(new Map());
+  const [normalizationPreviewLoading, setNormalizationPreviewLoading] = useState(false);
+  const [normalizationExpanded, setNormalizationExpanded] = useState(false);
+
+  // Sync normalization default when settings change
+  useEffect(() => {
+    setBulkCreateNormalize(defaultNormalizeOnCreate);
+  }, [defaultNormalizeOnCreate]);
 
   // Bulk create group dropdown management
   const {
@@ -1003,6 +1017,45 @@ export function StreamsPane({
     return { streamCount, excludedCount, filteredStreams };
   }, [streamsToCreate, bulkCreateTimezone]);
 
+  // Update normalize default when prop changes
+  useEffect(() => {
+    setBulkCreateNormalize(defaultNormalizeOnCreate);
+  }, [defaultNormalizeOnCreate]);
+
+  // Fetch normalized names preview when normalize toggle is enabled
+  useEffect(() => {
+    if (!bulkCreateNormalize || !bulkCreateModalOpen || bulkCreateStats.filteredStreams.length === 0) {
+      setNormalizedNamesPreview(new Map());
+      return;
+    }
+
+    const fetchPreview = async () => {
+      setNormalizationPreviewLoading(true);
+      try {
+        const streamNames = bulkCreateStats.filteredStreams.map(s => s.name);
+        const normalizedMap = await normalizeStreamNamesWithBackend(streamNames);
+        setNormalizedNamesPreview(normalizedMap);
+      } catch (error) {
+        console.error('Failed to fetch normalization preview:', error);
+        setNormalizedNamesPreview(new Map());
+      } finally {
+        setNormalizationPreviewLoading(false);
+      }
+    };
+
+    fetchPreview();
+  }, [bulkCreateNormalize, bulkCreateModalOpen, bulkCreateStats.filteredStreams]);
+
+  // Count how many names will change with normalization
+  const normalizationChangeCount = useMemo(() => {
+    if (!bulkCreateNormalize || normalizedNamesPreview.size === 0) return 0;
+    let count = 0;
+    for (const [original, normalized] of normalizedNamesPreview) {
+      if (original !== normalized) count++;
+    }
+    return count;
+  }, [bulkCreateNormalize, normalizedNamesPreview]);
+
   // Actually perform the bulk create with the specified pushDown option
   // startingNumberOverride: optionally override the starting number (used by "insert at end" option)
   const doBulkCreate = useCallback(async (pushDown: boolean, startingNumberOverride?: number) => {
@@ -1049,7 +1102,8 @@ export function StreamsPane({
             bulkCreateStripSuffix,
             channelDefaults?.customNetworkSuffixes,
             bulkCreateSelectedProfiles.size > 0 ? Array.from(bulkCreateSelectedProfiles) : undefined,
-            pushDown
+            pushDown,
+            bulkCreateNormalize
           );
 
           // Increment starting number for next group (if no explicit start)
@@ -1099,7 +1153,8 @@ export function StreamsPane({
           bulkCreateStripSuffix,
           channelDefaults?.customNetworkSuffixes,
           bulkCreateSelectedProfiles.size > 0 ? Array.from(bulkCreateSelectedProfiles) : undefined,
-          pushDown
+          pushDown,
+          bulkCreateNormalize
         );
       }
 
@@ -1139,6 +1194,7 @@ export function StreamsPane({
     bulkCreateStripNetwork,
     bulkCreateStripSuffix,
     bulkCreateSelectedProfiles,
+    bulkCreateNormalize,
     channelGroups,
     onBulkCreateFromGroup,
     clearSelection,
@@ -2151,221 +2207,6 @@ export function StreamsPane({
                 </div>
               )}
 
-              {/* Normalization - Collapsible Section */}
-              <div className="form-group naming-options-section">
-                <div
-                  className="naming-options-header"
-                  onClick={() => setNamingOptionsExpanded(!namingOptionsExpanded)}
-                >
-                  <span className="expand-icon">{namingOptionsExpanded ? '▼︎' : '▶︎'}</span>
-                  <span className="naming-options-title">Normalization</span>
-                  <span className="naming-options-summary">
-                    {(() => {
-                      const options: string[] = [];
-                      // Normalization options
-                      if (bulkCreateStripNetwork) options.push('Strip prefix');
-                      if (bulkCreateStripSuffix) options.push('Strip suffix');
-                      if (bulkCreateStripCountry) options.push('Remove country');
-                      if (bulkCreateKeepCountry) options.push(`Keep country (${bulkCreateCountrySeparator})`);
-                      if (bulkCreateAddNumber) options.push(`Add numbers (${bulkCreateSeparator})`);
-                      const hasDefaults = channelDefaults && (
-                        channelDefaults.removeCountryPrefix ||
-                        channelDefaults.includeChannelNumberInName
-                      );
-                      if (options.length > 0) {
-                        return hasDefaults ? `${options.join(', ')} (from settings)` : options.join(', ');
-                      }
-                      return 'Default';
-                    })()}
-                  </span>
-                </div>
-
-                {namingOptionsExpanded && (
-                  <div className="naming-options-content">
-                    {/* Network prefix option - only show if network prefixes detected */}
-                    {hasNetworkPrefixes && (
-                      <div className="naming-option-group">
-                        <label className="checkbox-option">
-                          <input
-                            type="checkbox"
-                            checked={bulkCreateStripNetwork}
-                            onChange={(e) => setBulkCreateStripNetwork(e.target.checked)}
-                          />
-                          <span>Strip network prefixes</span>
-                        </label>
-                        <span className="option-hint">e.g., "CHAMP | Queens Park Rangers" → "Queens Park Rangers"</span>
-                      </div>
-                    )}
-
-                    {/* Network suffix option - only show if network suffixes detected */}
-                    {hasNetworkSuffixes && (
-                      <div className="naming-option-group">
-                        <label className="checkbox-option">
-                          <input
-                            type="checkbox"
-                            checked={bulkCreateStripSuffix}
-                            onChange={(e) => setBulkCreateStripSuffix(e.target.checked)}
-                          />
-                          <span>Strip network suffixes</span>
-                        </label>
-                        <span className="option-hint">e.g., "ESPN (ENGLISH)" → "ESPN"</span>
-                      </div>
-                    )}
-
-                    {/* Country prefix option - only show if country prefixes detected */}
-                    {hasCountryPrefixes && (
-                      <div className="naming-option-group">
-                        <div className="country-prefix-info">
-                          <span className="material-icons">public</span>
-                          <span>Country prefixes detected: {uniqueCountryPrefixes.slice(0, 5).join(', ')}{uniqueCountryPrefixes.length > 5 ? ', ...' : ''}</span>
-                        </div>
-                        <div className="radio-group country-prefix-options">
-                          <label className="radio-option">
-                            <input
-                              type="radio"
-                              name="countryPrefixOption"
-                              checked={!bulkCreateStripCountry && !bulkCreateKeepCountry}
-                              onChange={() => {
-                                setBulkCreateStripCountry(false);
-                                setBulkCreateKeepCountry(false);
-                              }}
-                            />
-                            <span>Keep as-is</span>
-                          </label>
-                          <span className="option-hint radio-hint">e.g., "US: Sports Channel" stays "US: Sports Channel"</span>
-
-                          <label className="radio-option">
-                            <input
-                              type="radio"
-                              name="countryPrefixOption"
-                              checked={bulkCreateStripCountry && !bulkCreateKeepCountry}
-                              onChange={() => {
-                                setBulkCreateStripCountry(true);
-                                setBulkCreateKeepCountry(false);
-                              }}
-                            />
-                            <span>Remove country prefix</span>
-                          </label>
-                          <span className="option-hint radio-hint">e.g., "US: Sports Channel" → "Sports Channel"</span>
-
-                          <label className="radio-option">
-                            <input
-                              type="radio"
-                              name="countryPrefixOption"
-                              checked={bulkCreateKeepCountry}
-                              onChange={() => {
-                                setBulkCreateStripCountry(false);
-                                setBulkCreateKeepCountry(true);
-                              }}
-                            />
-                            <span>Keep country prefix (normalized)</span>
-                          </label>
-                          {bulkCreateKeepCountry && (
-                            <>
-                              <div className="separator-options country-separator">
-                                <span className="separator-label">Separator:</span>
-                                <button
-                                  type="button"
-                                  className={`separator-btn ${bulkCreateCountrySeparator === '-' ? 'active' : ''}`}
-                                  onClick={() => setBulkCreateCountrySeparator('-')}
-                                >
-                                  -
-                                </button>
-                                <button
-                                  type="button"
-                                  className={`separator-btn ${bulkCreateCountrySeparator === ':' ? 'active' : ''}`}
-                                  onClick={() => setBulkCreateCountrySeparator(':')}
-                                >
-                                  :
-                                </button>
-                                <button
-                                  type="button"
-                                  className={`separator-btn ${bulkCreateCountrySeparator === '|' ? 'active' : ''}`}
-                                  onClick={() => setBulkCreateCountrySeparator('|')}
-                                >
-                                  |
-                                </button>
-                              </div>
-                              <span className="option-hint radio-hint">e.g., "US: Sports Channel" → "US {bulkCreateCountrySeparator} Sports Channel"</span>
-                            </>
-                          )}
-                        </div>
-                      </div>
-                    )}
-
-                    {/* Channel number prefix option */}
-                    <div className="naming-option-group">
-                      <label className="checkbox-option">
-                        <input
-                          type="checkbox"
-                          checked={bulkCreateAddNumber}
-                          onChange={(e) => setBulkCreateAddNumber(e.target.checked)}
-                        />
-                        <span>Add channel number to name</span>
-                      </label>
-                      {bulkCreateAddNumber && (
-                        <>
-                          <div className="separator-options">
-                            <span className="separator-label">Separator:</span>
-                            <button
-                              type="button"
-                              className={`separator-btn ${bulkCreateSeparator === '-' ? 'active' : ''}`}
-                              onClick={() => setBulkCreateSeparator('-')}
-                            >
-                              -
-                            </button>
-                            <button
-                              type="button"
-                              className={`separator-btn ${bulkCreateSeparator === ':' ? 'active' : ''}`}
-                              onClick={() => setBulkCreateSeparator(':')}
-                            >
-                              :
-                            </button>
-                            <button
-                              type="button"
-                              className={`separator-btn ${bulkCreateSeparator === '|' ? 'active' : ''}`}
-                              onClick={() => setBulkCreateSeparator('|')}
-                            >
-                              |
-                            </button>
-                          </div>
-                          <span className="option-hint">e.g., "100 {bulkCreateSeparator} Sports Channel"</span>
-                        </>
-                      )}
-                    </div>
-
-                    {/* Prefix order option - only show when both country and number are enabled */}
-                    {bulkCreateKeepCountry && bulkCreateAddNumber && (
-                      <div className="naming-option-group prefix-order-group">
-                        <div className="prefix-order-label">Prefix Order:</div>
-                        <div className="prefix-order-options">
-                          <label className="radio-option">
-                            <input
-                              type="radio"
-                              name="prefixOrder"
-                              checked={bulkCreatePrefixOrder === 'number-first'}
-                              onChange={() => setBulkCreatePrefixOrder('number-first')}
-                            />
-                            <span>Number first</span>
-                          </label>
-                          <span className="option-hint radio-hint">e.g., "100 {bulkCreateSeparator} US {bulkCreateCountrySeparator} Sports Channel"</span>
-                          <label className="radio-option">
-                            <input
-                              type="radio"
-                              name="prefixOrder"
-                              checked={bulkCreatePrefixOrder === 'country-first'}
-                              onChange={() => setBulkCreatePrefixOrder('country-first')}
-                            />
-                            <span>Country first</span>
-                          </label>
-                          <span className="option-hint radio-hint">e.g., "US {bulkCreateCountrySeparator} 100 {bulkCreateSeparator} Sports Channel"</span>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
-
               {/* Channel Profiles - Collapsible Section */}
               {channelProfiles.length > 0 && (
                 <div className="form-group collapsible-section">
@@ -2423,6 +2264,122 @@ export function StreamsPane({
                   )}
                 </div>
               )}
+
+              {/* Channel Number in Name Option */}
+              <div className="form-group">
+                <label className="checkbox-option">
+                  <input
+                    type="checkbox"
+                    checked={bulkCreateAddNumber}
+                    onChange={(e) => setBulkCreateAddNumber(e.target.checked)}
+                  />
+                  <span>Add channel number to name</span>
+                </label>
+                {bulkCreateAddNumber && (
+                  <div className="separator-options" style={{ marginTop: '0.5rem', marginLeft: '1.5rem' }}>
+                    <span className="separator-label">Separator:</span>
+                    <button
+                      type="button"
+                      className={`separator-btn ${bulkCreateSeparator === '-' ? 'active' : ''}`}
+                      onClick={() => setBulkCreateSeparator('-')}
+                    >
+                      -
+                    </button>
+                    <button
+                      type="button"
+                      className={`separator-btn ${bulkCreateSeparator === ':' ? 'active' : ''}`}
+                      onClick={() => setBulkCreateSeparator(':')}
+                    >
+                      :
+                    </button>
+                    <button
+                      type="button"
+                      className={`separator-btn ${bulkCreateSeparator === '|' ? 'active' : ''}`}
+                      onClick={() => setBulkCreateSeparator('|')}
+                    >
+                      |
+                    </button>
+                    <span className="option-hint" style={{ marginLeft: '0.5rem' }}>e.g., "100 {bulkCreateSeparator} ESPN"</span>
+                  </div>
+                )}
+              </div>
+
+              {/* Normalization Rules - Collapsible Section */}
+              <div className="form-group collapsible-section">
+                <div
+                  className="collapsible-header"
+                  onClick={() => setNormalizationExpanded(!normalizationExpanded)}
+                >
+                  <span className="expand-icon">{normalizationExpanded ? '▼︎' : '▶︎'}</span>
+                  <span className="collapsible-title">Normalization Rules</span>
+                  <span className="collapsible-summary">
+                    {bulkCreateNormalize
+                      ? normalizationPreviewLoading
+                        ? 'Loading...'
+                        : normalizationChangeCount > 0
+                          ? `${normalizationChangeCount} name${normalizationChangeCount !== 1 ? 's' : ''} will change`
+                          : 'Enabled (no changes)'
+                      : 'Disabled'}
+                  </span>
+                </div>
+
+                {normalizationExpanded && (
+                  <div className="collapsible-content">
+                    <div className="normalization-info">
+                      <span className="material-icons">auto_fix_high</span>
+                      <span>Apply normalization rules to clean up channel names (strips quality suffixes, formats consistently)</span>
+                    </div>
+                    <label className="checkbox-option normalization-toggle">
+                      <input
+                        type="checkbox"
+                        checked={bulkCreateNormalize}
+                        onChange={(e) => setBulkCreateNormalize(e.target.checked)}
+                      />
+                      <span>Apply normalization rules</span>
+                    </label>
+
+                    {/* Preview of normalized names */}
+                    {bulkCreateNormalize && (
+                      <div className="normalization-preview">
+                        {normalizationPreviewLoading ? (
+                          <div className="normalization-loading">
+                            <span className="material-icons spinning">sync</span>
+                            <span>Loading preview...</span>
+                          </div>
+                        ) : normalizationChangeCount > 0 ? (
+                          <>
+                            <div className="normalization-summary">
+                              {normalizationChangeCount} of {bulkCreateStats.streamCount} names will be normalized
+                            </div>
+                            <div className="normalization-changes">
+                              {Array.from(normalizedNamesPreview.entries())
+                                .filter(([original, normalized]) => original !== normalized)
+                                .slice(0, 5)
+                                .map(([original, normalized]) => (
+                                  <div key={original} className="normalization-change-item">
+                                    <span className="original-name">{original}</span>
+                                    <span className="material-icons arrow-icon">arrow_forward</span>
+                                    <span className="normalized-name">{normalized}</span>
+                                  </div>
+                                ))}
+                              {normalizationChangeCount > 5 && (
+                                <div className="normalization-more">
+                                  ... and {normalizationChangeCount - 5} more
+                                </div>
+                              )}
+                            </div>
+                          </>
+                        ) : (
+                          <div className="normalization-no-changes">
+                            <span className="material-icons">check_circle</span>
+                            <span>No names will change (already normalized or no matching rules)</span>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
 
               {/* Preview - show per-group preview in separate mode, otherwise show combined preview */}
               {isFromMultipleGroups && bulkCreateMultiGroupOption === 'separate' ? (

@@ -205,6 +205,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   const [newPrefixInput, setNewPrefixInput] = useState('');
   const [customNetworkSuffixes, setCustomNetworkSuffixes] = useState<string[]>([]);
   const [newSuffixInput, setNewSuffixInput] = useState('');
+  const [normalizeOnChannelCreate, setNormalizeOnChannelCreate] = useState(false);
 
   const [streamSortPriority, setStreamSortPriority] = useState<SortCriterion[]>(['resolution', 'bitrate', 'framerate', 'm3u_priority', 'audio_channels']);
   const [streamSortEnabled, setStreamSortEnabled] = useState<SortEnabledMap>({ resolution: true, bitrate: true, framerate: true, m3u_priority: false, audio_channels: false });
@@ -493,6 +494,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       setEpgAutoMatchThreshold(settings.epg_auto_match_threshold ?? 80);
       setCustomNetworkPrefixes(settings.custom_network_prefixes ?? []);
       setCustomNetworkSuffixes(settings.custom_network_suffixes ?? []);
+      setNormalizeOnChannelCreate(settings.normalize_on_channel_create ?? false);
       setStatsPollInterval(settings.stats_poll_interval ?? 10);
       setOriginalPollInterval(settings.stats_poll_interval ?? 10);
       setUserTimezone(settings.user_timezone ?? '');
@@ -606,6 +608,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         epg_auto_match_threshold: epgAutoMatchThreshold,
         custom_network_prefixes: customNetworkPrefixes,
         custom_network_suffixes: customNetworkSuffixes,
+        normalize_on_channel_create: normalizeOnChannelCreate,
         stats_poll_interval: statsPollInterval,
         user_timezone: userTimezone,
         backend_log_level: backendLogLevel,
@@ -1682,6 +1685,28 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       <div className="settings-page-header">
         <h2>Channel Normalization</h2>
         <p>Configure tag-based patterns for cleaning up channel names during bulk channel creation.</p>
+      </div>
+
+      <div className="settings-section">
+        <div className="settings-section-header">
+          <span className="material-icons">auto_fix_high</span>
+          <h3>Default Behavior</h3>
+        </div>
+        <p className="form-hint" style={{ marginBottom: '1rem' }}>
+          When this is enabled, the "Apply normalization rules" checkbox will be checked by default
+          when creating channels from streams. You can still toggle it per-operation.
+        </p>
+
+        <div className="form-group">
+          <label className="checkbox-label">
+            <input
+              type="checkbox"
+              checked={normalizeOnChannelCreate}
+              onChange={(e) => setNormalizeOnChannelCreate(e.target.checked)}
+            />
+            <span>Apply normalization by default when creating channels</span>
+          </label>
+        </div>
       </div>
 
       <div className="settings-section">

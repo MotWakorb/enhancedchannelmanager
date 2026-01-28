@@ -221,6 +221,7 @@ export async function createChannel(data: {
   channel_group_id?: number;
   logo_id?: number;
   tvg_id?: string;
+  normalize?: boolean;  // Apply normalization rules to channel name
 }): Promise<Channel> {
   return fetchJson(`${API_BASE}/channels`, {
     method: 'POST',
@@ -772,6 +773,7 @@ export interface SettingsResponse {
   stream_sort_enabled: SortEnabledMap;  // Which sort criteria are enabled (e.g., { resolution: true, bitrate: true, framerate: false })
   m3u_account_priorities: M3UAccountPriorities;  // M3U account priorities for sorting (account_id -> priority)
   deprioritize_failed_streams: boolean;  // When enabled, failed/timeout/pending streams sort to bottom
+  normalize_on_channel_create: boolean;  // Default state for normalization toggle when creating channels
 }
 
 export interface TestConnectionResult {
@@ -825,6 +827,7 @@ export async function saveSettings(settings: {
   stream_sort_enabled?: SortEnabledMap;  // Optional - which sort criteria are enabled, defaults to all true
   m3u_account_priorities?: M3UAccountPriorities;  // Optional - M3U account priorities for sorting
   deprioritize_failed_streams?: boolean;  // Optional - deprioritize failed/timeout/pending streams in sort, defaults to true
+  normalize_on_channel_create?: boolean;  // Optional - default state for normalization toggle, defaults to false
 }): Promise<{ status: string; configured: boolean }> {
   return fetchJson(`${API_BASE}/settings`, {
     method: 'POST',
