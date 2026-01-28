@@ -416,7 +416,7 @@
 }
 
 .norm-engine-toggle input:checked + .norm-engine-toggle-slider {
-  background-color: var(--button-primary-bg);
+  background-color: var(--success, #22c55e);
 }
 
 .norm-engine-toggle input:checked + .norm-engine-toggle-slider:before {
