@@ -549,104 +549,94 @@ function generatePrintHtml(
         return;
       }
 
+      // Calculate the maximum allowed right edge for 5 columns
+      const contentRect = content.getBoundingClientRect();
+      const maxRightEdge = contentRect.left + contentRect.width;
+
+      // Paginate the content ensuring no more than 5 columns per page
+      paginateContent(container, firstPage, groups, maxRightEdge);
+    }
+
+    function paginateContent(container, page, groups, maxRightEdge) {
+      const content = page.querySelector('.content');
+
       // Temporarily allow overflow to measure true content extent
       content.style.overflow = 'visible';
 
-      // Get the content area width (what 5 columns should fit in)
-      const contentWidth = content.clientWidth;
+      // Categorize groups:
+      // 1. Groups that fit entirely within columns 1-5 (right <= maxRightEdge)
+      // 2. Groups that SPAN the boundary (left < maxRightEdge, right > maxRightEdge)
+      // 3. Groups that START past the boundary (left >= maxRightEdge)
 
-      // Find which groups overflow past the content boundary
+      let spanningGroup = null;
+      let spanningGroupIdx = -1;
       let overflowStartIdx = -1;
+
       for (let i = 0; i < groups.length; i++) {
         const rect = groups[i].getBoundingClientRect();
-        const contentRect = content.getBoundingClientRect();
-        // Check if group starts beyond the right edge of where content should end
-        if (rect.left > contentRect.left + contentWidth - 5) {
+
+        if (rect.left >= maxRightEdge) {
+          // Group starts past boundary - this and all following go to next page
           overflowStartIdx = i;
           break;
+        } else if (rect.right > maxRightEdge + 2) {
+          // Group spans the boundary - needs to be split/continued
+          spanningGroup = groups[i];
+          spanningGroupIdx = i;
+          // Continue to find where pure overflow starts
         }
       }
 
       // Restore overflow hidden
       content.style.overflow = 'hidden';
 
-      // No overflow - single page
-      if (overflowStartIdx === -1) {
-        addPageNumber(firstPage, 1);
-        return;
-      }
-
-      // Move overflow groups to new page(s)
-      const overflowGroups = groups.slice(overflowStartIdx);
-
-      const newPage = document.createElement('div');
-      newPage.className = 'page';
-      newPage.id = 'page-2';
-      newPage.innerHTML = '<div class="header" style="border-bottom: 1px solid #999;"><h1 style="font-size: 10pt;">${escapeHtml(title)} (continued)</h1></div><div class="content"></div>';
-      container.appendChild(newPage);
-
-      const newContent = newPage.querySelector('.content');
-      overflowGroups.forEach(function(g) {
-        newContent.appendChild(g);
-      });
-
-      addPageNumber(firstPage, 1);
-      addPageNumber(newPage, 2);
-
-      // Recursively handle overflow on new page
-      setTimeout(function() {
-        handlePageOverflow(newPage, container, 2);
-      }, 100);
-    }
-
-    function handlePageOverflow(page, container, currentTotal) {
-      const content = page.querySelector('.content');
-      const groups = Array.from(content.querySelectorAll('.channel-group'));
-
-      if (groups.length === 0) {
+      // If no overflow at all, we're done
+      if (overflowStartIdx === -1 && !spanningGroup) {
+        addPageNumber(page, getPageNumber(page));
         updatePageNumbers(container);
         return;
       }
 
-      content.style.overflow = 'visible';
-      const contentWidth = content.clientWidth;
-
-      let overflowStartIdx = -1;
-      for (let i = 0; i < groups.length; i++) {
-        const rect = groups[i].getBoundingClientRect();
-        const contentRect = content.getBoundingClientRect();
-        if (rect.left > contentRect.left + contentWidth - 5) {
-          overflowStartIdx = i;
-          break;
-        }
-      }
-
-      content.style.overflow = 'hidden';
-
-      if (overflowStartIdx === -1) {
-        updatePageNumbers(container);
-        return;
-      }
-
-      const overflowGroups = groups.slice(overflowStartIdx);
-      const newPageNum = currentTotal + 1;
-
+      // Create the next page
+      const newPageNum = container.querySelectorAll('.page').length + 1;
       const newPage = document.createElement('div');
       newPage.className = 'page';
       newPage.id = 'page-' + newPageNum;
       newPage.innerHTML = '<div class="header" style="border-bottom: 1px solid #999;"><h1 style="font-size: 10pt;">${escapeHtml(title)} (continued)</h1></div><div class="content"></div>';
       container.appendChild(newPage);
-
       const newContent = newPage.querySelector('.content');
-      overflowGroups.forEach(function(g) {
-        newContent.appendChild(g);
-      });
 
-      addPageNumber(newPage, newPageNum);
+      // Handle spanning group - clone it to continue on next page
+      if (spanningGroup) {
+        const clone = spanningGroup.cloneNode(true);
+        // Add "(continued)" to the group title
+        const titleEl = clone.querySelector('.group-title');
+        if (titleEl) {
+          titleEl.textContent = titleEl.textContent + ' (continued)';
+        }
+        newContent.appendChild(clone);
+      }
 
+      // Move groups that start past the boundary to the new page
+      if (overflowStartIdx !== -1) {
+        const overflowGroups = groups.slice(overflowStartIdx);
+        overflowGroups.forEach(function(g) {
+          newContent.appendChild(g);
+        });
+      }
+
+      addPageNumber(page, getPageNumber(page));
+
+      // Recursively handle the new page
       setTimeout(function() {
-        handlePageOverflow(newPage, container, newPageNum);
-      }, 100);
+        const newGroups = Array.from(newContent.querySelectorAll('.channel-group'));
+        paginateContent(container, newPage, newGroups, maxRightEdge);
+      }, 50);
+    }
+
+    function getPageNumber(page) {
+      const match = page.id.match(/page-(\\d+)/);
+      return match ? parseInt(match[1], 10) : 1;
     }
 
     function updatePageNumbers(container) {
@@ -661,6 +651,7 @@ function generatePrintHtml(
     }
 
     function addPageNumber(page, num) {
+      if (page.querySelector('.page-footer')) return; // Already has footer
       const pageFooter = document.createElement('div');
       pageFooter.className = 'page-footer';
       pageFooter.textContent = 'Page ' + num;
