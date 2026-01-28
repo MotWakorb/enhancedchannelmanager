@@ -1473,17 +1473,12 @@ async def bulk_commit_operations(request: BulkCommitRequest):
 
         if referenced_stream_ids:
             try:
-                logger.debug(f"[BULK-VALIDATE] Fetching existing streams for validation...")
-                # Fetch all pages of streams to build lookup
-                page = 1
-                while True:
-                    response = await client.get_streams(page=page, page_size=500)
-                    for s in response.get("results", []):
-                        existing_streams[s["id"]] = s
-                    if not response.get("next"):
-                        break
-                    page += 1
-                logger.debug(f"[BULK-VALIDATE] Loaded {len(existing_streams)} existing streams")
+                logger.debug(f"[BULK-VALIDATE] Fetching {len(referenced_stream_ids)} referenced streams for validation...")
+                # Fetch only the specific streams that are referenced (not all streams)
+                streams = await client.get_streams_by_ids(list(referenced_stream_ids))
+                for s in streams:
+                    existing_streams[s["id"]] = s
+                logger.debug(f"[BULK-VALIDATE] Loaded {len(existing_streams)} of {len(referenced_stream_ids)} referenced streams")
             except Exception as e:
                 logger.warning(f"[BULK-VALIDATE] Failed to fetch streams for validation: {e}")
 
