@@ -1514,7 +1514,7 @@
 }
 
 .modal-toggle input:checked + .modal-toggle-slider {
-  background-color: var(--accent-primary, #6366f1);
+  background-color: var(--success, #22c55e);
 }
 
 .modal-toggle input:checked + .modal-toggle-slider:before {

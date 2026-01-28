@@ -198,7 +198,7 @@ function M3UAccountRow({
 
       <div className="account-actions">
         <button
-          className="action-btn"
+          className={`action-btn toggle ${account.is_active ? 'active' : ''}`}
           onClick={() => onToggleActive(account)}
           title={account.is_active ? 'Disable' : 'Enable'}
         >

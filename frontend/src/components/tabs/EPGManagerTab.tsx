@@ -173,7 +173,7 @@ function SortableEPGSourceRow({ source, onEdit, onDelete, onRefresh, onToggleAct
           </button>
         )}
         <button
-          className="action-btn"
+          className={`action-btn toggle ${source.is_active ? 'active' : ''}`}
           onClick={() => onToggleActive(source)}
           title={source.is_active ? 'Disable' : 'Enable'}
         >
@@ -763,7 +763,7 @@ export function EPGManagerTab({ onSourcesChange, hideEpgUrls = false }: EPGManag
                 </div>
                 <div className="dummy-actions">
                   <button
-                    className="action-btn"
+                    className={`action-btn toggle ${source.is_active ? 'active' : ''}`}
                     onClick={() => handleToggleDummyActive(source)}
                     title={source.is_active ? 'Disable' : 'Enable'}
                   >
