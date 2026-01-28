@@ -1510,3 +1510,118 @@ button.group-selection-checkbox {
   z-index: 1;
   display: block;
 }
+
+/* Normalization Rules Section */
+.normalization-info {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem;
+  margin-bottom: 0.75rem;
+  background-color: var(--bg-tertiary);
+  border-radius: 4px;
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+}
+
+.normalization-info .material-icons {
+  font-size: 1rem;
+  color: var(--text-muted);
+}
+
+.normalization-toggle {
+  margin-bottom: 0.75rem;
+}
+
+.normalization-preview {
+  margin-top: 0.75rem;
+  padding: 0.75rem;
+  background-color: var(--bg-tertiary);
+  border-radius: 4px;
+  border: 1px solid var(--border-primary);
+}
+
+.normalization-loading {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+}
+
+.normalization-loading .material-icons.spinning {
+  font-size: 1rem;
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.normalization-summary {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  margin-bottom: 0.5rem;
+}
+
+.normalization-changes {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.normalization-change-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.85rem;
+  padding: 0.375rem 0.5rem;
+  background-color: var(--bg-secondary);
+  border-radius: 4px;
+}
+
+.normalization-change-item .original-name {
+  color: var(--text-muted);
+  text-decoration: line-through;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.normalization-change-item .arrow-icon {
+  font-size: 1rem;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.normalization-change-item .normalized-name {
+  color: var(--text-primary);
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.normalization-more {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  font-style: italic;
+  padding-left: 0.5rem;
+}
+
+.normalization-no-changes {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+}
+
+.normalization-no-changes .material-icons {
+  font-size: 1rem;
+  color: var(--success);
+}

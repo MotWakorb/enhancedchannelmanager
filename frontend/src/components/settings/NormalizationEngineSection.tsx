@@ -204,6 +204,46 @@ function SortableRuleItem({
   );
 }
 
+// Sortable group item for drag-and-drop reordering of groups
+function SortableGroupItem({
+  group,
+  children,
+}: {
+  group: NormalizationRuleGroup;
+  children: React.ReactNode;
+}) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: group.id });
+
+  const style: React.CSSProperties = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.5 : 1,
+    zIndex: isDragging ? 1000 : undefined,
+  };
+
+  return (
+    <div
+      ref={setNodeRef}
+      style={style}
+      className={`norm-engine-group ${!group.enabled ? 'disabled' : ''} ${isDragging ? 'dragging' : ''}`}
+    >
+      <div className="norm-engine-group-drag-handle" {...attributes} {...listeners}>
+        <span className="material-icons">drag_indicator</span>
+      </div>
+      <div className="norm-engine-group-content">
+        {children}
+      </div>
+    </div>
+  );
+}
+
 export function NormalizationEngineSection() {
   // Data state
   const [groups, setGroups] = useState<NormalizationRuleGroup[]>([]);
@@ -219,6 +259,7 @@ export function NormalizationEngineSection() {
   const [testInput, setTestInput] = useState('');
   const [testResults, setTestResults] = useState<NormalizationResult[]>([]);
   const [testing, setTesting] = useState(false);
+  const [testPanelExpanded, setTestPanelExpanded] = useState(false);
 
   // Rule editor state
   const [ruleEditor, setRuleEditor] = useState<RuleEditorState>({
@@ -335,25 +376,81 @@ export function NormalizationEngineSection() {
     }
   }, [loadData]);
 
+  // Handle group drag end for reordering
+  const handleGroupDragEnd = useCallback(async (event: DragEndEvent) => {
+    const { active, over } = event;
+
+    if (!over || active.id === over.id) {
+      return;
+    }
+
+    const oldIndex = groups.findIndex((g) => g.id === active.id);
+    const newIndex = groups.findIndex((g) => g.id === over.id);
+
+    if (oldIndex === -1 || newIndex === -1) {
+      return;
+    }
+
+    // Optimistically update local state
+    const newGroups = arrayMove(groups, oldIndex, newIndex);
+    setGroups(newGroups);
+
+    // Persist to backend
+    try {
+      const groupIds = newGroups.map((g) => g.id);
+      await api.reorderNormalizationGroups(groupIds);
+    } catch (err) {
+      // Revert on error
+      setError(err instanceof Error ? err.message : 'Failed to reorder groups');
+      await loadData();
+    }
+  }, [groups, loadData]);
+
   // Toggle group enabled state
   const toggleGroupEnabled = useCallback(async (group: NormalizationRuleGroup) => {
+    const newEnabled = !group.enabled;
+    // Optimistic update
+    setGroups((prev) =>
+      prev.map((g) => (g.id === group.id ? { ...g, enabled: newEnabled } : g))
+    );
     try {
-      await api.updateNormalizationGroup(group.id, { enabled: !group.enabled });
-      await loadData();
+      await api.updateNormalizationGroup(group.id, { enabled: newEnabled });
     } catch (err) {
+      // Revert on error
+      setGroups((prev) =>
+        prev.map((g) => (g.id === group.id ? { ...g, enabled: !newEnabled } : g))
+      );
       setError(err instanceof Error ? err.message : 'Failed to update group');
     }
-  }, [loadData]);
+  }, []);
 
   // Toggle rule enabled state
   const toggleRuleEnabled = useCallback(async (rule: NormalizationRule) => {
+    const newEnabled = !rule.enabled;
+    // Optimistic update
+    setGroups((prev) =>
+      prev.map((g) => ({
+        ...g,
+        rules: g.rules?.map((r) =>
+          r.id === rule.id ? { ...r, enabled: newEnabled } : r
+        ),
+      }))
+    );
     try {
-      await api.updateNormalizationRule(rule.id, { enabled: !rule.enabled });
-      await loadData();
+      await api.updateNormalizationRule(rule.id, { enabled: newEnabled });
     } catch (err) {
+      // Revert on error
+      setGroups((prev) =>
+        prev.map((g) => ({
+          ...g,
+          rules: g.rules?.map((r) =>
+            r.id === rule.id ? { ...r, enabled: !newEnabled } : r
+          ),
+        }))
+      );
       setError(err instanceof Error ? err.message : 'Failed to update rule');
     }
-  }, [loadData]);
+  }, []);
 
   // Delete rule
   const deleteRule = useCallback(async (rule: NormalizationRule) => {
@@ -710,16 +807,96 @@ export function NormalizationEngineSection() {
         </div>
       </div>
 
-      {/* Two-column layout: Groups/Rules + Test Panel */}
-      <div className="norm-engine-content">
-        {/* Left: Groups and Rules */}
-        <div className="norm-engine-groups">
-          {groups.map((group) => (
-            <div
-              key={group.id}
-              className={`norm-engine-group ${!group.enabled ? 'disabled' : ''}`}
+      {/* Collapsible Test Panel */}
+      <div className={`norm-engine-test-panel collapsible ${testPanelExpanded ? 'expanded' : ''}`}>
+        <div
+          className="norm-engine-test-header clickable"
+          onClick={() => setTestPanelExpanded(!testPanelExpanded)}
+        >
+          <span className={`material-icons norm-engine-expand ${testPanelExpanded ? 'expanded' : ''}`}>
+            chevron_right
+          </span>
+          <span className="material-icons">science</span>
+          <h4>Test Rules</h4>
+        </div>
+
+        {testPanelExpanded && (
+          <div className="norm-engine-test-body">
+            <div className="norm-engine-test-input">
+              <textarea
+                placeholder="Enter stream names to test (one per line)&#10;or leave empty to use samples..."
+                value={testInput}
+                onChange={(e) => setTestInput(e.target.value)}
+                rows={4}
+              />
+              <button
+                className="norm-engine-btn norm-engine-btn-primary"
+                onClick={runTest}
+                disabled={testing}
+                type="button"
+              >
+                {testing ? (
+                  <>
+                    <span className="material-icons spin">sync</span>
+                    Testing...
+                  </>
+                ) : (
+                  <>
+                    <span className="material-icons">play_arrow</span>
+                    Run Test
+                  </>
+                )}
+              </button>
+            </div>
+
+            {testResults.length > 0 && (
+              <div className="norm-engine-test-results">
+                <h5>Results</h5>
+                {testResults.map((result, index) => (
+                  <div key={index} className="norm-engine-test-result">
+                    <div className="norm-engine-test-original">
+                      <span className="label">Original:</span>
+                      <span className="value">{result.original}</span>
+                    </div>
+                    <div className="norm-engine-test-arrow">
+                      <span className="material-icons">arrow_downward</span>
+                    </div>
+                    <div className="norm-engine-test-normalized">
+                      <span className="label">Normalized:</span>
+                      <span className="value">{result.normalized}</span>
+                    </div>
+                    {result.transformations && result.transformations.length > 0 && (
+                      <div className="norm-engine-test-transforms">
+                        {result.transformations.map((t, i) => (
+                          <div key={i} className="norm-engine-test-transform">
+                            <span className="material-icons">chevron_right</span>
+                            Rule {t.rule_id}: "{t.before}" → "{t.after}"
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* Groups and Rules */}
+      <div className="norm-engine-groups">
+          <DndContext
+            sensors={sensors}
+            collisionDetection={closestCenter}
+            onDragEnd={handleGroupDragEnd}
+          >
+            <SortableContext
+              items={groups.map((g) => g.id)}
+              strategy={verticalListSortingStrategy}
             >
-              <div className="norm-engine-group-header" onClick={() => toggleGroup(group.id)}>
+              {groups.map((group) => (
+                <SortableGroupItem key={group.id} group={group}>
+                  <div className="norm-engine-group-header" onClick={() => toggleGroup(group.id)}>
                 <span className={`material-icons norm-engine-expand ${expandedGroups.has(group.id) ? 'expanded' : ''}`}>
                   chevron_right
                 </span>
@@ -804,8 +981,10 @@ export function NormalizationEngineSection() {
                   </button>
                 </div>
               )}
-            </div>
-          ))}
+                </SortableGroupItem>
+              ))}
+            </SortableContext>
+          </DndContext>
 
           {groups.length === 0 && (
             <div className="norm-engine-empty">
@@ -821,73 +1000,6 @@ export function NormalizationEngineSection() {
             </div>
           )}
         </div>
-
-        {/* Right: Test Panel */}
-        <div className="norm-engine-test-panel">
-          <div className="norm-engine-test-header">
-            <span className="material-icons">science</span>
-            <h4>Test Rules</h4>
-          </div>
-
-          <div className="norm-engine-test-input">
-            <textarea
-              placeholder="Enter stream names to test (one per line)&#10;or leave empty to use samples..."
-              value={testInput}
-              onChange={(e) => setTestInput(e.target.value)}
-              rows={4}
-            />
-            <button
-              className="norm-engine-btn norm-engine-btn-primary"
-              onClick={runTest}
-              disabled={testing}
-              type="button"
-            >
-              {testing ? (
-                <>
-                  <span className="material-icons spin">sync</span>
-                  Testing...
-                </>
-              ) : (
-                <>
-                  <span className="material-icons">play_arrow</span>
-                  Run Test
-                </>
-              )}
-            </button>
-          </div>
-
-          {testResults.length > 0 && (
-            <div className="norm-engine-test-results">
-              <h5>Results</h5>
-              {testResults.map((result, index) => (
-                <div key={index} className="norm-engine-test-result">
-                  <div className="norm-engine-test-original">
-                    <span className="label">Original:</span>
-                    <span className="value">{result.original}</span>
-                  </div>
-                  <div className="norm-engine-test-arrow">
-                    <span className="material-icons">arrow_downward</span>
-                  </div>
-                  <div className="norm-engine-test-normalized">
-                    <span className="label">Normalized:</span>
-                    <span className="value">{result.normalized}</span>
-                  </div>
-                  {result.transformations && result.transformations.length > 0 && (
-                    <div className="norm-engine-test-transforms">
-                      {result.transformations.map((t, i) => (
-                        <div key={i} className="norm-engine-test-transform">
-                          <span className="material-icons">chevron_right</span>
-                          Rule {t.rule_id}: "{t.before}" → "{t.after}"
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      </div>
 
       {/* Rule Editor Modal */}
       {ruleEditor.isOpen && (
