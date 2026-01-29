@@ -11,7 +11,7 @@ from datetime import datetime
 from typing import Optional, Type
 
 from database import get_session
-from models import ScheduledTask
+from models import ScheduledTask, TaskSchedule
 from task_scheduler import TaskScheduler, ScheduleConfig, ScheduleType
 
 logger = logging.getLogger(__name__)
@@ -132,6 +132,10 @@ class TaskRegistry:
 
                         self._instances[db_task.task_id] = instance
                         logger.debug(f"Loaded task config from DB: {db_task.task_id}")
+
+                        # Ensure non-manual tasks have a TaskSchedule entry
+                        if instance.schedule_config.schedule_type != ScheduleType.MANUAL:
+                            self._create_default_task_schedule(session, instance)
                     else:
                         logger.warning(f"Task {db_task.task_id} in DB but not registered")
 
@@ -217,6 +221,54 @@ class TaskRegistry:
             )
             session.add(db_task)
 
+            # If the task has a non-manual default schedule, create a TaskSchedule entry
+            # so users can edit it through the UI
+            if instance.schedule_config.schedule_type != ScheduleType.MANUAL:
+                self._create_default_task_schedule(session, instance)
+
+    def _create_default_task_schedule(self, session, instance: TaskScheduler) -> None:
+        """Create a default TaskSchedule entry for a task with a non-manual schedule."""
+        from schedule_calculator import calculate_next_run
+
+        # Check if a TaskSchedule already exists for this task
+        existing = session.query(TaskSchedule).filter(
+            TaskSchedule.task_id == instance.task_id
+        ).first()
+
+        if existing:
+            return  # Already has a schedule entry
+
+        schedule_config = instance.schedule_config
+        schedule_type = schedule_config.schedule_type.value
+
+        # Map internal schedule types to TaskSchedule types
+        if schedule_type == "interval":
+            task_schedule_type = "interval"
+        else:
+            # For other types, default to daily if there's a schedule_time
+            task_schedule_type = "daily" if schedule_config.schedule_time else "interval"
+
+        # Calculate next run time
+        next_run = calculate_next_run(
+            schedule_type=task_schedule_type,
+            interval_seconds=schedule_config.interval_seconds if task_schedule_type == "interval" else None,
+            schedule_time=schedule_config.schedule_time if task_schedule_type != "interval" else None,
+            timezone=schedule_config.timezone or "UTC",
+        )
+
+        task_schedule = TaskSchedule(
+            task_id=instance.task_id,
+            name="Default Schedule",
+            enabled=True,
+            schedule_type=task_schedule_type,
+            interval_seconds=schedule_config.interval_seconds if task_schedule_type == "interval" else None,
+            schedule_time=schedule_config.schedule_time if task_schedule_type != "interval" else None,
+            timezone=schedule_config.timezone or "UTC",
+            next_run_at=next_run,
+        )
+        session.add(task_schedule)
+        logger.info(f"Created default TaskSchedule for {instance.task_id}: {task_schedule_type}")
+
     # -------------------------------------------------------------------------
     # Task Configuration API
     # -------------------------------------------------------------------------
@@ -231,6 +283,10 @@ class TaskRegistry:
         schedule_time: Optional[str] = None,
         timezone: Optional[str] = None,
         task_config: Optional[dict] = None,
+        send_alerts: Optional[bool] = None,
+        alert_on_success: Optional[bool] = None,
+        alert_on_warning: Optional[bool] = None,
+        alert_on_error: Optional[bool] = None,
     ) -> Optional[dict]:
         """
         Update configuration for a task.
@@ -244,6 +300,10 @@ class TaskRegistry:
             schedule_time: HH:MM for daily scheduling
             timezone: IANA timezone name
             task_config: Task-specific configuration dict
+            send_alerts: Master toggle for alerts
+            alert_on_success: Alert when task succeeds
+            alert_on_warning: Alert on partial failures
+            alert_on_error: Alert on complete failures
 
         Returns:
             Updated task status dict, or None if task not found
@@ -279,7 +339,31 @@ class TaskRegistry:
         if instance._enabled and instance.schedule_config.schedule_type != ScheduleType.MANUAL:
             instance._calculate_next_run()
 
-        # Persist to database
+        # Update alert configuration in database (stored on ScheduledTask, not instance)
+        if any(x is not None for x in [send_alerts, alert_on_success, alert_on_warning, alert_on_error]):
+            try:
+                session = get_session()
+                try:
+                    db_task = session.query(ScheduledTask).filter(
+                        ScheduledTask.task_id == task_id
+                    ).first()
+                    if db_task:
+                        if send_alerts is not None:
+                            db_task.send_alerts = send_alerts
+                        if alert_on_success is not None:
+                            db_task.alert_on_success = alert_on_success
+                        if alert_on_warning is not None:
+                            db_task.alert_on_warning = alert_on_warning
+                        if alert_on_error is not None:
+                            db_task.alert_on_error = alert_on_error
+                        session.commit()
+                        logger.debug(f"Updated alert config for {task_id}")
+                finally:
+                    session.close()
+            except Exception as e:
+                logger.error(f"Failed to update alert config for {task_id}: {e}")
+
+        # Persist schedule config to database
         self.sync_to_database(task_id)
 
         return instance.get_status_dict()

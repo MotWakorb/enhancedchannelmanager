@@ -222,6 +222,11 @@ class ScheduledTask(Base):
     timezone = Column(String(50), nullable=True)  # IANA timezone name
     # Task-specific configuration (JSON)
     config = Column(Text, nullable=True)  # JSON with task-specific settings
+    # Alert configuration - control which alerts this task sends
+    send_alerts = Column(Boolean, default=True, nullable=False)  # Master toggle for alerts
+    alert_on_success = Column(Boolean, default=True, nullable=False)  # Alert when task succeeds
+    alert_on_warning = Column(Boolean, default=True, nullable=False)  # Alert on partial failures
+    alert_on_error = Column(Boolean, default=True, nullable=False)  # Alert on complete failures
     # Timestamps
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
@@ -249,6 +254,10 @@ class ScheduledTask(Base):
             "schedule_time": self.schedule_time,
             "timezone": self.timezone,
             "config": json.loads(self.config) if self.config else None,
+            "send_alerts": self.send_alerts,
+            "alert_on_success": self.alert_on_success,
+            "alert_on_warning": self.alert_on_warning,
+            "alert_on_error": self.alert_on_error,
             "created_at": self.created_at.isoformat() + "Z" if self.created_at else None,
             "updated_at": self.updated_at.isoformat() + "Z" if self.updated_at else None,
             "last_run_at": self.last_run_at.isoformat() + "Z" if self.last_run_at else None,
@@ -817,6 +826,8 @@ class M3USnapshot(Base):
     # JSON with group names and stream counts: {"groups": [{"name": "Sports", "stream_count": 50}, ...]}
     groups_data = Column(Text, nullable=True)
     total_streams = Column(Integer, default=0, nullable=False)
+    # Dispatcharr's updated_at timestamp when this snapshot was taken (for change monitoring)
+    dispatcharr_updated_at = Column(String(50), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
     __table_args__ = (
@@ -848,6 +859,7 @@ class M3USnapshot(Base):
             "snapshot_time": self.snapshot_time.isoformat() + "Z" if self.snapshot_time else None,
             "groups_data": self.get_groups_data(),
             "total_streams": self.total_streams,
+            "dispatcharr_updated_at": self.dispatcharr_updated_at,
             "created_at": self.created_at.isoformat() + "Z" if self.created_at else None,
         }
 
@@ -933,6 +945,8 @@ class M3UDigestSettings(Base):
     # Content filters
     include_group_changes = Column(Boolean, default=True, nullable=False)
     include_stream_changes = Column(Boolean, default=True, nullable=False)
+    # Show detailed list of streams/groups in digest (vs just summary counts)
+    show_detailed_list = Column(Boolean, default=True, nullable=False)
     # Only send digest if at least this many changes occurred
     min_changes_threshold = Column(Integer, default=1, nullable=False)
     # Tracking
@@ -965,6 +979,7 @@ class M3UDigestSettings(Base):
             "email_recipients": self.get_email_recipients(),
             "include_group_changes": self.include_group_changes,
             "include_stream_changes": self.include_stream_changes,
+            "show_detailed_list": self.show_detailed_list,
             "min_changes_threshold": self.min_changes_threshold,
             "last_digest_at": self.last_digest_at.isoformat() + "Z" if self.last_digest_at else None,
             "created_at": self.created_at.isoformat() + "Z" if self.created_at else None,

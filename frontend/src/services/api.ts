@@ -1779,6 +1779,11 @@ export interface TaskStatus {
   last_run: string | null;
   next_run: string | null;
   config: Record<string, unknown>;  // Task-specific configuration
+  // Alert configuration
+  send_alerts?: boolean;  // Master toggle for alerts
+  alert_on_success?: boolean;  // Alert when task succeeds
+  alert_on_warning?: boolean;  // Alert on partial failures
+  alert_on_error?: boolean;  // Alert on complete failures
 }
 
 export interface TaskExecution {
@@ -1807,6 +1812,11 @@ export interface TaskConfigUpdate {
   schedule_time?: string;
   timezone?: string;
   config?: Record<string, unknown>;  // Task-specific configuration
+  // Alert configuration
+  send_alerts?: boolean;  // Master toggle for alerts
+  alert_on_success?: boolean;  // Alert when task succeeds
+  alert_on_warning?: boolean;  // Alert on partial failures
+  alert_on_error?: boolean;  // Alert on complete failures
 }
 
 export interface CronPreset {

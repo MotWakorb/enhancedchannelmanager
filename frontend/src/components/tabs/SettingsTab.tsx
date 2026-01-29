@@ -764,6 +764,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         email_recipients: digestSettings.email_recipients,
         include_group_changes: digestSettings.include_group_changes,
         include_stream_changes: digestSettings.include_stream_changes,
+        show_detailed_list: digestSettings.show_detailed_list,
         min_changes_threshold: digestSettings.min_changes_threshold,
       });
       setDigestSettings(updated);
@@ -786,6 +787,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         email_recipients: digestSettings.email_recipients,
         include_group_changes: digestSettings.include_group_changes,
         include_stream_changes: digestSettings.include_stream_changes,
+        show_detailed_list: digestSettings.show_detailed_list,
         min_changes_threshold: digestSettings.min_changes_threshold,
       });
       // Now send the test
@@ -2265,6 +2267,19 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                 <div className="checkbox-content">
                   <label htmlFor="includeStreamChanges">Include stream changes</label>
                   <p>Include notifications when streams are added or removed within groups.</p>
+                </div>
+              </div>
+
+              <div className="checkbox-group">
+                <input
+                  id="showDetailedList"
+                  type="checkbox"
+                  checked={digestSettings.show_detailed_list}
+                  onChange={(e) => handleDigestSettingChange('show_detailed_list', e.target.checked)}
+                />
+                <div className="checkbox-content">
+                  <label htmlFor="showDetailedList">Show detailed list</label>
+                  <p>Include the full list of changed groups and streams in the digest. Disable to show only summary counts.</p>
                 </div>
               </div>
             </div>

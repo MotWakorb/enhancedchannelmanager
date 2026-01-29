@@ -1551,12 +1551,7 @@ button.group-selection-checkbox {
 
 .normalization-loading .material-icons.spinning {
   font-size: 1rem;
-  animation: spin 1s linear infinite;
-}
-
-@keyframes spin {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
+  /* Animation handled by .spinning in shared/common.css (counter-clockwise) */
 }
 
 .normalization-summary {

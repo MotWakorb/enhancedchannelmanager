@@ -218,8 +218,9 @@ This is a test email from Enhanced Channel Manager.
 
                 # Build digest content
                 template = M3UDigestTemplate()
-                html_content = template.render_html(changes, since)
-                plain_content = template.render_plain(changes, since)
+                show_detailed = getattr(settings, 'show_detailed_list', True)
+                html_content = template.render_html(changes, since, show_detailed_list=show_detailed)
+                plain_content = template.render_plain(changes, since, show_detailed_list=show_detailed)
                 subject = template.get_subject(changes)
 
             self._set_progress(status="sending_email")
