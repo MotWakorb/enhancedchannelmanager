@@ -49,6 +49,7 @@ const M3UManagerTab = lazy(() => import('./components/tabs/M3UManagerTab').then(
 const EPGManagerTab = lazy(() => import('./components/tabs/EPGManagerTab').then(m => ({ default: m.EPGManagerTab })));
 const GuideTab = lazy(() => import('./components/tabs/GuideTab').then(m => ({ default: m.GuideTab })));
 const LogoManagerTab = lazy(() => import('./components/tabs/LogoManagerTab').then(m => ({ default: m.LogoManagerTab })));
+const M3UChangesTab = lazy(() => import('./components/tabs/M3UChangesTab').then(m => ({ default: m.M3UChangesTab })));
 const JournalTab = lazy(() => import('./components/tabs/JournalTab').then(m => ({ default: m.JournalTab })));
 const StatsTab = lazy(() => import('./components/tabs/StatsTab').then(m => ({ default: m.StatsTab })));
 const SettingsTab = lazy(() => import('./components/tabs/SettingsTab').then(m => ({ default: m.SettingsTab })));
@@ -117,6 +118,7 @@ function App() {
   const [hideM3uUrls, setHideM3uUrls] = useState(false);
   const [gracenoteConflictMode, setGracenoteConflictMode] = useState<'ask' | 'skip' | 'overwrite'>('ask');
   const [epgAutoMatchThreshold, setEpgAutoMatchThreshold] = useState(80);
+  const [normalizeOnChannelCreate, setNormalizeOnChannelCreate] = useState(false);
   const [showVLCHelperModal, setShowVLCHelperModal] = useState(false);
   const [vlcModalStreamUrl, setVlcModalStreamUrl] = useState('');
   const [vlcModalStreamName, setVlcModalStreamName] = useState('');
@@ -132,7 +134,6 @@ function App() {
     streamSortPriority: ['resolution', 'bitrate', 'framerate'] as ('resolution' | 'bitrate' | 'framerate')[],
     streamSortEnabled: { resolution: true, bitrate: true, framerate: true } as Record<'resolution' | 'bitrate' | 'framerate', boolean>,
     deprioritizeFailedStreams: true,
-    normalizationSettings: { disabledBuiltinTags: [], customTags: [] } as api.NormalizationSettings,
   });
   // Also keep separate state for use in callbacks (to avoid stale closure issues)
   const [defaultChannelProfileIds, setDefaultChannelProfileIds] = useState<number[]>([]);
@@ -439,6 +440,7 @@ function App() {
         setHideM3uUrls(settings.hide_m3u_urls ?? false);
         setGracenoteConflictMode(settings.gracenote_conflict_mode || 'ask');
         setEpgAutoMatchThreshold(settings.epg_auto_match_threshold ?? 80);
+        setNormalizeOnChannelCreate(settings.normalize_on_channel_create ?? false);
         // Store VLC settings globally for vlc utility to access
         const vlcBehavior = (settings.vlc_open_behavior as 'protocol_only' | 'm3u_fallback' | 'm3u_only') || 'm3u_fallback';
         (window as any).__vlcSettings = { behavior: vlcBehavior };
@@ -456,7 +458,6 @@ function App() {
             return { streamSortPriority: merged.priority, streamSortEnabled: merged.enabled };
           })(),
           deprioritizeFailedStreams: settings.deprioritize_failed_streams ?? true,
-          normalizationSettings: settings.normalization_settings ?? { disabledBuiltinTags: [], customTags: [] },
           m3uAccountPriorities: settings.m3u_account_priorities ?? {},
         });
         setDefaultChannelProfileIds(settings.default_channel_profile_ids);
@@ -670,7 +671,6 @@ function App() {
           return { streamSortPriority: merged.priority, streamSortEnabled: merged.enabled };
         })(),
         deprioritizeFailedStreams: settings.deprioritize_failed_streams ?? true,
-        normalizationSettings: settings.normalization_settings ?? { disabledBuiltinTags: [], customTags: [] },
         m3uAccountPriorities: settings.m3u_account_priorities ?? {},
       });
       setDefaultChannelProfileIds(settings.default_channel_profile_ids);
@@ -743,6 +743,10 @@ function App() {
     streamsExplicitlyRequested.current = true;
     setStreamFilters(prev => ({ ...prev, selectedProviders: providerIds }));
     localStorage.setItem('streamProviderFilters', JSON.stringify(providerIds));
+    // Reload stream groups filtered by provider (if exactly one selected)
+    // When 0 or multiple providers selected, load all groups
+    const m3uAccountId = providerIds.length === 1 ? providerIds[0] : null;
+    loadStreamGroups(m3uAccountId);
   }, []);
 
   const updateSelectedStreamGroupFilters = useCallback((groups: string[]) => {
@@ -756,6 +760,8 @@ function App() {
     setStreamFilters(prev => ({ ...prev, selectedProviders: [], selectedGroups: [] }));
     localStorage.removeItem('streamProviderFilters');
     localStorage.removeItem('streamGroupFilters');
+    // Reload all stream groups (no provider filter)
+    loadStreamGroups(null);
   }, []);
 
   const trackNewlyCreatedGroup = useCallback((groupId: number) => {
@@ -802,9 +808,9 @@ function App() {
     }
   };
 
-  const loadStreamGroups = async () => {
+  const loadStreamGroups = async (m3uAccountId?: number | null) => {
     try {
-      const groups = await api.getStreamGroups();
+      const groups = await api.getStreamGroups(false, m3uAccountId);
       setStreamGroups(groups);
     } catch (err) {
       logger.error('Failed to load stream groups:', err);
@@ -1364,7 +1370,8 @@ function App() {
       stripNetworkSuffix?: boolean,
       customNetworkSuffixes?: string[],
       profileIds?: number[],
-      pushDownOnConflict?: boolean
+      pushDownOnConflict?: boolean,
+      normalize?: boolean
     ) => {
       try {
         // Bulk creation requires edit mode
@@ -1380,36 +1387,33 @@ function App() {
         const targetNewGroupName = newGroupName;
 
         // Create channels locally without calling Dispatcharr API (edit mode only)
-        // Build options for filtering/grouping
-        const options: api.NormalizeOptions = {
-          timezonePreference: timezonePreference ?? 'both',
-          stripCountryPrefix: stripCountryPrefix ?? false,
-          keepCountryPrefix: keepCountryPrefix ?? false,
-          countrySeparator: countrySeparator ?? '|',
-          stripNetworkPrefix: stripNetworkPrefix ?? false,
-          customNetworkPrefixes: customNetworkPrefixes,
-          stripNetworkSuffix: stripNetworkSuffix ?? false,
-          customNetworkSuffixes: customNetworkSuffixes,
-          normalizationSettings: channelDefaults.normalizationSettings,
-        };
-
         // Filter streams by timezone preference
         const filteredStreams = api.filterStreamsByTimezone(streamsToCreate, timezonePreference ?? 'both');
 
-        // Group streams by normalized name
-        const streamsByNormalizedName = new Map<string, Stream[]>();
+        // Normalize stream names using the backend normalization engine
+        // This applies all configured rules (country prefixes, network tags, etc.)
+        const streamNames = filteredStreams.map(s => s.name);
+        const normalizedNames = await api.normalizeStreamNamesWithBackend(streamNames);
+
+        // Group streams by normalized base name (also stripping quality suffixes to merge variants)
+        // The grouping key is the normalized name with quality suffixes stripped
+        // The channel name will be the normalized name (without quality stripping)
+        const streamsByBaseName = new Map<string, { normalizedName: string; streams: Stream[] }>();
         for (const stream of filteredStreams) {
-          const normalizedName = api.normalizeStreamName(stream.name, options);
-          const existing = streamsByNormalizedName.get(normalizedName);
+          // Get the backend-normalized name, fallback to original if not found
+          const normalizedName = normalizedNames.get(stream.name) || stream.name;
+          // Strip quality suffixes for grouping (so HD/FHD/4K/SD variants merge together)
+          const groupingKey = api.stripQualitySuffixes(normalizedName);
+          const existing = streamsByBaseName.get(groupingKey);
           if (existing) {
-            existing.push(stream);
+            existing.streams.push(stream);
           } else {
-            streamsByNormalizedName.set(normalizedName, [stream]);
+            streamsByBaseName.set(groupingKey, { normalizedName, streams: [stream] });
           }
         }
 
-        const mergedCount = filteredStreams.length - streamsByNormalizedName.size;
-        const channelCount = streamsByNormalizedName.size;
+        const mergedCount = filteredStreams.length - streamsByBaseName.size;
+        const channelCount = streamsByBaseName.size;
 
         // Fetch M3U metadata to get tvc-guide-stationid (Gracenote ID) for streams
         // This data isn't exposed by Dispatcharr's API, so we parse the M3U file directly
@@ -1510,7 +1514,7 @@ function App() {
         // Create channels and assign streams
         // Sort entries alphabetically by normalized name for consistent ordering
         // Use natural sort so "C-SPAN" comes before "C-SPAN 2" which comes before "C-SPAN 3"
-        const sortedEntries = Array.from(streamsByNormalizedName.entries()).sort((a, b) => {
+        const sortedEntries = Array.from(streamsByBaseName.entries()).sort((a, b) => {
           // Natural sort comparison that handles trailing numbers properly
           const nameA = a[0];
           const nameB = b[0];
@@ -1538,7 +1542,7 @@ function App() {
         const increment = hasDecimal ? 0.1 : 1;
 
         let channelIndex = 0;
-        for (const [normalizedName, groupedStreams] of sortedEntries) {
+        for (const [_groupingKey, { normalizedName, streams: groupedStreams }] of sortedEntries) {
           // Calculate channel number with proper decimal handling
           const rawChannelNumber = startingNumber + channelIndex * increment;
           // Round to 1 decimal place to avoid floating point precision issues
@@ -1610,6 +1614,7 @@ function App() {
           // If targetNewGroupName is set, pass it so the commit logic can create the group first
           // Pass logoUrl - the commit logic will create the logo if needed
           // Pass tvgId and tvcGuideStationId - auto-populate from stream metadata for EPG matching
+          // Pass normalize flag to apply normalization rules during channel creation
           const tempChannelId = stageCreateChannel(
             channelName,
             channelNumber,
@@ -1618,7 +1623,8 @@ function App() {
             undefined, // logoId - will be resolved during commit
             logoUrl,
             tvgId,
-            tvcGuideStationId
+            tvcGuideStationId,
+            normalize
           );
 
           // Assign all streams in this group to the new channel
@@ -1637,7 +1643,7 @@ function App() {
         const groupInfo = targetNewGroupName
           ? `\n\nA new group "${targetNewGroupName}" will be created.`
           : '';
-        alert(`Staged ${streamsByNormalizedName.size} channels for creation!${mergeInfo}${groupInfo}\n\nThey will be created in Dispatcharr when you click "Done".`);
+        alert(`Staged ${streamsByBaseName.size} channels for creation!${mergeInfo}${groupInfo}\n\nThey will be created in Dispatcharr when you click "Done".`);
 
         // If we used an existing group, add it to the visible filter now
         // (New groups will be added to filter after commit when they actually exist)
@@ -1659,7 +1665,7 @@ function App() {
         if (profileIdsToApply.length > 0) {
           pendingProfileAssignmentsRef.current.push({
             startNumber: startingNumber,
-            count: streamsByNormalizedName.size,
+            count: streamsByBaseName.size,
             profileIds: profileIdsToApply,
             increment, // Use the same increment calculated for channel creation
           });
@@ -2040,6 +2046,7 @@ function App() {
               onBulkStreamsDrop={handleBulkStreamsDrop}
               onOpenCreateChannelModal={handleOpenCreateChannelModal}
               onBulkCreateFromGroup={handleBulkCreateFromGroup}
+              defaultNormalizeOnCreate={normalizeOnChannelCreate}
               onCheckConflicts={handleCheckConflicts}
               onGetHighestChannelNumber={handleGetHighestChannelNumber}
 
@@ -2094,6 +2101,7 @@ function App() {
             />
           )}
           {activeTab === 'logo-manager' && <LogoManagerTab />}
+          {activeTab === 'm3u-changes' && <M3UChangesTab />}
           {activeTab === 'journal' && <JournalTab />}
           {activeTab === 'stats' && <StatsTab />}
           {activeTab === 'settings' && <SettingsTab onSaved={handleSettingsSaved} channelProfiles={channelProfiles} onProbeComplete={loadChannels} />}

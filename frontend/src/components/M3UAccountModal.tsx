@@ -475,10 +475,11 @@ export const M3UAccountModal = memo(function M3UAccountModal({
               <input
                 id="refreshInterval"
                 type="number"
-                min="1"
+                min="0"
                 value={refreshInterval}
-                onChange={(e) => setRefreshInterval(Number(e.target.value) || 24)}
+                onChange={(e) => setRefreshInterval(Number(e.target.value))}
               />
+              <span className="form-hint">0 = manual refresh only</span>
             </div>
             <div className="modal-form-group">
               <label htmlFor="staleDays">Stale Days</label>

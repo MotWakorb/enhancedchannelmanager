@@ -1073,6 +1073,15 @@
   color: var(--error);
 }
 
+/* Toggle button - green when active, grey when inactive */
+.action-btn.toggle.active {
+  color: var(--success, #22c55e);
+}
+
+.action-btn.toggle:not(.active) {
+  color: var(--text-muted);
+}
+
 /* Copy URL button - hidden by default, shown on hover
    Extracted from: ChannelsPane.css, StreamsPane.css */
 .copy-url-btn {

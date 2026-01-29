@@ -2,7 +2,8 @@
 SQLAlchemy ORM models for the Journal and Bandwidth tracking features.
 """
 from datetime import datetime, date
-from sqlalchemy import Column, Integer, BigInteger, String, Text, Boolean, DateTime, Date, Float, Index
+from sqlalchemy import Column, Integer, BigInteger, String, Text, Boolean, DateTime, Date, Float, Index, ForeignKey, UniqueConstraint
+from sqlalchemy.orm import relationship
 from database import Base
 
 
@@ -221,6 +222,11 @@ class ScheduledTask(Base):
     timezone = Column(String(50), nullable=True)  # IANA timezone name
     # Task-specific configuration (JSON)
     config = Column(Text, nullable=True)  # JSON with task-specific settings
+    # Alert configuration - control which alerts this task sends
+    send_alerts = Column(Boolean, default=True, nullable=False)  # Master toggle for alerts
+    alert_on_success = Column(Boolean, default=True, nullable=False)  # Alert when task succeeds
+    alert_on_warning = Column(Boolean, default=True, nullable=False)  # Alert on partial failures
+    alert_on_error = Column(Boolean, default=True, nullable=False)  # Alert on complete failures
     # Timestamps
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
@@ -248,6 +254,10 @@ class ScheduledTask(Base):
             "schedule_time": self.schedule_time,
             "timezone": self.timezone,
             "config": json.loads(self.config) if self.config else None,
+            "send_alerts": self.send_alerts,
+            "alert_on_success": self.alert_on_success,
+            "alert_on_warning": self.alert_on_warning,
+            "alert_on_error": self.alert_on_error,
             "created_at": self.created_at.isoformat() + "Z" if self.created_at else None,
             "updated_at": self.updated_at.isoformat() + "Z" if self.updated_at else None,
             "last_run_at": self.last_run_at.isoformat() + "Z" if self.last_run_at else None,
@@ -480,6 +490,166 @@ class Notification(Base):
         return f"<Notification(id={self.id}, type={self.type}, read={self.read})>"
 
 
+class NormalizationRuleGroup(Base):
+    """
+    Groups normalization rules for organization and bulk enable/disable.
+    Rules within a group execute in priority order.
+    Groups themselves execute in priority order.
+
+    Built-in groups are created from existing tag-based normalization settings
+    and marked with is_builtin=True. Users can create additional custom groups.
+    """
+    __tablename__ = "normalization_rule_groups"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String(100), nullable=False)  # e.g., "Quality Tags", "Country Prefixes"
+    description = Column(Text, nullable=True)  # Optional description
+    enabled = Column(Boolean, default=True, nullable=False)  # Enable/disable entire group
+    priority = Column(Integer, default=0, nullable=False)  # Lower = runs first
+    is_builtin = Column(Boolean, default=False, nullable=False)  # True for migrated tag groups
+    # Timestamps
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        Index("idx_norm_group_enabled", enabled),
+        Index("idx_norm_group_priority", priority),
+    )
+
+    def to_dict(self) -> dict:
+        """Convert to dictionary for API responses."""
+        return {
+            "id": self.id,
+            "name": self.name,
+            "description": self.description,
+            "enabled": self.enabled,
+            "priority": self.priority,
+            "is_builtin": self.is_builtin,
+            "created_at": self.created_at.isoformat() + "Z" if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() + "Z" if self.updated_at else None,
+        }
+
+    def __repr__(self):
+        return f"<NormalizationRuleGroup(id={self.id}, name={self.name}, enabled={self.enabled})>"
+
+
+class NormalizationRule(Base):
+    """
+    Individual normalization rule with condition and action.
+
+    Condition Types:
+    - 'always': Always matches (useful for unconditional transformations)
+    - 'contains': Match if input contains the pattern
+    - 'starts_with': Match if input starts with the pattern
+    - 'ends_with': Match if input ends with the pattern
+    - 'regex': Match using regular expression
+    - 'tag_group': Match if text contains ANY tag from specified tag group
+
+    Action Types:
+    - 'remove': Remove the matched portion
+    - 'replace': Replace matched portion with action_value
+    - 'regex_replace': Use regex substitution (condition must be 'regex')
+    - 'strip_prefix': Remove pattern from start (with optional separator)
+    - 'strip_suffix': Remove pattern from end (with optional separator)
+    - 'normalize_prefix': Keep prefix but standardize format (e.g., "US:" -> "US | ")
+
+    If/Then/Else Logic:
+    - IF condition matches: apply action_type/action_value
+    - ELSE (if else_action_type is set): apply else_action_type/else_action_value
+
+    Example Rules:
+    - Strip "HD" suffix: condition_type='ends_with', condition_value='HD',
+                         action_type='strip_suffix'
+    - Remove country prefix: condition_type='regex', condition_value='^(US|UK|CA)[:\\s|]+',
+                             action_type='remove'
+    - Normalize quality: condition_type='regex', condition_value='\\s*(FHD|UHD|4K|HD|SD)\\s*$',
+                        action_type='remove'
+    - Strip quality tag: condition_type='tag_group', tag_group_id=1, tag_match_position='suffix',
+                        action_type='remove'
+    """
+    __tablename__ = "normalization_rules"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    group_id = Column(Integer, nullable=False)  # References NormalizationRuleGroup.id
+    name = Column(String(100), nullable=False)  # e.g., "Strip HD suffix"
+    description = Column(Text, nullable=True)  # Optional description
+    enabled = Column(Boolean, default=True, nullable=False)  # Enable/disable rule
+    priority = Column(Integer, default=0, nullable=False)  # Order within group (lower = first)
+    # Condition configuration (legacy single condition - kept for backward compatibility)
+    condition_type = Column(String(20), nullable=True)  # always, contains, starts_with, ends_with, regex, tag_group
+    condition_value = Column(String(500), nullable=True)  # Pattern to match (null for 'always' or 'tag_group')
+    case_sensitive = Column(Boolean, default=False, nullable=False)  # Case sensitivity for matching
+    # Tag group condition (v0.8.7) - used when condition_type='tag_group'
+    tag_group_id = Column(Integer, ForeignKey("tag_groups.id", ondelete="SET NULL"), nullable=True)
+    tag_match_position = Column(String(20), nullable=True)  # 'prefix', 'suffix', or 'contains'
+    # Compound conditions (new - takes precedence over legacy fields if set)
+    conditions = Column(Text, nullable=True)  # JSON array of condition objects: [{type, value, negate, case_sensitive}]
+    condition_logic = Column(String(3), default="AND", nullable=False)  # "AND" or "OR" for combining conditions
+    # Action configuration
+    action_type = Column(String(20), nullable=False)  # remove, replace, regex_replace, strip_prefix, strip_suffix, normalize_prefix
+    action_value = Column(String(500), nullable=True)  # Replacement value (null for remove actions)
+    # Else action (v0.8.7) - executed when condition does NOT match
+    else_action_type = Column(String(20), nullable=True)  # Same values as action_type
+    else_action_value = Column(String(500), nullable=True)  # Replacement value for else action
+    # Stop processing flag - if true, no further rules execute after this one matches
+    stop_processing = Column(Boolean, default=False, nullable=False)
+    # Built-in flag for migrated rules
+    is_builtin = Column(Boolean, default=False, nullable=False)
+    # Timestamps
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    # Relationship to TagGroup (for tag_group condition type)
+    tag_group = relationship("TagGroup", lazy="joined")
+
+    __table_args__ = (
+        Index("idx_norm_rule_group", group_id),
+        Index("idx_norm_rule_enabled", enabled),
+        Index("idx_norm_rule_priority", group_id, priority),
+        Index("idx_norm_rule_tag_group", tag_group_id),
+    )
+
+    def get_conditions(self) -> list:
+        """Parse conditions JSON into list of condition objects."""
+        if not self.conditions:
+            return []
+        try:
+            import json
+            return json.loads(self.conditions)
+        except (json.JSONDecodeError, TypeError):
+            return []
+
+    def to_dict(self) -> dict:
+        """Convert to dictionary for API responses."""
+        return {
+            "id": self.id,
+            "group_id": self.group_id,
+            "name": self.name,
+            "description": self.description,
+            "enabled": self.enabled,
+            "priority": self.priority,
+            "condition_type": self.condition_type,
+            "condition_value": self.condition_value,
+            "case_sensitive": self.case_sensitive,
+            "tag_group_id": self.tag_group_id,
+            "tag_match_position": self.tag_match_position,
+            "tag_group_name": self.tag_group.name if self.tag_group else None,
+            "conditions": self.get_conditions(),
+            "condition_logic": self.condition_logic,
+            "action_type": self.action_type,
+            "action_value": self.action_value,
+            "else_action_type": self.else_action_type,
+            "else_action_value": self.else_action_value,
+            "stop_processing": self.stop_processing,
+            "is_builtin": self.is_builtin,
+            "created_at": self.created_at.isoformat() + "Z" if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() + "Z" if self.updated_at else None,
+        }
+
+    def __repr__(self):
+        return f"<NormalizationRule(id={self.id}, name={self.name}, type={self.condition_type})>"
+
+
 class AlertMethod(Base):
     """
     Configuration for an external alert method (Discord, Telegram, Email, etc.).
@@ -561,3 +731,260 @@ class AlertMethod(Base):
 
     def __repr__(self):
         return f"<AlertMethod(id={self.id}, name={self.name}, type={self.method_type})>"
+
+
+class TagGroup(Base):
+    """
+    Groups of tags for vocabulary management in the normalization engine.
+    Tag groups organize related strings (e.g., Quality, Country, Timezone).
+    Built-in groups are created automatically and cannot be deleted.
+    """
+    __tablename__ = "tag_groups"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String(100), nullable=False, unique=True)  # e.g., "Quality Tags", "Country Tags"
+    description = Column(Text, nullable=True)  # Optional description
+    is_builtin = Column(Boolean, default=False, nullable=False)  # True for system-created groups
+    # Timestamps
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    # Relationship to tags - cascade delete removes all tags when group is deleted
+    tags = relationship("Tag", back_populates="group", cascade="all, delete-orphan", lazy="dynamic")
+
+    __table_args__ = (
+        Index("idx_tag_group_name", name),
+        Index("idx_tag_group_builtin", is_builtin),
+    )
+
+    def to_dict(self, include_tags: bool = False) -> dict:
+        """Convert to dictionary for API responses."""
+        result = {
+            "id": self.id,
+            "name": self.name,
+            "description": self.description,
+            "is_builtin": self.is_builtin,
+            "created_at": self.created_at.isoformat() + "Z" if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() + "Z" if self.updated_at else None,
+        }
+        if include_tags:
+            result["tags"] = [tag.to_dict() for tag in self.tags]
+        return result
+
+    def __repr__(self):
+        return f"<TagGroup(id={self.id}, name={self.name}, is_builtin={self.is_builtin})>"
+
+
+class Tag(Base):
+    """
+    Individual tag within a tag group.
+    Tags are string values used for pattern matching in normalization rules.
+    """
+    __tablename__ = "tags"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    group_id = Column(Integer, ForeignKey("tag_groups.id", ondelete="CASCADE"), nullable=False)
+    value = Column(String(100), nullable=False)  # The tag value, e.g., "HD", "US", "NFL"
+    case_sensitive = Column(Boolean, default=False, nullable=False)  # Match case when searching
+    enabled = Column(Boolean, default=True, nullable=False)  # Can be disabled without deleting
+    is_builtin = Column(Boolean, default=False, nullable=False)  # True for system-created tags
+
+    # Relationship back to group
+    group = relationship("TagGroup", back_populates="tags")
+
+    __table_args__ = (
+        UniqueConstraint("group_id", "value", name="uq_tag_group_value"),
+        Index("idx_tag_group_id", group_id),
+        Index("idx_tag_enabled", enabled),
+    )
+
+    def to_dict(self) -> dict:
+        """Convert to dictionary for API responses."""
+        return {
+            "id": self.id,
+            "group_id": self.group_id,
+            "value": self.value,
+            "case_sensitive": self.case_sensitive,
+            "enabled": self.enabled,
+            "is_builtin": self.is_builtin,
+        }
+
+    def __repr__(self):
+        return f"<Tag(id={self.id}, group_id={self.group_id}, value={self.value})>"
+
+
+class M3USnapshot(Base):
+    """
+    Point-in-time snapshot of M3U playlist state.
+    Stored on each M3U refresh to enable change detection.
+    """
+    __tablename__ = "m3u_snapshots"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    m3u_account_id = Column(Integer, nullable=False)  # Dispatcharr M3U account ID
+    snapshot_time = Column(DateTime, default=datetime.utcnow, nullable=False)
+    # JSON with group names and stream counts: {"groups": [{"name": "Sports", "stream_count": 50}, ...]}
+    groups_data = Column(Text, nullable=True)
+    total_streams = Column(Integer, default=0, nullable=False)
+    # Dispatcharr's updated_at timestamp when this snapshot was taken (for change monitoring)
+    dispatcharr_updated_at = Column(String(50), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        Index("idx_m3u_snapshot_account", m3u_account_id),
+        Index("idx_m3u_snapshot_time", snapshot_time.desc()),
+        Index("idx_m3u_snapshot_account_time", m3u_account_id, snapshot_time.desc()),
+    )
+
+    def get_groups_data(self) -> dict:
+        """Parse groups_data JSON into dictionary."""
+        if not self.groups_data:
+            return {"groups": []}
+        try:
+            import json
+            return json.loads(self.groups_data)
+        except (ValueError, TypeError):
+            return {"groups": []}
+
+    def set_groups_data(self, data: dict) -> None:
+        """Set groups_data from dictionary."""
+        import json
+        self.groups_data = json.dumps(data) if data else None
+
+    def to_dict(self) -> dict:
+        """Convert to dictionary for API responses."""
+        return {
+            "id": self.id,
+            "m3u_account_id": self.m3u_account_id,
+            "snapshot_time": self.snapshot_time.isoformat() + "Z" if self.snapshot_time else None,
+            "groups_data": self.get_groups_data(),
+            "total_streams": self.total_streams,
+            "dispatcharr_updated_at": self.dispatcharr_updated_at,
+            "created_at": self.created_at.isoformat() + "Z" if self.created_at else None,
+        }
+
+    def __repr__(self):
+        return f"<M3USnapshot(id={self.id}, m3u_account_id={self.m3u_account_id}, total_streams={self.total_streams})>"
+
+
+class M3UChangeLog(Base):
+    """
+    Persisted log of detected changes in M3U playlists.
+    Records additions, removals, and modifications of groups and streams.
+    """
+    __tablename__ = "m3u_change_logs"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    m3u_account_id = Column(Integer, nullable=False)  # Dispatcharr M3U account ID
+    change_time = Column(DateTime, default=datetime.utcnow, nullable=False)
+    # Change type: group_added, group_removed, streams_added, streams_removed, streams_modified
+    change_type = Column(String(30), nullable=False)
+    group_name = Column(String(255), nullable=True)  # Affected group name (if applicable)
+    # JSON array of stream names for bulk changes: ["Stream 1", "Stream 2", ...]
+    stream_names = Column(Text, nullable=True)
+    count = Column(Integer, default=0, nullable=False)  # Number of items affected
+    enabled = Column(Boolean, default=False, nullable=False)  # Whether the group is enabled in the M3U
+    snapshot_id = Column(Integer, ForeignKey("m3u_snapshots.id", ondelete="SET NULL"), nullable=True)
+
+    # Relationship to snapshot
+    snapshot = relationship("M3USnapshot", lazy="joined")
+
+    __table_args__ = (
+        Index("idx_m3u_change_account", m3u_account_id),
+        Index("idx_m3u_change_time", change_time.desc()),
+        Index("idx_m3u_change_account_time", m3u_account_id, change_time.desc()),
+        Index("idx_m3u_change_type", change_type),
+    )
+
+    def get_stream_names(self) -> list:
+        """Parse stream_names JSON into list."""
+        if not self.stream_names:
+            return []
+        try:
+            import json
+            return json.loads(self.stream_names)
+        except (ValueError, TypeError):
+            return []
+
+    def set_stream_names(self, names: list) -> None:
+        """Set stream_names from list."""
+        import json
+        self.stream_names = json.dumps(names) if names else None
+
+    def to_dict(self) -> dict:
+        """Convert to dictionary for API responses."""
+        return {
+            "id": self.id,
+            "m3u_account_id": self.m3u_account_id,
+            "change_time": self.change_time.isoformat() + "Z" if self.change_time else None,
+            "change_type": self.change_type,
+            "group_name": self.group_name,
+            "stream_names": self.get_stream_names(),
+            "count": self.count,
+            "enabled": self.enabled,
+            "snapshot_id": self.snapshot_id,
+        }
+
+    def __repr__(self):
+        return f"<M3UChangeLog(id={self.id}, m3u_account_id={self.m3u_account_id}, type={self.change_type}, count={self.count}, enabled={self.enabled})>"
+
+
+class M3UDigestSettings(Base):
+    """
+    Settings for M3U change digest email reports.
+    Controls frequency and content of automated change notifications.
+    """
+    __tablename__ = "m3u_digest_settings"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    enabled = Column(Boolean, default=False, nullable=False)
+    # Frequency: immediate, hourly, daily, weekly
+    frequency = Column(String(20), default="daily", nullable=False)
+    # JSON array of email addresses: ["user@example.com", ...]
+    email_recipients = Column(Text, nullable=True)
+    # Content filters
+    include_group_changes = Column(Boolean, default=True, nullable=False)
+    include_stream_changes = Column(Boolean, default=True, nullable=False)
+    # Show detailed list of streams/groups in digest (vs just summary counts)
+    show_detailed_list = Column(Boolean, default=True, nullable=False)
+    # Only send digest if at least this many changes occurred
+    min_changes_threshold = Column(Integer, default=1, nullable=False)
+    # Tracking
+    last_digest_at = Column(DateTime, nullable=True)
+    # Timestamps
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    def get_email_recipients(self) -> list:
+        """Parse email_recipients JSON into list."""
+        if not self.email_recipients:
+            return []
+        try:
+            import json
+            return json.loads(self.email_recipients)
+        except (ValueError, TypeError):
+            return []
+
+    def set_email_recipients(self, emails: list) -> None:
+        """Set email_recipients from list."""
+        import json
+        self.email_recipients = json.dumps(emails) if emails else None
+
+    def to_dict(self) -> dict:
+        """Convert to dictionary for API responses."""
+        return {
+            "id": self.id,
+            "enabled": self.enabled,
+            "frequency": self.frequency,
+            "email_recipients": self.get_email_recipients(),
+            "include_group_changes": self.include_group_changes,
+            "include_stream_changes": self.include_stream_changes,
+            "show_detailed_list": self.show_detailed_list,
+            "min_changes_threshold": self.min_changes_threshold,
+            "last_digest_at": self.last_digest_at.isoformat() + "Z" if self.last_digest_at else None,
+            "created_at": self.created_at.isoformat() + "Z" if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() + "Z" if self.updated_at else None,
+        }
+
+    def __repr__(self):
+        return f"<M3UDigestSettings(id={self.id}, enabled={self.enabled}, frequency={self.frequency})>"

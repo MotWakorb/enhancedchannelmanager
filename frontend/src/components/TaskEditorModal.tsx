@@ -19,6 +19,12 @@ export function TaskEditorModal({ task, onClose, onSaved }: TaskEditorModalProps
   const [enabled, setEnabled] = useState(task.enabled);
   const [taskConfig, setTaskConfig] = useState<Record<string, unknown>>(task.config || {});
 
+  // Alert configuration state
+  const [sendAlerts, setSendAlerts] = useState(task.send_alerts ?? true);
+  const [alertOnSuccess, setAlertOnSuccess] = useState(task.alert_on_success ?? true);
+  const [alertOnWarning, setAlertOnWarning] = useState(task.alert_on_warning ?? true);
+  const [alertOnError, setAlertOnError] = useState(task.alert_on_error ?? true);
+
   // Schedules state
   const [schedules, setSchedules] = useState<TaskSchedule[]>(task.schedules || []);
   const [editingSchedule, setEditingSchedule] = useState<TaskSchedule | null>(null);
@@ -87,9 +93,10 @@ export function TaskEditorModal({ task, onClose, onSaved }: TaskEditorModalProps
       }));
     }
 
-    // M3U accounts (for m3u_refresh)
-    if (m3uAccounts.length > 0) {
-      options['m3u_accounts'] = m3uAccounts.map(a => ({
+    // M3U accounts (for m3u_refresh) - exclude "custom" account
+    const filteredM3uAccounts = m3uAccounts.filter(a => a.name.toLowerCase() !== 'custom');
+    if (filteredM3uAccounts.length > 0) {
+      options['m3u_accounts'] = filteredM3uAccounts.map(a => ({
         value: a.id,
         label: a.name,
       }));
@@ -146,7 +153,7 @@ export function TaskEditorModal({ task, onClose, onSaved }: TaskEditorModalProps
     refreshSchedules();
   }, [refreshSchedules]);
 
-  // Save task-level settings (enabled, config)
+  // Save task-level settings (enabled, config, alerts)
   const handleSaveTask = async () => {
     setError(null);
     setSaving(true);
@@ -154,6 +161,11 @@ export function TaskEditorModal({ task, onClose, onSaved }: TaskEditorModalProps
     try {
       const config: api.TaskConfigUpdate = {
         enabled,
+        // Alert configuration
+        send_alerts: sendAlerts,
+        alert_on_success: alertOnSuccess,
+        alert_on_warning: alertOnWarning,
+        alert_on_error: alertOnError,
       };
 
       // Include task-specific configuration
@@ -413,79 +425,53 @@ export function TaskEditorModal({ task, onClose, onSaved }: TaskEditorModalProps
             )}
           </div>
 
-          {/* Task-Specific Configuration: EPG Refresh */}
-          {task.task_id === 'epg_refresh' && epgSources.length > 0 && (
-            <div className="config-section">
-              <label className="section-label">EPG Sources to Refresh</label>
-              <div className="config-hint">
-                Select specific sources or leave empty to refresh all active sources.
-              </div>
-              <div className="config-list">
-                {epgSources.map((source) => (
-                  <label key={source.id} className="config-checkbox">
-                    <input
-                      type="checkbox"
-                      checked={((taskConfig.source_ids as number[]) || []).includes(source.id)}
-                      onChange={(e) => {
-                        const currentIds = (taskConfig.source_ids as number[]) || [];
-                        if (e.target.checked) {
-                          setTaskConfig({ ...taskConfig, source_ids: [...currentIds, source.id] });
-                        } else {
-                          setTaskConfig({ ...taskConfig, source_ids: currentIds.filter((id) => id !== source.id) });
-                        }
-                      }}
-                    />
-                    <span>{source.name}</span>
-                    {source.source_type === 'dummy' && (
-                      <span className="badge">(dummy)</span>
-                    )}
-                  </label>
-                ))}
-              </div>
+          {/* Alert Configuration Section */}
+          <div className="alert-config-section">
+            <div className="alert-config-header">
+              <label className="section-label">Alert Settings</label>
             </div>
-          )}
-
-          {/* Task-Specific Configuration: M3U Refresh */}
-          {task.task_id === 'm3u_refresh' && m3uAccounts.length > 0 && (
-            <div className="config-section">
-              <label className="section-label">M3U Accounts to Refresh</label>
-              <div className="config-hint">
-                Select specific accounts or leave empty to refresh all active accounts.
-              </div>
-              <div className="config-list">
-                {m3uAccounts
-                  .filter((account) => account.name.toLowerCase() !== 'custom')
-                  .map((account) => (
-                    <label key={account.id} className="config-checkbox">
-                      <input
-                        type="checkbox"
-                        checked={((taskConfig.account_ids as number[]) || []).includes(account.id)}
-                        onChange={(e) => {
-                          const currentIds = (taskConfig.account_ids as number[]) || [];
-                          if (e.target.checked) {
-                            setTaskConfig({ ...taskConfig, account_ids: [...currentIds, account.id] });
-                          } else {
-                            setTaskConfig({ ...taskConfig, account_ids: currentIds.filter((id) => id !== account.id) });
-                          }
-                        }}
-                      />
-                      <span>{account.name}</span>
-                      {!account.is_active && (
-                        <span className="badge">(inactive)</span>
-                      )}
-                    </label>
-                  ))}
-              </div>
-              <label className="config-checkbox" style={{ marginTop: '0.75rem' }}>
+            <div className="alert-config-content">
+              <label className="alert-toggle master-toggle">
                 <input
                   type="checkbox"
-                  checked={taskConfig.skip_inactive !== false}
-                  onChange={(e) => setTaskConfig({ ...taskConfig, skip_inactive: e.target.checked })}
+                  checked={sendAlerts}
+                  onChange={(e) => setSendAlerts(e.target.checked)}
                 />
-                <span>Skip inactive accounts</span>
+                <span>Send alerts for this task</span>
               </label>
+              {sendAlerts && (
+                <div className="alert-type-toggles">
+                  <label className="alert-toggle">
+                    <input
+                      type="checkbox"
+                      checked={alertOnSuccess}
+                      onChange={(e) => setAlertOnSuccess(e.target.checked)}
+                    />
+                    <span>Success</span>
+                    <span className="alert-hint">Alert when task completes successfully</span>
+                  </label>
+                  <label className="alert-toggle">
+                    <input
+                      type="checkbox"
+                      checked={alertOnWarning}
+                      onChange={(e) => setAlertOnWarning(e.target.checked)}
+                    />
+                    <span>Warning</span>
+                    <span className="alert-hint">Alert on partial failures or cancellation</span>
+                  </label>
+                  <label className="alert-toggle">
+                    <input
+                      type="checkbox"
+                      checked={alertOnError}
+                      onChange={(e) => setAlertOnError(e.target.checked)}
+                    />
+                    <span>Error</span>
+                    <span className="alert-hint">Alert when task fails completely</span>
+                  </label>
+                </div>
+              )}
             </div>
-          )}
+          </div>
 
           {/* Task-Specific Configuration: Cleanup */}
           {task.task_id === 'cleanup' && (
@@ -574,7 +560,7 @@ export function TaskEditorModal({ task, onClose, onSaved }: TaskEditorModalProps
               onCancel={() => setIsAddingSchedule(false)}
               saving={savingSchedule}
               taskId={task.task_id}
-              parameterSchema={parameterSchema}
+              parameterSchema={task.task_id === 'cleanup' ? [] : parameterSchema}
               parameterOptions={parameterOptions}
               defaultParameters={defaultParameters}
             />
@@ -602,7 +588,7 @@ export function TaskEditorModal({ task, onClose, onSaved }: TaskEditorModalProps
               onCancel={() => setEditingSchedule(null)}
               saving={savingSchedule}
               taskId={task.task_id}
-              parameterSchema={parameterSchema}
+              parameterSchema={task.task_id === 'cleanup' ? [] : parameterSchema}
               parameterOptions={parameterOptions}
             />
           </div>

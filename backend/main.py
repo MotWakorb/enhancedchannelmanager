@@ -5,7 +5,7 @@ from fastapi.responses import FileResponse
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
-from typing import Optional, Literal, Union
+from typing import Optional, Literal, Union, List
 import httpx
 import os
 import re
@@ -37,6 +37,9 @@ import alert_methods_discord  # noqa: F401
 import alert_methods_smtp  # noqa: F401
 import alert_methods_telegram  # noqa: F401
 
+# Import M3U digest for immediate notifications after refresh
+from tasks.m3u_digest import send_immediate_digest
+
 # Polling configuration for manual refresh endpoints
 # These control background polling to detect when Dispatcharr completes refresh operations
 REFRESH_POLL_INTERVAL_SECONDS = 5
@@ -52,10 +55,57 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# OpenAPI tags for organizing endpoints in Swagger UI
+tags_metadata = [
+    {"name": "Health", "description": "Health check and debug endpoints"},
+    {"name": "Settings", "description": "Application settings and configuration"},
+    {"name": "Channels", "description": "Channel management - create, update, delete channels"},
+    {"name": "Channel Groups", "description": "Organize channels into groups"},
+    {"name": "Channel Profiles", "description": "Channel profile configurations"},
+    {"name": "Streams", "description": "Stream management and statistics"},
+    {"name": "Stream Profiles", "description": "Stream profile configurations"},
+    {"name": "M3U", "description": "M3U account management, refresh, and VOD"},
+    {"name": "M3U Digest", "description": "M3U change digest email notifications"},
+    {"name": "EPG", "description": "Electronic Program Guide sources and data"},
+    {"name": "Providers", "description": "Stream providers (M3U accounts)"},
+    {"name": "Tasks", "description": "Scheduled tasks and task execution"},
+    {"name": "Notifications", "description": "System notifications"},
+    {"name": "Alert Methods", "description": "Alert delivery methods (Discord, Email, Telegram)"},
+    {"name": "Journal", "description": "Activity journal and audit log"},
+    {"name": "Stats", "description": "Statistics and analytics"},
+    {"name": "Stream Stats", "description": "Stream health monitoring and statistics"},
+    {"name": "Normalization", "description": "Channel name normalization rules"},
+    {"name": "Tags", "description": "Tag management for channels"},
+    {"name": "Cache", "description": "Cache management"},
+    {"name": "Cron", "description": "Cron expression utilities"},
+]
+
 app = FastAPI(
-    title="Enhanced Channel Manager",
-    description="Drag-and-drop channel management for Dispatcharr",
-    version="0.2.20007",
+    title="Enhanced Channel Manager API",
+    description="""
+## Overview
+Enhanced Channel Manager (ECM) provides a powerful API for managing IPTV channels,
+M3U playlists, EPG data, and more.
+
+## Features
+- **Channel Management**: Create, organize, and manage TV channels
+- **M3U Integration**: Import and sync M3U playlists from multiple providers
+- **EPG Support**: Manage Electronic Program Guide data sources
+- **Stream Monitoring**: Track stream health and statistics
+- **Scheduled Tasks**: Automate refresh and maintenance tasks
+- **Notifications**: Get alerts via Discord, Email, or Telegram
+
+## Authentication
+Currently, the API does not require authentication for local access.
+
+## Rate Limiting
+No rate limiting is enforced, but rapid polling is logged for diagnostics.
+    """,
+    version="0.8.7",
+    openapi_tags=tags_metadata,
+    docs_url="/api/docs",
+    redoc_url="/api/redoc",
+    openapi_url="/api/openapi.json",
 )
 
 # CORS for development
@@ -134,7 +184,7 @@ async def request_timing_middleware(request: Request, call_next):
 # ============================================================================
 # Diagnostic Endpoint for Request Rate Stats
 # ============================================================================
-@app.get("/api/debug/request-rates")
+@app.get("/api/debug/request-rates", tags=["Health"])
 async def get_request_rates():
     """Get current request rate statistics for all endpoints.
 
@@ -197,6 +247,20 @@ async def startup_event():
 
     # Initialize journal database
     init_db()
+
+    # Remove directional suffixes from Timezone Tags (East/West affect EPG timing)
+    try:
+        from normalization_migration import fix_timezone_tags_remove_directional
+        session = get_session()
+        try:
+            result = fix_timezone_tags_remove_directional(session)
+            if result.get("rules_deleted", 0) > 0:
+                logger.info(f"Removed {result['rules_deleted']} directional suffix rules from Timezone Tags")
+        finally:
+            session.close()
+    except Exception as e:
+        logger.warning(f"Could not apply timezone tags fix: {e}")
+
     logger.info(f"CONFIG_DIR: {CONFIG_DIR}")
     logger.info(f"CONFIG_FILE: {CONFIG_FILE}")
     logger.info(f"CONFIG_DIR exists: {CONFIG_DIR.exists()}")
@@ -399,6 +463,7 @@ class BulkCreateChannelOp(BaseModel):
     logoUrl: Optional[str] = None
     tvgId: Optional[str] = None
     tvcGuideStationId: Optional[str] = None  # Gracenote ID from M3U tvc-guide-stationid
+    normalize: Optional[bool] = False  # Apply normalization rules to channel name
 
 
 class BulkDeleteChannelOp(BaseModel):
@@ -468,7 +533,7 @@ class BulkCommitResponse(BaseModel):
 
 
 # Health check
-@app.get("/api/health")
+@app.get("/api/health", tags=["Health"])
 async def health_check():
     # Get version info from environment (set at build time)
     version = os.environ.get("ECM_VERSION", "unknown")
@@ -543,6 +608,16 @@ class SettingsRequest(BaseModel):
     m3u_account_priorities: dict[str, int] = {}  # M3U account priorities (account_id -> priority value)
     deprioritize_failed_streams: bool = True  # When enabled, failed/timeout/pending streams sort to bottom
     normalization_settings: Optional[NormalizationSettings] = None  # User-configurable normalization tags
+    normalize_on_channel_create: bool = False  # Default state for normalization toggle when creating channels
+    # Shared SMTP settings
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_user: str = ""
+    smtp_password: Optional[str] = None  # Optional - only required if changing SMTP auth
+    smtp_from_email: str = ""
+    smtp_from_name: str = "ECM Alerts"
+    smtp_use_tls: bool = True
+    smtp_use_ssl: bool = False
 
 
 class SettingsResponse(BaseModel):
@@ -589,6 +664,16 @@ class SettingsResponse(BaseModel):
     m3u_account_priorities: dict[str, int]  # M3U account priorities (account_id -> priority value)
     deprioritize_failed_streams: bool  # When enabled, failed/timeout/pending streams sort to bottom
     normalization_settings: NormalizationSettings  # User-configurable normalization tags
+    normalize_on_channel_create: bool  # Default state for normalization toggle when creating channels
+    # Shared SMTP settings
+    smtp_configured: bool  # Whether shared SMTP is configured
+    smtp_host: str
+    smtp_port: int
+    smtp_user: str
+    smtp_from_email: str
+    smtp_from_name: str
+    smtp_use_tls: bool
+    smtp_use_ssl: bool
 
 
 class TestConnectionRequest(BaseModel):
@@ -597,7 +682,7 @@ class TestConnectionRequest(BaseModel):
     password: str
 
 
-@app.get("/api/settings")
+@app.get("/api/settings", tags=["Settings"])
 async def get_current_settings():
     """Get current settings (password masked)."""
     logger.debug("GET /api/settings - Retrieving current settings")
@@ -652,10 +737,20 @@ async def get_current_settings():
                 for tag in settings.custom_normalization_tags
             ]
         ),
+        normalize_on_channel_create=settings.normalize_on_channel_create,
+        # Shared SMTP settings (password not returned for security)
+        smtp_configured=settings.is_smtp_configured(),
+        smtp_host=settings.smtp_host,
+        smtp_port=settings.smtp_port,
+        smtp_user=settings.smtp_user,
+        smtp_from_email=settings.smtp_from_email,
+        smtp_from_name=settings.smtp_from_name,
+        smtp_use_tls=settings.smtp_use_tls,
+        smtp_use_ssl=settings.smtp_use_ssl,
     )
 
 
-@app.post("/api/settings")
+@app.post("/api/settings", tags=["Settings"])
 async def update_settings(request: SettingsRequest):
     """Update Dispatcharr connection settings."""
     logger.debug(f"POST /api/settings - Updating settings (URL: {request.url}, username: {request.username})")
@@ -664,6 +759,9 @@ async def update_settings(request: SettingsRequest):
     # If password is not provided, keep the existing password
     # This allows updating non-auth settings without re-entering password
     password = request.password if request.password else current_settings.password
+
+    # Same for SMTP password - preserve existing if not provided
+    smtp_password = request.smtp_password if request.smtp_password else current_settings.smtp_password
 
     # Check if auth settings are being changed and password is required
     auth_changed = (
@@ -728,6 +826,16 @@ async def update_settings(request: SettingsRequest):
             [{"value": tag.value, "mode": tag.mode} for tag in request.normalization_settings.customTags]
             if request.normalization_settings else current_settings.custom_normalization_tags
         ),
+        normalize_on_channel_create=request.normalize_on_channel_create,
+        # Shared SMTP settings
+        smtp_host=request.smtp_host,
+        smtp_port=request.smtp_port,
+        smtp_user=request.smtp_user,
+        smtp_password=smtp_password,
+        smtp_from_email=request.smtp_from_email,
+        smtp_from_name=request.smtp_from_name,
+        smtp_use_tls=request.smtp_use_tls,
+        smtp_use_ssl=request.smtp_use_ssl,
     )
     save_settings(new_settings)
     clear_settings_cache()
@@ -766,7 +874,7 @@ async def update_settings(request: SettingsRequest):
     return {"status": "saved", "configured": new_settings.is_configured()}
 
 
-@app.post("/api/settings/test")
+@app.post("/api/settings/test", tags=["Settings"])
 async def test_connection(request: TestConnectionRequest):
     """Test connection to Dispatcharr with provided credentials."""
     import httpx
@@ -802,7 +910,108 @@ async def test_connection(request: TestConnectionRequest):
         return {"success": False, "message": str(e)}
 
 
-@app.post("/api/settings/restart-services")
+class SMTPTestRequest(BaseModel):
+    """Request model for testing SMTP settings."""
+    smtp_host: str
+    smtp_port: int = 587
+    smtp_user: str = ""
+    smtp_password: str = ""
+    smtp_from_email: str
+    smtp_from_name: str = "ECM Alerts"
+    smtp_use_tls: bool = True
+    smtp_use_ssl: bool = False
+    to_email: str  # Test recipient email
+
+
+@app.post("/api/settings/test-smtp", tags=["Settings"])
+async def test_smtp_connection(request: SMTPTestRequest):
+    """Test SMTP connection by sending a test email."""
+    import smtplib
+    import ssl
+    from email.mime.text import MIMEText
+    from email.mime.multipart import MIMEMultipart
+
+    logger.debug(f"POST /api/settings/test-smtp - Testing SMTP to {request.smtp_host}:{request.smtp_port}")
+
+    if not request.smtp_host:
+        return {"success": False, "message": "SMTP host is required"}
+    if not request.smtp_from_email:
+        return {"success": False, "message": "From email is required"}
+    if not request.to_email:
+        return {"success": False, "message": "Test recipient email is required"}
+
+    try:
+        # Build test email
+        msg = MIMEMultipart("alternative")
+        msg["Subject"] = "ECM SMTP Test - Connection Successful"
+        msg["From"] = f"{request.smtp_from_name} <{request.smtp_from_email}>"
+        msg["To"] = request.to_email
+
+        plain_text = """This is a test email from Enhanced Channel Manager.
+
+If you're reading this, your SMTP settings are configured correctly!
+
+You can now use email features like M3U Digest reports.
+
+- Enhanced Channel Manager"""
+
+        html_text = """
+        <html>
+        <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; padding: 20px;">
+            <div style="max-width: 500px; margin: 0 auto; background: #f8f9fa; border-radius: 8px; padding: 20px;">
+                <h2 style="color: #22C55E; margin-top: 0;">✅ SMTP Test Successful</h2>
+                <p>This is a test email from Enhanced Channel Manager.</p>
+                <p>If you're reading this, your SMTP settings are configured correctly!</p>
+                <p>You can now use email features like M3U Digest reports.</p>
+                <hr style="border: none; border-top: 1px solid #e9ecef; margin: 20px 0;">
+                <p style="color: #666; font-size: 12px;">- Enhanced Channel Manager</p>
+            </div>
+        </body>
+        </html>
+        """
+
+        msg.attach(MIMEText(plain_text, "plain"))
+        msg.attach(MIMEText(html_text, "html"))
+
+        # Connect and send
+        if request.smtp_use_ssl:
+            context = ssl.create_default_context()
+            server = smtplib.SMTP_SSL(request.smtp_host, request.smtp_port, context=context, timeout=10)
+        else:
+            server = smtplib.SMTP(request.smtp_host, request.smtp_port, timeout=10)
+
+        try:
+            if request.smtp_use_tls and not request.smtp_use_ssl:
+                server.starttls(context=ssl.create_default_context())
+
+            if request.smtp_user and request.smtp_password:
+                server.login(request.smtp_user, request.smtp_password)
+
+            server.sendmail(request.smtp_from_email, [request.to_email], msg.as_string())
+            logger.info(f"SMTP test email sent successfully to {request.to_email}")
+            return {"success": True, "message": f"Test email sent to {request.to_email}"}
+
+        finally:
+            server.quit()
+
+    except smtplib.SMTPAuthenticationError as e:
+        logger.error(f"SMTP test failed - authentication error: {e}")
+        return {"success": False, "message": "Authentication failed - check username and password"}
+    except smtplib.SMTPConnectError as e:
+        logger.error(f"SMTP test failed - connection error: {e}")
+        return {"success": False, "message": f"Could not connect to {request.smtp_host}:{request.smtp_port}"}
+    except smtplib.SMTPRecipientsRefused as e:
+        logger.error(f"SMTP test failed - recipient refused: {e}")
+        return {"success": False, "message": "Recipient email was refused by the server"}
+    except TimeoutError:
+        logger.error(f"SMTP test failed - timeout connecting to {request.smtp_host}")
+        return {"success": False, "message": f"Connection timed out to {request.smtp_host}:{request.smtp_port}"}
+    except Exception as e:
+        logger.exception(f"SMTP test failed - unexpected error: {e}")
+        return {"success": False, "message": str(e)}
+
+
+@app.post("/api/settings/restart-services", tags=["Settings"])
 async def restart_services():
     """Restart background services (bandwidth tracker and stream prober) to apply new settings."""
     settings = get_settings()
@@ -877,6 +1086,7 @@ class CreateChannelRequest(BaseModel):
     channel_group_id: Optional[int] = None
     logo_id: Optional[int] = None
     tvg_id: Optional[str] = None
+    normalize: Optional[bool] = False  # Apply normalization rules to channel name
 
 
 @app.get("/api/channels")
@@ -939,10 +1149,25 @@ async def get_channels(
 
 @app.post("/api/channels")
 async def create_channel(request: CreateChannelRequest):
-    logger.debug(f"POST /api/channels - Creating channel: {request.name}, number: {request.channel_number}")
+    logger.debug(f"POST /api/channels - Creating channel: {request.name}, number: {request.channel_number}, normalize: {request.normalize}")
     client = get_client()
     try:
-        data = {"name": request.name}
+        # Apply normalization if requested
+        channel_name = request.name
+        if request.normalize:
+            try:
+                from normalization_engine import get_normalization_engine
+                with get_session() as db:
+                    engine = get_normalization_engine(db)
+                    norm_result = engine.normalize(request.name)
+                    channel_name = norm_result.normalized
+                    if channel_name != request.name:
+                        logger.debug(f"Normalized channel name: '{request.name}' -> '{channel_name}'")
+            except Exception as norm_err:
+                logger.warning(f"Failed to normalize channel name '{request.name}': {norm_err}")
+                # Continue with original name
+
+        data = {"name": channel_name}
         if request.channel_number is not None:
             data["channel_number"] = request.channel_number
         if request.channel_group_id is not None:
@@ -976,7 +1201,7 @@ class CreateLogoRequest(BaseModel):
     url: str
 
 
-@app.get("/api/channels/logos")
+@app.get("/api/channels/logos", tags=["Channels"])
 async def get_logos(
     page: int = 1,
     page_size: int = 100,
@@ -989,7 +1214,7 @@ async def get_logos(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/channels/logos/{logo_id}")
+@app.get("/api/channels/logos/{logo_id}", tags=["Channels"])
 async def get_logo(logo_id: int):
     client = get_client()
     try:
@@ -998,7 +1223,7 @@ async def get_logo(logo_id: int):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/channels/logos")
+@app.post("/api/channels/logos", tags=["Channels"])
 async def create_logo(request: CreateLogoRequest):
     client = get_client()
     try:
@@ -1022,7 +1247,7 @@ async def create_logo(request: CreateLogoRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.patch("/api/channels/logos/{logo_id}")
+@app.patch("/api/channels/logos/{logo_id}", tags=["Channels"])
 async def update_logo(logo_id: int, data: dict):
     client = get_client()
     try:
@@ -1031,7 +1256,7 @@ async def update_logo(logo_id: int, data: dict):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.delete("/api/channels/logos/{logo_id}")
+@app.delete("/api/channels/logos/{logo_id}", tags=["Channels"])
 async def delete_logo(logo_id: int):
     client = get_client()
     try:
@@ -1042,7 +1267,7 @@ async def delete_logo(logo_id: int):
 
 
 # Channel by ID routes - must come after /api/channels/logos
-@app.get("/api/channels/{channel_id}")
+@app.get("/api/channels/{channel_id}", tags=["Channels"])
 async def get_channel(channel_id: int):
     client = get_client()
     try:
@@ -1051,7 +1276,7 @@ async def get_channel(channel_id: int):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/channels/{channel_id}/streams")
+@app.get("/api/channels/{channel_id}/streams", tags=["Channels"])
 async def get_channel_streams(channel_id: int):
     client = get_client()
     try:
@@ -1060,7 +1285,7 @@ async def get_channel_streams(channel_id: int):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.patch("/api/channels/{channel_id}")
+@app.patch("/api/channels/{channel_id}", tags=["Channels"])
 async def update_channel(channel_id: int, data: dict):
     logger.debug(f"PATCH /api/channels/{channel_id} - Updating channel with data: {data}")
     client = get_client()
@@ -1125,7 +1350,7 @@ async def update_channel(channel_id: int, data: dict):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.delete("/api/channels/{channel_id}")
+@app.delete("/api/channels/{channel_id}", tags=["Channels"])
 async def delete_channel(channel_id: int):
     logger.debug(f"DELETE /api/channels/{channel_id} - Deleting channel")
     client = get_client()
@@ -1153,7 +1378,7 @@ async def delete_channel(channel_id: int):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/channels/{channel_id}/add-stream")
+@app.post("/api/channels/{channel_id}/add-stream", tags=["Channels"])
 async def add_stream_to_channel(channel_id: int, request: AddStreamRequest):
     logger.debug(f"POST /api/channels/{channel_id}/add-stream - Adding stream {request.stream_id}")
     client = get_client()
@@ -1189,7 +1414,7 @@ async def add_stream_to_channel(channel_id: int, request: AddStreamRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/channels/{channel_id}/remove-stream")
+@app.post("/api/channels/{channel_id}/remove-stream", tags=["Channels"])
 async def remove_stream_from_channel(channel_id: int, request: RemoveStreamRequest):
     logger.debug(f"POST /api/channels/{channel_id}/remove-stream - Removing stream {request.stream_id}")
     client = get_client()
@@ -1225,7 +1450,7 @@ async def remove_stream_from_channel(channel_id: int, request: RemoveStreamReque
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/channels/{channel_id}/reorder-streams")
+@app.post("/api/channels/{channel_id}/reorder-streams", tags=["Channels"])
 async def reorder_channel_streams(channel_id: int, request: ReorderStreamsRequest):
     client = get_client()
     try:
@@ -1252,7 +1477,7 @@ async def reorder_channel_streams(channel_id: int, request: ReorderStreamsReques
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/channels/assign-numbers")
+@app.post("/api/channels/assign-numbers", tags=["Channels"])
 async def assign_channel_numbers(request: AssignNumbersRequest):
     client = get_client()
     settings = get_settings()
@@ -1325,7 +1550,7 @@ async def assign_channel_numbers(request: AssignNumbersRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/channels/bulk-commit")
+@app.post("/api/channels/bulk-commit", tags=["Channels"])
 async def bulk_commit_operations(request: BulkCommitRequest):
     """
     Process multiple channel operations in a single request.
@@ -1438,17 +1663,12 @@ async def bulk_commit_operations(request: BulkCommitRequest):
 
         if referenced_stream_ids:
             try:
-                logger.debug(f"[BULK-VALIDATE] Fetching existing streams for validation...")
-                # Fetch all pages of streams to build lookup
-                page = 1
-                while True:
-                    response = await client.get_streams(page=page, page_size=500)
-                    for s in response.get("results", []):
-                        existing_streams[s["id"]] = s
-                    if not response.get("next"):
-                        break
-                    page += 1
-                logger.debug(f"[BULK-VALIDATE] Loaded {len(existing_streams)} existing streams")
+                logger.debug(f"[BULK-VALIDATE] Fetching {len(referenced_stream_ids)} referenced streams for validation...")
+                # Fetch only the specific streams that are referenced (not all streams)
+                streams = await client.get_streams_by_ids(list(referenced_stream_ids))
+                for s in streams:
+                    existing_streams[s["id"]] = s
+                logger.debug(f"[BULK-VALIDATE] Loaded {len(existing_streams)} of {len(referenced_stream_ids)} referenced streams")
             except Exception as e:
                 logger.warning(f"[BULK-VALIDATE] Failed to fetch streams for validation: {e}")
 
@@ -1640,9 +1860,24 @@ async def bulk_commit_operations(request: BulkCommitRequest):
                     result["operationsApplied"] += 1
 
                 elif op.type == "createChannel":
-                    logger.debug(f"[BULK-APPLY] [{idx+1}/{len(request.operations)}] createChannel: name='{op.name}', tempId={op.tempId}, groupId={op.groupId}, newGroupName={op.newGroupName}")
+                    logger.debug(f"[BULK-APPLY] [{idx+1}/{len(request.operations)}] createChannel: name='{op.name}', tempId={op.tempId}, groupId={op.groupId}, newGroupName={op.newGroupName}, normalize={op.normalize}")
                     # Resolve group ID
                     group_id = resolve_group_id(op.groupId, op.newGroupName)
+
+                    # Apply normalization if requested
+                    channel_name = op.name
+                    if op.normalize:
+                        try:
+                            from normalization_engine import get_normalization_engine
+                            with get_session() as db:
+                                engine = get_normalization_engine(db)
+                                norm_result = engine.normalize(op.name)
+                                channel_name = norm_result.normalized
+                                if channel_name != op.name:
+                                    logger.debug(f"[BULK-APPLY] Normalized channel name: '{op.name}' -> '{channel_name}'")
+                        except Exception as norm_err:
+                            logger.warning(f"[BULK-APPLY] Failed to normalize channel name '{op.name}': {norm_err}")
+                            # Continue with original name
 
                     # Handle logo - if logoUrl provided but no logoId, try to find/create logo
                     logo_id = op.logoId
@@ -1656,15 +1891,15 @@ async def bulk_commit_operations(request: BulkCommitRequest):
                                 logger.debug(f"[BULK-APPLY] Found existing logo ID {logo_id}")
                             else:
                                 # Create new logo
-                                new_logo = await client.create_logo({"name": op.name, "url": op.logoUrl})
+                                new_logo = await client.create_logo({"name": channel_name, "url": op.logoUrl})
                                 logo_id = new_logo["id"]
                                 logger.debug(f"[BULK-APPLY] Created new logo ID {logo_id}")
                         except Exception as logo_err:
-                            logger.warning(f"[BULK-APPLY] Failed to create/find logo for channel '{op.name}': {logo_err}")
+                            logger.warning(f"[BULK-APPLY] Failed to create/find logo for channel '{channel_name}': {logo_err}")
                             # Continue without logo
 
                     # Create the channel
-                    channel_data = {"name": op.name}
+                    channel_data = {"name": channel_name}
                     if op.channelNumber is not None:
                         channel_data["channel_number"] = op.channelNumber
                     if group_id is not None:
@@ -1685,7 +1920,7 @@ async def bulk_commit_operations(request: BulkCommitRequest):
                         result["tempIdMap"][op.tempId] = new_channel["id"]
 
                     result["operationsApplied"] += 1
-                    logger.debug(f"[BULK-APPLY] Created channel '{op.name}' (temp: {op.tempId} -> real: {new_channel['id']})")
+                    logger.debug(f"[BULK-APPLY] Created channel '{channel_name}' (temp: {op.tempId} -> real: {new_channel['id']})")
 
                 elif op.type == "deleteChannel":
                     channel_id = resolve_id(op.channelId)
@@ -1802,7 +2037,7 @@ async def bulk_commit_operations(request: BulkCommitRequest):
 
 
 # Channel Groups
-@app.get("/api/channel-groups")
+@app.get("/api/channel-groups", tags=["Channel Groups"])
 async def get_channel_groups():
     client = get_client()
     try:
@@ -1833,7 +2068,7 @@ async def get_channel_groups():
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/channel-groups")
+@app.post("/api/channel-groups", tags=["Channel Groups"])
 async def create_channel_group(request: CreateChannelGroupRequest):
     client = get_client()
     try:
@@ -1858,7 +2093,7 @@ async def create_channel_group(request: CreateChannelGroupRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.patch("/api/channel-groups/{group_id}")
+@app.patch("/api/channel-groups/{group_id}", tags=["Channel Groups"])
 async def update_channel_group(group_id: int, data: dict):
     client = get_client()
     try:
@@ -1867,7 +2102,7 @@ async def update_channel_group(group_id: int, data: dict):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.delete("/api/channel-groups/orphaned")
+@app.delete("/api/channel-groups/orphaned", tags=["Channel Groups"])
 async def delete_orphaned_channel_groups(request: DeleteOrphanedGroupsRequest | None = Body(None)):
     """Delete channel groups that are truly orphaned.
 
@@ -2042,7 +2277,7 @@ async def delete_orphaned_channel_groups(request: DeleteOrphanedGroupsRequest | 
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.delete("/api/channel-groups/{group_id}")
+@app.delete("/api/channel-groups/{group_id}", tags=["Channel Groups"])
 async def delete_channel_group(group_id: int):
     client = get_client()
     try:
@@ -2078,7 +2313,7 @@ async def delete_channel_group(group_id: int):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/channel-groups/{group_id}/restore")
+@app.post("/api/channel-groups/{group_id}/restore", tags=["Channel Groups"])
 async def restore_channel_group(group_id: int):
     """Restore a hidden channel group back to the visible list."""
     try:
@@ -2100,7 +2335,7 @@ async def restore_channel_group(group_id: int):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/channel-groups/hidden")
+@app.get("/api/channel-groups/hidden", tags=["Channel Groups"])
 async def get_hidden_channel_groups():
     """Get list of all hidden channel groups."""
     try:
@@ -2114,7 +2349,7 @@ async def get_hidden_channel_groups():
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/channel-groups/orphaned")
+@app.get("/api/channel-groups/orphaned", tags=["Channel Groups"])
 async def get_orphaned_channel_groups():
     """Find channel groups that are truly orphaned.
 
@@ -2229,7 +2464,7 @@ async def get_orphaned_channel_groups():
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/channel-groups/auto-created")
+@app.get("/api/channel-groups/auto-created", tags=["Channel Groups"])
 async def get_groups_with_auto_created_channels():
     """Find channel groups that contain auto_created channels.
 
@@ -2299,7 +2534,7 @@ class ClearAutoCreatedRequest(BaseModel):
     group_ids: list[int]
 
 
-@app.post("/api/channels/clear-auto-created")
+@app.post("/api/channels/clear-auto-created", tags=["Channels"])
 async def clear_auto_created_flag(request: ClearAutoCreatedRequest):
     """Clear the auto_created flag from all channels in the specified groups.
 
@@ -2390,7 +2625,7 @@ async def clear_auto_created_flag(request: ClearAutoCreatedRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/channel-groups/with-streams")
+@app.get("/api/channel-groups/with-streams", tags=["Channel Groups"])
 async def get_channel_groups_with_streams():
     """Get all channel groups that have channels with streams.
 
@@ -2643,14 +2878,20 @@ async def get_streams(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/stream-groups")
-async def get_stream_groups(bypass_cache: bool = False):
+@app.get("/api/stream-groups", tags=["Streams"])
+async def get_stream_groups(bypass_cache: bool = False, m3u_account_id: Optional[int] = None):
     """Get all stream groups with their stream counts.
+
+    Args:
+        bypass_cache: Skip cache and fetch fresh data
+        m3u_account_id: Optional provider ID to filter groups. When provided,
+                       only returns groups that have streams from this provider.
 
     Returns list of objects: [{"name": "Group Name", "count": 42}, ...]
     """
     cache = get_cache()
-    cache_key = "stream_groups_with_counts"
+    # Include provider filter in cache key for proper cache isolation
+    cache_key = f"stream_groups_with_counts:{m3u_account_id}" if m3u_account_id else "stream_groups_with_counts"
 
     # Try cache first (unless bypassed)
     if not bypass_cache:
@@ -2660,14 +2901,14 @@ async def get_stream_groups(bypass_cache: bool = False):
 
     client = get_client()
     try:
-        result = await client.get_stream_groups_with_counts()
+        result = await client.get_stream_groups_with_counts(m3u_account_id=m3u_account_id)
         cache.set(cache_key, result)
         return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/cache/invalidate")
+@app.post("/api/cache/invalidate", tags=["Cache"])
 async def invalidate_cache(prefix: Optional[str] = None):
     """Invalidate cached data. If prefix is provided, only invalidate matching keys."""
     cache = get_cache()
@@ -2679,7 +2920,7 @@ async def invalidate_cache(prefix: Optional[str] = None):
         return {"message": f"Cleared entire cache ({count} entries)"}
 
 
-@app.get("/api/cache/stats")
+@app.get("/api/cache/stats", tags=["Cache"])
 async def cache_stats():
     """Get cache statistics."""
     cache = get_cache()
@@ -2687,7 +2928,7 @@ async def cache_stats():
 
 
 # Providers (M3U Accounts)
-@app.get("/api/providers")
+@app.get("/api/providers", tags=["Providers"])
 async def get_providers():
     client = get_client()
     try:
@@ -2696,7 +2937,7 @@ async def get_providers():
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/providers/group-settings")
+@app.get("/api/providers/group-settings", tags=["Providers"])
 async def get_all_provider_group_settings():
     """Get group settings from all M3U providers, mapped by channel_group_id."""
     client = get_client()
@@ -2707,7 +2948,7 @@ async def get_all_provider_group_settings():
 
 
 # EPG Sources
-@app.get("/api/epg/sources")
+@app.get("/api/epg/sources", tags=["EPG"])
 async def get_epg_sources():
     client = get_client()
     try:
@@ -2716,7 +2957,7 @@ async def get_epg_sources():
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/epg/sources/{source_id}")
+@app.get("/api/epg/sources/{source_id}", tags=["EPG"])
 async def get_epg_source(source_id: int):
     client = get_client()
     try:
@@ -2725,7 +2966,7 @@ async def get_epg_source(source_id: int):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/epg/sources")
+@app.post("/api/epg/sources", tags=["EPG"])
 async def create_epg_source(request: Request):
     client = get_client()
     try:
@@ -2747,7 +2988,7 @@ async def create_epg_source(request: Request):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.patch("/api/epg/sources/{source_id}")
+@app.patch("/api/epg/sources/{source_id}", tags=["EPG"])
 async def update_epg_source(source_id: int, request: Request):
     client = get_client()
     try:
@@ -2772,7 +3013,7 @@ async def update_epg_source(source_id: int, request: Request):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.delete("/api/epg/sources/{source_id}")
+@app.delete("/api/epg/sources/{source_id}", tags=["EPG"])
 async def delete_epg_source(source_id: int):
     client = get_client()
     try:
@@ -2888,7 +3129,7 @@ async def _poll_epg_refresh_completion(source_id: int, source_name: str, initial
         logger.error(f"[EPG-REFRESH] Error polling for '{source_name}' completion: {e}")
 
 
-@app.post("/api/epg/sources/{source_id}/refresh")
+@app.post("/api/epg/sources/{source_id}/refresh", tags=["EPG"])
 async def refresh_epg_source(source_id: int):
     """Trigger refresh for a single EPG source.
 
@@ -2931,7 +3172,7 @@ async def refresh_epg_source(source_id: int):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/epg/import")
+@app.post("/api/epg/import", tags=["EPG"])
 async def trigger_epg_import():
     client = get_client()
     try:
@@ -2941,7 +3182,7 @@ async def trigger_epg_import():
 
 
 # EPG Data
-@app.get("/api/epg/data")
+@app.get("/api/epg/data", tags=["EPG"])
 async def get_epg_data(
     page: int = 1,
     page_size: int = 100,
@@ -2960,7 +3201,7 @@ async def get_epg_data(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/epg/data/{data_id}")
+@app.get("/api/epg/data/{data_id}", tags=["EPG"])
 async def get_epg_data_by_id(data_id: int):
     client = get_client()
     try:
@@ -2969,7 +3210,7 @@ async def get_epg_data_by_id(data_id: int):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/epg/grid")
+@app.get("/api/epg/grid", tags=["EPG"])
 async def get_epg_grid(start: Optional[str] = None, end: Optional[str] = None):
     """Get EPG grid (programs from previous hour + next 24 hours).
 
@@ -2997,7 +3238,7 @@ async def get_epg_grid(start: Optional[str] = None, end: Optional[str] = None):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/epg/lcn")
+@app.get("/api/epg/lcn", tags=["EPG"])
 async def get_epg_lcn_by_tvg_id(tvg_id: str):
     """Get LCN (Logical Channel Number) for a TVG-ID from EPG XML sources.
 
@@ -3171,7 +3412,7 @@ class BatchLCNRequest(BaseModel):
     items: list[LCNLookupItem]
 
 
-@app.post("/api/epg/lcn/batch")
+@app.post("/api/epg/lcn/batch", tags=["EPG"])
 async def get_epg_lcn_batch(request: BatchLCNRequest):
     """Get LCN (Logical Channel Number) for multiple TVG-IDs from EPG XML sources.
 
@@ -3355,7 +3596,7 @@ async def get_epg_lcn_batch(request: BatchLCNRequest):
 
 
 # Stream Profiles
-@app.get("/api/stream-profiles")
+@app.get("/api/stream-profiles", tags=["Stream Profiles"])
 async def get_stream_profiles():
     client = get_client()
     try:
@@ -3368,7 +3609,7 @@ async def get_stream_profiles():
 # Channel Profiles
 # -------------------------------------------------------------------------
 
-@app.get("/api/channel-profiles")
+@app.get("/api/channel-profiles", tags=["Channel Profiles"])
 async def get_channel_profiles():
     """Get all channel profiles."""
     client = get_client()
@@ -3378,7 +3619,7 @@ async def get_channel_profiles():
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/channel-profiles")
+@app.post("/api/channel-profiles", tags=["Channel Profiles"])
 async def create_channel_profile(request: Request):
     """Create a new channel profile."""
     client = get_client()
@@ -3389,7 +3630,7 @@ async def create_channel_profile(request: Request):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/channel-profiles/{profile_id}")
+@app.get("/api/channel-profiles/{profile_id}", tags=["Channel Profiles"])
 async def get_channel_profile(profile_id: int):
     """Get a single channel profile."""
     client = get_client()
@@ -3399,7 +3640,7 @@ async def get_channel_profile(profile_id: int):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.patch("/api/channel-profiles/{profile_id}")
+@app.patch("/api/channel-profiles/{profile_id}", tags=["Channel Profiles"])
 async def update_channel_profile(profile_id: int, request: Request):
     """Update a channel profile."""
     client = get_client()
@@ -3410,7 +3651,7 @@ async def update_channel_profile(profile_id: int, request: Request):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.delete("/api/channel-profiles/{profile_id}")
+@app.delete("/api/channel-profiles/{profile_id}", tags=["Channel Profiles"])
 async def delete_channel_profile(profile_id: int):
     """Delete a channel profile."""
     client = get_client()
@@ -3421,7 +3662,7 @@ async def delete_channel_profile(profile_id: int):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.patch("/api/channel-profiles/{profile_id}/channels/bulk-update")
+@app.patch("/api/channel-profiles/{profile_id}/channels/bulk-update", tags=["Channel Profiles"])
 async def bulk_update_profile_channels(profile_id: int, request: Request):
     """Bulk enable/disable channels for a profile."""
     client = get_client()
@@ -3432,7 +3673,7 @@ async def bulk_update_profile_channels(profile_id: int, request: Request):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.patch("/api/channel-profiles/{profile_id}/channels/{channel_id}")
+@app.patch("/api/channel-profiles/{profile_id}/channels/{channel_id}", tags=["Channel Profiles"])
 async def update_profile_channel(profile_id: int, channel_id: int, request: Request):
     """Enable/disable a single channel for a profile."""
     client = get_client()
@@ -3447,7 +3688,7 @@ async def update_profile_channel(profile_id: int, channel_id: int, request: Requ
 # M3U Account Management
 # -------------------------------------------------------------------------
 
-@app.get("/api/m3u/accounts/{account_id}")
+@app.get("/api/m3u/accounts/{account_id}", tags=["M3U"])
 async def get_m3u_account(account_id: int):
     """Get a single M3U account by ID."""
     client = get_client()
@@ -3457,7 +3698,7 @@ async def get_m3u_account(account_id: int):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/m3u/accounts/{account_id}/stream-metadata")
+@app.get("/api/m3u/accounts/{account_id}/stream-metadata", tags=["M3U"])
 async def get_m3u_stream_metadata(account_id: int):
     """Fetch and parse M3U file to extract stream metadata (tvg-id -> tvc-guide-stationid mapping).
 
@@ -3537,7 +3778,7 @@ async def get_m3u_stream_metadata(account_id: int):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/m3u/accounts")
+@app.post("/api/m3u/accounts", tags=["M3U"])
 async def create_m3u_account(request: Request):
     """Create a new M3U account."""
     client = get_client()
@@ -3560,7 +3801,7 @@ async def create_m3u_account(request: Request):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/m3u/upload")
+@app.post("/api/m3u/upload", tags=["M3U"])
 async def upload_m3u_file(file: UploadFile = File(...)):
     """Upload an M3U file and return the path for use with M3U accounts.
 
@@ -3616,7 +3857,7 @@ async def upload_m3u_file(file: UploadFile = File(...)):
         raise HTTPException(status_code=500, detail=f"Failed to save file: {str(e)}")
 
 
-@app.put("/api/m3u/accounts/{account_id}")
+@app.put("/api/m3u/accounts/{account_id}", tags=["M3U"])
 async def update_m3u_account(account_id: int, request: Request):
     """Update an M3U account (full update)."""
     client = get_client()
@@ -3641,7 +3882,7 @@ async def update_m3u_account(account_id: int, request: Request):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.patch("/api/m3u/accounts/{account_id}")
+@app.patch("/api/m3u/accounts/{account_id}", tags=["M3U"])
 async def patch_m3u_account(account_id: int, request: Request):
     """Partially update an M3U account (e.g., toggle is_active)."""
     client = get_client()
@@ -3673,7 +3914,7 @@ async def patch_m3u_account(account_id: int, request: Request):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.delete("/api/m3u/accounts/{account_id}")
+@app.delete("/api/m3u/accounts/{account_id}", tags=["M3U"])
 async def delete_m3u_account(account_id: int, delete_groups: bool = True):
     """Delete an M3U account and optionally its associated channel groups.
 
@@ -3698,6 +3939,12 @@ async def delete_m3u_account(account_id: int, delete_groups: bool = True):
 
         # Delete the M3U account first
         await client.delete_m3u_account(account_id)
+
+        # Invalidate caches - streams from this M3U are now gone
+        cache = get_cache()
+        streams_cleared = cache.invalidate_prefix("streams:")
+        groups_cleared = cache.invalidate("channel_groups")
+        logger.info(f"Invalidated cache after M3U deletion: {streams_cleared} stream entries, channel_groups={groups_cleared}")
 
         # Now delete associated channel groups
         deleted_groups = []
@@ -3745,6 +3992,123 @@ async def delete_m3u_account(account_id: int, delete_groups: bool = True):
 # -------------------------------------------------------------------------
 
 
+async def _capture_m3u_changes_after_refresh(account_id: int, account_name: str):
+    """
+    Capture M3U state changes after a refresh.
+
+    Fetches current groups/streams for the account, compares with previous
+    snapshot, and persists any detected changes.
+
+    IMPORTANT: Gets ALL groups from the M3U source (not just enabled ones) by:
+    1. Getting the M3U account which has channel_groups with group IDs
+    2. Getting all channel groups to build ID -> name mapping
+    3. Getting actual stream counts per group (only available for enabled groups)
+    4. Merging: all groups get names, stream counts where available
+    """
+    from m3u_change_detector import M3UChangeDetector
+
+    try:
+        api_client = get_client()
+
+        # Get the M3U account - channel_groups contains ALL groups from this M3U source
+        account_data = await api_client.get_m3u_account(account_id)
+        account_channel_groups = account_data.get("channel_groups", [])
+
+        # Get all channel groups to build ID -> name mapping
+        all_channel_groups = await api_client.get_channel_groups()
+        group_lookup = {
+            g["id"]: g["name"]
+            for g in all_channel_groups
+        }
+
+        # Get actual stream counts (only available for enabled groups with imported streams)
+        stream_counts = await api_client.get_stream_groups_with_counts(m3u_account_id=account_id)
+        stream_count_lookup = {
+            g["name"]: g["count"]
+            for g in stream_counts
+        }
+
+        # Build list of enabled group names to fetch stream names for
+        enabled_group_names = []
+        for acg in account_channel_groups:
+            group_id = acg.get("channel_group")
+            if group_id and group_id in group_lookup and acg.get("enabled", False):
+                enabled_group_names.append(group_lookup[group_id])
+
+        # Fetch stream names for enabled groups (limit to first 50 per group)
+        stream_names_by_group = {}
+        MAX_STREAM_NAMES = 500
+        logger.info(f"[M3U-CHANGE] Fetching stream names for {len(enabled_group_names)} enabled groups: {enabled_group_names[:5]}{'...' if len(enabled_group_names) > 5 else ''}")
+        for group_name in enabled_group_names:
+            try:
+                streams_response = await api_client.get_streams(
+                    page=1,
+                    page_size=MAX_STREAM_NAMES,
+                    channel_group_name=group_name,
+                    m3u_account=account_id,
+                )
+                results = streams_response.get("results", [])
+                stream_names = [s.get("name", "") for s in results]
+                logger.debug(f"[M3U-CHANGE] Group '{group_name}': got {len(results)} streams, {len(stream_names)} names")
+                if stream_names:
+                    stream_names_by_group[group_name] = stream_names
+            except Exception as e:
+                logger.warning(f"[M3U-CHANGE] Could not fetch streams for group '{group_name}': {e}")
+
+        logger.info(f"[M3U-CHANGE] Captured stream names for {len(stream_names_by_group)} groups")
+
+        # Match up: for each group in this M3U account, get name and stream count
+        current_groups = []
+        total_streams = 0
+
+        for acg in account_channel_groups:
+            group_id = acg.get("channel_group")
+            if group_id and group_id in group_lookup:
+                group_name = group_lookup[group_id]
+                # Get stream count if available (only for enabled groups), otherwise 0
+                stream_count = stream_count_lookup.get(group_name, 0)
+                enabled = acg.get("enabled", False)
+                current_groups.append({
+                    "name": group_name,
+                    "stream_count": stream_count,
+                    "enabled": enabled,
+                })
+                total_streams += stream_count
+
+        logger.info(
+            f"[M3U-CHANGE] Capturing state for account {account_id} ({account_name}): "
+            f"{len(current_groups)} groups, {total_streams} streams (all groups from M3U)"
+        )
+
+        # Use change detector to compare and persist
+        db = get_session()
+        try:
+            detector = M3UChangeDetector(db)
+            change_set = detector.detect_changes(
+                m3u_account_id=account_id,
+                current_groups=current_groups,
+                current_total_streams=total_streams,
+                stream_names_by_group=stream_names_by_group,
+            )
+
+            if change_set.has_changes:
+                # Persist the changes
+                detector.persist_changes(change_set)
+                logger.info(
+                    f"[M3U-CHANGE] Detected and persisted changes for {account_name}: "
+                    f"+{len(change_set.groups_added)} groups, -{len(change_set.groups_removed)} groups, "
+                    f"+{sum(s.count for s in change_set.streams_added)} streams, "
+                    f"-{sum(s.count for s in change_set.streams_removed)} streams"
+                )
+            else:
+                logger.debug(f"[M3U-CHANGE] No changes detected for {account_name}")
+        finally:
+            db.close()
+
+    except Exception as e:
+        logger.error(f"[M3U-CHANGE] Failed to capture changes for {account_name}: {e}")
+
+
 async def _poll_m3u_refresh_completion(account_id: int, account_name: str, initial_updated):
     """
     Background task to poll Dispatcharr until M3U refresh completes.
@@ -3789,6 +4153,15 @@ async def _poll_m3u_refresh_completion(account_id: int, account_name: str, initi
                 wait_duration = (datetime.utcnow() - wait_start).total_seconds()
                 logger.info(f"[M3U-REFRESH] '{account_name}' refresh complete in {wait_duration:.1f}s")
 
+                # Capture M3U changes after refresh
+                await _capture_m3u_changes_after_refresh(account_id, account_name)
+
+                # Send immediate digest if configured
+                try:
+                    await send_immediate_digest(account_id)
+                except Exception as e:
+                    logger.warning(f"[M3U-REFRESH] Failed to send immediate digest for '{account_name}': {e}")
+
                 journal.log_entry(
                     category="m3u",
                     action_type="refresh",
@@ -3811,6 +4184,15 @@ async def _poll_m3u_refresh_completion(account_id: int, account_name: str, initi
                 # After 30 seconds, assume complete if no timestamp field available
                 wait_duration = (datetime.utcnow() - wait_start).total_seconds()
                 logger.info(f"[M3U-REFRESH] '{account_name}' - assuming complete after {wait_duration:.0f}s (no timestamp field)")
+
+                # Capture M3U changes after refresh
+                await _capture_m3u_changes_after_refresh(account_id, account_name)
+
+                # Send immediate digest if configured
+                try:
+                    await send_immediate_digest(account_id)
+                except Exception as e:
+                    logger.warning(f"[M3U-REFRESH] Failed to send immediate digest for '{account_name}': {e}")
 
                 journal.log_entry(
                     category="m3u",
@@ -3835,7 +4217,7 @@ async def _poll_m3u_refresh_completion(account_id: int, account_name: str, initi
         logger.error(f"[M3U-REFRESH] Error polling for '{account_name}' completion: {e}")
 
 
-@app.post("/api/m3u/refresh")
+@app.post("/api/m3u/refresh", tags=["M3U"])
 async def refresh_all_m3u_accounts():
     """Trigger refresh for all active M3U accounts."""
     client = get_client()
@@ -3845,7 +4227,7 @@ async def refresh_all_m3u_accounts():
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/m3u/refresh/{account_id}")
+@app.post("/api/m3u/refresh/{account_id}", tags=["M3U"])
 async def refresh_m3u_account(account_id: int):
     """Trigger refresh for a single M3U account.
 
@@ -3888,7 +4270,7 @@ async def refresh_m3u_account(account_id: int):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/m3u/accounts/{account_id}/refresh-vod")
+@app.post("/api/m3u/accounts/{account_id}/refresh-vod", tags=["M3U"])
 async def refresh_m3u_vod(account_id: int):
     """Refresh VOD content for an XtreamCodes account."""
     client = get_client()
@@ -3902,7 +4284,7 @@ async def refresh_m3u_vod(account_id: int):
 # M3U Filters
 # -------------------------------------------------------------------------
 
-@app.get("/api/m3u/accounts/{account_id}/filters")
+@app.get("/api/m3u/accounts/{account_id}/filters", tags=["M3U"])
 async def get_m3u_filters(account_id: int):
     """Get all filters for an M3U account."""
     client = get_client()
@@ -3912,7 +4294,7 @@ async def get_m3u_filters(account_id: int):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/m3u/accounts/{account_id}/filters")
+@app.post("/api/m3u/accounts/{account_id}/filters", tags=["M3U"])
 async def create_m3u_filter(account_id: int, request: Request):
     """Create a new filter for an M3U account."""
     client = get_client()
@@ -3923,7 +4305,7 @@ async def create_m3u_filter(account_id: int, request: Request):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.put("/api/m3u/accounts/{account_id}/filters/{filter_id}")
+@app.put("/api/m3u/accounts/{account_id}/filters/{filter_id}", tags=["M3U"])
 async def update_m3u_filter(account_id: int, filter_id: int, request: Request):
     """Update a filter for an M3U account."""
     client = get_client()
@@ -3934,7 +4316,7 @@ async def update_m3u_filter(account_id: int, filter_id: int, request: Request):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.delete("/api/m3u/accounts/{account_id}/filters/{filter_id}")
+@app.delete("/api/m3u/accounts/{account_id}/filters/{filter_id}", tags=["M3U"])
 async def delete_m3u_filter(account_id: int, filter_id: int):
     """Delete a filter from an M3U account."""
     client = get_client()
@@ -3949,7 +4331,7 @@ async def delete_m3u_filter(account_id: int, filter_id: int):
 # M3U Profiles
 # -------------------------------------------------------------------------
 
-@app.get("/api/m3u/accounts/{account_id}/profiles/")
+@app.get("/api/m3u/accounts/{account_id}/profiles/", tags=["M3U"])
 async def get_m3u_profiles(account_id: int):
     """Get all profiles for an M3U account."""
     client = get_client()
@@ -3959,7 +4341,7 @@ async def get_m3u_profiles(account_id: int):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/m3u/accounts/{account_id}/profiles/")
+@app.post("/api/m3u/accounts/{account_id}/profiles/", tags=["M3U"])
 async def create_m3u_profile(account_id: int, request: Request):
     """Create a new profile for an M3U account."""
     client = get_client()
@@ -3970,7 +4352,7 @@ async def create_m3u_profile(account_id: int, request: Request):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/m3u/accounts/{account_id}/profiles/{profile_id}/")
+@app.get("/api/m3u/accounts/{account_id}/profiles/{profile_id}/", tags=["M3U"])
 async def get_m3u_profile(account_id: int, profile_id: int):
     """Get a specific profile for an M3U account."""
     client = get_client()
@@ -3980,7 +4362,7 @@ async def get_m3u_profile(account_id: int, profile_id: int):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.patch("/api/m3u/accounts/{account_id}/profiles/{profile_id}/")
+@app.patch("/api/m3u/accounts/{account_id}/profiles/{profile_id}/", tags=["M3U"])
 async def update_m3u_profile(account_id: int, profile_id: int, request: Request):
     """Update a profile for an M3U account."""
     client = get_client()
@@ -3991,7 +4373,7 @@ async def update_m3u_profile(account_id: int, profile_id: int, request: Request)
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.delete("/api/m3u/accounts/{account_id}/profiles/{profile_id}/")
+@app.delete("/api/m3u/accounts/{account_id}/profiles/{profile_id}/", tags=["M3U"])
 async def delete_m3u_profile(account_id: int, profile_id: int):
     """Delete a profile from an M3U account."""
     client = get_client()
@@ -4006,7 +4388,7 @@ async def delete_m3u_profile(account_id: int, profile_id: int):
 # M3U Group Settings
 # -------------------------------------------------------------------------
 
-@app.patch("/api/m3u/accounts/{account_id}/group-settings")
+@app.patch("/api/m3u/accounts/{account_id}/group-settings", tags=["M3U"])
 async def update_m3u_group_settings(account_id: int, request: Request):
     """Update group settings for an M3U account."""
     client = get_client()
@@ -4136,7 +4518,7 @@ async def update_m3u_group_settings(account_id: int, request: Request):
 # Server Groups
 # -------------------------------------------------------------------------
 
-@app.get("/api/m3u/server-groups")
+@app.get("/api/m3u/server-groups", tags=["M3U"])
 async def get_server_groups():
     """Get all server groups."""
     client = get_client()
@@ -4146,7 +4528,7 @@ async def get_server_groups():
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/m3u/server-groups")
+@app.post("/api/m3u/server-groups", tags=["M3U"])
 async def create_server_group(request: Request):
     """Create a new server group."""
     client = get_client()
@@ -4171,7 +4553,7 @@ async def create_server_group(request: Request):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.patch("/api/m3u/server-groups/{group_id}")
+@app.patch("/api/m3u/server-groups/{group_id}", tags=["M3U"])
 async def update_server_group(group_id: int, request: Request):
     """Update a server group."""
     client = get_client()
@@ -4210,7 +4592,7 @@ async def update_server_group(group_id: int, request: Request):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.delete("/api/m3u/server-groups/{group_id}")
+@app.delete("/api/m3u/server-groups/{group_id}", tags=["M3U"])
 async def delete_server_group(group_id: int):
     """Delete a server group."""
     client = get_client()
@@ -4237,8 +4619,322 @@ async def delete_server_group(group_id: int):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# M3U Change Tracking API
+@app.get("/api/m3u/changes", tags=["M3U Digest"])
+async def get_m3u_changes(
+    page: int = 1,
+    page_size: int = 50,
+    m3u_account_id: Optional[int] = None,
+    change_type: Optional[str] = None,
+    enabled: Optional[bool] = None,
+    sort_by: Optional[str] = None,
+    sort_order: Optional[str] = "desc",
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+):
+    """
+    Get paginated list of M3U change logs.
+
+    Args:
+        page: Page number (1-indexed)
+        page_size: Number of items per page
+        m3u_account_id: Filter by M3U account ID
+        change_type: Filter by change type (group_added, group_removed, streams_added, streams_removed)
+        enabled: Filter by enabled status (true/false)
+        sort_by: Column to sort by (change_time, m3u_account_id, change_type, group_name, count, enabled)
+        sort_order: Sort order (asc or desc, default: desc)
+        date_from: Filter changes from this date (ISO format)
+        date_to: Filter changes until this date (ISO format)
+    """
+    from datetime import datetime as dt
+    from models import M3UChangeLog
+
+    db = get_session()
+    try:
+        query = db.query(M3UChangeLog)
+
+        # Apply filters
+        if m3u_account_id:
+            query = query.filter(M3UChangeLog.m3u_account_id == m3u_account_id)
+        if change_type:
+            query = query.filter(M3UChangeLog.change_type == change_type)
+        if enabled is not None:
+            query = query.filter(M3UChangeLog.enabled == enabled)
+        if date_from:
+            try:
+                date_from_dt = dt.fromisoformat(date_from.replace("Z", "+00:00"))
+                query = query.filter(M3UChangeLog.change_time >= date_from_dt)
+            except ValueError:
+                pass
+        if date_to:
+            try:
+                date_to_dt = dt.fromisoformat(date_to.replace("Z", "+00:00"))
+                query = query.filter(M3UChangeLog.change_time <= date_to_dt)
+            except ValueError:
+                pass
+
+        # Get total count
+        total = query.count()
+
+        # Apply sorting
+        sort_columns = {
+            "change_time": M3UChangeLog.change_time,
+            "m3u_account_id": M3UChangeLog.m3u_account_id,
+            "change_type": M3UChangeLog.change_type,
+            "group_name": M3UChangeLog.group_name,
+            "count": M3UChangeLog.count,
+            "enabled": M3UChangeLog.enabled,
+        }
+        sort_column = sort_columns.get(sort_by, M3UChangeLog.change_time)
+        if sort_order == "asc":
+            query = query.order_by(sort_column.asc())
+        else:
+            query = query.order_by(sort_column.desc())
+
+        # Apply pagination
+        changes = (
+            query.offset((page - 1) * page_size)
+            .limit(page_size)
+            .all()
+        )
+
+        return {
+            "results": [c.to_dict() for c in changes],
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+            "total_pages": (total + page_size - 1) // page_size,
+        }
+    finally:
+        db.close()
+
+
+@app.get("/api/m3u/changes/summary", tags=["M3U Digest"])
+async def get_m3u_changes_summary(
+    hours: int = 24,
+    m3u_account_id: Optional[int] = None,
+):
+    """
+    Get aggregated summary of M3U changes.
+
+    Args:
+        hours: Look back this many hours (default: 24)
+        m3u_account_id: Filter by M3U account ID
+    """
+    from datetime import datetime as dt, timedelta
+    from m3u_change_detector import M3UChangeDetector
+
+    db = get_session()
+    try:
+        detector = M3UChangeDetector(db)
+        since = dt.utcnow() - timedelta(hours=hours)
+        summary = detector.get_change_summary(since, m3u_account_id)
+        return summary
+    finally:
+        db.close()
+
+
+@app.get("/api/m3u/accounts/{account_id}/changes", tags=["M3U"])
+async def get_m3u_account_changes(
+    account_id: int,
+    page: int = 1,
+    page_size: int = 50,
+    change_type: Optional[str] = None,
+):
+    """
+    Get change history for a specific M3U account.
+
+    Args:
+        account_id: M3U account ID
+        page: Page number (1-indexed)
+        page_size: Number of items per page
+        change_type: Filter by change type
+    """
+    from models import M3UChangeLog
+
+    db = get_session()
+    try:
+        query = db.query(M3UChangeLog).filter(M3UChangeLog.m3u_account_id == account_id)
+
+        if change_type:
+            query = query.filter(M3UChangeLog.change_type == change_type)
+
+        total = query.count()
+
+        changes = (
+            query.order_by(M3UChangeLog.change_time.desc())
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+            .all()
+        )
+
+        return {
+            "results": [c.to_dict() for c in changes],
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+            "total_pages": (total + page_size - 1) // page_size,
+            "m3u_account_id": account_id,
+        }
+    finally:
+        db.close()
+
+
+@app.get("/api/m3u/snapshots", tags=["M3U"])
+async def get_m3u_snapshots(
+    m3u_account_id: Optional[int] = None,
+    limit: int = 10,
+):
+    """
+    Get recent M3U snapshots.
+
+    Args:
+        m3u_account_id: Filter by M3U account ID
+        limit: Maximum number of snapshots to return
+    """
+    from models import M3USnapshot
+
+    db = get_session()
+    try:
+        query = db.query(M3USnapshot)
+
+        if m3u_account_id:
+            query = query.filter(M3USnapshot.m3u_account_id == m3u_account_id)
+
+        snapshots = query.order_by(M3USnapshot.snapshot_time.desc()).limit(limit).all()
+
+        return [s.to_dict() for s in snapshots]
+    finally:
+        db.close()
+
+
+# M3U Digest Settings API
+@app.get("/api/m3u/digest/settings", tags=["M3U Digest"])
+async def get_m3u_digest_settings():
+    """Get M3U digest email settings."""
+    from tasks.m3u_digest import get_or_create_digest_settings
+
+    db = get_session()
+    try:
+        settings = get_or_create_digest_settings(db)
+        return settings.to_dict()
+    finally:
+        db.close()
+
+
+class M3UDigestSettingsUpdate(BaseModel):
+    """Request model for updating M3U digest settings."""
+    enabled: Optional[bool] = None
+    frequency: Optional[str] = None  # immediate, hourly, daily, weekly
+    email_recipients: Optional[List[str]] = None
+    include_group_changes: Optional[bool] = None
+    include_stream_changes: Optional[bool] = None
+    show_detailed_list: Optional[bool] = None  # Show detailed list vs just summary
+    min_changes_threshold: Optional[int] = None
+
+
+@app.put("/api/m3u/digest/settings", tags=["M3U Digest"])
+async def update_m3u_digest_settings(request: M3UDigestSettingsUpdate):
+    """Update M3U digest email settings."""
+    from tasks.m3u_digest import get_or_create_digest_settings
+    import re
+
+    db = get_session()
+    try:
+        settings = get_or_create_digest_settings(db)
+
+        # Validate and apply updates
+        if request.enabled is not None:
+            settings.enabled = request.enabled
+
+        if request.frequency is not None:
+            if request.frequency not in ("immediate", "hourly", "daily", "weekly"):
+                raise HTTPException(
+                    status_code=400,
+                    detail="Invalid frequency. Must be: immediate, hourly, daily, or weekly"
+                )
+            settings.frequency = request.frequency
+
+        if request.email_recipients is not None:
+            # Validate email addresses
+            email_pattern = re.compile(r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$")
+            for email in request.email_recipients:
+                if not email_pattern.match(email):
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Invalid email address: {email}"
+                    )
+            settings.set_email_recipients(request.email_recipients)
+
+        if request.include_group_changes is not None:
+            settings.include_group_changes = request.include_group_changes
+
+        if request.include_stream_changes is not None:
+            settings.include_stream_changes = request.include_stream_changes
+
+        if request.show_detailed_list is not None:
+            settings.show_detailed_list = request.show_detailed_list
+
+        if request.min_changes_threshold is not None:
+            if request.min_changes_threshold < 1:
+                raise HTTPException(
+                    status_code=400,
+                    detail="min_changes_threshold must be at least 1"
+                )
+            settings.min_changes_threshold = request.min_changes_threshold
+
+        db.commit()
+        db.refresh(settings)
+
+        # Log to journal
+        journal.log_entry(
+            category="m3u",
+            action_type="update",
+            entity_id=settings.id,
+            entity_name="M3U Digest Settings",
+            description="Updated M3U digest email settings",
+            after_value=settings.to_dict(),
+        )
+
+        return settings.to_dict()
+    finally:
+        db.close()
+
+
+@app.post("/api/m3u/digest/test", tags=["M3U Digest"])
+async def send_test_m3u_digest():
+    """Send a test M3U digest email."""
+    from tasks.m3u_digest import M3UDigestTask, get_or_create_digest_settings
+
+    db = get_session()
+    try:
+        settings = get_or_create_digest_settings(db)
+
+        if not settings.get_email_recipients():
+            raise HTTPException(
+                status_code=400,
+                detail="No email recipients configured. Please add recipients first."
+            )
+
+        task = M3UDigestTask()
+        result = await task.execute(force=True)
+
+        return {
+            "success": result.success,
+            "message": result.message,
+            "details": result.details,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(f"Failed to send test M3U digest: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        db.close()
+
+
 # Journal API
-@app.get("/api/journal")
+@app.get("/api/journal", tags=["Journal"])
 async def get_journal_entries(
     page: int = 1,
     page_size: int = 50,
@@ -4281,13 +4977,13 @@ async def get_journal_entries(
     )
 
 
-@app.get("/api/journal/stats")
+@app.get("/api/journal/stats", tags=["Journal"])
 async def get_journal_stats():
     """Get summary statistics for the journal."""
     return journal.get_stats()
 
 
-@app.delete("/api/journal/purge")
+@app.delete("/api/journal/purge", tags=["Journal"])
 async def purge_journal_entries(days: int = 90):
     """Delete journal entries older than the specified number of days."""
     deleted_count = journal.purge_old_entries(days=days)
@@ -4299,7 +4995,7 @@ async def purge_journal_entries(days: int = 90):
 # =============================================================================
 
 
-@app.get("/api/notifications")
+@app.get("/api/notifications", tags=["Notifications"])
 async def get_notifications(
     page: int = 1,
     page_size: int = 50,
@@ -4430,7 +5126,7 @@ async def create_notification_internal(
         session.close()
 
 
-@app.post("/api/notifications")
+@app.post("/api/notifications", tags=["Notifications"])
 async def create_notification(
     notification_type: str = "info",
     title: Optional[str] = None,
@@ -4510,7 +5206,7 @@ async def _dispatch_to_alert_channels(
         logger.error(f"Failed to dispatch alerts: {e}")
 
 
-@app.patch("/api/notifications/mark-all-read")
+@app.patch("/api/notifications/mark-all-read", tags=["Notifications"])
 async def mark_all_notifications_read():
     """Mark all notifications as read."""
     from datetime import datetime
@@ -4528,7 +5224,7 @@ async def mark_all_notifications_read():
         session.close()
 
 
-@app.patch("/api/notifications/{notification_id}")
+@app.patch("/api/notifications/{notification_id}", tags=["Notifications"])
 async def update_notification(notification_id: int, read: Optional[bool] = None):
     """Update a notification (mark as read/unread)."""
     from datetime import datetime
@@ -4551,7 +5247,7 @@ async def update_notification(notification_id: int, read: Optional[bool] = None)
         session.close()
 
 
-@app.delete("/api/notifications/{notification_id}")
+@app.delete("/api/notifications/{notification_id}", tags=["Notifications"])
 async def delete_notification(notification_id: int):
     """Delete a specific notification."""
     from models import Notification
@@ -4569,7 +5265,7 @@ async def delete_notification(notification_id: int):
         session.close()
 
 
-@app.delete("/api/notifications")
+@app.delete("/api/notifications", tags=["Notifications"])
 async def clear_all_notifications(read_only: bool = True):
     """Clear notifications. By default only clears read notifications."""
     from models import Notification
@@ -4655,7 +5351,7 @@ def validate_alert_sources(alert_sources: Optional[dict]) -> Optional[str]:
     return None
 
 
-@app.get("/api/alert-methods/types")
+@app.get("/api/alert-methods/types", tags=["Alert Methods"])
 async def get_alert_method_types():
     """Get available alert method types and their configuration fields."""
     logger.debug("Fetching alert method types")
@@ -4668,7 +5364,7 @@ async def get_alert_method_types():
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/alert-methods")
+@app.get("/api/alert-methods", tags=["Alert Methods"])
 async def list_alert_methods():
     """List all configured alert methods."""
     from models import AlertMethod as AlertMethodModel
@@ -4709,7 +5405,7 @@ async def list_alert_methods():
         session.close()
 
 
-@app.post("/api/alert-methods")
+@app.post("/api/alert-methods", tags=["Alert Methods"])
 async def create_alert_method(data: AlertMethodCreate):
     """Create a new alert method."""
     from models import AlertMethod as AlertMethodModel
@@ -4776,7 +5472,7 @@ async def create_alert_method(data: AlertMethodCreate):
             session.close()
 
 
-@app.get("/api/alert-methods/{method_id}")
+@app.get("/api/alert-methods/{method_id}", tags=["Alert Methods"])
 async def get_alert_method(method_id: int):
     """Get a specific alert method."""
     from models import AlertMethod as AlertMethodModel
@@ -4823,7 +5519,7 @@ async def get_alert_method(method_id: int):
         session.close()
 
 
-@app.patch("/api/alert-methods/{method_id}")
+@app.patch("/api/alert-methods/{method_id}", tags=["Alert Methods"])
 async def update_alert_method(method_id: int, data: AlertMethodUpdate):
     """Update an alert method."""
     from models import AlertMethod as AlertMethodModel
@@ -4885,7 +5581,7 @@ async def update_alert_method(method_id: int, data: AlertMethodUpdate):
         session.close()
 
 
-@app.delete("/api/alert-methods/{method_id}")
+@app.delete("/api/alert-methods/{method_id}", tags=["Alert Methods"])
 async def delete_alert_method(method_id: int):
     """Delete an alert method."""
     from models import AlertMethod as AlertMethodModel
@@ -4919,7 +5615,7 @@ async def delete_alert_method(method_id: int):
         session.close()
 
 
-@app.post("/api/alert-methods/{method_id}/test")
+@app.post("/api/alert-methods/{method_id}/test", tags=["Alert Methods"])
 async def test_alert_method(method_id: int):
     """Test an alert method by sending a test message."""
     from models import AlertMethod as AlertMethodModel
@@ -4966,7 +5662,7 @@ async def test_alert_method(method_id: int):
 # =============================================================================
 
 
-@app.get("/api/stats/channels")
+@app.get("/api/stats/channels", tags=["Stats"])
 async def get_channel_stats():
     """Get status of all active channels.
 
@@ -4980,7 +5676,7 @@ async def get_channel_stats():
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/stats/channels/{channel_id}")
+@app.get("/api/stats/channels/{channel_id}", tags=["Stats"])
 async def get_channel_stats_detail(channel_id: int):
     """Get detailed stats for a specific channel.
 
@@ -4994,7 +5690,7 @@ async def get_channel_stats_detail(channel_id: int):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/stats/activity")
+@app.get("/api/stats/activity", tags=["Stats"])
 async def get_system_events(
     limit: int = 100,
     offset: int = 0,
@@ -5019,7 +5715,7 @@ async def get_system_events(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/stats/channels/{channel_id}/stop")
+@app.post("/api/stats/channels/{channel_id}/stop", tags=["Stats"])
 async def stop_channel(channel_id: str):
     """Stop a channel and release all associated resources."""
     client = get_client()
@@ -5030,7 +5726,7 @@ async def stop_channel(channel_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/stats/channels/{channel_id}/stop-client")
+@app.post("/api/stats/channels/{channel_id}/stop-client", tags=["Stats"])
 async def stop_client(channel_id: str):
     """Stop a specific client connection."""
     client = get_client()
@@ -5041,7 +5737,7 @@ async def stop_client(channel_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/stats/bandwidth")
+@app.get("/api/stats/bandwidth", tags=["Stats"])
 async def get_bandwidth_stats():
     """Get bandwidth usage summary for all time periods."""
     try:
@@ -5051,7 +5747,7 @@ async def get_bandwidth_stats():
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/stats/top-watched")
+@app.get("/api/stats/top-watched", tags=["Stats"])
 async def get_top_watched_channels(limit: int = 10, sort_by: str = "views"):
     """Get the top watched channels by watch count or watch time."""
     try:
@@ -5066,7 +5762,7 @@ async def get_top_watched_channels(limit: int = 10, sort_by: str = "views"):
 # =============================================================================
 
 
-@app.get("/api/stream-stats")
+@app.get("/api/stream-stats", tags=["Stream Stats"])
 async def get_all_stream_stats():
     """Get all stream probe statistics."""
     try:
@@ -5076,7 +5772,7 @@ async def get_all_stream_stats():
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/stream-stats/summary")
+@app.get("/api/stream-stats/summary", tags=["Stream Stats"])
 async def get_stream_stats_summary():
     """Get summary of stream probe statistics."""
     try:
@@ -5086,7 +5782,7 @@ async def get_stream_stats_summary():
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/stream-stats/{stream_id}")
+@app.get("/api/stream-stats/{stream_id}", tags=["Stream Stats"])
 async def get_stream_stats_by_id(stream_id: int):
     """Get probe stats for a specific stream."""
     try:
@@ -5105,7 +5801,7 @@ class BulkStreamStatsRequest(BaseModel):
     stream_ids: list[int]
 
 
-@app.post("/api/stream-stats/by-ids")
+@app.post("/api/stream-stats/by-ids", tags=["Stream Stats"])
 async def get_stream_stats_by_ids(request: BulkStreamStatsRequest):
     """Get probe stats for multiple streams by their IDs."""
     try:
@@ -5128,7 +5824,7 @@ class ProbeAllRequest(BaseModel):
 
 # NOTE: /probe/bulk and /probe/all MUST be defined BEFORE /probe/{stream_id}
 # to avoid the path parameter matching "bulk" or "all" as a stream_id
-@app.post("/api/stream-stats/probe/bulk")
+@app.post("/api/stream-stats/probe/bulk", tags=["Stream Stats"])
 async def probe_bulk_streams(request: BulkProbeRequest):
     """Trigger on-demand probe for multiple streams."""
     logger.info(f"Bulk probe request received for {len(request.stream_ids)} streams: {request.stream_ids}")
@@ -5169,7 +5865,7 @@ async def probe_bulk_streams(request: BulkProbeRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/stream-stats/probe/all")
+@app.post("/api/stream-stats/probe/all", tags=["Stream Stats"])
 async def probe_all_streams_endpoint(request: ProbeAllRequest = ProbeAllRequest()):
     """Trigger probe for all streams (background task).
 
@@ -5214,7 +5910,7 @@ async def probe_all_streams_endpoint(request: ProbeAllRequest = ProbeAllRequest(
     return {"status": "started", "message": "Background probe started"}
 
 
-@app.get("/api/stream-stats/probe/progress")
+@app.get("/api/stream-stats/probe/progress", tags=["Stream Stats"])
 async def get_probe_progress():
     """Get current probe all streams progress."""
     prober = get_prober()
@@ -5224,7 +5920,7 @@ async def get_probe_progress():
     return prober.get_probe_progress()
 
 
-@app.get("/api/stream-stats/probe/results")
+@app.get("/api/stream-stats/probe/results", tags=["Stream Stats"])
 async def get_probe_results():
     """Get detailed results of the last probe all streams operation."""
     prober = get_prober()
@@ -5234,7 +5930,7 @@ async def get_probe_results():
     return prober.get_probe_results()
 
 
-@app.get("/api/stream-stats/probe/history")
+@app.get("/api/stream-stats/probe/history", tags=["Stream Stats"])
 async def get_probe_history():
     """Get probe run history (last 5 runs)."""
     prober = get_prober()
@@ -5244,7 +5940,7 @@ async def get_probe_history():
     return prober.get_probe_history()
 
 
-@app.post("/api/stream-stats/probe/cancel")
+@app.post("/api/stream-stats/probe/cancel", tags=["Stream Stats"])
 async def cancel_probe():
     """Cancel an in-progress probe operation."""
     prober = get_prober()
@@ -5254,7 +5950,7 @@ async def cancel_probe():
     return prober.cancel_probe()
 
 
-@app.post("/api/stream-stats/probe/reset")
+@app.post("/api/stream-stats/probe/reset", tags=["Stream Stats"])
 async def reset_probe_state():
     """Force reset the probe state if it gets stuck."""
     prober = get_prober()
@@ -5274,7 +5970,7 @@ class ClearStatsRequest(BaseModel):
     stream_ids: list[int]
 
 
-@app.post("/api/stream-stats/dismiss")
+@app.post("/api/stream-stats/dismiss", tags=["Stream Stats"])
 async def dismiss_stream_stats(request: DismissStatsRequest):
     """Dismiss probe failures for the specified streams.
 
@@ -5306,7 +6002,7 @@ async def dismiss_stream_stats(request: DismissStatsRequest):
         session.close()
 
 
-@app.post("/api/stream-stats/clear")
+@app.post("/api/stream-stats/clear", tags=["Stream Stats"])
 async def clear_stream_stats(request: ClearStatsRequest):
     """Clear (delete) probe stats for the specified streams.
 
@@ -5334,7 +6030,7 @@ async def clear_stream_stats(request: ClearStatsRequest):
         session.close()
 
 
-@app.post("/api/stream-stats/clear-all")
+@app.post("/api/stream-stats/clear-all", tags=["Stream Stats"])
 async def clear_all_stream_stats():
     """Clear (delete) all probe stats for all streams.
 
@@ -5357,7 +6053,7 @@ async def clear_all_stream_stats():
         session.close()
 
 
-@app.get("/api/stream-stats/dismissed")
+@app.get("/api/stream-stats/dismissed", tags=["Stream Stats"])
 async def get_dismissed_stream_stats():
     """Get list of dismissed stream IDs.
 
@@ -5380,7 +6076,7 @@ async def get_dismissed_stream_stats():
         session.close()
 
 
-@app.post("/api/stream-stats/probe/{stream_id}")
+@app.post("/api/stream-stats/probe/{stream_id}", tags=["Stream Stats"])
 async def probe_single_stream(stream_id: int):
     """Trigger on-demand probe for a single stream."""
     logger.info(f"Single stream probe request received for stream_id={stream_id}")
@@ -5428,26 +6124,40 @@ class TaskConfigUpdate(BaseModel):
     schedule_time: Optional[str] = None
     timezone: Optional[str] = None
     config: Optional[dict] = None  # Task-specific configuration (source_ids, account_ids, etc.)
+    # Alert configuration
+    send_alerts: Optional[bool] = None  # Master toggle for alerts
+    alert_on_success: Optional[bool] = None  # Alert when task succeeds
+    alert_on_warning: Optional[bool] = None  # Alert on partial failures
+    alert_on_error: Optional[bool] = None  # Alert on complete failures
 
 
-@app.get("/api/tasks")
+@app.get("/api/tasks", tags=["Tasks"])
 async def list_tasks():
     """Get all registered tasks with their status, including schedules."""
     start_time = time.time()
     try:
         from task_registry import get_registry
-        from models import TaskSchedule
+        from models import TaskSchedule, ScheduledTask
         from schedule_calculator import describe_schedule
 
         registry = get_registry()
         tasks = registry.get_all_task_statuses()
 
-        # Include schedules for each task
+        # Include schedules and alert config for each task
         session = get_session()
         try:
             for task in tasks:
                 task_id = task.get('task_id')
                 if task_id:
+                    # Get alert configuration from ScheduledTask
+                    db_task = session.query(ScheduledTask).filter(ScheduledTask.task_id == task_id).first()
+                    if db_task:
+                        task['send_alerts'] = db_task.send_alerts
+                        task['alert_on_success'] = db_task.alert_on_success
+                        task['alert_on_warning'] = db_task.alert_on_warning
+                        task['alert_on_error'] = db_task.alert_on_error
+
+                    # Get schedules
                     schedules = session.query(TaskSchedule).filter(TaskSchedule.task_id == task_id).all()
                     task['schedules'] = []
                     for schedule in schedules:
@@ -5476,12 +6186,12 @@ async def list_tasks():
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/tasks/{task_id}")
+@app.get("/api/tasks/{task_id}", tags=["Tasks"])
 async def get_task(task_id: str):
     """Get status for a specific task, including all schedules."""
     try:
         from task_registry import get_registry
-        from models import TaskSchedule
+        from models import TaskSchedule, ScheduledTask
         from schedule_calculator import describe_schedule
 
         registry = get_registry()
@@ -5489,9 +6199,18 @@ async def get_task(task_id: str):
         if status is None:
             raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
 
-        # Include schedules in the response
+        # Include schedules and alert config in the response
         session = get_session()
         try:
+            # Get alert configuration from ScheduledTask
+            db_task = session.query(ScheduledTask).filter(ScheduledTask.task_id == task_id).first()
+            if db_task:
+                status['send_alerts'] = db_task.send_alerts
+                status['alert_on_success'] = db_task.alert_on_success
+                status['alert_on_warning'] = db_task.alert_on_warning
+                status['alert_on_error'] = db_task.alert_on_error
+
+            # Get schedules
             schedules = session.query(TaskSchedule).filter(TaskSchedule.task_id == task_id).all()
             status['schedules'] = []
             for schedule in schedules:
@@ -5516,7 +6235,7 @@ async def get_task(task_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.patch("/api/tasks/{task_id}")
+@app.patch("/api/tasks/{task_id}", tags=["Tasks"])
 async def update_task(task_id: str, config: TaskConfigUpdate):
     """Update task configuration."""
     try:
@@ -5532,6 +6251,10 @@ async def update_task(task_id: str, config: TaskConfigUpdate):
             schedule_time=config.schedule_time,
             timezone=config.timezone,
             task_config=config.config,
+            send_alerts=config.send_alerts,
+            alert_on_success=config.alert_on_success,
+            alert_on_warning=config.alert_on_warning,
+            alert_on_error=config.alert_on_error,
         )
 
         if result is None:
@@ -5550,7 +6273,7 @@ class TaskRunRequest(BaseModel):
     schedule_id: Optional[int] = None  # Run with parameters from a specific schedule
 
 
-@app.post("/api/tasks/{task_id}/run")
+@app.post("/api/tasks/{task_id}/run", tags=["Tasks"])
 async def run_task(task_id: str, request: Optional[TaskRunRequest] = None):
     """Manually trigger a task execution."""
     try:
@@ -5570,7 +6293,7 @@ async def run_task(task_id: str, request: Optional[TaskRunRequest] = None):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/tasks/{task_id}/cancel")
+@app.post("/api/tasks/{task_id}/cancel", tags=["Tasks"])
 async def cancel_task(task_id: str):
     """Cancel a running task."""
     try:
@@ -5587,7 +6310,7 @@ async def cancel_task(task_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/tasks/{task_id}/history")
+@app.get("/api/tasks/{task_id}/history", tags=["Tasks"])
 async def get_task_history(task_id: str, limit: int = 50, offset: int = 0):
     """Get execution history for a task."""
     try:
@@ -5600,7 +6323,7 @@ async def get_task_history(task_id: str, limit: int = 50, offset: int = 0):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/tasks/engine/status")
+@app.get("/api/tasks/engine/status", tags=["Tasks"])
 async def get_engine_status():
     """Get task engine status."""
     try:
@@ -5612,7 +6335,7 @@ async def get_engine_status():
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/tasks/history/all")
+@app.get("/api/tasks/history/all", tags=["Tasks"])
 async def get_all_task_history(limit: int = 100, offset: int = 0):
     """Get execution history for all tasks."""
     try:
@@ -5625,7 +6348,7 @@ async def get_all_task_history(limit: int = 100, offset: int = 0):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/cron/presets")
+@app.get("/api/cron/presets", tags=["Cron"])
 async def get_cron_presets():
     """Get available cron presets for task scheduling."""
     try:
@@ -5636,12 +6359,106 @@ async def get_cron_presets():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# Normalization Rule request/response models
+class CreateRuleGroupRequest(BaseModel):
+    name: str
+    description: Optional[str] = None
+    enabled: bool = True
+    priority: int = 0
+
+
+class UpdateRuleGroupRequest(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    enabled: Optional[bool] = None
+    priority: Optional[int] = None
+
+
+class CreateRuleRequest(BaseModel):
+    group_id: int
+    name: str
+    description: Optional[str] = None
+    enabled: bool = True
+    priority: int = 0
+    # Legacy single condition (optional if using compound conditions)
+    condition_type: Optional[str] = None  # always, contains, starts_with, ends_with, regex, tag_group
+    condition_value: Optional[str] = None
+    case_sensitive: bool = False
+    # Tag group condition (for condition_type='tag_group')
+    tag_group_id: Optional[int] = None
+    tag_match_position: Optional[str] = None  # 'prefix', 'suffix', or 'contains'
+    # Compound conditions (takes precedence over legacy fields if set)
+    conditions: Optional[List[dict]] = None  # [{type, value, negate, case_sensitive}]
+    condition_logic: str = "AND"  # "AND" or "OR"
+    # Action configuration
+    action_type: str  # remove, replace, regex_replace, strip_prefix, strip_suffix, normalize_prefix
+    action_value: Optional[str] = None
+    # Else action (executed when condition doesn't match)
+    else_action_type: Optional[str] = None
+    else_action_value: Optional[str] = None
+    stop_processing: bool = False
+
+
+class UpdateRuleRequest(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    enabled: Optional[bool] = None
+    priority: Optional[int] = None
+    # Legacy single condition
+    condition_type: Optional[str] = None
+    condition_value: Optional[str] = None
+    case_sensitive: Optional[bool] = None
+    # Tag group condition
+    tag_group_id: Optional[int] = None
+    tag_match_position: Optional[str] = None
+    # Compound conditions
+    conditions: Optional[List[dict]] = None
+    condition_logic: Optional[str] = None
+    # Action configuration
+    action_type: Optional[str] = None
+    action_value: Optional[str] = None
+    # Else action
+    else_action_type: Optional[str] = None
+    else_action_value: Optional[str] = None
+    stop_processing: Optional[bool] = None
+
+
+class TestRuleRequest(BaseModel):
+    text: str
+    condition_type: str
+    condition_value: Optional[str] = None
+    case_sensitive: bool = False
+    # Tag group condition
+    tag_group_id: Optional[int] = None
+    tag_match_position: Optional[str] = None  # 'prefix', 'suffix', or 'contains'
+    # Compound conditions (takes precedence if set)
+    conditions: Optional[List[dict]] = None  # [{type, value, negate, case_sensitive}]
+    condition_logic: str = "AND"  # "AND" or "OR"
+    action_type: str
+    action_value: Optional[str] = None
+    # Else action
+    else_action_type: Optional[str] = None
+    else_action_value: Optional[str] = None
+
+
+class TestRulesBatchRequest(BaseModel):
+    texts: list[str]
+
+
+class ReorderRulesRequest(BaseModel):
+    rule_ids: list[int]  # Rules in new priority order
+
+
+class ReorderGroupsRequest(BaseModel):
+    group_ids: list[int]  # Groups in new priority order
+
+
 class CronValidateRequest(BaseModel):
     """Request to validate a cron expression."""
     expression: str
 
 
-@app.post("/api/cron/validate")
+@app.post("/api/cron/validate", tags=["Cron"])
 async def validate_cron(request: CronValidateRequest):
     """Validate a cron expression."""
     try:
@@ -5784,7 +6601,7 @@ TASK_PARAMETER_SCHEMAS = {
 }
 
 
-@app.get("/api/tasks/{task_id}/parameter-schema")
+@app.get("/api/tasks/{task_id}/parameter-schema", tags=["Tasks"])
 async def get_task_parameter_schema(task_id: str):
     """Get the parameter schema for a task type."""
     schema = TASK_PARAMETER_SCHEMAS.get(task_id)
@@ -5794,13 +6611,13 @@ async def get_task_parameter_schema(task_id: str):
     return {"task_id": task_id, **schema}
 
 
-@app.get("/api/tasks/parameter-schemas")
+@app.get("/api/tasks/parameter-schemas", tags=["Tasks"])
 async def get_all_task_parameter_schemas():
     """Get parameter schemas for all task types."""
     return {"schemas": TASK_PARAMETER_SCHEMAS}
 
 
-@app.get("/api/tasks/{task_id}/schedules")
+@app.get("/api/tasks/{task_id}/schedules", tags=["Tasks"])
 async def list_task_schedules(task_id: str):
     """Get all schedules for a task."""
     try:
@@ -5841,7 +6658,7 @@ async def list_task_schedules(task_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/tasks/{task_id}/schedules")
+@app.post("/api/tasks/{task_id}/schedules", tags=["Tasks"])
 async def create_task_schedule(task_id: str, data: TaskScheduleCreate):
     """Create a new schedule for a task."""
     try:
@@ -5915,7 +6732,7 @@ async def create_task_schedule(task_id: str, data: TaskScheduleCreate):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.patch("/api/tasks/{task_id}/schedules/{schedule_id}")
+@app.patch("/api/tasks/{task_id}/schedules/{schedule_id}", tags=["Tasks"])
 async def update_task_schedule(task_id: str, schedule_id: int, data: TaskScheduleUpdate):
     """Update a task schedule."""
     try:
@@ -5994,7 +6811,7 @@ async def update_task_schedule(task_id: str, schedule_id: int, data: TaskSchedul
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.delete("/api/tasks/{task_id}/schedules/{schedule_id}")
+@app.delete("/api/tasks/{task_id}/schedules/{schedule_id}", tags=["Tasks"])
 async def delete_task_schedule(task_id: str, schedule_id: int):
     """Delete a task schedule."""
     try:
@@ -6025,6 +6842,927 @@ async def delete_task_schedule(task_id: str, schedule_id: int):
         raise
     except Exception as e:
         logger.error(f"Failed to delete schedule {schedule_id} for task {task_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# =============================================================================
+# Normalization Rules API
+# =============================================================================
+
+@app.get("/api/normalization/rules", tags=["Normalization"])
+async def get_all_normalization_rules():
+    """Get all normalization rules organized by group."""
+    try:
+        from normalization_engine import get_normalization_engine
+        session = get_session()
+        try:
+            engine = get_normalization_engine(session)
+            rules = engine.get_all_rules()
+            return {"groups": rules}
+        finally:
+            session.close()
+    except Exception as e:
+        logger.error(f"Failed to get normalization rules: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/normalization/groups", tags=["Normalization"])
+async def get_normalization_groups():
+    """Get all normalization rule groups."""
+    try:
+        from models import NormalizationRuleGroup
+        session = get_session()
+        try:
+            groups = session.query(NormalizationRuleGroup).order_by(
+                NormalizationRuleGroup.priority
+            ).all()
+            return {"groups": [g.to_dict() for g in groups]}
+        finally:
+            session.close()
+    except Exception as e:
+        logger.error(f"Failed to get normalization groups: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/normalization/groups", tags=["Normalization"])
+async def create_normalization_group(request: CreateRuleGroupRequest):
+    """Create a new normalization rule group."""
+    try:
+        from models import NormalizationRuleGroup
+        session = get_session()
+        try:
+            group = NormalizationRuleGroup(
+                name=request.name,
+                description=request.description,
+                enabled=request.enabled,
+                priority=request.priority,
+                is_builtin=False
+            )
+            session.add(group)
+            session.commit()
+            session.refresh(group)
+            return group.to_dict()
+        finally:
+            session.close()
+    except Exception as e:
+        logger.error(f"Failed to create normalization group: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/normalization/groups/{group_id}", tags=["Normalization"])
+async def get_normalization_group(group_id: int):
+    """Get a normalization rule group by ID."""
+    try:
+        from models import NormalizationRuleGroup, NormalizationRule
+        session = get_session()
+        try:
+            group = session.query(NormalizationRuleGroup).filter(
+                NormalizationRuleGroup.id == group_id
+            ).first()
+            if not group:
+                raise HTTPException(status_code=404, detail="Group not found")
+
+            # Include rules in response
+            rules = session.query(NormalizationRule).filter(
+                NormalizationRule.group_id == group_id
+            ).order_by(NormalizationRule.priority).all()
+
+            result = group.to_dict()
+            result["rules"] = [r.to_dict() for r in rules]
+            return result
+        finally:
+            session.close()
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get normalization group {group_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.patch("/api/normalization/groups/{group_id}", tags=["Normalization"])
+async def update_normalization_group(group_id: int, request: UpdateRuleGroupRequest):
+    """Update a normalization rule group."""
+    try:
+        from models import NormalizationRuleGroup
+        session = get_session()
+        try:
+            group = session.query(NormalizationRuleGroup).filter(
+                NormalizationRuleGroup.id == group_id
+            ).first()
+            if not group:
+                raise HTTPException(status_code=404, detail="Group not found")
+
+            if request.name is not None:
+                group.name = request.name
+            if request.description is not None:
+                group.description = request.description
+            if request.enabled is not None:
+                group.enabled = request.enabled
+            if request.priority is not None:
+                group.priority = request.priority
+
+            session.commit()
+            session.refresh(group)
+            return group.to_dict()
+        finally:
+            session.close()
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to update normalization group {group_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/api/normalization/groups/{group_id}", tags=["Normalization"])
+async def delete_normalization_group(group_id: int):
+    """Delete a normalization rule group and all its rules."""
+    try:
+        from models import NormalizationRuleGroup, NormalizationRule
+        session = get_session()
+        try:
+            group = session.query(NormalizationRuleGroup).filter(
+                NormalizationRuleGroup.id == group_id
+            ).first()
+            if not group:
+                raise HTTPException(status_code=404, detail="Group not found")
+
+            # Delete all rules in this group first
+            session.query(NormalizationRule).filter(
+                NormalizationRule.group_id == group_id
+            ).delete()
+
+            # Delete the group
+            session.delete(group)
+            session.commit()
+            return {"status": "deleted", "id": group_id}
+        finally:
+            session.close()
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to delete normalization group {group_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/normalization/groups/reorder", tags=["Normalization"])
+async def reorder_normalization_groups(request: ReorderGroupsRequest):
+    """Reorder normalization rule groups."""
+    try:
+        from models import NormalizationRuleGroup
+        session = get_session()
+        try:
+            for priority, group_id in enumerate(request.group_ids):
+                session.query(NormalizationRuleGroup).filter(
+                    NormalizationRuleGroup.id == group_id
+                ).update({"priority": priority})
+            session.commit()
+            return {"status": "reordered", "group_ids": request.group_ids}
+        finally:
+            session.close()
+    except Exception as e:
+        logger.error(f"Failed to reorder normalization groups: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/normalization/rules/{rule_id}", tags=["Normalization"])
+async def get_normalization_rule(rule_id: int):
+    """Get a normalization rule by ID."""
+    try:
+        from models import NormalizationRule
+        session = get_session()
+        try:
+            rule = session.query(NormalizationRule).filter(
+                NormalizationRule.id == rule_id
+            ).first()
+            if not rule:
+                raise HTTPException(status_code=404, detail="Rule not found")
+            return rule.to_dict()
+        finally:
+            session.close()
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get normalization rule {rule_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/normalization/rules", tags=["Normalization"])
+async def create_normalization_rule(request: CreateRuleRequest):
+    """Create a new normalization rule."""
+    try:
+        from models import NormalizationRule, NormalizationRuleGroup
+        session = get_session()
+        try:
+            # Verify group exists
+            group = session.query(NormalizationRuleGroup).filter(
+                NormalizationRuleGroup.id == request.group_id
+            ).first()
+            if not group:
+                raise HTTPException(status_code=404, detail="Group not found")
+
+            # Serialize conditions to JSON if provided
+            import json
+            conditions_json = json.dumps(request.conditions) if request.conditions else None
+
+            rule = NormalizationRule(
+                group_id=request.group_id,
+                name=request.name,
+                description=request.description,
+                enabled=request.enabled,
+                priority=request.priority,
+                condition_type=request.condition_type,
+                condition_value=request.condition_value,
+                case_sensitive=request.case_sensitive,
+                tag_group_id=request.tag_group_id,
+                tag_match_position=request.tag_match_position,
+                conditions=conditions_json,
+                condition_logic=request.condition_logic,
+                action_type=request.action_type,
+                action_value=request.action_value,
+                else_action_type=request.else_action_type,
+                else_action_value=request.else_action_value,
+                stop_processing=request.stop_processing,
+                is_builtin=False
+            )
+            session.add(rule)
+            session.commit()
+            session.refresh(rule)
+            return rule.to_dict()
+        finally:
+            session.close()
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to create normalization rule: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.patch("/api/normalization/rules/{rule_id}", tags=["Normalization"])
+async def update_normalization_rule(rule_id: int, request: UpdateRuleRequest):
+    """Update a normalization rule."""
+    try:
+        from models import NormalizationRule
+        session = get_session()
+        try:
+            rule = session.query(NormalizationRule).filter(
+                NormalizationRule.id == rule_id
+            ).first()
+            if not rule:
+                raise HTTPException(status_code=404, detail="Rule not found")
+
+            import json
+
+            if request.name is not None:
+                rule.name = request.name
+            if request.description is not None:
+                rule.description = request.description
+            if request.enabled is not None:
+                rule.enabled = request.enabled
+            if request.priority is not None:
+                rule.priority = request.priority
+            if request.condition_type is not None:
+                rule.condition_type = request.condition_type
+            if request.condition_value is not None:
+                rule.condition_value = request.condition_value
+            if request.case_sensitive is not None:
+                rule.case_sensitive = request.case_sensitive
+            if request.tag_group_id is not None:
+                rule.tag_group_id = request.tag_group_id
+            if request.tag_match_position is not None:
+                rule.tag_match_position = request.tag_match_position
+            if request.conditions is not None:
+                rule.conditions = json.dumps(request.conditions) if request.conditions else None
+            if request.condition_logic is not None:
+                rule.condition_logic = request.condition_logic
+            if request.action_type is not None:
+                rule.action_type = request.action_type
+            if request.action_value is not None:
+                rule.action_value = request.action_value
+            if request.else_action_type is not None:
+                rule.else_action_type = request.else_action_type
+            if request.else_action_value is not None:
+                rule.else_action_value = request.else_action_value
+            if request.stop_processing is not None:
+                rule.stop_processing = request.stop_processing
+
+            session.commit()
+            session.refresh(rule)
+            return rule.to_dict()
+        finally:
+            session.close()
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to update normalization rule {rule_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/api/normalization/rules/{rule_id}", tags=["Normalization"])
+async def delete_normalization_rule(rule_id: int):
+    """Delete a normalization rule."""
+    try:
+        from models import NormalizationRule
+        session = get_session()
+        try:
+            rule = session.query(NormalizationRule).filter(
+                NormalizationRule.id == rule_id
+            ).first()
+            if not rule:
+                raise HTTPException(status_code=404, detail="Rule not found")
+
+            session.delete(rule)
+            session.commit()
+            return {"status": "deleted", "id": rule_id}
+        finally:
+            session.close()
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to delete normalization rule {rule_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/normalization/groups/{group_id}/rules/reorder", tags=["Normalization"])
+async def reorder_normalization_rules(group_id: int, request: ReorderRulesRequest):
+    """Reorder normalization rules within a group."""
+    try:
+        from models import NormalizationRule
+        session = get_session()
+        try:
+            for priority, rule_id in enumerate(request.rule_ids):
+                session.query(NormalizationRule).filter(
+                    NormalizationRule.id == rule_id,
+                    NormalizationRule.group_id == group_id
+                ).update({"priority": priority})
+            session.commit()
+            return {"status": "reordered", "group_id": group_id, "rule_ids": request.rule_ids}
+        finally:
+            session.close()
+    except Exception as e:
+        logger.error(f"Failed to reorder rules in group {group_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/normalization/test", tags=["Normalization"])
+async def test_normalization_rule(request: TestRuleRequest):
+    """Test a rule configuration against sample text without saving."""
+    try:
+        from normalization_engine import get_normalization_engine
+        session = get_session()
+        try:
+            engine = get_normalization_engine(session)
+            result = engine.test_rule(
+                text=request.text,
+                condition_type=request.condition_type,
+                condition_value=request.condition_value or "",
+                case_sensitive=request.case_sensitive,
+                action_type=request.action_type,
+                action_value=request.action_value or "",
+                conditions=request.conditions,
+                condition_logic=request.condition_logic,
+                tag_group_id=request.tag_group_id,
+                tag_match_position=request.tag_match_position or "contains",
+                else_action_type=request.else_action_type,
+                else_action_value=request.else_action_value
+            )
+            return result
+        finally:
+            session.close()
+    except Exception as e:
+        logger.error(f"Failed to test normalization rule: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/normalization/test-batch", tags=["Normalization"])
+async def test_normalization_batch(request: TestRulesBatchRequest):
+    """Test all enabled rules against multiple sample texts."""
+    try:
+        from normalization_engine import get_normalization_engine
+        session = get_session()
+        try:
+            engine = get_normalization_engine(session)
+            results = engine.test_rules_batch(request.texts)
+            return {
+                "results": [
+                    {
+                        "original": r.original,
+                        "normalized": r.normalized,
+                        "rules_applied": r.rules_applied,
+                        "transformations": [
+                            {"rule_id": t[0], "before": t[1], "after": t[2]}
+                            for t in r.transformations
+                        ]
+                    }
+                    for r in results
+                ]
+            }
+        finally:
+            session.close()
+    except Exception as e:
+        logger.error(f"Failed to test normalization batch: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/normalization/normalize", tags=["Normalization"])
+async def normalize_text(request: TestRulesBatchRequest):
+    """Normalize one or more texts using all enabled rules."""
+    try:
+        from normalization_engine import get_normalization_engine
+        session = get_session()
+        try:
+            engine = get_normalization_engine(session)
+            results = engine.test_rules_batch(request.texts)
+            return {
+                "results": [
+                    {"original": r.original, "normalized": r.normalized}
+                    for r in results
+                ]
+            }
+        finally:
+            session.close()
+    except Exception as e:
+        logger.error(f"Failed to normalize texts: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/normalization/rule-stats", tags=["Normalization"])
+async def get_normalization_rule_stats(limit: int = 500):
+    """Get statistics on how many streams each rule matches.
+
+    Fetches streams from Dispatcharr and tests each enabled rule individually
+    to count how many streams it would match.
+
+    Args:
+        limit: Maximum number of streams to test (default 500, max 2000)
+
+    Returns:
+        Dict with rule_stats (list of {rule_id, rule_name, group_name, match_count})
+        and metadata (total_streams_tested, total_rules)
+    """
+    try:
+        from models import NormalizationRule, NormalizationRuleGroup
+        from normalization_engine import get_normalization_engine
+
+        # Cap the limit to avoid performance issues
+        limit = min(limit, 2000)
+
+        # Fetch streams from Dispatcharr
+        client = get_client()
+        streams_result = await client.get_streams(page=1, page_size=limit)
+        streams = streams_result.get("results", [])
+        stream_names = [s.get("name", "") for s in streams if s.get("name")]
+
+        if not stream_names:
+            return {
+                "rule_stats": [],
+                "total_streams_tested": 0,
+                "total_rules": 0
+            }
+
+        session = get_session()
+        try:
+            engine = get_normalization_engine(session)
+
+            # Get all rules with their groups
+            groups = session.query(NormalizationRuleGroup).order_by(
+                NormalizationRuleGroup.priority
+            ).all()
+            group_map = {g.id: g.name for g in groups}
+
+            rules = session.query(NormalizationRule).order_by(
+                NormalizationRule.group_id,
+                NormalizationRule.priority
+            ).all()
+
+            rule_stats = []
+            for rule in rules:
+                match_count = 0
+                for name in stream_names:
+                    match = engine._match_condition(name, rule)
+                    if match.matched:
+                        match_count += 1
+
+                rule_stats.append({
+                    "rule_id": rule.id,
+                    "rule_name": rule.name,
+                    "group_id": rule.group_id,
+                    "group_name": group_map.get(rule.group_id, "Unknown"),
+                    "enabled": rule.enabled,
+                    "match_count": match_count,
+                    "match_percentage": round(match_count / len(stream_names) * 100, 1) if stream_names else 0
+                })
+
+            return {
+                "rule_stats": rule_stats,
+                "total_streams_tested": len(stream_names),
+                "total_rules": len(rules)
+            }
+        finally:
+            session.close()
+    except Exception as e:
+        logger.error(f"Failed to get rule stats: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/normalization/migration/status", tags=["Normalization"])
+async def get_normalization_migration_status():
+    """Get the status of the normalization rules migration."""
+    try:
+        from normalization_migration import get_migration_status
+        session = get_session()
+        try:
+            status = get_migration_status(session)
+            return status
+        finally:
+            session.close()
+    except Exception as e:
+        logger.error(f"Failed to get migration status: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/normalization/migration/run", tags=["Normalization"])
+async def run_normalization_migration(force: bool = False, migrate_settings: bool = True):
+    """Create demo normalization rules.
+
+    Creates editable demo rules that are disabled by default. Users can enable
+    the rule groups they want to use.
+
+    Args:
+        force: If True, recreate rules even if they already exist
+        migrate_settings: If True, also migrate user's custom_normalization_tags
+    """
+    try:
+        from normalization_migration import create_demo_rules
+
+        # Get user settings to migrate
+        custom_normalization_tags = []
+
+        if migrate_settings:
+            settings = get_settings()
+            custom_normalization_tags = settings.custom_normalization_tags or []
+
+        session = get_session()
+        try:
+            result = create_demo_rules(
+                session,
+                force=force,
+                custom_normalization_tags=custom_normalization_tags
+            )
+            return result
+        finally:
+            session.close()
+    except Exception as e:
+        logger.error(f"Failed to create demo rules: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# =============================================================================
+# Tag Engine API
+# =============================================================================
+
+# Tag Engine request/response models
+class CreateTagGroupRequest(BaseModel):
+    name: str
+    description: Optional[str] = None
+
+
+class UpdateTagGroupRequest(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+
+
+class CreateTagsRequest(BaseModel):
+    tags: List[str]  # List of tag values to add
+    case_sensitive: bool = False
+
+
+class UpdateTagRequest(BaseModel):
+    enabled: Optional[bool] = None
+    case_sensitive: Optional[bool] = None
+
+
+class TestTagsRequest(BaseModel):
+    text: str
+    group_id: int
+
+
+@app.get("/api/tags/groups", tags=["Tags"])
+async def list_tag_groups():
+    """List all tag groups with tag counts."""
+    try:
+        from models import TagGroup, Tag
+        from sqlalchemy import func
+        session = get_session()
+        try:
+            # Get groups with tag counts
+            groups = session.query(
+                TagGroup,
+                func.count(Tag.id).label("tag_count")
+            ).outerjoin(Tag).group_by(TagGroup.id).order_by(TagGroup.name).all()
+
+            result = []
+            for group, tag_count in groups:
+                group_dict = group.to_dict()
+                group_dict["tag_count"] = tag_count
+                result.append(group_dict)
+
+            return {"groups": result}
+        finally:
+            session.close()
+    except Exception as e:
+        logger.error(f"Failed to list tag groups: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/tags/groups", tags=["Tags"])
+async def create_tag_group(request: CreateTagGroupRequest):
+    """Create a new tag group."""
+    try:
+        from models import TagGroup
+        session = get_session()
+        try:
+            # Check for duplicate name
+            existing = session.query(TagGroup).filter(TagGroup.name == request.name).first()
+            if existing:
+                raise HTTPException(status_code=400, detail=f"Tag group '{request.name}' already exists")
+
+            group = TagGroup(
+                name=request.name,
+                description=request.description,
+                is_builtin=False
+            )
+            session.add(group)
+            session.commit()
+            session.refresh(group)
+            logger.info(f"Created tag group: id={group.id}, name={group.name}")
+            return group.to_dict()
+        finally:
+            session.close()
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to create tag group: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/tags/groups/{group_id}", tags=["Tags"])
+async def get_tag_group(group_id: int):
+    """Get a tag group with all its tags."""
+    try:
+        from models import TagGroup
+        session = get_session()
+        try:
+            group = session.query(TagGroup).filter(TagGroup.id == group_id).first()
+            if not group:
+                raise HTTPException(status_code=404, detail="Tag group not found")
+
+            return group.to_dict(include_tags=True)
+        finally:
+            session.close()
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get tag group {group_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.patch("/api/tags/groups/{group_id}", tags=["Tags"])
+async def update_tag_group(group_id: int, request: UpdateTagGroupRequest):
+    """Update a tag group name/description."""
+    try:
+        from models import TagGroup
+        session = get_session()
+        try:
+            group = session.query(TagGroup).filter(TagGroup.id == group_id).first()
+            if not group:
+                raise HTTPException(status_code=404, detail="Tag group not found")
+
+            # Prevent modifying built-in group name
+            if group.is_builtin and request.name is not None and request.name != group.name:
+                raise HTTPException(status_code=400, detail="Cannot rename built-in tag group")
+
+            if request.name is not None:
+                # Check for duplicate name
+                existing = session.query(TagGroup).filter(
+                    TagGroup.name == request.name,
+                    TagGroup.id != group_id
+                ).first()
+                if existing:
+                    raise HTTPException(status_code=400, detail=f"Tag group '{request.name}' already exists")
+                group.name = request.name
+
+            if request.description is not None:
+                group.description = request.description
+
+            session.commit()
+            session.refresh(group)
+            logger.info(f"Updated tag group: id={group.id}, name={group.name}")
+            return group.to_dict()
+        finally:
+            session.close()
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to update tag group {group_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/api/tags/groups/{group_id}", tags=["Tags"])
+async def delete_tag_group(group_id: int):
+    """Delete a tag group and all its tags."""
+    try:
+        from models import TagGroup
+        session = get_session()
+        try:
+            group = session.query(TagGroup).filter(TagGroup.id == group_id).first()
+            if not group:
+                raise HTTPException(status_code=404, detail="Tag group not found")
+
+            if group.is_builtin:
+                raise HTTPException(status_code=400, detail="Cannot delete built-in tag group")
+
+            group_name = group.name
+            session.delete(group)  # Cascade deletes all tags
+            session.commit()
+            logger.info(f"Deleted tag group: id={group_id}, name={group_name}")
+            return {"status": "deleted", "id": group_id}
+        finally:
+            session.close()
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to delete tag group {group_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/tags/groups/{group_id}/tags", tags=["Tags"])
+async def add_tags_to_group(group_id: int, request: CreateTagsRequest):
+    """Add one or more tags to a group."""
+    try:
+        from models import TagGroup, Tag
+        session = get_session()
+        try:
+            group = session.query(TagGroup).filter(TagGroup.id == group_id).first()
+            if not group:
+                raise HTTPException(status_code=404, detail="Tag group not found")
+
+            created_tags = []
+            skipped_tags = []
+
+            for tag_value in request.tags:
+                tag_value = tag_value.strip()
+                if not tag_value:
+                    continue
+
+                # Check if tag already exists in this group
+                existing = session.query(Tag).filter(
+                    Tag.group_id == group_id,
+                    Tag.value == tag_value
+                ).first()
+
+                if existing:
+                    skipped_tags.append(tag_value)
+                    continue
+
+                tag = Tag(
+                    group_id=group_id,
+                    value=tag_value,
+                    case_sensitive=request.case_sensitive,
+                    enabled=True,
+                    is_builtin=False
+                )
+                session.add(tag)
+                created_tags.append(tag_value)
+
+            session.commit()
+            logger.info(f"Added {len(created_tags)} tags to group {group_id}, skipped {len(skipped_tags)} duplicates")
+
+            return {
+                "created": created_tags,
+                "skipped": skipped_tags,
+                "group_id": group_id
+            }
+        finally:
+            session.close()
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to add tags to group {group_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.patch("/api/tags/groups/{group_id}/tags/{tag_id}", tags=["Tags"])
+async def update_tag(group_id: int, tag_id: int, request: UpdateTagRequest):
+    """Update a tag's enabled or case_sensitive status."""
+    try:
+        from models import Tag
+        session = get_session()
+        try:
+            tag = session.query(Tag).filter(
+                Tag.id == tag_id,
+                Tag.group_id == group_id
+            ).first()
+            if not tag:
+                raise HTTPException(status_code=404, detail="Tag not found")
+
+            if request.enabled is not None:
+                tag.enabled = request.enabled
+            if request.case_sensitive is not None:
+                tag.case_sensitive = request.case_sensitive
+
+            session.commit()
+            session.refresh(tag)
+            logger.info(f"Updated tag: id={tag.id}, value={tag.value}")
+            return tag.to_dict()
+        finally:
+            session.close()
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to update tag {tag_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/api/tags/groups/{group_id}/tags/{tag_id}", tags=["Tags"])
+async def delete_tag(group_id: int, tag_id: int):
+    """Delete a tag from a group."""
+    try:
+        from models import Tag
+        session = get_session()
+        try:
+            tag = session.query(Tag).filter(
+                Tag.id == tag_id,
+                Tag.group_id == group_id
+            ).first()
+            if not tag:
+                raise HTTPException(status_code=404, detail="Tag not found")
+
+            if tag.is_builtin:
+                raise HTTPException(status_code=400, detail="Cannot delete built-in tag")
+
+            tag_value = tag.value
+            session.delete(tag)
+            session.commit()
+            logger.info(f"Deleted tag: id={tag_id}, value={tag_value}")
+            return {"status": "deleted", "id": tag_id}
+        finally:
+            session.close()
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to delete tag {tag_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/tags/test", tags=["Tags"])
+async def test_tags(request: TestTagsRequest):
+    """Test text against a tag group to find matches."""
+    try:
+        from models import TagGroup, Tag
+        session = get_session()
+        try:
+            group = session.query(TagGroup).filter(TagGroup.id == request.group_id).first()
+            if not group:
+                raise HTTPException(status_code=404, detail="Tag group not found")
+
+            # Get all enabled tags in the group
+            tags = session.query(Tag).filter(
+                Tag.group_id == request.group_id,
+                Tag.enabled == True
+            ).all()
+
+            matches = []
+            text = request.text
+
+            for tag in tags:
+                if tag.case_sensitive:
+                    if tag.value in text:
+                        matches.append({
+                            "tag_id": tag.id,
+                            "value": tag.value,
+                            "case_sensitive": True
+                        })
+                else:
+                    if tag.value.lower() in text.lower():
+                        matches.append({
+                            "tag_id": tag.id,
+                            "value": tag.value,
+                            "case_sensitive": False
+                        })
+
+            return {
+                "text": request.text,
+                "group_id": request.group_id,
+                "group_name": group.name,
+                "matches": matches,
+                "match_count": len(matches)
+            }
+        finally:
+            session.close()
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to test tags: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

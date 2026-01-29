@@ -1,10 +1,10 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
 import * as api from '../../services/api';
 import { NETWORK_PREFIXES, NETWORK_SUFFIXES } from '../../constants/streamNormalization';
-import { normalizeStreamName } from '../../services/streamNormalization';
-import type { Theme, ProbeHistoryEntry, SortCriterion, SortEnabledMap, GracenoteConflictMode, NormalizationSettings } from '../../services/api';
-import { NormalizationTagsSection } from '../settings/NormalizationTagsSection';
-import type { ChannelProfile } from '../../types';
+import type { Theme, ProbeHistoryEntry, SortCriterion, SortEnabledMap, GracenoteConflictMode } from '../../services/api';
+import { NormalizationEngineSection } from '../settings/NormalizationEngineSection';
+import { TagEngineSection } from '../settings/TagEngineSection';
+import type { ChannelProfile, M3UDigestSettings, M3UDigestFrequency } from '../../types';
 import { logger } from '../../utils/logger';
 import { copyToClipboard } from '../../utils/clipboard';
 import type { LogLevel as FrontendLogLevel } from '../../utils/logger';
@@ -181,7 +181,7 @@ interface SettingsTabProps {
   onProbeComplete?: () => void;
 }
 
-type SettingsPage = 'general' | 'channel-defaults' | 'normalization' | 'appearance' | 'scheduled-tasks' | 'alert-methods' | 'maintenance';
+type SettingsPage = 'general' | 'channel-defaults' | 'normalization' | 'tag-engine' | 'appearance' | 'email' | 'scheduled-tasks' | 'alert-methods' | 'm3u-digest' | 'maintenance';
 
 export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onProbeComplete }: SettingsTabProps) {
   const [activePage, setActivePage] = useState<SettingsPage>('general');
@@ -205,26 +205,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   const [newPrefixInput, setNewPrefixInput] = useState('');
   const [customNetworkSuffixes, setCustomNetworkSuffixes] = useState<string[]>([]);
   const [newSuffixInput, setNewSuffixInput] = useState('');
-  // New tag-based normalization settings
-  const [normalizationSettings, setNormalizationSettings] = useState<NormalizationSettings>({
-    disabledBuiltinTags: [],
-    customTags: [],
-  });
-  const [normalizationPreviewInput, setNormalizationPreviewInput] = useState('');
-
-  // Compute normalized preview based on current settings
-  const normalizedPreviewResult = useMemo(() => {
-    if (!normalizationPreviewInput.trim()) return '';
-    return normalizeStreamName(normalizationPreviewInput, {
-      timezonePreference: 'both',
-      stripCountryPrefix: true, // Enable tag-based country stripping (keepCountryPrefix overrides if true)
-      keepCountryPrefix: includeCountryInName,
-      countrySeparator: countrySeparator as '-' | ':' | '|',
-      stripNetworkPrefix: true,
-      stripNetworkSuffix: true,
-      normalizationSettings,
-    });
-  }, [normalizationPreviewInput, includeCountryInName, countrySeparator, normalizationSettings]);
+  const [normalizeOnChannelCreate, setNormalizeOnChannelCreate] = useState(false);
 
   const [streamSortPriority, setStreamSortPriority] = useState<SortCriterion[]>(['resolution', 'bitrate', 'framerate', 'm3u_priority', 'audio_channels']);
   const [streamSortEnabled, setStreamSortEnabled] = useState<SortEnabledMap>({ resolution: true, bitrate: true, framerate: true, m3u_priority: false, audio_channels: false });
@@ -248,6 +229,27 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   // Log level settings
   const [backendLogLevel, setBackendLogLevel] = useState('INFO');
   const [frontendLogLevel, setFrontendLogLevel] = useState('INFO');
+
+  // M3U Digest settings
+  const [digestSettings, setDigestSettings] = useState<M3UDigestSettings | null>(null);
+  const [digestLoading, setDigestLoading] = useState(false);
+  const [digestError, setDigestError] = useState<string | null>(null);
+  const [digestSaving, setDigestSaving] = useState(false);
+  const [digestTestResult, setDigestTestResult] = useState<{ success: boolean; message: string } | null>(null);
+
+  // Shared SMTP (Email) settings
+  const [smtpHost, setSmtpHost] = useState('');
+  const [smtpPort, setSmtpPort] = useState(587);
+  const [smtpUser, setSmtpUser] = useState('');
+  const [smtpPassword, setSmtpPassword] = useState('');
+  const [smtpFromEmail, setSmtpFromEmail] = useState('');
+  const [smtpFromName, setSmtpFromName] = useState('ECM Alerts');
+  const [smtpUseTls, setSmtpUseTls] = useState(true);
+  const [smtpUseSsl, setSmtpUseSsl] = useState(false);
+  const [smtpConfigured, setSmtpConfigured] = useState(false);
+  const [smtpTestEmail, setSmtpTestEmail] = useState('');
+  const [smtpTesting, setSmtpTesting] = useState(false);
+  const [smtpTestResult, setSmtpTestResult] = useState<{ success: boolean; message: string } | null>(null);
 
   // Stream probe settings (scheduled probing is controlled by Task Engine)
   const [streamProbeBatchSize, setStreamProbeBatchSize] = useState(10);
@@ -333,76 +335,6 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   const [restarting, setRestarting] = useState(false);
   const [restartResult, setRestartResult] = useState<{ success: boolean; message: string } | null>(null);
 
-  // Handler to save normalization settings immediately when tags change
-  // NOTE: This callback must be defined AFTER all state declarations to avoid temporal dead zone errors
-  const handleNormalizationSettingsChange = useCallback(async (newSettings: NormalizationSettings) => {
-    // Update local state first for immediate UI response
-    setNormalizationSettings(newSettings);
-
-    // Save to backend immediately (with all current settings)
-    try {
-      await api.saveSettings({
-        url,
-        username,
-        auto_rename_channel_number: autoRenameChannelNumber,
-        include_channel_number_in_name: includeChannelNumberInName,
-        channel_number_separator: channelNumberSeparator,
-        remove_country_prefix: removeCountryPrefix,
-        include_country_in_name: includeCountryInName,
-        country_separator: countrySeparator,
-        timezone_preference: timezonePreference,
-        show_stream_urls: showStreamUrls,
-        hide_auto_sync_groups: hideAutoSyncGroups,
-        hide_ungrouped_streams: hideUngroupedStreams,
-        hide_epg_urls: hideEpgUrls,
-        hide_m3u_urls: hideM3uUrls,
-        gracenote_conflict_mode: gracenoteConflictMode,
-        theme: theme,
-        default_channel_profile_ids: defaultChannelProfileIds,
-        epg_auto_match_threshold: epgAutoMatchThreshold,
-        custom_network_prefixes: customNetworkPrefixes,
-        custom_network_suffixes: customNetworkSuffixes,
-        normalization_settings: newSettings, // Use the new settings
-        stats_poll_interval: statsPollInterval,
-        user_timezone: userTimezone,
-        backend_log_level: backendLogLevel,
-        frontend_log_level: frontendLogLevel,
-        vlc_open_behavior: vlcOpenBehavior,
-        linked_m3u_accounts: linkedM3UAccounts,
-        stream_probe_batch_size: streamProbeBatchSize,
-        stream_probe_timeout: streamProbeTimeout,
-        bitrate_sample_duration: bitrateSampleDuration,
-        parallel_probing_enabled: parallelProbingEnabled,
-        max_concurrent_probes: maxConcurrentProbes,
-        skip_recently_probed_hours: skipRecentlyProbedHours,
-        refresh_m3us_before_probe: refreshM3usBeforeProbe,
-        auto_reorder_after_probe: autoReorderAfterProbe,
-        stream_fetch_page_limit: streamFetchPageLimit,
-        stream_sort_priority: streamSortPriority,
-        stream_sort_enabled: streamSortEnabled,
-        m3u_account_priorities: m3uAccountPriorities,
-        deprioritize_failed_streams: deprioritizeFailedStreams,
-      });
-      logger.debug('Normalization settings saved automatically');
-    } catch (err) {
-      logger.error('Failed to auto-save normalization settings:', err);
-      // Don't show error to user for auto-save, just log it
-    }
-  }, [
-    url, username, autoRenameChannelNumber, includeChannelNumberInName,
-    channelNumberSeparator, removeCountryPrefix, includeCountryInName,
-    countrySeparator, timezonePreference, showStreamUrls, hideAutoSyncGroups,
-    hideUngroupedStreams, hideEpgUrls, hideM3uUrls, gracenoteConflictMode,
-    theme, defaultChannelProfileIds, epgAutoMatchThreshold,
-    customNetworkPrefixes, customNetworkSuffixes, statsPollInterval,
-    userTimezone, backendLogLevel, frontendLogLevel, vlcOpenBehavior,
-    linkedM3UAccounts, streamProbeBatchSize,
-    streamProbeTimeout, bitrateSampleDuration,
-    parallelProbingEnabled, maxConcurrentProbes, skipRecentlyProbedHours, refreshM3usBeforeProbe,
-    autoReorderAfterProbe, streamFetchPageLimit, streamSortPriority,
-    streamSortEnabled, deprioritizeFailedStreams
-  ]);
-
   // DnD sensors for sort priority
   const sensors = useSensors(
     useSensor(PointerSensor),
@@ -429,6 +361,13 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
     checkForOngoingProbe();
     loadM3UAccountsMaxStreams();
   }, []);
+
+  // Load M3U digest settings when that page is activated
+  useEffect(() => {
+    if (activePage === 'm3u-digest' && !digestSettings && !digestLoading) {
+      loadDigestSettings();
+    }
+  }, [activePage, digestSettings, digestLoading]);
 
   // Load M3U accounts to show guidance for max concurrent probes
   const loadM3UAccountsMaxStreams = async () => {
@@ -583,10 +522,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       setEpgAutoMatchThreshold(settings.epg_auto_match_threshold ?? 80);
       setCustomNetworkPrefixes(settings.custom_network_prefixes ?? []);
       setCustomNetworkSuffixes(settings.custom_network_suffixes ?? []);
-      setNormalizationSettings(settings.normalization_settings ?? {
-        disabledBuiltinTags: [],
-        customTags: [],
-      });
+      setNormalizeOnChannelCreate(settings.normalize_on_channel_create ?? false);
       setStatsPollInterval(settings.stats_poll_interval ?? 10);
       setOriginalPollInterval(settings.stats_poll_interval ?? 10);
       setUserTimezone(settings.user_timezone ?? '');
@@ -618,6 +554,16 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       setStreamSortEnabled(merged.enabled);
       setM3uAccountPriorities(settings.m3u_account_priorities ?? {});
       setDeprioritizeFailedStreams(settings.deprioritize_failed_streams ?? true);
+      // Shared SMTP settings
+      setSmtpHost(settings.smtp_host ?? '');
+      setSmtpPort(settings.smtp_port ?? 587);
+      setSmtpUser(settings.smtp_user ?? '');
+      setSmtpPassword(''); // Never load password from server
+      setSmtpFromEmail(settings.smtp_from_email ?? '');
+      setSmtpFromName(settings.smtp_from_name ?? 'ECM Alerts');
+      setSmtpUseTls(settings.smtp_use_tls ?? true);
+      setSmtpUseSsl(settings.smtp_use_ssl ?? false);
+      setSmtpConfigured(settings.smtp_configured ?? false);
       setNeedsRestart(false);
       setRestartResult(null);
       setTestResult(null);
@@ -700,7 +646,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         epg_auto_match_threshold: epgAutoMatchThreshold,
         custom_network_prefixes: customNetworkPrefixes,
         custom_network_suffixes: customNetworkSuffixes,
-        normalization_settings: normalizationSettings,
+        normalize_on_channel_create: normalizeOnChannelCreate,
         stats_poll_interval: statsPollInterval,
         user_timezone: userTimezone,
         backend_log_level: backendLogLevel,
@@ -721,7 +667,21 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         stream_sort_enabled: streamSortEnabled,
         m3u_account_priorities: m3uAccountPriorities,
         deprioritize_failed_streams: deprioritizeFailedStreams,
+        // Shared SMTP settings
+        smtp_host: smtpHost,
+        smtp_port: smtpPort,
+        smtp_user: smtpUser,
+        // Only send SMTP password if it was entered
+        ...(smtpPassword ? { smtp_password: smtpPassword } : {}),
+        smtp_from_email: smtpFromEmail,
+        smtp_from_name: smtpFromName,
+        smtp_use_tls: smtpUseTls,
+        smtp_use_ssl: smtpUseSsl,
       });
+      // Clear SMTP password field after save
+      setSmtpPassword('');
+      // Update SMTP configured status
+      setSmtpConfigured(!!(smtpHost && smtpFromEmail));
       // Apply frontend log level immediately
       const frontendLevel = frontendLogLevel === 'WARNING' ? 'WARN' : frontendLogLevel;
       if (['DEBUG', 'INFO', 'WARN', 'ERROR'].includes(frontendLevel)) {
@@ -769,6 +729,97 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
     } finally {
       setLoading(false);
     }
+  };
+
+  // M3U Digest Settings Management
+  const loadDigestSettings = async () => {
+    setDigestLoading(true);
+    setDigestError(null);
+    try {
+      const settings = await api.getM3UDigestSettings();
+      setDigestSettings(settings);
+    } catch (err) {
+      setDigestError(err instanceof Error ? err.message : 'Failed to load digest settings');
+    } finally {
+      setDigestLoading(false);
+    }
+  };
+
+  const handleDigestSettingChange = <K extends keyof M3UDigestSettings>(
+    key: K,
+    value: M3UDigestSettings[K]
+  ) => {
+    if (!digestSettings) return;
+    setDigestSettings({ ...digestSettings, [key]: value });
+  };
+
+  const handleSaveDigestSettings = async () => {
+    if (!digestSettings) return;
+    setDigestSaving(true);
+    setDigestError(null);
+    try {
+      const updated = await api.updateM3UDigestSettings({
+        enabled: digestSettings.enabled,
+        frequency: digestSettings.frequency,
+        email_recipients: digestSettings.email_recipients,
+        include_group_changes: digestSettings.include_group_changes,
+        include_stream_changes: digestSettings.include_stream_changes,
+        show_detailed_list: digestSettings.show_detailed_list,
+        min_changes_threshold: digestSettings.min_changes_threshold,
+      });
+      setDigestSettings(updated);
+    } catch (err) {
+      setDigestError(err instanceof Error ? err.message : 'Failed to save digest settings');
+    } finally {
+      setDigestSaving(false);
+    }
+  };
+
+  const handleSendTestDigest = async () => {
+    if (!digestSettings) return;
+    setDigestTestResult(null);
+    setDigestSaving(true);
+    try {
+      // Save settings first to ensure recipients are in the database
+      await api.updateM3UDigestSettings({
+        enabled: digestSettings.enabled,
+        frequency: digestSettings.frequency,
+        email_recipients: digestSettings.email_recipients,
+        include_group_changes: digestSettings.include_group_changes,
+        include_stream_changes: digestSettings.include_stream_changes,
+        show_detailed_list: digestSettings.show_detailed_list,
+        min_changes_threshold: digestSettings.min_changes_threshold,
+      });
+      // Now send the test
+      const result = await api.sendTestM3UDigest();
+      setDigestTestResult(result);
+      setTimeout(() => setDigestTestResult(null), 5000);
+    } catch (err) {
+      setDigestTestResult({
+        success: false,
+        message: err instanceof Error ? err.message : 'Failed to send test digest',
+      });
+    } finally {
+      setDigestSaving(false);
+    }
+  };
+
+  const handleAddDigestRecipient = (email: string) => {
+    if (!digestSettings || !email.trim()) return;
+    const trimmed = email.trim().toLowerCase();
+    if (digestSettings.email_recipients.includes(trimmed)) return;
+    setDigestSettings({
+      ...digestSettings,
+      email_recipients: [...digestSettings.email_recipients, trimmed],
+    });
+  };
+
+  const handleRemoveDigestRecipient = (email: string) => {
+    if (!digestSettings) return;
+    setDigestSettings({
+      ...digestSettings,
+      email_recipients: digestSettings.email_recipients.filter(e => e !== email),
+    });
   };
 
   const handleRestart = async () => {
@@ -1781,6 +1832,28 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
 
       <div className="settings-section">
         <div className="settings-section-header">
+          <span className="material-icons">auto_fix_high</span>
+          <h3>Default Behavior</h3>
+        </div>
+        <p className="form-hint" style={{ marginBottom: '1rem' }}>
+          When this is enabled, the "Apply normalization rules" checkbox will be checked by default
+          when creating channels from streams. You can still toggle it per-operation.
+        </p>
+
+        <div className="form-group">
+          <label className="checkbox-label">
+            <input
+              type="checkbox"
+              checked={normalizeOnChannelCreate}
+              onChange={(e) => setNormalizeOnChannelCreate(e.target.checked)}
+            />
+            <span>Apply normalization by default when creating channels</span>
+          </label>
+        </div>
+      </div>
+
+      <div className="settings-section">
+        <div className="settings-section-header">
           <span className="material-icons">public</span>
           <h3>Country Prefix Format</h3>
         </div>
@@ -1836,46 +1909,8 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         )}
       </div>
 
-      <NormalizationTagsSection
-        settings={normalizationSettings}
-        onChange={handleNormalizationSettingsChange}
-      />
-
-      {/* Preview Section */}
-      <div className="settings-section">
-        <div className="settings-section-header">
-          <span className="material-icons">preview</span>
-          <h3>Preview Normalization</h3>
-        </div>
-        <p className="form-hint" style={{ marginBottom: '1rem' }}>
-          Test how a stream name will be normalized with the current settings.
-        </p>
-        <div className="form-group">
-          <label htmlFor="normalization-preview-input">Stream Name</label>
-          <input
-            id="normalization-preview-input"
-            type="text"
-            value={normalizationPreviewInput}
-            onChange={(e) => setNormalizationPreviewInput(e.target.value)}
-            placeholder="Enter a stream name to preview (e.g., US: ESPN HD 1080p)"
-            style={{ width: '100%' }}
-          />
-        </div>
-        {normalizationPreviewInput.trim() && (
-          <div className="normalization-preview-result">
-            <div className="normalization-preview-label">Result:</div>
-            <div className="normalization-preview-value">
-              {normalizedPreviewResult || <span className="text-muted">(empty result)</span>}
-            </div>
-            {normalizedPreviewResult !== normalizationPreviewInput && (
-              <div className="normalization-preview-comparison">
-                <span className="material-icons" style={{ fontSize: '16px', color: 'var(--success-color)' }}>check_circle</span>
-                <span className="text-muted">Name was normalized</span>
-              </div>
-            )}
-          </div>
-        )}
-      </div>
+      {/* Advanced Normalization Rules Engine */}
+      <NormalizationEngineSection />
 
       {saveSuccess && (
         <div className="success-message">
@@ -1891,6 +1926,487 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
           {loading ? 'Saving...' : 'Save Settings'}
         </button>
       </div>
+    </div>
+  );
+
+  // State for new email input in digest settings
+  const [newDigestEmail, setNewDigestEmail] = useState('');
+
+  // Handle SMTP test
+  const handleTestSmtp = async () => {
+    if (!smtpHost || !smtpFromEmail || !smtpTestEmail) {
+      setSmtpTestResult({ success: false, message: 'SMTP host, from email, and test recipient are required' });
+      return;
+    }
+
+    setSmtpTesting(true);
+    setSmtpTestResult(null);
+
+    try {
+      const result = await api.testSmtpConnection({
+        smtp_host: smtpHost,
+        smtp_port: smtpPort,
+        smtp_user: smtpUser,
+        smtp_password: smtpPassword,
+        smtp_from_email: smtpFromEmail,
+        smtp_from_name: smtpFromName,
+        smtp_use_tls: smtpUseTls,
+        smtp_use_ssl: smtpUseSsl,
+        to_email: smtpTestEmail,
+      });
+      setSmtpTestResult(result);
+    } catch (err) {
+      setSmtpTestResult({ success: false, message: 'Failed to test SMTP connection' });
+    } finally {
+      setSmtpTesting(false);
+    }
+  };
+
+  const renderEmailSettingsPage = () => (
+    <div className="settings-page">
+      <div className="settings-page-header">
+        <h2>Email Settings</h2>
+        <p>Configure shared SMTP settings for email features like M3U Digest reports.</p>
+      </div>
+
+      <div className="settings-section">
+        <div className="settings-section-header">
+          <span className="material-icons">mail_outline</span>
+          <h3>SMTP Configuration</h3>
+        </div>
+        <p className="section-description">
+          Configure your SMTP server to enable email features. These settings are used by M3U Digest
+          reports and Email alert methods.
+        </p>
+
+        {smtpConfigured && (
+          <div className="status-badge status-success">
+            <span className="material-icons">check_circle</span>
+            SMTP Configured
+          </div>
+        )}
+
+        <div className="form-group-vertical">
+          <label htmlFor="smtpHost">SMTP Host</label>
+          <input
+            type="text"
+            id="smtpHost"
+            value={smtpHost}
+            onChange={(e) => setSmtpHost(e.target.value)}
+            placeholder="smtp.example.com"
+          />
+          <p className="field-hint">Your email provider's SMTP server address (e.g., smtp.gmail.com)</p>
+        </div>
+
+        <div className="form-row">
+          <div className="form-group-vertical">
+            <label htmlFor="smtpPort">SMTP Port</label>
+            <input
+              type="number"
+              id="smtpPort"
+              value={smtpPort}
+              onChange={(e) => setSmtpPort(parseInt(e.target.value, 10) || 587)}
+              min={1}
+              max={65535}
+            />
+            <p className="field-hint">Usually 587 (TLS), 465 (SSL), or 25 (unencrypted)</p>
+          </div>
+
+          <div className="form-group-vertical">
+            <label htmlFor="smtpSecurity">Security</label>
+            <select
+              id="smtpSecurity"
+              value={smtpUseSsl ? 'ssl' : smtpUseTls ? 'tls' : 'none'}
+              onChange={(e) => {
+                const val = e.target.value;
+                setSmtpUseTls(val === 'tls');
+                setSmtpUseSsl(val === 'ssl');
+              }}
+            >
+              <option value="tls">TLS (STARTTLS)</option>
+              <option value="ssl">SSL</option>
+              <option value="none">None</option>
+            </select>
+            <p className="field-hint">TLS is recommended for most providers</p>
+          </div>
+        </div>
+
+        <div className="form-row">
+          <div className="form-group-vertical">
+            <label htmlFor="smtpUser">Username (optional)</label>
+            <input
+              type="text"
+              id="smtpUser"
+              value={smtpUser}
+              onChange={(e) => setSmtpUser(e.target.value)}
+              placeholder="user@example.com"
+            />
+            <p className="field-hint">Usually your email address</p>
+          </div>
+
+          <div className="form-group-vertical">
+            <label htmlFor="smtpPassword">Password (optional)</label>
+            <input
+              type="password"
+              id="smtpPassword"
+              value={smtpPassword}
+              onChange={(e) => setSmtpPassword(e.target.value)}
+              placeholder="••••••••"
+            />
+            <p className="field-hint">App password recommended for Gmail/OAuth providers</p>
+          </div>
+        </div>
+
+        <div className="form-row">
+          <div className="form-group-vertical">
+            <label htmlFor="smtpFromEmail">From Email</label>
+            <input
+              type="email"
+              id="smtpFromEmail"
+              value={smtpFromEmail}
+              onChange={(e) => setSmtpFromEmail(e.target.value)}
+              placeholder="noreply@example.com"
+            />
+            <p className="field-hint">The sender email address</p>
+          </div>
+
+          <div className="form-group-vertical">
+            <label htmlFor="smtpFromName">From Name</label>
+            <input
+              type="text"
+              id="smtpFromName"
+              value={smtpFromName}
+              onChange={(e) => setSmtpFromName(e.target.value)}
+              placeholder="ECM Alerts"
+            />
+            <p className="field-hint">Display name for the sender</p>
+          </div>
+        </div>
+      </div>
+
+      <div className="settings-section">
+        <div className="settings-section-header">
+          <span className="material-icons">send</span>
+          <h3>Test Connection</h3>
+        </div>
+        <p className="section-description">
+          Send a test email to verify your SMTP settings are configured correctly.
+        </p>
+
+        <div className="form-group-vertical">
+          <label htmlFor="smtpTestEmail">Test Recipient Email</label>
+          <div className="input-with-button">
+            <input
+              type="email"
+              id="smtpTestEmail"
+              value={smtpTestEmail}
+              onChange={(e) => setSmtpTestEmail(e.target.value)}
+              placeholder="your@email.com"
+            />
+            <button
+              className="btn-test"
+              onClick={handleTestSmtp}
+              disabled={smtpTesting || !smtpHost || !smtpFromEmail || !smtpTestEmail}
+            >
+              {smtpTesting ? (
+                <>
+                  <span className="material-icons spinning">sync</span>
+                  Testing...
+                </>
+              ) : (
+                <>
+                  <span className="material-icons">send</span>
+                  Send Test Email
+                </>
+              )}
+            </button>
+          </div>
+        </div>
+
+        {smtpTestResult && (
+          <div className={`test-result ${smtpTestResult.success ? 'success' : 'error'}`}>
+            <span className="material-icons">
+              {smtpTestResult.success ? 'check_circle' : 'error'}
+            </span>
+            {smtpTestResult.message}
+          </div>
+        )}
+      </div>
+
+      <div className="settings-actions">
+        <button
+          className="btn btn-primary"
+          onClick={handleSave}
+          disabled={loading}
+        >
+          {loading ? 'Saving...' : 'Save Settings'}
+        </button>
+        {saveSuccess && <span className="save-success">Settings saved!</span>}
+        {error && <span className="save-error">{error}</span>}
+      </div>
+    </div>
+  );
+
+  const renderM3UDigestPage = () => (
+    <div className="settings-page">
+      <div className="settings-page-header">
+        <h2>M3U Change Digest</h2>
+        <p>Configure email notifications for M3U playlist changes.</p>
+      </div>
+
+      {digestLoading && (
+        <div className="loading-state">
+          <span className="material-icons spinning">sync</span>
+          <span>Loading digest settings...</span>
+        </div>
+      )}
+
+      {digestError && (
+        <div className="error-banner">
+          <span className="material-icons">error</span>
+          {digestError}
+          <button onClick={loadDigestSettings}>Retry</button>
+        </div>
+      )}
+
+      {digestSettings && !digestLoading && (
+        <>
+          {/* Enable/Disable Section */}
+          <div className="settings-section">
+            <div className="settings-section-header">
+              <span className="material-icons">notifications</span>
+              <h3>Digest Notifications</h3>
+            </div>
+
+            <div className="settings-group">
+              <div className="checkbox-group">
+                <input
+                  id="digestEnabled"
+                  type="checkbox"
+                  checked={digestSettings.enabled}
+                  onChange={(e) => handleDigestSettingChange('enabled', e.target.checked)}
+                />
+                <div className="checkbox-content">
+                  <label htmlFor="digestEnabled">Enable M3U digest emails</label>
+                  <p>Send email notifications when M3U playlists change (groups or streams added/removed).</p>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Frequency Section */}
+          <div className="settings-section">
+            <div className="settings-section-header">
+              <span className="material-icons">schedule</span>
+              <h3>Frequency</h3>
+            </div>
+
+            <div className="settings-group">
+              <div className="form-group-vertical">
+                <label htmlFor="digestFrequency">Digest frequency</label>
+                <span className="form-description">
+                  How often to send digest emails. "Immediate" sends right after each M3U refresh.
+                </span>
+                <CustomSelect
+                  value={digestSettings.frequency}
+                  onChange={(val) => handleDigestSettingChange('frequency', val as M3UDigestFrequency)}
+                  options={[
+                    { value: 'immediate', label: 'Immediate (after each refresh)' },
+                    { value: 'hourly', label: 'Hourly' },
+                    { value: 'daily', label: 'Daily' },
+                    { value: 'weekly', label: 'Weekly' },
+                  ]}
+                />
+              </div>
+
+              <div className="form-group-vertical">
+                <label htmlFor="digestThreshold">Minimum changes threshold</label>
+                <span className="form-description">
+                  Only send digest if at least this many changes occurred.
+                </span>
+                <input
+                  id="digestThreshold"
+                  type="number"
+                  min="1"
+                  max="100"
+                  value={digestSettings.min_changes_threshold}
+                  onChange={(e) => handleDigestSettingChange('min_changes_threshold', Math.max(1, parseInt(e.target.value) || 1))}
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* Content Filters Section */}
+          <div className="settings-section">
+            <div className="settings-section-header">
+              <span className="material-icons">filter_list</span>
+              <h3>Content Filters</h3>
+            </div>
+
+            <div className="settings-group">
+              <div className="checkbox-group">
+                <input
+                  id="includeGroupChanges"
+                  type="checkbox"
+                  checked={digestSettings.include_group_changes}
+                  onChange={(e) => handleDigestSettingChange('include_group_changes', e.target.checked)}
+                />
+                <div className="checkbox-content">
+                  <label htmlFor="includeGroupChanges">Include group changes</label>
+                  <p>Include notifications when groups are added or removed.</p>
+                </div>
+              </div>
+
+              <div className="checkbox-group">
+                <input
+                  id="includeStreamChanges"
+                  type="checkbox"
+                  checked={digestSettings.include_stream_changes}
+                  onChange={(e) => handleDigestSettingChange('include_stream_changes', e.target.checked)}
+                />
+                <div className="checkbox-content">
+                  <label htmlFor="includeStreamChanges">Include stream changes</label>
+                  <p>Include notifications when streams are added or removed within groups.</p>
+                </div>
+              </div>
+
+              <div className="checkbox-group">
+                <input
+                  id="showDetailedList"
+                  type="checkbox"
+                  checked={digestSettings.show_detailed_list}
+                  onChange={(e) => handleDigestSettingChange('show_detailed_list', e.target.checked)}
+                />
+                <div className="checkbox-content">
+                  <label htmlFor="showDetailedList">Show detailed list</label>
+                  <p>Include the full list of changed groups and streams in the digest. Disable to show only summary counts.</p>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Recipients Section */}
+          <div className="settings-section">
+            <div className="settings-section-header">
+              <span className="material-icons">mail</span>
+              <h3>Email Recipients</h3>
+            </div>
+
+            {!smtpConfigured && (
+              <div className="warning-banner">
+                <span className="material-icons">warning</span>
+                <span>
+                  SMTP is not configured. Please configure your email server in{' '}
+                  <button
+                    className="link-button"
+                    onClick={() => setActivePage('email')}
+                  >
+                    Email Settings
+                  </button>{' '}
+                  before sending digests.
+                </span>
+              </div>
+            )}
+
+            <div className="settings-group">
+              <div className="form-group-vertical">
+                <label>Recipients</label>
+                <span className="form-description">
+                  Email addresses to receive digest notifications.
+                </span>
+                <div className="email-recipients-list">
+                  {digestSettings.email_recipients.length === 0 ? (
+                    <span className="no-recipients">No recipients configured</span>
+                  ) : (
+                    digestSettings.email_recipients.map((email) => (
+                      <span key={email} className="email-recipient-tag">
+                        {email}
+                        <button
+                          className="remove-btn"
+                          onClick={() => handleRemoveDigestRecipient(email)}
+                          title="Remove recipient"
+                        >
+                          <span className="material-icons">close</span>
+                        </button>
+                      </span>
+                    ))
+                  )}
+                </div>
+                <div className="add-email-row">
+                  <input
+                    type="email"
+                    placeholder="Enter email address"
+                    value={newDigestEmail}
+                    onChange={(e) => setNewDigestEmail(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && newDigestEmail.trim()) {
+                        handleAddDigestRecipient(newDigestEmail);
+                        setNewDigestEmail('');
+                      }
+                    }}
+                  />
+                  <button
+                    className="btn-secondary"
+                    onClick={() => {
+                      if (newDigestEmail.trim()) {
+                        handleAddDigestRecipient(newDigestEmail);
+                        setNewDigestEmail('');
+                      }
+                    }}
+                    disabled={!newDigestEmail.trim()}
+                  >
+                    <span className="material-icons">add</span>
+                    Add
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Last Digest Info */}
+          {digestSettings.last_digest_at && (
+            <div className="settings-section">
+              <div className="settings-section-header">
+                <span className="material-icons">history</span>
+                <h3>Last Digest</h3>
+              </div>
+              <p className="form-hint">
+                Last digest sent: {new Date(digestSettings.last_digest_at).toLocaleString()}
+              </p>
+            </div>
+          )}
+
+          {/* Test Result */}
+          {digestTestResult && (
+            <div className={`result-banner ${digestTestResult.success ? 'success' : 'error'}`}>
+              <span className="material-icons">
+                {digestTestResult.success ? 'check_circle' : 'error'}
+              </span>
+              {digestTestResult.message}
+            </div>
+          )}
+
+          {/* Actions */}
+          <div className="settings-actions">
+            <button
+              className="btn-secondary"
+              onClick={handleSendTestDigest}
+              disabled={digestSaving || !smtpConfigured || digestSettings.email_recipients.length === 0}
+            >
+              <span className="material-icons">send</span>
+              Send Test Digest
+            </button>
+            <button
+              className="btn-primary"
+              onClick={handleSaveDigestSettings}
+              disabled={digestSaving}
+            >
+              <span className="material-icons">save</span>
+              {digestSaving ? 'Saving...' : 'Save Digest Settings'}
+            </button>
+          </div>
+        </>
+      )}
     </div>
   );
 
@@ -2606,8 +3122,15 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
             className={`settings-nav-item ${activePage === 'normalization' ? 'active' : ''}`}
             onClick={() => setActivePage('normalization')}
           >
-            <span className="material-icons">label</span>
+            <span className="material-icons">auto_fix_high</span>
             Channel Normalization
+          </li>
+          <li
+            className={`settings-nav-item ${activePage === 'tag-engine' ? 'active' : ''}`}
+            onClick={() => setActivePage('tag-engine')}
+          >
+            <span className="material-icons">label</span>
+            Tags
           </li>
           <li
             className={`settings-nav-item ${activePage === 'appearance' ? 'active' : ''}`}
@@ -2615,6 +3138,13 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
           >
             <span className="material-icons">palette</span>
             Appearance
+          </li>
+          <li
+            className={`settings-nav-item ${activePage === 'email' ? 'active' : ''}`}
+            onClick={() => setActivePage('email')}
+          >
+            <span className="material-icons">email</span>
+            Email Settings
           </li>
           <li
             className={`settings-nav-item ${activePage === 'scheduled-tasks' ? 'active' : ''}`}
@@ -2631,6 +3161,13 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
             Alert Methods
           </li>
           <li
+            className={`settings-nav-item ${activePage === 'm3u-digest' ? 'active' : ''}`}
+            onClick={() => setActivePage('m3u-digest')}
+          >
+            <span className="material-icons">mail</span>
+            M3U Digest
+          </li>
+          <li
             className={`settings-nav-item ${activePage === 'maintenance' ? 'active' : ''}`}
             onClick={() => setActivePage('maintenance')}
           >
@@ -2644,9 +3181,12 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         {activePage === 'general' && renderGeneralPage()}
         {activePage === 'channel-defaults' && renderChannelDefaultsPage()}
         {activePage === 'normalization' && renderNormalizationPage()}
+        {activePage === 'tag-engine' && <TagEngineSection />}
         {activePage === 'appearance' && renderAppearancePage()}
+        {activePage === 'email' && renderEmailSettingsPage()}
         {activePage === 'scheduled-tasks' && <ScheduledTasksSection userTimezone={userTimezone} />}
         {activePage === 'alert-methods' && <AlertMethodSettings />}
+        {activePage === 'm3u-digest' && renderM3UDigestPage()}
         {activePage === 'maintenance' && renderMaintenancePage()}
       </div>
 
