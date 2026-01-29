@@ -19,6 +19,12 @@ export function TaskEditorModal({ task, onClose, onSaved }: TaskEditorModalProps
   const [enabled, setEnabled] = useState(task.enabled);
   const [taskConfig, setTaskConfig] = useState<Record<string, unknown>>(task.config || {});
 
+  // Alert configuration state
+  const [sendAlerts, setSendAlerts] = useState(task.send_alerts ?? true);
+  const [alertOnSuccess, setAlertOnSuccess] = useState(task.alert_on_success ?? true);
+  const [alertOnWarning, setAlertOnWarning] = useState(task.alert_on_warning ?? true);
+  const [alertOnError, setAlertOnError] = useState(task.alert_on_error ?? true);
+
   // Schedules state
   const [schedules, setSchedules] = useState<TaskSchedule[]>(task.schedules || []);
   const [editingSchedule, setEditingSchedule] = useState<TaskSchedule | null>(null);
@@ -147,7 +153,7 @@ export function TaskEditorModal({ task, onClose, onSaved }: TaskEditorModalProps
     refreshSchedules();
   }, [refreshSchedules]);
 
-  // Save task-level settings (enabled, config)
+  // Save task-level settings (enabled, config, alerts)
   const handleSaveTask = async () => {
     setError(null);
     setSaving(true);
@@ -155,6 +161,11 @@ export function TaskEditorModal({ task, onClose, onSaved }: TaskEditorModalProps
     try {
       const config: api.TaskConfigUpdate = {
         enabled,
+        // Alert configuration
+        send_alerts: sendAlerts,
+        alert_on_success: alertOnSuccess,
+        alert_on_warning: alertOnWarning,
+        alert_on_error: alertOnError,
       };
 
       // Include task-specific configuration
@@ -412,6 +423,54 @@ export function TaskEditorModal({ task, onClose, onSaved }: TaskEditorModalProps
                 ))}
               </div>
             )}
+          </div>
+
+          {/* Alert Configuration Section */}
+          <div className="alert-config-section">
+            <div className="alert-config-header">
+              <label className="section-label">Alert Settings</label>
+            </div>
+            <div className="alert-config-content">
+              <label className="alert-toggle master-toggle">
+                <input
+                  type="checkbox"
+                  checked={sendAlerts}
+                  onChange={(e) => setSendAlerts(e.target.checked)}
+                />
+                <span>Send alerts for this task</span>
+              </label>
+              {sendAlerts && (
+                <div className="alert-type-toggles">
+                  <label className="alert-toggle">
+                    <input
+                      type="checkbox"
+                      checked={alertOnSuccess}
+                      onChange={(e) => setAlertOnSuccess(e.target.checked)}
+                    />
+                    <span>Success</span>
+                    <span className="alert-hint">Alert when task completes successfully</span>
+                  </label>
+                  <label className="alert-toggle">
+                    <input
+                      type="checkbox"
+                      checked={alertOnWarning}
+                      onChange={(e) => setAlertOnWarning(e.target.checked)}
+                    />
+                    <span>Warning</span>
+                    <span className="alert-hint">Alert on partial failures or cancellation</span>
+                  </label>
+                  <label className="alert-toggle">
+                    <input
+                      type="checkbox"
+                      checked={alertOnError}
+                      onChange={(e) => setAlertOnError(e.target.checked)}
+                    />
+                    <span>Error</span>
+                    <span className="alert-hint">Alert when task fails completely</span>
+                  </label>
+                </div>
+              )}
+            </div>
           </div>
 
           {/* Task-Specific Configuration: Cleanup */}

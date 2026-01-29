@@ -76,7 +76,7 @@ class M3UDigestTemplate:
         summary["account_count"] = len(summary["accounts"])
         return summary
 
-    def render_html(self, changes: List[M3UChangeLog], since: datetime) -> str:
+    def render_html(self, changes: List[M3UChangeLog], since: datetime, show_detailed_list: bool = True) -> str:
         """Render HTML email content."""
         summary = self._get_summary(changes)
         by_account = self._group_changes(changes)
@@ -239,44 +239,52 @@ class M3UDigestTemplate:
         <div class="content">
 """
 
-        # Add per-account sections
-        for account_id, type_changes in by_account.items():
-            html += f"""
+        # Add per-account sections (only if show_detailed_list is enabled)
+        if show_detailed_list:
+            for account_id, type_changes in by_account.items():
+                html += f"""
             <div class="account-section">
                 <div class="account-header">M3U Account #{account_id}</div>
 """
-            for change_type, change_list in type_changes.items():
-                label = self.LABELS.get(change_type, change_type)
-                html += f"""
+                for change_type, change_list in type_changes.items():
+                    label = self.LABELS.get(change_type, change_type)
+                    html += f"""
                 <div class="change-group">
                     <span class="change-type {change_type}">{label}</span>
                     <ul class="change-list">
 """
-                for change in change_list[:20]:  # Limit to 20 items per type
-                    if change.group_name:
-                        if change.change_type in ("group_added", "group_removed"):
-                            html += f'<li><strong>{change.group_name}</strong> <span class="stream-count">({change.count} streams)</span></li>\n'
-                        else:
-                            stream_names = change.get_stream_names()
-                            if stream_names:
-                                names_preview = ", ".join(stream_names[:3])
-                                if len(stream_names) > 3:
-                                    names_preview += f" and {len(stream_names) - 3} more"
-                                html += f'<li><strong>{change.group_name}</strong>: {change.count} streams <span class="stream-count">({names_preview})</span></li>\n'
+                    for change in change_list[:20]:  # Limit to 20 items per type
+                        if change.group_name:
+                            if change.change_type in ("group_added", "group_removed"):
+                                html += f'<li><strong>{change.group_name}</strong> <span class="stream-count">({change.count} streams)</span></li>\n'
                             else:
-                                html += f'<li><strong>{change.group_name}</strong>: {change.count} streams</li>\n'
-                    else:
-                        html += f'<li>{change.count} items</li>\n'
+                                stream_names = change.get_stream_names()
+                                if stream_names:
+                                    names_preview = ", ".join(stream_names[:3])
+                                    if len(stream_names) > 3:
+                                        names_preview += f" and {len(stream_names) - 3} more"
+                                    html += f'<li><strong>{change.group_name}</strong>: {change.count} streams <span class="stream-count">({names_preview})</span></li>\n'
+                                else:
+                                    html += f'<li><strong>{change.group_name}</strong>: {change.count} streams</li>\n'
+                        else:
+                            html += f'<li>{change.count} items</li>\n'
 
-                if len(change_list) > 20:
-                    html += f'<li><em>... and {len(change_list) - 20} more</em></li>\n'
+                    if len(change_list) > 20:
+                        html += f'<li><em>... and {len(change_list) - 20} more</em></li>\n'
 
-                html += """
+                    html += """
                     </ul>
                 </div>
 """
-            html += """
+                html += """
             </div>
+"""
+        else:
+            # Summary-only mode - just show a note
+            html += """
+            <p style="text-align: center; color: #666; padding: 20px;">
+                Detailed change list disabled. Enable "Show Detailed List" in settings to see individual changes.
+            </p>
 """
 
         html += f"""
@@ -292,7 +300,7 @@ class M3UDigestTemplate:
 """
         return html
 
-    def render_plain(self, changes: List[M3UChangeLog], since: datetime) -> str:
+    def render_plain(self, changes: List[M3UChangeLog], since: datetime, show_detailed_list: bool = True) -> str:
         """Render plain text email content."""
         summary = self._get_summary(changes)
         by_account = self._group_changes(changes)
@@ -313,31 +321,32 @@ class M3UDigestTemplate:
             "",
         ]
 
-        # Add per-account sections
-        for account_id, type_changes in by_account.items():
-            lines.append("=" * 50)
-            lines.append(f"M3U ACCOUNT #{account_id}")
-            lines.append("=" * 50)
+        # Add per-account sections (only if show_detailed_list is enabled)
+        if show_detailed_list:
+            for account_id, type_changes in by_account.items():
+                lines.append("=" * 50)
+                lines.append(f"M3U ACCOUNT #{account_id}")
+                lines.append("=" * 50)
 
-            for change_type, change_list in type_changes.items():
-                label = self.LABELS.get(change_type, change_type)
-                lines.append("")
-                lines.append(f"[{label.upper()}]")
-                lines.append("-" * 20)
+                for change_type, change_list in type_changes.items():
+                    label = self.LABELS.get(change_type, change_type)
+                    lines.append("")
+                    lines.append(f"[{label.upper()}]")
+                    lines.append("-" * 20)
 
-                for change in change_list[:20]:
-                    if change.group_name:
-                        if change.change_type in ("group_added", "group_removed"):
-                            lines.append(f"  * {change.group_name} ({change.count} streams)")
+                    for change in change_list[:20]:
+                        if change.group_name:
+                            if change.change_type in ("group_added", "group_removed"):
+                                lines.append(f"  * {change.group_name} ({change.count} streams)")
+                            else:
+                                lines.append(f"  * {change.group_name}: {change.count} streams")
                         else:
-                            lines.append(f"  * {change.group_name}: {change.count} streams")
-                    else:
-                        lines.append(f"  * {change.count} items")
+                            lines.append(f"  * {change.count} items")
 
-                if len(change_list) > 20:
-                    lines.append(f"  ... and {len(change_list) - 20} more")
+                    if len(change_list) > 20:
+                        lines.append(f"  ... and {len(change_list) - 20} more")
 
-            lines.append("")
+                lines.append("")
 
         lines.extend([
             "-" * 50,

@@ -114,6 +114,7 @@ class M3UChangeDetector:
         m3u_account_id: int,
         groups_data: List[Dict],
         total_streams: int,
+        dispatcharr_updated_at: Optional[str] = None,
     ) -> M3USnapshot:
         """
         Create a new M3U snapshot from current state.
@@ -122,6 +123,7 @@ class M3UChangeDetector:
             m3u_account_id: The M3U account ID from Dispatcharr
             groups_data: List of dicts with 'name' and 'stream_count' for each group
             total_streams: Total number of streams in the playlist
+            dispatcharr_updated_at: Dispatcharr's updated_at timestamp (for change monitoring)
 
         Returns:
             The created M3USnapshot
@@ -130,6 +132,7 @@ class M3UChangeDetector:
             m3u_account_id=m3u_account_id,
             snapshot_time=datetime.utcnow(),
             total_streams=total_streams,
+            dispatcharr_updated_at=dispatcharr_updated_at,
         )
         snapshot.set_groups_data({"groups": groups_data})
 
@@ -171,6 +174,7 @@ class M3UChangeDetector:
         current_groups: List[Dict],
         current_total_streams: int,
         stream_names_by_group: Optional[Dict[str, List[str]]] = None,
+        dispatcharr_updated_at: Optional[str] = None,
     ) -> M3UChangeSet:
         """
         Detect changes between current M3U state and previous snapshot.
@@ -181,6 +185,7 @@ class M3UChangeDetector:
             current_total_streams: Total streams in current state
             stream_names_by_group: Optional dict mapping group names to stream name lists
                                    (enables detailed stream-level change detection)
+            dispatcharr_updated_at: Dispatcharr's updated_at timestamp (for change monitoring)
 
         Returns:
             M3UChangeSet with all detected changes
@@ -193,6 +198,7 @@ class M3UChangeDetector:
             m3u_account_id=m3u_account_id,
             groups_data=current_groups,
             total_streams=current_total_streams,
+            dispatcharr_updated_at=dispatcharr_updated_at,
         )
 
         change_set = M3UChangeSet(

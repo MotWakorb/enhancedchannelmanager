@@ -19,7 +19,11 @@ POLL_INTERVAL_SECONDS = 5  # How often to check if refresh is complete
 MAX_WAIT_SECONDS = 300  # Maximum time to wait (5 minutes)
 
 
-async def capture_m3u_changes(account_id: int, account_name: str) -> Optional[Dict]:
+async def capture_m3u_changes(
+    account_id: int,
+    account_name: str,
+    dispatcharr_updated_at: Optional[str] = None,
+) -> Optional[Dict]:
     """
     Capture M3U state changes after a refresh.
 
@@ -31,6 +35,11 @@ async def capture_m3u_changes(account_id: int, account_name: str) -> Optional[Di
     2. Getting all channel groups to build ID -> name mapping
     3. Getting actual stream counts per group (only available for enabled groups)
     4. Merging: all groups get names, stream counts where available
+
+    Args:
+        account_id: The M3U account ID
+        account_name: The account name (for logging)
+        dispatcharr_updated_at: Dispatcharr's updated_at timestamp (for change monitoring)
 
     Returns the change set dict if changes were detected, None otherwise.
     """
@@ -119,6 +128,7 @@ async def capture_m3u_changes(account_id: int, account_name: str) -> Optional[Di
                 current_groups=current_groups,
                 current_total_streams=total_streams,
                 stream_names_by_group=stream_names_by_group,
+                dispatcharr_updated_at=dispatcharr_updated_at,
             )
 
             if change_set.has_changes:

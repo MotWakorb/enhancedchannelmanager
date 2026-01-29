@@ -147,6 +147,15 @@ def _run_migrations(engine) -> None:
             # Add enabled column to m3u_change_logs (v0.10.0)
             _add_m3u_change_logs_enabled_column(conn)
 
+            # Add show_detailed_list column to m3u_digest_settings (v0.8.7)
+            _add_m3u_digest_show_detailed_list_column(conn)
+
+            # Add dispatcharr_updated_at column to m3u_snapshots (v0.8.7)
+            _add_m3u_snapshot_dispatcharr_updated_at_column(conn)
+
+            # Add alert configuration columns to scheduled_tasks (v0.8.7)
+            _add_scheduled_task_alert_columns(conn)
+
             logger.debug("All migrations complete - schema is up to date")
     except Exception as e:
         logger.exception(f"Migration failed: {e}")
@@ -913,6 +922,108 @@ def _add_m3u_change_logs_enabled_column(conn) -> None:
         logger.info("Migration complete: added enabled column to m3u_change_logs")
     else:
         logger.debug("m3u_change_logs.enabled column already exists")
+
+
+def _add_m3u_digest_show_detailed_list_column(conn) -> None:
+    """Add show_detailed_list column to m3u_digest_settings table."""
+    from sqlalchemy import text
+
+    # Check if m3u_digest_settings table exists
+    result = conn.execute(text(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='m3u_digest_settings'"
+    ))
+    if not result.fetchone():
+        logger.debug("m3u_digest_settings table doesn't exist yet, skipping migration")
+        return
+
+    # Check if show_detailed_list column already exists
+    result = conn.execute(text("PRAGMA table_info(m3u_digest_settings)"))
+    columns = [row[1] for row in result.fetchall()]
+
+    if "show_detailed_list" not in columns:
+        logger.info("Adding show_detailed_list column to m3u_digest_settings")
+        conn.execute(text(
+            "ALTER TABLE m3u_digest_settings ADD COLUMN show_detailed_list BOOLEAN DEFAULT 1 NOT NULL"
+        ))
+        conn.commit()
+        logger.info("Migration complete: added show_detailed_list column to m3u_digest_settings")
+    else:
+        logger.debug("m3u_digest_settings.show_detailed_list column already exists")
+
+
+def _add_m3u_snapshot_dispatcharr_updated_at_column(conn) -> None:
+    """Add dispatcharr_updated_at column to m3u_snapshots table for change monitoring."""
+    from sqlalchemy import text
+
+    # Check if m3u_snapshots table exists
+    result = conn.execute(text(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='m3u_snapshots'"
+    ))
+    if not result.fetchone():
+        logger.debug("m3u_snapshots table doesn't exist yet, skipping migration")
+        return
+
+    # Check if dispatcharr_updated_at column already exists
+    result = conn.execute(text("PRAGMA table_info(m3u_snapshots)"))
+    columns = [row[1] for row in result.fetchall()]
+
+    if "dispatcharr_updated_at" not in columns:
+        logger.info("Adding dispatcharr_updated_at column to m3u_snapshots")
+        conn.execute(text(
+            "ALTER TABLE m3u_snapshots ADD COLUMN dispatcharr_updated_at VARCHAR(50)"
+        ))
+        conn.commit()
+        logger.info("Migration complete: added dispatcharr_updated_at column to m3u_snapshots")
+    else:
+        logger.debug("m3u_snapshots.dispatcharr_updated_at column already exists")
+
+
+def _add_scheduled_task_alert_columns(conn) -> None:
+    """Add alert configuration columns to scheduled_tasks table."""
+    from sqlalchemy import text
+
+    # Check if scheduled_tasks table exists
+    result = conn.execute(text(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='scheduled_tasks'"
+    ))
+    if not result.fetchone():
+        logger.debug("scheduled_tasks table doesn't exist yet, skipping alert columns migration")
+        return
+
+    # Check which columns already exist
+    result = conn.execute(text("PRAGMA table_info(scheduled_tasks)"))
+    columns = [row[1] for row in result.fetchall()]
+
+    # Add send_alerts column if not exists
+    if "send_alerts" not in columns:
+        logger.info("Adding send_alerts column to scheduled_tasks")
+        conn.execute(text(
+            "ALTER TABLE scheduled_tasks ADD COLUMN send_alerts BOOLEAN DEFAULT 1 NOT NULL"
+        ))
+
+    # Add alert_on_success column if not exists
+    if "alert_on_success" not in columns:
+        logger.info("Adding alert_on_success column to scheduled_tasks")
+        conn.execute(text(
+            "ALTER TABLE scheduled_tasks ADD COLUMN alert_on_success BOOLEAN DEFAULT 1 NOT NULL"
+        ))
+
+    # Add alert_on_warning column if not exists
+    if "alert_on_warning" not in columns:
+        logger.info("Adding alert_on_warning column to scheduled_tasks")
+        conn.execute(text(
+            "ALTER TABLE scheduled_tasks ADD COLUMN alert_on_warning BOOLEAN DEFAULT 1 NOT NULL"
+        ))
+
+    # Add alert_on_error column if not exists
+    if "alert_on_error" not in columns:
+        logger.info("Adding alert_on_error column to scheduled_tasks")
+        conn.execute(text(
+            "ALTER TABLE scheduled_tasks ADD COLUMN alert_on_error BOOLEAN DEFAULT 1 NOT NULL"
+        ))
+
+    conn.commit()
+    logger.debug("scheduled_tasks alert columns migration complete")
 
 
 def _perform_maintenance(engine) -> None:

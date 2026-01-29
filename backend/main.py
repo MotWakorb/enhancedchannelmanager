@@ -37,6 +37,9 @@ import alert_methods_discord  # noqa: F401
 import alert_methods_smtp  # noqa: F401
 import alert_methods_telegram  # noqa: F401
 
+# Import M3U digest for immediate notifications after refresh
+from tasks.m3u_digest import send_immediate_digest
+
 # Polling configuration for manual refresh endpoints
 # These control background polling to detect when Dispatcharr completes refresh operations
 REFRESH_POLL_INTERVAL_SECONDS = 5
@@ -52,10 +55,57 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# OpenAPI tags for organizing endpoints in Swagger UI
+tags_metadata = [
+    {"name": "Health", "description": "Health check and debug endpoints"},
+    {"name": "Settings", "description": "Application settings and configuration"},
+    {"name": "Channels", "description": "Channel management - create, update, delete channels"},
+    {"name": "Channel Groups", "description": "Organize channels into groups"},
+    {"name": "Channel Profiles", "description": "Channel profile configurations"},
+    {"name": "Streams", "description": "Stream management and statistics"},
+    {"name": "Stream Profiles", "description": "Stream profile configurations"},
+    {"name": "M3U", "description": "M3U account management, refresh, and VOD"},
+    {"name": "M3U Digest", "description": "M3U change digest email notifications"},
+    {"name": "EPG", "description": "Electronic Program Guide sources and data"},
+    {"name": "Providers", "description": "Stream providers (M3U accounts)"},
+    {"name": "Tasks", "description": "Scheduled tasks and task execution"},
+    {"name": "Notifications", "description": "System notifications"},
+    {"name": "Alert Methods", "description": "Alert delivery methods (Discord, Email, Telegram)"},
+    {"name": "Journal", "description": "Activity journal and audit log"},
+    {"name": "Stats", "description": "Statistics and analytics"},
+    {"name": "Stream Stats", "description": "Stream health monitoring and statistics"},
+    {"name": "Normalization", "description": "Channel name normalization rules"},
+    {"name": "Tags", "description": "Tag management for channels"},
+    {"name": "Cache", "description": "Cache management"},
+    {"name": "Cron", "description": "Cron expression utilities"},
+]
+
 app = FastAPI(
-    title="Enhanced Channel Manager",
-    description="Drag-and-drop channel management for Dispatcharr",
-    version="0.2.20007",
+    title="Enhanced Channel Manager API",
+    description="""
+## Overview
+Enhanced Channel Manager (ECM) provides a powerful API for managing IPTV channels,
+M3U playlists, EPG data, and more.
+
+## Features
+- **Channel Management**: Create, organize, and manage TV channels
+- **M3U Integration**: Import and sync M3U playlists from multiple providers
+- **EPG Support**: Manage Electronic Program Guide data sources
+- **Stream Monitoring**: Track stream health and statistics
+- **Scheduled Tasks**: Automate refresh and maintenance tasks
+- **Notifications**: Get alerts via Discord, Email, or Telegram
+
+## Authentication
+Currently, the API does not require authentication for local access.
+
+## Rate Limiting
+No rate limiting is enforced, but rapid polling is logged for diagnostics.
+    """,
+    version="0.8.7",
+    openapi_tags=tags_metadata,
+    docs_url="/api/docs",
+    redoc_url="/api/redoc",
+    openapi_url="/api/openapi.json",
 )
 
 # CORS for development
@@ -134,7 +184,7 @@ async def request_timing_middleware(request: Request, call_next):
 # ============================================================================
 # Diagnostic Endpoint for Request Rate Stats
 # ============================================================================
-@app.get("/api/debug/request-rates")
+@app.get("/api/debug/request-rates", tags=["Health"])
 async def get_request_rates():
     """Get current request rate statistics for all endpoints.
 
@@ -483,7 +533,7 @@ class BulkCommitResponse(BaseModel):
 
 
 # Health check
-@app.get("/api/health")
+@app.get("/api/health", tags=["Health"])
 async def health_check():
     # Get version info from environment (set at build time)
     version = os.environ.get("ECM_VERSION", "unknown")
@@ -632,7 +682,7 @@ class TestConnectionRequest(BaseModel):
     password: str
 
 
-@app.get("/api/settings")
+@app.get("/api/settings", tags=["Settings"])
 async def get_current_settings():
     """Get current settings (password masked)."""
     logger.debug("GET /api/settings - Retrieving current settings")
@@ -700,7 +750,7 @@ async def get_current_settings():
     )
 
 
-@app.post("/api/settings")
+@app.post("/api/settings", tags=["Settings"])
 async def update_settings(request: SettingsRequest):
     """Update Dispatcharr connection settings."""
     logger.debug(f"POST /api/settings - Updating settings (URL: {request.url}, username: {request.username})")
@@ -824,7 +874,7 @@ async def update_settings(request: SettingsRequest):
     return {"status": "saved", "configured": new_settings.is_configured()}
 
 
-@app.post("/api/settings/test")
+@app.post("/api/settings/test", tags=["Settings"])
 async def test_connection(request: TestConnectionRequest):
     """Test connection to Dispatcharr with provided credentials."""
     import httpx
@@ -873,7 +923,7 @@ class SMTPTestRequest(BaseModel):
     to_email: str  # Test recipient email
 
 
-@app.post("/api/settings/test-smtp")
+@app.post("/api/settings/test-smtp", tags=["Settings"])
 async def test_smtp_connection(request: SMTPTestRequest):
     """Test SMTP connection by sending a test email."""
     import smtplib
@@ -961,7 +1011,7 @@ You can now use email features like M3U Digest reports.
         return {"success": False, "message": str(e)}
 
 
-@app.post("/api/settings/restart-services")
+@app.post("/api/settings/restart-services", tags=["Settings"])
 async def restart_services():
     """Restart background services (bandwidth tracker and stream prober) to apply new settings."""
     settings = get_settings()
@@ -1151,7 +1201,7 @@ class CreateLogoRequest(BaseModel):
     url: str
 
 
-@app.get("/api/channels/logos")
+@app.get("/api/channels/logos", tags=["Channels"])
 async def get_logos(
     page: int = 1,
     page_size: int = 100,
@@ -1164,7 +1214,7 @@ async def get_logos(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/channels/logos/{logo_id}")
+@app.get("/api/channels/logos/{logo_id}", tags=["Channels"])
 async def get_logo(logo_id: int):
     client = get_client()
     try:
@@ -1173,7 +1223,7 @@ async def get_logo(logo_id: int):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/channels/logos")
+@app.post("/api/channels/logos", tags=["Channels"])
 async def create_logo(request: CreateLogoRequest):
     client = get_client()
     try:
@@ -1197,7 +1247,7 @@ async def create_logo(request: CreateLogoRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.patch("/api/channels/logos/{logo_id}")
+@app.patch("/api/channels/logos/{logo_id}", tags=["Channels"])
 async def update_logo(logo_id: int, data: dict):
     client = get_client()
     try:
@@ -1206,7 +1256,7 @@ async def update_logo(logo_id: int, data: dict):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.delete("/api/channels/logos/{logo_id}")
+@app.delete("/api/channels/logos/{logo_id}", tags=["Channels"])
 async def delete_logo(logo_id: int):
     client = get_client()
     try:
@@ -1217,7 +1267,7 @@ async def delete_logo(logo_id: int):
 
 
 # Channel by ID routes - must come after /api/channels/logos
-@app.get("/api/channels/{channel_id}")
+@app.get("/api/channels/{channel_id}", tags=["Channels"])
 async def get_channel(channel_id: int):
     client = get_client()
     try:
@@ -1226,7 +1276,7 @@ async def get_channel(channel_id: int):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/channels/{channel_id}/streams")
+@app.get("/api/channels/{channel_id}/streams", tags=["Channels"])
 async def get_channel_streams(channel_id: int):
     client = get_client()
     try:
@@ -1235,7 +1285,7 @@ async def get_channel_streams(channel_id: int):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.patch("/api/channels/{channel_id}")
+@app.patch("/api/channels/{channel_id}", tags=["Channels"])
 async def update_channel(channel_id: int, data: dict):
     logger.debug(f"PATCH /api/channels/{channel_id} - Updating channel with data: {data}")
     client = get_client()
@@ -1300,7 +1350,7 @@ async def update_channel(channel_id: int, data: dict):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.delete("/api/channels/{channel_id}")
+@app.delete("/api/channels/{channel_id}", tags=["Channels"])
 async def delete_channel(channel_id: int):
     logger.debug(f"DELETE /api/channels/{channel_id} - Deleting channel")
     client = get_client()
@@ -1328,7 +1378,7 @@ async def delete_channel(channel_id: int):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/channels/{channel_id}/add-stream")
+@app.post("/api/channels/{channel_id}/add-stream", tags=["Channels"])
 async def add_stream_to_channel(channel_id: int, request: AddStreamRequest):
     logger.debug(f"POST /api/channels/{channel_id}/add-stream - Adding stream {request.stream_id}")
     client = get_client()
@@ -1364,7 +1414,7 @@ async def add_stream_to_channel(channel_id: int, request: AddStreamRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/channels/{channel_id}/remove-stream")
+@app.post("/api/channels/{channel_id}/remove-stream", tags=["Channels"])
 async def remove_stream_from_channel(channel_id: int, request: RemoveStreamRequest):
     logger.debug(f"POST /api/channels/{channel_id}/remove-stream - Removing stream {request.stream_id}")
     client = get_client()
@@ -1400,7 +1450,7 @@ async def remove_stream_from_channel(channel_id: int, request: RemoveStreamReque
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/channels/{channel_id}/reorder-streams")
+@app.post("/api/channels/{channel_id}/reorder-streams", tags=["Channels"])
 async def reorder_channel_streams(channel_id: int, request: ReorderStreamsRequest):
     client = get_client()
     try:
@@ -1427,7 +1477,7 @@ async def reorder_channel_streams(channel_id: int, request: ReorderStreamsReques
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/channels/assign-numbers")
+@app.post("/api/channels/assign-numbers", tags=["Channels"])
 async def assign_channel_numbers(request: AssignNumbersRequest):
     client = get_client()
     settings = get_settings()
@@ -1500,7 +1550,7 @@ async def assign_channel_numbers(request: AssignNumbersRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/channels/bulk-commit")
+@app.post("/api/channels/bulk-commit", tags=["Channels"])
 async def bulk_commit_operations(request: BulkCommitRequest):
     """
     Process multiple channel operations in a single request.
@@ -1987,7 +2037,7 @@ async def bulk_commit_operations(request: BulkCommitRequest):
 
 
 # Channel Groups
-@app.get("/api/channel-groups")
+@app.get("/api/channel-groups", tags=["Channel Groups"])
 async def get_channel_groups():
     client = get_client()
     try:
@@ -2018,7 +2068,7 @@ async def get_channel_groups():
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/channel-groups")
+@app.post("/api/channel-groups", tags=["Channel Groups"])
 async def create_channel_group(request: CreateChannelGroupRequest):
     client = get_client()
     try:
@@ -2043,7 +2093,7 @@ async def create_channel_group(request: CreateChannelGroupRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.patch("/api/channel-groups/{group_id}")
+@app.patch("/api/channel-groups/{group_id}", tags=["Channel Groups"])
 async def update_channel_group(group_id: int, data: dict):
     client = get_client()
     try:
@@ -2052,7 +2102,7 @@ async def update_channel_group(group_id: int, data: dict):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.delete("/api/channel-groups/orphaned")
+@app.delete("/api/channel-groups/orphaned", tags=["Channel Groups"])
 async def delete_orphaned_channel_groups(request: DeleteOrphanedGroupsRequest | None = Body(None)):
     """Delete channel groups that are truly orphaned.
 
@@ -2227,7 +2277,7 @@ async def delete_orphaned_channel_groups(request: DeleteOrphanedGroupsRequest | 
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.delete("/api/channel-groups/{group_id}")
+@app.delete("/api/channel-groups/{group_id}", tags=["Channel Groups"])
 async def delete_channel_group(group_id: int):
     client = get_client()
     try:
@@ -2263,7 +2313,7 @@ async def delete_channel_group(group_id: int):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/channel-groups/{group_id}/restore")
+@app.post("/api/channel-groups/{group_id}/restore", tags=["Channel Groups"])
 async def restore_channel_group(group_id: int):
     """Restore a hidden channel group back to the visible list."""
     try:
@@ -2285,7 +2335,7 @@ async def restore_channel_group(group_id: int):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/channel-groups/hidden")
+@app.get("/api/channel-groups/hidden", tags=["Channel Groups"])
 async def get_hidden_channel_groups():
     """Get list of all hidden channel groups."""
     try:
@@ -2299,7 +2349,7 @@ async def get_hidden_channel_groups():
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/channel-groups/orphaned")
+@app.get("/api/channel-groups/orphaned", tags=["Channel Groups"])
 async def get_orphaned_channel_groups():
     """Find channel groups that are truly orphaned.
 
@@ -2414,7 +2464,7 @@ async def get_orphaned_channel_groups():
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/channel-groups/auto-created")
+@app.get("/api/channel-groups/auto-created", tags=["Channel Groups"])
 async def get_groups_with_auto_created_channels():
     """Find channel groups that contain auto_created channels.
 
@@ -2484,7 +2534,7 @@ class ClearAutoCreatedRequest(BaseModel):
     group_ids: list[int]
 
 
-@app.post("/api/channels/clear-auto-created")
+@app.post("/api/channels/clear-auto-created", tags=["Channels"])
 async def clear_auto_created_flag(request: ClearAutoCreatedRequest):
     """Clear the auto_created flag from all channels in the specified groups.
 
@@ -2575,7 +2625,7 @@ async def clear_auto_created_flag(request: ClearAutoCreatedRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/channel-groups/with-streams")
+@app.get("/api/channel-groups/with-streams", tags=["Channel Groups"])
 async def get_channel_groups_with_streams():
     """Get all channel groups that have channels with streams.
 
@@ -2828,7 +2878,7 @@ async def get_streams(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/stream-groups")
+@app.get("/api/stream-groups", tags=["Streams"])
 async def get_stream_groups(bypass_cache: bool = False, m3u_account_id: Optional[int] = None):
     """Get all stream groups with their stream counts.
 
@@ -2858,7 +2908,7 @@ async def get_stream_groups(bypass_cache: bool = False, m3u_account_id: Optional
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/cache/invalidate")
+@app.post("/api/cache/invalidate", tags=["Cache"])
 async def invalidate_cache(prefix: Optional[str] = None):
     """Invalidate cached data. If prefix is provided, only invalidate matching keys."""
     cache = get_cache()
@@ -2870,7 +2920,7 @@ async def invalidate_cache(prefix: Optional[str] = None):
         return {"message": f"Cleared entire cache ({count} entries)"}
 
 
-@app.get("/api/cache/stats")
+@app.get("/api/cache/stats", tags=["Cache"])
 async def cache_stats():
     """Get cache statistics."""
     cache = get_cache()
@@ -2878,7 +2928,7 @@ async def cache_stats():
 
 
 # Providers (M3U Accounts)
-@app.get("/api/providers")
+@app.get("/api/providers", tags=["Providers"])
 async def get_providers():
     client = get_client()
     try:
@@ -2887,7 +2937,7 @@ async def get_providers():
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/providers/group-settings")
+@app.get("/api/providers/group-settings", tags=["Providers"])
 async def get_all_provider_group_settings():
     """Get group settings from all M3U providers, mapped by channel_group_id."""
     client = get_client()
@@ -2898,7 +2948,7 @@ async def get_all_provider_group_settings():
 
 
 # EPG Sources
-@app.get("/api/epg/sources")
+@app.get("/api/epg/sources", tags=["EPG"])
 async def get_epg_sources():
     client = get_client()
     try:
@@ -2907,7 +2957,7 @@ async def get_epg_sources():
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/epg/sources/{source_id}")
+@app.get("/api/epg/sources/{source_id}", tags=["EPG"])
 async def get_epg_source(source_id: int):
     client = get_client()
     try:
@@ -2916,7 +2966,7 @@ async def get_epg_source(source_id: int):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/epg/sources")
+@app.post("/api/epg/sources", tags=["EPG"])
 async def create_epg_source(request: Request):
     client = get_client()
     try:
@@ -2938,7 +2988,7 @@ async def create_epg_source(request: Request):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.patch("/api/epg/sources/{source_id}")
+@app.patch("/api/epg/sources/{source_id}", tags=["EPG"])
 async def update_epg_source(source_id: int, request: Request):
     client = get_client()
     try:
@@ -2963,7 +3013,7 @@ async def update_epg_source(source_id: int, request: Request):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.delete("/api/epg/sources/{source_id}")
+@app.delete("/api/epg/sources/{source_id}", tags=["EPG"])
 async def delete_epg_source(source_id: int):
     client = get_client()
     try:
@@ -3079,7 +3129,7 @@ async def _poll_epg_refresh_completion(source_id: int, source_name: str, initial
         logger.error(f"[EPG-REFRESH] Error polling for '{source_name}' completion: {e}")
 
 
-@app.post("/api/epg/sources/{source_id}/refresh")
+@app.post("/api/epg/sources/{source_id}/refresh", tags=["EPG"])
 async def refresh_epg_source(source_id: int):
     """Trigger refresh for a single EPG source.
 
@@ -3122,7 +3172,7 @@ async def refresh_epg_source(source_id: int):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/epg/import")
+@app.post("/api/epg/import", tags=["EPG"])
 async def trigger_epg_import():
     client = get_client()
     try:
@@ -3132,7 +3182,7 @@ async def trigger_epg_import():
 
 
 # EPG Data
-@app.get("/api/epg/data")
+@app.get("/api/epg/data", tags=["EPG"])
 async def get_epg_data(
     page: int = 1,
     page_size: int = 100,
@@ -3151,7 +3201,7 @@ async def get_epg_data(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/epg/data/{data_id}")
+@app.get("/api/epg/data/{data_id}", tags=["EPG"])
 async def get_epg_data_by_id(data_id: int):
     client = get_client()
     try:
@@ -3160,7 +3210,7 @@ async def get_epg_data_by_id(data_id: int):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/epg/grid")
+@app.get("/api/epg/grid", tags=["EPG"])
 async def get_epg_grid(start: Optional[str] = None, end: Optional[str] = None):
     """Get EPG grid (programs from previous hour + next 24 hours).
 
@@ -3188,7 +3238,7 @@ async def get_epg_grid(start: Optional[str] = None, end: Optional[str] = None):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/epg/lcn")
+@app.get("/api/epg/lcn", tags=["EPG"])
 async def get_epg_lcn_by_tvg_id(tvg_id: str):
     """Get LCN (Logical Channel Number) for a TVG-ID from EPG XML sources.
 
@@ -3362,7 +3412,7 @@ class BatchLCNRequest(BaseModel):
     items: list[LCNLookupItem]
 
 
-@app.post("/api/epg/lcn/batch")
+@app.post("/api/epg/lcn/batch", tags=["EPG"])
 async def get_epg_lcn_batch(request: BatchLCNRequest):
     """Get LCN (Logical Channel Number) for multiple TVG-IDs from EPG XML sources.
 
@@ -3546,7 +3596,7 @@ async def get_epg_lcn_batch(request: BatchLCNRequest):
 
 
 # Stream Profiles
-@app.get("/api/stream-profiles")
+@app.get("/api/stream-profiles", tags=["Stream Profiles"])
 async def get_stream_profiles():
     client = get_client()
     try:
@@ -3559,7 +3609,7 @@ async def get_stream_profiles():
 # Channel Profiles
 # -------------------------------------------------------------------------
 
-@app.get("/api/channel-profiles")
+@app.get("/api/channel-profiles", tags=["Channel Profiles"])
 async def get_channel_profiles():
     """Get all channel profiles."""
     client = get_client()
@@ -3569,7 +3619,7 @@ async def get_channel_profiles():
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/channel-profiles")
+@app.post("/api/channel-profiles", tags=["Channel Profiles"])
 async def create_channel_profile(request: Request):
     """Create a new channel profile."""
     client = get_client()
@@ -3580,7 +3630,7 @@ async def create_channel_profile(request: Request):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/channel-profiles/{profile_id}")
+@app.get("/api/channel-profiles/{profile_id}", tags=["Channel Profiles"])
 async def get_channel_profile(profile_id: int):
     """Get a single channel profile."""
     client = get_client()
@@ -3590,7 +3640,7 @@ async def get_channel_profile(profile_id: int):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.patch("/api/channel-profiles/{profile_id}")
+@app.patch("/api/channel-profiles/{profile_id}", tags=["Channel Profiles"])
 async def update_channel_profile(profile_id: int, request: Request):
     """Update a channel profile."""
     client = get_client()
@@ -3601,7 +3651,7 @@ async def update_channel_profile(profile_id: int, request: Request):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.delete("/api/channel-profiles/{profile_id}")
+@app.delete("/api/channel-profiles/{profile_id}", tags=["Channel Profiles"])
 async def delete_channel_profile(profile_id: int):
     """Delete a channel profile."""
     client = get_client()
@@ -3612,7 +3662,7 @@ async def delete_channel_profile(profile_id: int):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.patch("/api/channel-profiles/{profile_id}/channels/bulk-update")
+@app.patch("/api/channel-profiles/{profile_id}/channels/bulk-update", tags=["Channel Profiles"])
 async def bulk_update_profile_channels(profile_id: int, request: Request):
     """Bulk enable/disable channels for a profile."""
     client = get_client()
@@ -3623,7 +3673,7 @@ async def bulk_update_profile_channels(profile_id: int, request: Request):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.patch("/api/channel-profiles/{profile_id}/channels/{channel_id}")
+@app.patch("/api/channel-profiles/{profile_id}/channels/{channel_id}", tags=["Channel Profiles"])
 async def update_profile_channel(profile_id: int, channel_id: int, request: Request):
     """Enable/disable a single channel for a profile."""
     client = get_client()
@@ -3638,7 +3688,7 @@ async def update_profile_channel(profile_id: int, channel_id: int, request: Requ
 # M3U Account Management
 # -------------------------------------------------------------------------
 
-@app.get("/api/m3u/accounts/{account_id}")
+@app.get("/api/m3u/accounts/{account_id}", tags=["M3U"])
 async def get_m3u_account(account_id: int):
     """Get a single M3U account by ID."""
     client = get_client()
@@ -3648,7 +3698,7 @@ async def get_m3u_account(account_id: int):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/m3u/accounts/{account_id}/stream-metadata")
+@app.get("/api/m3u/accounts/{account_id}/stream-metadata", tags=["M3U"])
 async def get_m3u_stream_metadata(account_id: int):
     """Fetch and parse M3U file to extract stream metadata (tvg-id -> tvc-guide-stationid mapping).
 
@@ -3728,7 +3778,7 @@ async def get_m3u_stream_metadata(account_id: int):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/m3u/accounts")
+@app.post("/api/m3u/accounts", tags=["M3U"])
 async def create_m3u_account(request: Request):
     """Create a new M3U account."""
     client = get_client()
@@ -3751,7 +3801,7 @@ async def create_m3u_account(request: Request):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/m3u/upload")
+@app.post("/api/m3u/upload", tags=["M3U"])
 async def upload_m3u_file(file: UploadFile = File(...)):
     """Upload an M3U file and return the path for use with M3U accounts.
 
@@ -3807,7 +3857,7 @@ async def upload_m3u_file(file: UploadFile = File(...)):
         raise HTTPException(status_code=500, detail=f"Failed to save file: {str(e)}")
 
 
-@app.put("/api/m3u/accounts/{account_id}")
+@app.put("/api/m3u/accounts/{account_id}", tags=["M3U"])
 async def update_m3u_account(account_id: int, request: Request):
     """Update an M3U account (full update)."""
     client = get_client()
@@ -3832,7 +3882,7 @@ async def update_m3u_account(account_id: int, request: Request):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.patch("/api/m3u/accounts/{account_id}")
+@app.patch("/api/m3u/accounts/{account_id}", tags=["M3U"])
 async def patch_m3u_account(account_id: int, request: Request):
     """Partially update an M3U account (e.g., toggle is_active)."""
     client = get_client()
@@ -3864,7 +3914,7 @@ async def patch_m3u_account(account_id: int, request: Request):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.delete("/api/m3u/accounts/{account_id}")
+@app.delete("/api/m3u/accounts/{account_id}", tags=["M3U"])
 async def delete_m3u_account(account_id: int, delete_groups: bool = True):
     """Delete an M3U account and optionally its associated channel groups.
 
@@ -3889,6 +3939,12 @@ async def delete_m3u_account(account_id: int, delete_groups: bool = True):
 
         # Delete the M3U account first
         await client.delete_m3u_account(account_id)
+
+        # Invalidate caches - streams from this M3U are now gone
+        cache = get_cache()
+        streams_cleared = cache.invalidate_prefix("streams:")
+        groups_cleared = cache.invalidate("channel_groups")
+        logger.info(f"Invalidated cache after M3U deletion: {streams_cleared} stream entries, channel_groups={groups_cleared}")
 
         # Now delete associated channel groups
         deleted_groups = []
@@ -4100,6 +4156,12 @@ async def _poll_m3u_refresh_completion(account_id: int, account_name: str, initi
                 # Capture M3U changes after refresh
                 await _capture_m3u_changes_after_refresh(account_id, account_name)
 
+                # Send immediate digest if configured
+                try:
+                    await send_immediate_digest(account_id)
+                except Exception as e:
+                    logger.warning(f"[M3U-REFRESH] Failed to send immediate digest for '{account_name}': {e}")
+
                 journal.log_entry(
                     category="m3u",
                     action_type="refresh",
@@ -4126,6 +4188,12 @@ async def _poll_m3u_refresh_completion(account_id: int, account_name: str, initi
                 # Capture M3U changes after refresh
                 await _capture_m3u_changes_after_refresh(account_id, account_name)
 
+                # Send immediate digest if configured
+                try:
+                    await send_immediate_digest(account_id)
+                except Exception as e:
+                    logger.warning(f"[M3U-REFRESH] Failed to send immediate digest for '{account_name}': {e}")
+
                 journal.log_entry(
                     category="m3u",
                     action_type="refresh",
@@ -4149,7 +4217,7 @@ async def _poll_m3u_refresh_completion(account_id: int, account_name: str, initi
         logger.error(f"[M3U-REFRESH] Error polling for '{account_name}' completion: {e}")
 
 
-@app.post("/api/m3u/refresh")
+@app.post("/api/m3u/refresh", tags=["M3U"])
 async def refresh_all_m3u_accounts():
     """Trigger refresh for all active M3U accounts."""
     client = get_client()
@@ -4159,7 +4227,7 @@ async def refresh_all_m3u_accounts():
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/m3u/refresh/{account_id}")
+@app.post("/api/m3u/refresh/{account_id}", tags=["M3U"])
 async def refresh_m3u_account(account_id: int):
     """Trigger refresh for a single M3U account.
 
@@ -4202,7 +4270,7 @@ async def refresh_m3u_account(account_id: int):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/m3u/accounts/{account_id}/refresh-vod")
+@app.post("/api/m3u/accounts/{account_id}/refresh-vod", tags=["M3U"])
 async def refresh_m3u_vod(account_id: int):
     """Refresh VOD content for an XtreamCodes account."""
     client = get_client()
@@ -4216,7 +4284,7 @@ async def refresh_m3u_vod(account_id: int):
 # M3U Filters
 # -------------------------------------------------------------------------
 
-@app.get("/api/m3u/accounts/{account_id}/filters")
+@app.get("/api/m3u/accounts/{account_id}/filters", tags=["M3U"])
 async def get_m3u_filters(account_id: int):
     """Get all filters for an M3U account."""
     client = get_client()
@@ -4226,7 +4294,7 @@ async def get_m3u_filters(account_id: int):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/m3u/accounts/{account_id}/filters")
+@app.post("/api/m3u/accounts/{account_id}/filters", tags=["M3U"])
 async def create_m3u_filter(account_id: int, request: Request):
     """Create a new filter for an M3U account."""
     client = get_client()
@@ -4237,7 +4305,7 @@ async def create_m3u_filter(account_id: int, request: Request):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.put("/api/m3u/accounts/{account_id}/filters/{filter_id}")
+@app.put("/api/m3u/accounts/{account_id}/filters/{filter_id}", tags=["M3U"])
 async def update_m3u_filter(account_id: int, filter_id: int, request: Request):
     """Update a filter for an M3U account."""
     client = get_client()
@@ -4248,7 +4316,7 @@ async def update_m3u_filter(account_id: int, filter_id: int, request: Request):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.delete("/api/m3u/accounts/{account_id}/filters/{filter_id}")
+@app.delete("/api/m3u/accounts/{account_id}/filters/{filter_id}", tags=["M3U"])
 async def delete_m3u_filter(account_id: int, filter_id: int):
     """Delete a filter from an M3U account."""
     client = get_client()
@@ -4263,7 +4331,7 @@ async def delete_m3u_filter(account_id: int, filter_id: int):
 # M3U Profiles
 # -------------------------------------------------------------------------
 
-@app.get("/api/m3u/accounts/{account_id}/profiles/")
+@app.get("/api/m3u/accounts/{account_id}/profiles/", tags=["M3U"])
 async def get_m3u_profiles(account_id: int):
     """Get all profiles for an M3U account."""
     client = get_client()
@@ -4273,7 +4341,7 @@ async def get_m3u_profiles(account_id: int):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/m3u/accounts/{account_id}/profiles/")
+@app.post("/api/m3u/accounts/{account_id}/profiles/", tags=["M3U"])
 async def create_m3u_profile(account_id: int, request: Request):
     """Create a new profile for an M3U account."""
     client = get_client()
@@ -4284,7 +4352,7 @@ async def create_m3u_profile(account_id: int, request: Request):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/m3u/accounts/{account_id}/profiles/{profile_id}/")
+@app.get("/api/m3u/accounts/{account_id}/profiles/{profile_id}/", tags=["M3U"])
 async def get_m3u_profile(account_id: int, profile_id: int):
     """Get a specific profile for an M3U account."""
     client = get_client()
@@ -4294,7 +4362,7 @@ async def get_m3u_profile(account_id: int, profile_id: int):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.patch("/api/m3u/accounts/{account_id}/profiles/{profile_id}/")
+@app.patch("/api/m3u/accounts/{account_id}/profiles/{profile_id}/", tags=["M3U"])
 async def update_m3u_profile(account_id: int, profile_id: int, request: Request):
     """Update a profile for an M3U account."""
     client = get_client()
@@ -4305,7 +4373,7 @@ async def update_m3u_profile(account_id: int, profile_id: int, request: Request)
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.delete("/api/m3u/accounts/{account_id}/profiles/{profile_id}/")
+@app.delete("/api/m3u/accounts/{account_id}/profiles/{profile_id}/", tags=["M3U"])
 async def delete_m3u_profile(account_id: int, profile_id: int):
     """Delete a profile from an M3U account."""
     client = get_client()
@@ -4320,7 +4388,7 @@ async def delete_m3u_profile(account_id: int, profile_id: int):
 # M3U Group Settings
 # -------------------------------------------------------------------------
 
-@app.patch("/api/m3u/accounts/{account_id}/group-settings")
+@app.patch("/api/m3u/accounts/{account_id}/group-settings", tags=["M3U"])
 async def update_m3u_group_settings(account_id: int, request: Request):
     """Update group settings for an M3U account."""
     client = get_client()
@@ -4450,7 +4518,7 @@ async def update_m3u_group_settings(account_id: int, request: Request):
 # Server Groups
 # -------------------------------------------------------------------------
 
-@app.get("/api/m3u/server-groups")
+@app.get("/api/m3u/server-groups", tags=["M3U"])
 async def get_server_groups():
     """Get all server groups."""
     client = get_client()
@@ -4460,7 +4528,7 @@ async def get_server_groups():
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/m3u/server-groups")
+@app.post("/api/m3u/server-groups", tags=["M3U"])
 async def create_server_group(request: Request):
     """Create a new server group."""
     client = get_client()
@@ -4485,7 +4553,7 @@ async def create_server_group(request: Request):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.patch("/api/m3u/server-groups/{group_id}")
+@app.patch("/api/m3u/server-groups/{group_id}", tags=["M3U"])
 async def update_server_group(group_id: int, request: Request):
     """Update a server group."""
     client = get_client()
@@ -4524,7 +4592,7 @@ async def update_server_group(group_id: int, request: Request):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.delete("/api/m3u/server-groups/{group_id}")
+@app.delete("/api/m3u/server-groups/{group_id}", tags=["M3U"])
 async def delete_server_group(group_id: int):
     """Delete a server group."""
     client = get_client()
@@ -4552,7 +4620,7 @@ async def delete_server_group(group_id: int):
 
 
 # M3U Change Tracking API
-@app.get("/api/m3u/changes")
+@app.get("/api/m3u/changes", tags=["M3U Digest"])
 async def get_m3u_changes(
     page: int = 1,
     page_size: int = 50,
@@ -4641,7 +4709,7 @@ async def get_m3u_changes(
         db.close()
 
 
-@app.get("/api/m3u/changes/summary")
+@app.get("/api/m3u/changes/summary", tags=["M3U Digest"])
 async def get_m3u_changes_summary(
     hours: int = 24,
     m3u_account_id: Optional[int] = None,
@@ -4666,7 +4734,7 @@ async def get_m3u_changes_summary(
         db.close()
 
 
-@app.get("/api/m3u/accounts/{account_id}/changes")
+@app.get("/api/m3u/accounts/{account_id}/changes", tags=["M3U"])
 async def get_m3u_account_changes(
     account_id: int,
     page: int = 1,
@@ -4712,7 +4780,7 @@ async def get_m3u_account_changes(
         db.close()
 
 
-@app.get("/api/m3u/snapshots")
+@app.get("/api/m3u/snapshots", tags=["M3U"])
 async def get_m3u_snapshots(
     m3u_account_id: Optional[int] = None,
     limit: int = 10,
@@ -4741,7 +4809,7 @@ async def get_m3u_snapshots(
 
 
 # M3U Digest Settings API
-@app.get("/api/m3u/digest/settings")
+@app.get("/api/m3u/digest/settings", tags=["M3U Digest"])
 async def get_m3u_digest_settings():
     """Get M3U digest email settings."""
     from tasks.m3u_digest import get_or_create_digest_settings
@@ -4761,10 +4829,11 @@ class M3UDigestSettingsUpdate(BaseModel):
     email_recipients: Optional[List[str]] = None
     include_group_changes: Optional[bool] = None
     include_stream_changes: Optional[bool] = None
+    show_detailed_list: Optional[bool] = None  # Show detailed list vs just summary
     min_changes_threshold: Optional[int] = None
 
 
-@app.put("/api/m3u/digest/settings")
+@app.put("/api/m3u/digest/settings", tags=["M3U Digest"])
 async def update_m3u_digest_settings(request: M3UDigestSettingsUpdate):
     """Update M3U digest email settings."""
     from tasks.m3u_digest import get_or_create_digest_settings
@@ -4803,6 +4872,9 @@ async def update_m3u_digest_settings(request: M3UDigestSettingsUpdate):
         if request.include_stream_changes is not None:
             settings.include_stream_changes = request.include_stream_changes
 
+        if request.show_detailed_list is not None:
+            settings.show_detailed_list = request.show_detailed_list
+
         if request.min_changes_threshold is not None:
             if request.min_changes_threshold < 1:
                 raise HTTPException(
@@ -4829,7 +4901,7 @@ async def update_m3u_digest_settings(request: M3UDigestSettingsUpdate):
         db.close()
 
 
-@app.post("/api/m3u/digest/test")
+@app.post("/api/m3u/digest/test", tags=["M3U Digest"])
 async def send_test_m3u_digest():
     """Send a test M3U digest email."""
     from tasks.m3u_digest import M3UDigestTask, get_or_create_digest_settings
@@ -4862,7 +4934,7 @@ async def send_test_m3u_digest():
 
 
 # Journal API
-@app.get("/api/journal")
+@app.get("/api/journal", tags=["Journal"])
 async def get_journal_entries(
     page: int = 1,
     page_size: int = 50,
@@ -4905,13 +4977,13 @@ async def get_journal_entries(
     )
 
 
-@app.get("/api/journal/stats")
+@app.get("/api/journal/stats", tags=["Journal"])
 async def get_journal_stats():
     """Get summary statistics for the journal."""
     return journal.get_stats()
 
 
-@app.delete("/api/journal/purge")
+@app.delete("/api/journal/purge", tags=["Journal"])
 async def purge_journal_entries(days: int = 90):
     """Delete journal entries older than the specified number of days."""
     deleted_count = journal.purge_old_entries(days=days)
@@ -4923,7 +4995,7 @@ async def purge_journal_entries(days: int = 90):
 # =============================================================================
 
 
-@app.get("/api/notifications")
+@app.get("/api/notifications", tags=["Notifications"])
 async def get_notifications(
     page: int = 1,
     page_size: int = 50,
@@ -5054,7 +5126,7 @@ async def create_notification_internal(
         session.close()
 
 
-@app.post("/api/notifications")
+@app.post("/api/notifications", tags=["Notifications"])
 async def create_notification(
     notification_type: str = "info",
     title: Optional[str] = None,
@@ -5134,7 +5206,7 @@ async def _dispatch_to_alert_channels(
         logger.error(f"Failed to dispatch alerts: {e}")
 
 
-@app.patch("/api/notifications/mark-all-read")
+@app.patch("/api/notifications/mark-all-read", tags=["Notifications"])
 async def mark_all_notifications_read():
     """Mark all notifications as read."""
     from datetime import datetime
@@ -5152,7 +5224,7 @@ async def mark_all_notifications_read():
         session.close()
 
 
-@app.patch("/api/notifications/{notification_id}")
+@app.patch("/api/notifications/{notification_id}", tags=["Notifications"])
 async def update_notification(notification_id: int, read: Optional[bool] = None):
     """Update a notification (mark as read/unread)."""
     from datetime import datetime
@@ -5175,7 +5247,7 @@ async def update_notification(notification_id: int, read: Optional[bool] = None)
         session.close()
 
 
-@app.delete("/api/notifications/{notification_id}")
+@app.delete("/api/notifications/{notification_id}", tags=["Notifications"])
 async def delete_notification(notification_id: int):
     """Delete a specific notification."""
     from models import Notification
@@ -5193,7 +5265,7 @@ async def delete_notification(notification_id: int):
         session.close()
 
 
-@app.delete("/api/notifications")
+@app.delete("/api/notifications", tags=["Notifications"])
 async def clear_all_notifications(read_only: bool = True):
     """Clear notifications. By default only clears read notifications."""
     from models import Notification
@@ -5279,7 +5351,7 @@ def validate_alert_sources(alert_sources: Optional[dict]) -> Optional[str]:
     return None
 
 
-@app.get("/api/alert-methods/types")
+@app.get("/api/alert-methods/types", tags=["Alert Methods"])
 async def get_alert_method_types():
     """Get available alert method types and their configuration fields."""
     logger.debug("Fetching alert method types")
@@ -5292,7 +5364,7 @@ async def get_alert_method_types():
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/alert-methods")
+@app.get("/api/alert-methods", tags=["Alert Methods"])
 async def list_alert_methods():
     """List all configured alert methods."""
     from models import AlertMethod as AlertMethodModel
@@ -5333,7 +5405,7 @@ async def list_alert_methods():
         session.close()
 
 
-@app.post("/api/alert-methods")
+@app.post("/api/alert-methods", tags=["Alert Methods"])
 async def create_alert_method(data: AlertMethodCreate):
     """Create a new alert method."""
     from models import AlertMethod as AlertMethodModel
@@ -5400,7 +5472,7 @@ async def create_alert_method(data: AlertMethodCreate):
             session.close()
 
 
-@app.get("/api/alert-methods/{method_id}")
+@app.get("/api/alert-methods/{method_id}", tags=["Alert Methods"])
 async def get_alert_method(method_id: int):
     """Get a specific alert method."""
     from models import AlertMethod as AlertMethodModel
@@ -5447,7 +5519,7 @@ async def get_alert_method(method_id: int):
         session.close()
 
 
-@app.patch("/api/alert-methods/{method_id}")
+@app.patch("/api/alert-methods/{method_id}", tags=["Alert Methods"])
 async def update_alert_method(method_id: int, data: AlertMethodUpdate):
     """Update an alert method."""
     from models import AlertMethod as AlertMethodModel
@@ -5509,7 +5581,7 @@ async def update_alert_method(method_id: int, data: AlertMethodUpdate):
         session.close()
 
 
-@app.delete("/api/alert-methods/{method_id}")
+@app.delete("/api/alert-methods/{method_id}", tags=["Alert Methods"])
 async def delete_alert_method(method_id: int):
     """Delete an alert method."""
     from models import AlertMethod as AlertMethodModel
@@ -5543,7 +5615,7 @@ async def delete_alert_method(method_id: int):
         session.close()
 
 
-@app.post("/api/alert-methods/{method_id}/test")
+@app.post("/api/alert-methods/{method_id}/test", tags=["Alert Methods"])
 async def test_alert_method(method_id: int):
     """Test an alert method by sending a test message."""
     from models import AlertMethod as AlertMethodModel
@@ -5590,7 +5662,7 @@ async def test_alert_method(method_id: int):
 # =============================================================================
 
 
-@app.get("/api/stats/channels")
+@app.get("/api/stats/channels", tags=["Stats"])
 async def get_channel_stats():
     """Get status of all active channels.
 
@@ -5604,7 +5676,7 @@ async def get_channel_stats():
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/stats/channels/{channel_id}")
+@app.get("/api/stats/channels/{channel_id}", tags=["Stats"])
 async def get_channel_stats_detail(channel_id: int):
     """Get detailed stats for a specific channel.
 
@@ -5618,7 +5690,7 @@ async def get_channel_stats_detail(channel_id: int):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/stats/activity")
+@app.get("/api/stats/activity", tags=["Stats"])
 async def get_system_events(
     limit: int = 100,
     offset: int = 0,
@@ -5643,7 +5715,7 @@ async def get_system_events(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/stats/channels/{channel_id}/stop")
+@app.post("/api/stats/channels/{channel_id}/stop", tags=["Stats"])
 async def stop_channel(channel_id: str):
     """Stop a channel and release all associated resources."""
     client = get_client()
@@ -5654,7 +5726,7 @@ async def stop_channel(channel_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/stats/channels/{channel_id}/stop-client")
+@app.post("/api/stats/channels/{channel_id}/stop-client", tags=["Stats"])
 async def stop_client(channel_id: str):
     """Stop a specific client connection."""
     client = get_client()
@@ -5665,7 +5737,7 @@ async def stop_client(channel_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/stats/bandwidth")
+@app.get("/api/stats/bandwidth", tags=["Stats"])
 async def get_bandwidth_stats():
     """Get bandwidth usage summary for all time periods."""
     try:
@@ -5675,7 +5747,7 @@ async def get_bandwidth_stats():
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/stats/top-watched")
+@app.get("/api/stats/top-watched", tags=["Stats"])
 async def get_top_watched_channels(limit: int = 10, sort_by: str = "views"):
     """Get the top watched channels by watch count or watch time."""
     try:
@@ -5690,7 +5762,7 @@ async def get_top_watched_channels(limit: int = 10, sort_by: str = "views"):
 # =============================================================================
 
 
-@app.get("/api/stream-stats")
+@app.get("/api/stream-stats", tags=["Stream Stats"])
 async def get_all_stream_stats():
     """Get all stream probe statistics."""
     try:
@@ -5700,7 +5772,7 @@ async def get_all_stream_stats():
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/stream-stats/summary")
+@app.get("/api/stream-stats/summary", tags=["Stream Stats"])
 async def get_stream_stats_summary():
     """Get summary of stream probe statistics."""
     try:
@@ -5710,7 +5782,7 @@ async def get_stream_stats_summary():
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/stream-stats/{stream_id}")
+@app.get("/api/stream-stats/{stream_id}", tags=["Stream Stats"])
 async def get_stream_stats_by_id(stream_id: int):
     """Get probe stats for a specific stream."""
     try:
@@ -5729,7 +5801,7 @@ class BulkStreamStatsRequest(BaseModel):
     stream_ids: list[int]
 
 
-@app.post("/api/stream-stats/by-ids")
+@app.post("/api/stream-stats/by-ids", tags=["Stream Stats"])
 async def get_stream_stats_by_ids(request: BulkStreamStatsRequest):
     """Get probe stats for multiple streams by their IDs."""
     try:
@@ -5752,7 +5824,7 @@ class ProbeAllRequest(BaseModel):
 
 # NOTE: /probe/bulk and /probe/all MUST be defined BEFORE /probe/{stream_id}
 # to avoid the path parameter matching "bulk" or "all" as a stream_id
-@app.post("/api/stream-stats/probe/bulk")
+@app.post("/api/stream-stats/probe/bulk", tags=["Stream Stats"])
 async def probe_bulk_streams(request: BulkProbeRequest):
     """Trigger on-demand probe for multiple streams."""
     logger.info(f"Bulk probe request received for {len(request.stream_ids)} streams: {request.stream_ids}")
@@ -5793,7 +5865,7 @@ async def probe_bulk_streams(request: BulkProbeRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/stream-stats/probe/all")
+@app.post("/api/stream-stats/probe/all", tags=["Stream Stats"])
 async def probe_all_streams_endpoint(request: ProbeAllRequest = ProbeAllRequest()):
     """Trigger probe for all streams (background task).
 
@@ -5838,7 +5910,7 @@ async def probe_all_streams_endpoint(request: ProbeAllRequest = ProbeAllRequest(
     return {"status": "started", "message": "Background probe started"}
 
 
-@app.get("/api/stream-stats/probe/progress")
+@app.get("/api/stream-stats/probe/progress", tags=["Stream Stats"])
 async def get_probe_progress():
     """Get current probe all streams progress."""
     prober = get_prober()
@@ -5848,7 +5920,7 @@ async def get_probe_progress():
     return prober.get_probe_progress()
 
 
-@app.get("/api/stream-stats/probe/results")
+@app.get("/api/stream-stats/probe/results", tags=["Stream Stats"])
 async def get_probe_results():
     """Get detailed results of the last probe all streams operation."""
     prober = get_prober()
@@ -5858,7 +5930,7 @@ async def get_probe_results():
     return prober.get_probe_results()
 
 
-@app.get("/api/stream-stats/probe/history")
+@app.get("/api/stream-stats/probe/history", tags=["Stream Stats"])
 async def get_probe_history():
     """Get probe run history (last 5 runs)."""
     prober = get_prober()
@@ -5868,7 +5940,7 @@ async def get_probe_history():
     return prober.get_probe_history()
 
 
-@app.post("/api/stream-stats/probe/cancel")
+@app.post("/api/stream-stats/probe/cancel", tags=["Stream Stats"])
 async def cancel_probe():
     """Cancel an in-progress probe operation."""
     prober = get_prober()
@@ -5878,7 +5950,7 @@ async def cancel_probe():
     return prober.cancel_probe()
 
 
-@app.post("/api/stream-stats/probe/reset")
+@app.post("/api/stream-stats/probe/reset", tags=["Stream Stats"])
 async def reset_probe_state():
     """Force reset the probe state if it gets stuck."""
     prober = get_prober()
@@ -5898,7 +5970,7 @@ class ClearStatsRequest(BaseModel):
     stream_ids: list[int]
 
 
-@app.post("/api/stream-stats/dismiss")
+@app.post("/api/stream-stats/dismiss", tags=["Stream Stats"])
 async def dismiss_stream_stats(request: DismissStatsRequest):
     """Dismiss probe failures for the specified streams.
 
@@ -5930,7 +6002,7 @@ async def dismiss_stream_stats(request: DismissStatsRequest):
         session.close()
 
 
-@app.post("/api/stream-stats/clear")
+@app.post("/api/stream-stats/clear", tags=["Stream Stats"])
 async def clear_stream_stats(request: ClearStatsRequest):
     """Clear (delete) probe stats for the specified streams.
 
@@ -5958,7 +6030,7 @@ async def clear_stream_stats(request: ClearStatsRequest):
         session.close()
 
 
-@app.post("/api/stream-stats/clear-all")
+@app.post("/api/stream-stats/clear-all", tags=["Stream Stats"])
 async def clear_all_stream_stats():
     """Clear (delete) all probe stats for all streams.
 
@@ -5981,7 +6053,7 @@ async def clear_all_stream_stats():
         session.close()
 
 
-@app.get("/api/stream-stats/dismissed")
+@app.get("/api/stream-stats/dismissed", tags=["Stream Stats"])
 async def get_dismissed_stream_stats():
     """Get list of dismissed stream IDs.
 
@@ -6004,7 +6076,7 @@ async def get_dismissed_stream_stats():
         session.close()
 
 
-@app.post("/api/stream-stats/probe/{stream_id}")
+@app.post("/api/stream-stats/probe/{stream_id}", tags=["Stream Stats"])
 async def probe_single_stream(stream_id: int):
     """Trigger on-demand probe for a single stream."""
     logger.info(f"Single stream probe request received for stream_id={stream_id}")
@@ -6052,26 +6124,40 @@ class TaskConfigUpdate(BaseModel):
     schedule_time: Optional[str] = None
     timezone: Optional[str] = None
     config: Optional[dict] = None  # Task-specific configuration (source_ids, account_ids, etc.)
+    # Alert configuration
+    send_alerts: Optional[bool] = None  # Master toggle for alerts
+    alert_on_success: Optional[bool] = None  # Alert when task succeeds
+    alert_on_warning: Optional[bool] = None  # Alert on partial failures
+    alert_on_error: Optional[bool] = None  # Alert on complete failures
 
 
-@app.get("/api/tasks")
+@app.get("/api/tasks", tags=["Tasks"])
 async def list_tasks():
     """Get all registered tasks with their status, including schedules."""
     start_time = time.time()
     try:
         from task_registry import get_registry
-        from models import TaskSchedule
+        from models import TaskSchedule, ScheduledTask
         from schedule_calculator import describe_schedule
 
         registry = get_registry()
         tasks = registry.get_all_task_statuses()
 
-        # Include schedules for each task
+        # Include schedules and alert config for each task
         session = get_session()
         try:
             for task in tasks:
                 task_id = task.get('task_id')
                 if task_id:
+                    # Get alert configuration from ScheduledTask
+                    db_task = session.query(ScheduledTask).filter(ScheduledTask.task_id == task_id).first()
+                    if db_task:
+                        task['send_alerts'] = db_task.send_alerts
+                        task['alert_on_success'] = db_task.alert_on_success
+                        task['alert_on_warning'] = db_task.alert_on_warning
+                        task['alert_on_error'] = db_task.alert_on_error
+
+                    # Get schedules
                     schedules = session.query(TaskSchedule).filter(TaskSchedule.task_id == task_id).all()
                     task['schedules'] = []
                     for schedule in schedules:
@@ -6100,12 +6186,12 @@ async def list_tasks():
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/tasks/{task_id}")
+@app.get("/api/tasks/{task_id}", tags=["Tasks"])
 async def get_task(task_id: str):
     """Get status for a specific task, including all schedules."""
     try:
         from task_registry import get_registry
-        from models import TaskSchedule
+        from models import TaskSchedule, ScheduledTask
         from schedule_calculator import describe_schedule
 
         registry = get_registry()
@@ -6113,9 +6199,18 @@ async def get_task(task_id: str):
         if status is None:
             raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
 
-        # Include schedules in the response
+        # Include schedules and alert config in the response
         session = get_session()
         try:
+            # Get alert configuration from ScheduledTask
+            db_task = session.query(ScheduledTask).filter(ScheduledTask.task_id == task_id).first()
+            if db_task:
+                status['send_alerts'] = db_task.send_alerts
+                status['alert_on_success'] = db_task.alert_on_success
+                status['alert_on_warning'] = db_task.alert_on_warning
+                status['alert_on_error'] = db_task.alert_on_error
+
+            # Get schedules
             schedules = session.query(TaskSchedule).filter(TaskSchedule.task_id == task_id).all()
             status['schedules'] = []
             for schedule in schedules:
@@ -6140,7 +6235,7 @@ async def get_task(task_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.patch("/api/tasks/{task_id}")
+@app.patch("/api/tasks/{task_id}", tags=["Tasks"])
 async def update_task(task_id: str, config: TaskConfigUpdate):
     """Update task configuration."""
     try:
@@ -6156,6 +6251,10 @@ async def update_task(task_id: str, config: TaskConfigUpdate):
             schedule_time=config.schedule_time,
             timezone=config.timezone,
             task_config=config.config,
+            send_alerts=config.send_alerts,
+            alert_on_success=config.alert_on_success,
+            alert_on_warning=config.alert_on_warning,
+            alert_on_error=config.alert_on_error,
         )
 
         if result is None:
@@ -6174,7 +6273,7 @@ class TaskRunRequest(BaseModel):
     schedule_id: Optional[int] = None  # Run with parameters from a specific schedule
 
 
-@app.post("/api/tasks/{task_id}/run")
+@app.post("/api/tasks/{task_id}/run", tags=["Tasks"])
 async def run_task(task_id: str, request: Optional[TaskRunRequest] = None):
     """Manually trigger a task execution."""
     try:
@@ -6194,7 +6293,7 @@ async def run_task(task_id: str, request: Optional[TaskRunRequest] = None):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/tasks/{task_id}/cancel")
+@app.post("/api/tasks/{task_id}/cancel", tags=["Tasks"])
 async def cancel_task(task_id: str):
     """Cancel a running task."""
     try:
@@ -6211,7 +6310,7 @@ async def cancel_task(task_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/tasks/{task_id}/history")
+@app.get("/api/tasks/{task_id}/history", tags=["Tasks"])
 async def get_task_history(task_id: str, limit: int = 50, offset: int = 0):
     """Get execution history for a task."""
     try:
@@ -6224,7 +6323,7 @@ async def get_task_history(task_id: str, limit: int = 50, offset: int = 0):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/tasks/engine/status")
+@app.get("/api/tasks/engine/status", tags=["Tasks"])
 async def get_engine_status():
     """Get task engine status."""
     try:
@@ -6236,7 +6335,7 @@ async def get_engine_status():
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/tasks/history/all")
+@app.get("/api/tasks/history/all", tags=["Tasks"])
 async def get_all_task_history(limit: int = 100, offset: int = 0):
     """Get execution history for all tasks."""
     try:
@@ -6249,7 +6348,7 @@ async def get_all_task_history(limit: int = 100, offset: int = 0):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/cron/presets")
+@app.get("/api/cron/presets", tags=["Cron"])
 async def get_cron_presets():
     """Get available cron presets for task scheduling."""
     try:
@@ -6359,7 +6458,7 @@ class CronValidateRequest(BaseModel):
     expression: str
 
 
-@app.post("/api/cron/validate")
+@app.post("/api/cron/validate", tags=["Cron"])
 async def validate_cron(request: CronValidateRequest):
     """Validate a cron expression."""
     try:
@@ -6502,7 +6601,7 @@ TASK_PARAMETER_SCHEMAS = {
 }
 
 
-@app.get("/api/tasks/{task_id}/parameter-schema")
+@app.get("/api/tasks/{task_id}/parameter-schema", tags=["Tasks"])
 async def get_task_parameter_schema(task_id: str):
     """Get the parameter schema for a task type."""
     schema = TASK_PARAMETER_SCHEMAS.get(task_id)
@@ -6512,13 +6611,13 @@ async def get_task_parameter_schema(task_id: str):
     return {"task_id": task_id, **schema}
 
 
-@app.get("/api/tasks/parameter-schemas")
+@app.get("/api/tasks/parameter-schemas", tags=["Tasks"])
 async def get_all_task_parameter_schemas():
     """Get parameter schemas for all task types."""
     return {"schemas": TASK_PARAMETER_SCHEMAS}
 
 
-@app.get("/api/tasks/{task_id}/schedules")
+@app.get("/api/tasks/{task_id}/schedules", tags=["Tasks"])
 async def list_task_schedules(task_id: str):
     """Get all schedules for a task."""
     try:
@@ -6559,7 +6658,7 @@ async def list_task_schedules(task_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/tasks/{task_id}/schedules")
+@app.post("/api/tasks/{task_id}/schedules", tags=["Tasks"])
 async def create_task_schedule(task_id: str, data: TaskScheduleCreate):
     """Create a new schedule for a task."""
     try:
@@ -6633,7 +6732,7 @@ async def create_task_schedule(task_id: str, data: TaskScheduleCreate):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.patch("/api/tasks/{task_id}/schedules/{schedule_id}")
+@app.patch("/api/tasks/{task_id}/schedules/{schedule_id}", tags=["Tasks"])
 async def update_task_schedule(task_id: str, schedule_id: int, data: TaskScheduleUpdate):
     """Update a task schedule."""
     try:
@@ -6712,7 +6811,7 @@ async def update_task_schedule(task_id: str, schedule_id: int, data: TaskSchedul
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.delete("/api/tasks/{task_id}/schedules/{schedule_id}")
+@app.delete("/api/tasks/{task_id}/schedules/{schedule_id}", tags=["Tasks"])
 async def delete_task_schedule(task_id: str, schedule_id: int):
     """Delete a task schedule."""
     try:
@@ -6750,7 +6849,7 @@ async def delete_task_schedule(task_id: str, schedule_id: int):
 # Normalization Rules API
 # =============================================================================
 
-@app.get("/api/normalization/rules")
+@app.get("/api/normalization/rules", tags=["Normalization"])
 async def get_all_normalization_rules():
     """Get all normalization rules organized by group."""
     try:
@@ -6767,7 +6866,7 @@ async def get_all_normalization_rules():
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/normalization/groups")
+@app.get("/api/normalization/groups", tags=["Normalization"])
 async def get_normalization_groups():
     """Get all normalization rule groups."""
     try:
@@ -6785,7 +6884,7 @@ async def get_normalization_groups():
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/normalization/groups")
+@app.post("/api/normalization/groups", tags=["Normalization"])
 async def create_normalization_group(request: CreateRuleGroupRequest):
     """Create a new normalization rule group."""
     try:
@@ -6810,7 +6909,7 @@ async def create_normalization_group(request: CreateRuleGroupRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/normalization/groups/{group_id}")
+@app.get("/api/normalization/groups/{group_id}", tags=["Normalization"])
 async def get_normalization_group(group_id: int):
     """Get a normalization rule group by ID."""
     try:
@@ -6840,7 +6939,7 @@ async def get_normalization_group(group_id: int):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.patch("/api/normalization/groups/{group_id}")
+@app.patch("/api/normalization/groups/{group_id}", tags=["Normalization"])
 async def update_normalization_group(group_id: int, request: UpdateRuleGroupRequest):
     """Update a normalization rule group."""
     try:
@@ -6874,7 +6973,7 @@ async def update_normalization_group(group_id: int, request: UpdateRuleGroupRequ
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.delete("/api/normalization/groups/{group_id}")
+@app.delete("/api/normalization/groups/{group_id}", tags=["Normalization"])
 async def delete_normalization_group(group_id: int):
     """Delete a normalization rule group and all its rules."""
     try:
@@ -6905,7 +7004,7 @@ async def delete_normalization_group(group_id: int):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/normalization/groups/reorder")
+@app.post("/api/normalization/groups/reorder", tags=["Normalization"])
 async def reorder_normalization_groups(request: ReorderGroupsRequest):
     """Reorder normalization rule groups."""
     try:
@@ -6925,7 +7024,7 @@ async def reorder_normalization_groups(request: ReorderGroupsRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/normalization/rules/{rule_id}")
+@app.get("/api/normalization/rules/{rule_id}", tags=["Normalization"])
 async def get_normalization_rule(rule_id: int):
     """Get a normalization rule by ID."""
     try:
@@ -6947,7 +7046,7 @@ async def get_normalization_rule(rule_id: int):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/normalization/rules")
+@app.post("/api/normalization/rules", tags=["Normalization"])
 async def create_normalization_rule(request: CreateRuleRequest):
     """Create a new normalization rule."""
     try:
@@ -6998,7 +7097,7 @@ async def create_normalization_rule(request: CreateRuleRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.patch("/api/normalization/rules/{rule_id}")
+@app.patch("/api/normalization/rules/{rule_id}", tags=["Normalization"])
 async def update_normalization_rule(rule_id: int, request: UpdateRuleRequest):
     """Update a normalization rule."""
     try:
@@ -7058,7 +7157,7 @@ async def update_normalization_rule(rule_id: int, request: UpdateRuleRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.delete("/api/normalization/rules/{rule_id}")
+@app.delete("/api/normalization/rules/{rule_id}", tags=["Normalization"])
 async def delete_normalization_rule(rule_id: int):
     """Delete a normalization rule."""
     try:
@@ -7083,7 +7182,7 @@ async def delete_normalization_rule(rule_id: int):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/normalization/groups/{group_id}/rules/reorder")
+@app.post("/api/normalization/groups/{group_id}/rules/reorder", tags=["Normalization"])
 async def reorder_normalization_rules(group_id: int, request: ReorderRulesRequest):
     """Reorder normalization rules within a group."""
     try:
@@ -7104,7 +7203,7 @@ async def reorder_normalization_rules(group_id: int, request: ReorderRulesReques
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/normalization/test")
+@app.post("/api/normalization/test", tags=["Normalization"])
 async def test_normalization_rule(request: TestRuleRequest):
     """Test a rule configuration against sample text without saving."""
     try:
@@ -7134,7 +7233,7 @@ async def test_normalization_rule(request: TestRuleRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/normalization/test-batch")
+@app.post("/api/normalization/test-batch", tags=["Normalization"])
 async def test_normalization_batch(request: TestRulesBatchRequest):
     """Test all enabled rules against multiple sample texts."""
     try:
@@ -7164,7 +7263,7 @@ async def test_normalization_batch(request: TestRulesBatchRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/normalization/normalize")
+@app.post("/api/normalization/normalize", tags=["Normalization"])
 async def normalize_text(request: TestRulesBatchRequest):
     """Normalize one or more texts using all enabled rules."""
     try:
@@ -7186,7 +7285,7 @@ async def normalize_text(request: TestRulesBatchRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/normalization/rule-stats")
+@app.get("/api/normalization/rule-stats", tags=["Normalization"])
 async def get_normalization_rule_stats(limit: int = 500):
     """Get statistics on how many streams each rule matches.
 
@@ -7265,7 +7364,7 @@ async def get_normalization_rule_stats(limit: int = 500):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/normalization/migration/status")
+@app.get("/api/normalization/migration/status", tags=["Normalization"])
 async def get_normalization_migration_status():
     """Get the status of the normalization rules migration."""
     try:
@@ -7281,7 +7380,7 @@ async def get_normalization_migration_status():
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/normalization/migration/run")
+@app.post("/api/normalization/migration/run", tags=["Normalization"])
 async def run_normalization_migration(force: bool = False, migrate_settings: bool = True):
     """Create demo normalization rules.
 
@@ -7347,7 +7446,7 @@ class TestTagsRequest(BaseModel):
     group_id: int
 
 
-@app.get("/api/tags/groups")
+@app.get("/api/tags/groups", tags=["Tags"])
 async def list_tag_groups():
     """List all tag groups with tag counts."""
     try:
@@ -7375,7 +7474,7 @@ async def list_tag_groups():
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/tags/groups")
+@app.post("/api/tags/groups", tags=["Tags"])
 async def create_tag_group(request: CreateTagGroupRequest):
     """Create a new tag group."""
     try:
@@ -7406,7 +7505,7 @@ async def create_tag_group(request: CreateTagGroupRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/tags/groups/{group_id}")
+@app.get("/api/tags/groups/{group_id}", tags=["Tags"])
 async def get_tag_group(group_id: int):
     """Get a tag group with all its tags."""
     try:
@@ -7427,7 +7526,7 @@ async def get_tag_group(group_id: int):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.patch("/api/tags/groups/{group_id}")
+@app.patch("/api/tags/groups/{group_id}", tags=["Tags"])
 async def update_tag_group(group_id: int, request: UpdateTagGroupRequest):
     """Update a tag group name/description."""
     try:
@@ -7468,7 +7567,7 @@ async def update_tag_group(group_id: int, request: UpdateTagGroupRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.delete("/api/tags/groups/{group_id}")
+@app.delete("/api/tags/groups/{group_id}", tags=["Tags"])
 async def delete_tag_group(group_id: int):
     """Delete a tag group and all its tags."""
     try:
@@ -7496,7 +7595,7 @@ async def delete_tag_group(group_id: int):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/tags/groups/{group_id}/tags")
+@app.post("/api/tags/groups/{group_id}/tags", tags=["Tags"])
 async def add_tags_to_group(group_id: int, request: CreateTagsRequest):
     """Add one or more tags to a group."""
     try:
@@ -7552,7 +7651,7 @@ async def add_tags_to_group(group_id: int, request: CreateTagsRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.patch("/api/tags/groups/{group_id}/tags/{tag_id}")
+@app.patch("/api/tags/groups/{group_id}/tags/{tag_id}", tags=["Tags"])
 async def update_tag(group_id: int, tag_id: int, request: UpdateTagRequest):
     """Update a tag's enabled or case_sensitive status."""
     try:
@@ -7584,7 +7683,7 @@ async def update_tag(group_id: int, tag_id: int, request: UpdateTagRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.delete("/api/tags/groups/{group_id}/tags/{tag_id}")
+@app.delete("/api/tags/groups/{group_id}/tags/{tag_id}", tags=["Tags"])
 async def delete_tag(group_id: int, tag_id: int):
     """Delete a tag from a group."""
     try:
@@ -7615,7 +7714,7 @@ async def delete_tag(group_id: int, tag_id: int):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/tags/test")
+@app.post("/api/tags/test", tags=["Tags"])
 async def test_tags(request: TestTagsRequest):
     """Test text against a tag group to find matches."""
     try:

@@ -273,3 +273,58 @@
 .schedule-editor-modal .modal-container {
   max-width: 500px;
 }
+
+/* Alert Configuration Section */
+.task-editor-modal .alert-config-section {
+  background-color: var(--bg-secondary);
+  padding: 1rem;
+  border-radius: 6px;
+  margin-bottom: 1.5rem;
+}
+
+.task-editor-modal .alert-config-header {
+  margin-bottom: 0.75rem;
+}
+
+.task-editor-modal .alert-config-header .section-label {
+  font-weight: 500;
+  display: block;
+}
+
+.task-editor-modal .alert-config-content {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.task-editor-modal .alert-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  cursor: pointer;
+}
+
+.task-editor-modal .alert-toggle input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent-primary);
+}
+
+.task-editor-modal .alert-toggle.master-toggle {
+  font-weight: 500;
+}
+
+.task-editor-modal .alert-type-toggles {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-left: 1.5rem;
+  padding-left: 0.75rem;
+  border-left: 2px solid var(--border-color);
+}
+
+.task-editor-modal .alert-hint {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  margin-left: auto;
+}

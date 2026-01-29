@@ -814,6 +814,7 @@ export interface M3UDigestSettings {
   email_recipients: string[];
   include_group_changes: boolean;
   include_stream_changes: boolean;
+  show_detailed_list: boolean;
   min_changes_threshold: number;
   last_digest_at: string | null;  // ISO timestamp
   created_at: string;  // ISO timestamp
@@ -827,5 +828,6 @@ export interface M3UDigestSettingsUpdate {
   email_recipients?: string[];
   include_group_changes?: boolean;
   include_stream_changes?: boolean;
+  show_detailed_list?: boolean;
   min_changes_threshold?: number;
 }
