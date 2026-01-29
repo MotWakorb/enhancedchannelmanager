@@ -108,6 +108,9 @@ export function M3UChangesTab() {
   // Expanded rows
   const [expandedId, setExpandedId] = useState<number | null>(null);
 
+  // Expanded stream names (show all instead of first 20)
+  const [expandedStreams, setExpandedStreams] = useState<Set<number>>(new Set());
+
   // Fetch M3U accounts for filter dropdown
   useEffect(() => {
     api.getM3UAccounts().then(setAccounts).catch(console.error);
@@ -163,6 +166,20 @@ export function M3UChangesTab() {
   // Toggle row expansion
   const toggleExpand = (id: number) => {
     setExpandedId(expandedId === id ? null : id);
+  };
+
+  // Toggle stream names expansion (show all vs first 20)
+  const toggleStreamNames = (id: number, e: React.MouseEvent) => {
+    e.stopPropagation(); // Don't toggle row expansion
+    setExpandedStreams(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
   };
 
   // Handle column sort
@@ -242,85 +259,85 @@ export function M3UChangesTab() {
         </div>
       </div>
 
-      {/* Summary Cards */}
-      {summary && (
-        <div className="summary-cards">
-          <div className="summary-card added">
-            <div className="summary-icon">
-              <span className="material-icons">add_circle</span>
+      {/* Filters and Summary Row */}
+      <div className="filters-summary-row">
+        <div className="filters-bar">
+          <div className="filter-select">
+            <CustomSelect
+              value={hoursFilter}
+              onChange={(val) => setHoursFilter(val as number)}
+              options={hoursOptions}
+              placeholder="Time Range"
+            />
+          </div>
+          <div className="filter-select">
+            <CustomSelect
+              value={accountFilter}
+              onChange={(val) => setAccountFilter(val as number | '')}
+              options={[
+                { value: '', label: 'All Accounts' },
+                ...accounts.map(a => ({ value: a.id, label: a.name })),
+              ]}
+              placeholder="Filter by Account"
+            />
+          </div>
+          <div className="filter-select">
+            <CustomSelect
+              value={changeTypeFilter}
+              onChange={(val) => setChangeTypeFilter(val as M3UChangeType | '')}
+              options={changeTypeOptions}
+              placeholder="Filter by Type"
+            />
+          </div>
+          <div className="filter-select">
+            <CustomSelect
+              value={enabledFilter}
+              onChange={(val) => setEnabledFilter(val as boolean | '')}
+              options={enabledOptions}
+              placeholder="Filter by Status"
+            />
+          </div>
+        </div>
+        {summary && (
+          <div className="summary-cards">
+            <div className="summary-card added">
+              <div className="summary-icon">
+                <span className="material-icons">add_circle</span>
+              </div>
+              <div className="summary-content">
+                <span className="summary-value">{summary.groups_added}</span>
+                <span className="summary-label">Groups Added</span>
+              </div>
             </div>
-            <div className="summary-content">
-              <span className="summary-value">{summary.groups_added}</span>
-              <span className="summary-label">Groups Added</span>
+            <div className="summary-card removed">
+              <div className="summary-icon">
+                <span className="material-icons">remove_circle</span>
+              </div>
+              <div className="summary-content">
+                <span className="summary-value">{summary.groups_removed}</span>
+                <span className="summary-label">Groups Removed</span>
+              </div>
+            </div>
+            <div className="summary-card added">
+              <div className="summary-icon">
+                <span className="material-icons">playlist_add</span>
+              </div>
+              <div className="summary-content">
+                <span className="summary-value">{summary.streams_added}</span>
+                <span className="summary-label">Streams Added</span>
+              </div>
+            </div>
+            <div className="summary-card removed">
+              <div className="summary-icon">
+                <span className="material-icons">playlist_remove</span>
+              </div>
+              <div className="summary-content">
+                <span className="summary-value">{summary.streams_removed}</span>
+                <span className="summary-label">Streams Removed</span>
+              </div>
             </div>
           </div>
-          <div className="summary-card removed">
-            <div className="summary-icon">
-              <span className="material-icons">remove_circle</span>
-            </div>
-            <div className="summary-content">
-              <span className="summary-value">{summary.groups_removed}</span>
-              <span className="summary-label">Groups Removed</span>
-            </div>
-          </div>
-          <div className="summary-card added">
-            <div className="summary-icon">
-              <span className="material-icons">playlist_add</span>
-            </div>
-            <div className="summary-content">
-              <span className="summary-value">{summary.streams_added}</span>
-              <span className="summary-label">Streams Added</span>
-            </div>
-          </div>
-          <div className="summary-card removed">
-            <div className="summary-icon">
-              <span className="material-icons">playlist_remove</span>
-            </div>
-            <div className="summary-content">
-              <span className="summary-value">{summary.streams_removed}</span>
-              <span className="summary-label">Streams Removed</span>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Filters Bar */}
-      <div className="filters-bar">
-        <div className="filter-select">
-          <CustomSelect
-            value={hoursFilter}
-            onChange={(val) => setHoursFilter(val as number)}
-            options={hoursOptions}
-            placeholder="Time Range"
-          />
-        </div>
-        <div className="filter-select">
-          <CustomSelect
-            value={accountFilter}
-            onChange={(val) => setAccountFilter(val as number | '')}
-            options={[
-              { value: '', label: 'All Accounts' },
-              ...accounts.map(a => ({ value: a.id, label: a.name })),
-            ]}
-            placeholder="Filter by Account"
-          />
-        </div>
-        <div className="filter-select">
-          <CustomSelect
-            value={changeTypeFilter}
-            onChange={(val) => setChangeTypeFilter(val as M3UChangeType | '')}
-            options={changeTypeOptions}
-            placeholder="Filter by Type"
-          />
-        </div>
-        <div className="filter-select">
-          <CustomSelect
-            value={enabledFilter}
-            onChange={(val) => setEnabledFilter(val as boolean | '')}
-            options={enabledOptions}
-            placeholder="Filter by Status"
-          />
-        </div>
+        )}
       </div>
 
       {/* Error Banner */}
@@ -467,12 +484,20 @@ export function M3UChangesTab() {
                         <div className="detail-section">
                           <h4>Stream Names ({change.stream_names.length})</h4>
                           <div className="stream-names-list">
-                            {change.stream_names.slice(0, 20).map((name, idx) => (
+                            {(expandedStreams.has(change.id)
+                              ? change.stream_names
+                              : change.stream_names.slice(0, 20)
+                            ).map((name, idx) => (
                               <span key={idx} className="stream-name-tag">{name}</span>
                             ))}
                             {change.stream_names.length > 20 && (
-                              <span className="stream-name-more">
-                                +{change.stream_names.length - 20} more
+                              <span
+                                className="stream-name-toggle"
+                                onClick={(e) => toggleStreamNames(change.id, e)}
+                              >
+                                {expandedStreams.has(change.id)
+                                  ? 'Show less'
+                                  : `+${change.stream_names.length - 20} more`}
                               </span>
                             )}
                           </div>

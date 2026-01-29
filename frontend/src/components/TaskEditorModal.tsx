@@ -87,9 +87,10 @@ export function TaskEditorModal({ task, onClose, onSaved }: TaskEditorModalProps
       }));
     }
 
-    // M3U accounts (for m3u_refresh)
-    if (m3uAccounts.length > 0) {
-      options['m3u_accounts'] = m3uAccounts.map(a => ({
+    // M3U accounts (for m3u_refresh) - exclude "custom" account
+    const filteredM3uAccounts = m3uAccounts.filter(a => a.name.toLowerCase() !== 'custom');
+    if (filteredM3uAccounts.length > 0) {
+      options['m3u_accounts'] = filteredM3uAccounts.map(a => ({
         value: a.id,
         label: a.name,
       }));
@@ -413,80 +414,6 @@ export function TaskEditorModal({ task, onClose, onSaved }: TaskEditorModalProps
             )}
           </div>
 
-          {/* Task-Specific Configuration: EPG Refresh */}
-          {task.task_id === 'epg_refresh' && epgSources.length > 0 && (
-            <div className="config-section">
-              <label className="section-label">EPG Sources to Refresh</label>
-              <div className="config-hint">
-                Select specific sources or leave empty to refresh all active sources.
-              </div>
-              <div className="config-list">
-                {epgSources.map((source) => (
-                  <label key={source.id} className="config-checkbox">
-                    <input
-                      type="checkbox"
-                      checked={((taskConfig.source_ids as number[]) || []).includes(source.id)}
-                      onChange={(e) => {
-                        const currentIds = (taskConfig.source_ids as number[]) || [];
-                        if (e.target.checked) {
-                          setTaskConfig({ ...taskConfig, source_ids: [...currentIds, source.id] });
-                        } else {
-                          setTaskConfig({ ...taskConfig, source_ids: currentIds.filter((id) => id !== source.id) });
-                        }
-                      }}
-                    />
-                    <span>{source.name}</span>
-                    {source.source_type === 'dummy' && (
-                      <span className="badge">(dummy)</span>
-                    )}
-                  </label>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* Task-Specific Configuration: M3U Refresh */}
-          {task.task_id === 'm3u_refresh' && m3uAccounts.length > 0 && (
-            <div className="config-section">
-              <label className="section-label">M3U Accounts to Refresh</label>
-              <div className="config-hint">
-                Select specific accounts or leave empty to refresh all active accounts.
-              </div>
-              <div className="config-list">
-                {m3uAccounts
-                  .filter((account) => account.name.toLowerCase() !== 'custom')
-                  .map((account) => (
-                    <label key={account.id} className="config-checkbox">
-                      <input
-                        type="checkbox"
-                        checked={((taskConfig.account_ids as number[]) || []).includes(account.id)}
-                        onChange={(e) => {
-                          const currentIds = (taskConfig.account_ids as number[]) || [];
-                          if (e.target.checked) {
-                            setTaskConfig({ ...taskConfig, account_ids: [...currentIds, account.id] });
-                          } else {
-                            setTaskConfig({ ...taskConfig, account_ids: currentIds.filter((id) => id !== account.id) });
-                          }
-                        }}
-                      />
-                      <span>{account.name}</span>
-                      {!account.is_active && (
-                        <span className="badge">(inactive)</span>
-                      )}
-                    </label>
-                  ))}
-              </div>
-              <label className="config-checkbox" style={{ marginTop: '0.75rem' }}>
-                <input
-                  type="checkbox"
-                  checked={taskConfig.skip_inactive !== false}
-                  onChange={(e) => setTaskConfig({ ...taskConfig, skip_inactive: e.target.checked })}
-                />
-                <span>Skip inactive accounts</span>
-              </label>
-            </div>
-          )}
-
           {/* Task-Specific Configuration: Cleanup */}
           {task.task_id === 'cleanup' && (
             <div className="config-section">
@@ -574,7 +501,7 @@ export function TaskEditorModal({ task, onClose, onSaved }: TaskEditorModalProps
               onCancel={() => setIsAddingSchedule(false)}
               saving={savingSchedule}
               taskId={task.task_id}
-              parameterSchema={parameterSchema}
+              parameterSchema={task.task_id === 'cleanup' ? [] : parameterSchema}
               parameterOptions={parameterOptions}
               defaultParameters={defaultParameters}
             />
@@ -602,7 +529,7 @@ export function TaskEditorModal({ task, onClose, onSaved }: TaskEditorModalProps
               onCancel={() => setEditingSchedule(null)}
               saving={savingSchedule}
               taskId={task.task_id}
-              parameterSchema={parameterSchema}
+              parameterSchema={task.task_id === 'cleanup' ? [] : parameterSchema}
               parameterOptions={parameterOptions}
             />
           </div>

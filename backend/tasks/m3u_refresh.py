@@ -67,7 +67,8 @@ async def capture_m3u_changes(account_id: int, account_name: str) -> Optional[Di
 
         # Fetch stream names for enabled groups (limit to first 50 per group)
         stream_names_by_group = {}
-        MAX_STREAM_NAMES = 50
+        MAX_STREAM_NAMES = 500
+        logger.info(f"[M3U-CHANGE] Fetching stream names for {len(enabled_group_names)} enabled groups: {enabled_group_names[:5]}{'...' if len(enabled_group_names) > 5 else ''}")
         for group_name in enabled_group_names:
             try:
                 streams_response = await api_client.get_streams(
@@ -76,11 +77,15 @@ async def capture_m3u_changes(account_id: int, account_name: str) -> Optional[Di
                     channel_group_name=group_name,
                     m3u_account=account_id,
                 )
-                stream_names = [s.get("name", "") for s in streams_response.get("results", [])]
+                results = streams_response.get("results", [])
+                stream_names = [s.get("name", "") for s in results]
+                logger.debug(f"[M3U-CHANGE] Group '{group_name}': got {len(results)} streams, {len(stream_names)} names")
                 if stream_names:
                     stream_names_by_group[group_name] = stream_names
             except Exception as e:
-                logger.debug(f"[M3U-CHANGE] Could not fetch streams for group '{group_name}': {e}")
+                logger.warning(f"[M3U-CHANGE] Could not fetch streams for group '{group_name}': {e}")
+
+        logger.info(f"[M3U-CHANGE] Captured stream names for {len(stream_names_by_group)} groups")
 
         # Match up: for each group in this M3U account, get name and stream count
         current_groups = []
