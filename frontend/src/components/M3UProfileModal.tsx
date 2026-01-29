@@ -241,7 +241,7 @@ export const M3UProfileModal = memo(function M3UProfileModal({
 
                           <div className="profile-actions">
                             <button
-                              className="action-btn"
+                              className={`action-btn toggle ${profile.is_active ? 'active' : ''}`}
                               onClick={() => handleToggleActive(profile)}
                               title={profile.is_active ? 'Deactivate' : 'Activate'}
                             >

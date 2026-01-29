@@ -195,14 +195,63 @@ npm run test:e2e:report    # View test report
 
 ## CSS/Styling Guidelines
 
-**Button Styling - IMPORTANT:**
-- NEVER use `--accent-primary` for button backgrounds with white/light text - it causes white-on-white in dark mode
-- ALWAYS use `--button-primary-bg` for primary button backgrounds
-- ALWAYS use `--button-primary-text` for primary button text color
-- Example of correct button styling:
-  ```css
-  .btn-primary {
-    background-color: var(--button-primary-bg);
-    color: var(--button-primary-text);
-  }
-  ```
+**Theme-Aware Variables - CRITICAL:**
+
+The `--accent-*` variables have OPPOSITE meanings in dark vs light mode:
+- Dark mode: `--accent-primary` = white, `--accent-secondary` = light gray
+- Light mode: `--accent-primary` = indigo, `--accent-secondary` = lighter indigo
+
+**NEVER use `--accent-primary` or `--accent-secondary` for:**
+- Backgrounds with text on top (causes white-on-white in dark mode)
+- Badge/tag backgrounds
+- Any element that needs text contrast
+
+**Safe variables for backgrounds:**
+```css
+/* Use these for backgrounds */
+--bg-primary      /* Main background */
+--bg-secondary    /* Slightly different background */
+--bg-tertiary     /* Cards, chips, tags */
+--input-bg        /* Form inputs */
+--button-primary-bg  /* Primary buttons */
+```
+
+**Safe variables for text:**
+```css
+/* Use these for text */
+--text-primary    /* Main text */
+--text-secondary  /* Secondary/label text */
+--text-muted      /* Disabled/subtle text */
+--button-primary-text  /* Text on primary buttons */
+```
+
+**Correct patterns:**
+```css
+/* Tags, chips, badges */
+.tag {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  border: 1px solid var(--border-primary);
+}
+
+/* Primary buttons */
+.btn-primary {
+  background-color: var(--button-primary-bg);
+  color: var(--button-primary-text);
+}
+
+/* Secondary/subtle badges */
+.badge {
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+}
+```
+
+**WRONG - will cause contrast issues:**
+```css
+/* DON'T DO THIS */
+.tag {
+  background: var(--accent-secondary);  /* Light in dark mode! */
+  color: var(--accent-primary);         /* White in dark mode! */
+}
+```

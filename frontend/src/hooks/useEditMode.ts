@@ -644,12 +644,12 @@ export function useEditMode({
   );
 
   const stageCreateChannel = useCallback(
-    (name: string, channelNumber?: number, groupId?: number, newGroupName?: string, logoId?: number, logoUrl?: string, tvgId?: string, tvcGuideStationId?: string): number => {
+    (name: string, channelNumber?: number, groupId?: number, newGroupName?: string, logoId?: number, logoUrl?: string, tvgId?: string, tvcGuideStationId?: string, normalize?: boolean): number => {
       // Use ref to get unique temp ID even when called in a loop (React batching issue)
       const tempId = nextTempIdRef.current;
       nextTempIdRef.current -= 1; // Decrement immediately for next call
       stageOperation(
-        { type: 'createChannel', name, channelNumber, groupId, newGroupName, logoId, logoUrl, tvgId, tvcGuideStationId },
+        { type: 'createChannel', name, channelNumber, groupId, newGroupName, logoId, logoUrl, tvgId, tvcGuideStationId, normalize },
         `Create channel "${name}"`,
         []
       );

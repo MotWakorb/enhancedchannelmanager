@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import type { M3UAccount, ServerGroup, EPGSource, ChannelGroup, ChannelProfile, StreamProfile } from '../../types';
 import * as api from '../../services/api';
 import { naturalCompare } from '../../utils/naturalSort';
@@ -33,6 +33,7 @@ interface M3UAccountRowProps {
   hideM3uUrls?: boolean;
   priority?: number;  // Sort priority for this account (higher = better)
   onPriorityChange?: (accountId: number, priority: number) => void;
+  isBeingRefreshed?: boolean;  // Whether we're tracking this account as still refreshing
 }
 
 function M3UAccountRow({
@@ -48,8 +49,13 @@ function M3UAccountRow({
   hideM3uUrls = false,
   priority = 0,
   onPriorityChange,
+  isBeingRefreshed = false,
 }: M3UAccountRowProps) {
+  // Consider refreshing if status says so OR if we're tracking it as refreshing
+  const isRefreshing = isBeingRefreshed || account.status === 'fetching' || account.status === 'parsing';
+
   const getStatusIcon = (status: M3UAccount['status']) => {
+    // Show actual status from Dispatcharr - icons reflect real progress
     switch (status) {
       case 'success': return 'check_circle';
       case 'error': return 'error';
@@ -62,6 +68,7 @@ function M3UAccountRow({
   };
 
   const getStatusClass = (status: M3UAccount['status']) => {
+    // Show actual status class from Dispatcharr
     switch (status) {
       case 'success': return 'status-success';
       case 'error': return 'status-error';
@@ -74,6 +81,7 @@ function M3UAccountRow({
   };
 
   const getStatusLabel = (status: M3UAccount['status']) => {
+    // Show actual status label from Dispatcharr - users see real progress
     switch (status) {
       case 'success': return 'Ready';
       case 'error': return 'Error';
@@ -84,8 +92,6 @@ function M3UAccountRow({
       default: return 'Idle';
     }
   };
-
-  const isRefreshing = account.status === 'fetching' || account.status === 'parsing';
 
   const getAccountTypeLabel = (type: M3UAccount['account_type']) => {
     return type === 'XC' ? 'XtreamCodes' : 'Standard M3U';
@@ -198,7 +204,7 @@ function M3UAccountRow({
 
       <div className="account-actions">
         <button
-          className="action-btn"
+          className={`action-btn toggle ${account.is_active ? 'active' : ''}`}
           onClick={() => onToggleActive(account)}
           title={account.is_active ? 'Disable' : 'Enable'}
         >
@@ -271,7 +277,19 @@ export function M3UManagerTab({
   const [error, setError] = useState<string | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
   const [editingAccount, setEditingAccount] = useState<M3UAccount | null>(null);
-  const [refreshingAll, setRefreshingAll] = useState(false);
+  const pollingRef = useRef<NodeJS.Timeout | null>(null);
+  // Track accounts being refreshed - stores initial updated_at to detect completion
+  const [refreshingAccounts, setRefreshingAccounts] = useState<Map<number, { initialUpdatedAt: string | null; startTime: number }>>(new Map());
+
+  // Check if any accounts are actively refreshing
+  // An account is refreshing if: status is fetching/parsing OR we're waiting for updated_at to change
+  const anyRefreshing = accounts.some(
+    a => a.is_active && (
+      a.status === 'fetching' ||
+      a.status === 'parsing' ||
+      refreshingAccounts.has(a.id)
+    )
+  );
   const [filterServerGroup, setFilterServerGroup] = useState<number | null>(null);
   const [groupsModalOpen, setGroupsModalOpen] = useState(false);
   const [groupsAccount, setGroupsAccount] = useState<M3UAccount | null>(null);
@@ -311,41 +329,80 @@ export function M3UManagerTab({
     loadData();
   }, [loadData]);
 
-  // Auto-detect and poll for refresh status (e.g., when probe triggers M3U refresh)
+  // Poll for refresh status when any account is refreshing
   useEffect(() => {
-    // Check if any accounts are currently refreshing
-    const checkRefreshStatus = () => {
-      const hasRefreshing = accounts.some(
-        a => a.is_active && (a.status === 'fetching' || a.status === 'parsing')
-      );
+    // Clear any existing polling
+    if (pollingRef.current) {
+      clearInterval(pollingRef.current);
+      pollingRef.current = null;
+    }
 
-      if (hasRefreshing && !refreshingAll) {
-        setRefreshingAll(true);
-      }
+    // Start polling if any accounts are refreshing
+    if (anyRefreshing) {
+      const REFRESH_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
 
-      return hasRefreshing;
-    };
+      pollingRef.current = setInterval(async () => {
+        try {
+          const updatedAccounts = await api.getM3UAccounts();
+          setAccounts(updatedAccounts);
 
-    // Start polling if accounts are refreshing
-    if (accounts.length > 0 && checkRefreshStatus()) {
-      const pollInterval = setInterval(async () => {
-        const updatedAccounts = await api.getM3UAccounts();
-        setAccounts(updatedAccounts);
+          // Check each tracked account to see if refresh completed
+          const now = Date.now();
+          const completedIds: number[] = [];
 
-        const stillRefreshing = updatedAccounts.some(
-          a => a.is_active && (a.status === 'fetching' || a.status === 'parsing')
-        );
+          refreshingAccounts.forEach((tracking, accountId) => {
+            const account = updatedAccounts.find(a => a.id === accountId);
+            if (!account) {
+              // Account was deleted
+              completedIds.push(accountId);
+              return;
+            }
 
-        if (!stillRefreshing) {
-          clearInterval(pollInterval);
-          setRefreshingAll(false);
+            // Refresh is complete if:
+            // 1. Status is no longer fetching/parsing (success, error, idle, disabled)
+            // 2. Timeout exceeded (safety fallback)
+            const isStillRefreshing = account.status === 'fetching' || account.status === 'parsing';
+            if (
+              !isStillRefreshing ||
+              (now - tracking.startTime) > REFRESH_TIMEOUT_MS
+            ) {
+              completedIds.push(accountId);
+            }
+          });
+
+          // Remove completed accounts from tracking
+          if (completedIds.length > 0) {
+            setRefreshingAccounts(prev => {
+              const next = new Map(prev);
+              completedIds.forEach(id => next.delete(id));
+              return next;
+            });
+          }
+
+          // Also check status-based refreshing for accounts not in our tracking
+          const stillRefreshingByStatus = updatedAccounts.some(
+            a => a.is_active && (a.status === 'fetching' || a.status === 'parsing')
+          );
+
+          // Stop polling when no accounts are refreshing
+          if (refreshingAccounts.size === 0 && !stillRefreshingByStatus && pollingRef.current) {
+            clearInterval(pollingRef.current);
+            pollingRef.current = null;
+          }
+        } catch (err) {
+          console.error('Failed to poll account status:', err);
         }
       }, 2000);
-
-      // Cleanup on unmount or when accounts change
-      return () => clearInterval(pollInterval);
     }
-  }, [accounts, refreshingAll]);
+
+    // Cleanup on unmount
+    return () => {
+      if (pollingRef.current) {
+        clearInterval(pollingRef.current);
+        pollingRef.current = null;
+      }
+    };
+  }, [anyRefreshing, refreshingAccounts]);
 
   const handleAddAccount = () => {
     setEditingAccount(null);
@@ -373,22 +430,22 @@ export function M3UManagerTab({
 
   const handleRefreshAccount = async (account: M3UAccount) => {
     try {
+      // Capture initial updated_at before triggering refresh
+      const initialUpdatedAt = account.updated_at || null;
+
       await api.refreshM3UAccount(account.id);
-      // Update local state to show refreshing
+
+      // Track this account as refreshing
+      setRefreshingAccounts(prev => {
+        const next = new Map(prev);
+        next.set(account.id, { initialUpdatedAt, startTime: Date.now() });
+        return next;
+      });
+
+      // Update local state to show refreshing status
       setAccounts(prev => prev.map(a =>
         a.id === account.id ? { ...a, status: 'fetching' } : a
       ));
-      // Poll for status updates
-      const pollInterval = setInterval(async () => {
-        const updatedAccounts = await api.getM3UAccounts();
-        setAccounts(updatedAccounts);
-        const updatedAccount = updatedAccounts.find(a => a.id === account.id);
-        if (updatedAccount && (updatedAccount.status === 'success' || updatedAccount.status === 'error')) {
-          clearInterval(pollInterval);
-        }
-      }, 2000);
-      // Stop polling after 5 minutes
-      setTimeout(() => clearInterval(pollInterval), 300000);
     } catch (err) {
       setError('Failed to refresh M3U account');
     }
@@ -404,40 +461,38 @@ export function M3UManagerTab({
   };
 
   const handleRefreshAll = async () => {
-    setRefreshingAll(true);
     try {
       // Filter out the hidden "custom" account - don't refresh it
       const accountsToRefresh = accounts.filter(
         a => a.is_active && a.name.toLowerCase() !== 'custom'
       );
 
+      // Capture initial updated_at for all accounts
+      const now = Date.now();
+      const tracking = new Map<number, { initialUpdatedAt: string | null; startTime: number }>();
+      accountsToRefresh.forEach(a => {
+        tracking.set(a.id, {
+          initialUpdatedAt: a.updated_at || null,
+          startTime: now,
+        });
+      });
+
       // Trigger refresh for each account individually
       await Promise.all(accountsToRefresh.map(a => api.refreshM3UAccount(a.id)));
+
+      // Track all accounts as refreshing
+      setRefreshingAccounts(prev => {
+        const next = new Map(prev);
+        tracking.forEach((value, key) => next.set(key, value));
+        return next;
+      });
 
       // Mark these accounts as fetching
       setAccounts(prev => prev.map(a =>
         a.is_active && a.name.toLowerCase() !== 'custom' ? { ...a, status: 'fetching' } : a
       ));
-      // Poll for status updates
-      const pollInterval = setInterval(async () => {
-        const updatedAccounts = await api.getM3UAccounts();
-        setAccounts(updatedAccounts);
-        const stillRefreshing = updatedAccounts.some(
-          a => a.is_active && a.name.toLowerCase() !== 'custom' && (a.status === 'fetching' || a.status === 'parsing')
-        );
-        if (!stillRefreshing) {
-          clearInterval(pollInterval);
-          setRefreshingAll(false);
-        }
-      }, 2000);
-      // Stop polling after 10 minutes
-      setTimeout(() => {
-        clearInterval(pollInterval);
-        setRefreshingAll(false);
-      }, 600000);
     } catch (err) {
       setError('Failed to refresh M3U accounts');
-      setRefreshingAll(false);
     }
   };
 
@@ -678,9 +733,9 @@ export function M3UManagerTab({
             <span className={`material-icons ${syncingGroups ? 'spinning' : ''}`}>sync_alt</span>
             {syncingGroups ? 'Syncing...' : 'Sync Groups'}
           </button>
-          <button className="btn-secondary" onClick={handleRefreshAll} disabled={refreshingAll}>
-            <span className={`material-icons ${refreshingAll ? 'spinning' : ''}`}>sync</span>
-            {refreshingAll ? 'Refreshing...' : 'Refresh All'}
+          <button className="btn-secondary" onClick={handleRefreshAll} disabled={anyRefreshing}>
+            <span className={`material-icons ${anyRefreshing ? 'spinning' : ''}`}>sync</span>
+            {anyRefreshing ? 'Refreshing...' : 'Refresh All'}
           </button>
           <button className="btn-primary" onClick={handleAddAccount}>
             <span className="material-icons">add</span>
@@ -735,6 +790,7 @@ export function M3UManagerTab({
                 hideM3uUrls={hideM3uUrls}
                 priority={pendingPriorities[String(account.id)] ?? 0}
                 onPriorityChange={handlePriorityChange}
+                isBeingRefreshed={refreshingAccounts.has(account.id)}
               />
             ))}
           </div>

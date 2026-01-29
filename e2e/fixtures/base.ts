@@ -46,6 +46,7 @@ const tabContentSelectors: Record<string, string> = {
   'settings': '.settings-tab',
   'stats': '.stats-tab',
   'm3u-manager': '.m3u-manager-tab, [class*="m3u"]',
+  'm3u-changes': '.m3u-changes-tab',
   'epg-manager': '.epg-manager-tab, [class*="epg"]',
   'logo-manager': '.logo-manager-tab, [class*="logo"]',
   'guide': '.guide-tab',

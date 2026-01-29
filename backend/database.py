@@ -53,7 +53,7 @@ def init_db() -> None:
         _SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=_engine)
 
         # Import models to register them with Base
-        from models import JournalEntry, BandwidthDaily, ChannelWatchStats, HiddenChannelGroup, StreamStats, ScheduledTask, TaskSchedule, TaskExecution, Notification, AlertMethod  # noqa: F401
+        from models import JournalEntry, BandwidthDaily, ChannelWatchStats, HiddenChannelGroup, StreamStats, ScheduledTask, TaskSchedule, TaskExecution, Notification, AlertMethod, TagGroup, Tag, NormalizationRuleGroup, NormalizationRule  # noqa: F401
 
         # Create all tables
         Base.metadata.create_all(bind=_engine)
@@ -61,6 +61,9 @@ def init_db() -> None:
 
         # Run migrations for existing tables (add new columns if missing)
         _run_migrations(_engine)
+
+        # Create demo normalization rule groups if none exist
+        _create_demo_normalization_rules()
 
         # Perform maintenance: purge old entries and vacuum
         _perform_maintenance(_engine)
@@ -123,13 +126,65 @@ def _run_migrations(engine) -> None:
             # Remove min_interval_seconds column from alert_methods (v0.8.2-0028)
             _remove_min_interval_seconds_column(conn)
 
-            # Add parameters column to task_schedules (v0.8.6-0025)
+            # Add parameters column to task_schedules (v0.8.7)
             _add_task_schedule_parameters_column(conn)
+
+            # Add compound conditions columns to normalization_rules (v0.8.7)
+            _add_compound_conditions_columns(conn)
+
+            # Add tag_group and else_action columns to normalization_rules (v0.8.7)
+            _add_tag_group_and_else_columns(conn)
+
+            # Populate built-in tag groups (v0.8.7)
+            _populate_builtin_tags(conn)
+
+            # Convert normalization rules from built-in to editable (v0.8.7)
+            _convert_normalization_rules_to_editable(conn)
+
+            # Fix tag-group rule action types (v0.8.7)
+            _fix_tag_group_action_types(conn)
+
+            # Add enabled column to m3u_change_logs (v0.10.0)
+            _add_m3u_change_logs_enabled_column(conn)
+
+            # Add show_detailed_list column to m3u_digest_settings (v0.8.7)
+            _add_m3u_digest_show_detailed_list_column(conn)
+
+            # Add dispatcharr_updated_at column to m3u_snapshots (v0.8.7)
+            _add_m3u_snapshot_dispatcharr_updated_at_column(conn)
+
+            # Add alert configuration columns to scheduled_tasks (v0.8.7)
+            _add_scheduled_task_alert_columns(conn)
 
             logger.debug("All migrations complete - schema is up to date")
     except Exception as e:
         logger.exception(f"Migration failed: {e}")
         raise
+
+
+def _create_demo_normalization_rules() -> None:
+    """Create demo normalization rule groups if none exist.
+
+    This creates the 5 demo rule groups (Strip Quality Suffixes, Strip Country Prefixes,
+    etc.) that use tag-group-based conditions. Rules are disabled by default.
+    """
+    try:
+        db = _SessionLocal()
+        try:
+            from normalization_migration import create_demo_rules
+            result = create_demo_rules(db, force=False)
+            if result.get("skipped"):
+                logger.debug("Demo normalization rules already exist, skipping creation")
+            else:
+                groups = result.get("groups_created", 0)
+                rules = result.get("rules_created", 0)
+                if groups > 0:
+                    logger.info(f"Created {groups} demo normalization rule groups with {rules} rules")
+        finally:
+            db.close()
+    except Exception as e:
+        logger.warning(f"Could not create demo normalization rules: {e}")
+        # Non-fatal - don't block startup
 
 
 def _migrate_task_schedules(conn) -> None:
@@ -451,7 +506,7 @@ def _remove_min_interval_seconds_column(conn) -> None:
 
 
 def _add_task_schedule_parameters_column(conn) -> None:
-    """Add missing columns to task_schedules table (v0.8.6-0025)."""
+    """Add missing columns to task_schedules table (v0.8.7)."""
     from sqlalchemy import text
 
     # Check if task_schedules table exists
@@ -483,6 +538,492 @@ def _add_task_schedule_parameters_column(conn) -> None:
         ))
         conn.commit()
         logger.info("Migration complete: added last_run_at column to task_schedules")
+
+
+def _add_compound_conditions_columns(conn) -> None:
+    """Add compound conditions columns to normalization_rules table (v0.8.7)."""
+    from sqlalchemy import text
+
+    # Check if normalization_rules table exists
+    result = conn.execute(text(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='normalization_rules'"
+    ))
+    if not result.fetchone():
+        logger.debug("normalization_rules table doesn't exist yet, skipping migration")
+        return
+
+    # Get current columns
+    result = conn.execute(text("PRAGMA table_info(normalization_rules)"))
+    columns = [row[1] for row in result.fetchall()]
+
+    # Add conditions column if missing (JSON array of condition objects)
+    if "conditions" not in columns:
+        logger.info("Adding conditions column to normalization_rules table")
+        conn.execute(text(
+            "ALTER TABLE normalization_rules ADD COLUMN conditions TEXT"
+        ))
+        conn.commit()
+        logger.info("Migration complete: added conditions column to normalization_rules")
+
+    # Add condition_logic column if missing ("AND" or "OR")
+    if "condition_logic" not in columns:
+        logger.info("Adding condition_logic column to normalization_rules table")
+        conn.execute(text(
+            "ALTER TABLE normalization_rules ADD COLUMN condition_logic VARCHAR(3) DEFAULT 'AND' NOT NULL"
+        ))
+        conn.commit()
+        logger.info("Migration complete: added condition_logic column to normalization_rules")
+
+
+def _add_tag_group_and_else_columns(conn) -> None:
+    """Add tag_group and else_action columns to normalization_rules table (v0.8.7)."""
+    from sqlalchemy import text
+
+    # Check if normalization_rules table exists
+    result = conn.execute(text(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='normalization_rules'"
+    ))
+    if not result.fetchone():
+        logger.debug("normalization_rules table doesn't exist yet, skipping migration")
+        return
+
+    # Get current columns
+    result = conn.execute(text("PRAGMA table_info(normalization_rules)"))
+    columns = [row[1] for row in result.fetchall()]
+
+    # Add tag_group_id column if missing
+    if "tag_group_id" not in columns:
+        logger.info("Adding tag_group_id column to normalization_rules table")
+        conn.execute(text(
+            "ALTER TABLE normalization_rules ADD COLUMN tag_group_id INTEGER REFERENCES tag_groups(id) ON DELETE SET NULL"
+        ))
+        conn.commit()
+        logger.info("Migration complete: added tag_group_id column to normalization_rules")
+
+    # Add tag_match_position column if missing
+    if "tag_match_position" not in columns:
+        logger.info("Adding tag_match_position column to normalization_rules table")
+        conn.execute(text(
+            "ALTER TABLE normalization_rules ADD COLUMN tag_match_position VARCHAR(20)"
+        ))
+        conn.commit()
+        logger.info("Migration complete: added tag_match_position column to normalization_rules")
+
+    # Add else_action_type column if missing
+    if "else_action_type" not in columns:
+        logger.info("Adding else_action_type column to normalization_rules table")
+        conn.execute(text(
+            "ALTER TABLE normalization_rules ADD COLUMN else_action_type VARCHAR(20)"
+        ))
+        conn.commit()
+        logger.info("Migration complete: added else_action_type column to normalization_rules")
+
+    # Add else_action_value column if missing
+    if "else_action_value" not in columns:
+        logger.info("Adding else_action_value column to normalization_rules table")
+        conn.execute(text(
+            "ALTER TABLE normalization_rules ADD COLUMN else_action_value VARCHAR(500)"
+        ))
+        conn.commit()
+        logger.info("Migration complete: added else_action_value column to normalization_rules")
+
+
+def _populate_builtin_tags(conn) -> None:
+    """Populate built-in tag groups and tags (v0.8.7).
+
+    Creates the following built-in tag groups:
+    - Quality Tags: HD, FHD, UHD, 4K, SD, 1080P, etc.
+    - Country Tags: US, UK, CA, AU, BR, etc.
+    - Timezone Tags: EST, PST, ET, PT, etc.
+    - League Tags: NFL, NBA, MLB, NHL, etc.
+    - Network Tags: PPV, LIVE, BACKUP, VIP, etc.
+
+    Tag groups are built-in (immutable group names) but users can add custom tags.
+    """
+    from sqlalchemy import text
+
+    # Check if tag_groups table exists
+    result = conn.execute(text(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='tag_groups'"
+    ))
+    if not result.fetchone():
+        logger.debug("tag_groups table doesn't exist yet, skipping built-in tags population")
+        return
+
+    # Sync built-in tags - adds any missing groups and tags
+    # This runs on every startup to ensure new built-in tags are added to existing installations
+    logger.debug("Syncing built-in tag groups and tags")
+
+    # Define built-in tag groups and their tags
+    builtin_groups = {
+        "Quality Tags": {
+            "description": "Video quality indicators (HD, 4K, etc.)",
+            "tags": ["HD", "FHD", "UHD", "4K", "SD", "1080P", "1080I", "720P", "480P", "HEVC", "H264", "H265"]
+        },
+        "Country Tags": {
+            "description": "Country codes and abbreviations",
+            "tags": [
+                # North America
+                "US", "CA", "MX",
+                # Central America & Caribbean
+                "CR", "PA", "CU", "DO", "PR", "JM",
+                # South America
+                "BR", "AR", "CL", "CO", "PE", "VE", "EC", "UY", "PY", "BO",
+                # Western Europe
+                "UK", "GB", "DE", "FR", "ES", "IT", "NL", "BE", "PT", "AT", "CH", "IE",
+                # Northern Europe
+                "SE", "NO", "DK", "FI", "IS",
+                # Eastern Europe
+                "PL", "CZ", "SK", "HU", "RO", "BG", "HR", "SI", "RS", "UA", "RU", "BY",
+                # Southern Europe
+                "GR", "TR", "CY", "MT",
+                # Middle East
+                "AE", "SA", "QA", "KW", "BH", "OM", "IL", "JO", "LB", "IQ", "IR", "SY",
+                # North Africa
+                "EG", "MA", "DZ", "TN", "LY",
+                # Sub-Saharan Africa
+                "ZA", "NG", "KE", "GH", "ET", "TZ", "UG",
+                # South Asia
+                "IN", "PK", "BD", "LK", "NP",
+                # East Asia
+                "CN", "JP", "KR", "TW", "HK", "MO",
+                # Southeast Asia
+                "SG", "MY", "TH", "VN", "PH", "ID", "MM",
+                # Oceania
+                "AU", "NZ", "FJ"
+            ]
+        },
+        "Timezone Tags": {
+            "description": "Timezone abbreviations",
+            "tags": [
+                # Universal
+                "UTC", "GMT",
+                # US/Canada
+                "EST", "EDT", "ET", "CST", "CDT", "CT", "MST", "MDT", "MT",
+                "PST", "PDT", "PT", "AST", "ADT", "HST", "AKST", "AKDT",
+                # Europe
+                "CET", "CEST", "EET", "EEST", "WET", "WEST", "BST", "IST",
+                # Asia - East
+                "JST", "KST", "CST", "HKT", "PHT", "SGT", "MYT", "WIB", "WITA", "WIT",
+                # Asia - South
+                "IST", "PKT", "BST", "NPT", "BTT",
+                # Asia - Central/West
+                "ICT", "THA", "MMT",
+                # Middle East
+                "GST", "AST", "IRST", "TRT", "IDT",
+                # Australia/Pacific
+                "AEST", "AEDT", "ACST", "ACDT", "AWST", "NZST", "NZDT", "FJT",
+                # Americas (non-US)
+                "BRT", "BRST", "ART", "CLT", "CLST", "COT", "PET", "VET", "ECT",
+                # Africa
+                "CAT", "EAT", "WAT", "SAST", "CET"
+            ]
+        },
+        "League Tags": {
+            "description": "Sports league abbreviations",
+            "tags": [
+                # US Major Leagues
+                "NFL", "NBA", "MLB", "NHL", "MLS",
+                # US College & Other
+                "NCAA", "NCAAF", "NCAAB", "WNBA", "NWSL", "CFL", "XFL", "USFL",
+                # Soccer/Football - International
+                "FIFA", "UEFA", "UCL", "UEL",
+                # Soccer/Football - Europe
+                "EPL", "LA LIGA", "SERIE A", "BUNDESLIGA", "LIGUE 1",
+                "PREMIER LEAGUE", "FA CUP", "EREDIVISIE",
+                # Soccer/Football - Americas
+                "LIGA MX", "CPL", "CONMEBOL", "CONCACAF",
+                # Combat Sports
+                "UFC", "WWE", "AEW", "BELLATOR", "ONE", "PFL", "BOXING",
+                # Golf
+                "PGA", "LPGA", "LIV", "DP WORLD",
+                # Tennis
+                "ATP", "WTA", "US OPEN", "WIMBLEDON", "ROLAND GARROS",
+                # Motorsports
+                "F1", "NASCAR", "INDYCAR", "MOTOGP", "WRC", "NHRA",
+                # Basketball - International
+                "FIBA", "EUROLEAGUE",
+                # Hockey - US Minor Leagues
+                "AHL", "ECHL", "USHL", "SPHL",
+                # Hockey - International
+                "IIHF", "KHL",
+                # Cricket (CPL already listed under Soccer/Football - Americas)
+                "IPL", "BBL", "PSL", "ICC",
+                # Rugby
+                "SIX NATIONS", "SUPER RUGBY", "NRL", "PREMIERSHIP RUGBY",
+                # Australian Sports
+                "AFL", "A-LEAGUE",
+                # Other
+                "OLYMPICS", "X GAMES"
+            ]
+        },
+        "Network Tags": {
+            "description": "Network and stream type indicators",
+            "tags": ["PPV", "LIVE", "BACKUP", "VIP", "PREMIUM", "24/7", "REPLAY"]
+        }
+    }
+
+    groups_created = 0
+    tags_added = 0
+
+    for group_name, group_data in builtin_groups.items():
+        # Check if group exists
+        result = conn.execute(text("SELECT id FROM tag_groups WHERE name = :name"), {"name": group_name})
+        row = result.fetchone()
+
+        if row:
+            group_id = row[0]
+        else:
+            # Create the group
+            conn.execute(text("""
+                INSERT INTO tag_groups (name, description, is_builtin, created_at, updated_at)
+                VALUES (:name, :description, 1, datetime('now'), datetime('now'))
+            """), {"name": group_name, "description": group_data["description"]})
+            result = conn.execute(text("SELECT id FROM tag_groups WHERE name = :name"), {"name": group_name})
+            group_id = result.fetchone()[0]
+            groups_created += 1
+            logger.info(f"Created built-in group '{group_name}'")
+
+        # Get existing tags for this group
+        result = conn.execute(text("SELECT value FROM tags WHERE group_id = :group_id"), {"group_id": group_id})
+        existing_tags = set(row[0] for row in result.fetchall())
+
+        # Deduplicate the tag list (in case of duplicates like CPL)
+        unique_tags = list(dict.fromkeys(group_data["tags"]))
+
+        # Insert missing tags
+        for tag_value in unique_tags:
+            if tag_value not in existing_tags:
+                conn.execute(text("""
+                    INSERT INTO tags (group_id, value, case_sensitive, enabled, is_builtin)
+                    VALUES (:group_id, :value, 0, 1, 1)
+                """), {"group_id": group_id, "value": tag_value})
+                tags_added += 1
+
+    conn.commit()
+
+    if groups_created > 0 or tags_added > 0:
+        logger.info(f"Built-in tags sync complete: {groups_created} groups created, {tags_added} tags added")
+    else:
+        logger.debug("Built-in tags sync complete: no changes needed")
+
+
+def _convert_normalization_rules_to_editable(conn) -> None:
+    """Convert normalization rule groups and rules from built-in to editable (v0.8.7).
+
+    This migration changes is_builtin from 1 to 0 for all normalization rules,
+    making them fully editable and deletable by users. Preserves all other
+    settings (enabled status, customizations, etc.).
+    """
+    from sqlalchemy import text
+
+    # Check if normalization_rule_groups table exists
+    result = conn.execute(text(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='normalization_rule_groups'"
+    ))
+    if not result.fetchone():
+        logger.debug("normalization_rule_groups table doesn't exist yet, skipping conversion")
+        return
+
+    # Count how many built-in rules exist
+    result = conn.execute(text("SELECT COUNT(*) FROM normalization_rule_groups WHERE is_builtin = 1"))
+    builtin_groups = result.fetchone()[0]
+
+    result = conn.execute(text("SELECT COUNT(*) FROM normalization_rules WHERE is_builtin = 1"))
+    builtin_rules = result.fetchone()[0]
+
+    if builtin_groups == 0 and builtin_rules == 0:
+        logger.debug("No built-in normalization rules to convert")
+        return
+
+    # Convert all built-in rule groups to editable
+    if builtin_groups > 0:
+        conn.execute(text("UPDATE normalization_rule_groups SET is_builtin = 0 WHERE is_builtin = 1"))
+        logger.info(f"Converted {builtin_groups} normalization rule groups from built-in to editable")
+
+    # Convert all built-in rules to editable
+    if builtin_rules > 0:
+        conn.execute(text("UPDATE normalization_rules SET is_builtin = 0 WHERE is_builtin = 1"))
+        logger.info(f"Converted {builtin_rules} normalization rules from built-in to editable")
+
+    conn.commit()
+
+
+def _fix_tag_group_action_types(conn) -> None:
+    """Fix action types for tag-group-based normalization rules (v0.8.7).
+
+    Rules using tag_group conditions with prefix/suffix position should use
+    strip_prefix/strip_suffix instead of 'remove' to properly handle
+    separator characters (: | - /).
+    """
+    from sqlalchemy import text
+
+    # Check if normalization_rules table exists
+    result = conn.execute(text(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='normalization_rules'"
+    ))
+    if not result.fetchone():
+        logger.debug("normalization_rules table doesn't exist yet, skipping action type fix")
+        return
+
+    # Update prefix rules: remove -> strip_prefix
+    result = conn.execute(text("""
+        UPDATE normalization_rules
+        SET action_type = 'strip_prefix'
+        WHERE condition_type = 'tag_group'
+          AND tag_match_position = 'prefix'
+          AND action_type = 'remove'
+    """))
+    prefix_updated = result.rowcount
+
+    # Update suffix rules: remove -> strip_suffix
+    result = conn.execute(text("""
+        UPDATE normalization_rules
+        SET action_type = 'strip_suffix'
+        WHERE condition_type = 'tag_group'
+          AND tag_match_position = 'suffix'
+          AND action_type = 'remove'
+    """))
+    suffix_updated = result.rowcount
+
+    total_updated = prefix_updated + suffix_updated
+    if total_updated > 0:
+        conn.commit()
+        logger.info(f"Fixed {total_updated} tag-group rules to use strip_prefix/strip_suffix actions")
+    else:
+        logger.debug("No tag-group rules needed action type fixes")
+
+
+def _add_m3u_change_logs_enabled_column(conn) -> None:
+    """Add enabled column to m3u_change_logs table (v0.10.0).
+
+    Tracks whether a group is enabled in the M3U account.
+    """
+    from sqlalchemy import text
+
+    # Check if m3u_change_logs table exists
+    result = conn.execute(text(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='m3u_change_logs'"
+    ))
+    if not result.fetchone():
+        logger.debug("m3u_change_logs table doesn't exist yet, skipping enabled column migration")
+        return
+
+    # Check if enabled column already exists
+    result = conn.execute(text("PRAGMA table_info(m3u_change_logs)"))
+    columns = [row[1] for row in result.fetchall()]
+
+    if "enabled" not in columns:
+        logger.info("Adding enabled column to m3u_change_logs")
+        conn.execute(text(
+            "ALTER TABLE m3u_change_logs ADD COLUMN enabled BOOLEAN DEFAULT 0 NOT NULL"
+        ))
+        conn.commit()
+        logger.info("Migration complete: added enabled column to m3u_change_logs")
+    else:
+        logger.debug("m3u_change_logs.enabled column already exists")
+
+
+def _add_m3u_digest_show_detailed_list_column(conn) -> None:
+    """Add show_detailed_list column to m3u_digest_settings table."""
+    from sqlalchemy import text
+
+    # Check if m3u_digest_settings table exists
+    result = conn.execute(text(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='m3u_digest_settings'"
+    ))
+    if not result.fetchone():
+        logger.debug("m3u_digest_settings table doesn't exist yet, skipping migration")
+        return
+
+    # Check if show_detailed_list column already exists
+    result = conn.execute(text("PRAGMA table_info(m3u_digest_settings)"))
+    columns = [row[1] for row in result.fetchall()]
+
+    if "show_detailed_list" not in columns:
+        logger.info("Adding show_detailed_list column to m3u_digest_settings")
+        conn.execute(text(
+            "ALTER TABLE m3u_digest_settings ADD COLUMN show_detailed_list BOOLEAN DEFAULT 1 NOT NULL"
+        ))
+        conn.commit()
+        logger.info("Migration complete: added show_detailed_list column to m3u_digest_settings")
+    else:
+        logger.debug("m3u_digest_settings.show_detailed_list column already exists")
+
+
+def _add_m3u_snapshot_dispatcharr_updated_at_column(conn) -> None:
+    """Add dispatcharr_updated_at column to m3u_snapshots table for change monitoring."""
+    from sqlalchemy import text
+
+    # Check if m3u_snapshots table exists
+    result = conn.execute(text(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='m3u_snapshots'"
+    ))
+    if not result.fetchone():
+        logger.debug("m3u_snapshots table doesn't exist yet, skipping migration")
+        return
+
+    # Check if dispatcharr_updated_at column already exists
+    result = conn.execute(text("PRAGMA table_info(m3u_snapshots)"))
+    columns = [row[1] for row in result.fetchall()]
+
+    if "dispatcharr_updated_at" not in columns:
+        logger.info("Adding dispatcharr_updated_at column to m3u_snapshots")
+        conn.execute(text(
+            "ALTER TABLE m3u_snapshots ADD COLUMN dispatcharr_updated_at VARCHAR(50)"
+        ))
+        conn.commit()
+        logger.info("Migration complete: added dispatcharr_updated_at column to m3u_snapshots")
+    else:
+        logger.debug("m3u_snapshots.dispatcharr_updated_at column already exists")
+
+
+def _add_scheduled_task_alert_columns(conn) -> None:
+    """Add alert configuration columns to scheduled_tasks table."""
+    from sqlalchemy import text
+
+    # Check if scheduled_tasks table exists
+    result = conn.execute(text(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='scheduled_tasks'"
+    ))
+    if not result.fetchone():
+        logger.debug("scheduled_tasks table doesn't exist yet, skipping alert columns migration")
+        return
+
+    # Check which columns already exist
+    result = conn.execute(text("PRAGMA table_info(scheduled_tasks)"))
+    columns = [row[1] for row in result.fetchall()]
+
+    # Add send_alerts column if not exists
+    if "send_alerts" not in columns:
+        logger.info("Adding send_alerts column to scheduled_tasks")
+        conn.execute(text(
+            "ALTER TABLE scheduled_tasks ADD COLUMN send_alerts BOOLEAN DEFAULT 1 NOT NULL"
+        ))
+
+    # Add alert_on_success column if not exists
+    if "alert_on_success" not in columns:
+        logger.info("Adding alert_on_success column to scheduled_tasks")
+        conn.execute(text(
+            "ALTER TABLE scheduled_tasks ADD COLUMN alert_on_success BOOLEAN DEFAULT 1 NOT NULL"
+        ))
+
+    # Add alert_on_warning column if not exists
+    if "alert_on_warning" not in columns:
+        logger.info("Adding alert_on_warning column to scheduled_tasks")
+        conn.execute(text(
+            "ALTER TABLE scheduled_tasks ADD COLUMN alert_on_warning BOOLEAN DEFAULT 1 NOT NULL"
+        ))
+
+    # Add alert_on_error column if not exists
+    if "alert_on_error" not in columns:
+        logger.info("Adding alert_on_error column to scheduled_tasks")
+        conn.execute(text(
+            "ALTER TABLE scheduled_tasks ADD COLUMN alert_on_error BOOLEAN DEFAULT 1 NOT NULL"
+        ))
+
+    conn.commit()
+    logger.debug("scheduled_tasks alert columns migration complete")
 
 
 def _perform_maintenance(engine) -> None:

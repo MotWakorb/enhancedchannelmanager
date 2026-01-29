@@ -25,15 +25,41 @@ import type {
   ChannelStatsResponse,
   ChannelStats,
   SystemEventsResponse,
+  NormalizationRuleGroup,
+  NormalizationRule,
+  CreateRuleGroupRequest,
+  UpdateRuleGroupRequest,
+  CreateRuleRequest,
+  UpdateRuleRequest,
+  TestRuleRequest,
+  TestRuleResult,
+  NormalizationBatchResponse,
+  NormalizationMigrationStatus,
+  NormalizationMigrationResult,
+  TagGroup,
+  Tag,
+  CreateTagGroupRequest,
+  UpdateTagGroupRequest,
+  AddTagsRequest,
+  AddTagsResponse,
+  UpdateTagRequest,
+  TestTagsResponse,
+  // M3U Change Tracking
+  M3USnapshot,
+  M3UChangeLog,
+  M3UChangesResponse,
+  M3UChangeSummary,
+  M3UDigestSettings,
+  M3UDigestSettingsUpdate,
+  M3UChangeType,
 } from '../types';
 import { logger } from '../utils/logger';
 import {
   type TimezonePreference,
-  type NormalizeOptions,
   type NumberSeparator,
-  type PrefixOrder,
   getStreamQualityPriority,
   sortStreamsByQuality,
+  stripQualitySuffixes,
   stripNetworkPrefix,
   hasNetworkPrefix,
   detectNetworkPrefixes,
@@ -46,19 +72,18 @@ import {
   getUniqueCountryPrefixes,
   getRegionalSuffix,
   detectRegionalVariants,
-  normalizeStreamName,
   filterStreamsByTimezone,
+  normalizeStreamNamesWithBackend,
 } from './streamNormalization';
 // Re-export stream normalization utilities for backward compatibility
 export type {
   TimezonePreference,
-  NormalizeOptions,
   NumberSeparator,
-  PrefixOrder,
 };
 export {
   getStreamQualityPriority,
   sortStreamsByQuality,
+  stripQualitySuffixes,
   stripNetworkPrefix,
   hasNetworkPrefix,
   detectNetworkPrefixes,
@@ -71,8 +96,8 @@ export {
   getUniqueCountryPrefixes,
   getRegionalSuffix,
   detectRegionalVariants,
-  normalizeStreamName,
   filterStreamsByTimezone,
+  normalizeStreamNamesWithBackend,
 };
 
 const API_BASE = '/api';
@@ -204,6 +229,7 @@ export async function createChannel(data: {
   channel_group_id?: number;
   logo_id?: number;
   tvg_id?: string;
+  normalize?: boolean;  // Apply normalization rules to channel name
 }): Promise<Channel> {
   return fetchJson(`${API_BASE}/channels`, {
     method: 'POST',
@@ -393,9 +419,12 @@ export async function getStreams(params?: {
   return fetchJson(`${API_BASE}/streams${query}`, { signal: params?.signal });
 }
 
-export async function getStreamGroups(bypassCache?: boolean): Promise<StreamGroupInfo[]> {
-  const params = bypassCache ? '?bypass_cache=true' : '';
-  return fetchJson(`${API_BASE}/stream-groups${params}`);
+export async function getStreamGroups(bypassCache?: boolean, m3uAccountId?: number | null): Promise<StreamGroupInfo[]> {
+  const queryParams: string[] = [];
+  if (bypassCache) queryParams.push('bypass_cache=true');
+  if (m3uAccountId !== undefined && m3uAccountId !== null) queryParams.push(`m3u_account_id=${m3uAccountId}`);
+  const query = queryParams.length > 0 ? `?${queryParams.join('&')}` : '';
+  return fetchJson(`${API_BASE}/stream-groups${query}`);
 }
 
 export async function invalidateCache(prefix?: string): Promise<{ message: string }> {
@@ -709,23 +738,6 @@ export type M3UAccountPriorities = Record<string, number>;
 
 export type GracenoteConflictMode = 'ask' | 'skip' | 'overwrite';
 
-// Normalization tag mode - where the tag should be matched
-export type NormalizationTagMode = 'prefix' | 'suffix' | 'both';
-
-// A single normalization tag with its matching mode
-export interface NormalizationTag {
-  value: string;
-  mode: NormalizationTagMode;
-}
-
-// User-configurable normalization settings
-export interface NormalizationSettings {
-  // Built-in tags that user has disabled (by group:value key, e.g., "country:US")
-  disabledBuiltinTags: string[];
-  // User-added custom tags
-  customTags: NormalizationTag[];
-}
-
 export interface SettingsResponse {
   url: string;
   username: string;
@@ -769,7 +781,16 @@ export interface SettingsResponse {
   stream_sort_enabled: SortEnabledMap;  // Which sort criteria are enabled (e.g., { resolution: true, bitrate: true, framerate: false })
   m3u_account_priorities: M3UAccountPriorities;  // M3U account priorities for sorting (account_id -> priority)
   deprioritize_failed_streams: boolean;  // When enabled, failed/timeout/pending streams sort to bottom
-  normalization_settings: NormalizationSettings;  // User-configurable normalization tag settings
+  normalize_on_channel_create: boolean;  // Default state for normalization toggle when creating channels
+  // Shared SMTP settings
+  smtp_configured: boolean;  // Whether shared SMTP is configured
+  smtp_host: string;
+  smtp_port: number;
+  smtp_user: string;
+  smtp_from_email: string;
+  smtp_from_name: string;
+  smtp_use_tls: boolean;
+  smtp_use_ssl: boolean;
 }
 
 export interface TestConnectionResult {
@@ -823,7 +844,16 @@ export async function saveSettings(settings: {
   stream_sort_enabled?: SortEnabledMap;  // Optional - which sort criteria are enabled, defaults to all true
   m3u_account_priorities?: M3UAccountPriorities;  // Optional - M3U account priorities for sorting
   deprioritize_failed_streams?: boolean;  // Optional - deprioritize failed/timeout/pending streams in sort, defaults to true
-  normalization_settings?: NormalizationSettings;  // Optional - user-configurable normalization tags
+  normalize_on_channel_create?: boolean;  // Optional - default state for normalization toggle, defaults to false
+  // Shared SMTP settings
+  smtp_host?: string;  // Optional - SMTP server hostname
+  smtp_port?: number;  // Optional - SMTP port, defaults to 587
+  smtp_user?: string;  // Optional - SMTP username
+  smtp_password?: string;  // Optional - SMTP password (only send if changing)
+  smtp_from_email?: string;  // Optional - From email address
+  smtp_from_name?: string;  // Optional - From display name, defaults to "ECM Alerts"
+  smtp_use_tls?: boolean;  // Optional - Use TLS, defaults to true
+  smtp_use_ssl?: boolean;  // Optional - Use SSL, defaults to false
 }): Promise<{ status: string; configured: boolean }> {
   return fetchJson(`${API_BASE}/settings`, {
     method: 'POST',
@@ -837,6 +867,25 @@ export async function testConnection(settings: {
   password: string;
 }): Promise<TestConnectionResult> {
   return fetchJson(`${API_BASE}/settings/test`, {
+    method: 'POST',
+    body: JSON.stringify(settings),
+  });
+}
+
+export interface SMTPTestRequest {
+  smtp_host: string;
+  smtp_port: number;
+  smtp_user: string;
+  smtp_password: string;
+  smtp_from_email: string;
+  smtp_from_name: string;
+  smtp_use_tls: boolean;
+  smtp_use_ssl: boolean;
+  to_email: string;  // Test recipient email
+}
+
+export async function testSmtpConnection(settings: SMTPTestRequest): Promise<TestConnectionResult> {
+  return fetchJson(`${API_BASE}/settings/test-smtp`, {
     method: 'POST',
     body: JSON.stringify(settings),
   });
@@ -1730,6 +1779,11 @@ export interface TaskStatus {
   last_run: string | null;
   next_run: string | null;
   config: Record<string, unknown>;  // Task-specific configuration
+  // Alert configuration
+  send_alerts?: boolean;  // Master toggle for alerts
+  alert_on_success?: boolean;  // Alert when task succeeds
+  alert_on_warning?: boolean;  // Alert on partial failures
+  alert_on_error?: boolean;  // Alert on complete failures
 }
 
 export interface TaskExecution {
@@ -1758,6 +1812,11 @@ export interface TaskConfigUpdate {
   schedule_time?: string;
   timezone?: string;
   config?: Record<string, unknown>;  // Task-specific configuration
+  // Alert configuration
+  send_alerts?: boolean;  // Master toggle for alerts
+  alert_on_success?: boolean;  // Alert when task succeeds
+  alert_on_warning?: boolean;  // Alert on partial failures
+  alert_on_error?: boolean;  // Alert on complete failures
 }
 
 export interface CronPreset {
@@ -2116,6 +2175,355 @@ export async function deleteAlertMethod(methodId: number): Promise<{ success: bo
 
 export async function testAlertMethod(methodId: number): Promise<{ success: boolean; message: string }> {
   return fetchJson(`${API_BASE}/alert-methods/${methodId}/test`, {
+    method: 'POST',
+  });
+}
+
+// =============================================================================
+// Normalization Rules API
+// =============================================================================
+
+/**
+ * Get all normalization rule groups
+ */
+export async function getNormalizationGroups(): Promise<{ groups: NormalizationRuleGroup[] }> {
+  return fetchJson(`${API_BASE}/normalization/groups`);
+}
+
+/**
+ * Get a single normalization rule group by ID
+ */
+export async function getNormalizationGroup(groupId: number): Promise<NormalizationRuleGroup> {
+  return fetchJson(`${API_BASE}/normalization/groups/${groupId}`);
+}
+
+/**
+ * Create a new normalization rule group
+ */
+export async function createNormalizationGroup(data: CreateRuleGroupRequest): Promise<NormalizationRuleGroup> {
+  return fetchJson(`${API_BASE}/normalization/groups`, {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
+/**
+ * Update a normalization rule group
+ */
+export async function updateNormalizationGroup(groupId: number, data: UpdateRuleGroupRequest): Promise<NormalizationRuleGroup> {
+  return fetchJson(`${API_BASE}/normalization/groups/${groupId}`, {
+    method: 'PATCH',
+    body: JSON.stringify(data),
+  });
+}
+
+/**
+ * Delete a normalization rule group
+ */
+export async function deleteNormalizationGroup(groupId: number): Promise<{ status: string; id: number }> {
+  return fetchJson(`${API_BASE}/normalization/groups/${groupId}`, {
+    method: 'DELETE',
+  });
+}
+
+/**
+ * Reorder normalization rule groups
+ */
+export async function reorderNormalizationGroups(groupIds: number[]): Promise<{ status: string }> {
+  return fetchJson(`${API_BASE}/normalization/groups/reorder`, {
+    method: 'POST',
+    body: JSON.stringify({ group_ids: groupIds }),
+  });
+}
+
+/**
+ * Get all normalization rules (optionally filtered by group)
+ */
+export async function getNormalizationRules(groupId?: number): Promise<{ groups: NormalizationRuleGroup[] }> {
+  const query = groupId ? `?group_id=${groupId}` : '';
+  return fetchJson(`${API_BASE}/normalization/rules${query}`);
+}
+
+/**
+ * Get a single normalization rule by ID
+ */
+export async function getNormalizationRule(ruleId: number): Promise<NormalizationRule> {
+  return fetchJson(`${API_BASE}/normalization/rules/${ruleId}`);
+}
+
+/**
+ * Create a new normalization rule
+ */
+export async function createNormalizationRule(data: CreateRuleRequest): Promise<NormalizationRule> {
+  return fetchJson(`${API_BASE}/normalization/rules`, {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
+/**
+ * Update a normalization rule
+ */
+export async function updateNormalizationRule(ruleId: number, data: UpdateRuleRequest): Promise<NormalizationRule> {
+  return fetchJson(`${API_BASE}/normalization/rules/${ruleId}`, {
+    method: 'PATCH',
+    body: JSON.stringify(data),
+  });
+}
+
+/**
+ * Delete a normalization rule
+ */
+export async function deleteNormalizationRule(ruleId: number): Promise<{ status: string; id: number }> {
+  return fetchJson(`${API_BASE}/normalization/rules/${ruleId}`, {
+    method: 'DELETE',
+  });
+}
+
+/**
+ * Reorder rules within a group
+ */
+export async function reorderNormalizationRules(groupId: number, ruleIds: number[]): Promise<{ status: string }> {
+  return fetchJson(`${API_BASE}/normalization/groups/${groupId}/rules/reorder`, {
+    method: 'POST',
+    body: JSON.stringify({ rule_ids: ruleIds }),
+  });
+}
+
+/**
+ * Test a single rule configuration without saving
+ */
+export async function testNormalizationRule(data: TestRuleRequest): Promise<TestRuleResult> {
+  return fetchJson(`${API_BASE}/normalization/test`, {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
+/**
+ * Test multiple texts through all enabled rules (with transformation details)
+ */
+export async function testNormalizationBatch(texts: string[]): Promise<NormalizationBatchResponse> {
+  return fetchJson(`${API_BASE}/normalization/test-batch`, {
+    method: 'POST',
+    body: JSON.stringify({ texts }),
+  });
+}
+
+/**
+ * Normalize texts through all enabled rules (simple result)
+ */
+export async function normalizeTexts(texts: string[]): Promise<NormalizationBatchResponse> {
+  return fetchJson(`${API_BASE}/normalization/normalize`, {
+    method: 'POST',
+    body: JSON.stringify({ texts }),
+  });
+}
+
+/**
+ * Get normalization migration status
+ */
+export async function getNormalizationMigrationStatus(): Promise<NormalizationMigrationStatus> {
+  return fetchJson(`${API_BASE}/normalization/migration/status`);
+}
+
+/**
+ * Run normalization migration to create built-in rules
+ */
+export async function runNormalizationMigration(force?: boolean): Promise<NormalizationMigrationResult> {
+  const query = force ? '?force=true' : '';
+  return fetchJson(`${API_BASE}/normalization/migration/run${query}`, {
+    method: 'POST',
+  });
+}
+
+// =============================================================================
+// Tag Engine API
+// =============================================================================
+
+/**
+ * Get all tag groups with tag counts
+ */
+export async function getTagGroups(): Promise<{ groups: TagGroup[] }> {
+  return fetchJson(`${API_BASE}/tags/groups`);
+}
+
+/**
+ * Get a single tag group with all its tags
+ */
+export async function getTagGroup(groupId: number): Promise<TagGroup> {
+  return fetchJson(`${API_BASE}/tags/groups/${groupId}`);
+}
+
+/**
+ * Create a new tag group
+ */
+export async function createTagGroup(data: CreateTagGroupRequest): Promise<TagGroup> {
+  return fetchJson(`${API_BASE}/tags/groups`, {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
+/**
+ * Update a tag group
+ */
+export async function updateTagGroup(groupId: number, data: UpdateTagGroupRequest): Promise<TagGroup> {
+  return fetchJson(`${API_BASE}/tags/groups/${groupId}`, {
+    method: 'PATCH',
+    body: JSON.stringify(data),
+  });
+}
+
+/**
+ * Delete a tag group (cannot delete built-in groups)
+ */
+export async function deleteTagGroup(groupId: number): Promise<{ status: string; id: number }> {
+  return fetchJson(`${API_BASE}/tags/groups/${groupId}`, {
+    method: 'DELETE',
+  });
+}
+
+/**
+ * Add tags to a group (supports bulk add)
+ */
+export async function addTagsToGroup(groupId: number, data: AddTagsRequest): Promise<AddTagsResponse> {
+  return fetchJson(`${API_BASE}/tags/groups/${groupId}/tags`, {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
+/**
+ * Update a tag (enabled, case_sensitive)
+ */
+export async function updateTag(groupId: number, tagId: number, data: UpdateTagRequest): Promise<Tag> {
+  return fetchJson(`${API_BASE}/tags/groups/${groupId}/tags/${tagId}`, {
+    method: 'PATCH',
+    body: JSON.stringify(data),
+  });
+}
+
+/**
+ * Delete a tag from a group (cannot delete built-in tags)
+ */
+export async function deleteTag(groupId: number, tagId: number): Promise<{ status: string; id: number }> {
+  return fetchJson(`${API_BASE}/tags/groups/${groupId}/tags/${tagId}`, {
+    method: 'DELETE',
+  });
+}
+
+/**
+ * Test text against a tag group to find matches
+ */
+export async function testTagGroup(groupId: number, text: string): Promise<TestTagsResponse> {
+  return fetchJson(`${API_BASE}/tags/test`, {
+    method: 'POST',
+    body: JSON.stringify({ group_id: groupId, text }),
+  });
+}
+
+// =============================================================================
+// M3U Change Tracking API
+// =============================================================================
+
+/**
+ * Get paginated list of M3U change logs
+ */
+export async function getM3UChanges(params?: {
+  page?: number;
+  pageSize?: number;
+  m3uAccountId?: number;
+  changeType?: M3UChangeType;
+  enabled?: boolean;
+  sortBy?: string;
+  sortOrder?: 'asc' | 'desc';
+  dateFrom?: string;  // ISO timestamp
+  dateTo?: string;    // ISO timestamp
+}): Promise<M3UChangesResponse> {
+  const query = buildQuery({
+    page: params?.page,
+    page_size: params?.pageSize,
+    m3u_account_id: params?.m3uAccountId,
+    change_type: params?.changeType,
+    enabled: params?.enabled,
+    sort_by: params?.sortBy,
+    sort_order: params?.sortOrder,
+    date_from: params?.dateFrom,
+    date_to: params?.dateTo,
+  });
+  return fetchJson(`${API_BASE}/m3u/changes${query}`);
+}
+
+/**
+ * Get change history for a specific M3U account
+ */
+export async function getM3UAccountChanges(
+  accountId: number,
+  params?: {
+    page?: number;
+    pageSize?: number;
+    changeType?: M3UChangeType;
+  }
+): Promise<M3UChangesResponse> {
+  const query = buildQuery({
+    page: params?.page,
+    page_size: params?.pageSize,
+    change_type: params?.changeType,
+  });
+  return fetchJson(`${API_BASE}/m3u/accounts/${accountId}/changes${query}`);
+}
+
+/**
+ * Get aggregated summary of M3U changes
+ */
+export async function getM3UChangesSummary(params?: {
+  hours?: number;  // Look back this many hours (default: 24)
+  m3uAccountId?: number;
+}): Promise<M3UChangeSummary> {
+  const query = buildQuery({
+    hours: params?.hours,
+    m3u_account_id: params?.m3uAccountId,
+  });
+  return fetchJson(`${API_BASE}/m3u/changes/summary${query}`);
+}
+
+/**
+ * Get recent M3U snapshots
+ */
+export async function getM3USnapshots(params?: {
+  m3uAccountId?: number;
+  limit?: number;
+}): Promise<M3USnapshot[]> {
+  const query = buildQuery({
+    m3u_account_id: params?.m3uAccountId,
+    limit: params?.limit,
+  });
+  return fetchJson(`${API_BASE}/m3u/snapshots${query}`);
+}
+
+/**
+ * Get M3U digest email settings
+ */
+export async function getM3UDigestSettings(): Promise<M3UDigestSettings> {
+  return fetchJson(`${API_BASE}/m3u/digest/settings`);
+}
+
+/**
+ * Update M3U digest email settings
+ */
+export async function updateM3UDigestSettings(data: M3UDigestSettingsUpdate): Promise<M3UDigestSettings> {
+  return fetchJson(`${API_BASE}/m3u/digest/settings`, {
+    method: 'PUT',
+    body: JSON.stringify(data),
+  });
+}
+
+/**
+ * Send a test digest email
+ */
+export async function sendTestM3UDigest(): Promise<{ success: boolean; message: string }> {
+  return fetchJson(`${API_BASE}/m3u/digest/test`, {
     method: 'POST',
   });
 }

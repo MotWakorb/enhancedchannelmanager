@@ -131,6 +131,35 @@ class TaskEngine:
         try:
             # Import here to avoid circular imports
             from main import create_notification_internal
+            from models import ScheduledTask
+
+            # Check task-level alert settings
+            should_send_alert = True
+            try:
+                session = get_session()
+                try:
+                    scheduled_task = session.query(ScheduledTask).filter(
+                        ScheduledTask.task_id == task_id
+                    ).first()
+                    if scheduled_task:
+                        # Check master toggle first
+                        if not scheduled_task.send_alerts:
+                            should_send_alert = False
+                            logger.debug(f"[{task_id}] Alerts disabled for this task (send_alerts=False)")
+                        # Check type-specific toggle
+                        elif notification_type == "success" and not scheduled_task.alert_on_success:
+                            should_send_alert = False
+                            logger.debug(f"[{task_id}] Success alerts disabled for this task")
+                        elif notification_type == "warning" and not scheduled_task.alert_on_warning:
+                            should_send_alert = False
+                            logger.debug(f"[{task_id}] Warning alerts disabled for this task")
+                        elif notification_type == "error" and not scheduled_task.alert_on_error:
+                            should_send_alert = False
+                            logger.debug(f"[{task_id}] Error alerts disabled for this task")
+                finally:
+                    session.close()
+            except Exception as e:
+                logger.warning(f"[{task_id}] Failed to check task alert settings, defaulting to send: {e}")
 
             metadata = {
                 "task_id": task_id,
@@ -161,7 +190,7 @@ class TaskEngine:
                 source="task",
                 source_id=task_id,
                 metadata=metadata,
-                send_alerts=True,
+                send_alerts=should_send_alert,
                 alert_category=alert_category,
             )
         except Exception as e:

@@ -11,7 +11,8 @@ from sqlalchemy.orm import Session
 
 from models import (
     JournalEntry, BandwidthDaily, ChannelWatchStats, HiddenChannelGroup,
-    StreamStats, ScheduledTask, TaskSchedule, TaskExecution, Notification, AlertMethod
+    StreamStats, ScheduledTask, TaskSchedule, TaskExecution, Notification, AlertMethod,
+    TagGroup, Tag, NormalizationRuleGroup, NormalizationRule
 )
 
 
@@ -730,5 +731,237 @@ def create_telegram_alert(
             "bot_token": bot_token or f"test_bot_{counter}",
             "chat_id": chat_id or f"test_chat_{counter}"
         },
+        **kwargs
+    )
+
+
+# -----------------------------------------------------------------------------
+# TagGroup Factory
+# -----------------------------------------------------------------------------
+
+def create_tag_group(
+    session: Session,
+    name: str = None,
+    description: str = None,
+    is_builtin: bool = False,
+    **kwargs
+) -> TagGroup:
+    """Create a TagGroup instance.
+
+    Args:
+        session: Database session
+        name: Group name (e.g., "Quality Tags")
+        description: Optional description
+        is_builtin: Whether this is a system-created group
+
+    Returns:
+        Created and committed TagGroup instance
+    """
+    counter = _next_id()
+    group = TagGroup(
+        name=name or f"Test Tag Group {counter}",
+        description=description or f"Description for group {counter}",
+        is_builtin=is_builtin,
+        **kwargs
+    )
+    session.add(group)
+    session.commit()
+    session.refresh(group)
+    return group
+
+
+def create_quality_tag_group(
+    session: Session,
+    **kwargs
+) -> TagGroup:
+    """Create a Quality Tags group with common quality tags.
+
+    Convenience factory for quality tag groups.
+    """
+    group = create_tag_group(
+        session,
+        name="Quality Tags",
+        description="Video quality indicators",
+        **kwargs
+    )
+    # Add common quality tags
+    for tag_value in ["HD", "FHD", "UHD", "4K", "SD", "1080P", "720P"]:
+        create_tag(session, group_id=group.id, value=tag_value)
+    return group
+
+
+# -----------------------------------------------------------------------------
+# Tag Factory
+# -----------------------------------------------------------------------------
+
+def create_tag(
+    session: Session,
+    group_id: int,
+    value: str = None,
+    case_sensitive: bool = False,
+    enabled: bool = True,
+    is_builtin: bool = False,
+    **kwargs
+) -> Tag:
+    """Create a Tag instance.
+
+    Args:
+        session: Database session
+        group_id: ID of the parent TagGroup
+        value: Tag value (e.g., "HD", "US")
+        case_sensitive: Whether to match case
+        enabled: Whether tag is active
+        is_builtin: Whether this is a system-created tag
+
+    Returns:
+        Created and committed Tag instance
+    """
+    counter = _next_id()
+    tag = Tag(
+        group_id=group_id,
+        value=value or f"TAG{counter}",
+        case_sensitive=case_sensitive,
+        enabled=enabled,
+        is_builtin=is_builtin,
+        **kwargs
+    )
+    session.add(tag)
+    session.commit()
+    session.refresh(tag)
+    return tag
+
+
+# -----------------------------------------------------------------------------
+# NormalizationRuleGroup Factory
+# -----------------------------------------------------------------------------
+
+def create_normalization_rule_group(
+    session: Session,
+    name: str = None,
+    description: str = None,
+    priority: int = 100,
+    enabled: bool = True,
+    is_builtin: bool = False,
+    **kwargs
+) -> NormalizationRuleGroup:
+    """Create a NormalizationRuleGroup instance.
+
+    Args:
+        session: Database session
+        name: Group name
+        description: Optional description
+        priority: Processing order (lower = first)
+        enabled: Whether group is active
+        is_builtin: Whether this is a system-created group
+
+    Returns:
+        Created and committed NormalizationRuleGroup instance
+    """
+    counter = _next_id()
+    group = NormalizationRuleGroup(
+        name=name or f"Test Rule Group {counter}",
+        description=description or f"Description for rule group {counter}",
+        priority=priority,
+        enabled=enabled,
+        is_builtin=is_builtin,
+        **kwargs
+    )
+    session.add(group)
+    session.commit()
+    session.refresh(group)
+    return group
+
+
+# -----------------------------------------------------------------------------
+# NormalizationRule Factory
+# -----------------------------------------------------------------------------
+
+def create_normalization_rule(
+    session: Session,
+    group_id: int,
+    name: str = None,
+    condition_type: str = "contains",
+    condition_value: str = None,
+    case_sensitive: bool = False,
+    action_type: str = "remove",
+    action_value: str = None,
+    priority: int = 100,
+    enabled: bool = True,
+    is_builtin: bool = False,
+    tag_group_id: int = None,
+    tag_match_position: str = None,
+    else_action_type: str = None,
+    else_action_value: str = None,
+    **kwargs
+) -> NormalizationRule:
+    """Create a NormalizationRule instance.
+
+    Args:
+        session: Database session
+        group_id: ID of the parent NormalizationRuleGroup
+        name: Rule name
+        condition_type: Type of condition (contains, prefix, suffix, regex, tag_group)
+        condition_value: Value to match
+        case_sensitive: Whether to match case
+        action_type: Type of action (remove, replace, strip_prefix, strip_suffix)
+        action_value: Replacement value
+        priority: Processing order within group
+        enabled: Whether rule is active
+        is_builtin: Whether this is a system-created rule
+        tag_group_id: ID of tag group for tag_group condition
+        tag_match_position: Position for tag matching (prefix, suffix, contains)
+        else_action_type: Action when condition doesn't match
+        else_action_value: Value for else action
+
+    Returns:
+        Created and committed NormalizationRule instance
+    """
+    counter = _next_id()
+    rule = NormalizationRule(
+        group_id=group_id,
+        name=name or f"Test Rule {counter}",
+        condition_type=condition_type,
+        condition_value=condition_value or f"test_value_{counter}",
+        case_sensitive=case_sensitive,
+        action_type=action_type,
+        action_value=action_value,
+        priority=priority,
+        enabled=enabled,
+        is_builtin=is_builtin,
+        tag_group_id=tag_group_id,
+        tag_match_position=tag_match_position,
+        else_action_type=else_action_type,
+        else_action_value=else_action_value,
+        **kwargs
+    )
+    session.add(rule)
+    session.commit()
+    session.refresh(rule)
+    return rule
+
+
+def create_tag_group_rule(
+    session: Session,
+    rule_group_id: int,
+    tag_group_id: int,
+    tag_match_position: str = "suffix",
+    action_type: str = "strip_suffix",
+    name: str = None,
+    **kwargs
+) -> NormalizationRule:
+    """Create a NormalizationRule that uses tag_group condition.
+
+    Convenience factory for tag-group based rules.
+    """
+    counter = _next_id()
+    return create_normalization_rule(
+        session,
+        group_id=rule_group_id,
+        name=name or f"Tag Group Rule {counter}",
+        condition_type="tag_group",
+        condition_value=None,
+        tag_group_id=tag_group_id,
+        tag_match_position=tag_match_position,
+        action_type=action_type,
         **kwargs
     )

@@ -5,6 +5,7 @@ A professional-grade web interface for managing IPTV configurations with Dispatc
 ## Application Tabs
 
 - **M3U Manager** - Full M3U account management with linked accounts and group synchronization
+- **M3U Changes** - Track and review all changes detected in M3U playlists (groups added/removed, streams added/removed)
 - **EPG Manager** - Manage EPG sources with drag-and-drop priority ordering
 - **Channel Manager** - Full-featured channel and stream management with split-pane layout
 - **Guide** - TV Guide with EPG grid view showing program schedules
@@ -28,6 +29,21 @@ A professional-grade web interface for managing IPTV configurations with Dispatc
 - **Hide Disabled Filter** - Optionally hide disabled groups in the manage groups modal
 - **Auto-Refresh** - New accounts automatically refresh after creation (no "Pending Setup" state)
 - **Server Group Filtering** - Filter M3U accounts by server group
+
+### M3U Change Tracking
+
+- **Automatic Change Detection** - Detects changes every time an M3U account is refreshed
+- **Group Changes** - Track when groups are added or removed from M3U playlists
+- **Stream Changes** - Monitor streams added or removed within existing groups
+- **Change History** - Full searchable history of all detected changes
+- **Filtering** - Filter changes by M3U account, change type (group/stream add/remove), and enabled status
+- **Sorting** - Sort by time, account, type, group name, count, or enabled status
+- **Summary Statistics** - Dashboard cards showing total groups/streams added and removed
+- **Time Range Filter** - View changes from last 24 hours, 3 days, 7 days, 30 days, or 90 days
+- **Expandable Details** - Click any change row to see full details including stream names
+- **Enabled/Disabled Tracking** - See whether affected groups were enabled or disabled in the M3U
+- **M3U Change Monitor Task** - Background task polls for external changes made in Dispatcharr
+- **M3U Digest Emails** - Configure email notifications for M3U changes (immediate, hourly, daily, weekly)
 
 ### Channel Profiles
 
@@ -259,6 +275,18 @@ Powerful tag-based system for cleaning and normalizing stream names during bulk 
 - **Reset to Defaults** - One-click restore of default tag configuration
 - **Quick Tag Manager** - Compact tag editor also available in bulk create modal for per-operation customization
 
+#### Normalization Engine (Rule-Based)
+Advanced rule-based normalization system for granular control over stream name transformations:
+
+- **Custom Rules** - Create rules with flexible conditions and actions
+- **Compound Conditions** - Build complex logic with AND/OR/NOT operators
+- **Condition Types** - Contains, starts with, ends with, equals, regex match
+- **Action Types** - Remove prefix/suffix, replace text, regex replace, set value
+- **Rule Ordering** - Drag-and-drop to set execution priority
+- **Enable/Disable Rules** - Toggle individual rules without deleting
+- **Testing Panel** - Test rules against sample names with real-time preview
+- **Normalize on Create** - Automatically apply normalization when creating channels
+
 #### Stream Probing
 Automated stream health checking:
 
@@ -420,16 +448,17 @@ Enhanced stream sorting options and granular probe scheduling:
 - **Smart Defaults** - Schedule editor for Stream Probe defaults to values from Settings > Maintenance
 - **Auto-Reorder After Probe** - Automatically reorder streams by quality and status after scheduled probes complete
 
-### v0.8.7 - Granular Normalization Engine
+### ~~v0.8.7 - Granular Normalization Engine~~ ✅ Implemented
 Advanced rule-based stream name normalization:
 - **Rule Creation UI** - Create custom normalization rules with conditions and actions
 - **Rule Prioritization** - Drag-and-drop rule ordering to control execution priority
+- **Compound Conditions** - Build complex conditions with AND/OR/NOT logic
 - **Regex Support** - Full regex pattern matching and replacement capabilities
-- **Condition Types** - Contains, starts with, ends with, regex match
+- **Condition Types** - Contains, starts with, ends with, regex match, equals
 - **Action Types** - Remove prefix/suffix, replace, regex replace, set value
-- **Rule Groups** - Organize rules into logical groups for better management
-- **Rule Testing Panel** - Test rules against sample stream names before applying
-- **Built-in Rules Migration** - Migrate existing tag-based normalization to new engine
+- **Rule Testing Panel** - Test rules against sample stream names with real-time preview
+- **Normalization on Channel Create** - Option to automatically normalize names when creating channels
+- **EPG/M3U Manual Refresh** - Set refresh interval to 0 for manual-only refresh (no auto-refresh)
 
 ### v0.9.0 - Mobile Interface
 Full mobile support for managing channels on the go:
