@@ -44,6 +44,14 @@ import type {
   AddTagsResponse,
   UpdateTagRequest,
   TestTagsResponse,
+  // M3U Change Tracking
+  M3USnapshot,
+  M3UChangeLog,
+  M3UChangesResponse,
+  M3UChangeSummary,
+  M3UDigestSettings,
+  M3UDigestSettingsUpdate,
+  M3UChangeType,
 } from '../types';
 import { logger } from '../utils/logger';
 import {
@@ -2365,5 +2373,110 @@ export async function testTagGroup(groupId: number, text: string): Promise<TestT
   return fetchJson(`${API_BASE}/tags/test`, {
     method: 'POST',
     body: JSON.stringify({ group_id: groupId, text }),
+  });
+}
+
+// =============================================================================
+// M3U Change Tracking API
+// =============================================================================
+
+/**
+ * Get paginated list of M3U change logs
+ */
+export async function getM3UChanges(params?: {
+  page?: number;
+  pageSize?: number;
+  m3uAccountId?: number;
+  changeType?: M3UChangeType;
+  enabled?: boolean;
+  sortBy?: string;
+  sortOrder?: 'asc' | 'desc';
+  dateFrom?: string;  // ISO timestamp
+  dateTo?: string;    // ISO timestamp
+}): Promise<M3UChangesResponse> {
+  const query = buildQuery({
+    page: params?.page,
+    page_size: params?.pageSize,
+    m3u_account_id: params?.m3uAccountId,
+    change_type: params?.changeType,
+    enabled: params?.enabled,
+    sort_by: params?.sortBy,
+    sort_order: params?.sortOrder,
+    date_from: params?.dateFrom,
+    date_to: params?.dateTo,
+  });
+  return fetchJson(`${API_BASE}/m3u/changes${query}`);
+}
+
+/**
+ * Get change history for a specific M3U account
+ */
+export async function getM3UAccountChanges(
+  accountId: number,
+  params?: {
+    page?: number;
+    pageSize?: number;
+    changeType?: M3UChangeType;
+  }
+): Promise<M3UChangesResponse> {
+  const query = buildQuery({
+    page: params?.page,
+    page_size: params?.pageSize,
+    change_type: params?.changeType,
+  });
+  return fetchJson(`${API_BASE}/m3u/accounts/${accountId}/changes${query}`);
+}
+
+/**
+ * Get aggregated summary of M3U changes
+ */
+export async function getM3UChangesSummary(params?: {
+  hours?: number;  // Look back this many hours (default: 24)
+  m3uAccountId?: number;
+}): Promise<M3UChangeSummary> {
+  const query = buildQuery({
+    hours: params?.hours,
+    m3u_account_id: params?.m3uAccountId,
+  });
+  return fetchJson(`${API_BASE}/m3u/changes/summary${query}`);
+}
+
+/**
+ * Get recent M3U snapshots
+ */
+export async function getM3USnapshots(params?: {
+  m3uAccountId?: number;
+  limit?: number;
+}): Promise<M3USnapshot[]> {
+  const query = buildQuery({
+    m3u_account_id: params?.m3uAccountId,
+    limit: params?.limit,
+  });
+  return fetchJson(`${API_BASE}/m3u/snapshots${query}`);
+}
+
+/**
+ * Get M3U digest email settings
+ */
+export async function getM3UDigestSettings(): Promise<M3UDigestSettings> {
+  return fetchJson(`${API_BASE}/m3u/digest/settings`);
+}
+
+/**
+ * Update M3U digest email settings
+ */
+export async function updateM3UDigestSettings(data: M3UDigestSettingsUpdate): Promise<M3UDigestSettings> {
+  return fetchJson(`${API_BASE}/m3u/digest/settings`, {
+    method: 'PUT',
+    body: JSON.stringify(data),
+  });
+}
+
+/**
+ * Send a test digest email
+ */
+export async function sendTestM3UDigest(): Promise<{ success: boolean; message: string }> {
+  return fetchJson(`${API_BASE}/m3u/digest/test`, {
+    method: 'POST',
   });
 }

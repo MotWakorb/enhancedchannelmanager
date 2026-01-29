@@ -144,6 +144,9 @@ def _run_migrations(engine) -> None:
             # Fix tag-group rule action types (v0.8.7)
             _fix_tag_group_action_types(conn)
 
+            # Add enabled column to m3u_change_logs (v0.10.0)
+            _add_m3u_change_logs_enabled_column(conn)
+
             logger.debug("All migrations complete - schema is up to date")
     except Exception as e:
         logger.exception(f"Migration failed: {e}")
@@ -880,6 +883,36 @@ def _fix_tag_group_action_types(conn) -> None:
         logger.info(f"Fixed {total_updated} tag-group rules to use strip_prefix/strip_suffix actions")
     else:
         logger.debug("No tag-group rules needed action type fixes")
+
+
+def _add_m3u_change_logs_enabled_column(conn) -> None:
+    """Add enabled column to m3u_change_logs table (v0.10.0).
+
+    Tracks whether a group is enabled in the M3U account.
+    """
+    from sqlalchemy import text
+
+    # Check if m3u_change_logs table exists
+    result = conn.execute(text(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='m3u_change_logs'"
+    ))
+    if not result.fetchone():
+        logger.debug("m3u_change_logs table doesn't exist yet, skipping enabled column migration")
+        return
+
+    # Check if enabled column already exists
+    result = conn.execute(text("PRAGMA table_info(m3u_change_logs)"))
+    columns = [row[1] for row in result.fetchall()]
+
+    if "enabled" not in columns:
+        logger.info("Adding enabled column to m3u_change_logs")
+        conn.execute(text(
+            "ALTER TABLE m3u_change_logs ADD COLUMN enabled BOOLEAN DEFAULT 0 NOT NULL"
+        ))
+        conn.commit()
+        logger.info("Migration complete: added enabled column to m3u_change_logs")
+    else:
+        logger.debug("m3u_change_logs.enabled column already exists")
 
 
 def _perform_maintenance(engine) -> None:

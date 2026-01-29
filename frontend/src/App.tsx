@@ -49,6 +49,7 @@ const M3UManagerTab = lazy(() => import('./components/tabs/M3UManagerTab').then(
 const EPGManagerTab = lazy(() => import('./components/tabs/EPGManagerTab').then(m => ({ default: m.EPGManagerTab })));
 const GuideTab = lazy(() => import('./components/tabs/GuideTab').then(m => ({ default: m.GuideTab })));
 const LogoManagerTab = lazy(() => import('./components/tabs/LogoManagerTab').then(m => ({ default: m.LogoManagerTab })));
+const M3UChangesTab = lazy(() => import('./components/tabs/M3UChangesTab').then(m => ({ default: m.M3UChangesTab })));
 const JournalTab = lazy(() => import('./components/tabs/JournalTab').then(m => ({ default: m.JournalTab })));
 const StatsTab = lazy(() => import('./components/tabs/StatsTab').then(m => ({ default: m.StatsTab })));
 const SettingsTab = lazy(() => import('./components/tabs/SettingsTab').then(m => ({ default: m.SettingsTab })));
@@ -2100,6 +2101,7 @@ function App() {
             />
           )}
           {activeTab === 'logo-manager' && <LogoManagerTab />}
+          {activeTab === 'm3u-changes' && <M3UChangesTab />}
           {activeTab === 'journal' && <JournalTab />}
           {activeTab === 'stats' && <StatsTab />}
           {activeTab === 'settings' && <SettingsTab onSaved={handleSettingsSaved} channelProfiles={channelProfiles} onProbeComplete={loadChannels} />}
