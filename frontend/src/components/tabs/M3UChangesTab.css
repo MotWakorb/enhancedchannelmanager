@@ -185,10 +185,11 @@
 
 .changes-list-content {
   flex: 1;
-  overflow-y: auto;
+  /* Removed overflow-y: auto - let parent .changes-list handle scrolling
+     to keep header and content columns aligned */
 }
 
-.list-header {
+.m3u-changes-tab .list-header {
   display: grid;
   grid-template-columns: 100px 150px 150px 1fr 80px 70px 40px;
   gap: 0.75rem;
@@ -207,7 +208,7 @@
   flex-shrink: 0;
 }
 
-.list-header .sortable {
+.m3u-changes-tab .list-header .sortable {
   cursor: pointer;
   display: flex;
   align-items: center;
@@ -216,11 +217,11 @@
   transition: color 0.15s;
 }
 
-.list-header .sortable:hover {
+.m3u-changes-tab .list-header .sortable:hover {
   color: var(--text-primary);
 }
 
-.list-header .sort-icon {
+.m3u-changes-tab .list-header .sort-icon {
   font-size: 14px !important;
   opacity: 0.8;
 }
@@ -519,7 +520,7 @@
     min-width: 150px;
   }
 
-  .list-header {
+  .m3u-changes-tab .list-header {
     display: none;
   }
 
