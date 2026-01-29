@@ -63,6 +63,9 @@ export function AlertMethodSettings({ className }: AlertMethodSettingsProps) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  // Shared SMTP configuration status
+  const [smtpConfigured, setSmtpConfigured] = useState(false);
+
   // EPG and M3U data for granular filtering
   const [epgSources, setEpgSources] = useState<EpgSourceBasic[]>([]);
   const [m3uAccounts, setM3uAccounts] = useState<M3uAccountBasic[]>([]);
@@ -80,16 +83,18 @@ export function AlertMethodSettings({ className }: AlertMethodSettingsProps) {
   const loadMethods = useCallback(async () => {
     try {
       setLoading(true);
-      const [methodsData, typesData, epgData, m3uData] = await Promise.all([
+      const [methodsData, typesData, epgData, m3uData, settingsData] = await Promise.all([
         api.getAlertMethods(),
         api.getAlertMethodTypes(),
         api.getEPGSources().catch(() => []),
         api.getM3UAccounts().catch(() => []),
+        api.getSettings().catch(() => ({ smtp_configured: false })),
       ]);
       setMethods(methodsData);
       setMethodTypes(typesData);
       setEpgSources(epgData.map((s: { id: number; name: string }) => ({ id: s.id, name: s.name })));
       setM3uAccounts(m3uData.map((a: { id: number; name: string }) => ({ id: a.id, name: a.name })));
+      setSmtpConfigured(settingsData.smtp_configured ?? false);
       setError(null);
     } catch (err) {
       setError('Failed to load alert methods');
@@ -306,15 +311,7 @@ export function AlertMethodSettings({ className }: AlertMethodSettingsProps) {
       parse_mode: 'Parse Mode',
       disable_notification: 'Silent Messages',
       disable_web_page_preview: 'Disable Link Previews',
-      smtp_host: 'SMTP Host',
-      smtp_port: 'SMTP Port',
-      smtp_user: 'SMTP Username',
-      smtp_password: 'SMTP Password',
-      from_email: 'From Email',
-      from_name: 'From Name',
-      to_emails: 'To Emails (comma separated)',
-      use_tls: 'Use TLS',
-      use_ssl: 'Use SSL',
+      to_emails: 'Recipient Email Addresses',
     };
     return labels[field] || field.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
   };
@@ -490,8 +487,31 @@ export function AlertMethodSettings({ className }: AlertMethodSettingsProps) {
                 <>
                   <div className="config-section">
                     <h4>Configuration</h4>
+
+                    {/* SMTP warning if shared settings not configured */}
+                    {formData.method_type === 'smtp' && !smtpConfigured && (
+                      <div className="smtp-warning">
+                        <span className="material-icons">warning</span>
+                        <div>
+                          <strong>SMTP not configured</strong>
+                          <p>Configure your SMTP server in Settings &gt; Email Settings before using email alerts.</p>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* SMTP info when configured */}
+                    {formData.method_type === 'smtp' && smtpConfigured && (
+                      <div className="smtp-info">
+                        <span className="material-icons">check_circle</span>
+                        <p>Using shared SMTP settings from Email Settings. Only recipient addresses are configured here.</p>
+                      </div>
+                    )}
+
                     {selectedType.required_fields.map(field =>
                       renderConfigField(field, true)
+                    )}
+                    {formData.method_type === 'smtp' && (
+                      <p className="form-hint">Enter one or more email addresses, separated by commas.</p>
                     )}
                     {Object.entries(selectedType.optional_fields).map(([field, defaultVal]) =>
                       renderConfigField(field, false, defaultVal)

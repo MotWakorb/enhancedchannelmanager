@@ -782,6 +782,15 @@ export interface SettingsResponse {
   m3u_account_priorities: M3UAccountPriorities;  // M3U account priorities for sorting (account_id -> priority)
   deprioritize_failed_streams: boolean;  // When enabled, failed/timeout/pending streams sort to bottom
   normalize_on_channel_create: boolean;  // Default state for normalization toggle when creating channels
+  // Shared SMTP settings
+  smtp_configured: boolean;  // Whether shared SMTP is configured
+  smtp_host: string;
+  smtp_port: number;
+  smtp_user: string;
+  smtp_from_email: string;
+  smtp_from_name: string;
+  smtp_use_tls: boolean;
+  smtp_use_ssl: boolean;
 }
 
 export interface TestConnectionResult {
@@ -836,6 +845,15 @@ export async function saveSettings(settings: {
   m3u_account_priorities?: M3UAccountPriorities;  // Optional - M3U account priorities for sorting
   deprioritize_failed_streams?: boolean;  // Optional - deprioritize failed/timeout/pending streams in sort, defaults to true
   normalize_on_channel_create?: boolean;  // Optional - default state for normalization toggle, defaults to false
+  // Shared SMTP settings
+  smtp_host?: string;  // Optional - SMTP server hostname
+  smtp_port?: number;  // Optional - SMTP port, defaults to 587
+  smtp_user?: string;  // Optional - SMTP username
+  smtp_password?: string;  // Optional - SMTP password (only send if changing)
+  smtp_from_email?: string;  // Optional - From email address
+  smtp_from_name?: string;  // Optional - From display name, defaults to "ECM Alerts"
+  smtp_use_tls?: boolean;  // Optional - Use TLS, defaults to true
+  smtp_use_ssl?: boolean;  // Optional - Use SSL, defaults to false
 }): Promise<{ status: string; configured: boolean }> {
   return fetchJson(`${API_BASE}/settings`, {
     method: 'POST',
@@ -849,6 +867,25 @@ export async function testConnection(settings: {
   password: string;
 }): Promise<TestConnectionResult> {
   return fetchJson(`${API_BASE}/settings/test`, {
+    method: 'POST',
+    body: JSON.stringify(settings),
+  });
+}
+
+export interface SMTPTestRequest {
+  smtp_host: string;
+  smtp_port: number;
+  smtp_user: string;
+  smtp_password: string;
+  smtp_from_email: string;
+  smtp_from_name: string;
+  smtp_use_tls: boolean;
+  smtp_use_ssl: boolean;
+  to_email: string;  // Test recipient email
+}
+
+export async function testSmtpConnection(settings: SMTPTestRequest): Promise<TestConnectionResult> {
+  return fetchJson(`${API_BASE}/settings/test-smtp`, {
     method: 'POST',
     body: JSON.stringify(settings),
   });

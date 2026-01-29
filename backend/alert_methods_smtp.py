@@ -1,34 +1,33 @@
 """
 SMTP Email Alert Method.
 
-Sends notifications via email using SMTP.
+Sends notifications via email using the shared SMTP settings from Email Settings.
+This alert method only configures recipients and alert filters - SMTP server
+configuration is centralized in Settings > Email Settings.
 """
 import logging
 import smtplib
 import ssl
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-from typing import Optional, List
+from typing import List
 
 from alert_methods import AlertMethod, AlertMessage, register_method
+from config import get_settings
 
 logger = logging.getLogger(__name__)
 
 
 @register_method
 class SMTPMethod(AlertMethod):
-    """Sends alerts via SMTP email."""
+    """Sends alerts via SMTP email using shared SMTP settings."""
 
     method_type = "smtp"
-    display_name = "Email (SMTP)"
-    required_config_fields = ["smtp_host", "smtp_port", "from_email", "to_emails"]
-    optional_config_fields = {
-        "smtp_user": "",
-        "smtp_password": "",
-        "use_tls": True,
-        "use_ssl": False,
-        "from_name": "ECM Alerts",
-    }
+    display_name = "Email"
+    # Only recipient emails are configured per-method
+    # SMTP server settings come from shared Email Settings
+    required_config_fields = ["to_emails"]
+    optional_config_fields = {}
 
     # Emoji alternatives for plain text
     TYPE_LABELS = {
@@ -37,6 +36,22 @@ class SMTPMethod(AlertMethod):
         "warning": "[WARNING]",
         "error": "[ERROR]",
     }
+
+    def _get_smtp_config(self) -> dict | None:
+        """Get shared SMTP configuration from settings."""
+        settings = get_settings()
+        if not settings.is_smtp_configured():
+            return None
+        return {
+            "smtp_host": settings.smtp_host,
+            "smtp_port": settings.smtp_port,
+            "smtp_user": settings.smtp_user,
+            "smtp_password": settings.smtp_password,
+            "from_email": settings.smtp_from_email,
+            "from_name": settings.smtp_from_name,
+            "use_tls": settings.smtp_use_tls,
+            "use_ssl": settings.smtp_use_ssl,
+        }
 
     def _build_html_message(self, message: AlertMessage) -> str:
         """Build an HTML email body."""
@@ -115,16 +130,25 @@ class SMTPMethod(AlertMethod):
         return "\n".join(parts)
 
     async def send(self, message: AlertMessage) -> bool:
-        """Send an email alert via SMTP."""
-        smtp_host = self.config.get("smtp_host")
-        smtp_port = int(self.config.get("smtp_port", 587))
-        from_email = self.config.get("from_email")
+        """Send an email alert via SMTP using shared settings."""
+        # Get shared SMTP configuration
+        smtp_config = self._get_smtp_config()
+        if not smtp_config:
+            logger.error(f"SMTP method {self.name}: Shared SMTP settings not configured. Configure in Settings > Email Settings.")
+            return False
+
+        smtp_host = smtp_config["smtp_host"]
+        smtp_port = smtp_config["smtp_port"]
+        from_email = smtp_config["from_email"]
+        from_name = smtp_config["from_name"]
+
+        # Get recipients from this alert method's config
         to_emails = self.config.get("to_emails")
 
-        logger.debug(f"SMTP method {self.name}: config keys={list(self.config.keys())}, from_email={from_email}, to_emails={to_emails}")
+        logger.debug(f"SMTP method {self.name}: Using shared SMTP ({smtp_host}), to_emails={to_emails}")
 
-        if not all([smtp_host, from_email, to_emails]):
-            logger.error(f"SMTP method {self.name}: Missing required configuration")
+        if not to_emails:
+            logger.error(f"SMTP method {self.name}: No recipients configured")
             return False
 
         # Parse to_emails if it's a string
@@ -138,7 +162,7 @@ class SMTPMethod(AlertMethod):
         # Build the email
         msg = MIMEMultipart("alternative")
         msg["Subject"] = f"{self.TYPE_LABELS.get(message.notification_type, '')} {message.title or 'ECM Notification'}"
-        msg["From"] = f"{self.config.get('from_name', 'ECM Alerts')} <{from_email}>"
+        msg["From"] = f"{from_name} <{from_email}>"
         msg["To"] = ", ".join(to_emails)
 
         # Attach both plain text and HTML versions
@@ -148,11 +172,11 @@ class SMTPMethod(AlertMethod):
         msg.attach(MIMEText(plain_text, "plain"))
         msg.attach(MIMEText(html_text, "html"))
 
-        # Get authentication credentials
-        smtp_user = self.config.get("smtp_user") or None
-        smtp_password = self.config.get("smtp_password") or None
-        use_tls = self.config.get("use_tls", True)
-        use_ssl = self.config.get("use_ssl", False)
+        # Get authentication credentials from shared settings
+        smtp_user = smtp_config["smtp_user"] or None
+        smtp_password = smtp_config["smtp_password"] or None
+        use_tls = smtp_config["use_tls"]
+        use_ssl = smtp_config["use_ssl"]
 
         try:
             # Connect to SMTP server
@@ -169,7 +193,7 @@ class SMTPMethod(AlertMethod):
                 if smtp_user and smtp_password:
                     server.login(smtp_user, smtp_password)
 
-                logger.debug(f"SMTP method {self.name}: Sending from={from_email}, to={to_emails}, From header={msg['From']}")
+                logger.debug(f"SMTP method {self.name}: Sending from={from_email}, to={to_emails}")
                 server.sendmail(from_email, to_emails, msg.as_string())
                 logger.info(f"SMTP method {self.name}: Email sent to {len(to_emails)} recipient(s)")
                 return True
@@ -189,23 +213,28 @@ class SMTPMethod(AlertMethod):
 
     async def test_connection(self) -> tuple[bool, str]:
         """Test the SMTP connection by sending a test email."""
-        smtp_host = self.config.get("smtp_host")
-        smtp_port = int(self.config.get("smtp_port", 587))
-        from_email = self.config.get("from_email")
+        # Get shared SMTP configuration
+        smtp_config = self._get_smtp_config()
+        if not smtp_config:
+            return False, "Shared SMTP not configured. Configure in Settings > Email Settings first."
+
         to_emails = self.config.get("to_emails")
-
-        if not smtp_host:
-            return False, "SMTP host not configured"
-        if not from_email:
-            return False, "From email not configured"
         if not to_emails:
-            return False, "No recipients configured"
+            return False, "No recipient email addresses configured"
 
-        # First, just test the connection
-        use_ssl = self.config.get("use_ssl", False)
-        use_tls = self.config.get("use_tls", True)
-        smtp_user = self.config.get("smtp_user")
-        smtp_password = self.config.get("smtp_password")
+        # Parse to_emails if it's a string
+        if isinstance(to_emails, str):
+            to_emails = [e.strip() for e in to_emails.split(",") if e.strip()]
+
+        if not to_emails:
+            return False, "No recipient email addresses configured"
+
+        smtp_host = smtp_config["smtp_host"]
+        smtp_port = smtp_config["smtp_port"]
+        use_ssl = smtp_config["use_ssl"]
+        use_tls = smtp_config["use_tls"]
+        smtp_user = smtp_config["smtp_user"]
+        smtp_password = smtp_config["smtp_password"]
 
         try:
             if use_ssl:
@@ -225,14 +254,14 @@ class SMTPMethod(AlertMethod):
                 test_message = AlertMessage(
                     title="Connection Test",
                     message="This is a test message from Enhanced Channel Manager. "
-                            "If you see this, your SMTP settings are configured correctly!",
+                            "If you see this, your email alert is configured correctly!",
                     notification_type="info",
                     source="ECM Alert Test",
                 )
 
                 success = await self.send(test_message)
                 if success:
-                    return True, "Test email sent successfully"
+                    return True, f"Test email sent to {', '.join(to_emails)}"
                 else:
                     return False, "Connected but failed to send test email"
 
@@ -240,11 +269,11 @@ class SMTPMethod(AlertMethod):
                 server.quit()
 
         except smtplib.SMTPAuthenticationError:
-            return False, "Authentication failed - check username and password"
+            return False, "SMTP authentication failed - check Email Settings"
         except smtplib.SMTPConnectError:
-            return False, f"Could not connect to {smtp_host}:{smtp_port}"
+            return False, f"Could not connect to SMTP server - check Email Settings"
         except TimeoutError:
-            return False, f"Connection timed out to {smtp_host}:{smtp_port}"
+            return False, f"Connection timed out - check Email Settings"
         except Exception as e:
             return False, f"Error: {str(e)}"
 
@@ -256,14 +285,20 @@ class SMTPMethod(AlertMethod):
         if len(messages) == 1:
             return await self.send(messages[0])
 
-        # Build digest email
-        smtp_host = self.config.get("smtp_host")
-        smtp_port = int(self.config.get("smtp_port", 587))
-        from_email = self.config.get("from_email")
-        to_emails = self.config.get("to_emails")
+        # Get shared SMTP configuration
+        smtp_config = self._get_smtp_config()
+        if not smtp_config:
+            logger.error(f"SMTP method {self.name}: Shared SMTP settings not configured")
+            return False
 
-        if not all([smtp_host, from_email, to_emails]):
-            logger.error(f"SMTP method {self.name}: Missing required configuration")
+        smtp_host = smtp_config["smtp_host"]
+        smtp_port = smtp_config["smtp_port"]
+        from_email = smtp_config["from_email"]
+        from_name = smtp_config["from_name"]
+
+        to_emails = self.config.get("to_emails")
+        if not to_emails:
+            logger.error(f"SMTP method {self.name}: No recipients configured")
             return False
 
         if isinstance(to_emails, str):
@@ -281,11 +316,11 @@ class SMTPMethod(AlertMethod):
         # Build summary for subject
         summary_parts = []
         if counts["success"]:
-            summary_parts.append(f"{counts['success']} ✓")
+            summary_parts.append(f"{counts['success']} success")
         if counts["error"]:
-            summary_parts.append(f"{counts['error']} ✗")
+            summary_parts.append(f"{counts['error']} error")
         if counts["warning"]:
-            summary_parts.append(f"{counts['warning']} ⚠")
+            summary_parts.append(f"{counts['warning']} warning")
 
         subject = f"ECM Digest: {', '.join(summary_parts) if summary_parts else f'{len(messages)} notifications'}"
 
@@ -296,17 +331,17 @@ class SMTPMethod(AlertMethod):
         # Create email
         msg = MIMEMultipart("alternative")
         msg["Subject"] = subject
-        msg["From"] = f"{self.config.get('from_name', 'ECM Alerts')} <{from_email}>"
+        msg["From"] = f"{from_name} <{from_email}>"
         msg["To"] = ", ".join(to_emails)
 
         msg.attach(MIMEText(plain, "plain"))
         msg.attach(MIMEText(html, "html"))
 
-        # Send
-        use_tls = self.config.get("use_tls", True)
-        use_ssl = self.config.get("use_ssl", False)
-        smtp_user = self.config.get("smtp_user") or None
-        smtp_password = self.config.get("smtp_password") or None
+        # Send using shared SMTP settings
+        use_tls = smtp_config["use_tls"]
+        use_ssl = smtp_config["use_ssl"]
+        smtp_user = smtp_config["smtp_user"] or None
+        smtp_password = smtp_config["smtp_password"] or None
 
         try:
             if use_ssl:
@@ -354,13 +389,13 @@ class SMTPMethod(AlertMethod):
         # Build summary line
         summary_parts = []
         if counts.get("success", 0):
-            summary_parts.append(f"✅ {counts['success']} succeeded")
+            summary_parts.append(f"{counts['success']} succeeded")
         if counts.get("error", 0):
-            summary_parts.append(f"❌ {counts['error']} failed")
+            summary_parts.append(f"{counts['error']} failed")
         if counts.get("warning", 0):
-            summary_parts.append(f"⚠️ {counts['warning']} warnings")
+            summary_parts.append(f"{counts['warning']} warnings")
         if counts.get("info", 0):
-            summary_parts.append(f"ℹ️ {counts['info']} info")
+            summary_parts.append(f"{counts['info']} info")
 
         html = f"""
         <html>
@@ -385,7 +420,7 @@ class SMTPMethod(AlertMethod):
         <body>
             <div class="container">
                 <div class="header">
-                    <h2>📊 ECM Notification Digest</h2>
+                    <h2>ECM Notification Digest</h2>
                     <div class="summary">{' | '.join(summary_parts)}</div>
                 </div>
                 <div class="body">

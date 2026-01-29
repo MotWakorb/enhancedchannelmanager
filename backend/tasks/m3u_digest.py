@@ -174,21 +174,53 @@ class M3UDigestTask(TaskScheduler):
                 )
 
             if not changes:
-                return TaskResult(
-                    success=True,
-                    message="No changes to report since last digest",
-                    started_at=started_at,
-                    completed_at=datetime.utcnow(),
-                    total_items=0,
-                )
+                if not force:
+                    return TaskResult(
+                        success=True,
+                        message="No changes to report since last digest",
+                        started_at=started_at,
+                        completed_at=datetime.utcnow(),
+                        total_items=0,
+                    )
+                # Force mode with no changes - send a test email
+                subject = "[ECM] M3U Digest Test - Configuration Verified"
+                html_content = """
+                <html>
+                <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; padding: 20px; background-color: #f5f5f5;">
+                    <div style="max-width: 600px; margin: 0 auto; background: white; border-radius: 8px; padding: 30px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+                        <h1 style="color: #22C55E; margin-top: 0;">✓ Test Successful</h1>
+                        <p style="color: #333; font-size: 16px;">
+                            Your M3U Digest email configuration is working correctly.
+                        </p>
+                        <p style="color: #666; font-size: 14px;">
+                            When there are actual M3U changes to report, you will receive digest emails at this address.
+                        </p>
+                        <hr style="border: none; border-top: 1px solid #eee; margin: 20px 0;">
+                        <p style="color: #999; font-size: 12px;">
+                            This is a test email from Enhanced Channel Manager.
+                        </p>
+                    </div>
+                </body>
+                </html>
+                """
+                plain_content = """
+M3U Digest Test - Configuration Verified
 
-            self._set_progress(status="building_digest", total=len(changes))
+Your M3U Digest email configuration is working correctly.
 
-            # Build digest content
-            template = M3UDigestTemplate()
-            html_content = template.render_html(changes, since)
-            plain_content = template.render_plain(changes, since)
-            subject = template.get_subject(changes)
+When there are actual M3U changes to report, you will receive digest emails at this address.
+
+---
+This is a test email from Enhanced Channel Manager.
+                """.strip()
+            else:
+                self._set_progress(status="building_digest", total=len(changes))
+
+                # Build digest content
+                template = M3UDigestTemplate()
+                html_content = template.render_html(changes, since)
+                plain_content = template.render_plain(changes, since)
+                subject = template.get_subject(changes)
 
             self._set_progress(status="sending_email")
 
@@ -201,13 +233,20 @@ class M3UDigestTask(TaskScheduler):
             )
 
             if send_success:
-                # Update last digest time
-                settings.last_digest_at = datetime.utcnow()
-                db.commit()
+                # Update last digest time (only for real digests, not tests)
+                if changes:
+                    settings.last_digest_at = datetime.utcnow()
+                    db.commit()
+
+                # Different message for test vs real digest
+                if changes:
+                    message = f"Sent M3U digest with {len(changes)} changes to {len(recipients)} recipients"
+                else:
+                    message = f"Test email sent successfully to {len(recipients)} recipient{'s' if len(recipients) != 1 else ''}"
 
                 return TaskResult(
                     success=True,
-                    message=f"Sent M3U digest with {len(changes)} changes to {len(recipients)} recipients",
+                    message=message,
                     started_at=started_at,
                     completed_at=datetime.utcnow(),
                     total_items=len(changes),
@@ -215,7 +254,8 @@ class M3UDigestTask(TaskScheduler):
                     details={
                         "changes_count": len(changes),
                         "recipients": recipients,
-                        "since": since.isoformat(),
+                        "since": since.isoformat() if changes else None,
+                        "is_test": not bool(changes),
                     },
                 )
             else:
@@ -248,13 +288,45 @@ class M3UDigestTask(TaskScheduler):
         plain_content: str,
     ) -> bool:
         """
-        Send the digest email using configured SMTP alert methods.
+        Send the digest email using shared SMTP settings or alert methods.
 
-        Returns True if at least one email was sent successfully.
+        Priority:
+        1. Shared SMTP settings (from General Settings)
+        2. First enabled SMTP alert method (fallback)
+
+        Returns True if email was sent successfully.
         """
-        from alert_methods import get_alert_manager, AlertMessage
+        from config import get_settings
 
+        # First, try shared SMTP settings
+        settings = get_settings()
+        if settings.is_smtp_configured():
+            logger.info(f"[{self.task_id}] Using shared SMTP settings")
+            smtp_config = {
+                "smtp_host": settings.smtp_host,
+                "smtp_port": settings.smtp_port,
+                "smtp_user": settings.smtp_user,
+                "smtp_password": settings.smtp_password,
+                "from_email": settings.smtp_from_email,
+                "from_name": settings.smtp_from_name,
+                "use_tls": settings.smtp_use_tls,
+                "use_ssl": settings.smtp_use_ssl,
+            }
+            success = await self._send_custom_email_with_config(
+                smtp_config,
+                recipients,
+                subject,
+                html_content,
+                plain_content,
+            )
+            if success:
+                return True
+            logger.warning(f"[{self.task_id}] Shared SMTP failed, trying alert methods")
+
+        # Fall back to SMTP alert methods
         try:
+            from alert_methods import get_alert_manager
+
             alert_manager = get_alert_manager()
 
             # Find SMTP alert methods
@@ -269,55 +341,36 @@ class M3UDigestTask(TaskScheduler):
 
             # Use the first enabled SMTP method
             smtp_method = smtp_methods[0]
+            logger.info(f"[{self.task_id}] Using SMTP alert method: {smtp_method.name}")
 
-            # Create a custom alert message for the digest
-            message = AlertMessage(
-                notification_type="info",
-                title=subject,
-                message=plain_content,
-                source="m3u_digest",
-                metadata={"digest": True},
+            success = await self._send_custom_email_with_config(
+                smtp_method.config,
+                recipients,
+                subject,
+                html_content,
+                plain_content,
             )
-
-            # Override the to_emails in config temporarily
-            original_to = smtp_method.config.get("to_emails")
-            smtp_method.config["to_emails"] = recipients
-
-            try:
-                # The SMTP method will handle HTML/plain text
-                # We need a custom send for digest with pre-built HTML
-                success = await self._send_custom_email(
-                    smtp_method,
-                    recipients,
-                    subject,
-                    html_content,
-                    plain_content,
-                )
-                return success
-            finally:
-                # Restore original recipients
-                smtp_method.config["to_emails"] = original_to
+            return success
 
         except Exception as e:
             logger.error(f"[{self.task_id}] Failed to send digest email: {e}")
             return False
 
-    async def _send_custom_email(
+    async def _send_custom_email_with_config(
         self,
-        smtp_method,
+        config: Dict,
         recipients: List[str],
         subject: str,
         html_content: str,
         plain_content: str,
     ) -> bool:
-        """Send a custom email with pre-built HTML content."""
+        """Send a custom email with pre-built HTML content using SMTP config dict."""
         import smtplib
         import ssl
         from email.mime.text import MIMEText
         from email.mime.multipart import MIMEMultipart
 
         try:
-            config = smtp_method.config
             smtp_host = config.get("smtp_host")
             smtp_port = int(config.get("smtp_port", 587))
             from_email = config.get("from_email")
@@ -342,9 +395,9 @@ class M3UDigestTask(TaskScheduler):
 
             if use_ssl:
                 context = ssl.create_default_context()
-                server = smtplib.SMTP_SSL(smtp_host, smtp_port, context=context)
+                server = smtplib.SMTP_SSL(smtp_host, smtp_port, context=context, timeout=30)
             else:
-                server = smtplib.SMTP(smtp_host, smtp_port)
+                server = smtplib.SMTP(smtp_host, smtp_port, timeout=30)
                 if use_tls:
                     context = ssl.create_default_context()
                     server.starttls(context=context)
