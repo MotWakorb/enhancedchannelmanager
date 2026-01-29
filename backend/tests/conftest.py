@@ -24,7 +24,8 @@ from database import Base
 from models import (
     JournalEntry, BandwidthDaily, ChannelWatchStats, HiddenChannelGroup,
     StreamStats, ScheduledTask, TaskSchedule, TaskExecution, Notification, AlertMethod,
-    TagGroup, Tag, NormalizationRuleGroup, NormalizationRule
+    TagGroup, Tag, NormalizationRuleGroup, NormalizationRule,
+    M3USnapshot, M3UChangeLog
 )
 
 
