@@ -29,6 +29,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends gosu ffmpeg \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --create-home --shell /bin/bash appuser
 
+# Install uv for fast Python package management
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+
 # Install Python dependencies
 # Note: Build tools needed for ARM64 where some packages lack pre-built wheels
 COPY backend/requirements.txt ./
@@ -38,7 +41,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libffi-dev \
         cargo \
         rustc \
-    && pip install --no-cache-dir -r requirements.txt \
+    && uv pip install --system --no-cache -r requirements.txt \
     && apt-get purge -y build-essential python3-dev libffi-dev cargo rustc \
     && apt-get autoremove -y \
     && rm -rf /var/lib/apt/lists/* /root/.cargo
