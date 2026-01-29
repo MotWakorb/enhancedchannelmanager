@@ -559,6 +559,15 @@ class SettingsRequest(BaseModel):
     deprioritize_failed_streams: bool = True  # When enabled, failed/timeout/pending streams sort to bottom
     normalization_settings: Optional[NormalizationSettings] = None  # User-configurable normalization tags
     normalize_on_channel_create: bool = False  # Default state for normalization toggle when creating channels
+    # Shared SMTP settings
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_user: str = ""
+    smtp_password: Optional[str] = None  # Optional - only required if changing SMTP auth
+    smtp_from_email: str = ""
+    smtp_from_name: str = "ECM Alerts"
+    smtp_use_tls: bool = True
+    smtp_use_ssl: bool = False
 
 
 class SettingsResponse(BaseModel):
@@ -606,6 +615,15 @@ class SettingsResponse(BaseModel):
     deprioritize_failed_streams: bool  # When enabled, failed/timeout/pending streams sort to bottom
     normalization_settings: NormalizationSettings  # User-configurable normalization tags
     normalize_on_channel_create: bool  # Default state for normalization toggle when creating channels
+    # Shared SMTP settings
+    smtp_configured: bool  # Whether shared SMTP is configured
+    smtp_host: str
+    smtp_port: int
+    smtp_user: str
+    smtp_from_email: str
+    smtp_from_name: str
+    smtp_use_tls: bool
+    smtp_use_ssl: bool
 
 
 class TestConnectionRequest(BaseModel):
@@ -670,6 +688,15 @@ async def get_current_settings():
             ]
         ),
         normalize_on_channel_create=settings.normalize_on_channel_create,
+        # Shared SMTP settings (password not returned for security)
+        smtp_configured=settings.is_smtp_configured(),
+        smtp_host=settings.smtp_host,
+        smtp_port=settings.smtp_port,
+        smtp_user=settings.smtp_user,
+        smtp_from_email=settings.smtp_from_email,
+        smtp_from_name=settings.smtp_from_name,
+        smtp_use_tls=settings.smtp_use_tls,
+        smtp_use_ssl=settings.smtp_use_ssl,
     )
 
 
@@ -682,6 +709,9 @@ async def update_settings(request: SettingsRequest):
     # If password is not provided, keep the existing password
     # This allows updating non-auth settings without re-entering password
     password = request.password if request.password else current_settings.password
+
+    # Same for SMTP password - preserve existing if not provided
+    smtp_password = request.smtp_password if request.smtp_password else current_settings.smtp_password
 
     # Check if auth settings are being changed and password is required
     auth_changed = (
@@ -747,6 +777,15 @@ async def update_settings(request: SettingsRequest):
             if request.normalization_settings else current_settings.custom_normalization_tags
         ),
         normalize_on_channel_create=request.normalize_on_channel_create,
+        # Shared SMTP settings
+        smtp_host=request.smtp_host,
+        smtp_port=request.smtp_port,
+        smtp_user=request.smtp_user,
+        smtp_password=smtp_password,
+        smtp_from_email=request.smtp_from_email,
+        smtp_from_name=request.smtp_from_name,
+        smtp_use_tls=request.smtp_use_tls,
+        smtp_use_ssl=request.smtp_use_ssl,
     )
     save_settings(new_settings)
     clear_settings_cache()
@@ -818,6 +857,107 @@ async def test_connection(request: TestConnectionRequest):
         return {"success": False, "message": "Connection timed out"}
     except Exception as e:
         logger.exception(f"Connection test failed - unexpected error: {e}")
+        return {"success": False, "message": str(e)}
+
+
+class SMTPTestRequest(BaseModel):
+    """Request model for testing SMTP settings."""
+    smtp_host: str
+    smtp_port: int = 587
+    smtp_user: str = ""
+    smtp_password: str = ""
+    smtp_from_email: str
+    smtp_from_name: str = "ECM Alerts"
+    smtp_use_tls: bool = True
+    smtp_use_ssl: bool = False
+    to_email: str  # Test recipient email
+
+
+@app.post("/api/settings/test-smtp")
+async def test_smtp_connection(request: SMTPTestRequest):
+    """Test SMTP connection by sending a test email."""
+    import smtplib
+    import ssl
+    from email.mime.text import MIMEText
+    from email.mime.multipart import MIMEMultipart
+
+    logger.debug(f"POST /api/settings/test-smtp - Testing SMTP to {request.smtp_host}:{request.smtp_port}")
+
+    if not request.smtp_host:
+        return {"success": False, "message": "SMTP host is required"}
+    if not request.smtp_from_email:
+        return {"success": False, "message": "From email is required"}
+    if not request.to_email:
+        return {"success": False, "message": "Test recipient email is required"}
+
+    try:
+        # Build test email
+        msg = MIMEMultipart("alternative")
+        msg["Subject"] = "ECM SMTP Test - Connection Successful"
+        msg["From"] = f"{request.smtp_from_name} <{request.smtp_from_email}>"
+        msg["To"] = request.to_email
+
+        plain_text = """This is a test email from Enhanced Channel Manager.
+
+If you're reading this, your SMTP settings are configured correctly!
+
+You can now use email features like M3U Digest reports.
+
+- Enhanced Channel Manager"""
+
+        html_text = """
+        <html>
+        <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; padding: 20px;">
+            <div style="max-width: 500px; margin: 0 auto; background: #f8f9fa; border-radius: 8px; padding: 20px;">
+                <h2 style="color: #22C55E; margin-top: 0;">✅ SMTP Test Successful</h2>
+                <p>This is a test email from Enhanced Channel Manager.</p>
+                <p>If you're reading this, your SMTP settings are configured correctly!</p>
+                <p>You can now use email features like M3U Digest reports.</p>
+                <hr style="border: none; border-top: 1px solid #e9ecef; margin: 20px 0;">
+                <p style="color: #666; font-size: 12px;">- Enhanced Channel Manager</p>
+            </div>
+        </body>
+        </html>
+        """
+
+        msg.attach(MIMEText(plain_text, "plain"))
+        msg.attach(MIMEText(html_text, "html"))
+
+        # Connect and send
+        if request.smtp_use_ssl:
+            context = ssl.create_default_context()
+            server = smtplib.SMTP_SSL(request.smtp_host, request.smtp_port, context=context, timeout=10)
+        else:
+            server = smtplib.SMTP(request.smtp_host, request.smtp_port, timeout=10)
+
+        try:
+            if request.smtp_use_tls and not request.smtp_use_ssl:
+                server.starttls(context=ssl.create_default_context())
+
+            if request.smtp_user and request.smtp_password:
+                server.login(request.smtp_user, request.smtp_password)
+
+            server.sendmail(request.smtp_from_email, [request.to_email], msg.as_string())
+            logger.info(f"SMTP test email sent successfully to {request.to_email}")
+            return {"success": True, "message": f"Test email sent to {request.to_email}"}
+
+        finally:
+            server.quit()
+
+    except smtplib.SMTPAuthenticationError as e:
+        logger.error(f"SMTP test failed - authentication error: {e}")
+        return {"success": False, "message": "Authentication failed - check username and password"}
+    except smtplib.SMTPConnectError as e:
+        logger.error(f"SMTP test failed - connection error: {e}")
+        return {"success": False, "message": f"Could not connect to {request.smtp_host}:{request.smtp_port}"}
+    except smtplib.SMTPRecipientsRefused as e:
+        logger.error(f"SMTP test failed - recipient refused: {e}")
+        return {"success": False, "message": "Recipient email was refused by the server"}
+    except TimeoutError:
+        logger.error(f"SMTP test failed - timeout connecting to {request.smtp_host}")
+        return {"success": False, "message": f"Connection timed out to {request.smtp_host}:{request.smtp_port}"}
+    except Exception as e:
+        logger.exception(f"SMTP test failed - unexpected error: {e}")
         return {"success": False, "message": str(e)}
 
 

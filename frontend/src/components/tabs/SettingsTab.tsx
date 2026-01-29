@@ -181,7 +181,7 @@ interface SettingsTabProps {
   onProbeComplete?: () => void;
 }
 
-type SettingsPage = 'general' | 'channel-defaults' | 'normalization' | 'tag-engine' | 'appearance' | 'scheduled-tasks' | 'alert-methods' | 'm3u-digest' | 'maintenance';
+type SettingsPage = 'general' | 'channel-defaults' | 'normalization' | 'tag-engine' | 'appearance' | 'email' | 'scheduled-tasks' | 'alert-methods' | 'm3u-digest' | 'maintenance';
 
 export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onProbeComplete }: SettingsTabProps) {
   const [activePage, setActivePage] = useState<SettingsPage>('general');
@@ -236,6 +236,20 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   const [digestError, setDigestError] = useState<string | null>(null);
   const [digestSaving, setDigestSaving] = useState(false);
   const [digestTestResult, setDigestTestResult] = useState<{ success: boolean; message: string } | null>(null);
+
+  // Shared SMTP (Email) settings
+  const [smtpHost, setSmtpHost] = useState('');
+  const [smtpPort, setSmtpPort] = useState(587);
+  const [smtpUser, setSmtpUser] = useState('');
+  const [smtpPassword, setSmtpPassword] = useState('');
+  const [smtpFromEmail, setSmtpFromEmail] = useState('');
+  const [smtpFromName, setSmtpFromName] = useState('ECM Alerts');
+  const [smtpUseTls, setSmtpUseTls] = useState(true);
+  const [smtpUseSsl, setSmtpUseSsl] = useState(false);
+  const [smtpConfigured, setSmtpConfigured] = useState(false);
+  const [smtpTestEmail, setSmtpTestEmail] = useState('');
+  const [smtpTesting, setSmtpTesting] = useState(false);
+  const [smtpTestResult, setSmtpTestResult] = useState<{ success: boolean; message: string } | null>(null);
 
   // Stream probe settings (scheduled probing is controlled by Task Engine)
   const [streamProbeBatchSize, setStreamProbeBatchSize] = useState(10);
@@ -540,6 +554,16 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       setStreamSortEnabled(merged.enabled);
       setM3uAccountPriorities(settings.m3u_account_priorities ?? {});
       setDeprioritizeFailedStreams(settings.deprioritize_failed_streams ?? true);
+      // Shared SMTP settings
+      setSmtpHost(settings.smtp_host ?? '');
+      setSmtpPort(settings.smtp_port ?? 587);
+      setSmtpUser(settings.smtp_user ?? '');
+      setSmtpPassword(''); // Never load password from server
+      setSmtpFromEmail(settings.smtp_from_email ?? '');
+      setSmtpFromName(settings.smtp_from_name ?? 'ECM Alerts');
+      setSmtpUseTls(settings.smtp_use_tls ?? true);
+      setSmtpUseSsl(settings.smtp_use_ssl ?? false);
+      setSmtpConfigured(settings.smtp_configured ?? false);
       setNeedsRestart(false);
       setRestartResult(null);
       setTestResult(null);
@@ -643,7 +667,21 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         stream_sort_enabled: streamSortEnabled,
         m3u_account_priorities: m3uAccountPriorities,
         deprioritize_failed_streams: deprioritizeFailedStreams,
+        // Shared SMTP settings
+        smtp_host: smtpHost,
+        smtp_port: smtpPort,
+        smtp_user: smtpUser,
+        // Only send SMTP password if it was entered
+        ...(smtpPassword ? { smtp_password: smtpPassword } : {}),
+        smtp_from_email: smtpFromEmail,
+        smtp_from_name: smtpFromName,
+        smtp_use_tls: smtpUseTls,
+        smtp_use_ssl: smtpUseSsl,
       });
+      // Clear SMTP password field after save
+      setSmtpPassword('');
+      // Update SMTP configured status
+      setSmtpConfigured(!!(smtpHost && smtpFromEmail));
       // Apply frontend log level immediately
       const frontendLevel = frontendLogLevel === 'WARNING' ? 'WARN' : frontendLogLevel;
       if (['DEBUG', 'INFO', 'WARN', 'ERROR'].includes(frontendLevel)) {
@@ -737,8 +775,20 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   };
 
   const handleSendTestDigest = async () => {
+    if (!digestSettings) return;
     setDigestTestResult(null);
+    setDigestSaving(true);
     try {
+      // Save settings first to ensure recipients are in the database
+      await api.updateM3UDigestSettings({
+        enabled: digestSettings.enabled,
+        frequency: digestSettings.frequency,
+        email_recipients: digestSettings.email_recipients,
+        include_group_changes: digestSettings.include_group_changes,
+        include_stream_changes: digestSettings.include_stream_changes,
+        min_changes_threshold: digestSettings.min_changes_threshold,
+      });
+      // Now send the test
       const result = await api.sendTestM3UDigest();
       setDigestTestResult(result);
       setTimeout(() => setDigestTestResult(null), 5000);
@@ -747,6 +797,8 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         success: false,
         message: err instanceof Error ? err.message : 'Failed to send test digest',
       });
+    } finally {
+      setDigestSaving(false);
     }
   };
 
@@ -1878,6 +1930,221 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   // State for new email input in digest settings
   const [newDigestEmail, setNewDigestEmail] = useState('');
 
+  // Handle SMTP test
+  const handleTestSmtp = async () => {
+    if (!smtpHost || !smtpFromEmail || !smtpTestEmail) {
+      setSmtpTestResult({ success: false, message: 'SMTP host, from email, and test recipient are required' });
+      return;
+    }
+
+    setSmtpTesting(true);
+    setSmtpTestResult(null);
+
+    try {
+      const result = await api.testSmtpConnection({
+        smtp_host: smtpHost,
+        smtp_port: smtpPort,
+        smtp_user: smtpUser,
+        smtp_password: smtpPassword,
+        smtp_from_email: smtpFromEmail,
+        smtp_from_name: smtpFromName,
+        smtp_use_tls: smtpUseTls,
+        smtp_use_ssl: smtpUseSsl,
+        to_email: smtpTestEmail,
+      });
+      setSmtpTestResult(result);
+    } catch (err) {
+      setSmtpTestResult({ success: false, message: 'Failed to test SMTP connection' });
+    } finally {
+      setSmtpTesting(false);
+    }
+  };
+
+  const renderEmailSettingsPage = () => (
+    <div className="settings-page">
+      <div className="settings-page-header">
+        <h2>Email Settings</h2>
+        <p>Configure shared SMTP settings for email features like M3U Digest reports.</p>
+      </div>
+
+      <div className="settings-section">
+        <div className="settings-section-header">
+          <span className="material-icons">mail_outline</span>
+          <h3>SMTP Configuration</h3>
+        </div>
+        <p className="section-description">
+          Configure your SMTP server to enable email features. These settings are used by M3U Digest
+          reports and Email alert methods.
+        </p>
+
+        {smtpConfigured && (
+          <div className="status-badge status-success">
+            <span className="material-icons">check_circle</span>
+            SMTP Configured
+          </div>
+        )}
+
+        <div className="form-group-vertical">
+          <label htmlFor="smtpHost">SMTP Host</label>
+          <input
+            type="text"
+            id="smtpHost"
+            value={smtpHost}
+            onChange={(e) => setSmtpHost(e.target.value)}
+            placeholder="smtp.example.com"
+          />
+          <p className="field-hint">Your email provider's SMTP server address (e.g., smtp.gmail.com)</p>
+        </div>
+
+        <div className="form-row">
+          <div className="form-group-vertical">
+            <label htmlFor="smtpPort">SMTP Port</label>
+            <input
+              type="number"
+              id="smtpPort"
+              value={smtpPort}
+              onChange={(e) => setSmtpPort(parseInt(e.target.value, 10) || 587)}
+              min={1}
+              max={65535}
+            />
+            <p className="field-hint">Usually 587 (TLS), 465 (SSL), or 25 (unencrypted)</p>
+          </div>
+
+          <div className="form-group-vertical">
+            <label htmlFor="smtpSecurity">Security</label>
+            <select
+              id="smtpSecurity"
+              value={smtpUseSsl ? 'ssl' : smtpUseTls ? 'tls' : 'none'}
+              onChange={(e) => {
+                const val = e.target.value;
+                setSmtpUseTls(val === 'tls');
+                setSmtpUseSsl(val === 'ssl');
+              }}
+            >
+              <option value="tls">TLS (STARTTLS)</option>
+              <option value="ssl">SSL</option>
+              <option value="none">None</option>
+            </select>
+            <p className="field-hint">TLS is recommended for most providers</p>
+          </div>
+        </div>
+
+        <div className="form-row">
+          <div className="form-group-vertical">
+            <label htmlFor="smtpUser">Username (optional)</label>
+            <input
+              type="text"
+              id="smtpUser"
+              value={smtpUser}
+              onChange={(e) => setSmtpUser(e.target.value)}
+              placeholder="user@example.com"
+            />
+            <p className="field-hint">Usually your email address</p>
+          </div>
+
+          <div className="form-group-vertical">
+            <label htmlFor="smtpPassword">Password (optional)</label>
+            <input
+              type="password"
+              id="smtpPassword"
+              value={smtpPassword}
+              onChange={(e) => setSmtpPassword(e.target.value)}
+              placeholder="••••••••"
+            />
+            <p className="field-hint">App password recommended for Gmail/OAuth providers</p>
+          </div>
+        </div>
+
+        <div className="form-row">
+          <div className="form-group-vertical">
+            <label htmlFor="smtpFromEmail">From Email</label>
+            <input
+              type="email"
+              id="smtpFromEmail"
+              value={smtpFromEmail}
+              onChange={(e) => setSmtpFromEmail(e.target.value)}
+              placeholder="noreply@example.com"
+            />
+            <p className="field-hint">The sender email address</p>
+          </div>
+
+          <div className="form-group-vertical">
+            <label htmlFor="smtpFromName">From Name</label>
+            <input
+              type="text"
+              id="smtpFromName"
+              value={smtpFromName}
+              onChange={(e) => setSmtpFromName(e.target.value)}
+              placeholder="ECM Alerts"
+            />
+            <p className="field-hint">Display name for the sender</p>
+          </div>
+        </div>
+      </div>
+
+      <div className="settings-section">
+        <div className="settings-section-header">
+          <span className="material-icons">send</span>
+          <h3>Test Connection</h3>
+        </div>
+        <p className="section-description">
+          Send a test email to verify your SMTP settings are configured correctly.
+        </p>
+
+        <div className="form-group-vertical">
+          <label htmlFor="smtpTestEmail">Test Recipient Email</label>
+          <div className="input-with-button">
+            <input
+              type="email"
+              id="smtpTestEmail"
+              value={smtpTestEmail}
+              onChange={(e) => setSmtpTestEmail(e.target.value)}
+              placeholder="your@email.com"
+            />
+            <button
+              className="btn-test"
+              onClick={handleTestSmtp}
+              disabled={smtpTesting || !smtpHost || !smtpFromEmail || !smtpTestEmail}
+            >
+              {smtpTesting ? (
+                <>
+                  <span className="material-icons spinning">sync</span>
+                  Testing...
+                </>
+              ) : (
+                <>
+                  <span className="material-icons">send</span>
+                  Send Test Email
+                </>
+              )}
+            </button>
+          </div>
+        </div>
+
+        {smtpTestResult && (
+          <div className={`test-result ${smtpTestResult.success ? 'success' : 'error'}`}>
+            <span className="material-icons">
+              {smtpTestResult.success ? 'check_circle' : 'error'}
+            </span>
+            {smtpTestResult.message}
+          </div>
+        )}
+      </div>
+
+      <div className="settings-actions">
+        <button
+          className="btn btn-primary"
+          onClick={handleSave}
+          disabled={loading}
+        >
+          {loading ? 'Saving...' : 'Save Settings'}
+        </button>
+        {saveSuccess && <span className="save-success">Settings saved!</span>}
+        {error && <span className="save-error">{error}</span>}
+      </div>
+    </div>
+  );
+
   const renderM3UDigestPage = () => (
     <div className="settings-page">
       <div className="settings-page-header">
@@ -1910,20 +2177,17 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
             </div>
 
             <div className="settings-group">
-              <div className="form-group toggle-group">
-                <label htmlFor="digestEnabled">Enable M3U digest emails</label>
-                <span className="form-description">
-                  Send email notifications when M3U playlists change (groups or streams added/removed).
-                </span>
-                <label className="toggle-switch">
-                  <input
-                    id="digestEnabled"
-                    type="checkbox"
-                    checked={digestSettings.enabled}
-                    onChange={(e) => handleDigestSettingChange('enabled', e.target.checked)}
-                  />
-                  <span className="toggle-slider"></span>
-                </label>
+              <div className="checkbox-group">
+                <input
+                  id="digestEnabled"
+                  type="checkbox"
+                  checked={digestSettings.enabled}
+                  onChange={(e) => handleDigestSettingChange('enabled', e.target.checked)}
+                />
+                <div className="checkbox-content">
+                  <label htmlFor="digestEnabled">Enable M3U digest emails</label>
+                  <p>Send email notifications when M3U playlists change (groups or streams added/removed).</p>
+                </div>
               </div>
             </div>
           </div>
@@ -1978,36 +2242,30 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
             </div>
 
             <div className="settings-group">
-              <div className="form-group toggle-group">
-                <label htmlFor="includeGroupChanges">Include group changes</label>
-                <span className="form-description">
-                  Include notifications when groups are added or removed.
-                </span>
-                <label className="toggle-switch">
-                  <input
-                    id="includeGroupChanges"
-                    type="checkbox"
-                    checked={digestSettings.include_group_changes}
-                    onChange={(e) => handleDigestSettingChange('include_group_changes', e.target.checked)}
-                  />
-                  <span className="toggle-slider"></span>
-                </label>
+              <div className="checkbox-group">
+                <input
+                  id="includeGroupChanges"
+                  type="checkbox"
+                  checked={digestSettings.include_group_changes}
+                  onChange={(e) => handleDigestSettingChange('include_group_changes', e.target.checked)}
+                />
+                <div className="checkbox-content">
+                  <label htmlFor="includeGroupChanges">Include group changes</label>
+                  <p>Include notifications when groups are added or removed.</p>
+                </div>
               </div>
 
-              <div className="form-group toggle-group">
-                <label htmlFor="includeStreamChanges">Include stream changes</label>
-                <span className="form-description">
-                  Include notifications when streams are added or removed within groups.
-                </span>
-                <label className="toggle-switch">
-                  <input
-                    id="includeStreamChanges"
-                    type="checkbox"
-                    checked={digestSettings.include_stream_changes}
-                    onChange={(e) => handleDigestSettingChange('include_stream_changes', e.target.checked)}
-                  />
-                  <span className="toggle-slider"></span>
-                </label>
+              <div className="checkbox-group">
+                <input
+                  id="includeStreamChanges"
+                  type="checkbox"
+                  checked={digestSettings.include_stream_changes}
+                  onChange={(e) => handleDigestSettingChange('include_stream_changes', e.target.checked)}
+                />
+                <div className="checkbox-content">
+                  <label htmlFor="includeStreamChanges">Include stream changes</label>
+                  <p>Include notifications when streams are added or removed within groups.</p>
+                </div>
               </div>
             </div>
           </div>
@@ -2019,11 +2277,27 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
               <h3>Email Recipients</h3>
             </div>
 
+            {!smtpConfigured && (
+              <div className="warning-banner">
+                <span className="material-icons">warning</span>
+                <span>
+                  SMTP is not configured. Please configure your email server in{' '}
+                  <button
+                    className="link-button"
+                    onClick={() => setActivePage('email')}
+                  >
+                    Email Settings
+                  </button>{' '}
+                  before sending digests.
+                </span>
+              </div>
+            )}
+
             <div className="settings-group">
               <div className="form-group-vertical">
                 <label>Recipients</label>
                 <span className="form-description">
-                  Email addresses to receive digest notifications. Requires SMTP configured in Alert Methods.
+                  Email addresses to receive digest notifications.
                 </span>
                 <div className="email-recipients-list">
                   {digestSettings.email_recipients.length === 0 ? (
@@ -2102,7 +2376,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
             <button
               className="btn-secondary"
               onClick={handleSendTestDigest}
-              disabled={digestSaving || digestSettings.email_recipients.length === 0}
+              disabled={digestSaving || !smtpConfigured || digestSettings.email_recipients.length === 0}
             >
               <span className="material-icons">send</span>
               Send Test Digest
@@ -2851,6 +3125,13 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
             Appearance
           </li>
           <li
+            className={`settings-nav-item ${activePage === 'email' ? 'active' : ''}`}
+            onClick={() => setActivePage('email')}
+          >
+            <span className="material-icons">email</span>
+            Email Settings
+          </li>
+          <li
             className={`settings-nav-item ${activePage === 'scheduled-tasks' ? 'active' : ''}`}
             onClick={() => setActivePage('scheduled-tasks')}
           >
@@ -2887,6 +3168,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         {activePage === 'normalization' && renderNormalizationPage()}
         {activePage === 'tag-engine' && <TagEngineSection />}
         {activePage === 'appearance' && renderAppearancePage()}
+        {activePage === 'email' && renderEmailSettingsPage()}
         {activePage === 'scheduled-tasks' && <ScheduledTasksSection userTimezone={userTimezone} />}
         {activePage === 'alert-methods' && <AlertMethodSettings />}
         {activePage === 'm3u-digest' && renderM3UDigestPage()}

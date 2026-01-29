@@ -106,9 +106,23 @@ class DispatcharrSettings(BaseModel):
     # normalize_on_channel_create: Default state for normalization toggle when creating channels
     # When true, the "Apply normalization" checkbox will be checked by default
     normalize_on_channel_create: bool = False
+    # Shared SMTP settings for email features (M3U Digest, etc.)
+    # These provide a centralized email configuration that can be used by various features
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_user: str = ""
+    smtp_password: str = ""
+    smtp_from_email: str = ""
+    smtp_from_name: str = "ECM Alerts"
+    smtp_use_tls: bool = True
+    smtp_use_ssl: bool = False
 
     def is_configured(self) -> bool:
         return bool(self.url and self.username and self.password)
+
+    def is_smtp_configured(self) -> bool:
+        """Check if shared SMTP settings are configured."""
+        return bool(self.smtp_host and self.smtp_from_email)
 
 
 class Settings(BaseSettings):
