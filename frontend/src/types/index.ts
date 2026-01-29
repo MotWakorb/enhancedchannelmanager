@@ -743,3 +743,89 @@ export interface NormalizationMigrationResult {
   rules_created: number;
   skipped: boolean;
 }
+
+// =============================================================================
+// M3U Change Tracking Types
+// =============================================================================
+
+// Change type for M3U playlist changes
+export type M3UChangeType = 'group_added' | 'group_removed' | 'streams_added' | 'streams_removed';
+
+// Digest email frequency options
+export type M3UDigestFrequency = 'immediate' | 'hourly' | 'daily' | 'weekly';
+
+// Group data within a snapshot
+export interface M3USnapshotGroupData {
+  name: string;
+  stream_count: number;
+}
+
+// Point-in-time snapshot of M3U playlist state
+export interface M3USnapshot {
+  id: number;
+  m3u_account_id: number;
+  snapshot_time: string;  // ISO timestamp
+  groups_data: {
+    groups: M3USnapshotGroupData[];
+  };
+  total_streams: number;
+  created_at: string;  // ISO timestamp
+}
+
+// Individual change log entry
+export interface M3UChangeLog {
+  id: number;
+  m3u_account_id: number;
+  change_time: string;  // ISO timestamp
+  change_type: M3UChangeType;
+  group_name: string | null;
+  stream_names: string[];
+  count: number;
+  enabled: boolean;  // Whether the group is enabled in the M3U
+  snapshot_id: number | null;
+}
+
+// Paginated response for M3U changes
+export interface M3UChangesResponse {
+  results: M3UChangeLog[];
+  total: number;
+  page: number;
+  page_size: number;
+  total_pages: number;
+  m3u_account_id?: number;  // Present when filtering by account
+}
+
+// Summary statistics for M3U changes
+export interface M3UChangeSummary {
+  total_changes: number;
+  groups_added: number;
+  groups_removed: number;
+  streams_added: number;
+  streams_removed: number;
+  accounts_affected: number[];
+  since: string;  // ISO timestamp
+}
+
+// Settings for M3U change digest emails
+export interface M3UDigestSettings {
+  id: number;
+  enabled: boolean;
+  frequency: M3UDigestFrequency;
+  email_recipients: string[];
+  include_group_changes: boolean;
+  include_stream_changes: boolean;
+  min_changes_threshold: number;
+  last_digest_at: string | null;  // ISO timestamp
+  created_at: string;  // ISO timestamp
+  updated_at: string;  // ISO timestamp
+}
+
+// Request to update digest settings
+export interface M3UDigestSettingsUpdate {
+  enabled?: boolean;
+  frequency?: M3UDigestFrequency;
+  email_recipients?: string[];
+  include_group_changes?: boolean;
+  include_stream_changes?: boolean;
+  min_changes_threshold?: number;
+}

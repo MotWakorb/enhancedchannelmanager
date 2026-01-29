@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import './CustomSelect.css';
 
 export interface SelectOption {
@@ -31,9 +32,12 @@ export function CustomSelect({
   const [isOpen, setIsOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [highlightedIndex, setHighlightedIndex] = useState(-1);
+  const [menuPosition, setMenuPosition] = useState({ top: 0, left: 0, width: 0 });
   const containerRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const optionsRef = useRef<HTMLDivElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
 
   const selectedOption = options.find(opt => opt.value === value);
 
@@ -46,7 +50,10 @@ export function CustomSelect({
   // Close dropdown when clicking outside
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
-      if (containerRef.current && !containerRef.current.contains(event.target as Node)) {
+      const target = event.target as Node;
+      const clickedInContainer = containerRef.current?.contains(target);
+      const clickedInMenu = menuRef.current?.contains(target);
+      if (!clickedInContainer && !clickedInMenu) {
         setIsOpen(false);
         setSearchQuery('');
         setHighlightedIndex(-1);
@@ -56,6 +63,18 @@ export function CustomSelect({
     if (isOpen) {
       document.addEventListener('mousedown', handleClickOutside);
       return () => document.removeEventListener('mousedown', handleClickOutside);
+    }
+  }, [isOpen]);
+
+  // Calculate menu position when opening
+  useEffect(() => {
+    if (isOpen && triggerRef.current) {
+      const rect = triggerRef.current.getBoundingClientRect();
+      setMenuPosition({
+        top: rect.bottom + 4,
+        left: rect.left,
+        width: rect.width,
+      });
     }
   }, [isOpen]);
 
@@ -175,6 +194,7 @@ export function CustomSelect({
       onKeyDown={handleKeyDown}
     >
       <button
+        ref={triggerRef}
         type="button"
         className="custom-select-trigger"
         onClick={handleToggle}
@@ -190,8 +210,19 @@ export function CustomSelect({
         </span>
       </button>
 
-      {isOpen && (
-        <div className="custom-select-menu" role="listbox">
+      {isOpen && createPortal(
+        <div
+          ref={menuRef}
+          className="custom-select-menu"
+          role="listbox"
+          style={{
+            position: 'fixed',
+            top: menuPosition.top,
+            left: menuPosition.left,
+            width: menuPosition.width,
+            minWidth: 200,
+          }}
+        >
           {searchable && (
             <div className="custom-select-search">
               <span className="material-icons">search</span>
@@ -240,7 +271,8 @@ export function CustomSelect({
               ))
             )}
           </div>
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   );

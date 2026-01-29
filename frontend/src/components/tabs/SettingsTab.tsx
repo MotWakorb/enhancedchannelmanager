@@ -4,7 +4,7 @@ import { NETWORK_PREFIXES, NETWORK_SUFFIXES } from '../../constants/streamNormal
 import type { Theme, ProbeHistoryEntry, SortCriterion, SortEnabledMap, GracenoteConflictMode } from '../../services/api';
 import { NormalizationEngineSection } from '../settings/NormalizationEngineSection';
 import { TagEngineSection } from '../settings/TagEngineSection';
-import type { ChannelProfile } from '../../types';
+import type { ChannelProfile, M3UDigestSettings, M3UDigestFrequency } from '../../types';
 import { logger } from '../../utils/logger';
 import { copyToClipboard } from '../../utils/clipboard';
 import type { LogLevel as FrontendLogLevel } from '../../utils/logger';
@@ -181,7 +181,7 @@ interface SettingsTabProps {
   onProbeComplete?: () => void;
 }
 
-type SettingsPage = 'general' | 'channel-defaults' | 'normalization' | 'tag-engine' | 'appearance' | 'scheduled-tasks' | 'alert-methods' | 'maintenance';
+type SettingsPage = 'general' | 'channel-defaults' | 'normalization' | 'tag-engine' | 'appearance' | 'scheduled-tasks' | 'alert-methods' | 'm3u-digest' | 'maintenance';
 
 export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onProbeComplete }: SettingsTabProps) {
   const [activePage, setActivePage] = useState<SettingsPage>('general');
@@ -229,6 +229,13 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   // Log level settings
   const [backendLogLevel, setBackendLogLevel] = useState('INFO');
   const [frontendLogLevel, setFrontendLogLevel] = useState('INFO');
+
+  // M3U Digest settings
+  const [digestSettings, setDigestSettings] = useState<M3UDigestSettings | null>(null);
+  const [digestLoading, setDigestLoading] = useState(false);
+  const [digestError, setDigestError] = useState<string | null>(null);
+  const [digestSaving, setDigestSaving] = useState(false);
+  const [digestTestResult, setDigestTestResult] = useState<{ success: boolean; message: string } | null>(null);
 
   // Stream probe settings (scheduled probing is controlled by Task Engine)
   const [streamProbeBatchSize, setStreamProbeBatchSize] = useState(10);
@@ -340,6 +347,13 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
     checkForOngoingProbe();
     loadM3UAccountsMaxStreams();
   }, []);
+
+  // Load M3U digest settings when that page is activated
+  useEffect(() => {
+    if (activePage === 'm3u-digest' && !digestSettings && !digestLoading) {
+      loadDigestSettings();
+    }
+  }, [activePage, digestSettings, digestLoading]);
 
   // Load M3U accounts to show guidance for max concurrent probes
   const loadM3UAccountsMaxStreams = async () => {
@@ -677,6 +691,81 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
     } finally {
       setLoading(false);
     }
+  };
+
+  // M3U Digest Settings Management
+  const loadDigestSettings = async () => {
+    setDigestLoading(true);
+    setDigestError(null);
+    try {
+      const settings = await api.getM3UDigestSettings();
+      setDigestSettings(settings);
+    } catch (err) {
+      setDigestError(err instanceof Error ? err.message : 'Failed to load digest settings');
+    } finally {
+      setDigestLoading(false);
+    }
+  };
+
+  const handleDigestSettingChange = <K extends keyof M3UDigestSettings>(
+    key: K,
+    value: M3UDigestSettings[K]
+  ) => {
+    if (!digestSettings) return;
+    setDigestSettings({ ...digestSettings, [key]: value });
+  };
+
+  const handleSaveDigestSettings = async () => {
+    if (!digestSettings) return;
+    setDigestSaving(true);
+    setDigestError(null);
+    try {
+      const updated = await api.updateM3UDigestSettings({
+        enabled: digestSettings.enabled,
+        frequency: digestSettings.frequency,
+        email_recipients: digestSettings.email_recipients,
+        include_group_changes: digestSettings.include_group_changes,
+        include_stream_changes: digestSettings.include_stream_changes,
+        min_changes_threshold: digestSettings.min_changes_threshold,
+      });
+      setDigestSettings(updated);
+    } catch (err) {
+      setDigestError(err instanceof Error ? err.message : 'Failed to save digest settings');
+    } finally {
+      setDigestSaving(false);
+    }
+  };
+
+  const handleSendTestDigest = async () => {
+    setDigestTestResult(null);
+    try {
+      const result = await api.sendTestM3UDigest();
+      setDigestTestResult(result);
+      setTimeout(() => setDigestTestResult(null), 5000);
+    } catch (err) {
+      setDigestTestResult({
+        success: false,
+        message: err instanceof Error ? err.message : 'Failed to send test digest',
+      });
+    }
+  };
+
+  const handleAddDigestRecipient = (email: string) => {
+    if (!digestSettings || !email.trim()) return;
+    const trimmed = email.trim().toLowerCase();
+    if (digestSettings.email_recipients.includes(trimmed)) return;
+    setDigestSettings({
+      ...digestSettings,
+      email_recipients: [...digestSettings.email_recipients, trimmed],
+    });
+  };
+
+  const handleRemoveDigestRecipient = (email: string) => {
+    if (!digestSettings) return;
+    setDigestSettings({
+      ...digestSettings,
+      email_recipients: digestSettings.email_recipients.filter(e => e !== email),
+    });
   };
 
   const handleRestart = async () => {
@@ -1786,6 +1875,252 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
     </div>
   );
 
+  // State for new email input in digest settings
+  const [newDigestEmail, setNewDigestEmail] = useState('');
+
+  const renderM3UDigestPage = () => (
+    <div className="settings-page">
+      <div className="settings-page-header">
+        <h2>M3U Change Digest</h2>
+        <p>Configure email notifications for M3U playlist changes.</p>
+      </div>
+
+      {digestLoading && (
+        <div className="loading-state">
+          <span className="material-icons spinning">sync</span>
+          <span>Loading digest settings...</span>
+        </div>
+      )}
+
+      {digestError && (
+        <div className="error-banner">
+          <span className="material-icons">error</span>
+          {digestError}
+          <button onClick={loadDigestSettings}>Retry</button>
+        </div>
+      )}
+
+      {digestSettings && !digestLoading && (
+        <>
+          {/* Enable/Disable Section */}
+          <div className="settings-section">
+            <div className="settings-section-header">
+              <span className="material-icons">notifications</span>
+              <h3>Digest Notifications</h3>
+            </div>
+
+            <div className="settings-group">
+              <div className="form-group toggle-group">
+                <label htmlFor="digestEnabled">Enable M3U digest emails</label>
+                <span className="form-description">
+                  Send email notifications when M3U playlists change (groups or streams added/removed).
+                </span>
+                <label className="toggle-switch">
+                  <input
+                    id="digestEnabled"
+                    type="checkbox"
+                    checked={digestSettings.enabled}
+                    onChange={(e) => handleDigestSettingChange('enabled', e.target.checked)}
+                  />
+                  <span className="toggle-slider"></span>
+                </label>
+              </div>
+            </div>
+          </div>
+
+          {/* Frequency Section */}
+          <div className="settings-section">
+            <div className="settings-section-header">
+              <span className="material-icons">schedule</span>
+              <h3>Frequency</h3>
+            </div>
+
+            <div className="settings-group">
+              <div className="form-group-vertical">
+                <label htmlFor="digestFrequency">Digest frequency</label>
+                <span className="form-description">
+                  How often to send digest emails. "Immediate" sends right after each M3U refresh.
+                </span>
+                <CustomSelect
+                  value={digestSettings.frequency}
+                  onChange={(val) => handleDigestSettingChange('frequency', val as M3UDigestFrequency)}
+                  options={[
+                    { value: 'immediate', label: 'Immediate (after each refresh)' },
+                    { value: 'hourly', label: 'Hourly' },
+                    { value: 'daily', label: 'Daily' },
+                    { value: 'weekly', label: 'Weekly' },
+                  ]}
+                />
+              </div>
+
+              <div className="form-group-vertical">
+                <label htmlFor="digestThreshold">Minimum changes threshold</label>
+                <span className="form-description">
+                  Only send digest if at least this many changes occurred.
+                </span>
+                <input
+                  id="digestThreshold"
+                  type="number"
+                  min="1"
+                  max="100"
+                  value={digestSettings.min_changes_threshold}
+                  onChange={(e) => handleDigestSettingChange('min_changes_threshold', Math.max(1, parseInt(e.target.value) || 1))}
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* Content Filters Section */}
+          <div className="settings-section">
+            <div className="settings-section-header">
+              <span className="material-icons">filter_list</span>
+              <h3>Content Filters</h3>
+            </div>
+
+            <div className="settings-group">
+              <div className="form-group toggle-group">
+                <label htmlFor="includeGroupChanges">Include group changes</label>
+                <span className="form-description">
+                  Include notifications when groups are added or removed.
+                </span>
+                <label className="toggle-switch">
+                  <input
+                    id="includeGroupChanges"
+                    type="checkbox"
+                    checked={digestSettings.include_group_changes}
+                    onChange={(e) => handleDigestSettingChange('include_group_changes', e.target.checked)}
+                  />
+                  <span className="toggle-slider"></span>
+                </label>
+              </div>
+
+              <div className="form-group toggle-group">
+                <label htmlFor="includeStreamChanges">Include stream changes</label>
+                <span className="form-description">
+                  Include notifications when streams are added or removed within groups.
+                </span>
+                <label className="toggle-switch">
+                  <input
+                    id="includeStreamChanges"
+                    type="checkbox"
+                    checked={digestSettings.include_stream_changes}
+                    onChange={(e) => handleDigestSettingChange('include_stream_changes', e.target.checked)}
+                  />
+                  <span className="toggle-slider"></span>
+                </label>
+              </div>
+            </div>
+          </div>
+
+          {/* Recipients Section */}
+          <div className="settings-section">
+            <div className="settings-section-header">
+              <span className="material-icons">mail</span>
+              <h3>Email Recipients</h3>
+            </div>
+
+            <div className="settings-group">
+              <div className="form-group-vertical">
+                <label>Recipients</label>
+                <span className="form-description">
+                  Email addresses to receive digest notifications. Requires SMTP configured in Alert Methods.
+                </span>
+                <div className="email-recipients-list">
+                  {digestSettings.email_recipients.length === 0 ? (
+                    <span className="no-recipients">No recipients configured</span>
+                  ) : (
+                    digestSettings.email_recipients.map((email) => (
+                      <span key={email} className="email-recipient-tag">
+                        {email}
+                        <button
+                          className="remove-btn"
+                          onClick={() => handleRemoveDigestRecipient(email)}
+                          title="Remove recipient"
+                        >
+                          <span className="material-icons">close</span>
+                        </button>
+                      </span>
+                    ))
+                  )}
+                </div>
+                <div className="add-email-row">
+                  <input
+                    type="email"
+                    placeholder="Enter email address"
+                    value={newDigestEmail}
+                    onChange={(e) => setNewDigestEmail(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && newDigestEmail.trim()) {
+                        handleAddDigestRecipient(newDigestEmail);
+                        setNewDigestEmail('');
+                      }
+                    }}
+                  />
+                  <button
+                    className="btn-secondary"
+                    onClick={() => {
+                      if (newDigestEmail.trim()) {
+                        handleAddDigestRecipient(newDigestEmail);
+                        setNewDigestEmail('');
+                      }
+                    }}
+                    disabled={!newDigestEmail.trim()}
+                  >
+                    <span className="material-icons">add</span>
+                    Add
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Last Digest Info */}
+          {digestSettings.last_digest_at && (
+            <div className="settings-section">
+              <div className="settings-section-header">
+                <span className="material-icons">history</span>
+                <h3>Last Digest</h3>
+              </div>
+              <p className="form-hint">
+                Last digest sent: {new Date(digestSettings.last_digest_at).toLocaleString()}
+              </p>
+            </div>
+          )}
+
+          {/* Test Result */}
+          {digestTestResult && (
+            <div className={`result-banner ${digestTestResult.success ? 'success' : 'error'}`}>
+              <span className="material-icons">
+                {digestTestResult.success ? 'check_circle' : 'error'}
+              </span>
+              {digestTestResult.message}
+            </div>
+          )}
+
+          {/* Actions */}
+          <div className="settings-actions">
+            <button
+              className="btn-secondary"
+              onClick={handleSendTestDigest}
+              disabled={digestSaving || digestSettings.email_recipients.length === 0}
+            >
+              <span className="material-icons">send</span>
+              Send Test Digest
+            </button>
+            <button
+              className="btn-primary"
+              onClick={handleSaveDigestSettings}
+              disabled={digestSaving}
+            >
+              <span className="material-icons">save</span>
+              {digestSaving ? 'Saving...' : 'Save Digest Settings'}
+            </button>
+          </div>
+        </>
+      )}
+    </div>
+  );
+
   const renderMaintenancePage = () => (
     <div className="settings-page">
       <div className="settings-page-header">
@@ -2530,6 +2865,13 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
             Alert Methods
           </li>
           <li
+            className={`settings-nav-item ${activePage === 'm3u-digest' ? 'active' : ''}`}
+            onClick={() => setActivePage('m3u-digest')}
+          >
+            <span className="material-icons">mail</span>
+            M3U Digest
+          </li>
+          <li
             className={`settings-nav-item ${activePage === 'maintenance' ? 'active' : ''}`}
             onClick={() => setActivePage('maintenance')}
           >
@@ -2547,6 +2889,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         {activePage === 'appearance' && renderAppearancePage()}
         {activePage === 'scheduled-tasks' && <ScheduledTasksSection userTimezone={userTimezone} />}
         {activePage === 'alert-methods' && <AlertMethodSettings />}
+        {activePage === 'm3u-digest' && renderM3UDigestPage()}
         {activePage === 'maintenance' && renderMaintenancePage()}
       </div>
 

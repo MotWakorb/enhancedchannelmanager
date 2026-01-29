@@ -3796,6 +3796,118 @@ async def delete_m3u_account(account_id: int, delete_groups: bool = True):
 # -------------------------------------------------------------------------
 
 
+async def _capture_m3u_changes_after_refresh(account_id: int, account_name: str):
+    """
+    Capture M3U state changes after a refresh.
+
+    Fetches current groups/streams for the account, compares with previous
+    snapshot, and persists any detected changes.
+
+    IMPORTANT: Gets ALL groups from the M3U source (not just enabled ones) by:
+    1. Getting the M3U account which has channel_groups with group IDs
+    2. Getting all channel groups to build ID -> name mapping
+    3. Getting actual stream counts per group (only available for enabled groups)
+    4. Merging: all groups get names, stream counts where available
+    """
+    from m3u_change_detector import M3UChangeDetector
+
+    try:
+        api_client = get_client()
+
+        # Get the M3U account - channel_groups contains ALL groups from this M3U source
+        account_data = await api_client.get_m3u_account(account_id)
+        account_channel_groups = account_data.get("channel_groups", [])
+
+        # Get all channel groups to build ID -> name mapping
+        all_channel_groups = await api_client.get_channel_groups()
+        group_lookup = {
+            g["id"]: g["name"]
+            for g in all_channel_groups
+        }
+
+        # Get actual stream counts (only available for enabled groups with imported streams)
+        stream_counts = await api_client.get_stream_groups_with_counts(m3u_account_id=account_id)
+        stream_count_lookup = {
+            g["name"]: g["count"]
+            for g in stream_counts
+        }
+
+        # Build list of enabled group names to fetch stream names for
+        enabled_group_names = []
+        for acg in account_channel_groups:
+            group_id = acg.get("channel_group")
+            if group_id and group_id in group_lookup and acg.get("enabled", False):
+                enabled_group_names.append(group_lookup[group_id])
+
+        # Fetch stream names for enabled groups (limit to first 50 per group)
+        stream_names_by_group = {}
+        MAX_STREAM_NAMES = 50
+        for group_name in enabled_group_names:
+            try:
+                streams_response = await api_client.get_streams(
+                    page=1,
+                    page_size=MAX_STREAM_NAMES,
+                    channel_group_name=group_name,
+                    m3u_account=account_id,
+                )
+                stream_names = [s.get("name", "") for s in streams_response.get("results", [])]
+                if stream_names:
+                    stream_names_by_group[group_name] = stream_names
+            except Exception as e:
+                logger.debug(f"[M3U-CHANGE] Could not fetch streams for group '{group_name}': {e}")
+
+        # Match up: for each group in this M3U account, get name and stream count
+        current_groups = []
+        total_streams = 0
+
+        for acg in account_channel_groups:
+            group_id = acg.get("channel_group")
+            if group_id and group_id in group_lookup:
+                group_name = group_lookup[group_id]
+                # Get stream count if available (only for enabled groups), otherwise 0
+                stream_count = stream_count_lookup.get(group_name, 0)
+                enabled = acg.get("enabled", False)
+                current_groups.append({
+                    "name": group_name,
+                    "stream_count": stream_count,
+                    "enabled": enabled,
+                })
+                total_streams += stream_count
+
+        logger.info(
+            f"[M3U-CHANGE] Capturing state for account {account_id} ({account_name}): "
+            f"{len(current_groups)} groups, {total_streams} streams (all groups from M3U)"
+        )
+
+        # Use change detector to compare and persist
+        db = get_session()
+        try:
+            detector = M3UChangeDetector(db)
+            change_set = detector.detect_changes(
+                m3u_account_id=account_id,
+                current_groups=current_groups,
+                current_total_streams=total_streams,
+                stream_names_by_group=stream_names_by_group,
+            )
+
+            if change_set.has_changes:
+                # Persist the changes
+                detector.persist_changes(change_set)
+                logger.info(
+                    f"[M3U-CHANGE] Detected and persisted changes for {account_name}: "
+                    f"+{len(change_set.groups_added)} groups, -{len(change_set.groups_removed)} groups, "
+                    f"+{sum(s.count for s in change_set.streams_added)} streams, "
+                    f"-{sum(s.count for s in change_set.streams_removed)} streams"
+                )
+            else:
+                logger.debug(f"[M3U-CHANGE] No changes detected for {account_name}")
+        finally:
+            db.close()
+
+    except Exception as e:
+        logger.error(f"[M3U-CHANGE] Failed to capture changes for {account_name}: {e}")
+
+
 async def _poll_m3u_refresh_completion(account_id: int, account_name: str, initial_updated):
     """
     Background task to poll Dispatcharr until M3U refresh completes.
@@ -3840,6 +3952,9 @@ async def _poll_m3u_refresh_completion(account_id: int, account_name: str, initi
                 wait_duration = (datetime.utcnow() - wait_start).total_seconds()
                 logger.info(f"[M3U-REFRESH] '{account_name}' refresh complete in {wait_duration:.1f}s")
 
+                # Capture M3U changes after refresh
+                await _capture_m3u_changes_after_refresh(account_id, account_name)
+
                 journal.log_entry(
                     category="m3u",
                     action_type="refresh",
@@ -3862,6 +3977,9 @@ async def _poll_m3u_refresh_completion(account_id: int, account_name: str, initi
                 # After 30 seconds, assume complete if no timestamp field available
                 wait_duration = (datetime.utcnow() - wait_start).total_seconds()
                 logger.info(f"[M3U-REFRESH] '{account_name}' - assuming complete after {wait_duration:.0f}s (no timestamp field)")
+
+                # Capture M3U changes after refresh
+                await _capture_m3u_changes_after_refresh(account_id, account_name)
 
                 journal.log_entry(
                     category="m3u",
@@ -4286,6 +4404,316 @@ async def delete_server_group(group_id: int):
         return {"status": "deleted"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# M3U Change Tracking API
+@app.get("/api/m3u/changes")
+async def get_m3u_changes(
+    page: int = 1,
+    page_size: int = 50,
+    m3u_account_id: Optional[int] = None,
+    change_type: Optional[str] = None,
+    enabled: Optional[bool] = None,
+    sort_by: Optional[str] = None,
+    sort_order: Optional[str] = "desc",
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+):
+    """
+    Get paginated list of M3U change logs.
+
+    Args:
+        page: Page number (1-indexed)
+        page_size: Number of items per page
+        m3u_account_id: Filter by M3U account ID
+        change_type: Filter by change type (group_added, group_removed, streams_added, streams_removed)
+        enabled: Filter by enabled status (true/false)
+        sort_by: Column to sort by (change_time, m3u_account_id, change_type, group_name, count, enabled)
+        sort_order: Sort order (asc or desc, default: desc)
+        date_from: Filter changes from this date (ISO format)
+        date_to: Filter changes until this date (ISO format)
+    """
+    from datetime import datetime as dt
+    from models import M3UChangeLog
+
+    db = get_session()
+    try:
+        query = db.query(M3UChangeLog)
+
+        # Apply filters
+        if m3u_account_id:
+            query = query.filter(M3UChangeLog.m3u_account_id == m3u_account_id)
+        if change_type:
+            query = query.filter(M3UChangeLog.change_type == change_type)
+        if enabled is not None:
+            query = query.filter(M3UChangeLog.enabled == enabled)
+        if date_from:
+            try:
+                date_from_dt = dt.fromisoformat(date_from.replace("Z", "+00:00"))
+                query = query.filter(M3UChangeLog.change_time >= date_from_dt)
+            except ValueError:
+                pass
+        if date_to:
+            try:
+                date_to_dt = dt.fromisoformat(date_to.replace("Z", "+00:00"))
+                query = query.filter(M3UChangeLog.change_time <= date_to_dt)
+            except ValueError:
+                pass
+
+        # Get total count
+        total = query.count()
+
+        # Apply sorting
+        sort_columns = {
+            "change_time": M3UChangeLog.change_time,
+            "m3u_account_id": M3UChangeLog.m3u_account_id,
+            "change_type": M3UChangeLog.change_type,
+            "group_name": M3UChangeLog.group_name,
+            "count": M3UChangeLog.count,
+            "enabled": M3UChangeLog.enabled,
+        }
+        sort_column = sort_columns.get(sort_by, M3UChangeLog.change_time)
+        if sort_order == "asc":
+            query = query.order_by(sort_column.asc())
+        else:
+            query = query.order_by(sort_column.desc())
+
+        # Apply pagination
+        changes = (
+            query.offset((page - 1) * page_size)
+            .limit(page_size)
+            .all()
+        )
+
+        return {
+            "results": [c.to_dict() for c in changes],
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+            "total_pages": (total + page_size - 1) // page_size,
+        }
+    finally:
+        db.close()
+
+
+@app.get("/api/m3u/changes/summary")
+async def get_m3u_changes_summary(
+    hours: int = 24,
+    m3u_account_id: Optional[int] = None,
+):
+    """
+    Get aggregated summary of M3U changes.
+
+    Args:
+        hours: Look back this many hours (default: 24)
+        m3u_account_id: Filter by M3U account ID
+    """
+    from datetime import datetime as dt, timedelta
+    from m3u_change_detector import M3UChangeDetector
+
+    db = get_session()
+    try:
+        detector = M3UChangeDetector(db)
+        since = dt.utcnow() - timedelta(hours=hours)
+        summary = detector.get_change_summary(since, m3u_account_id)
+        return summary
+    finally:
+        db.close()
+
+
+@app.get("/api/m3u/accounts/{account_id}/changes")
+async def get_m3u_account_changes(
+    account_id: int,
+    page: int = 1,
+    page_size: int = 50,
+    change_type: Optional[str] = None,
+):
+    """
+    Get change history for a specific M3U account.
+
+    Args:
+        account_id: M3U account ID
+        page: Page number (1-indexed)
+        page_size: Number of items per page
+        change_type: Filter by change type
+    """
+    from models import M3UChangeLog
+
+    db = get_session()
+    try:
+        query = db.query(M3UChangeLog).filter(M3UChangeLog.m3u_account_id == account_id)
+
+        if change_type:
+            query = query.filter(M3UChangeLog.change_type == change_type)
+
+        total = query.count()
+
+        changes = (
+            query.order_by(M3UChangeLog.change_time.desc())
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+            .all()
+        )
+
+        return {
+            "results": [c.to_dict() for c in changes],
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+            "total_pages": (total + page_size - 1) // page_size,
+            "m3u_account_id": account_id,
+        }
+    finally:
+        db.close()
+
+
+@app.get("/api/m3u/snapshots")
+async def get_m3u_snapshots(
+    m3u_account_id: Optional[int] = None,
+    limit: int = 10,
+):
+    """
+    Get recent M3U snapshots.
+
+    Args:
+        m3u_account_id: Filter by M3U account ID
+        limit: Maximum number of snapshots to return
+    """
+    from models import M3USnapshot
+
+    db = get_session()
+    try:
+        query = db.query(M3USnapshot)
+
+        if m3u_account_id:
+            query = query.filter(M3USnapshot.m3u_account_id == m3u_account_id)
+
+        snapshots = query.order_by(M3USnapshot.snapshot_time.desc()).limit(limit).all()
+
+        return [s.to_dict() for s in snapshots]
+    finally:
+        db.close()
+
+
+# M3U Digest Settings API
+@app.get("/api/m3u/digest/settings")
+async def get_m3u_digest_settings():
+    """Get M3U digest email settings."""
+    from tasks.m3u_digest import get_or_create_digest_settings
+
+    db = get_session()
+    try:
+        settings = get_or_create_digest_settings(db)
+        return settings.to_dict()
+    finally:
+        db.close()
+
+
+class M3UDigestSettingsUpdate(BaseModel):
+    """Request model for updating M3U digest settings."""
+    enabled: Optional[bool] = None
+    frequency: Optional[str] = None  # immediate, hourly, daily, weekly
+    email_recipients: Optional[List[str]] = None
+    include_group_changes: Optional[bool] = None
+    include_stream_changes: Optional[bool] = None
+    min_changes_threshold: Optional[int] = None
+
+
+@app.put("/api/m3u/digest/settings")
+async def update_m3u_digest_settings(request: M3UDigestSettingsUpdate):
+    """Update M3U digest email settings."""
+    from tasks.m3u_digest import get_or_create_digest_settings
+    import re
+
+    db = get_session()
+    try:
+        settings = get_or_create_digest_settings(db)
+
+        # Validate and apply updates
+        if request.enabled is not None:
+            settings.enabled = request.enabled
+
+        if request.frequency is not None:
+            if request.frequency not in ("immediate", "hourly", "daily", "weekly"):
+                raise HTTPException(
+                    status_code=400,
+                    detail="Invalid frequency. Must be: immediate, hourly, daily, or weekly"
+                )
+            settings.frequency = request.frequency
+
+        if request.email_recipients is not None:
+            # Validate email addresses
+            email_pattern = re.compile(r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$")
+            for email in request.email_recipients:
+                if not email_pattern.match(email):
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Invalid email address: {email}"
+                    )
+            settings.set_email_recipients(request.email_recipients)
+
+        if request.include_group_changes is not None:
+            settings.include_group_changes = request.include_group_changes
+
+        if request.include_stream_changes is not None:
+            settings.include_stream_changes = request.include_stream_changes
+
+        if request.min_changes_threshold is not None:
+            if request.min_changes_threshold < 1:
+                raise HTTPException(
+                    status_code=400,
+                    detail="min_changes_threshold must be at least 1"
+                )
+            settings.min_changes_threshold = request.min_changes_threshold
+
+        db.commit()
+        db.refresh(settings)
+
+        # Log to journal
+        journal.log_entry(
+            category="m3u",
+            action_type="update",
+            entity_id=settings.id,
+            entity_name="M3U Digest Settings",
+            description="Updated M3U digest email settings",
+            after_value=settings.to_dict(),
+        )
+
+        return settings.to_dict()
+    finally:
+        db.close()
+
+
+@app.post("/api/m3u/digest/test")
+async def send_test_m3u_digest():
+    """Send a test M3U digest email."""
+    from tasks.m3u_digest import M3UDigestTask, get_or_create_digest_settings
+
+    db = get_session()
+    try:
+        settings = get_or_create_digest_settings(db)
+
+        if not settings.get_email_recipients():
+            raise HTTPException(
+                status_code=400,
+                detail="No email recipients configured. Please add recipients first."
+            )
+
+        task = M3UDigestTask()
+        result = await task.execute(force=True)
+
+        return {
+            "success": result.success,
+            "message": result.message,
+            "details": result.details,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(f"Failed to send test M3U digest: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        db.close()
 
 
 # Journal API

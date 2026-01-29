@@ -435,12 +435,14 @@
 }
 
 .alert-method-settings .form-group.inline label {
+  display: inline;
   margin-bottom: 0;
   white-space: nowrap;
 }
 
 .alert-method-settings .form-group.inline input {
   margin-bottom: 0;
+  width: auto;
 }
 
 .alert-method-settings .form-hint.small {

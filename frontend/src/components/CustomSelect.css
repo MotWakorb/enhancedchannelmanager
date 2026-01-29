@@ -73,18 +73,13 @@
   transform: rotate(180deg);
 }
 
-/* Dropdown menu */
+/* Dropdown menu - rendered via portal */
 .custom-select-menu {
-  position: absolute;
-  top: 100%;
-  left: 0;
-  right: 0;
-  margin-top: 4px;
   background-color: var(--bg-secondary, #252530);
   border: 1px solid var(--border-secondary, #4a4a55);
   border-radius: 6px;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
-  z-index: 1000;
+  z-index: 10000;
   max-height: 250px;
   display: flex;
   flex-direction: column;

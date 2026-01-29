@@ -802,3 +802,174 @@ class Tag(Base):
 
     def __repr__(self):
         return f"<Tag(id={self.id}, group_id={self.group_id}, value={self.value})>"
+
+
+class M3USnapshot(Base):
+    """
+    Point-in-time snapshot of M3U playlist state.
+    Stored on each M3U refresh to enable change detection.
+    """
+    __tablename__ = "m3u_snapshots"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    m3u_account_id = Column(Integer, nullable=False)  # Dispatcharr M3U account ID
+    snapshot_time = Column(DateTime, default=datetime.utcnow, nullable=False)
+    # JSON with group names and stream counts: {"groups": [{"name": "Sports", "stream_count": 50}, ...]}
+    groups_data = Column(Text, nullable=True)
+    total_streams = Column(Integer, default=0, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        Index("idx_m3u_snapshot_account", m3u_account_id),
+        Index("idx_m3u_snapshot_time", snapshot_time.desc()),
+        Index("idx_m3u_snapshot_account_time", m3u_account_id, snapshot_time.desc()),
+    )
+
+    def get_groups_data(self) -> dict:
+        """Parse groups_data JSON into dictionary."""
+        if not self.groups_data:
+            return {"groups": []}
+        try:
+            import json
+            return json.loads(self.groups_data)
+        except (ValueError, TypeError):
+            return {"groups": []}
+
+    def set_groups_data(self, data: dict) -> None:
+        """Set groups_data from dictionary."""
+        import json
+        self.groups_data = json.dumps(data) if data else None
+
+    def to_dict(self) -> dict:
+        """Convert to dictionary for API responses."""
+        return {
+            "id": self.id,
+            "m3u_account_id": self.m3u_account_id,
+            "snapshot_time": self.snapshot_time.isoformat() + "Z" if self.snapshot_time else None,
+            "groups_data": self.get_groups_data(),
+            "total_streams": self.total_streams,
+            "created_at": self.created_at.isoformat() + "Z" if self.created_at else None,
+        }
+
+    def __repr__(self):
+        return f"<M3USnapshot(id={self.id}, m3u_account_id={self.m3u_account_id}, total_streams={self.total_streams})>"
+
+
+class M3UChangeLog(Base):
+    """
+    Persisted log of detected changes in M3U playlists.
+    Records additions, removals, and modifications of groups and streams.
+    """
+    __tablename__ = "m3u_change_logs"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    m3u_account_id = Column(Integer, nullable=False)  # Dispatcharr M3U account ID
+    change_time = Column(DateTime, default=datetime.utcnow, nullable=False)
+    # Change type: group_added, group_removed, streams_added, streams_removed, streams_modified
+    change_type = Column(String(30), nullable=False)
+    group_name = Column(String(255), nullable=True)  # Affected group name (if applicable)
+    # JSON array of stream names for bulk changes: ["Stream 1", "Stream 2", ...]
+    stream_names = Column(Text, nullable=True)
+    count = Column(Integer, default=0, nullable=False)  # Number of items affected
+    enabled = Column(Boolean, default=False, nullable=False)  # Whether the group is enabled in the M3U
+    snapshot_id = Column(Integer, ForeignKey("m3u_snapshots.id", ondelete="SET NULL"), nullable=True)
+
+    # Relationship to snapshot
+    snapshot = relationship("M3USnapshot", lazy="joined")
+
+    __table_args__ = (
+        Index("idx_m3u_change_account", m3u_account_id),
+        Index("idx_m3u_change_time", change_time.desc()),
+        Index("idx_m3u_change_account_time", m3u_account_id, change_time.desc()),
+        Index("idx_m3u_change_type", change_type),
+    )
+
+    def get_stream_names(self) -> list:
+        """Parse stream_names JSON into list."""
+        if not self.stream_names:
+            return []
+        try:
+            import json
+            return json.loads(self.stream_names)
+        except (ValueError, TypeError):
+            return []
+
+    def set_stream_names(self, names: list) -> None:
+        """Set stream_names from list."""
+        import json
+        self.stream_names = json.dumps(names) if names else None
+
+    def to_dict(self) -> dict:
+        """Convert to dictionary for API responses."""
+        return {
+            "id": self.id,
+            "m3u_account_id": self.m3u_account_id,
+            "change_time": self.change_time.isoformat() + "Z" if self.change_time else None,
+            "change_type": self.change_type,
+            "group_name": self.group_name,
+            "stream_names": self.get_stream_names(),
+            "count": self.count,
+            "enabled": self.enabled,
+            "snapshot_id": self.snapshot_id,
+        }
+
+    def __repr__(self):
+        return f"<M3UChangeLog(id={self.id}, m3u_account_id={self.m3u_account_id}, type={self.change_type}, count={self.count}, enabled={self.enabled})>"
+
+
+class M3UDigestSettings(Base):
+    """
+    Settings for M3U change digest email reports.
+    Controls frequency and content of automated change notifications.
+    """
+    __tablename__ = "m3u_digest_settings"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    enabled = Column(Boolean, default=False, nullable=False)
+    # Frequency: immediate, hourly, daily, weekly
+    frequency = Column(String(20), default="daily", nullable=False)
+    # JSON array of email addresses: ["user@example.com", ...]
+    email_recipients = Column(Text, nullable=True)
+    # Content filters
+    include_group_changes = Column(Boolean, default=True, nullable=False)
+    include_stream_changes = Column(Boolean, default=True, nullable=False)
+    # Only send digest if at least this many changes occurred
+    min_changes_threshold = Column(Integer, default=1, nullable=False)
+    # Tracking
+    last_digest_at = Column(DateTime, nullable=True)
+    # Timestamps
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    def get_email_recipients(self) -> list:
+        """Parse email_recipients JSON into list."""
+        if not self.email_recipients:
+            return []
+        try:
+            import json
+            return json.loads(self.email_recipients)
+        except (ValueError, TypeError):
+            return []
+
+    def set_email_recipients(self, emails: list) -> None:
+        """Set email_recipients from list."""
+        import json
+        self.email_recipients = json.dumps(emails) if emails else None
+
+    def to_dict(self) -> dict:
+        """Convert to dictionary for API responses."""
+        return {
+            "id": self.id,
+            "enabled": self.enabled,
+            "frequency": self.frequency,
+            "email_recipients": self.get_email_recipients(),
+            "include_group_changes": self.include_group_changes,
+            "include_stream_changes": self.include_stream_changes,
+            "min_changes_threshold": self.min_changes_threshold,
+            "last_digest_at": self.last_digest_at.isoformat() + "Z" if self.last_digest_at else None,
+            "created_at": self.created_at.isoformat() + "Z" if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() + "Z" if self.updated_at else None,
+        }
+
+    def __repr__(self):
+        return f"<M3UDigestSettings(id={self.id}, enabled={self.enabled}, frequency={self.frequency})>"
