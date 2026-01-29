@@ -933,8 +933,8 @@ export function ChannelsPane({
   }, [logos]);
 
   // Load streams when a channel is selected
-  // Always fetch from API to ensure we have the correct streams regardless of
-  // what's loaded in StreamsPane (which uses lazy loading and filtering)
+  // In edit mode, staged streams may not exist in the API yet, so we need to
+  // look them up from allStreams prop as well as fetching from API
   useEffect(() => {
     const loadStreams = async () => {
       if (!selectedChannelId) {
@@ -948,13 +948,43 @@ export function ChannelsPane({
         return;
       }
 
-      // Fetch from API
+      // Build a map of locally available streams (for edit mode staged streams)
+      const localStreamMap = new Map(allStreams.map((s) => [s.id, s]));
+
+      // For new channels (negative IDs), never call API - only use local streams
+      // The channel doesn't exist on the server yet
+      if (selectedChannelId < 0) {
+        const orderedStreams = selectedChannel.streams
+          .map((id) => localStreamMap.get(id))
+          .filter((s): s is Stream => s !== undefined);
+        setChannelStreams(orderedStreams);
+        return;
+      }
+
+      // Check if all needed streams are available locally
+      const missingFromLocal = selectedChannel.streams.filter(id => !localStreamMap.has(id));
+
+      // If all streams are available locally, use them without API call
+      if (missingFromLocal.length === 0) {
+        const orderedStreams = selectedChannel.streams
+          .map((id) => localStreamMap.get(id))
+          .filter((s): s is Stream => s !== undefined);
+        setChannelStreams(orderedStreams);
+        return;
+      }
+
+      // Fetch from API for streams not available locally
       setStreamsLoading(true);
       try {
         const streamDetails = await api.getChannelStreams(selectedChannelId);
+        // Combine API results with local streams (local takes precedence for staged changes)
+        const combinedMap = new Map<number, Stream>([
+          ...streamDetails.map((s: Stream) => [s.id, s] as [number, Stream]),
+          ...allStreams.map((s) => [s.id, s] as [number, Stream]),
+        ]);
         // Sort streams to match the order in channel.streams
         const orderedStreams = selectedChannel.streams
-          .map((id) => streamDetails.find((s: Stream) => s.id === id))
+          .map((id) => combinedMap.get(id))
           .filter((s): s is Stream => s !== undefined);
         setChannelStreams(orderedStreams);
       } catch (err) {
@@ -964,7 +994,7 @@ export function ChannelsPane({
       }
     };
     loadStreams();
-  }, [selectedChannelId, channels]);
+  }, [selectedChannelId, channels, allStreams]);
 
   // Fetch stream stats when channelStreams changes
   useEffect(() => {
