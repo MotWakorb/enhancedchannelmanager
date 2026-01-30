@@ -10,6 +10,7 @@ from tasks.m3u_refresh import M3URefreshTask
 from tasks.m3u_change_monitor import M3UChangeMonitorTask
 from tasks.cleanup import CleanupTask
 from tasks.stream_probe import StreamProbeTask
+from tasks.popularity_calculation import PopularityCalculationTask
 
 __all__ = [
     "EPGRefreshTask",
@@ -17,4 +18,5 @@ __all__ = [
     "M3UChangeMonitorTask",
     "CleanupTask",
     "StreamProbeTask",
+    "PopularityCalculationTask",
 ]
