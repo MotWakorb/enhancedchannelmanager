@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
 import * as api from '../../services/api';
 import { NETWORK_PREFIXES, NETWORK_SUFFIXES } from '../../constants/streamNormalization';
-import type { Theme, ProbeHistoryEntry, SortCriterion, SortEnabledMap, GracenoteConflictMode } from '../../services/api';
+import type { Theme, ProbeHistoryEntry, SortCriterion, SortEnabledMap, GracenoteConflictMode, StreamPreviewMode } from '../../services/api';
 import { NormalizationEngineSection } from '../settings/NormalizationEngineSection';
 import { TagEngineSection } from '../settings/TagEngineSection';
 import type { ChannelProfile, M3UDigestSettings, M3UDigestFrequency } from '../../types';
@@ -221,6 +221,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   const [gracenoteConflictMode, setGracenoteConflictMode] = useState<GracenoteConflictMode>('ask');
   const [theme, setTheme] = useState<Theme>('dark');
   const [vlcOpenBehavior, setVlcOpenBehavior] = useState('m3u_fallback');
+  const [streamPreviewMode, setStreamPreviewMode] = useState<StreamPreviewMode>('passthrough');
 
   // Stats settings
   const [statsPollInterval, setStatsPollInterval] = useState(10);
@@ -518,6 +519,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       setGracenoteConflictMode(settings.gracenote_conflict_mode || 'ask');
       setTheme(settings.theme || 'dark');
       setVlcOpenBehavior(settings.vlc_open_behavior || 'm3u_fallback');
+      setStreamPreviewMode(settings.stream_preview_mode || 'passthrough');
       setDefaultChannelProfileIds(settings.default_channel_profile_ids);
       setEpgAutoMatchThreshold(settings.epg_auto_match_threshold ?? 80);
       setCustomNetworkPrefixes(settings.custom_network_prefixes ?? []);
@@ -652,6 +654,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         backend_log_level: backendLogLevel,
         frontend_log_level: frontendLogLevel,
         vlc_open_behavior: vlcOpenBehavior,
+        stream_preview_mode: streamPreviewMode,
         linked_m3u_accounts: linkedM3UAccounts,
         // Stream probe settings (scheduled probing is controlled by Task Engine)
         stream_probe_batch_size: streamProbeBatchSize,
@@ -1503,6 +1506,32 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
             Controls what happens when you click "Open in VLC". The vlc:// protocol requires
             browser extensions on some platforms. If "protocol_only" fails, a helper modal
             will guide you to install the necessary extension.
+          </p>
+        </div>
+      </div>
+
+      <div className="settings-section">
+        <div className="settings-section-header">
+          <span className="material-icons">play_circle</span>
+          <h3>Stream Preview</h3>
+        </div>
+
+        <div className="form-group">
+          <label htmlFor="streamPreviewMode">Browser Playback Mode</label>
+          <CustomSelect
+            value={streamPreviewMode}
+            onChange={(value) => setStreamPreviewMode(value as StreamPreviewMode)}
+            options={[
+              { value: 'passthrough', label: 'Direct Playback (may fail on AC-3/E-AC-3 audio)' },
+              { value: 'transcode', label: 'Transcode Audio to AAC (CPU intensive, best compatibility)' },
+              { value: 'video_only', label: 'Video Only - No Audio (fast preview)' },
+            ]}
+          />
+          <p className="form-hint">
+            Controls how streams are played in the browser preview. Many IPTV streams use
+            AC-3 or E-AC-3 audio codecs which aren't supported by Chrome. Use "Transcode"
+            for best compatibility, or "Video Only" for quick visual previews without audio.
+            Transcoding requires FFmpeg on the backend and uses more CPU.
           </p>
         </div>
       </div>

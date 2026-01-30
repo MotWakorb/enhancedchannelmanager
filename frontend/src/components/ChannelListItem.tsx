@@ -41,6 +41,7 @@ export interface ChannelListItemProps {
   onProbeChannel?: () => void;
   isProbing?: boolean;
   hasFailedStreams?: boolean;
+  onPreviewChannel?: () => void;
 }
 
 export const ChannelListItem = memo(function ChannelListItem({
@@ -80,6 +81,7 @@ export const ChannelListItem = memo(function ChannelListItem({
   onProbeChannel,
   isProbing = false,
   hasFailedStreams = false,
+  onPreviewChannel,
 }: ChannelListItemProps) {
   const {
     attributes,
@@ -244,6 +246,18 @@ export const ChannelListItem = memo(function ChannelListItem({
           <span className={`material-icons ${isProbing ? 'spinning' : ''}`}>
             {isProbing ? 'sync' : 'speed'}
           </span>
+        </button>
+      )}
+      {onPreviewChannel && channel.streams.length > 0 && (
+        <button
+          className="preview-btn channel-preview-btn"
+          onClick={(e) => {
+            e.stopPropagation();
+            onPreviewChannel();
+          }}
+          title="Preview channel in browser"
+        >
+          <span className="material-icons">visibility</span>
         </button>
       )}
       {channelUrl && (
