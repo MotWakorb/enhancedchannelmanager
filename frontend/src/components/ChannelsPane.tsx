@@ -40,6 +40,7 @@ import { useContextMenu } from '../hooks/useContextMenu';
 import { useModal } from '../hooks/useModal';
 import { ChannelListItem } from './ChannelListItem';
 import { StreamListItem } from './StreamListItem';
+import { PreviewStreamModal } from './PreviewStreamModal';
 import './ChannelsPane.css';
 
 interface ChannelsPaneProps {
@@ -730,6 +731,11 @@ export function ChannelsPane({
   const [channelStreams, setChannelStreams] = useState<Stream[]>([]);
   const [streamsLoading, setStreamsLoading] = useState(false);
 
+  // Stream/Channel preview modal state
+  const [previewStream, setPreviewStream] = useState<Stream | null>(null);
+  const [previewChannel, setPreviewChannel] = useState<Channel | null>(null);
+  const [previewChannelName, setPreviewChannelName] = useState<string | undefined>(undefined);
+
   // Stream stats state for displaying probe metadata
   const [streamStatsMap, setStreamStatsMap] = useState<Map<number, StreamStats>>(new Map());
   const [probingChannels, setProbingChannels] = useState<Set<number>>(new Set());
@@ -1344,6 +1350,27 @@ export function ChannelsPane({
   const handleCopyStreamUrl = async (url: string, streamName: string) => {
     await handleCopy(url, `stream URL for "${streamName}"`);
   };
+
+  // Handle opening stream preview modal
+  const handlePreviewStream = useCallback((stream: Stream, channelName?: string) => {
+    setPreviewStream(stream);
+    setPreviewChannel(null);
+    setPreviewChannelName(channelName);
+  }, []);
+
+  // Handle opening channel preview modal
+  const handlePreviewChannel = useCallback((channel: Channel) => {
+    setPreviewChannel(channel);
+    setPreviewStream(null);
+    setPreviewChannelName(undefined);
+  }, []);
+
+  // Handle closing preview modal
+  const handleClosePreview = useCallback(() => {
+    setPreviewStream(null);
+    setPreviewChannel(null);
+    setPreviewChannelName(undefined);
+  }, []);
 
   // Handle removing a stream from the selected channel
   const handleRemoveStream = async (streamId: number) => {
@@ -4346,6 +4373,7 @@ export function ChannelsPane({
                         const stats = streamStatsMap.get(streamId);
                         return stats && (stats.probe_status === 'failed' || stats.probe_status === 'timeout');
                       })}
+                      onPreviewChannel={() => handlePreviewChannel(channel)}
                     />
                     {selectedChannelId === channel.id && (
                       <div className="inline-streams">
@@ -4387,6 +4415,7 @@ export function ChannelsPane({
                                         onRemove={handleRemoveStream}
                                         onCopyUrl={stream.url ? () => handleCopyStreamUrl(stream.url!, stream.name) : undefined}
                                         onClearStats={handleClearStreamStats}
+                                        onPreview={stream.url ? (s) => handlePreviewStream(s, channel.name) : undefined}
                                         showStreamUrls={showStreamUrls}
                                         streamStats={streamStatsMap.get(stream.id) ?? null}
                                       />
@@ -6130,6 +6159,16 @@ export function ChannelsPane({
             </div>
           </div>
         )}
+
+        {/* Stream Preview Modal */}
+        <PreviewStreamModal
+          isOpen={previewStream !== null || previewChannel !== null}
+          onClose={handleClosePreview}
+          stream={previewStream}
+          channel={previewChannel}
+          channelName={previewChannelName}
+          providerName={previewStream?.m3u_account ? providers.find((p) => p.id === previewStream.m3u_account)?.name : undefined}
+        />
       </div>
     </div>
   );

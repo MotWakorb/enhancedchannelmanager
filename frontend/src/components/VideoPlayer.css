@@ -1,0 +1,188 @@
+/* VideoPlayer Component Styles */
+
+.video-player {
+  position: relative;
+  width: 100%;
+  max-width: 100%;
+  background-color: #000;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.video-player--fullscreen {
+  border-radius: 0;
+}
+
+.video-player__video {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: contain;
+  background-color: #000;
+}
+
+/* Overlays */
+.video-player__overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  color: #fff;
+  font-size: 14px;
+  z-index: 10;
+}
+
+.video-player__overlay--loading {
+  background-color: rgba(0, 0, 0, 0.7);
+}
+
+.video-player__overlay--error {
+  background-color: rgba(0, 0, 0, 0.85);
+}
+
+.video-player__overlay--error .material-icons {
+  font-size: 48px;
+  color: #f44336;
+}
+
+.video-player__error-message {
+  font-weight: 500;
+  text-align: center;
+  max-width: 80%;
+}
+
+.video-player__error-details {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.7);
+  text-align: center;
+  max-width: 80%;
+}
+
+/* Loading spinner */
+.video-player__spinner {
+  width: 40px;
+  height: 40px;
+  border: 3px solid rgba(255, 255, 255, 0.3);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: video-player-spin 1s linear infinite;
+}
+
+@keyframes video-player-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Controls */
+.video-player__controls {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 16px;
+  background: linear-gradient(transparent, rgba(0, 0, 0, 0.8));
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+
+.video-player:hover .video-player__controls,
+.video-player:focus-within .video-player__controls {
+  opacity: 1;
+}
+
+/* Always show controls when paused or in fullscreen */
+.video-player--fullscreen .video-player__controls {
+  padding: 16px 24px;
+}
+
+.video-player__control-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background-color: transparent;
+  color: #fff;
+  cursor: pointer;
+  transition: background-color 0.15s ease;
+}
+
+.video-player__control-btn:hover {
+  background-color: rgba(255, 255, 255, 0.2);
+}
+
+.video-player__control-btn:active {
+  background-color: rgba(255, 255, 255, 0.3);
+}
+
+.video-player__control-btn .material-icons {
+  font-size: 24px;
+}
+
+/* Volume slider */
+.video-player__volume-slider {
+  width: 80px;
+  height: 4px;
+  -webkit-appearance: none;
+  appearance: none;
+  background: rgba(255, 255, 255, 0.3);
+  border-radius: 2px;
+  cursor: pointer;
+}
+
+.video-player__volume-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 12px;
+  height: 12px;
+  background: #fff;
+  border-radius: 50%;
+  cursor: pointer;
+}
+
+.video-player__volume-slider::-moz-range-thumb {
+  width: 12px;
+  height: 12px;
+  background: #fff;
+  border: none;
+  border-radius: 50%;
+  cursor: pointer;
+}
+
+.video-player__spacer {
+  flex: 1;
+}
+
+/* Responsive adjustments */
+@media (max-width: 480px) {
+  .video-player__controls {
+    padding: 8px 12px;
+    gap: 4px;
+  }
+
+  .video-player__control-btn {
+    width: 32px;
+    height: 32px;
+  }
+
+  .video-player__control-btn .material-icons {
+    font-size: 20px;
+  }
+
+  .video-player__volume-slider {
+    width: 60px;
+  }
+}

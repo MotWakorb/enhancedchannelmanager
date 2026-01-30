@@ -1370,10 +1370,11 @@
   color: var(--error);
 }
 
-/* Base .copy-url-btn and .vlc-btn styles are in shared/common.css */
+/* Base .copy-url-btn, .vlc-btn, and .preview-btn styles are in shared/common.css */
 
 .inline-stream-item:hover .copy-url-btn,
-.inline-stream-item:hover .vlc-btn {
+.inline-stream-item:hover .vlc-btn,
+.inline-stream-item:hover .preview-btn {
   opacity: 1;
 }
 
@@ -1582,7 +1583,8 @@
 }
 
 .channel-item:hover .channel-copy-url-btn,
-.channel-item:hover .channel-vlc-btn {
+.channel-item:hover .channel-vlc-btn,
+.channel-item:hover .channel-preview-btn {
   opacity: 1;
 }
 
@@ -1591,6 +1593,10 @@
 }
 
 .channel-vlc-btn {
+  margin-right: 0.25rem;
+}
+
+.channel-preview-btn {
   margin-right: 0.25rem;
 }
 

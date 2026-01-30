@@ -116,6 +116,11 @@ class DispatcharrSettings(BaseModel):
     smtp_from_name: str = "ECM Alerts"
     smtp_use_tls: bool = True
     smtp_use_ssl: bool = False
+    # Stream preview mode: how to handle audio codecs in browser preview
+    # "passthrough" - Direct playback, may fail on AC-3/E-AC-3/DTS codecs
+    # "transcode" - FFmpeg transcodes unsupported audio to AAC (CPU intensive)
+    # "video_only" - Strip audio for quick preview (fast, no audio)
+    stream_preview_mode: str = "passthrough"
 
     def is_configured(self) -> bool:
         return bool(self.url and self.username and self.password)

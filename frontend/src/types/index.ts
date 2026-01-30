@@ -831,3 +831,61 @@ export interface M3UDigestSettingsUpdate {
   show_detailed_list?: boolean;
   min_changes_threshold?: number;
 }
+
+// =============================================================================
+// Video Player / Stream Preview Types
+// =============================================================================
+
+// Player state for video playback
+export type VideoPlayerState = 'idle' | 'loading' | 'playing' | 'paused' | 'error' | 'ended';
+
+// Error types that can occur during playback
+export interface VideoPlayerError {
+  code: string;
+  message: string;
+  details?: string;
+}
+
+// Props for the VideoPlayer component
+export interface VideoPlayerProps {
+  // Stream URL to play (MPEG-TS stream via proxy)
+  src: string;
+  // Optional: Auto-start playback when component mounts
+  autoPlay?: boolean;
+  // Optional: Show native video controls
+  controls?: boolean;
+  // Optional: Mute audio by default
+  muted?: boolean;
+  // Optional: CSS class name for styling
+  className?: string;
+  // Optional: Width (CSS value or number for pixels)
+  width?: string | number;
+  // Optional: Height (CSS value or number for pixels)
+  height?: string | number;
+  // Callback when player state changes
+  onStateChange?: (state: VideoPlayerState) => void;
+  // Callback when an error occurs
+  onError?: (error: VideoPlayerError) => void;
+  // Callback when playback starts
+  onPlay?: () => void;
+  // Callback when playback pauses
+  onPause?: () => void;
+  // Callback when stream ends
+  onEnded?: () => void;
+}
+
+// Props for the PreviewStreamModal component
+export interface PreviewStreamModalProps {
+  // Whether the modal is open
+  isOpen: boolean;
+  // Callback to close the modal
+  onClose: () => void;
+  // Stream to preview (contains URL and metadata) - mutually exclusive with channel
+  stream?: Stream | null;
+  // Channel to preview - mutually exclusive with stream
+  channel?: Channel | null;
+  // Optional: Channel name for display in modal header (used when previewing a stream)
+  channelName?: string;
+  // Optional: M3U provider name for display (used when previewing a stream)
+  providerName?: string;
+}

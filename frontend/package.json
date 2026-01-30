@@ -1,7 +1,7 @@
 {
   "name": "enhanced-channel-manager",
   "private": true,
-  "version": "0.9.0-0002",
+  "version": "0.10.0-0001",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -18,6 +18,7 @@
     "@dnd-kit/core": "^6.1.0",
     "@dnd-kit/sortable": "^8.0.0",
     "@dnd-kit/utilities": "^3.2.2",
+    "mpegts.js": "^1.8.0",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "recharts": "^3.6.0"

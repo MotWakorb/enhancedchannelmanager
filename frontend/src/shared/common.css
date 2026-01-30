@@ -1128,6 +1128,31 @@
   background: rgba(255, 136, 0, 0.1);
 }
 
+/* Preview button - hidden by default, shown on hover
+   Used for in-browser stream preview */
+.preview-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.25rem;
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  border-radius: 4px;
+  transition: color 0.15s, background 0.15s, opacity 0.15s;
+  opacity: 0;
+}
+
+.preview-btn:hover {
+  color: var(--success, #22c55e);
+  background: rgba(34, 197, 94, 0.1);
+}
+
+.preview-btn .material-icons {
+  font-size: 1rem;
+}
+
 
 /* =============================================================================
    19. SELECTION INFO
