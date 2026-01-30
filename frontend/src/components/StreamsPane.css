@@ -437,10 +437,11 @@ button.group-selection-checkbox {
   margin-top: 0.125rem;
 }
 
-/* .copy-url-btn and .vlc-btn base styles are in shared/common.css */
+/* .copy-url-btn, .vlc-btn, and .preview-btn base styles are in shared/common.css */
 /* Component-specific: show on hover */
 .stream-item:hover .copy-url-btn,
-.stream-item:hover .vlc-btn {
+.stream-item:hover .vlc-btn,
+.stream-item:hover .preview-btn {
   opacity: 1;
 }
 
