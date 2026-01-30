@@ -9,6 +9,7 @@ import { useDropdown } from '../hooks/useDropdown';
 import { useContextMenu } from '../hooks/useContextMenu';
 import { useKeyboardShortcuts } from '../hooks/useKeyboardShortcuts';
 import { CustomSelect } from './CustomSelect';
+import { PreviewStreamModal } from './PreviewStreamModal';
 import './StreamsPane.css';
 
 interface StreamGroup {
@@ -311,6 +312,9 @@ export function StreamsPane({
   const [bulkCreateGroup, setBulkCreateGroup] = useState<StreamGroup | null>(null);
   const [bulkCreateGroups, setBulkCreateGroups] = useState<StreamGroup[]>([]); // For multi-group creation
   const [bulkCreateStreams, setBulkCreateStreams] = useState<Stream[]>([]); // For selected streams
+
+  // Stream preview modal state
+  const [previewStream, setPreviewStream] = useState<Stream | null>(null);
   const [bulkCreateMultiGroupOption, setBulkCreateMultiGroupOption] = useState<'separate' | 'single'>('separate');
   // Custom names for each group when using 'separate' mode (maps original group name to custom name)
   const [bulkCreateCustomGroupNames, setBulkCreateCustomGroupNames] = useState<Map<string, string>>(new Map());
@@ -1729,6 +1733,16 @@ export function StreamsPane({
                           {stream.url && (
                             <>
                               <button
+                                className="preview-btn"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setPreviewStream(stream);
+                                }}
+                                title="Preview stream in browser"
+                              >
+                                <span className="material-icons">visibility</span>
+                              </button>
+                              <button
                                 className="vlc-btn"
                                 onClick={(e) => {
                                   e.stopPropagation();
@@ -2551,6 +2565,14 @@ export function StreamsPane({
           </div>
         </div>
       )}
+
+      {/* Stream Preview Modal */}
+      <PreviewStreamModal
+        isOpen={previewStream !== null}
+        onClose={() => setPreviewStream(null)}
+        stream={previewStream}
+        providerName={previewStream?.m3u_account ? providers.find((p) => p.id === previewStream.m3u_account)?.name : undefined}
+      />
     </div>
   );
 }

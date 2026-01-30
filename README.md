@@ -75,6 +75,19 @@ A professional-grade web interface for managing IPTV configurations with Dispatc
 - **Filter by Provider** - Filter streams by M3U account
 - **Filter by Group** - Filter streams by their source group
 - **Copy Stream URL** - Click copy button on any stream to copy its direct URL
+- **Stream Preview** - Preview streams directly in the browser before assigning to channels
+  - MPEG-TS playback using mpegts.js library
+  - Three preview modes: Passthrough (direct), Transcode (AAC audio), Video Only (no audio)
+  - Mode indicator shows current preview mode in the modal
+  - Alternative options: Open in VLC, Download M3U, Copy URL
+
+### Channel Preview
+
+- **Channel Output Preview** - Preview channels as they would appear to clients through Dispatcharr
+  - Tests the actual Dispatcharr proxy stream output
+  - Verifies channel configuration is working correctly
+  - Same preview modes as stream preview (Passthrough, Transcode, Video Only)
+  - JWT authentication handled automatically
 
 ### EPG Management
 
@@ -322,6 +335,16 @@ Configure how streams are automatically sorted within channels:
 - **Deprioritize Failed Streams** - Option to automatically sort failed/dead streams to the bottom
 - **Visual Rank Badges** - See sort priority numbers at a glance
 
+#### Stream Preview
+Configure how streams and channels are previewed in the browser:
+
+- **Preview Mode** - Choose how streams are processed for browser playback:
+  - **Passthrough** - Direct proxy, fastest but may fail on AC-3/E-AC-3/DTS audio codecs
+  - **Transcode** - FFmpeg transcodes audio to AAC for browser compatibility (recommended)
+  - **Video Only** - Strip audio entirely for silent quick preview
+- **Mode Switching** - Change mode anytime; takes effect on next preview
+- **Requires FFmpeg** - Transcode and Video Only modes require FFmpeg installed in the container (included in official Docker image)
+
 #### Channel Defaults
 Default options applied when using bulk channel creation:
 
@@ -348,6 +371,20 @@ These defaults are pre-loaded when opening the bulk create modal, with a "(from 
   - **Skip** - Automatically skip channels with existing IDs
   - **Overwrite** - Automatically replace all existing IDs with new ones
 - **Frontend Log Level** - Set console logging verbosity (Error, Warn, Info, Debug) for troubleshooting
+
+#### VLC Integration
+Open streams directly in VLC media player from your browser:
+
+- **Open in VLC Behavior** - Choose how "Open in VLC" buttons work:
+  - **Try VLC Protocol** - Attempt vlc:// protocol, show helper if it fails
+  - **Fallback to M3U** - Try vlc:// first, then download M3U file if it fails
+  - **Always M3U** - Always download M3U file (most compatible)
+- **Protocol Handler Scripts** - Downloadable scripts to register the vlc:// protocol handler:
+  - **Windows** - PowerShell script with auto-elevation and registry setup
+  - **Linux** - Shell script creating .desktop file for xdg-open
+  - **macOS** - Shell script creating AppleScript handler app
+- **Helper Modal** - When vlc:// fails, shows OS-specific setup instructions with download buttons
+- **M3U Fallback** - Download M3U playlist files that open directly in VLC
 
 #### Scheduled Tasks
 Automated background tasks with flexible scheduling:
@@ -460,29 +497,36 @@ Advanced rule-based stream name normalization:
 - **Normalization on Channel Create** - Option to automatically normalize names when creating channels
 - **EPG/M3U Manual Refresh** - Set refresh interval to 0 for manual-only refresh (no auto-refresh)
 
-### v0.9.0 - Mobile Interface
+### ~~v0.9.0 - M3U Change Tracking~~ ✅ Implemented
+Track and report changes to M3U sources:
+- **Automatic Change Detection** - Detects changes every time an M3U account is refreshed
+- **Snapshot System** - Store M3U state snapshots for comparison
+- **Group Change Detection** - Track when groups are added or deleted
+- **Stream Change Detection** - Track when streams are added, deleted, or modified
+- **M3U Changes Tab** - New tab to view all detected changes with filtering
+- **Email Digest Reports** - Configurable email digests when changes occur (immediate, hourly, daily, weekly)
+- **Change History** - Full searchable history of all M3U changes over time
+- **Summary Statistics** - Dashboard cards showing total groups/streams added and removed
+
+### ~~v0.10.0 - Stream Preview~~ ✅ Implemented
+Embedded video player for stream and channel preview:
+- **MPEG-TS Playback** - Native .ts stream playback using mpegts.js library for browser compatibility
+- **Preview Modal** - Click any stream or channel to open a preview player
+- **Three Preview Modes** - Configurable in Settings:
+  - **Passthrough** - Direct stream proxy (fastest, may fail on AC-3/E-AC-3 audio)
+  - **Transcode** - FFmpeg transcodes audio to AAC for browser compatibility
+  - **Video Only** - Strip audio for quick silent preview
+- **Mode Indicator** - Shows current preview mode in the modal with icon and tooltip
+- **Channel Preview** - Preview channel output through Dispatcharr's TS proxy with JWT authentication
+- **Alternative Options** - Open in VLC, Download M3U, Copy URL (for streams with direct URLs)
+- **Stream Metadata Display** - Shows stream name, TVG-ID, channel group, and M3U provider
+
+### v0.11.0 - Mobile Interface
 Full mobile support for managing channels on the go:
 - Responsive layouts for phones and tablets
 - Touch-optimized controls
 - Mobile-friendly navigation
 - Progressive Web App (PWA) support
-
-### v0.10.0 - Preview Stream
-Embedded video player for stream preview:
-- **MPEG-TS Playback** - Native .ts stream playback using mpegts.js library
-- **Preview Modal** - Click any stream to open a preview player
-- **Stream Health Indicators** - Visual feedback on stream quality and stability
-- **Quick Preview** - Preview streams before assigning to channels
-- **Integration Points** - Preview from stream list, channel streams, and bulk create modal
-
-### v0.11.0 - M3U Change Tracking
-Track and report changes to M3U sources:
-- **Snapshot System** - Store M3U state snapshots for comparison
-- **Group Change Detection** - Track when groups are added or deleted
-- **Stream Change Detection** - Track when streams are added, deleted, or modified
-- **M3U Changes Tab** - New tab to view all detected changes with filtering
-- **Email Digest Reports** - Configurable email digests when changes occur
-- **Change History** - Historical view of all M3U changes over time
 
 ### v0.12.0 - Channel Auto-Creation Pipeline
 Rules engine for automatic channel management:
