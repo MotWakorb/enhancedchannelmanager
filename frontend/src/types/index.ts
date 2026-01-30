@@ -434,17 +434,39 @@ export interface SystemEventsResponse {
 export interface BandwidthDailyRecord {
   date: string;
   bytes_transferred: number;
+  bytes_in: number;
+  bytes_out: number;
   peak_channels: number;
   peak_clients: number;
+  peak_bitrate_in: number;
+  peak_bitrate_out: number;
 }
 
 // Response from /api/stats/bandwidth
 export interface BandwidthSummary {
+  // Legacy fields (backwards compatible)
   today: number;
   this_week: number;
   this_month: number;
   this_year: number;
   all_time: number;
+  // Inbound/Outbound breakdown
+  today_in: number;
+  today_out: number;
+  week_in: number;
+  week_out: number;
+  month_in: number;
+  month_out: number;
+  year_in: number;
+  year_out: number;
+  all_time_in: number;
+  all_time_out: number;
+  // Peak bitrates
+  today_peak_bitrate_in: number;
+  today_peak_bitrate_out: number;
+  week_peak_bitrate_in: number;
+  week_peak_bitrate_out: number;
+  // Daily history for charts
   daily_history: BandwidthDailyRecord[];
 }
 
@@ -1074,4 +1096,37 @@ export interface UpdatePopularityRuleRequest {
   action_type?: PopularityActionType;
   action_value?: string | null;
   run_frequency?: PopularityRuleFrequency;
+}
+
+// =============================================================================
+// Watch History Types (v0.11.0)
+// =============================================================================
+
+// Individual watch session record
+export interface WatchHistoryEntry {
+  id: number;
+  channel_id: string;
+  channel_name: string;
+  ip_address: string;
+  date: string;  // ISO date string (YYYY-MM-DD)
+  connected_at: string;  // ISO timestamp
+  disconnected_at: string | null;  // ISO timestamp or null if still watching
+  watch_seconds: number;
+}
+
+// Summary statistics for watch history
+export interface WatchHistorySummary {
+  unique_channels: number;
+  unique_ips: number;
+  total_watch_seconds: number;
+}
+
+// Paginated watch history response
+export interface WatchHistoryResponse {
+  total: number;
+  page: number;
+  page_size: number;
+  total_pages: number;
+  summary: WatchHistorySummary;
+  history: WatchHistoryEntry[];
 }

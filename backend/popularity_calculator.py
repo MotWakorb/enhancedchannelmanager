@@ -392,16 +392,35 @@ class PopularityCalculator:
 
 
 # Convenience function for running calculation
-def calculate_popularity(period_days: int = 7, weights: Optional[dict] = None) -> dict:
+def calculate_popularity(
+    period_days: int = 7,
+    weights: Optional[dict] = None,
+    evaluate_rules: bool = False,
+    rules_dry_run: bool = False,
+) -> dict:
     """
     Run popularity calculation with specified parameters.
 
     Args:
         period_days: Number of days to consider
         weights: Optional custom weights
+        evaluate_rules: If True, evaluate popularity rules after calculation
+        rules_dry_run: If True, evaluate rules without executing actions
 
     Returns:
-        Calculation results dict
+        Calculation results dict (includes rules_result if evaluate_rules=True)
     """
     calculator = PopularityCalculator(period_days=period_days, weights=weights)
-    return calculator.calculate_all()
+    result = calculator.calculate_all()
+
+    # Optionally evaluate rules after calculation
+    if evaluate_rules and result.get("channels_scored", 0) > 0:
+        try:
+            from popularity_rules_engine import evaluate_all_rules
+            rules_result = evaluate_all_rules(dry_run=rules_dry_run)
+            result["rules_result"] = rules_result
+        except Exception as e:
+            logger.error(f"Rules evaluation failed after calculation: {e}")
+            result["rules_result"] = {"success": False, "error": str(e)}
+
+    return result

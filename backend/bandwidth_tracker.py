@@ -201,6 +201,10 @@ class BandwidthTracker:
 
         # Calculate totals from all active channels
         total_bytes_delta = 0
+        total_bytes_in_delta = 0  # Inbound from providers
+        total_bytes_out_delta = 0  # Outbound to clients
+        current_bitrate_in = 0  # Current inbound bitrate (bps)
+        current_bitrate_out = 0  # Current outbound bitrate (bps)
         active_channels = len(channels)
         total_clients = 0
 
@@ -232,6 +236,7 @@ class BandwidthTracker:
 
             bytes_now = channel.get("total_bytes", 0) or 0
             client_count = channel.get("client_count", 0) or 0
+            avg_bitrate_kbps = channel.get("avg_bitrate_kbps", 0) or 0
 
             # Extract client IP addresses
             clients = channel.get("clients", [])
@@ -241,6 +246,13 @@ class BandwidthTracker:
             current_bytes[channel_id] = bytes_now
             total_clients += client_count
 
+            # Track current bitrate (for peak calculation)
+            # Inbound: one stream per channel from provider
+            # Outbound: stream × number of clients
+            channel_bitrate_bps = int(avg_bitrate_kbps * 1000)  # Convert kbps to bps
+            current_bitrate_in += channel_bitrate_bps  # One stream per channel
+            current_bitrate_out += channel_bitrate_bps * max(client_count, 1)  # Stream × clients
+
             # Calculate per-channel byte delta
             channel_bytes_delta = 0
             if channel_id in self._last_bytes:
@@ -248,6 +260,12 @@ class BandwidthTracker:
                 if bytes_now > prev_bytes:
                     channel_bytes_delta = bytes_now - prev_bytes
                     total_bytes_delta += channel_bytes_delta
+                    # Calculate in/out bytes
+                    # Outbound = total bytes sent to all clients
+                    total_bytes_out_delta += channel_bytes_delta
+                    # Inbound = bytes from provider (approximately bytes / client_count)
+                    # Since one stream from provider is split to N clients
+                    total_bytes_in_delta += channel_bytes_delta // max(client_count, 1)
 
             # Track active channels for watch counting (use string ID for UUID support)
             if channel_id:
@@ -300,10 +318,18 @@ class BandwidthTracker:
 
         # Only record if there's actual data transfer
         if total_bytes_delta > 0 or active_channels > 0:
-            self._update_daily_record(total_bytes_delta, active_channels, total_clients)
+            self._update_daily_record(
+                total_bytes_delta,
+                active_channels,
+                total_clients,
+                bytes_in_delta=total_bytes_in_delta,
+                bytes_out_delta=total_bytes_out_delta,
+                current_bitrate_in=current_bitrate_in,
+                current_bitrate_out=current_bitrate_out,
+            )
             if total_bytes_delta > 0:
                 bytes_mb = total_bytes_delta / (1024 * 1024)
-                logger.debug(f"Bandwidth delta: {bytes_mb:.2f} MB, active channels: {active_channels}, clients: {total_clients}")
+                logger.debug(f"Bandwidth delta: {bytes_mb:.2f} MB (in: {total_bytes_in_delta / (1024*1024):.2f}, out: {total_bytes_out_delta / (1024*1024):.2f}), active channels: {active_channels}, clients: {total_clients}")
 
         # Update per-channel bandwidth (v0.11.0)
         if channel_bandwidth_updates:
@@ -322,7 +348,16 @@ class BandwidthTracker:
         if stopped_channels:
             logger.info(f"{len(stopped_channels)} channel(s) stopped streaming")
 
-    def _update_daily_record(self, bytes_delta: int, active_channels: int, total_clients: int):
+    def _update_daily_record(
+        self,
+        bytes_delta: int,
+        active_channels: int,
+        total_clients: int,
+        bytes_in_delta: int = 0,
+        bytes_out_delta: int = 0,
+        current_bitrate_in: int = 0,
+        current_bitrate_out: int = 0,
+    ):
         """Update today's bandwidth record in the database (using user's timezone)."""
         today = get_current_date()
 
@@ -337,15 +372,24 @@ class BandwidthTracker:
                 record = BandwidthDaily(
                     date=today,
                     bytes_transferred=0,
+                    bytes_in=0,
+                    bytes_out=0,
                     peak_channels=0,
                     peak_clients=0,
+                    peak_bitrate_in=0,
+                    peak_bitrate_out=0,
                 )
                 session.add(record)
 
             # Update totals
             record.bytes_transferred += bytes_delta
+            record.bytes_in += bytes_in_delta
+            record.bytes_out += bytes_out_delta
             record.peak_channels = max(record.peak_channels, active_channels)
             record.peak_clients = max(record.peak_clients, total_clients)
+            # Update peak bitrates (track highest seen during the day)
+            record.peak_bitrate_in = max(record.peak_bitrate_in, current_bitrate_in)
+            record.peak_bitrate_out = max(record.peak_bitrate_out, current_bitrate_out)
 
             session.commit()
         except Exception as e:
@@ -640,7 +684,7 @@ class BandwidthTracker:
 
         Returns:
             dict with today, this_week, this_month, this_year, all_time bytes,
-            and daily_history for last 7 days
+            in/out breakdowns, peak bitrates, and daily_history for last 7 days
         """
         from sqlalchemy import func
 
@@ -652,35 +696,63 @@ class BandwidthTracker:
         session = get_session()
         try:
             # Use SQL aggregation for efficient calculations
-            # Today's bytes
+            # Today's bytes (total, in, out)
             today_result = session.query(
-                func.coalesce(func.sum(BandwidthDaily.bytes_transferred), 0)
-            ).filter(BandwidthDaily.date == today).scalar()
-            today_bytes = today_result or 0
+                func.coalesce(func.sum(BandwidthDaily.bytes_transferred), 0),
+                func.coalesce(func.sum(BandwidthDaily.bytes_in), 0),
+                func.coalesce(func.sum(BandwidthDaily.bytes_out), 0),
+                func.coalesce(func.max(BandwidthDaily.peak_bitrate_in), 0),
+                func.coalesce(func.max(BandwidthDaily.peak_bitrate_out), 0),
+            ).filter(BandwidthDaily.date == today).first()
+            today_bytes = today_result[0] or 0
+            today_bytes_in = today_result[1] or 0
+            today_bytes_out = today_result[2] or 0
+            today_peak_bitrate_in = today_result[3] or 0
+            today_peak_bitrate_out = today_result[4] or 0
 
             # This week's bytes
             week_result = session.query(
-                func.coalesce(func.sum(BandwidthDaily.bytes_transferred), 0)
-            ).filter(BandwidthDaily.date >= week_ago).scalar()
-            week_bytes = week_result or 0
+                func.coalesce(func.sum(BandwidthDaily.bytes_transferred), 0),
+                func.coalesce(func.sum(BandwidthDaily.bytes_in), 0),
+                func.coalesce(func.sum(BandwidthDaily.bytes_out), 0),
+                func.coalesce(func.max(BandwidthDaily.peak_bitrate_in), 0),
+                func.coalesce(func.max(BandwidthDaily.peak_bitrate_out), 0),
+            ).filter(BandwidthDaily.date >= week_ago).first()
+            week_bytes = week_result[0] or 0
+            week_bytes_in = week_result[1] or 0
+            week_bytes_out = week_result[2] or 0
+            week_peak_bitrate_in = week_result[3] or 0
+            week_peak_bitrate_out = week_result[4] or 0
 
             # This month's bytes
             month_result = session.query(
-                func.coalesce(func.sum(BandwidthDaily.bytes_transferred), 0)
-            ).filter(BandwidthDaily.date >= month_start).scalar()
-            month_bytes = month_result or 0
+                func.coalesce(func.sum(BandwidthDaily.bytes_transferred), 0),
+                func.coalesce(func.sum(BandwidthDaily.bytes_in), 0),
+                func.coalesce(func.sum(BandwidthDaily.bytes_out), 0),
+            ).filter(BandwidthDaily.date >= month_start).first()
+            month_bytes = month_result[0] or 0
+            month_bytes_in = month_result[1] or 0
+            month_bytes_out = month_result[2] or 0
 
             # This year's bytes
             year_result = session.query(
-                func.coalesce(func.sum(BandwidthDaily.bytes_transferred), 0)
-            ).filter(BandwidthDaily.date >= year_start).scalar()
-            year_bytes = year_result or 0
+                func.coalesce(func.sum(BandwidthDaily.bytes_transferred), 0),
+                func.coalesce(func.sum(BandwidthDaily.bytes_in), 0),
+                func.coalesce(func.sum(BandwidthDaily.bytes_out), 0),
+            ).filter(BandwidthDaily.date >= year_start).first()
+            year_bytes = year_result[0] or 0
+            year_bytes_in = year_result[1] or 0
+            year_bytes_out = year_result[2] or 0
 
             # All time bytes
             all_time_result = session.query(
-                func.coalesce(func.sum(BandwidthDaily.bytes_transferred), 0)
-            ).scalar()
-            all_time_bytes = all_time_result or 0
+                func.coalesce(func.sum(BandwidthDaily.bytes_transferred), 0),
+                func.coalesce(func.sum(BandwidthDaily.bytes_in), 0),
+                func.coalesce(func.sum(BandwidthDaily.bytes_out), 0),
+            ).first()
+            all_time_bytes = all_time_result[0] or 0
+            all_time_bytes_in = all_time_result[1] or 0
+            all_time_bytes_out = all_time_result[2] or 0
 
             # Get last 7 days for chart
             week_records = session.query(BandwidthDaily).filter(
@@ -690,11 +762,29 @@ class BandwidthTracker:
             daily_history = [record.to_dict() for record in week_records]
 
             return {
+                # Legacy fields (backwards compatible)
                 "today": today_bytes,
                 "this_week": week_bytes,
                 "this_month": month_bytes,
                 "this_year": year_bytes,
                 "all_time": all_time_bytes,
+                # Inbound/Outbound breakdown
+                "today_in": today_bytes_in,
+                "today_out": today_bytes_out,
+                "week_in": week_bytes_in,
+                "week_out": week_bytes_out,
+                "month_in": month_bytes_in,
+                "month_out": month_bytes_out,
+                "year_in": year_bytes_in,
+                "year_out": year_bytes_out,
+                "all_time_in": all_time_bytes_in,
+                "all_time_out": all_time_bytes_out,
+                # Peak bitrates (today and week)
+                "today_peak_bitrate_in": today_peak_bitrate_in,
+                "today_peak_bitrate_out": today_peak_bitrate_out,
+                "week_peak_bitrate_in": week_peak_bitrate_in,
+                "week_peak_bitrate_out": week_peak_bitrate_out,
+                # Daily history for charts
                 "daily_history": daily_history,
             }
 

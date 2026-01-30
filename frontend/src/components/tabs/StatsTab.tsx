@@ -18,6 +18,8 @@ import {
 import { CustomSelect } from '../CustomSelect';
 import { EnhancedStatsPanel } from './EnhancedStatsPanel';
 import { PopularityPanel } from './PopularityPanel';
+import { WatchHistoryPanel } from './WatchHistoryPanel';
+import { BandwidthPanel } from './BandwidthPanel';
 import './StatsTab.css';
 
 // Historical data point for charts
@@ -1313,11 +1315,17 @@ export function StatsTab() {
           </div>
         )}
 
+        {/* Bandwidth In/Out Panel (v0.11.0) */}
+        <BandwidthPanel />
+
         {/* Enhanced Statistics (v0.11.0) */}
         <EnhancedStatsPanel />
 
         {/* Popularity Rankings (v0.11.0) */}
         <PopularityPanel />
+
+        {/* Watch History Log (v0.11.0) */}
+        <WatchHistoryPanel />
       </div>
     </div>
   );

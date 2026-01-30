@@ -58,14 +58,21 @@ class BandwidthDaily(Base):
     """
     Daily aggregated bandwidth statistics.
     One row per day with totals and peaks.
+
+    Inbound = bandwidth from upstream providers (one stream per channel)
+    Outbound = bandwidth to clients (multiplied by viewer count)
     """
     __tablename__ = "bandwidth_daily"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     date = Column(Date, nullable=False, unique=True)
-    bytes_transferred = Column(BigInteger, default=0, nullable=False)
+    bytes_transferred = Column(BigInteger, default=0, nullable=False)  # Legacy: total bytes (same as bytes_out)
+    bytes_in = Column(BigInteger, default=0, nullable=False)  # Inbound from providers
+    bytes_out = Column(BigInteger, default=0, nullable=False)  # Outbound to clients
     peak_channels = Column(Integer, default=0, nullable=False)
     peak_clients = Column(Integer, default=0, nullable=False)
+    peak_bitrate_in = Column(BigInteger, default=0, nullable=False)  # Peak inbound bitrate (bps)
+    peak_bitrate_out = Column(BigInteger, default=0, nullable=False)  # Peak outbound bitrate (bps)
 
     __table_args__ = (
         Index("idx_bandwidth_daily_date", date.desc()),
@@ -76,12 +83,16 @@ class BandwidthDaily(Base):
         return {
             "date": self.date.isoformat() if self.date else None,
             "bytes_transferred": self.bytes_transferred,
+            "bytes_in": self.bytes_in,
+            "bytes_out": self.bytes_out,
             "peak_channels": self.peak_channels,
             "peak_clients": self.peak_clients,
+            "peak_bitrate_in": self.peak_bitrate_in,
+            "peak_bitrate_out": self.peak_bitrate_out,
         }
 
     def __repr__(self):
-        return f"<BandwidthDaily(date={self.date}, bytes={self.bytes_transferred})>"
+        return f"<BandwidthDaily(date={self.date}, in={self.bytes_in}, out={self.bytes_out})>"
 
 
 class ChannelWatchStats(Base):
@@ -223,10 +234,11 @@ class ScheduledTask(Base):
     # Task-specific configuration (JSON)
     config = Column(Text, nullable=True)  # JSON with task-specific settings
     # Alert configuration - control which alerts this task sends
-    send_alerts = Column(Boolean, default=True, nullable=False)  # Master toggle for alerts
+    send_alerts = Column(Boolean, default=True, nullable=False)  # Master toggle for external alerts (email, etc.)
     alert_on_success = Column(Boolean, default=True, nullable=False)  # Alert when task succeeds
     alert_on_warning = Column(Boolean, default=True, nullable=False)  # Alert on partial failures
     alert_on_error = Column(Boolean, default=True, nullable=False)  # Alert on complete failures
+    show_notifications = Column(Boolean, default=True, nullable=False)  # Show in NotificationCenter (bell icon)
     # Timestamps
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
@@ -258,6 +270,7 @@ class ScheduledTask(Base):
             "alert_on_success": self.alert_on_success,
             "alert_on_warning": self.alert_on_warning,
             "alert_on_error": self.alert_on_error,
+            "show_notifications": self.show_notifications,
             "created_at": self.created_at.isoformat() + "Z" if self.created_at else None,
             "updated_at": self.updated_at.isoformat() + "Z" if self.updated_at else None,
             "last_run_at": self.last_run_at.isoformat() + "Z" if self.last_run_at else None,

@@ -849,6 +849,35 @@ async def update_settings(request: SettingsRequest):
     clear_settings_cache()
     reset_client()
 
+    # If the Dispatcharr URL changed, invalidate all cached data from the old server
+    server_changed = request.url != current_settings.url
+    if server_changed:
+        cache = get_cache()
+        cache.clear()
+        logger.info(f"Dispatcharr URL changed - cleared all cache entries")
+
+        # Also clear all data tied to the old server
+        from models import (
+            M3UChangeLog, M3USnapshot, ChannelWatchStats, HiddenChannelGroup,
+            ChannelBandwidth, ChannelPopularityScore, UniqueClientConnection
+        )
+        with get_session() as db:
+            changes_deleted = db.query(M3UChangeLog).delete()
+            snapshots_deleted = db.query(M3USnapshot).delete()
+            watch_stats_deleted = db.query(ChannelWatchStats).delete()
+            hidden_groups_deleted = db.query(HiddenChannelGroup).delete()
+            bandwidth_deleted = db.query(ChannelBandwidth).delete()
+            popularity_deleted = db.query(ChannelPopularityScore).delete()
+            connections_deleted = db.query(UniqueClientConnection).delete()
+            db.commit()
+            logger.info(
+                f"Dispatcharr URL changed - cleared all server-specific data: "
+                f"{changes_deleted} M3U changes, {snapshots_deleted} snapshots, "
+                f"{watch_stats_deleted} watch stats, {hidden_groups_deleted} hidden groups, "
+                f"{bandwidth_deleted} bandwidth records, {popularity_deleted} popularity scores, "
+                f"{connections_deleted} client connections"
+            )
+
     # Apply backend log level immediately
     if new_settings.backend_log_level != current_settings.backend_log_level:
         logger.info(f"Applying new backend log level: {new_settings.backend_log_level}")
@@ -878,8 +907,8 @@ async def update_settings(request: SettingsRequest):
             )
             logger.info("Updated prober sort settings from settings")
 
-    logger.info(f"Settings saved successfully - configured: {new_settings.is_configured()}, auth_changed: {auth_changed}")
-    return {"status": "saved", "configured": new_settings.is_configured()}
+    logger.info(f"Settings saved successfully - configured: {new_settings.is_configured()}, auth_changed: {auth_changed}, server_changed: {server_changed}")
+    return {"status": "saved", "configured": new_settings.is_configured(), "server_changed": server_changed}
 
 
 @app.post("/api/settings/test", tags=["Settings"])
@@ -5134,39 +5163,41 @@ async def create_notification_internal(
         session.close()
 
 
+class CreateNotificationRequest(BaseModel):
+    notification_type: str = "info"
+    title: Optional[str] = None
+    message: str
+    source: Optional[str] = None
+    source_id: Optional[str] = None
+    action_label: Optional[str] = None
+    action_url: Optional[str] = None
+    metadata: Optional[dict] = None
+    send_alerts: bool = True
+
+
 @app.post("/api/notifications", tags=["Notifications"])
-async def create_notification(
-    notification_type: str = "info",
-    title: Optional[str] = None,
-    message: str = "",
-    source: Optional[str] = None,
-    source_id: Optional[str] = None,
-    action_label: Optional[str] = None,
-    action_url: Optional[str] = None,
-    metadata: Optional[dict] = None,
-    send_alerts: bool = True,
-):
+async def create_notification(request: CreateNotificationRequest):
     """Create a new notification (API endpoint).
 
     Args:
         send_alerts: If True (default), also dispatch to configured alert channels.
     """
-    if not message:
+    if not request.message:
         raise HTTPException(status_code=400, detail="Message is required")
 
-    if notification_type not in ("info", "success", "warning", "error"):
+    if request.notification_type not in ("info", "success", "warning", "error"):
         raise HTTPException(status_code=400, detail="Invalid notification type")
 
     result = await create_notification_internal(
-        notification_type=notification_type,
-        title=title,
-        message=message,
-        source=source,
-        source_id=source_id,
-        action_label=action_label,
-        action_url=action_url,
-        metadata=metadata,
-        send_alerts=send_alerts,
+        notification_type=request.notification_type,
+        title=request.title,
+        message=request.message,
+        source=request.source,
+        source_id=request.source_id,
+        action_label=request.action_label,
+        action_url=request.action_url,
+        metadata=request.metadata,
+        send_alerts=request.send_alerts,
     )
 
     if result is None:
@@ -5287,6 +5318,24 @@ async def clear_all_notifications(read_only: bool = True):
         count = query.delete(synchronize_session=False)
         session.commit()
         return {"deleted": count, "read_only": read_only}
+    finally:
+        session.close()
+
+
+@app.delete("/api/notifications/by-source", tags=["Notifications"])
+async def delete_notifications_by_source(source: str, source_id: Optional[str] = None):
+    """Delete notifications matching source and optionally source_id."""
+    from models import Notification
+
+    session = get_session()
+    try:
+        query = session.query(Notification).filter(Notification.source == source)
+        if source_id is not None:
+            query = query.filter(Notification.source_id == source_id)
+
+        count = query.delete(synchronize_session=False)
+        session.commit()
+        return {"deleted": count, "source": source, "source_id": source_id}
     finally:
         session.close()
 
@@ -5800,6 +5849,101 @@ async def get_unique_viewers_by_channel(days: int = 7, limit: int = 20):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/api/stats/watch-history", tags=["Enhanced Stats"])
+async def get_watch_history(
+    page: int = 1,
+    page_size: int = 50,
+    channel_id: Optional[str] = None,
+    ip_address: Optional[str] = None,
+    days: Optional[int] = None,
+):
+    """
+    Get watch history log - all channel viewing sessions.
+
+    Args:
+        page: Page number (1-indexed)
+        page_size: Number of records per page (max 100)
+        channel_id: Filter by specific channel
+        ip_address: Filter by specific IP address
+        days: Filter to last N days (None = all time)
+    """
+    try:
+        from models import UniqueClientConnection
+        from sqlalchemy import func, desc
+        from datetime import date, timedelta
+
+        session = get_session()
+        try:
+            # Build query
+            query = session.query(UniqueClientConnection)
+
+            # Apply filters
+            if channel_id:
+                query = query.filter(UniqueClientConnection.channel_id == channel_id)
+            if ip_address:
+                query = query.filter(UniqueClientConnection.ip_address == ip_address)
+            if days:
+                cutoff_date = date.today() - timedelta(days=days)
+                query = query.filter(UniqueClientConnection.date >= cutoff_date)
+
+            # Get total count
+            total = query.count()
+
+            # Limit page_size
+            page_size = min(page_size, 100)
+
+            # Apply pagination and ordering (most recent first)
+            offset = (page - 1) * page_size
+            records = query.order_by(
+                desc(UniqueClientConnection.connected_at)
+            ).offset(offset).limit(page_size).all()
+
+            # Get summary stats
+            summary_query = session.query(
+                func.count(func.distinct(UniqueClientConnection.channel_id)).label("unique_channels"),
+                func.count(func.distinct(UniqueClientConnection.ip_address)).label("unique_ips"),
+                func.sum(UniqueClientConnection.watch_seconds).label("total_watch_seconds"),
+            )
+            if channel_id:
+                summary_query = summary_query.filter(UniqueClientConnection.channel_id == channel_id)
+            if ip_address:
+                summary_query = summary_query.filter(UniqueClientConnection.ip_address == ip_address)
+            if days:
+                summary_query = summary_query.filter(UniqueClientConnection.date >= cutoff_date)
+
+            summary = summary_query.first()
+
+            return {
+                "total": total,
+                "page": page,
+                "page_size": page_size,
+                "total_pages": (total + page_size - 1) // page_size if total > 0 else 1,
+                "summary": {
+                    "unique_channels": summary.unique_channels or 0,
+                    "unique_ips": summary.unique_ips or 0,
+                    "total_watch_seconds": summary.total_watch_seconds or 0,
+                },
+                "history": [
+                    {
+                        "id": r.id,
+                        "channel_id": r.channel_id,
+                        "channel_name": r.channel_name,
+                        "ip_address": r.ip_address,
+                        "date": r.date.isoformat() if r.date else None,
+                        "connected_at": r.connected_at.isoformat() + "Z" if r.connected_at else None,
+                        "disconnected_at": r.disconnected_at.isoformat() + "Z" if r.disconnected_at else None,
+                        "watch_seconds": r.watch_seconds,
+                    }
+                    for r in records
+                ],
+            }
+        finally:
+            session.close()
+    except Exception as e:
+        logger.error(f"Failed to get watch history: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # =============================================================================
 # Popularity Endpoints (v0.11.0)
 # =============================================================================
@@ -5846,11 +5990,26 @@ async def get_trending_channels(direction: str = "up", limit: int = 10):
 
 
 @app.post("/api/stats/popularity/calculate", tags=["Popularity"])
-async def calculate_popularity_scores(period_days: int = 7):
-    """Trigger popularity score calculation."""
+async def calculate_popularity_scores(
+    period_days: int = 7,
+    evaluate_rules: bool = False,
+    rules_dry_run: bool = False,
+):
+    """
+    Trigger popularity score calculation.
+
+    Args:
+        period_days: Number of days to consider for scoring
+        evaluate_rules: If True, evaluate popularity rules after calculation
+        rules_dry_run: If True, evaluate rules without executing actions
+    """
     try:
         from popularity_calculator import calculate_popularity
-        result = calculate_popularity(period_days=period_days)
+        result = calculate_popularity(
+            period_days=period_days,
+            evaluate_rules=evaluate_rules,
+            rules_dry_run=rules_dry_run,
+        )
         return result
     except Exception as e:
         logger.error(f"Failed to calculate popularity: {e}")
@@ -6027,6 +6186,47 @@ async def delete_popularity_rule(rule_id: int):
         raise
     except Exception as e:
         logger.error(f"Failed to delete popularity rule: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/popularity-rules/evaluate", tags=["Popularity Rules"])
+async def evaluate_popularity_rules(dry_run: bool = False):
+    """
+    Evaluate all enabled popularity rules against current channel scores.
+
+    Args:
+        dry_run: If True, evaluate rules but don't execute actions
+
+    Returns:
+        Evaluation results with matched channels and executed actions
+    """
+    try:
+        from popularity_rules_engine import evaluate_all_rules
+        result = evaluate_all_rules(dry_run=dry_run)
+        return result
+    except Exception as e:
+        logger.error(f"Failed to evaluate popularity rules: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/popularity-rules/{rule_id}/evaluate", tags=["Popularity Rules"])
+async def evaluate_single_popularity_rule(rule_id: int, dry_run: bool = False):
+    """
+    Evaluate a specific popularity rule against current channel scores.
+
+    Args:
+        rule_id: The rule ID to evaluate
+        dry_run: If True, evaluate rule but don't execute actions
+
+    Returns:
+        Evaluation results for the specified rule
+    """
+    try:
+        from popularity_rules_engine import evaluate_rules
+        result = evaluate_rules([rule_id], dry_run=dry_run)
+        return result
+    except Exception as e:
+        logger.error(f"Failed to evaluate popularity rule {rule_id}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -6398,10 +6598,11 @@ class TaskConfigUpdate(BaseModel):
     timezone: Optional[str] = None
     config: Optional[dict] = None  # Task-specific configuration (source_ids, account_ids, etc.)
     # Alert configuration
-    send_alerts: Optional[bool] = None  # Master toggle for alerts
+    send_alerts: Optional[bool] = None  # Master toggle for external alerts (email, etc.)
     alert_on_success: Optional[bool] = None  # Alert when task succeeds
     alert_on_warning: Optional[bool] = None  # Alert on partial failures
     alert_on_error: Optional[bool] = None  # Alert on complete failures
+    show_notifications: Optional[bool] = None  # Show in NotificationCenter (bell icon)
 
 
 @app.get("/api/tasks", tags=["Tasks"])
@@ -6429,6 +6630,7 @@ async def list_tasks():
                         task['alert_on_success'] = db_task.alert_on_success
                         task['alert_on_warning'] = db_task.alert_on_warning
                         task['alert_on_error'] = db_task.alert_on_error
+                        task['show_notifications'] = db_task.show_notifications
 
                     # Get schedules
                     schedules = session.query(TaskSchedule).filter(TaskSchedule.task_id == task_id).all()
@@ -6482,6 +6684,7 @@ async def get_task(task_id: str):
                 status['alert_on_success'] = db_task.alert_on_success
                 status['alert_on_warning'] = db_task.alert_on_warning
                 status['alert_on_error'] = db_task.alert_on_error
+                status['show_notifications'] = db_task.show_notifications
 
             # Get schedules
             schedules = session.query(TaskSchedule).filter(TaskSchedule.task_id == task_id).all()
@@ -6528,6 +6731,7 @@ async def update_task(task_id: str, config: TaskConfigUpdate):
             alert_on_success=config.alert_on_success,
             alert_on_warning=config.alert_on_warning,
             alert_on_error=config.alert_on_error,
+            show_notifications=config.show_notifications,
         )
 
         if result is None:

@@ -6,9 +6,9 @@ import { useState, useEffect, useCallback } from 'react';
 import type {
   ChannelPopularityScore,
   PopularityRankingsResponse,
-  PopularityCalculationResult,
 } from '../../types';
 import * as api from '../../services/api';
+import { useNotifications } from '../../contexts/NotificationContext';
 import './PopularityPanel.css';
 
 // Format bytes to human readable
@@ -71,9 +71,9 @@ export function PopularityPanel({ refreshTrigger }: PopularityPanelProps) {
   const [loading, setLoading] = useState(true);
   const [calculating, setCalculating] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [lastCalculation, setLastCalculation] = useState<PopularityCalculationResult | null>(null);
   const [activeView, setActiveView] = useState<'rankings' | 'trending'>('rankings');
   const [expandedChannel, setExpandedChannel] = useState<string | null>(null);
+  const notifications = useNotifications();
 
   const fetchData = useCallback(async () => {
     try {
@@ -104,11 +104,15 @@ export function PopularityPanel({ refreshTrigger }: PopularityPanelProps) {
       setCalculating(true);
       setError(null);
       const result = await api.calculatePopularity(7);
-      setLastCalculation(result);
+      notifications.success(
+        `Calculated ${result.channels_scored} channels (${result.channels_created} new, ${result.channels_updated} updated)`,
+        'Popularity Calculated'
+      );
       // Refresh data after calculation
       await fetchData();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to calculate popularity');
+      const message = err instanceof Error ? err.message : 'Failed to calculate popularity';
+      notifications.error(message, 'Calculation Failed');
     } finally {
       setCalculating(false);
     }
@@ -159,13 +163,6 @@ export function PopularityPanel({ refreshTrigger }: PopularityPanelProps) {
       </div>
 
       {error && <div className="error-message">{error}</div>}
-
-      {lastCalculation && (
-        <div className="calculation-result">
-          Calculated {lastCalculation.channels_scored} channels
-          ({lastCalculation.channels_created} new, {lastCalculation.channels_updated} updated)
-        </div>
-      )}
 
       {activeView === 'rankings' && (
         <div className="rankings-section">

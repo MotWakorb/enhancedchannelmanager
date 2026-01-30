@@ -156,6 +156,9 @@ def _run_migrations(engine) -> None:
             # Add alert configuration columns to scheduled_tasks (v0.8.7)
             _add_scheduled_task_alert_columns(conn)
 
+            # Add bandwidth in/out tracking columns (v0.11.0)
+            _add_bandwidth_inout_columns(conn)
+
             logger.debug("All migrations complete - schema is up to date")
     except Exception as e:
         logger.exception(f"Migration failed: {e}")
@@ -1022,8 +1025,63 @@ def _add_scheduled_task_alert_columns(conn) -> None:
             "ALTER TABLE scheduled_tasks ADD COLUMN alert_on_error BOOLEAN DEFAULT 1 NOT NULL"
         ))
 
+    # Add show_notifications column if not exists (v0.10.0-0003)
+    if "show_notifications" not in columns:
+        logger.info("Adding show_notifications column to scheduled_tasks")
+        conn.execute(text(
+            "ALTER TABLE scheduled_tasks ADD COLUMN show_notifications BOOLEAN DEFAULT 1 NOT NULL"
+        ))
+
     conn.commit()
     logger.debug("scheduled_tasks alert columns migration complete")
+
+
+def _add_bandwidth_inout_columns(conn) -> None:
+    """Add bandwidth in/out tracking columns to bandwidth_daily table (v0.11.0)."""
+    from sqlalchemy import text
+
+    # Check if bandwidth_daily table exists
+    result = conn.execute(text(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='bandwidth_daily'"
+    ))
+    if not result.fetchone():
+        logger.debug("bandwidth_daily table doesn't exist yet, skipping in/out columns migration")
+        return
+
+    # Check which columns already exist
+    result = conn.execute(text("PRAGMA table_info(bandwidth_daily)"))
+    columns = [row[1] for row in result.fetchall()]
+
+    # Add bytes_in column if not exists
+    if "bytes_in" not in columns:
+        logger.info("Adding bytes_in column to bandwidth_daily")
+        conn.execute(text(
+            "ALTER TABLE bandwidth_daily ADD COLUMN bytes_in INTEGER DEFAULT 0 NOT NULL"
+        ))
+
+    # Add bytes_out column if not exists
+    if "bytes_out" not in columns:
+        logger.info("Adding bytes_out column to bandwidth_daily")
+        conn.execute(text(
+            "ALTER TABLE bandwidth_daily ADD COLUMN bytes_out INTEGER DEFAULT 0 NOT NULL"
+        ))
+
+    # Add peak_bitrate_in column if not exists
+    if "peak_bitrate_in" not in columns:
+        logger.info("Adding peak_bitrate_in column to bandwidth_daily")
+        conn.execute(text(
+            "ALTER TABLE bandwidth_daily ADD COLUMN peak_bitrate_in INTEGER DEFAULT 0 NOT NULL"
+        ))
+
+    # Add peak_bitrate_out column if not exists
+    if "peak_bitrate_out" not in columns:
+        logger.info("Adding peak_bitrate_out column to bandwidth_daily")
+        conn.execute(text(
+            "ALTER TABLE bandwidth_daily ADD COLUMN peak_bitrate_out INTEGER DEFAULT 0 NOT NULL"
+        ))
+
+    conn.commit()
+    logger.debug("bandwidth_daily in/out columns migration complete")
 
 
 def _perform_maintenance(engine) -> None:

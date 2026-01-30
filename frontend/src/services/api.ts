@@ -860,7 +860,7 @@ export async function saveSettings(settings: {
   smtp_use_tls?: boolean;  // Optional - Use TLS, defaults to true
   smtp_use_ssl?: boolean;  // Optional - Use SSL, defaults to false
   stream_preview_mode?: StreamPreviewMode;  // Optional - Stream preview mode, defaults to "passthrough"
-}): Promise<{ status: string; configured: boolean }> {
+}): Promise<{ status: string; configured: boolean; server_changed: boolean }> {
   return fetchJson(`${API_BASE}/settings`, {
     method: 'POST',
     body: JSON.stringify(settings),
@@ -1505,6 +1505,31 @@ export async function calculatePopularity(periodDays: number = 7): Promise<impor
 }
 
 // =============================================================================
+// Watch History (v0.11.0)
+// =============================================================================
+
+/**
+ * Get watch history log - all channel viewing sessions.
+ */
+export async function getWatchHistory(options: {
+  page?: number;
+  pageSize?: number;
+  channelId?: string;
+  ipAddress?: string;
+  days?: number;
+} = {}): Promise<import('../types').WatchHistoryResponse> {
+  const params = new URLSearchParams();
+  if (options.page) params.set('page', String(options.page));
+  if (options.pageSize) params.set('page_size', String(options.pageSize));
+  if (options.channelId) params.set('channel_id', options.channelId);
+  if (options.ipAddress) params.set('ip_address', options.ipAddress);
+  if (options.days) params.set('days', String(options.days));
+
+  const queryString = params.toString();
+  return fetchJson(`${API_BASE}/stats/watch-history${queryString ? `?${queryString}` : ''}`);
+}
+
+// =============================================================================
 // Popularity Rules (v0.11.0)
 // =============================================================================
 
@@ -1914,6 +1939,7 @@ export interface TaskStatus {
   alert_on_success?: boolean;  // Alert when task succeeds
   alert_on_warning?: boolean;  // Alert on partial failures
   alert_on_error?: boolean;  // Alert on complete failures
+  show_notifications?: boolean;  // Show in NotificationCenter (bell icon)
 }
 
 export interface TaskExecution {
@@ -1947,6 +1973,7 @@ export interface TaskConfigUpdate {
   alert_on_success?: boolean;  // Alert when task succeeds
   alert_on_warning?: boolean;  // Alert on partial failures
   alert_on_error?: boolean;  // Alert on complete failures
+  show_notifications?: boolean;  // Show in NotificationCenter (bell icon)
 }
 
 export interface CronPreset {
@@ -2153,19 +2180,19 @@ export async function getNotifications(params?: {
 }
 
 export async function createNotification(data: CreateNotificationData): Promise<Notification> {
-  const query = buildQuery({
-    message: data.message,
-    notification_type: data.notification_type,
-    title: data.title,
-    source: data.source,
-    source_id: data.source_id,
-    action_label: data.action_label,
-    action_url: data.action_url,
-  });
-  return fetchJson(`${API_BASE}/notifications${query}`, {
+  return fetchJson(`${API_BASE}/notifications`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: data.metadata ? JSON.stringify({ metadata: data.metadata }) : undefined,
+    body: JSON.stringify({
+      message: data.message,
+      notification_type: data.notification_type,
+      title: data.title,
+      source: data.source,
+      source_id: data.source_id,
+      action_label: data.action_label,
+      action_url: data.action_url,
+      metadata: data.metadata,
+    }),
   });
 }
 
@@ -2191,6 +2218,13 @@ export async function deleteNotification(notificationId: number): Promise<{ dele
 export async function clearNotifications(readOnly: boolean = true): Promise<{ deleted: number; read_only: boolean }> {
   const query = buildQuery({ read_only: readOnly });
   return fetchJson(`${API_BASE}/notifications${query}`, {
+    method: 'DELETE',
+  });
+}
+
+export async function deleteNotificationsBySource(source: string, sourceId?: string): Promise<{ deleted: number; source: string; source_id: string | null }> {
+  const query = buildQuery({ source, source_id: sourceId });
+  return fetchJson(`${API_BASE}/notifications/by-source${query}`, {
     method: 'DELETE',
   });
 }
