@@ -11,6 +11,7 @@ export interface StreamListItemProps {
   onRemove: (streamId: number) => void;
   onCopyUrl?: () => void;
   onClearStats?: (streamId: number) => void;
+  onPreview?: (stream: Stream) => void;
   showStreamUrls?: boolean;
   streamStats?: StreamStats | null;
 }
@@ -22,6 +23,7 @@ export const StreamListItem = memo(function StreamListItem({
   onRemove,
   onCopyUrl,
   onClearStats,
+  onPreview,
   showStreamUrls = true,
   streamStats
 }: StreamListItemProps) {
@@ -148,6 +150,18 @@ export const StreamListItem = memo(function StreamListItem({
         )}
         {providerName && <span className="inline-stream-provider">{providerName}</span>}
       </div>
+      {stream.url && onPreview && (
+        <button
+          className="preview-btn"
+          onClick={(e) => {
+            e.stopPropagation();
+            onPreview(stream);
+          }}
+          title="Preview stream in browser"
+        >
+          <span className="material-icons">visibility</span>
+        </button>
+      )}
       {stream.url && (
         <button
           className="vlc-btn"

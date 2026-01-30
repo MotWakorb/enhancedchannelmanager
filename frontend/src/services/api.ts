@@ -791,7 +791,12 @@ export interface SettingsResponse {
   smtp_from_name: string;
   smtp_use_tls: boolean;
   smtp_use_ssl: boolean;
+  // Stream preview mode: "passthrough", "transcode", or "video_only"
+  stream_preview_mode: StreamPreviewMode;
 }
+
+// Stream preview mode for browser playback
+export type StreamPreviewMode = 'passthrough' | 'transcode' | 'video_only';
 
 export interface TestConnectionResult {
   success: boolean;
@@ -854,6 +859,7 @@ export async function saveSettings(settings: {
   smtp_from_name?: string;  // Optional - From display name, defaults to "ECM Alerts"
   smtp_use_tls?: boolean;  // Optional - Use TLS, defaults to true
   smtp_use_ssl?: boolean;  // Optional - Use SSL, defaults to false
+  stream_preview_mode?: StreamPreviewMode;  // Optional - Stream preview mode, defaults to "passthrough"
 }): Promise<{ status: string; configured: boolean }> {
   return fetchJson(`${API_BASE}/settings`, {
     method: 'POST',
