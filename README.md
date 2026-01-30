@@ -520,6 +520,8 @@ Embedded video player for stream and channel preview:
 - **Channel Preview** - Preview channel output through Dispatcharr's TS proxy with JWT authentication
 - **Alternative Options** - Open in VLC, Download M3U, Copy URL (for streams with direct URLs)
 - **Stream Metadata Display** - Shows stream name, TVG-ID, channel group, and M3U provider
+- **VLC Protocol Handler Scripts** - One-click "Open in VLC" with scripts for Windows, Linux, and macOS
+- **VLC Protocol Helper Modal** - Download scripts and view setup instructions in Settings → Advanced
 
 ### v0.11.0 - Mobile Interface
 Full mobile support for managing channels on the go:
