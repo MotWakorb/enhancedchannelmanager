@@ -1433,6 +1433,130 @@ export async function getTopWatchedChannels(limit: number = 10, sortBy: 'views' 
 }
 
 // =============================================================================
+// Enhanced Statistics (v0.11.0)
+// =============================================================================
+
+/**
+ * Get unique viewer statistics for the specified period.
+ */
+export async function getUniqueViewersSummary(days: number = 7): Promise<import('../types').UniqueViewersSummary> {
+  return fetchJson(`${API_BASE}/stats/unique-viewers?days=${days}`);
+}
+
+/**
+ * Get per-channel bandwidth statistics.
+ */
+export async function getChannelBandwidthStats(
+  days: number = 7,
+  limit: number = 20,
+  sortBy: 'bytes' | 'connections' | 'watch_time' = 'bytes'
+): Promise<import('../types').ChannelBandwidthStats[]> {
+  return fetchJson(`${API_BASE}/stats/channel-bandwidth?days=${days}&limit=${limit}&sort_by=${sortBy}`);
+}
+
+/**
+ * Get unique viewer counts per channel.
+ */
+export async function getUniqueViewersByChannel(
+  days: number = 7,
+  limit: number = 20
+): Promise<import('../types').ChannelUniqueViewers[]> {
+  return fetchJson(`${API_BASE}/stats/unique-viewers-by-channel?days=${days}&limit=${limit}`);
+}
+
+// =============================================================================
+// Popularity (v0.11.0)
+// =============================================================================
+
+/**
+ * Get channel popularity rankings.
+ */
+export async function getPopularityRankings(
+  limit: number = 50,
+  offset: number = 0
+): Promise<import('../types').PopularityRankingsResponse> {
+  return fetchJson(`${API_BASE}/stats/popularity/rankings?limit=${limit}&offset=${offset}`);
+}
+
+/**
+ * Get popularity score for a specific channel.
+ */
+export async function getChannelPopularity(channelId: string): Promise<import('../types').ChannelPopularityScore> {
+  return fetchJson(`${API_BASE}/stats/popularity/channel/${channelId}`);
+}
+
+/**
+ * Get channels that are trending up or down.
+ */
+export async function getTrendingChannels(
+  direction: 'up' | 'down' = 'up',
+  limit: number = 10
+): Promise<import('../types').ChannelPopularityScore[]> {
+  return fetchJson(`${API_BASE}/stats/popularity/trending?direction=${direction}&limit=${limit}`);
+}
+
+/**
+ * Trigger popularity score calculation.
+ */
+export async function calculatePopularity(periodDays: number = 7): Promise<import('../types').PopularityCalculationResult> {
+  return fetchJson(`${API_BASE}/stats/popularity/calculate?period_days=${periodDays}`, {
+    method: 'POST',
+  });
+}
+
+// =============================================================================
+// Popularity Rules (v0.11.0)
+// =============================================================================
+
+/**
+ * List all popularity rules.
+ */
+export async function getPopularityRules(): Promise<import('../types').PopularityRule[]> {
+  return fetchJson(`${API_BASE}/popularity-rules`);
+}
+
+/**
+ * Get a specific popularity rule.
+ */
+export async function getPopularityRule(ruleId: number): Promise<import('../types').PopularityRule> {
+  return fetchJson(`${API_BASE}/popularity-rules/${ruleId}`);
+}
+
+/**
+ * Create a new popularity rule.
+ */
+export async function createPopularityRule(
+  rule: import('../types').CreatePopularityRuleRequest
+): Promise<import('../types').PopularityRule> {
+  return fetchJson(`${API_BASE}/popularity-rules`, {
+    method: 'POST',
+    body: JSON.stringify(rule),
+  });
+}
+
+/**
+ * Update a popularity rule.
+ */
+export async function updatePopularityRule(
+  ruleId: number,
+  updates: import('../types').UpdatePopularityRuleRequest
+): Promise<import('../types').PopularityRule> {
+  return fetchJson(`${API_BASE}/popularity-rules/${ruleId}`, {
+    method: 'PUT',
+    body: JSON.stringify(updates),
+  });
+}
+
+/**
+ * Delete a popularity rule.
+ */
+export async function deletePopularityRule(ruleId: number): Promise<{ status: string; id: number }> {
+  return fetchJson(`${API_BASE}/popularity-rules/${ruleId}`, {
+    method: 'DELETE',
+  });
+}
+
+// =============================================================================
 // Stream Stats / Probing
 // =============================================================================
 

@@ -1,0 +1,382 @@
+/* Popularity Panel (v0.11.0) */
+
+.popularity-panel {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-primary);
+  border-radius: 8px;
+  padding: 16px;
+  margin-bottom: 16px;
+}
+
+.popularity-panel .panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.popularity-panel .header-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.popularity-panel .section-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin: 0;
+}
+
+.popularity-panel .total-count {
+  font-size: 12px;
+  color: var(--text-muted);
+  background: var(--bg-tertiary);
+  padding: 3px 8px;
+  border-radius: 4px;
+}
+
+.popularity-panel .header-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.popularity-panel .view-toggle {
+  display: flex;
+  gap: 4px;
+  background: var(--bg-tertiary);
+  padding: 3px;
+  border-radius: 6px;
+}
+
+.popularity-panel .toggle-btn {
+  padding: 6px 12px;
+  font-size: 12px;
+  font-weight: 500;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.popularity-panel .toggle-btn:hover {
+  color: var(--text-primary);
+}
+
+.popularity-panel .toggle-btn.active {
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+}
+
+.popularity-panel .calculate-btn {
+  padding: 6px 14px;
+  font-size: 12px;
+  font-weight: 500;
+  border: none;
+  border-radius: 6px;
+  background: var(--button-primary-bg);
+  color: var(--button-primary-text);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.popularity-panel .calculate-btn:hover:not(:disabled) {
+  opacity: 0.9;
+}
+
+.popularity-panel .calculate-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+/* Error and Calculation Result */
+.popularity-panel .error-message {
+  background: rgba(239, 68, 68, 0.1);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  color: #ef4444;
+  padding: 10px 14px;
+  border-radius: 6px;
+  font-size: 12px;
+  margin-bottom: 12px;
+}
+
+.popularity-panel .calculation-result {
+  background: rgba(20, 184, 166, 0.1);
+  border: 1px solid rgba(20, 184, 166, 0.3);
+  color: #14b8a6;
+  padding: 10px 14px;
+  border-radius: 6px;
+  font-size: 12px;
+  margin-bottom: 12px;
+}
+
+/* Rankings List */
+.popularity-panel .rankings-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.popularity-panel .ranking-item {
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-primary);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.popularity-panel .ranking-item:hover {
+  border-color: var(--border-secondary);
+}
+
+.popularity-panel .ranking-item.expanded {
+  border-color: var(--button-primary-bg);
+}
+
+.popularity-panel .ranking-main {
+  display: flex;
+  align-items: center;
+  padding: 10px 12px;
+  gap: 12px;
+}
+
+.popularity-panel .rank {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-muted);
+  min-width: 36px;
+}
+
+.popularity-panel .channel-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.popularity-panel .channel-name {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.popularity-panel .trend {
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.popularity-panel .trend.trend-up {
+  color: #22c55e;
+}
+
+.popularity-panel .trend.trend-down {
+  color: #ef4444;
+}
+
+.popularity-panel .trend.trend-stable {
+  color: var(--text-muted);
+}
+
+/* Score Bar */
+.popularity-panel .score-bar-container {
+  width: 120px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.popularity-panel .score-bar {
+  height: 6px;
+  background: linear-gradient(90deg, #3b82f6, #14b8a6);
+  border-radius: 3px;
+  flex: 1;
+  max-width: 80px;
+}
+
+.popularity-panel .score-value {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+  min-width: 32px;
+  text-align: right;
+}
+
+/* Ranking Details (Expanded) */
+.popularity-panel .ranking-details {
+  padding: 12px;
+  border-top: 1px solid var(--border-primary);
+  background: var(--bg-secondary);
+}
+
+.popularity-panel .detail-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.popularity-panel .detail-item {
+  text-align: center;
+}
+
+.popularity-panel .detail-label {
+  display: block;
+  font-size: 10px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  margin-bottom: 2px;
+}
+
+.popularity-panel .detail-value {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.popularity-panel .rank-change {
+  font-size: 11px;
+  color: var(--text-muted);
+  text-align: center;
+  margin-top: 8px;
+}
+
+.popularity-panel .rank-improved {
+  color: #22c55e;
+}
+
+.popularity-panel .rank-declined {
+  color: #ef4444;
+}
+
+/* Trending Section */
+.popularity-panel .trending-columns {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+
+.popularity-panel .trending-column {
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-primary);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.popularity-panel .column-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  border-bottom: 1px solid var(--border-primary);
+}
+
+.popularity-panel .trend-icon {
+  font-size: 14px;
+}
+
+.popularity-panel .trend-icon.up {
+  color: #22c55e;
+}
+
+.popularity-panel .trend-icon.down {
+  color: #ef4444;
+}
+
+.popularity-panel .trending-list {
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.popularity-panel .trending-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  background: var(--bg-secondary);
+  border-radius: 4px;
+}
+
+.popularity-panel .trending-rank {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  min-width: 28px;
+}
+
+.popularity-panel .trending-name {
+  flex: 1;
+  font-size: 12px;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.popularity-panel .trending-change {
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.popularity-panel .trending-change.up {
+  color: #22c55e;
+}
+
+.popularity-panel .trending-change.down {
+  color: #ef4444;
+}
+
+.popularity-panel .empty-trending {
+  padding: 20px;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+/* States */
+.popularity-panel .loading-state,
+.popularity-panel .empty-state {
+  padding: 32px;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+  .popularity-panel .panel-header {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .popularity-panel .header-right {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .popularity-panel .detail-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .popularity-panel .trending-columns {
+    grid-template-columns: 1fr;
+  }
+
+  .popularity-panel .score-bar-container {
+    width: 80px;
+  }
+}

@@ -16,6 +16,8 @@ import {
   ResponsiveContainer,
 } from 'recharts';
 import { CustomSelect } from '../CustomSelect';
+import { EnhancedStatsPanel } from './EnhancedStatsPanel';
+import { PopularityPanel } from './PopularityPanel';
 import './StatsTab.css';
 
 // Historical data point for charts
@@ -1310,6 +1312,12 @@ export function StatsTab() {
             })()}
           </div>
         )}
+
+        {/* Enhanced Statistics (v0.11.0) */}
+        <EnhancedStatsPanel />
+
+        {/* Popularity Rankings (v0.11.0) */}
+        <PopularityPanel />
       </div>
     </div>
   );

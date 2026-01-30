@@ -988,3 +988,258 @@ class M3UDigestSettings(Base):
 
     def __repr__(self):
         return f"<M3UDigestSettings(id={self.id}, enabled={self.enabled}, frequency={self.frequency})>"
+
+
+# =============================================================================
+# Enhanced Statistics Models (v0.11.0)
+# =============================================================================
+
+class UniqueClientConnection(Base):
+    """
+    Tracks individual client connections for unique viewer analytics.
+    Records each time a client IP connects to watch a channel.
+    Used for calculating unique viewers and connection patterns.
+    """
+    __tablename__ = "unique_client_connections"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    ip_address = Column(String(45), nullable=False)  # IPv4 or IPv6
+    channel_id = Column(String(64), nullable=False)  # Dispatcharr channel UUID
+    channel_name = Column(String(255), nullable=False)  # Cached for display
+    date = Column(Date, nullable=False)  # Date of connection (for daily aggregation)
+    connected_at = Column(DateTime, nullable=False)  # When connection started
+    disconnected_at = Column(DateTime, nullable=True)  # When connection ended (null if still active)
+    watch_seconds = Column(Integer, default=0, nullable=False)  # Duration of this session
+    # Timestamps
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        Index("idx_unique_client_ip", ip_address),
+        Index("idx_unique_client_channel", channel_id),
+        Index("idx_unique_client_date", date.desc()),
+        Index("idx_unique_client_channel_date", channel_id, date),
+        Index("idx_unique_client_ip_date", ip_address, date),
+        # Composite for finding unique viewers per channel per day
+        Index("idx_unique_client_channel_ip_date", channel_id, ip_address, date),
+    )
+
+    def to_dict(self) -> dict:
+        """Convert to dictionary for API responses."""
+        return {
+            "id": self.id,
+            "ip_address": self.ip_address,
+            "channel_id": self.channel_id,
+            "channel_name": self.channel_name,
+            "date": self.date.isoformat() if self.date else None,
+            "connected_at": self.connected_at.isoformat() + "Z" if self.connected_at else None,
+            "disconnected_at": self.disconnected_at.isoformat() + "Z" if self.disconnected_at else None,
+            "watch_seconds": self.watch_seconds,
+            "created_at": self.created_at.isoformat() + "Z" if self.created_at else None,
+        }
+
+    def __repr__(self):
+        return f"<UniqueClientConnection(id={self.id}, ip={self.ip_address}, channel={self.channel_name})>"
+
+
+class ChannelBandwidth(Base):
+    """
+    Per-channel bandwidth tracking (daily aggregates).
+    Tracks how much data each channel transfers, enabling per-channel analytics.
+    """
+    __tablename__ = "channel_bandwidth"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    channel_id = Column(String(64), nullable=False)  # Dispatcharr channel UUID
+    channel_name = Column(String(255), nullable=False)  # Cached for display
+    date = Column(Date, nullable=False)  # Date of data
+    bytes_transferred = Column(BigInteger, default=0, nullable=False)  # Total bytes for this channel this day
+    peak_clients = Column(Integer, default=0, nullable=False)  # Max concurrent clients
+    total_watch_seconds = Column(Integer, default=0, nullable=False)  # Cumulative watch time
+    connection_count = Column(Integer, default=0, nullable=False)  # Number of connections started
+    # Timestamps
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("channel_id", "date", name="uq_channel_bandwidth_channel_date"),
+        Index("idx_channel_bandwidth_channel", channel_id),
+        Index("idx_channel_bandwidth_date", date.desc()),
+        Index("idx_channel_bandwidth_bytes", bytes_transferred.desc()),
+    )
+
+    def to_dict(self) -> dict:
+        """Convert to dictionary for API responses."""
+        return {
+            "id": self.id,
+            "channel_id": self.channel_id,
+            "channel_name": self.channel_name,
+            "date": self.date.isoformat() if self.date else None,
+            "bytes_transferred": self.bytes_transferred,
+            "peak_clients": self.peak_clients,
+            "total_watch_seconds": self.total_watch_seconds,
+            "connection_count": self.connection_count,
+            "created_at": self.created_at.isoformat() + "Z" if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() + "Z" if self.updated_at else None,
+        }
+
+    def __repr__(self):
+        return f"<ChannelBandwidth(id={self.id}, channel={self.channel_name}, date={self.date}, bytes={self.bytes_transferred})>"
+
+
+class ChannelPopularityScore(Base):
+    """
+    Calculated popularity scores for channels.
+    Updated periodically by the popularity calculator service.
+    Combines multiple metrics into a single score for ranking.
+    """
+    __tablename__ = "channel_popularity_scores"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    channel_id = Column(String(64), nullable=False, unique=True)  # Dispatcharr channel UUID
+    channel_name = Column(String(255), nullable=False)  # Cached for display
+    # Composite popularity score (0-100 scale)
+    score = Column(Float, default=0.0, nullable=False)
+    # Current rank (1 = most popular)
+    rank = Column(Integer, nullable=True)
+    # Component metrics (7-day rolling window)
+    watch_count_7d = Column(Integer, default=0, nullable=False)  # Number of watch sessions
+    watch_time_7d = Column(Integer, default=0, nullable=False)  # Total seconds watched
+    unique_viewers_7d = Column(Integer, default=0, nullable=False)  # Distinct IP addresses
+    bandwidth_7d = Column(BigInteger, default=0, nullable=False)  # Bytes transferred
+    # Trend indicators
+    trend = Column(String(10), default="stable", nullable=False)  # "up", "down", "stable"
+    trend_percent = Column(Float, default=0.0, nullable=False)  # Percentage change from previous period
+    previous_score = Column(Float, nullable=True)  # Score from previous calculation
+    previous_rank = Column(Integer, nullable=True)  # Rank from previous calculation
+    # Calculation metadata
+    calculated_at = Column(DateTime, nullable=False)
+    # Timestamps
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        Index("idx_popularity_score", score.desc()),
+        Index("idx_popularity_rank", rank),
+        Index("idx_popularity_channel", channel_id),
+        Index("idx_popularity_trend", trend),
+    )
+
+    def to_dict(self) -> dict:
+        """Convert to dictionary for API responses."""
+        return {
+            "id": self.id,
+            "channel_id": self.channel_id,
+            "channel_name": self.channel_name,
+            "score": self.score,
+            "rank": self.rank,
+            "watch_count_7d": self.watch_count_7d,
+            "watch_time_7d": self.watch_time_7d,
+            "unique_viewers_7d": self.unique_viewers_7d,
+            "bandwidth_7d": self.bandwidth_7d,
+            "trend": self.trend,
+            "trend_percent": self.trend_percent,
+            "previous_score": self.previous_score,
+            "previous_rank": self.previous_rank,
+            "calculated_at": self.calculated_at.isoformat() + "Z" if self.calculated_at else None,
+            "created_at": self.created_at.isoformat() + "Z" if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() + "Z" if self.updated_at else None,
+        }
+
+    def __repr__(self):
+        return f"<ChannelPopularityScore(id={self.id}, channel={self.channel_name}, score={self.score}, rank={self.rank})>"
+
+
+class PopularityRule(Base):
+    """
+    Rules for automatic channel management based on popularity metrics.
+    Enables actions like promoting popular channels or notifying about declining ones.
+
+    Condition operators:
+    - "gt", "gte", "lt", "lte", "eq": Compare metric to threshold
+    - "in_top_n": Channel is in top N by rank
+    - "in_bottom_n": Channel is in bottom N by rank
+    - "trending_up": Trend is "up" and trend_percent >= threshold
+    - "trending_down": Trend is "down" and trend_percent >= threshold (absolute)
+
+    Condition metrics:
+    - "score": Popularity score (0-100)
+    - "rank": Current rank position
+    - "watch_count_7d": Watch sessions in last 7 days
+    - "watch_time_7d": Watch seconds in last 7 days
+    - "unique_viewers_7d": Unique IPs in last 7 days
+    - "bandwidth_7d": Bytes transferred in last 7 days
+    - "trend_percent": Percentage change in score
+
+    Action types:
+    - "add_to_group": Add channel to specified group (action_value = group name/ID)
+    - "remove_from_group": Remove channel from group
+    - "set_channel_number": Set channel number (action_value = number or "auto")
+    - "notify": Send notification (action_value = message template)
+    - "log": Log to journal (action_value = message template)
+    """
+    __tablename__ = "popularity_rules"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String(100), nullable=False)  # Rule name for display
+    description = Column(Text, nullable=True)  # Optional description
+    enabled = Column(Boolean, default=True, nullable=False)
+    priority = Column(Integer, default=0, nullable=False)  # Lower = runs first
+    # Condition configuration
+    condition_metric = Column(String(30), nullable=False)  # score, rank, watch_count_7d, etc.
+    condition_operator = Column(String(20), nullable=False)  # gt, gte, lt, lte, eq, in_top_n, etc.
+    condition_threshold = Column(Float, nullable=False)  # Value to compare against
+    # Optional secondary condition (AND logic)
+    condition_metric_2 = Column(String(30), nullable=True)
+    condition_operator_2 = Column(String(20), nullable=True)
+    condition_threshold_2 = Column(Float, nullable=True)
+    # Action configuration
+    action_type = Column(String(30), nullable=False)  # add_to_group, notify, etc.
+    action_value = Column(Text, nullable=True)  # Action-specific value (JSON for complex actions)
+    # Execution settings
+    run_frequency = Column(String(20), default="on_calculation", nullable=False)  # on_calculation, hourly, daily
+    last_run_at = Column(DateTime, nullable=True)
+    last_matched_count = Column(Integer, default=0, nullable=False)  # Channels matched on last run
+    # Timestamps
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        Index("idx_popularity_rule_enabled", enabled),
+        Index("idx_popularity_rule_priority", priority),
+    )
+
+    def get_action_value(self):
+        """Parse action_value as JSON if applicable."""
+        if not self.action_value:
+            return None
+        try:
+            import json
+            return json.loads(self.action_value)
+        except (ValueError, TypeError):
+            return self.action_value
+
+    def to_dict(self) -> dict:
+        """Convert to dictionary for API responses."""
+        return {
+            "id": self.id,
+            "name": self.name,
+            "description": self.description,
+            "enabled": self.enabled,
+            "priority": self.priority,
+            "condition_metric": self.condition_metric,
+            "condition_operator": self.condition_operator,
+            "condition_threshold": self.condition_threshold,
+            "condition_metric_2": self.condition_metric_2,
+            "condition_operator_2": self.condition_operator_2,
+            "condition_threshold_2": self.condition_threshold_2,
+            "action_type": self.action_type,
+            "action_value": self.get_action_value(),
+            "run_frequency": self.run_frequency,
+            "last_run_at": self.last_run_at.isoformat() + "Z" if self.last_run_at else None,
+            "last_matched_count": self.last_matched_count,
+            "created_at": self.created_at.isoformat() + "Z" if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() + "Z" if self.updated_at else None,
+        }
+
+    def __repr__(self):
+        return f"<PopularityRule(id={self.id}, name={self.name}, enabled={self.enabled})>"

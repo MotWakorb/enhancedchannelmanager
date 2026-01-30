@@ -1,0 +1,326 @@
+/* Enhanced Statistics Panel (v0.11.0) */
+
+.enhanced-stats-panel {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-primary);
+  border-radius: 8px;
+  padding: 16px;
+  margin-bottom: 16px;
+}
+
+.enhanced-stats-panel .panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+}
+
+.enhanced-stats-panel .section-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin: 0;
+}
+
+.enhanced-stats-panel .view-toggle {
+  display: flex;
+  gap: 4px;
+  background: var(--bg-tertiary);
+  padding: 3px;
+  border-radius: 6px;
+}
+
+.enhanced-stats-panel .toggle-btn {
+  padding: 6px 12px;
+  font-size: 12px;
+  font-weight: 500;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.enhanced-stats-panel .toggle-btn:hover {
+  color: var(--text-primary);
+}
+
+.enhanced-stats-panel .toggle-btn.active {
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+}
+
+/* Stats Summary Cards */
+.enhanced-stats-panel .stats-summary {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.enhanced-stats-panel .stat-card {
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-primary);
+  border-radius: 6px;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+}
+
+.enhanced-stats-panel .stat-value {
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--text-primary);
+  line-height: 1.2;
+}
+
+.enhanced-stats-panel .stat-label {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 4px;
+}
+
+/* Chart Container */
+.enhanced-stats-panel .chart-container {
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-primary);
+  border-radius: 6px;
+  padding: 12px;
+  margin-bottom: 16px;
+}
+
+.enhanced-stats-panel .chart-title {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  margin-bottom: 8px;
+}
+
+/* Tooltip */
+.enhanced-stats-tooltip {
+  background: var(--bg-primary);
+  border: 1px solid var(--border-primary);
+  border-radius: 6px;
+  padding: 8px 12px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+.enhanced-stats-tooltip .tooltip-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 4px;
+}
+
+.enhanced-stats-tooltip .tooltip-value {
+  font-size: 13px;
+  font-weight: 500;
+  color: #14b8a6;
+}
+
+.enhanced-stats-tooltip .tooltip-detail {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
+/* Top Viewers Section */
+.enhanced-stats-panel .top-viewers-section,
+.enhanced-stats-panel .channel-viewers-section {
+  margin-bottom: 16px;
+}
+
+.enhanced-stats-panel .subsection-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin-bottom: 8px;
+}
+
+.enhanced-stats-panel .viewers-list,
+.enhanced-stats-panel .channel-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.enhanced-stats-panel .viewer-item,
+.enhanced-stats-panel .channel-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-primary);
+  border-radius: 4px;
+}
+
+.enhanced-stats-panel .viewer-rank,
+.enhanced-stats-panel .channel-rank {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  min-width: 24px;
+}
+
+.enhanced-stats-panel .viewer-ip {
+  font-family: monospace;
+  font-size: 12px;
+  color: var(--text-primary);
+  flex: 1;
+}
+
+.enhanced-stats-panel .channel-name {
+  font-size: 12px;
+  color: var(--text-primary);
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.enhanced-stats-panel .viewer-stats,
+.enhanced-stats-panel .channel-viewers {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+/* Bandwidth Section */
+.enhanced-stats-panel .bandwidth-section .sort-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.enhanced-stats-panel .sort-label {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.enhanced-stats-panel .sort-btn {
+  padding: 4px 10px;
+  font-size: 11px;
+  font-weight: 500;
+  border: 1px solid var(--border-primary);
+  border-radius: 4px;
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.enhanced-stats-panel .sort-btn:hover {
+  border-color: var(--border-secondary);
+  color: var(--text-primary);
+}
+
+.enhanced-stats-panel .sort-btn.active {
+  background: var(--button-primary-bg);
+  border-color: var(--button-primary-bg);
+  color: var(--button-primary-text);
+}
+
+/* Channel Bandwidth List */
+.enhanced-stats-panel .channel-bandwidth-list {
+  border: 1px solid var(--border-primary);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.enhanced-stats-panel .list-header {
+  display: grid;
+  grid-template-columns: 32px 1fr 90px 80px 80px;
+  gap: 8px;
+  padding: 8px 12px;
+  background: var(--bg-tertiary);
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  border-bottom: 1px solid var(--border-primary);
+}
+
+.enhanced-stats-panel .bandwidth-item {
+  display: grid;
+  grid-template-columns: 32px 1fr 90px 80px 80px;
+  gap: 8px;
+  padding: 10px 12px;
+  font-size: 12px;
+  border-bottom: 1px solid var(--border-primary);
+}
+
+.enhanced-stats-panel .bandwidth-item:last-child {
+  border-bottom: none;
+}
+
+.enhanced-stats-panel .bandwidth-item:hover {
+  background: var(--bg-tertiary);
+}
+
+.enhanced-stats-panel .col-rank {
+  color: var(--text-muted);
+  font-weight: 500;
+}
+
+.enhanced-stats-panel .col-name {
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.enhanced-stats-panel .col-bandwidth {
+  color: #3b82f6;
+  font-weight: 500;
+  text-align: right;
+}
+
+.enhanced-stats-panel .col-connections,
+.enhanced-stats-panel .col-time {
+  color: var(--text-secondary);
+  text-align: right;
+}
+
+/* States */
+.enhanced-stats-panel .loading-state,
+.enhanced-stats-panel .error-state,
+.enhanced-stats-panel .empty-state {
+  padding: 32px;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.enhanced-stats-panel .error-state {
+  color: #ef4444;
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+  .enhanced-stats-panel .stats-summary {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .enhanced-stats-panel .panel-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 12px;
+  }
+
+  .enhanced-stats-panel .list-header,
+  .enhanced-stats-panel .bandwidth-item {
+    grid-template-columns: 28px 1fr 70px;
+  }
+
+  .enhanced-stats-panel .col-connections,
+  .enhanced-stats-panel .col-time,
+  .enhanced-stats-panel .list-header .col-connections,
+  .enhanced-stats-panel .list-header .col-time {
+    display: none;
+  }
+}

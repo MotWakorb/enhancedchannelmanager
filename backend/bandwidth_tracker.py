@@ -10,7 +10,7 @@ from typing import Optional
 from zoneinfo import ZoneInfo
 
 from database import get_session
-from models import BandwidthDaily, ChannelWatchStats
+from models import BandwidthDaily, ChannelWatchStats, UniqueClientConnection, ChannelBandwidth
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +61,11 @@ class BandwidthTracker:
         self._ecm_channel_number_map: dict[int, str] = {}  # channel_number -> name mapping from ECM
         self._channel_map_refresh_interval = 300  # Refresh channel map every 5 minutes
         self._last_channel_map_refresh = 0.0
+        # Enhanced stats tracking (v0.11.0)
+        # Maps (channel_id, ip_address) -> connection_id in UniqueClientConnection table
+        self._active_connections: dict[tuple[str, str], int] = {}
+        # Track last known clients per channel for detecting new/disconnected clients
+        self._last_channel_clients: dict[str, set[str]] = {}  # channel_id -> set of IPs
 
     async def start(self):
         """Start the background polling task."""
@@ -201,8 +206,11 @@ class BandwidthTracker:
 
         current_bytes: dict[str, int] = {}
         current_active_channels: set[str] = set()
+        current_channel_clients: dict[str, set[str]] = {}  # channel_id -> set of IPs
         newly_active_channels: list[dict] = []
         still_active_channels: list[dict] = []
+        # Per-channel bandwidth tracking (v0.11.0)
+        channel_bandwidth_updates: list[dict] = []
 
         for channel in channels:
             channel_id = str(channel.get("channel_id", ""))
@@ -228,14 +236,28 @@ class BandwidthTracker:
             # Extract client IP addresses
             clients = channel.get("clients", [])
             client_ips = [c.get("ip_address") for c in clients if c.get("ip_address")]
+            current_channel_clients[channel_id] = set(client_ips)
 
             current_bytes[channel_id] = bytes_now
             total_clients += client_count
+
+            # Calculate per-channel byte delta
+            channel_bytes_delta = 0
+            if channel_id in self._last_bytes:
+                prev_bytes = self._last_bytes[channel_id]
+                if bytes_now > prev_bytes:
+                    channel_bytes_delta = bytes_now - prev_bytes
+                    total_bytes_delta += channel_bytes_delta
 
             # Track active channels for watch counting (use string ID for UUID support)
             if channel_id:
                 current_active_channels.add(channel_id)
                 self._channel_names[channel_id] = channel_name  # Cache name for stop events
+
+                # Detect new and continuing client connections
+                last_clients = self._last_channel_clients.get(channel_id, set())
+                new_clients = set(client_ips) - last_clients
+                continuing_clients = set(client_ips) & last_clients
 
                 # Check if this channel just became active (wasn't in last poll)
                 if channel_id not in self._last_active_channels:
@@ -243,28 +265,38 @@ class BandwidthTracker:
                         "channel_id": channel_id,
                         "channel_name": channel_name,
                         "client_ips": client_ips,
+                        "client_count": client_count,
                     })
                 else:
                     # Channel was active last poll and still is - accumulate watch time
                     still_active_channels.append({
                         "channel_id": channel_id,
                         "channel_name": channel_name,
+                        "client_ips": client_ips,
+                        "new_clients": list(new_clients),
+                        "continuing_clients": list(continuing_clients),
+                        "client_count": client_count,
                     })
 
-            # Calculate delta if we have previous value for this channel
-            if channel_id in self._last_bytes:
-                prev_bytes = self._last_bytes[channel_id]
-                if bytes_now > prev_bytes:
-                    total_bytes_delta += bytes_now - prev_bytes
+                # Track per-channel bandwidth data
+                if channel_bytes_delta > 0 or client_count > 0:
+                    channel_bandwidth_updates.append({
+                        "channel_id": channel_id,
+                        "channel_name": channel_name,
+                        "bytes_delta": channel_bytes_delta,
+                        "client_count": client_count,
+                    })
 
         # Check for channels that stopped being watched
         stopped_channels = self._last_active_channels - current_active_channels
         if stopped_channels:
             self._log_watch_stop_events(stopped_channels)
+            self._close_client_connections(stopped_channels)
 
         # Update last bytes tracking
         self._last_bytes = current_bytes
         self._last_active_channels = current_active_channels
+        self._last_channel_clients = current_channel_clients
 
         # Only record if there's actual data transfer
         if total_bytes_delta > 0 or active_channels > 0:
@@ -272,6 +304,10 @@ class BandwidthTracker:
             if total_bytes_delta > 0:
                 bytes_mb = total_bytes_delta / (1024 * 1024)
                 logger.debug(f"Bandwidth delta: {bytes_mb:.2f} MB, active channels: {active_channels}, clients: {total_clients}")
+
+        # Update per-channel bandwidth (v0.11.0)
+        if channel_bandwidth_updates:
+            self._update_channel_bandwidth(channel_bandwidth_updates)
 
         # Update watch counts for newly active channels (and log start events)
         if newly_active_channels:
@@ -318,17 +354,62 @@ class BandwidthTracker:
         finally:
             session.close()
 
+    def _update_channel_bandwidth(self, updates: list[dict]):
+        """Update per-channel bandwidth records (v0.11.0)."""
+        today = get_current_date()
+        session = get_session()
+        try:
+            for upd in updates:
+                channel_id = upd["channel_id"]
+                channel_name = upd["channel_name"]
+                bytes_delta = upd["bytes_delta"]
+                client_count = upd["client_count"]
+
+                # Get or create today's record for this channel
+                record = session.query(ChannelBandwidth).filter(
+                    ChannelBandwidth.channel_id == channel_id,
+                    ChannelBandwidth.date == today
+                ).first()
+
+                if record is None:
+                    record = ChannelBandwidth(
+                        channel_id=channel_id,
+                        channel_name=channel_name,
+                        date=today,
+                        bytes_transferred=0,
+                        peak_clients=0,
+                        total_watch_seconds=0,
+                        connection_count=0,
+                    )
+                    session.add(record)
+
+                # Update record
+                record.bytes_transferred += bytes_delta
+                record.peak_clients = max(record.peak_clients, client_count)
+                record.total_watch_seconds += self.poll_interval * client_count  # Each client adds poll_interval seconds
+                record.channel_name = channel_name  # Update name in case it changed
+
+            session.commit()
+            logger.debug(f"Updated channel bandwidth for {len(updates)} channels")
+        except Exception as e:
+            logger.error(f"Failed to update channel bandwidth: {e}")
+            session.rollback()
+        finally:
+            session.close()
+
     def _update_watch_counts(self, channels: list[dict]):
         """Update watch counts for channels that just became active and log journal events."""
         from journal import log_entry
 
         session = get_session()
+        today = get_current_date()
         try:
             now = datetime.now(get_user_timezone())
             for ch in channels:
                 channel_id = ch["channel_id"]
                 channel_name = ch["channel_name"]
                 client_ips = ch.get("client_ips", [])
+                client_count = ch.get("client_count", len(client_ips))
 
                 # Get or create watch stats record
                 record = session.query(ChannelWatchStats).filter(
@@ -349,6 +430,29 @@ class BandwidthTracker:
                 record.last_watched = now
                 # Update channel name in case it changed
                 record.channel_name = channel_name
+
+                # Create UniqueClientConnection records for each client (v0.11.0)
+                for ip in client_ips:
+                    connection = UniqueClientConnection(
+                        ip_address=ip,
+                        channel_id=channel_id,
+                        channel_name=channel_name,
+                        date=today,
+                        connected_at=now,
+                        watch_seconds=0,
+                    )
+                    session.add(connection)
+                    session.flush()  # Get the ID
+                    # Track active connection
+                    self._active_connections[(channel_id, ip)] = connection.id
+
+                # Update ChannelBandwidth connection count
+                bw_record = session.query(ChannelBandwidth).filter(
+                    ChannelBandwidth.channel_id == channel_id,
+                    ChannelBandwidth.date == today
+                ).first()
+                if bw_record:
+                    bw_record.connection_count += len(client_ips)
 
                 # Build description with IP addresses
                 ip_str = ", ".join(client_ips) if client_ips else "unknown"
@@ -379,11 +483,15 @@ class BandwidthTracker:
     def _update_watch_time(self, channels: list[dict]):
         """Accumulate watch time for channels that are still active."""
         session = get_session()
+        today = get_current_date()
         try:
             now = datetime.now(get_user_timezone())
             for ch in channels:
                 channel_id = ch["channel_id"]
                 channel_name = ch["channel_name"]
+                new_clients = ch.get("new_clients", [])
+                continuing_clients = ch.get("continuing_clients", [])
+                client_count = ch.get("client_count", 0)
 
                 record = session.query(ChannelWatchStats).filter(
                     ChannelWatchStats.channel_id == channel_id
@@ -394,6 +502,53 @@ class BandwidthTracker:
                     record.total_watch_seconds += self.poll_interval
                     record.last_watched = now
                     record.channel_name = channel_name
+
+                # Handle new clients that joined mid-stream (v0.11.0)
+                for ip in new_clients:
+                    connection = UniqueClientConnection(
+                        ip_address=ip,
+                        channel_id=channel_id,
+                        channel_name=channel_name,
+                        date=today,
+                        connected_at=now,
+                        watch_seconds=0,
+                    )
+                    session.add(connection)
+                    session.flush()
+                    self._active_connections[(channel_id, ip)] = connection.id
+
+                    # Update connection count in ChannelBandwidth
+                    bw_record = session.query(ChannelBandwidth).filter(
+                        ChannelBandwidth.channel_id == channel_id,
+                        ChannelBandwidth.date == today
+                    ).first()
+                    if bw_record:
+                        bw_record.connection_count += 1
+
+                # Update watch_seconds for continuing connections
+                for ip in continuing_clients:
+                    conn_key = (channel_id, ip)
+                    if conn_key in self._active_connections:
+                        conn_id = self._active_connections[conn_key]
+                        connection = session.query(UniqueClientConnection).filter(
+                            UniqueClientConnection.id == conn_id
+                        ).first()
+                        if connection:
+                            connection.watch_seconds += self.poll_interval
+
+                # Handle clients that disconnected from this still-active channel
+                last_clients = self._last_channel_clients.get(channel_id, set())
+                current_clients = set(ch.get("client_ips", []))
+                disconnected_clients = last_clients - current_clients
+                for ip in disconnected_clients:
+                    conn_key = (channel_id, ip)
+                    if conn_key in self._active_connections:
+                        conn_id = self._active_connections.pop(conn_key)
+                        connection = session.query(UniqueClientConnection).filter(
+                            UniqueClientConnection.id == conn_id
+                        ).first()
+                        if connection:
+                            connection.disconnected_at = now
 
             session.commit()
         except Exception as e:
@@ -443,6 +598,38 @@ class BandwidthTracker:
             logger.debug(f"Logged watch stop events for {len(channel_ids)} channels")
         except Exception as e:
             logger.error(f"Failed to log watch stop events: {e}")
+        finally:
+            session.close()
+
+    def _close_client_connections(self, channel_ids: set[str]):
+        """Mark all client connections as disconnected when channels stop (v0.11.0)."""
+        session = get_session()
+        try:
+            now = datetime.now(get_user_timezone())
+            closed_count = 0
+
+            for channel_id in channel_ids:
+                # Find all active connections for this channel
+                keys_to_remove = [
+                    key for key in self._active_connections
+                    if key[0] == channel_id
+                ]
+
+                for key in keys_to_remove:
+                    conn_id = self._active_connections.pop(key)
+                    connection = session.query(UniqueClientConnection).filter(
+                        UniqueClientConnection.id == conn_id
+                    ).first()
+                    if connection and connection.disconnected_at is None:
+                        connection.disconnected_at = now
+                        closed_count += 1
+
+            session.commit()
+            if closed_count > 0:
+                logger.debug(f"Closed {closed_count} client connections for stopped channels")
+        except Exception as e:
+            logger.error(f"Failed to close client connections: {e}")
+            session.rollback()
         finally:
             session.close()
 
@@ -557,6 +744,202 @@ class BandwidthTracker:
         except Exception as e:
             logger.error(f"Failed to purge old records: {e}")
             session.rollback()
+        finally:
+            session.close()
+
+    # =========================================================================
+    # Enhanced Statistics Query Methods (v0.11.0)
+    # =========================================================================
+
+    @staticmethod
+    def get_unique_viewers_summary(days: int = 7) -> dict:
+        """
+        Get unique viewer statistics for the specified period.
+
+        Args:
+            days: Number of days to look back (default 7)
+
+        Returns:
+            dict with unique viewer counts and breakdown
+        """
+        from sqlalchemy import func, distinct
+
+        cutoff = get_current_date() - timedelta(days=days)
+        today = get_current_date()
+
+        session = get_session()
+        try:
+            # Total unique IPs in period
+            total_unique = session.query(
+                func.count(distinct(UniqueClientConnection.ip_address))
+            ).filter(UniqueClientConnection.date >= cutoff).scalar() or 0
+
+            # Unique IPs today
+            today_unique = session.query(
+                func.count(distinct(UniqueClientConnection.ip_address))
+            ).filter(UniqueClientConnection.date == today).scalar() or 0
+
+            # Total connections in period
+            total_connections = session.query(
+                func.count(UniqueClientConnection.id)
+            ).filter(UniqueClientConnection.date >= cutoff).scalar() or 0
+
+            # Average watch time per connection
+            avg_watch_time = session.query(
+                func.avg(UniqueClientConnection.watch_seconds)
+            ).filter(
+                UniqueClientConnection.date >= cutoff,
+                UniqueClientConnection.watch_seconds > 0
+            ).scalar() or 0
+
+            # Top viewers by connection count
+            top_viewers = session.query(
+                UniqueClientConnection.ip_address,
+                func.count(UniqueClientConnection.id).label("connection_count"),
+                func.sum(UniqueClientConnection.watch_seconds).label("total_watch_seconds")
+            ).filter(
+                UniqueClientConnection.date >= cutoff
+            ).group_by(
+                UniqueClientConnection.ip_address
+            ).order_by(
+                func.count(UniqueClientConnection.id).desc()
+            ).limit(10).all()
+
+            # Daily unique viewer counts for chart
+            daily_unique = session.query(
+                UniqueClientConnection.date,
+                func.count(distinct(UniqueClientConnection.ip_address)).label("unique_count")
+            ).filter(
+                UniqueClientConnection.date >= cutoff
+            ).group_by(
+                UniqueClientConnection.date
+            ).order_by(
+                UniqueClientConnection.date.asc()
+            ).all()
+
+            return {
+                "period_days": days,
+                "total_unique_viewers": total_unique,
+                "today_unique_viewers": today_unique,
+                "total_connections": total_connections,
+                "avg_watch_seconds": round(avg_watch_time, 1),
+                "top_viewers": [
+                    {
+                        "ip_address": v.ip_address,
+                        "connection_count": v.connection_count,
+                        "total_watch_seconds": v.total_watch_seconds or 0,
+                    }
+                    for v in top_viewers
+                ],
+                "daily_unique": [
+                    {"date": d.date.isoformat(), "unique_count": d.unique_count}
+                    for d in daily_unique
+                ],
+            }
+        finally:
+            session.close()
+
+    @staticmethod
+    def get_channel_bandwidth_stats(days: int = 7, limit: int = 20, sort_by: str = "bytes") -> list[dict]:
+        """
+        Get per-channel bandwidth statistics.
+
+        Args:
+            days: Number of days to aggregate (default 7)
+            limit: Maximum channels to return (default 20)
+            sort_by: "bytes", "connections", or "watch_time" (default "bytes")
+
+        Returns:
+            List of channel bandwidth stats, sorted by specified metric
+        """
+        from sqlalchemy import func
+
+        cutoff = get_current_date() - timedelta(days=days)
+
+        session = get_session()
+        try:
+            # Aggregate per-channel data
+            query = session.query(
+                ChannelBandwidth.channel_id,
+                ChannelBandwidth.channel_name,
+                func.sum(ChannelBandwidth.bytes_transferred).label("total_bytes"),
+                func.sum(ChannelBandwidth.connection_count).label("total_connections"),
+                func.sum(ChannelBandwidth.total_watch_seconds).label("total_watch_seconds"),
+                func.max(ChannelBandwidth.peak_clients).label("peak_clients"),
+            ).filter(
+                ChannelBandwidth.date >= cutoff
+            ).group_by(
+                ChannelBandwidth.channel_id,
+                ChannelBandwidth.channel_name
+            )
+
+            # Apply sorting
+            if sort_by == "connections":
+                query = query.order_by(func.sum(ChannelBandwidth.connection_count).desc())
+            elif sort_by == "watch_time":
+                query = query.order_by(func.sum(ChannelBandwidth.total_watch_seconds).desc())
+            else:  # bytes
+                query = query.order_by(func.sum(ChannelBandwidth.bytes_transferred).desc())
+
+            results = query.limit(limit).all()
+
+            return [
+                {
+                    "channel_id": r.channel_id,
+                    "channel_name": r.channel_name,
+                    "total_bytes": r.total_bytes or 0,
+                    "total_connections": r.total_connections or 0,
+                    "total_watch_seconds": r.total_watch_seconds or 0,
+                    "peak_clients": r.peak_clients or 0,
+                }
+                for r in results
+            ]
+        finally:
+            session.close()
+
+    @staticmethod
+    def get_unique_viewers_by_channel(days: int = 7, limit: int = 20) -> list[dict]:
+        """
+        Get unique viewer counts per channel.
+
+        Args:
+            days: Number of days to look back (default 7)
+            limit: Maximum channels to return (default 20)
+
+        Returns:
+            List of channels with their unique viewer counts
+        """
+        from sqlalchemy import func, distinct
+
+        cutoff = get_current_date() - timedelta(days=days)
+
+        session = get_session()
+        try:
+            results = session.query(
+                UniqueClientConnection.channel_id,
+                UniqueClientConnection.channel_name,
+                func.count(distinct(UniqueClientConnection.ip_address)).label("unique_viewers"),
+                func.count(UniqueClientConnection.id).label("total_connections"),
+                func.sum(UniqueClientConnection.watch_seconds).label("total_watch_seconds"),
+            ).filter(
+                UniqueClientConnection.date >= cutoff
+            ).group_by(
+                UniqueClientConnection.channel_id,
+                UniqueClientConnection.channel_name
+            ).order_by(
+                func.count(distinct(UniqueClientConnection.ip_address)).desc()
+            ).limit(limit).all()
+
+            return [
+                {
+                    "channel_id": r.channel_id,
+                    "channel_name": r.channel_name,
+                    "unique_viewers": r.unique_viewers,
+                    "total_connections": r.total_connections,
+                    "total_watch_seconds": r.total_watch_seconds or 0,
+                }
+                for r in results
+            ]
         finally:
             session.close()
 

@@ -889,3 +889,189 @@ export interface PreviewStreamModalProps {
   // Optional: M3U provider name for display (used when previewing a stream)
   providerName?: string;
 }
+
+// =============================================================================
+// Enhanced Statistics Types (v0.11.0)
+// =============================================================================
+
+// Top viewer entry in unique viewers summary
+export interface TopViewer {
+  ip_address: string;
+  connection_count: number;
+  total_watch_seconds: number;
+}
+
+// Daily unique viewer count for charts
+export interface DailyUniqueCount {
+  date: string;  // ISO date string (YYYY-MM-DD)
+  unique_count: number;
+}
+
+// Summary of unique viewer statistics
+export interface UniqueViewersSummary {
+  period_days: number;
+  total_unique_viewers: number;
+  today_unique_viewers: number;
+  total_connections: number;
+  avg_watch_seconds: number;
+  top_viewers: TopViewer[];
+  daily_unique: DailyUniqueCount[];
+}
+
+// Per-channel bandwidth statistics
+export interface ChannelBandwidthStats {
+  channel_id: string;
+  channel_name: string;
+  total_bytes: number;
+  total_connections: number;
+  total_watch_seconds: number;
+  peak_clients: number;
+}
+
+// Unique viewers per channel
+export interface ChannelUniqueViewers {
+  channel_id: string;
+  channel_name: string;
+  unique_viewers: number;
+  total_connections: number;
+  total_watch_seconds: number;
+}
+
+// =============================================================================
+// Popularity Types (v0.11.0)
+// =============================================================================
+
+// Trend direction
+export type PopularityTrend = 'up' | 'down' | 'stable';
+
+// Channel popularity score
+export interface ChannelPopularityScore {
+  id: number;
+  channel_id: string;
+  channel_name: string;
+  score: number;
+  rank: number | null;
+  watch_count_7d: number;
+  watch_time_7d: number;
+  unique_viewers_7d: number;
+  bandwidth_7d: number;
+  trend: PopularityTrend;
+  trend_percent: number;
+  previous_score: number | null;
+  previous_rank: number | null;
+  calculated_at: string;  // ISO timestamp
+  created_at: string;
+  updated_at: string;
+}
+
+// Paginated popularity rankings response
+export interface PopularityRankingsResponse {
+  total: number;
+  rankings: ChannelPopularityScore[];
+}
+
+// Result of popularity calculation
+export interface PopularityCalculationResult {
+  channels_scored: number;
+  channels_updated: number;
+  channels_created: number;
+  top_channels: {
+    channel_id: string;
+    channel_name: string;
+    score: number;
+    rank: number;
+  }[];
+}
+
+// =============================================================================
+// Popularity Rules Types (v0.11.0)
+// =============================================================================
+
+// Condition metrics for popularity rules
+export type PopularityConditionMetric =
+  | 'score'
+  | 'rank'
+  | 'watch_count_7d'
+  | 'watch_time_7d'
+  | 'unique_viewers_7d'
+  | 'bandwidth_7d'
+  | 'trend_percent';
+
+// Condition operators for popularity rules
+export type PopularityConditionOperator =
+  | 'gt'
+  | 'gte'
+  | 'lt'
+  | 'lte'
+  | 'eq'
+  | 'in_top_n'
+  | 'in_bottom_n'
+  | 'trending_up'
+  | 'trending_down';
+
+// Action types for popularity rules
+export type PopularityActionType =
+  | 'add_to_group'
+  | 'remove_from_group'
+  | 'set_channel_number'
+  | 'notify'
+  | 'log';
+
+// Run frequency options
+export type PopularityRuleFrequency = 'on_calculation' | 'hourly' | 'daily';
+
+// A popularity rule
+export interface PopularityRule {
+  id: number;
+  name: string;
+  description: string | null;
+  enabled: boolean;
+  priority: number;
+  condition_metric: PopularityConditionMetric;
+  condition_operator: PopularityConditionOperator;
+  condition_threshold: number;
+  condition_metric_2: PopularityConditionMetric | null;
+  condition_operator_2: PopularityConditionOperator | null;
+  condition_threshold_2: number | null;
+  action_type: PopularityActionType;
+  action_value: string | null;
+  run_frequency: PopularityRuleFrequency;
+  last_run_at: string | null;  // ISO timestamp
+  last_matched_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+// Request to create a popularity rule
+export interface CreatePopularityRuleRequest {
+  name: string;
+  description?: string;
+  enabled?: boolean;
+  priority?: number;
+  condition_metric: PopularityConditionMetric;
+  condition_operator: PopularityConditionOperator;
+  condition_threshold: number;
+  condition_metric_2?: PopularityConditionMetric;
+  condition_operator_2?: PopularityConditionOperator;
+  condition_threshold_2?: number;
+  action_type: PopularityActionType;
+  action_value?: string;
+  run_frequency?: PopularityRuleFrequency;
+}
+
+// Request to update a popularity rule
+export interface UpdatePopularityRuleRequest {
+  name?: string;
+  description?: string;
+  enabled?: boolean;
+  priority?: number;
+  condition_metric?: PopularityConditionMetric;
+  condition_operator?: PopularityConditionOperator;
+  condition_threshold?: number;
+  condition_metric_2?: PopularityConditionMetric | null;
+  condition_operator_2?: PopularityConditionOperator | null;
+  condition_threshold_2?: number | null;
+  action_type?: PopularityActionType;
+  action_value?: string | null;
+  run_frequency?: PopularityRuleFrequency;
+}

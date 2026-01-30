@@ -5766,6 +5766,271 @@ async def get_top_watched_channels(limit: int = 10, sort_by: str = "views"):
 
 
 # =============================================================================
+# Enhanced Statistics Endpoints (v0.11.0)
+# =============================================================================
+
+
+@app.get("/api/stats/unique-viewers", tags=["Enhanced Stats"])
+async def get_unique_viewers_summary(days: int = 7):
+    """Get unique viewer statistics for the specified period."""
+    try:
+        return BandwidthTracker.get_unique_viewers_summary(days=days)
+    except Exception as e:
+        logger.error(f"Failed to get unique viewers summary: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/stats/channel-bandwidth", tags=["Enhanced Stats"])
+async def get_channel_bandwidth_stats(days: int = 7, limit: int = 20, sort_by: str = "bytes"):
+    """Get per-channel bandwidth statistics."""
+    try:
+        return BandwidthTracker.get_channel_bandwidth_stats(days=days, limit=limit, sort_by=sort_by)
+    except Exception as e:
+        logger.error(f"Failed to get channel bandwidth stats: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/stats/unique-viewers-by-channel", tags=["Enhanced Stats"])
+async def get_unique_viewers_by_channel(days: int = 7, limit: int = 20):
+    """Get unique viewer counts per channel."""
+    try:
+        return BandwidthTracker.get_unique_viewers_by_channel(days=days, limit=limit)
+    except Exception as e:
+        logger.error(f"Failed to get unique viewers by channel: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# =============================================================================
+# Popularity Endpoints (v0.11.0)
+# =============================================================================
+
+
+@app.get("/api/stats/popularity/rankings", tags=["Popularity"])
+async def get_popularity_rankings(limit: int = 50, offset: int = 0):
+    """Get channel popularity rankings."""
+    try:
+        from popularity_calculator import PopularityCalculator
+        return PopularityCalculator.get_rankings(limit=limit, offset=offset)
+    except Exception as e:
+        logger.error(f"Failed to get popularity rankings: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/stats/popularity/channel/{channel_id}", tags=["Popularity"])
+async def get_channel_popularity(channel_id: str):
+    """Get popularity score for a specific channel."""
+    try:
+        from popularity_calculator import PopularityCalculator
+        result = PopularityCalculator.get_channel_score(channel_id)
+        if not result:
+            raise HTTPException(status_code=404, detail="Channel popularity score not found")
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get channel popularity: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/stats/popularity/trending", tags=["Popularity"])
+async def get_trending_channels(direction: str = "up", limit: int = 10):
+    """Get channels that are trending up or down."""
+    if direction not in ("up", "down"):
+        raise HTTPException(status_code=400, detail="direction must be 'up' or 'down'")
+    try:
+        from popularity_calculator import PopularityCalculator
+        return PopularityCalculator.get_trending_channels(direction=direction, limit=limit)
+    except Exception as e:
+        logger.error(f"Failed to get trending channels: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/stats/popularity/calculate", tags=["Popularity"])
+async def calculate_popularity_scores(period_days: int = 7):
+    """Trigger popularity score calculation."""
+    try:
+        from popularity_calculator import calculate_popularity
+        result = calculate_popularity(period_days=period_days)
+        return result
+    except Exception as e:
+        logger.error(f"Failed to calculate popularity: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# =============================================================================
+# Popularity Rules CRUD Endpoints (v0.11.0)
+# =============================================================================
+
+
+class PopularityRuleCreate(BaseModel):
+    name: str
+    description: Optional[str] = None
+    enabled: bool = True
+    priority: int = 0
+    condition_metric: str
+    condition_operator: str
+    condition_threshold: float
+    condition_metric_2: Optional[str] = None
+    condition_operator_2: Optional[str] = None
+    condition_threshold_2: Optional[float] = None
+    action_type: str
+    action_value: Optional[str] = None
+    run_frequency: str = "on_calculation"
+
+
+class PopularityRuleUpdate(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    enabled: Optional[bool] = None
+    priority: Optional[int] = None
+    condition_metric: Optional[str] = None
+    condition_operator: Optional[str] = None
+    condition_threshold: Optional[float] = None
+    condition_metric_2: Optional[str] = None
+    condition_operator_2: Optional[str] = None
+    condition_threshold_2: Optional[float] = None
+    action_type: Optional[str] = None
+    action_value: Optional[str] = None
+    run_frequency: Optional[str] = None
+
+
+@app.get("/api/popularity-rules", tags=["Popularity Rules"])
+async def list_popularity_rules():
+    """List all popularity rules."""
+    try:
+        from models import PopularityRule
+        session = get_session()
+        try:
+            rules = session.query(PopularityRule).order_by(PopularityRule.priority.asc()).all()
+            return [r.to_dict() for r in rules]
+        finally:
+            session.close()
+    except Exception as e:
+        logger.error(f"Failed to list popularity rules: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/popularity-rules", tags=["Popularity Rules"])
+async def create_popularity_rule(rule: PopularityRuleCreate):
+    """Create a new popularity rule."""
+    try:
+        from models import PopularityRule
+        import json
+        session = get_session()
+        try:
+            new_rule = PopularityRule(
+                name=rule.name,
+                description=rule.description,
+                enabled=rule.enabled,
+                priority=rule.priority,
+                condition_metric=rule.condition_metric,
+                condition_operator=rule.condition_operator,
+                condition_threshold=rule.condition_threshold,
+                condition_metric_2=rule.condition_metric_2,
+                condition_operator_2=rule.condition_operator_2,
+                condition_threshold_2=rule.condition_threshold_2,
+                action_type=rule.action_type,
+                action_value=json.dumps(rule.action_value) if rule.action_value and not isinstance(rule.action_value, str) else rule.action_value,
+                run_frequency=rule.run_frequency,
+            )
+            session.add(new_rule)
+            session.commit()
+            session.refresh(new_rule)
+            return new_rule.to_dict()
+        except Exception as e:
+            session.rollback()
+            raise
+        finally:
+            session.close()
+    except Exception as e:
+        logger.error(f"Failed to create popularity rule: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/popularity-rules/{rule_id}", tags=["Popularity Rules"])
+async def get_popularity_rule(rule_id: int):
+    """Get a specific popularity rule."""
+    try:
+        from models import PopularityRule
+        session = get_session()
+        try:
+            rule = session.query(PopularityRule).filter(PopularityRule.id == rule_id).first()
+            if not rule:
+                raise HTTPException(status_code=404, detail="Rule not found")
+            return rule.to_dict()
+        finally:
+            session.close()
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get popularity rule: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.put("/api/popularity-rules/{rule_id}", tags=["Popularity Rules"])
+async def update_popularity_rule(rule_id: int, updates: PopularityRuleUpdate):
+    """Update a popularity rule."""
+    try:
+        from models import PopularityRule
+        import json
+        session = get_session()
+        try:
+            rule = session.query(PopularityRule).filter(PopularityRule.id == rule_id).first()
+            if not rule:
+                raise HTTPException(status_code=404, detail="Rule not found")
+
+            update_data = updates.model_dump(exclude_unset=True)
+            for key, value in update_data.items():
+                if key == "action_value" and value and not isinstance(value, str):
+                    value = json.dumps(value)
+                setattr(rule, key, value)
+
+            session.commit()
+            session.refresh(rule)
+            return rule.to_dict()
+        except HTTPException:
+            raise
+        except Exception as e:
+            session.rollback()
+            raise
+        finally:
+            session.close()
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to update popularity rule: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/api/popularity-rules/{rule_id}", tags=["Popularity Rules"])
+async def delete_popularity_rule(rule_id: int):
+    """Delete a popularity rule."""
+    try:
+        from models import PopularityRule
+        session = get_session()
+        try:
+            rule = session.query(PopularityRule).filter(PopularityRule.id == rule_id).first()
+            if not rule:
+                raise HTTPException(status_code=404, detail="Rule not found")
+
+            session.delete(rule)
+            session.commit()
+            return {"status": "deleted", "id": rule_id}
+        except HTTPException:
+            raise
+        except Exception as e:
+            session.rollback()
+            raise
+        finally:
+            session.close()
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to delete popularity rule: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# =============================================================================
 # Stream Stats / Probing Endpoints
 # =============================================================================
 
