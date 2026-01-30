@@ -7791,6 +7791,12 @@ if os.path.exists(static_dir):
     app.mount(
         "/assets", StaticFiles(directory=os.path.join(static_dir, "assets")), name="assets"
     )
+    # Serve downloadable scripts (VLC protocol handlers, etc.)
+    scripts_dir = os.path.join(static_dir, "scripts")
+    if os.path.exists(scripts_dir):
+        app.mount(
+            "/scripts", StaticFiles(directory=scripts_dir), name="scripts"
+        )
 
     @app.get("/{full_path:path}")
     async def serve_spa(full_path: str):

@@ -1,0 +1,240 @@
+/**
+ * VLCProtocolHelperModal.css - Styles for VLC protocol helper modal
+ */
+
+/* OS Tabs */
+.vlc-os-tabs {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 1.5rem;
+  padding: 0.5rem;
+  background: var(--bg-secondary, #252540);
+  border-radius: 8px;
+  flex-wrap: wrap;
+}
+
+.vlc-os-tab {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.625rem 1rem;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: var(--text-secondary, #888);
+  font-size: 0.875rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s;
+  flex: 1;
+  justify-content: center;
+  min-width: 100px;
+}
+
+.vlc-os-tab:hover {
+  background: var(--bg-tertiary, #2a2a4a);
+  color: var(--text-primary, #fff);
+}
+
+.vlc-os-tab.active {
+  background: var(--button-primary-bg, #6366f1);
+  color: var(--button-primary-text, #fff);
+  border-color: var(--button-primary-bg, #6366f1);
+}
+
+.vlc-os-tab .material-icons {
+  font-size: 1.125rem;
+}
+
+/* Tab Content */
+.vlc-tab-content {
+  animation: vlc-fade-in 0.2s ease-out;
+}
+
+@keyframes vlc-fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(-5px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Script Download Button Container */
+.vlc-script-download {
+  margin: 1rem 0;
+}
+
+/* Instructions List */
+.vlc-instructions {
+  background: var(--bg-secondary, #252540);
+  border: 1px solid var(--border-primary, #3a3a5a);
+  border-radius: 6px;
+  padding: 1rem;
+  margin-top: 1rem;
+}
+
+.vlc-instructions strong {
+  display: block;
+  color: var(--text-primary, #fff);
+  margin-bottom: 0.75rem;
+  font-size: 0.9rem;
+}
+
+.vlc-instructions ol {
+  margin: 0;
+  padding-left: 1.25rem;
+  color: var(--text-secondary, #888);
+}
+
+.vlc-instructions ol li {
+  margin-bottom: 0.5rem;
+  line-height: 1.5;
+  font-size: 0.875rem;
+}
+
+.vlc-instructions ol li:last-child {
+  margin-bottom: 0;
+}
+
+.vlc-instructions ol li code {
+  background: var(--bg-tertiary, #1a1a2e);
+  padding: 0.125rem 0.375rem;
+  border-radius: 3px;
+  font-size: 0.8rem;
+  color: var(--accent-primary, #6366f1);
+}
+
+/* Code Block */
+.vlc-code-block {
+  background: var(--bg-tertiary, #1a1a2e);
+  border: 1px solid var(--border-primary, #3a3a5a);
+  border-radius: 6px;
+  padding: 1rem;
+  margin-top: 0.75rem;
+  overflow-x: auto;
+}
+
+.vlc-code-block code {
+  font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+  font-size: 0.75rem;
+  line-height: 1.6;
+  color: var(--text-secondary, #a0a0a0);
+  white-space: pre;
+  display: block;
+}
+
+/* Copyable Command */
+.vlc-copyable-command {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  background: var(--bg-tertiary, #1a1a2e);
+  border: 1px solid var(--border-primary, #3a3a5a);
+  border-radius: 4px;
+  padding: 0.5rem 0.75rem;
+  margin-top: 0.5rem;
+  font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+}
+
+.vlc-copyable-command code {
+  flex: 1;
+  font-size: 0.8rem;
+  color: var(--text-secondary, #a0a0a0);
+  word-break: break-all;
+}
+
+.vlc-copy-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  color: var(--text-secondary, #888);
+  cursor: pointer;
+  padding: 0.25rem;
+  border-radius: 4px;
+  transition: all 0.15s;
+  flex-shrink: 0;
+}
+
+.vlc-copy-btn:hover {
+  background: var(--bg-secondary, #252540);
+  color: var(--text-primary, #fff);
+}
+
+.vlc-copy-btn .material-icons {
+  font-size: 1rem;
+}
+
+/* Keyboard keys */
+.vlc-instructions kbd {
+  display: inline-block;
+  padding: 0.125rem 0.375rem;
+  font-size: 0.75rem;
+  font-family: inherit;
+  background: var(--bg-tertiary, #1a1a2e);
+  border: 1px solid var(--border-primary, #3a3a5a);
+  border-radius: 3px;
+  box-shadow: 0 1px 0 var(--border-primary, #3a3a5a);
+}
+
+/* Note Text */
+.vlc-note {
+  font-size: 0.8rem;
+  color: var(--text-muted, #666);
+  margin-top: 0.75rem;
+  font-style: italic;
+}
+
+/* External Link */
+.vlc-external-link {
+  margin-top: 0.75rem;
+}
+
+.vlc-external-link a {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: var(--accent-primary, #6366f1);
+  text-decoration: none;
+  font-size: 0.9rem;
+  transition: opacity 0.15s;
+}
+
+.vlc-external-link a:hover {
+  opacity: 0.8;
+  text-decoration: underline;
+}
+
+.vlc-external-link a .material-icons {
+  font-size: 1rem;
+}
+
+/* Alternative Section */
+.vlc-alternative-section {
+  margin-top: 1.5rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid var(--border-primary, #3a3a5a);
+}
+
+/* Responsive */
+@media (max-width: 600px) {
+  .vlc-os-tabs {
+    flex-direction: column;
+  }
+
+  .vlc-os-tab {
+    min-width: auto;
+  }
+
+  .vlc-code-block {
+    padding: 0.75rem;
+  }
+
+  .vlc-code-block code {
+    font-size: 0.7rem;
+  }
+}
