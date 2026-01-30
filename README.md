@@ -349,6 +349,20 @@ These defaults are pre-loaded when opening the bulk create modal, with a "(from 
   - **Overwrite** - Automatically replace all existing IDs with new ones
 - **Frontend Log Level** - Set console logging verbosity (Error, Warn, Info, Debug) for troubleshooting
 
+#### VLC Integration
+Open streams directly in VLC media player from your browser:
+
+- **Open in VLC Behavior** - Choose how "Open in VLC" buttons work:
+  - **Try VLC Protocol** - Attempt vlc:// protocol, show helper if it fails
+  - **Fallback to M3U** - Try vlc:// first, then download M3U file if it fails
+  - **Always M3U** - Always download M3U file (most compatible)
+- **Protocol Handler Scripts** - Downloadable scripts to register the vlc:// protocol handler:
+  - **Windows** - PowerShell script with auto-elevation and registry setup
+  - **Linux** - Shell script creating .desktop file for xdg-open
+  - **macOS** - Shell script creating AppleScript handler app
+- **Helper Modal** - When vlc:// fails, shows OS-specific setup instructions with download buttons
+- **M3U Fallback** - Download M3U playlist files that open directly in VLC
+
 #### Scheduled Tasks
 Automated background tasks with flexible scheduling:
 
