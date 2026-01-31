@@ -10,10 +10,36 @@
 import { test, expect, navigateToTab, waitForToast } from './fixtures/base';
 import { selectors, sampleTasks } from './fixtures/test-data';
 
+/**
+ * Navigate to the Scheduled Tasks section within Settings.
+ * Settings has a sidebar with multiple sections - we need to click on "Scheduled Tasks".
+ */
+async function navigateToScheduledTasks(appPage: import('@playwright/test').Page): Promise<void> {
+  // First navigate to settings tab
+  await navigateToTab(appPage, 'settings');
+
+  // Wait for the settings tab container to be visible first
+  await appPage.waitForSelector('.settings-tab', { timeout: 15000 });
+
+  // Wait for the settings sidebar to be fully loaded (may take time due to data loading)
+  await appPage.waitForSelector('.settings-sidebar, .settings-nav', { timeout: 15000 });
+
+  // Small delay to ensure the nav items are interactive
+  await appPage.waitForTimeout(300);
+
+  // Then click on "Scheduled Tasks" in the settings sidebar
+  const scheduledTasksNav = appPage.locator('.settings-nav-item:has-text("Scheduled Tasks"), li:has-text("Scheduled Tasks")');
+  await scheduledTasksNav.waitFor({ state: 'visible', timeout: 10000 });
+  await scheduledTasksNav.click();
+
+  // Wait for the scheduled tasks section to load
+  await appPage.waitForSelector('h2:has-text("Scheduled Tasks"), .scheduled-tasks-section', { timeout: 10000 });
+}
+
 test.describe('Scheduled Tasks', () => {
   test.beforeEach(async ({ appPage }) => {
-    // Navigate to settings tab where tasks are usually located
-    await navigateToTab(appPage, 'settings');
+    // Navigate to Settings > Scheduled Tasks section
+    await navigateToScheduledTasks(appPage);
   });
 
   test('task list section is visible', async ({ appPage }) => {
@@ -68,7 +94,7 @@ test.describe('Scheduled Tasks', () => {
 
 test.describe('Task Actions', () => {
   test.beforeEach(async ({ appPage }) => {
-    await navigateToTab(appPage, 'settings');
+    await navigateToScheduledTasks(appPage);
   });
 
   test('run button exists for tasks', async ({ appPage }) => {
@@ -91,28 +117,28 @@ test.describe('Task Actions', () => {
   });
 
   test('clicking edit opens task modal', async ({ appPage }) => {
-    // Find an edit button or task item that opens a modal
-    const editButton = appPage.locator(
-      'button:has-text("Edit"), button[title*="Edit"], .task-edit-btn'
-    ).first();
+    // Find an edit button on a task card
+    const editButton = appPage.locator('button:has-text("Edit")').first();
 
     const buttonExists = (await editButton.count()) > 0;
 
     if (buttonExists) {
       await editButton.click();
-      await appPage.waitForTimeout(500);
 
-      // Modal should appear
-      const modal = appPage.locator('.modal, [role="dialog"], .task-modal');
-      const modalVisible = (await modal.count()) > 0;
-      expect(modalVisible).toBeTruthy();
+      // Wait for the task editor modal to appear
+      const modal = appPage.locator('.task-editor-modal, .modal-overlay, .modal-container');
+      await modal.first().waitFor({ state: 'visible', timeout: 5000 });
+
+      // Verify modal is visible with "Configure Task" header
+      const modalHeader = appPage.locator('h2:has-text("Configure Task")');
+      await expect(modalHeader).toBeVisible();
     }
   });
 });
 
 test.describe('Task Scheduling', () => {
   test.beforeEach(async ({ appPage }) => {
-    await navigateToTab(appPage, 'settings');
+    await navigateToScheduledTasks(appPage);
   });
 
   test('can view task schedule information', async ({ appPage }) => {
@@ -157,7 +183,7 @@ test.describe('Task Scheduling', () => {
 
 test.describe('Task Status', () => {
   test('tasks show enabled/disabled status', async ({ appPage }) => {
-    await navigateToTab(appPage, 'settings');
+    await navigateToScheduledTasks(appPage);
 
     // Look for toggle switches or enable/disable indicators
     const toggles = appPage.locator(
@@ -169,7 +195,7 @@ test.describe('Task Status', () => {
   });
 
   test('tasks show last run status', async ({ appPage }) => {
-    await navigateToTab(appPage, 'settings');
+    await navigateToScheduledTasks(appPage);
 
     const lastRun = appPage.locator(':has-text("Last run"), :has-text("last run"), [data-testid*="last-run"]');
     const count = await lastRun.count();
@@ -179,7 +205,7 @@ test.describe('Task Status', () => {
 
 test.describe('Schedule Editor', () => {
   test.beforeEach(async ({ appPage }) => {
-    await navigateToTab(appPage, 'settings');
+    await navigateToScheduledTasks(appPage);
   });
 
   test('add schedule button exists', async ({ appPage }) => {
@@ -228,7 +254,7 @@ test.describe('Schedule Editor', () => {
 
 test.describe('Stream Probe Parameters', () => {
   test.beforeEach(async ({ appPage }) => {
-    await navigateToTab(appPage, 'settings');
+    await navigateToScheduledTasks(appPage);
   });
 
   test('stream probe task shows parameter options', async ({ appPage }) => {
@@ -265,7 +291,7 @@ test.describe('Stream Probe Parameters', () => {
 
 test.describe('Task Execution', () => {
   test.beforeEach(async ({ appPage }) => {
-    await navigateToTab(appPage, 'settings');
+    await navigateToScheduledTasks(appPage);
   });
 
   test('run now button triggers task', async ({ appPage }) => {

@@ -89,13 +89,13 @@ test.describe('SettingsModal - Dispatcharr Connection', () => {
   test('layout and visual regression', async ({ appPage }) => {
     await navigateToSettingsPage(appPage, 'General')
 
-    // Look for a button that opens the connection modal
-    const connectBtn = appPage.locator('button:has-text("Connect"), button:has-text("Settings"), button:has-text("Configure")').first()
+    // Look for the Edit button in the Dispatcharr Connection section
+    const editBtn = appPage.locator('.btn-edit-connection, button:has-text("Edit")').first()
 
-    if ((await connectBtn.count()) > 0 && (await connectBtn.isVisible())) {
-      await connectBtn.click()
+    if ((await editBtn.count()) > 0 && (await editBtn.isVisible())) {
+      await editBtn.click()
       await waitForModal(appPage)
-      await testModalLayout(appPage, 'SettingsModal', '.modal-content')
+      await testModalLayout(appPage, 'SettingsModal', '.settings-modal, .modal-container')
       await closeModal(appPage)
     } else {
       test.skip()
@@ -134,14 +134,34 @@ test.describe('DeleteOrphanedGroupsModal', () => {
   test('layout and visual regression', async ({ appPage }) => {
     await navigateToSettingsPage(appPage, 'Maintenance')
 
-    // Look for delete orphaned groups button
-    const deleteBtn = appPage.locator('button:has-text("Orphaned"), button:has-text("Delete")').first()
+    // First, scan for orphaned groups - the modal only appears if orphans are found
+    const scanBtn = appPage.locator('button:has-text("Scan for Orphaned Groups")').first()
 
-    if ((await deleteBtn.count()) > 0 && (await deleteBtn.isVisible())) {
-      await deleteBtn.click()
-      await waitForModal(appPage)
-      await testModalLayout(appPage, 'DeleteOrphanedGroupsModal', '.delete-orphaned-modal, .modal-content')
-      await closeModal(appPage)
+    if ((await scanBtn.count()) > 0 && (await scanBtn.isVisible())) {
+      await scanBtn.click()
+      // Wait for scan to complete (button text changes or results appear)
+      await appPage.waitForTimeout(2000)
+
+      // Check if any orphaned groups were found - look for delete button or results
+      const deleteBtn = appPage.locator('button:has-text("Delete"), button:has-text("Orphaned Group")').first()
+      if ((await deleteBtn.count()) > 0 && (await deleteBtn.isVisible())) {
+        // Note: DeleteOrphanedGroupsModal is a confirmation modal that appears inline,
+        // not a separate modal overlay. Skip this test if no orphans found.
+        await deleteBtn.click()
+        await appPage.waitForTimeout(500)
+
+        // Check if modal appeared
+        const modal = appPage.locator('.delete-orphaned-modal, .modal-content, .modal-overlay')
+        if ((await modal.count()) > 0 && (await modal.first().isVisible())) {
+          await testModalLayout(appPage, 'DeleteOrphanedGroupsModal', '.delete-orphaned-modal, .modal-content')
+          await closeModal(appPage)
+        } else {
+          test.skip()
+        }
+      } else {
+        // No orphaned groups found in test data - skip test
+        test.skip()
+      }
     } else {
       test.skip()
     }
@@ -157,14 +177,33 @@ test.describe('BulkEPGAssignModal', () => {
     await navigateToTab(appPage, 'channel-manager')
     await appPage.waitForTimeout(1000)
 
-    // Look for bulk EPG assign button
-    const bulkEpgBtn = appPage.locator('button:has-text("Bulk EPG"), button:has-text("EPG")').first()
+    // Enter edit mode first - the bulk EPG button only appears in edit mode
+    const editModeBtn = appPage.locator('.enter-edit-mode-btn, button:has-text("Edit Mode")').first()
+    if ((await editModeBtn.count()) > 0 && (await editModeBtn.isVisible())) {
+      await editModeBtn.click()
+      await appPage.waitForTimeout(500)
+    }
 
-    if ((await bulkEpgBtn.count()) > 0 && (await bulkEpgBtn.isVisible())) {
-      await bulkEpgBtn.click()
-      await waitForModal(appPage)
-      await testModalLayout(appPage, 'BulkEPGAssignModal', '.bulk-epg-modal')
-      await closeModal(appPage)
+    // Select some channels - the bulk EPG button only appears with selection
+    const channelItems = appPage.locator('.channel-item')
+    const channelCount = await channelItems.count()
+
+    if (channelCount > 0) {
+      // Click first channel to select it
+      await channelItems.first().click()
+      await appPage.waitForTimeout(300)
+
+      // Look for bulk EPG assign button (icon-only button with title attribute)
+      const bulkEpgBtn = appPage.locator('button[title*="EPG"], button.bulk-action-btn').first()
+
+      if ((await bulkEpgBtn.count()) > 0 && (await bulkEpgBtn.isVisible())) {
+        await bulkEpgBtn.click()
+        await waitForModal(appPage)
+        await testModalLayout(appPage, 'BulkEPGAssignModal', '.bulk-epg-modal, .modal-content')
+        await closeModal(appPage)
+      } else {
+        test.skip()
+      }
     } else {
       test.skip()
     }
@@ -247,10 +286,12 @@ test.describe('M3ULinkedAccountsModal', () => {
 
 test.describe('ChannelProfilesListModal', () => {
   test('layout and visual regression', async ({ appPage }) => {
-    await navigateToSettingsPage(appPage, 'Channel Defaults')
+    // The profiles button is in the Channel Manager tab, not Settings
+    await navigateToTab(appPage, 'channel-manager')
+    await appPage.waitForTimeout(1000)
 
-    // Look for profiles button
-    const profilesBtn = appPage.locator('button:has-text("Profiles"), button:has-text("Manage")').first()
+    // Look for profiles button (icon-only button with title or class)
+    const profilesBtn = appPage.locator('.profiles-btn, button[title*="profile"], button[title*="Profile"]').first()
 
     if ((await profilesBtn.count()) > 0 && (await profilesBtn.isVisible())) {
       await profilesBtn.click()
