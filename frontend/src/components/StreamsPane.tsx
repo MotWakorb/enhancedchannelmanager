@@ -463,11 +463,19 @@ export function StreamsPane({
         e.dataTransfer.setData('bulkDrag', 'true');
         e.dataTransfer.effectAllowed = 'copy';
 
-        // Debug logging
+        // Debug logging - use console.warn for visibility
+        const typesAfterSet = Array.from(e.dataTransfer.types);
+        console.warn(`[DRAG-DEBUG] Drag started (bulk)`, {
+          streamId: stream.id,
+          streamName: stream.name,
+          selectedCount,
+          typesAfterSet,
+          effectAllowed: e.dataTransfer.effectAllowed
+        });
         logger.debug(`[DRAG-DEBUG] Drag started (bulk)`, {
           streamId: stream.id,
           selectedCount,
-          types: Array.from(e.dataTransfer.types),
+          types: typesAfterSet,
           effectAllowed: e.dataTransfer.effectAllowed
         });
 
@@ -492,11 +500,18 @@ export function StreamsPane({
         e.dataTransfer.setData('streamName', stream.name);
         e.dataTransfer.effectAllowed = 'copy';
 
-        // Debug logging
+        // Debug logging - use console.warn for visibility
+        const typesAfterSet = Array.from(e.dataTransfer.types);
+        console.warn(`[DRAG-DEBUG] Drag started (single)`, {
+          streamId: stream.id,
+          streamName: stream.name,
+          typesAfterSet,
+          effectAllowed: e.dataTransfer.effectAllowed
+        });
         logger.debug(`[DRAG-DEBUG] Drag started (single)`, {
           streamId: stream.id,
           streamName: stream.name,
-          types: Array.from(e.dataTransfer.types),
+          types: typesAfterSet,
           effectAllowed: e.dataTransfer.effectAllowed
         });
       }
