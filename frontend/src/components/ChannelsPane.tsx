@@ -2496,15 +2496,35 @@ export function ChannelsPane({
   };
 
   const handleStreamDragOver = (e: React.DragEvent, channelId: number) => {
+    // Debug logging for drag-over investigation
+    const rawTypes = Array.from(e.dataTransfer.types);
+    const types = rawTypes.map(t => t.toLowerCase());
+    const hasStreamId = types.includes('streamid') || types.includes('streamids');
+
+    logger.debug(`[DRAG-DEBUG] handleStreamDragOver called`, {
+      channelId,
+      isEditMode,
+      rawTypes,
+      lowercaseTypes: types,
+      hasStreamId,
+      effectAllowed: e.dataTransfer.effectAllowed,
+      dropEffect: e.dataTransfer.dropEffect
+    });
+
     // Block stream drag-over when not in edit mode
-    if (!isEditMode) return;
+    if (!isEditMode) {
+      logger.debug(`[DRAG-DEBUG] Blocked: not in edit mode`);
+      return;
+    }
 
     // Only handle stream drags (from external drag source)
     // Check for both lowercase 'streamid' and actual data types
-    const types = e.dataTransfer.types.map(t => t.toLowerCase());
-    if (types.includes('streamid') || types.includes('streamids')) {
+    if (hasStreamId) {
+      logger.debug(`[DRAG-DEBUG] Allowing drop - calling preventDefault`);
       e.preventDefault();
       setDragOverChannelId(channelId);
+    } else {
+      logger.debug(`[DRAG-DEBUG] No streamid/streamids type found, drop not allowed`);
     }
   };
 

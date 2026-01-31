@@ -10,6 +10,7 @@ import { useContextMenu } from '../hooks/useContextMenu';
 import { useKeyboardShortcuts } from '../hooks/useKeyboardShortcuts';
 import { CustomSelect } from './CustomSelect';
 import { PreviewStreamModal } from './PreviewStreamModal';
+import { logger } from '../utils/logger';
 import './StreamsPane.css';
 
 interface StreamGroup {
@@ -462,6 +463,14 @@ export function StreamsPane({
         e.dataTransfer.setData('bulkDrag', 'true');
         e.dataTransfer.effectAllowed = 'copy';
 
+        // Debug logging
+        logger.debug(`[DRAG-DEBUG] Drag started (bulk)`, {
+          streamId: stream.id,
+          selectedCount,
+          types: Array.from(e.dataTransfer.types),
+          effectAllowed: e.dataTransfer.effectAllowed
+        });
+
         // Custom drag image showing count
         const dragEl = document.createElement('div');
         dragEl.className = 'drag-preview';
@@ -482,6 +491,14 @@ export function StreamsPane({
         e.dataTransfer.setData('streamId', String(stream.id));
         e.dataTransfer.setData('streamName', stream.name);
         e.dataTransfer.effectAllowed = 'copy';
+
+        // Debug logging
+        logger.debug(`[DRAG-DEBUG] Drag started (single)`, {
+          streamId: stream.id,
+          streamName: stream.name,
+          types: Array.from(e.dataTransfer.types),
+          effectAllowed: e.dataTransfer.effectAllowed
+        });
       }
     },
     [isSelected, selectedCount, selectedIds]
