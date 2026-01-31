@@ -50,28 +50,38 @@ function copyWithExecCommand(text: string): boolean {
  * @returns Promise that resolves to true if successful, false if failed
  */
 export async function copyToClipboard(text: string, description: string = 'text'): Promise<boolean> {
+  console.warn('[CLIPBOARD-DEBUG] copyToClipboard called', { text: text.substring(0, 50), description });
+
   // Try modern Clipboard API first (works on HTTPS/localhost)
   if (navigator.clipboard && navigator.clipboard.writeText) {
+    console.warn('[CLIPBOARD-DEBUG] Trying Clipboard API');
     try {
       await navigator.clipboard.writeText(text);
+      console.warn('[CLIPBOARD-DEBUG] Clipboard API succeeded');
       logger.info(`Copied ${description} to clipboard (Clipboard API): ${text.substring(0, 50)}${text.length > 50 ? '...' : ''}`);
       return true;
     } catch (error) {
       // Log the error but continue to fallback
+      console.warn('[CLIPBOARD-DEBUG] Clipboard API failed', error);
       if (error instanceof Error) {
         logger.warn(`Clipboard API failed for ${description}: ${error.message}, trying fallback method`);
       }
     }
+  } else {
+    console.warn('[CLIPBOARD-DEBUG] Clipboard API not available');
   }
 
   // Fallback to execCommand (works over HTTP)
+  console.warn('[CLIPBOARD-DEBUG] Trying execCommand fallback');
   logger.debug(`Using execCommand fallback for ${description}`);
   const success = copyWithExecCommand(text);
 
   if (success) {
+    console.warn('[CLIPBOARD-DEBUG] execCommand succeeded');
     logger.info(`Copied ${description} to clipboard (execCommand): ${text.substring(0, 50)}${text.length > 50 ? '...' : ''}`);
     return true;
   } else {
+    console.warn('[CLIPBOARD-DEBUG] execCommand failed');
     logger.error(`Failed to copy ${description} to clipboard with both methods`);
     return false;
   }
