@@ -62,6 +62,8 @@ describe('clipboard', () => {
         setAttribute: vi.fn(),
         select: vi.fn(),
         setSelectionRange: vi.fn(),
+        focus: vi.fn(),
+        blur: vi.fn(),
       };
       vi.spyOn(document, 'createElement').mockReturnValue(mockTextarea as unknown as HTMLElement);
       vi.spyOn(document.body, 'appendChild').mockImplementation(() => mockTextarea as unknown as HTMLElement);
@@ -93,6 +95,8 @@ describe('clipboard', () => {
         setAttribute: vi.fn(),
         select: vi.fn(),
         setSelectionRange: vi.fn(),
+        focus: vi.fn(),
+        blur: vi.fn(),
       };
       vi.spyOn(document, 'createElement').mockReturnValue(mockTextarea as unknown as HTMLElement);
       vi.spyOn(document.body, 'appendChild').mockImplementation(() => mockTextarea as unknown as HTMLElement);
@@ -125,6 +129,8 @@ describe('clipboard', () => {
         setAttribute: vi.fn(),
         select: vi.fn(),
         setSelectionRange: vi.fn(),
+        focus: vi.fn(),
+        blur: vi.fn(),
       };
       vi.spyOn(document, 'createElement').mockReturnValue(mockTextarea as unknown as HTMLElement);
       vi.spyOn(document.body, 'appendChild').mockImplementation(() => mockTextarea as unknown as HTMLElement);
@@ -181,6 +187,8 @@ describe('clipboard', () => {
         setAttribute: vi.fn(),
         select: vi.fn(),
         setSelectionRange: vi.fn(),
+        focus: vi.fn(),
+        blur: vi.fn(),
       };
 
       const appendSpy = vi.spyOn(document.body, 'appendChild').mockImplementation(() => mockTextarea as unknown as HTMLElement);
@@ -233,6 +241,8 @@ describe('clipboard', () => {
         setAttribute: vi.fn(),
         select: vi.fn(),
         setSelectionRange: vi.fn(),
+        focus: vi.fn(),
+        blur: vi.fn(),
       };
       vi.spyOn(document, 'createElement').mockReturnValue(mockTextarea as unknown as HTMLElement);
       vi.spyOn(document.body, 'appendChild').mockImplementation(() => mockTextarea as unknown as HTMLElement);
