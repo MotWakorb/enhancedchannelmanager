@@ -1288,84 +1288,209 @@ export function useEditMode({
       ? summaryParts.join(', ')
       : 'No operations';
 
-    // With bulk commit, we have 2 main steps: bulk commit + fetch updated channels
-    const totalOperations = 2;
-    let currentOperation = 0;
-
-    const reportProgress = (description: string) => {
-      currentOperation++;
-      onProgress?.({
-        current: currentOperation,
-        total: totalOperations,
-        currentOperation: description,
-      });
-    };
-
     try {
       // Build bulk operations using helper
       const { bulkOperations, groupsToCreate } = buildBulkOperations(consolidatedOps);
 
-      // Report progress for bulk commit with detailed breakdown
-      reportProgress(`Applying: ${operationSummary}`);
+      const totalOps = bulkOperations.length;
+      const BATCH_SIZE = 200; // Process in batches of 200 for progress updates
 
-      // Execute bulk commit with options
-      const bulkResponse = await api.bulkCommit({
-        operations: bulkOperations,
-        groupsToCreate: groupsToCreate.length > 0 ? groupsToCreate : undefined,
-        continueOnError: options?.continueOnError,
+      // Report progress helper
+      const reportProgress = (current: number, total: number, description: string) => {
+        onProgress?.({
+          current,
+          total,
+          currentOperation: description,
+        });
+      };
+
+      // Separate creates (must go first) from other operations
+      const createOps = bulkOperations.filter(op => op.type === 'createChannel');
+      const otherOps = bulkOperations.filter(op => op.type !== 'createChannel');
+
+      // Calculate total batches for other operations
+      const numBatches = Math.ceil(otherOps.length / BATCH_SIZE);
+      const estimatedFetchPages = 4;
+      // Total steps: 1 (creates) + batches + fetch pages
+      const totalSteps = 1 + numBatches + estimatedFetchPages;
+      let completedSteps = 0;
+      let totalApplied = 0;
+      let totalFailed = 0;
+
+      // Report initial progress
+      reportProgress(0, totalSteps, `Preparing ${totalOps} operations...`);
+
+      // Step 1: Execute creates first (with groups) to get real IDs
+      if (createOps.length > 0 || groupsToCreate.length > 0) {
+        reportProgress(0, totalSteps, `Creating ${createOps.length} channels and ${groupsToCreate.length} groups...`);
+        const createResponse = await api.bulkCommit({
+          operations: createOps,
+          groupsToCreate: groupsToCreate.length > 0 ? groupsToCreate : undefined,
+          continueOnError: options?.continueOnError,
+        });
+
+        // Check for validation failures
+        if (!createResponse.success && createResponse.validationIssues?.length) {
+          result.success = false;
+          result.validationIssues = createResponse.validationIssues;
+          result.validationPassed = false;
+          throw new Error('Validation failed');
+        }
+
+        // Store temp ID mappings
+        for (const [tempIdStr, realId] of Object.entries(createResponse.tempIdMap)) {
+          tempIdMap.set(Number(tempIdStr), realId);
+        }
+        for (const [groupName, groupId] of Object.entries(createResponse.groupIdMap)) {
+          newGroupIdMap.set(groupName, groupId);
+        }
+
+        totalApplied += createResponse.operationsApplied;
+        totalFailed += createResponse.operationsFailed;
+        result.errors.push(...createResponse.errors);
+      }
+
+      completedSteps = 1;
+      reportProgress(completedSteps, totalSteps, `Created channels, processing ${otherOps.length} updates...`);
+
+      // Step 2: Process other operations in batches
+      // Replace temp IDs with real IDs in remaining operations
+      const resolvedOps = otherOps.map(op => {
+        const resolved = { ...op };
+        if (resolved.channelId && resolved.channelId < 0) {
+          const realId = tempIdMap.get(resolved.channelId);
+          if (realId !== undefined) {
+            resolved.channelId = realId;
+          }
+        }
+        return resolved;
       });
 
-      // Map response to result
-      result.success = bulkResponse.success;
-      result.operationsApplied = bulkResponse.operationsApplied;
-      result.operationsFailed = bulkResponse.operationsFailed;
-      result.errors = bulkResponse.errors;
-      result.validationIssues = bulkResponse.validationIssues;
-      result.validationPassed = bulkResponse.validationPassed;
+      // Process in batches
+      for (let i = 0; i < resolvedOps.length; i += BATCH_SIZE) {
+        const batch = resolvedOps.slice(i, i + BATCH_SIZE);
+        const batchNum = Math.floor(i / BATCH_SIZE) + 1;
+        const batchEnd = Math.min(i + BATCH_SIZE, resolvedOps.length);
 
-      // Populate tempIdMap and newGroupIdMap from response
-      for (const [tempIdStr, realId] of Object.entries(bulkResponse.tempIdMap)) {
-        tempIdMap.set(Number(tempIdStr), realId);
+        reportProgress(
+          completedSteps + batchNum,
+          totalSteps,
+          `Processing operations ${i + 1}-${batchEnd} of ${resolvedOps.length}...`
+        );
+
+        const batchResponse = await api.bulkCommit({
+          operations: batch,
+          continueOnError: options?.continueOnError,
+        });
+
+        // Check for validation failures
+        if (!batchResponse.success && batchResponse.validationIssues?.length) {
+          result.validationIssues = batchResponse.validationIssues;
+          result.validationPassed = false;
+          // Don't throw - collect errors and continue if continueOnError
+          if (!options?.continueOnError) {
+            result.success = false;
+            throw new Error('Validation failed');
+          }
+        }
+
+        totalApplied += batchResponse.operationsApplied;
+        totalFailed += batchResponse.operationsFailed;
+        result.errors.push(...batchResponse.errors);
+
+        // If a batch completely fails and we're not continuing on error, stop
+        if (!batchResponse.success && !options?.continueOnError) {
+          result.success = false;
+          break;
+        }
       }
-      for (const [groupName, groupId] of Object.entries(bulkResponse.groupIdMap)) {
-        newGroupIdMap.set(groupName, groupId);
-      }
 
-      console.log(`[EditMode] Bulk commit completed: ${result.operationsApplied} applied, ${result.operationsFailed} failed`);
+      completedSteps = 1 + numBatches;
 
-      // Fetch updated channels
-      reportProgress('Fetching updated channels');
+      // Update result totals
+      result.operationsApplied = totalApplied;
+      result.operationsFailed = totalFailed;
+      result.success = totalFailed === 0;
+
+      console.log(`[EditMode] Bulk commit completed: ${totalApplied} applied, ${totalFailed} failed`);
+
+      // Fetch updated channels with per-page progress
       const allChannels: Channel[] = [];
       let page = 1;
       let hasMore = true;
 
       while (hasMore) {
+        reportProgress(completedSteps + page, totalSteps, `Fetching channels (page ${page})...`);
         const response = await api.getChannels({ page, pageSize: 500 });
         allChannels.push(...response.results);
         hasMore = response.next !== null;
         page++;
       }
 
+      // Final progress
+      reportProgress(totalSteps, totalSteps, `Complete: ${totalApplied} operations applied`);
+
       result.updatedChannels = allChannels;
 
-      if (result.success) {
-        // Update real channels
+      // Determine if we had any success (partial or complete)
+      const hadSuccess = result.operationsApplied > 0;
+      const hadFailures = result.operationsFailed > 0 || (result.validationIssues && result.validationIssues.length > 0);
+
+      // Always update channels if any operations succeeded
+      // This ensures partial success is reflected in the UI
+      if (hadSuccess) {
         onChannelsChange(allChannels);
-        // Exit edit mode on success
         setState(createInitialState());
-        // Pass the IDs of newly created groups to the callback
         const createdGroupIds = Array.from(newGroupIdMap.values());
         onCommitComplete?.(createdGroupIds);
-      } else {
+      }
+
+      if (hadFailures) {
         // Build a detailed error message
-        let errorMessage = `Failed to apply ${result.operationsFailed} operation(s)`;
-        if (result.errors.length > 0) {
+        let errorMessage: string;
+
+        // Check if this was a validation failure (no operations were executed)
+        if (result.validationIssues && result.validationIssues.length > 0 && !hadSuccess) {
+          const issue = result.validationIssues[0];
+          errorMessage = `Validation failed: ${issue.message}`;
+          if (result.validationIssues.length > 1) {
+            errorMessage += ` (+${result.validationIssues.length - 1} more issue${result.validationIssues.length > 2 ? 's' : ''})`;
+          }
+        } else if (hadSuccess) {
+          // Partial success - some operations worked, some failed
+          errorMessage = `Completed with errors: ${result.operationsApplied} succeeded, ${result.operationsFailed} failed`;
+          if (result.errors.length > 0) {
+            // Show up to 3 unique error messages
+            const uniqueErrors = new Map<string, { error: string; count: number; example?: string }>();
+            for (const err of result.errors) {
+              const key = err.error;
+              if (!uniqueErrors.has(key)) {
+                const example = err.channelName || err.streamName || undefined;
+                uniqueErrors.set(key, { error: err.error, count: 1, example });
+              } else {
+                uniqueErrors.get(key)!.count++;
+              }
+            }
+            const errorList = Array.from(uniqueErrors.values()).slice(0, 3);
+            const errorDetails = errorList.map(e => {
+              let detail = e.error;
+              if (e.count > 1) detail += ` (x${e.count})`;
+              else if (e.example) detail += ` (${e.example})`;
+              return detail;
+            }).join('; ');
+            errorMessage += `. Errors: ${errorDetails}`;
+          }
+        } else if (result.errors.length > 0) {
+          // All operations failed
+          errorMessage = `Failed to apply ${result.operationsFailed} operation(s)`;
           const firstError = result.errors[0];
           const details: string[] = [];
           if (firstError.channelName) details.push(`channel: ${firstError.channelName}`);
           if (firstError.streamName) details.push(`stream: ${firstError.streamName}`);
           const detailStr = details.length > 0 ? ` (${details.join(', ')})` : '';
           errorMessage += `: ${firstError.error}${detailStr}`;
+        } else {
+          errorMessage = `Failed to apply ${result.operationsFailed} operation(s)`;
         }
         onError?.(errorMessage);
       }

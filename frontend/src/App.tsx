@@ -373,7 +373,7 @@ function App() {
     setCommitProgress({ current: 0, total: 1, currentOperation: 'Starting...' });
     await commit((progress) => {
       setCommitProgress(progress);
-    });
+    }, { continueOnError: true });
     setCommitProgress(null);
     setShowExitDialog(false);
     // Clear selection when exiting edit mode
@@ -1263,11 +1263,12 @@ function App() {
 
           // Track profile assignments for after commit
           // Use passed profileIds if provided, otherwise fall back to default profiles
+          // ALWAYS add assignment even if profileIds is empty - this triggers disable on all profiles
           const profilesToAssign = profileIds && profileIds.length > 0
             ? profileIds
             : defaultChannelProfileIds;
 
-          if (profilesToAssign.length > 0 && channelNumber !== undefined) {
+          if (channelNumber !== undefined) {
             pendingProfileAssignmentsRef.current.push({
               startNumber: channelNumber,
               count: 1,
@@ -1658,18 +1659,17 @@ function App() {
 
         // Store pending profile assignments to be applied after commit
         // Use explicit profileIds if provided, otherwise fall back to default profiles
+        // ALWAYS add assignment even if profileIds is empty - this triggers disable on all profiles
         const profileIdsToApply = (profileIds && profileIds.length > 0)
           ? profileIds
           : defaultChannelProfileIds;
 
-        if (profileIdsToApply.length > 0) {
-          pendingProfileAssignmentsRef.current.push({
-            startNumber: startingNumber,
-            count: streamsByBaseName.size,
-            profileIds: profileIdsToApply,
-            increment, // Use the same increment calculated for channel creation
-          });
-        }
+        pendingProfileAssignmentsRef.current.push({
+          startNumber: startingNumber,
+          count: streamsByBaseName.size,
+          profileIds: profileIdsToApply,
+          increment, // Use the same increment calculated for channel creation
+        });
 
       } catch (err) {
         logger.error('Bulk create failed:', err);
