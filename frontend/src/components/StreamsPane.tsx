@@ -159,8 +159,16 @@ export function StreamsPane({
     collapseAll: collapseAllGroups,
   } = useExpandCollapse<string>();
 
-  // Hide mapped streams toggle state
-  const [hideMappedStreams, setHideMappedStreams] = useState(false);
+  // Hide mapped streams toggle state (persisted in localStorage)
+  const [hideMappedStreams, setHideMappedStreams] = useState(() => {
+    const stored = localStorage.getItem('ecm-hide-mapped-streams');
+    return stored === 'true';
+  });
+
+  // Persist hide mapped state to localStorage
+  useEffect(() => {
+    localStorage.setItem('ecm-hide-mapped-streams', String(hideMappedStreams));
+  }, [hideMappedStreams]);
 
   // Copy feedback state
   const { copySuccess, copyError, handleCopy } = useCopyFeedback();
