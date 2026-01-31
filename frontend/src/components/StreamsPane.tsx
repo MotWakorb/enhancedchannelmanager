@@ -11,6 +11,7 @@ import { useKeyboardShortcuts } from '../hooks/useKeyboardShortcuts';
 import { CustomSelect } from './CustomSelect';
 import { PreviewStreamModal } from './PreviewStreamModal';
 import { logger } from '../utils/logger';
+import { setStreamDragData, clearStreamDragData } from '../utils/dragStore';
 import './StreamsPane.css';
 
 interface StreamGroup {
@@ -463,6 +464,12 @@ export function StreamsPane({
         e.dataTransfer.setData('bulkDrag', 'true');
         e.dataTransfer.effectAllowed = 'copy';
 
+        // Store in drag store as backup (workaround for browsers that clear dataTransfer.types)
+        setStreamDragData({
+          type: 'stream',
+          streamIds: selectedStreamIds,
+        });
+
         // Debug logging - use console.warn for visibility
         const typesAfterSet = Array.from(e.dataTransfer.types);
         console.warn(`[DRAG-DEBUG] Drag started (bulk)`, {
@@ -499,6 +506,12 @@ export function StreamsPane({
         e.dataTransfer.setData('streamId', String(stream.id));
         e.dataTransfer.setData('streamName', stream.name);
         e.dataTransfer.effectAllowed = 'copy';
+
+        // Store in drag store as backup (workaround for browsers that clear dataTransfer.types)
+        setStreamDragData({
+          type: 'stream',
+          streamIds: [stream.id],
+        });
 
         // Debug logging - use console.warn for visibility
         const typesAfterSet = Array.from(e.dataTransfer.types);
@@ -1725,6 +1738,7 @@ export function StreamsPane({
                               className="drag-handle"
                               draggable={true}
                               onDragStart={(e) => handleDragStart(e, stream)}
+                              onDragEnd={() => clearStreamDragData()}
                             >
                               ⋮⋮
                             </span>

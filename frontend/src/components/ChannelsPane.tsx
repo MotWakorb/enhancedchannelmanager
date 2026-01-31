@@ -22,6 +22,7 @@ import {
 import { CSS } from '@dnd-kit/utilities';
 import type { Channel, ChannelGroup, ChannelProfile, Stream, StreamStats, M3UAccount, M3UGroupSetting, Logo, ChangeInfo, ChangeRecord, SavePoint, EPGData, EPGSource, StreamProfile, ChannelListFilterSettings } from '../types';
 import { logger } from '../utils/logger';
+import { getStreamDragData, hasStreamDragData, clearStreamDragData } from '../utils/dragStore';
 import { computeAutoRename } from '../utils/channelRename';
 import { ChannelProfilesListModal } from './ChannelProfilesListModal';
 import type { ChannelDefaults } from './StreamsPane';
@@ -2496,31 +2497,32 @@ export function ChannelsPane({
   };
 
   const handleStreamDragOver = (e: React.DragEvent, channelId: number) => {
-    // Debug logging for drag-over investigation - using console.warn for visibility
+    // Check dataTransfer types first
     const rawTypes = Array.from(e.dataTransfer.types);
     const types = rawTypes.map(t => t.toLowerCase());
-    const hasStreamId = types.includes('streamid') || types.includes('streamids');
+    const hasStreamIdFromTypes = types.includes('streamid') || types.includes('streamids');
+
+    // Fallback: check drag store (workaround for browsers that clear dataTransfer.types)
+    const hasStreamIdFromStore = hasStreamDragData();
+    const hasStreamId = hasStreamIdFromTypes || hasStreamIdFromStore;
 
     // Log every dragover call to help debug (use warn for visibility in console)
     console.warn(`[DRAG-DEBUG] handleStreamDragOver`, {
       channelId,
       isEditMode,
       rawTypes,
-      types,
+      hasStreamIdFromTypes,
+      hasStreamIdFromStore,
       hasStreamId,
-      effectAllowed: e.dataTransfer.effectAllowed,
-      dropEffect: e.dataTransfer.dropEffect,
-      target: (e.target as HTMLElement)?.className
     });
 
     logger.debug(`[DRAG-DEBUG] handleStreamDragOver called`, {
       channelId,
       isEditMode,
       rawTypes,
-      lowercaseTypes: types,
+      hasStreamIdFromTypes,
+      hasStreamIdFromStore,
       hasStreamId,
-      effectAllowed: e.dataTransfer.effectAllowed,
-      dropEffect: e.dataTransfer.dropEffect
     });
 
     // Block stream drag-over when not in edit mode
@@ -2530,16 +2532,15 @@ export function ChannelsPane({
       return;
     }
 
-    // Only handle stream drags (from external drag source)
-    // Check for both lowercase 'streamid' and actual data types
+    // Allow drop if we have stream data from either source
     if (hasStreamId) {
       console.warn(`[DRAG-DEBUG] Allowing drop - calling preventDefault`);
       logger.debug(`[DRAG-DEBUG] Allowing drop - calling preventDefault`);
       e.preventDefault();
       setDragOverChannelId(channelId);
     } else {
-      console.warn(`[DRAG-DEBUG] No streamid/streamids in types:`, rawTypes);
-      logger.debug(`[DRAG-DEBUG] No streamid/streamids type found, drop not allowed`);
+      console.warn(`[DRAG-DEBUG] No stream drag data found`);
+      logger.debug(`[DRAG-DEBUG] No stream drag data found, drop not allowed`);
     }
   };
 
@@ -2555,26 +2556,46 @@ export function ChannelsPane({
 
     e.preventDefault();
 
-    // Check for bulk drag first
+    // Try to get data from dataTransfer first
     const bulkDrag = e.dataTransfer.getData('bulkDrag');
-    if (bulkDrag === 'true') {
-      const streamIdsJson = e.dataTransfer.getData('streamIds');
-      if (streamIdsJson) {
-        try {
-          const streamIds = JSON.parse(streamIdsJson) as number[];
-          onBulkStreamDrop(channelId, streamIds);
-          return;
-        } catch {
-          // Fall through to single stream handling
-        }
+    const streamIdsJson = e.dataTransfer.getData('streamIds');
+    const streamIdStr = e.dataTransfer.getData('streamId');
+
+    // Check for bulk drag from dataTransfer
+    if (bulkDrag === 'true' && streamIdsJson) {
+      try {
+        const streamIds = JSON.parse(streamIdsJson) as number[];
+        console.warn('[DRAG-DEBUG] Drop: using dataTransfer bulk data', { channelId, streamIds });
+        clearStreamDragData();
+        onBulkStreamDrop(channelId, streamIds);
+        return;
+      } catch {
+        // Fall through
       }
     }
 
-    // Single stream drop
-    const streamId = e.dataTransfer.getData('streamId');
-    if (streamId) {
-      onChannelDrop(channelId, parseInt(streamId, 10));
+    // Single stream from dataTransfer
+    if (streamIdStr) {
+      console.warn('[DRAG-DEBUG] Drop: using dataTransfer single data', { channelId, streamId: streamIdStr });
+      clearStreamDragData();
+      onChannelDrop(channelId, parseInt(streamIdStr, 10));
+      return;
     }
+
+    // Fallback: use drag store (for browsers that clear dataTransfer)
+    const dragData = getStreamDragData();
+    if (dragData && dragData.type === 'stream' && dragData.streamIds.length > 0) {
+      console.warn('[DRAG-DEBUG] Drop: using drag store fallback', { channelId, streamIds: dragData.streamIds });
+      clearStreamDragData();
+      if (dragData.streamIds.length > 1) {
+        onBulkStreamDrop(channelId, dragData.streamIds);
+      } else {
+        onChannelDrop(channelId, dragData.streamIds[0]);
+      }
+      return;
+    }
+
+    console.warn('[DRAG-DEBUG] Drop: no stream data found');
   };
 
   // Handle stream group drag over the pane (for bulk channel creation)
