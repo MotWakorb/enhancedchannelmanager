@@ -15,29 +15,42 @@ function copyWithExecCommand(text: string): boolean {
   const textarea = document.createElement('textarea');
   textarea.value = text;
 
-  // Make it invisible and non-interactive
+  // Position it in a way that works across browsers
+  // Using clip rect instead of negative positioning for better compatibility
   textarea.style.position = 'fixed';
-  textarea.style.top = '-9999px';
-  textarea.style.left = '-9999px';
-  textarea.style.opacity = '0';
-  textarea.setAttribute('readonly', '');
+  textarea.style.top = '0';
+  textarea.style.left = '0';
+  textarea.style.width = '2em';
+  textarea.style.height = '2em';
+  textarea.style.padding = '0';
+  textarea.style.border = 'none';
+  textarea.style.outline = 'none';
+  textarea.style.boxShadow = 'none';
+  textarea.style.background = 'transparent';
+  // Use clip to hide instead of opacity (some browsers ignore opacity for copy)
+  textarea.style.clip = 'rect(0, 0, 0, 0)';
+  // Don't use readonly - some browsers won't copy from readonly elements
 
   document.body.appendChild(textarea);
 
   try {
-    // Select the text
+    // Focus first, then select (required for some browsers)
+    textarea.focus();
     textarea.select();
     textarea.setSelectionRange(0, text.length);
 
     // Execute copy command
     const success = document.execCommand('copy');
+    console.warn('[CLIPBOARD-DEBUG] execCommand returned:', success);
 
     return success;
   } catch (error) {
+    console.warn('[CLIPBOARD-DEBUG] execCommand threw error:', error);
     logger.error('execCommand copy failed:', error);
     return false;
   } finally {
-    // Clean up
+    // Remove focus before cleanup
+    textarea.blur();
     document.body.removeChild(textarea);
   }
 }
