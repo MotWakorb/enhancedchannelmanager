@@ -662,6 +662,44 @@ export interface UpdateInfo {
 
 const GITHUB_REPO = 'MotWakorb/enhancedchannelmanager';
 
+// Compare versions to determine if an update is available
+// Handles build suffixes like "0.10.0-0001" properly
+// Returns true if latestVersion is newer than currentVersion
+function isNewerVersion(latestVersion: string, currentVersion: string): boolean {
+  // Extract base version (before any - suffix)
+  const getBaseVersion = (v: string) => v.split('-')[0];
+  const getBuildNumber = (v: string) => {
+    const parts = v.split('-');
+    return parts.length > 1 ? parseInt(parts[1], 10) || 0 : 0;
+  };
+
+  const latestBase = getBaseVersion(latestVersion);
+  const currentBase = getBaseVersion(currentVersion);
+
+  // Parse semver parts
+  const parseVersion = (v: string) => {
+    const parts = v.split('.').map(p => parseInt(p, 10) || 0);
+    return { major: parts[0] || 0, minor: parts[1] || 0, patch: parts[2] || 0 };
+  };
+
+  const latest = parseVersion(latestBase);
+  const current = parseVersion(currentBase);
+
+  // Compare major.minor.patch
+  if (latest.major !== current.major) return latest.major > current.major;
+  if (latest.minor !== current.minor) return latest.minor > current.minor;
+  if (latest.patch !== current.patch) return latest.patch > current.patch;
+
+  // Base versions are equal - check build numbers
+  // If current has a build number (e.g., 0.10.0-0001) and latest doesn't (0.10.0),
+  // then current is at or after latest, so no update available
+  const latestBuild = getBuildNumber(latestVersion);
+  const currentBuild = getBuildNumber(currentVersion);
+
+  // Only newer if latest has a higher build number
+  return latestBuild > currentBuild;
+}
+
 // Check for updates based on release channel
 export async function checkForUpdates(
   currentVersion: string,
@@ -680,10 +718,10 @@ export async function checkForUpdates(
       const packageJson = await response.json();
       const latestVersion = packageJson.version || 'unknown';
 
-      // Compare versions
-      const updateAvailable = latestVersion !== currentVersion &&
-        currentVersion !== 'unknown' &&
-        latestVersion !== 'unknown';
+      // Compare versions using semantic version comparison
+      const updateAvailable = currentVersion !== 'unknown' &&
+        latestVersion !== 'unknown' &&
+        isNewerVersion(latestVersion, currentVersion);
 
       return {
         updateAvailable,
@@ -706,10 +744,10 @@ export async function checkForUpdates(
       const data = await response.json();
       const latestVersion = data.tag_name?.replace(/^v/, '') || 'unknown';
 
-      // Compare versions
-      const updateAvailable = latestVersion !== currentVersion &&
-        currentVersion !== 'unknown' &&
-        latestVersion !== 'unknown';
+      // Compare versions using semantic version comparison
+      const updateAvailable = currentVersion !== 'unknown' &&
+        latestVersion !== 'unknown' &&
+        isNewerVersion(latestVersion, currentVersion);
 
       return {
         updateAvailable,
