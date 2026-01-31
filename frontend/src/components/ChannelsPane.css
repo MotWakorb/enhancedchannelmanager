@@ -1209,6 +1209,12 @@
   border-left: 2px solid var(--accent-primary);
 }
 
+.inline-streams.drag-over {
+  background-color: var(--success)33;
+  border: 2px dashed var(--success);
+  border-left: 2px dashed var(--success);
+}
+
 .inline-streams-loading,
 .inline-streams-empty {
   font-size: 0.8rem;
