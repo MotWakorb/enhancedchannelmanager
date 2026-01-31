@@ -183,10 +183,12 @@ export function PopularityPanel({ refreshTrigger }: PopularityPanelProps) {
                       </span>
                     </div>
                     <div className="score-bar-container">
-                      <div
-                        className="score-bar"
-                        style={{ width: `${channel.score}%` }}
-                      />
+                      <div className="score-bar-track">
+                        <div
+                          className="score-bar"
+                          style={{ width: `${channel.score}%` }}
+                        />
+                      </div>
                       <span className="score-value">{channel.score.toFixed(1)}</span>
                     </div>
                   </div>
