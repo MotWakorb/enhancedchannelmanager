@@ -76,6 +76,9 @@ class BandwidthTracker:
         # Initialize channel maps on startup
         await self._initialize_channel_maps()
 
+        # Clean up stale connections from previous runs
+        self._cleanup_stale_connections()
+
         self._running = True
         self._task = asyncio.create_task(self._poll_loop())
         logger.info(f"BandwidthTracker started (polling every {self.poll_interval}s)")
@@ -129,6 +132,86 @@ class BandwidthTracker:
 
         except Exception as e:
             logger.error(f"Failed to initialize channel maps: {e}")
+
+    def _cleanup_stale_connections(self):
+        """
+        Clean up stale connections from previous runs.
+        Marks any connections with null disconnected_at as completed.
+        Also updates channel names that look like UUIDs if we can resolve them.
+        """
+        import re
+        from models import ChannelPopularityScore, ChannelWatchStats
+        uuid_pattern = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', re.I)
+        truncated_pattern = re.compile(r'^Channel [0-9a-f]{8}\.\.\.$', re.I)
+
+        def needs_name_fix(name: str) -> bool:
+            """Check if a channel name looks like a UUID or truncated UUID."""
+            return bool(uuid_pattern.match(name) or truncated_pattern.match(name))
+
+        session = get_session()
+        try:
+            now = datetime.utcnow()
+
+            # Find all connections with null disconnected_at (stale "watching" entries)
+            stale_connections = session.query(UniqueClientConnection).filter(
+                UniqueClientConnection.disconnected_at.is_(None)
+            ).all()
+
+            stale_count = 0
+            name_updates = 0
+
+            for conn in stale_connections:
+                # Mark as disconnected - use connected_at + watch_seconds as approximate end time
+                if conn.watch_seconds > 0:
+                    conn.disconnected_at = conn.connected_at + timedelta(seconds=conn.watch_seconds)
+                else:
+                    conn.disconnected_at = conn.connected_at
+                stale_count += 1
+
+            # Fix channel names in UniqueClientConnection
+            all_connections = session.query(UniqueClientConnection).all()
+            for conn in all_connections:
+                if needs_name_fix(conn.channel_name):
+                    real_name = self._ecm_channel_map.get(conn.channel_id)
+                    if real_name and real_name != conn.channel_name:
+                        conn.channel_name = real_name
+                        name_updates += 1
+
+            # Fix channel names in ChannelPopularityScore
+            popularity_scores = session.query(ChannelPopularityScore).all()
+            for score in popularity_scores:
+                if needs_name_fix(score.channel_name):
+                    real_name = self._ecm_channel_map.get(score.channel_id)
+                    if real_name and real_name != score.channel_name:
+                        score.channel_name = real_name
+                        name_updates += 1
+
+            # Fix channel names in ChannelWatchStats
+            watch_stats = session.query(ChannelWatchStats).all()
+            for stats in watch_stats:
+                if needs_name_fix(stats.channel_name):
+                    real_name = self._ecm_channel_map.get(stats.channel_id)
+                    if real_name and real_name != stats.channel_name:
+                        stats.channel_name = real_name
+                        name_updates += 1
+
+            # Fix channel names in ChannelBandwidth
+            bandwidth_records = session.query(ChannelBandwidth).all()
+            for bw in bandwidth_records:
+                if needs_name_fix(bw.channel_name):
+                    real_name = self._ecm_channel_map.get(bw.channel_id)
+                    if real_name and real_name != bw.channel_name:
+                        bw.channel_name = real_name
+                        name_updates += 1
+
+            session.commit()
+            if stale_count > 0 or name_updates > 0:
+                logger.info(f"Cleaned up {stale_count} stale connections, updated {name_updates} channel names")
+        except Exception as e:
+            logger.error(f"Failed to cleanup stale connections: {e}")
+            session.rollback()
+        finally:
+            session.close()
 
     async def _poll_loop(self):
         """Main polling loop - runs until stopped."""

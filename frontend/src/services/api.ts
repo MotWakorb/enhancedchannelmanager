@@ -1556,58 +1556,6 @@ export async function getWatchHistory(options: {
 }
 
 // =============================================================================
-// Popularity Rules (v0.11.0)
-// =============================================================================
-
-/**
- * List all popularity rules.
- */
-export async function getPopularityRules(): Promise<import('../types').PopularityRule[]> {
-  return fetchJson(`${API_BASE}/popularity-rules`);
-}
-
-/**
- * Get a specific popularity rule.
- */
-export async function getPopularityRule(ruleId: number): Promise<import('../types').PopularityRule> {
-  return fetchJson(`${API_BASE}/popularity-rules/${ruleId}`);
-}
-
-/**
- * Create a new popularity rule.
- */
-export async function createPopularityRule(
-  rule: import('../types').CreatePopularityRuleRequest
-): Promise<import('../types').PopularityRule> {
-  return fetchJson(`${API_BASE}/popularity-rules`, {
-    method: 'POST',
-    body: JSON.stringify(rule),
-  });
-}
-
-/**
- * Update a popularity rule.
- */
-export async function updatePopularityRule(
-  ruleId: number,
-  updates: import('../types').UpdatePopularityRuleRequest
-): Promise<import('../types').PopularityRule> {
-  return fetchJson(`${API_BASE}/popularity-rules/${ruleId}`, {
-    method: 'PUT',
-    body: JSON.stringify(updates),
-  });
-}
-
-/**
- * Delete a popularity rule.
- */
-export async function deletePopularityRule(ruleId: number): Promise<{ status: string; id: number }> {
-  return fetchJson(`${API_BASE}/popularity-rules/${ruleId}`, {
-    method: 'DELETE',
-  });
-}
-
-// =============================================================================
 // Stream Stats / Probing
 // =============================================================================
 
