@@ -1,19 +1,58 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import * as api from '../services/api';
 import type { Notification } from '../services/api';
+import { useNotifications } from '../contexts/NotificationContext';
 import './NotificationCenter.css';
 
 interface NotificationCenterProps {
   onNotificationClick?: (notification: Notification) => void;
 }
 
+// Progress metadata structure for task notifications
+interface ProbeProgress {
+  current: number;
+  total: number;
+  success: number;
+  failed: number;
+  skipped: number;
+  status: 'idle' | 'starting' | 'fetching' | 'refreshing' | 'probing' | 'paused' | 'cancelled' | 'completed' | 'reordering' | 'failed' | 'fetching_sources' | 'fetching_accounts' | 'building_digest' | 'sending_email' | 'sending_discord';
+  current_stream: string;
+}
+
+interface ProgressMetadata {
+  progress?: ProbeProgress;
+}
+
+// Helper to check if notification has progress (from any task)
+const isProgressNotification = (n: Notification): boolean => {
+  // Match stream_probe source OR any task_* source with progress metadata
+  const hasProgressSource = n.source === 'stream_probe' || n.source?.startsWith('task_');
+  return hasProgressSource && n.metadata?.progress !== undefined;
+};
+
+// Alias for backward compatibility
+const isProbeNotification = isProgressNotification;
+
+// Helper to get progress from notification
+const getProbeProgress = (n: Notification): ProbeProgress | null => {
+  if (!isProgressNotification(n)) return null;
+  return (n.metadata as ProgressMetadata)?.progress || null;
+};
+
+// Helper to check if task is actively running (not completed, failed, or idle)
+const isProbeActive = (status: ProbeProgress['status']): boolean => {
+  return ['probing', 'fetching', 'refreshing', 'reordering', 'starting', 'fetching_sources', 'fetching_accounts', 'building_digest', 'sending_email', 'sending_discord'].includes(status);
+};
+
 export function NotificationCenter({ onNotificationClick }: NotificationCenterProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
   const [loading, setLoading] = useState(false);
+  const [restartingFromNotification, setRestartingFromNotification] = useState<number | null>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
+  const toasts = useNotifications();
 
   // Load notifications
   const loadNotifications = useCallback(async () => {
@@ -29,12 +68,22 @@ export function NotificationCenter({ onNotificationClick }: NotificationCenterPr
     }
   }, []);
 
-  // Load on mount and periodically
+  // Check if any notification has an active probe running (including paused)
+  const hasActiveProbe = useMemo(() => {
+    return notifications.some(n => {
+      const progress = getProbeProgress(n);
+      return progress && (isProbeActive(progress.status) || progress.status === 'paused');
+    });
+  }, [notifications]);
+
+  // Load on mount and periodically - faster when probe is running
   useEffect(() => {
     loadNotifications();
-    const interval = setInterval(loadNotifications, 30000); // Poll every 30 seconds
+    // Poll every 2 seconds when probe is running, otherwise every 30 seconds
+    const pollInterval = hasActiveProbe ? 2000 : 30000;
+    const interval = setInterval(loadNotifications, pollInterval);
     return () => clearInterval(interval);
-  }, [loadNotifications]);
+  }, [loadNotifications, hasActiveProbe]);
 
   // Close panel when clicking outside
   useEffect(() => {
@@ -107,6 +156,58 @@ export function NotificationCenter({ onNotificationClick }: NotificationCenterPr
     }
   };
 
+  const handleCancelProbe = async (e: React.MouseEvent) => {
+    e.stopPropagation(); // Prevent notification click
+    try {
+      await api.cancelProbe();
+      loadNotifications();
+    } catch (err) {
+      console.error('Failed to cancel probe:', err);
+    }
+  };
+
+  const handlePauseProbe = async (e: React.MouseEvent) => {
+    e.stopPropagation(); // Prevent notification click
+    try {
+      await api.pauseProbe();
+      loadNotifications();
+    } catch (err) {
+      console.error('Failed to pause probe:', err);
+    }
+  };
+
+  const handleResumeProbe = async (e: React.MouseEvent) => {
+    e.stopPropagation(); // Prevent notification click
+    try {
+      await api.resumeProbe();
+      loadNotifications();
+    } catch (err) {
+      console.error('Failed to resume probe:', err);
+    }
+  };
+
+  const handleRestartServices = async (notification: Notification) => {
+    setRestartingFromNotification(notification.id);
+    try {
+      const result = await api.restartServices();
+      if (result.success) {
+        // Dispatch event to dismiss any restart toasts from SettingsTab
+        window.dispatchEvent(new CustomEvent('services-restarted'));
+        toasts.success('Services restarted successfully with new settings.', 'Restart Complete');
+        // Delete this notification since the action is complete
+        await api.deleteNotification(notification.id);
+        loadNotifications();
+      } else {
+        toasts.error(result.message || 'Failed to restart services', 'Restart Failed');
+      }
+    } catch (err) {
+      console.error('Failed to restart services:', err);
+      toasts.error('Failed to restart services', 'Restart Failed');
+    } finally {
+      setRestartingFromNotification(null);
+    }
+  };
+
   const handleNotificationClick = (notification: Notification) => {
     if (onNotificationClick) {
       onNotificationClick(notification);
@@ -139,6 +240,93 @@ export function NotificationCenter({ onNotificationClick }: NotificationCenterPr
       case 'error': return 'error';
       default: return 'info';
     }
+  };
+
+  const hasRestartAction = (notification: Notification): boolean => {
+    return notification.metadata?.action_type === 'restart_services';
+  };
+
+  // Render progress bar for probe notifications
+  const renderProbeProgress = (notification: Notification) => {
+    const progress = getProbeProgress(notification);
+    if (!progress) return null;
+
+    const percentage = progress.total > 0
+      ? Math.round((progress.current / progress.total) * 100)
+      : 0;
+
+    return (
+      <div className="notification-probe-progress">
+        {/* Progress bar */}
+        <div className="notification-progress-bar">
+          <div
+            className="notification-progress-fill"
+            style={{ width: `${percentage}%` }}
+          />
+        </div>
+
+        {/* Stats and controls row - stats left, buttons right */}
+        <div className="notification-probe-controls-row">
+          <div className="notification-probe-stats">
+            {progress.success > 0 && (
+              <span className="probe-stat probe-stat-success">
+                <span className="material-icons">check</span>
+                {progress.success}
+              </span>
+            )}
+            {progress.failed > 0 && (
+              <span className="probe-stat probe-stat-failed">
+                <span className="material-icons">close</span>
+                {progress.failed}
+              </span>
+            )}
+            {progress.skipped > 0 && (
+              <span className="probe-stat probe-stat-skipped">
+                <span className="material-icons">remove</span>
+                {progress.skipped}
+              </span>
+            )}
+          </div>
+
+          {(isProbeActive(progress.status) || progress.status === 'paused') && (
+            <div className="probe-control-buttons">
+              {isProbeActive(progress.status) && (
+                <button
+                  className="probe-control-btn probe-pause-btn"
+                  onClick={handlePauseProbe}
+                  title="Pause probe"
+                >
+                  <span className="material-icons">pause</span>
+                </button>
+              )}
+              {progress.status === 'paused' && (
+                <button
+                  className="probe-control-btn probe-resume-btn"
+                  onClick={handleResumeProbe}
+                  title="Resume probe"
+                >
+                  <span className="material-icons">play_arrow</span>
+                </button>
+              )}
+              <button
+                className="probe-control-btn probe-cancel-btn"
+                onClick={handleCancelProbe}
+                title="Cancel probe"
+              >
+                <span className="material-icons">close</span>
+              </button>
+            </div>
+          )}
+        </div>
+
+        {/* Current stream name if still running or paused */}
+        {(isProbeActive(progress.status) || progress.status === 'paused') && progress.current_stream && (
+          <div className="notification-probe-current">
+            {progress.current_stream}
+          </div>
+        )}
+      </div>
+    );
   };
 
   return (
@@ -207,7 +395,7 @@ export function NotificationCenter({ onNotificationClick }: NotificationCenterPr
               notifications.map((notification) => (
                 <div
                   key={notification.id}
-                  className={`notification-item notification-${notification.type} ${notification.read ? 'read' : 'unread'}`}
+                  className={`notification-item notification-${notification.type} ${notification.read ? 'read' : 'unread'} ${isProbeNotification(notification) ? 'notification-probe' : ''}`}
                   onClick={() => handleNotificationClick(notification)}
                 >
                   <div className="notification-icon">
@@ -218,32 +406,54 @@ export function NotificationCenter({ onNotificationClick }: NotificationCenterPr
                       <div className="notification-title">{notification.title}</div>
                     )}
                     <div className="notification-message">{notification.message}</div>
+                    {hasRestartAction(notification) && (
+                      <button
+                        className="notification-action-btn-inline"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleRestartServices(notification);
+                        }}
+                        disabled={restartingFromNotification === notification.id}
+                      >
+                        <span className={`material-icons ${restartingFromNotification === notification.id ? 'spinning' : ''}`}>
+                          {restartingFromNotification === notification.id ? 'sync' : 'restart_alt'}
+                        </span>
+                        {restartingFromNotification === notification.id ? 'Restarting...' : 'Restart Services'}
+                      </button>
+                    )}
+                    {renderProbeProgress(notification)}
                     <div className="notification-time">{formatTime(notification.created_at)}</div>
                   </div>
-                  <div className="notification-actions">
-                    <button
-                      className="notification-item-action"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleMarkRead(notification);
-                      }}
-                      title={notification.read ? 'Mark as unread' : 'Mark as read'}
-                    >
-                      <span className="material-icons">
-                        {notification.read ? 'mark_email_unread' : 'mark_email_read'}
-                      </span>
-                    </button>
-                    <button
-                      className="notification-item-action delete"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleDelete(notification);
-                      }}
-                      title="Delete"
-                    >
-                      <span className="material-icons">close</span>
-                    </button>
-                  </div>
+                  {/* Hide actions for active probe notifications */}
+                  {!(isProbeNotification(notification) &&
+                     getProbeProgress(notification) &&
+                     (isProbeActive(getProbeProgress(notification)!.status) ||
+                      getProbeProgress(notification)!.status === 'paused')) && (
+                    <div className="notification-actions">
+                      <button
+                        className="notification-item-action"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleMarkRead(notification);
+                        }}
+                        title={notification.read ? 'Mark as unread' : 'Mark as read'}
+                      >
+                        <span className="material-icons">
+                          {notification.read ? 'mark_email_unread' : 'mark_email_read'}
+                        </span>
+                      </button>
+                      <button
+                        className="notification-item-action delete"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleDelete(notification);
+                        }}
+                        title="Delete"
+                      >
+                        <span className="material-icons">close</span>
+                      </button>
+                    </div>
+                  )}
                 </div>
               ))
             )}

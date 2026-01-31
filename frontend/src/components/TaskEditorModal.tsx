@@ -24,6 +24,12 @@ export function TaskEditorModal({ task, onClose, onSaved }: TaskEditorModalProps
   const [alertOnSuccess, setAlertOnSuccess] = useState(task.alert_on_success ?? true);
   const [alertOnWarning, setAlertOnWarning] = useState(task.alert_on_warning ?? true);
   const [alertOnError, setAlertOnError] = useState(task.alert_on_error ?? true);
+  const [alertOnInfo, setAlertOnInfo] = useState(task.alert_on_info ?? false);
+  // Notification channels
+  const [sendToEmail, setSendToEmail] = useState(task.send_to_email ?? true);
+  const [sendToDiscord, setSendToDiscord] = useState(task.send_to_discord ?? true);
+  const [sendToTelegram, setSendToTelegram] = useState(task.send_to_telegram ?? true);
+  const [showNotifications, setShowNotifications] = useState(task.show_notifications ?? true);
 
   // Schedules state
   const [schedules, setSchedules] = useState<TaskSchedule[]>(task.schedules || []);
@@ -166,6 +172,12 @@ export function TaskEditorModal({ task, onClose, onSaved }: TaskEditorModalProps
         alert_on_success: alertOnSuccess,
         alert_on_warning: alertOnWarning,
         alert_on_error: alertOnError,
+        alert_on_info: alertOnInfo,
+        // Notification channels
+        send_to_email: sendToEmail,
+        send_to_discord: sendToDiscord,
+        send_to_telegram: sendToTelegram,
+        show_notifications: showNotifications,
       };
 
       // Include task-specific configuration
@@ -176,9 +188,11 @@ export function TaskEditorModal({ task, onClose, onSaved }: TaskEditorModalProps
       await api.updateTask(task.task_id, config);
       onSaved();
       onClose();
+      notifications.success('Settings saved successfully');
     } catch (err) {
       logger.error('Failed to save task configuration', err);
       setError('Failed to save configuration');
+      notifications.error('Failed to save configuration', 'Save Failed');
     } finally {
       setSaving(false);
     }
@@ -253,21 +267,26 @@ export function TaskEditorModal({ task, onClose, onSaved }: TaskEditorModalProps
       logger.info(`Task ${task.task_id} with schedule ${schedule.id} completed`, result);
 
       if (result.error === 'CANCELLED') {
-        // Task was cancelled
-        notifications.info(
-          `${task.task_name} was cancelled. ${result.success_count} items completed before cancellation`,
-          'Task Cancelled'
-        );
-      } else if (result.success) {
-        notifications.success(
-          `${task.task_name} completed: ${result.success_count} succeeded, ${result.failed_count} failed`,
-          'Task Completed'
-        );
-      } else {
-        notifications.error(
-          result.message || `${task.task_name} failed`,
-          'Task Failed'
-        );
+        // Task was cancelled - always show cancellation notification
+        if (showNotifications) {
+          notifications.info(
+            `${task.task_name} was cancelled. ${result.success_count} items completed before cancellation`,
+            'Task Cancelled'
+          );
+        }
+      } else if (showNotifications) {
+        // Only show toast if show_notifications is enabled
+        if (result.success) {
+          notifications.success(
+            `${task.task_name} completed: ${result.success_count} succeeded, ${result.failed_count} failed`,
+            'Task Completed'
+          );
+        } else {
+          notifications.error(
+            result.message || `${task.task_name} failed`,
+            'Task Failed'
+          );
+        }
       }
 
       await refreshSchedules();
@@ -425,10 +444,30 @@ export function TaskEditorModal({ task, onClose, onSaved }: TaskEditorModalProps
             )}
           </div>
 
+          {/* Notification Center Settings Section */}
+          <div className="alert-config-section">
+            <div className="alert-config-header">
+              <label className="section-label">Notification Center</label>
+            </div>
+            <div className="alert-config-content">
+              <label className="alert-toggle master-toggle">
+                <input
+                  type="checkbox"
+                  checked={showNotifications}
+                  onChange={(e) => setShowNotifications(e.target.checked)}
+                />
+                <span>Show notifications in bell icon</span>
+              </label>
+              <div className="alert-hint" style={{ marginLeft: '1.5rem', marginTop: '0.25rem' }}>
+                When enabled, task results appear in the notification center (bell icon).
+              </div>
+            </div>
+          </div>
+
           {/* Alert Configuration Section */}
           <div className="alert-config-section">
             <div className="alert-config-header">
-              <label className="section-label">Alert Settings</label>
+              <label className="section-label">External Alerts</label>
             </div>
             <div className="alert-config-content">
               <label className="alert-toggle master-toggle">
@@ -437,38 +476,77 @@ export function TaskEditorModal({ task, onClose, onSaved }: TaskEditorModalProps
                   checked={sendAlerts}
                   onChange={(e) => setSendAlerts(e.target.checked)}
                 />
-                <span>Send alerts for this task</span>
+                <span>Send external alerts</span>
               </label>
               {sendAlerts && (
-                <div className="alert-type-toggles">
-                  <label className="alert-toggle">
-                    <input
-                      type="checkbox"
-                      checked={alertOnSuccess}
-                      onChange={(e) => setAlertOnSuccess(e.target.checked)}
-                    />
-                    <span>Success</span>
-                    <span className="alert-hint">Alert when task completes successfully</span>
-                  </label>
-                  <label className="alert-toggle">
-                    <input
-                      type="checkbox"
-                      checked={alertOnWarning}
-                      onChange={(e) => setAlertOnWarning(e.target.checked)}
-                    />
-                    <span>Warning</span>
-                    <span className="alert-hint">Alert on partial failures or cancellation</span>
-                  </label>
-                  <label className="alert-toggle">
-                    <input
-                      type="checkbox"
-                      checked={alertOnError}
-                      onChange={(e) => setAlertOnError(e.target.checked)}
-                    />
-                    <span>Error</span>
-                    <span className="alert-hint">Alert when task fails completely</span>
-                  </label>
-                </div>
+                <>
+                  <div className="alert-subsection">
+                    <div className="alert-subsection-label">Alert Types</div>
+                    <div className="alert-type-toggles">
+                      <label className="alert-toggle">
+                        <input
+                          type="checkbox"
+                          checked={alertOnError}
+                          onChange={(e) => setAlertOnError(e.target.checked)}
+                        />
+                        <span>Error</span>
+                      </label>
+                      <label className="alert-toggle">
+                        <input
+                          type="checkbox"
+                          checked={alertOnWarning}
+                          onChange={(e) => setAlertOnWarning(e.target.checked)}
+                        />
+                        <span>Warning</span>
+                      </label>
+                      <label className="alert-toggle">
+                        <input
+                          type="checkbox"
+                          checked={alertOnSuccess}
+                          onChange={(e) => setAlertOnSuccess(e.target.checked)}
+                        />
+                        <span>Success</span>
+                      </label>
+                      <label className="alert-toggle">
+                        <input
+                          type="checkbox"
+                          checked={alertOnInfo}
+                          onChange={(e) => setAlertOnInfo(e.target.checked)}
+                        />
+                        <span>Info</span>
+                      </label>
+                    </div>
+                  </div>
+                  <div className="alert-subsection">
+                    <div className="alert-subsection-label">Notification Channels</div>
+                    <div className="alert-type-toggles">
+                      <label className="alert-toggle">
+                        <input
+                          type="checkbox"
+                          checked={sendToEmail}
+                          onChange={(e) => setSendToEmail(e.target.checked)}
+                        />
+                        <span>Email</span>
+                      </label>
+                      <label className="alert-toggle">
+                        <input
+                          type="checkbox"
+                          checked={sendToDiscord}
+                          onChange={(e) => setSendToDiscord(e.target.checked)}
+                        />
+                        <span>Discord</span>
+                      </label>
+                      <label className="alert-toggle">
+                        <input
+                          type="checkbox"
+                          checked={sendToTelegram}
+                          onChange={(e) => setSendToTelegram(e.target.checked)}
+                        />
+                        <span>Telegram</span>
+                      </label>
+                    </div>
+                  </div>
+                </>
               )}
             </div>
           </div>

@@ -791,6 +791,13 @@ export interface SettingsResponse {
   smtp_from_name: string;
   smtp_use_tls: boolean;
   smtp_use_ssl: boolean;
+  // Shared Discord settings
+  discord_configured: boolean;  // Whether shared Discord webhook is configured
+  discord_webhook_url: string;
+  // Shared Telegram settings
+  telegram_configured: boolean;  // Whether shared Telegram bot is configured
+  telegram_bot_token: string;
+  telegram_chat_id: string;
   // Stream preview mode: "passthrough", "transcode", or "video_only"
   stream_preview_mode: StreamPreviewMode;
 }
@@ -859,6 +866,11 @@ export async function saveSettings(settings: {
   smtp_from_name?: string;  // Optional - From display name, defaults to "ECM Alerts"
   smtp_use_tls?: boolean;  // Optional - Use TLS, defaults to true
   smtp_use_ssl?: boolean;  // Optional - Use SSL, defaults to false
+  // Shared Discord settings
+  discord_webhook_url?: string;  // Optional - Discord webhook URL
+  // Shared Telegram settings
+  telegram_bot_token?: string;  // Optional - Telegram bot token
+  telegram_chat_id?: string;  // Optional - Telegram chat ID
   stream_preview_mode?: StreamPreviewMode;  // Optional - Stream preview mode, defaults to "passthrough"
 }): Promise<{ status: string; configured: boolean; server_changed: boolean }> {
   return fetchJson(`${API_BASE}/settings`, {
@@ -894,6 +906,20 @@ export async function testSmtpConnection(settings: SMTPTestRequest): Promise<Tes
   return fetchJson(`${API_BASE}/settings/test-smtp`, {
     method: 'POST',
     body: JSON.stringify(settings),
+  });
+}
+
+export async function testDiscordWebhook(webhookUrl: string): Promise<TestConnectionResult> {
+  return fetchJson(`${API_BASE}/settings/test-discord`, {
+    method: 'POST',
+    body: JSON.stringify({ webhook_url: webhookUrl }),
+  });
+}
+
+export async function testTelegramBot(botToken: string, chatId: string): Promise<TestConnectionResult> {
+  return fetchJson(`${API_BASE}/settings/test-telegram`, {
+    method: 'POST',
+    body: JSON.stringify({ bot_token: botToken, chat_id: chatId }),
   });
 }
 
@@ -1827,6 +1853,18 @@ export async function cancelProbe(): Promise<{ status: string; message: string }
   }) as Promise<{ status: string; message: string }>;
 }
 
+export async function pauseProbe(): Promise<{ status: string; message: string }> {
+  return fetchJson(`${API_BASE}/stream-stats/probe/pause`, {
+    method: 'POST',
+  }) as Promise<{ status: string; message: string }>;
+}
+
+export async function resumeProbe(): Promise<{ status: string; message: string }> {
+  return fetchJson(`${API_BASE}/stream-stats/probe/resume`, {
+    method: 'POST',
+  }) as Promise<{ status: string; message: string }>;
+}
+
 export async function resetProbeState(): Promise<{ status: string; message: string }> {
   return fetchJson(`${API_BASE}/stream-stats/probe/reset`, {
     method: 'POST',
@@ -1939,6 +1977,11 @@ export interface TaskStatus {
   alert_on_success?: boolean;  // Alert when task succeeds
   alert_on_warning?: boolean;  // Alert on partial failures
   alert_on_error?: boolean;  // Alert on complete failures
+  alert_on_info?: boolean;  // Alert on info messages
+  // Notification channels
+  send_to_email?: boolean;  // Send alerts via email
+  send_to_discord?: boolean;  // Send alerts via Discord
+  send_to_telegram?: boolean;  // Send alerts via Telegram
   show_notifications?: boolean;  // Show in NotificationCenter (bell icon)
 }
 
@@ -1973,6 +2016,11 @@ export interface TaskConfigUpdate {
   alert_on_success?: boolean;  // Alert when task succeeds
   alert_on_warning?: boolean;  // Alert on partial failures
   alert_on_error?: boolean;  // Alert on complete failures
+  alert_on_info?: boolean;  // Alert on info messages
+  // Notification channels
+  send_to_email?: boolean;  // Send alerts via email
+  send_to_discord?: boolean;  // Send alerts via Discord
+  send_to_telegram?: boolean;  // Send alerts via Telegram
   show_notifications?: boolean;  // Show in NotificationCenter (bell icon)
 }
 
@@ -2162,6 +2210,7 @@ export interface CreateNotificationData {
   action_label?: string;
   action_url?: string;
   metadata?: Record<string, unknown>;
+  send_alerts?: boolean; // If false, don't dispatch to Discord/Telegram/Email
 }
 
 export async function getNotifications(params?: {
@@ -2192,6 +2241,7 @@ export async function createNotification(data: CreateNotificationData): Promise<
       action_label: data.action_label,
       action_url: data.action_url,
       metadata: data.metadata,
+      send_alerts: data.send_alerts,
     }),
   });
 }

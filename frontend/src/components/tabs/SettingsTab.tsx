@@ -1,6 +1,7 @@
-import { useState, useEffect, useMemo, useCallback } from 'react';
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import * as api from '../../services/api';
 import { NETWORK_PREFIXES, NETWORK_SUFFIXES } from '../../constants/streamNormalization';
+import { useNotifications } from '../../contexts/NotificationContext';
 import type { Theme, ProbeHistoryEntry, SortCriterion, SortEnabledMap, GracenoteConflictMode, StreamPreviewMode } from '../../services/api';
 import { NormalizationEngineSection } from '../settings/NormalizationEngineSection';
 import { TagEngineSection } from '../settings/TagEngineSection';
@@ -10,7 +11,6 @@ import { copyToClipboard } from '../../utils/clipboard';
 import type { LogLevel as FrontendLogLevel } from '../../utils/logger';
 import { DeleteOrphanedGroupsModal } from '../DeleteOrphanedGroupsModal';
 import { ScheduledTasksSection } from '../ScheduledTasksSection';
-import { AlertMethodSettings } from '../AlertMethodSettings';
 import { SettingsModal } from '../SettingsModal';
 import { CustomSelect } from '../CustomSelect';
 import {
@@ -181,10 +181,24 @@ interface SettingsTabProps {
   onProbeComplete?: () => void;
 }
 
-type SettingsPage = 'general' | 'channel-defaults' | 'normalization' | 'tag-engine' | 'appearance' | 'email' | 'scheduled-tasks' | 'alert-methods' | 'm3u-digest' | 'maintenance';
+type SettingsPage = 'general' | 'channel-defaults' | 'normalization' | 'tag-engine' | 'appearance' | 'email' | 'scheduled-tasks' | 'm3u-digest' | 'maintenance';
 
 export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onProbeComplete }: SettingsTabProps) {
   const [activePage, setActivePage] = useState<SettingsPage>('general');
+  const notifications = useNotifications();
+  const restartToastIdRef = useRef<string | null>(null);
+
+  // Listen for restart events from NotificationCenter to dismiss the restart toast
+  useEffect(() => {
+    const handleServicesRestarted = () => {
+      if (restartToastIdRef.current) {
+        notifications.dismiss(restartToastIdRef.current);
+        restartToastIdRef.current = null;
+      }
+    };
+    window.addEventListener('services-restarted', handleServicesRestarted);
+    return () => window.removeEventListener('services-restarted', handleServicesRestarted);
+  }, [notifications]);
 
   // Connection settings
   const [url, setUrl] = useState('');
@@ -252,6 +266,17 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   const [smtpTesting, setSmtpTesting] = useState(false);
   const [smtpTestResult, setSmtpTestResult] = useState<{ success: boolean; message: string } | null>(null);
 
+  // Shared Discord settings
+  const [discordWebhookUrl, setDiscordWebhookUrl] = useState('');
+  const [discordConfigured, setDiscordConfigured] = useState(false);
+  const [discordTesting, setDiscordTesting] = useState(false);
+
+  // Shared Telegram settings
+  const [telegramBotToken, setTelegramBotToken] = useState('');
+  const [telegramChatId, setTelegramChatId] = useState('');
+  const [telegramConfigured, setTelegramConfigured] = useState(false);
+  const [telegramTesting, setTelegramTesting] = useState(false);
+
   // Stream probe settings (scheduled probing is controlled by Task Engine)
   const [streamProbeBatchSize, setStreamProbeBatchSize] = useState(10);
   const [streamProbeTimeout, setStreamProbeTimeout] = useState(30);
@@ -303,15 +328,11 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   // UI state
   const [loading, setLoading] = useState(false);
   const [testing, setTesting] = useState(false);
-  const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [saveSuccess, setSaveSuccess] = useState(false);
 
   // Maintenance state
   const [orphanedGroups, setOrphanedGroups] = useState<{ id: number; name: string; reason?: string }[]>([]);
   const [loadingOrphaned, setLoadingOrphaned] = useState(false);
   const [cleaningOrphaned, setCleaningOrphaned] = useState(false);
-  const [cleanupResult, setCleanupResult] = useState<string | null>(null);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [showConnectionModal, setShowConnectionModal] = useState(false);
 
@@ -321,7 +342,6 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   const [loadingAutoCreated, setLoadingAutoCreated] = useState(false);
   const [selectedAutoCreatedGroups, setSelectedAutoCreatedGroups] = useState<Set<number>>(new Set());
   const [clearingAutoCreated, setClearingAutoCreated] = useState(false);
-  const [autoCreatedResult, setAutoCreatedResult] = useState<{ success: boolean; message: string } | null>(null);
 
   // Track original URL/username to detect if auth settings changed
   const [originalUrl, setOriginalUrl] = useState('');
@@ -566,10 +586,15 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       setSmtpUseTls(settings.smtp_use_tls ?? true);
       setSmtpUseSsl(settings.smtp_use_ssl ?? false);
       setSmtpConfigured(settings.smtp_configured ?? false);
+      // Shared Discord settings
+      setDiscordWebhookUrl(settings.discord_webhook_url ?? '');
+      setDiscordConfigured(settings.discord_configured ?? false);
+      // Shared Telegram settings
+      setTelegramBotToken(settings.telegram_bot_token ?? '');
+      setTelegramChatId(settings.telegram_chat_id ?? '');
+      setTelegramConfigured(settings.telegram_configured ?? false);
       setNeedsRestart(false);
       setRestartResult(null);
-      setTestResult(null);
-      setError(null);
     } catch (err) {
       console.error('Failed to load settings:', err);
     }
@@ -585,20 +610,21 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
 
   const handleTest = async () => {
     if (!url || !username || !password) {
-      setError('URL, username, and password are required to test connection');
+      notifications.error('URL, username, and password are required to test connection');
       return;
     }
 
     setTesting(true);
-    setTestResult(null);
-    setError(null);
-    setSaveSuccess(false);
 
     try {
       const result = await api.testConnection({ url, username, password });
-      setTestResult(result);
+      if (result.success) {
+        notifications.success(result.message, 'Connection Test');
+      } else {
+        notifications.error(result.message, 'Connection Test');
+      }
     } catch (err) {
-      setTestResult({ success: false, message: 'Failed to test connection' });
+      notifications.error('Failed to test connection', 'Connection Test');
     } finally {
       setTesting(false);
     }
@@ -610,22 +636,20 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
 
     // Validate required fields
     if (!url || !username) {
-      setError('URL and username are required');
+      notifications.error('URL and username are required');
       return;
     }
 
     // Password is only required if auth settings changed
     if (authChanged && !password) {
-      setError('Password is required when changing URL or username');
+      notifications.error('Password is required when changing URL or username');
       return;
     }
 
     setLoading(true);
-    setError(null);
-    setSaveSuccess(false);
 
     try {
-      await api.saveSettings({
+      const result = await api.saveSettings({
         url,
         username,
         // Only send password if it was entered
@@ -680,11 +704,26 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         smtp_from_name: smtpFromName,
         smtp_use_tls: smtpUseTls,
         smtp_use_ssl: smtpUseSsl,
+        // Shared Discord settings
+        discord_webhook_url: discordWebhookUrl,
+        // Shared Telegram settings
+        telegram_bot_token: telegramBotToken,
+        telegram_chat_id: telegramChatId,
       });
+      // If server URL changed, all data was invalidated - reload the page
+      if (result.server_changed) {
+        logger.info('Dispatcharr server URL changed - reloading page to refresh all data');
+        window.location.reload();
+        return;
+      }
       // Clear SMTP password field after save
       setSmtpPassword('');
       // Update SMTP configured status
       setSmtpConfigured(!!(smtpHost && smtpFromEmail));
+      // Update Discord configured status
+      setDiscordConfigured(!!discordWebhookUrl);
+      // Update Telegram configured status
+      setTelegramConfigured(!!(telegramBotToken && telegramChatId));
       // Apply frontend log level immediately
       const frontendLevel = frontendLogLevel === 'WARNING' ? 'WARN' : frontendLogLevel;
       if (['DEBUG', 'INFO', 'WARN', 'ERROR'].includes(frontendLevel)) {
@@ -696,7 +735,6 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       setOriginalUrl(url);
       setOriginalUsername(username);
       setPassword('');
-      setSaveSuccess(true);
       logger.info('Settings saved successfully');
       // Check if any settings that require a restart have changed
       const pollOrTimezoneChanged = statsPollInterval !== originalPollInterval || userTimezone !== originalTimezone;
@@ -713,6 +751,28 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       if (pollOrTimezoneChanged || probeSettingsChanged) {
         logger.info('[RESTART-CHECK] Setting needsRestart=true');
         setNeedsRestart(true);
+
+        // Show toast notification with restart action
+        const message = pollOrTimezoneChanged
+          ? 'Stats or timezone settings changed. Restart services to apply.'
+          : 'Probe settings changed. Restart services to apply.';
+
+        // Dismiss any previous restart toast before showing new one
+        if (restartToastIdRef.current) {
+          notifications.dismiss(restartToastIdRef.current);
+        }
+
+        restartToastIdRef.current = notifications.notify({
+          type: 'warning',
+          title: 'Restart Required',
+          message,
+          duration: 0, // Don't auto-dismiss
+          action: {
+            label: 'Restart Now',
+            onClick: handleRestart,
+          },
+        });
+
         if (pollOrTimezoneChanged) {
           logger.info('Stats polling or timezone changed - backend restart recommended');
         }
@@ -721,14 +781,14 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         }
       } else {
         logger.info('[RESTART-CHECK] No restart-requiring changes detected');
+        // Show success toast only if no restart is required (restart toast handles its own messaging)
+        notifications.success('Settings saved successfully');
       }
       onSaved();
-      // Clear success message after 8 seconds
-      setTimeout(() => setSaveSuccess(false), 8000);
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'Failed to save settings';
       logger.error('Failed to save settings', err);
-      setError(errorMessage);
+      notifications.error(errorMessage, 'Save Failed');
     } finally {
       setLoading(false);
     }
@@ -771,8 +831,10 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         min_changes_threshold: digestSettings.min_changes_threshold,
       });
       setDigestSettings(updated);
+      notifications.success('Settings saved successfully');
     } catch (err) {
       setDigestError(err instanceof Error ? err.message : 'Failed to save digest settings');
+      notifications.error('Failed to save digest settings', 'Save Failed');
     } finally {
       setDigestSaving(false);
     }
@@ -837,11 +899,24 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         setOriginalAutoReorder(autoReorderAfterProbe);
         setOriginalRefreshM3usBeforeProbe(refreshM3usBeforeProbe);
         setNeedsRestart(false);
+
+        // Dismiss the restart toast
+        if (restartToastIdRef.current) {
+          notifications.dismiss(restartToastIdRef.current);
+          restartToastIdRef.current = null;
+        }
+
+        // Show success notification
+        notifications.success('Services restarted successfully with new settings.', 'Restart Complete');
+
         // Clear result after 3 seconds
         setTimeout(() => setRestartResult(null), 3000);
+      } else {
+        notifications.error(result.message || 'Failed to restart services', 'Restart Failed');
       }
     } catch (err) {
       setRestartResult({ success: false, message: 'Failed to restart services' });
+      notifications.error('Failed to restart services', 'Restart Failed');
     } finally {
       setRestarting(false);
     }
@@ -991,15 +1066,14 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
 
   const handleLoadOrphanedGroups = async () => {
     setLoadingOrphaned(true);
-    setCleanupResult(null);
     try {
       const result = await api.getOrphanedChannelGroups();
       setOrphanedGroups(result.orphaned_groups);
       if (result.orphaned_groups.length === 0) {
-        setCleanupResult('No orphaned groups found. Your database is clean!');
+        notifications.success('No orphaned groups found. Your database is clean!');
       }
     } catch (err) {
-      setCleanupResult(`Failed to load orphaned groups: ${err}`);
+      notifications.error(`Failed to load orphaned groups: ${err}`);
     } finally {
       setLoadingOrphaned(false);
     }
@@ -1012,10 +1086,15 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
 
   const handleConfirmDelete = async (selectedGroupIds: number[]) => {
     setCleaningOrphaned(true);
-    setCleanupResult(null);
     try {
       const result = await api.deleteOrphanedChannelGroups(selectedGroupIds);
-      setCleanupResult(result.message);
+
+      if (result.failed_groups.length > 0) {
+        const failedNames = result.failed_groups.map(g => g.name).join(', ');
+        notifications.warning(`${result.message}. Failed to delete: ${failedNames}`);
+      } else {
+        notifications.success(result.message);
+      }
 
       if (result.deleted_groups.length > 0) {
         // Reload to refresh the list
@@ -1023,13 +1102,8 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         // Notify parent to refresh data
         onSaved();
       }
-
-      if (result.failed_groups.length > 0) {
-        const failedNames = result.failed_groups.map(g => g.name).join(', ');
-        setCleanupResult(`${result.message}. Failed to delete: ${failedNames}`);
-      }
     } catch (err) {
-      setCleanupResult(`Failed to cleanup orphaned groups: ${err}`);
+      notifications.error(`Failed to cleanup orphaned groups: ${err}`);
     } finally {
       setCleaningOrphaned(false);
     }
@@ -1038,17 +1112,16 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   // Auto-created channels handlers
   const handleLoadAutoCreatedGroups = async () => {
     setLoadingAutoCreated(true);
-    setAutoCreatedResult(null);
     try {
       const result = await api.getGroupsWithAutoCreatedChannels();
       setAutoCreatedGroups(result.groups);
       setTotalAutoCreatedChannels(result.total_auto_created_channels);
       setSelectedAutoCreatedGroups(new Set()); // Clear selection
       if (result.groups.length === 0) {
-        setAutoCreatedResult({ success: true, message: 'No groups with auto_created channels found.' });
+        notifications.success('No groups with auto_created channels found.');
       }
     } catch (err) {
-      setAutoCreatedResult({ success: false, message: `Failed to load groups: ${err}` });
+      notifications.error(`Failed to load groups: ${err}`);
     } finally {
       setLoadingAutoCreated(false);
     }
@@ -1078,10 +1151,14 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
     if (selectedAutoCreatedGroups.size === 0) return;
 
     setClearingAutoCreated(true);
-    setAutoCreatedResult(null);
     try {
       const result = await api.clearAutoCreatedFlag(Array.from(selectedAutoCreatedGroups));
-      setAutoCreatedResult({ success: true, message: result.message });
+
+      if (result.failed_channels.length > 0) {
+        notifications.warning(`${result.message}. ${result.failed_channels.length} channel(s) failed to update.`);
+      } else {
+        notifications.success(result.message);
+      }
 
       if (result.updated_count > 0) {
         // Reload to refresh the list
@@ -1089,15 +1166,8 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         // Notify parent to refresh data (channels may have changed)
         onSaved();
       }
-
-      if (result.failed_channels.length > 0) {
-        setAutoCreatedResult({
-          success: false,
-          message: `${result.message}. ${result.failed_channels.length} channel(s) failed to update.`
-        });
-      }
     } catch (err) {
-      setAutoCreatedResult({ success: false, message: `Failed to clear auto_created flag: ${err}` });
+      notifications.error(`Failed to clear auto_created flag: ${err}`);
     } finally {
       setClearingAutoCreated(false);
     }
@@ -1109,22 +1179,6 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         <h2>General Settings</h2>
         <p>Configure your Dispatcharr connection.</p>
       </div>
-
-      {error && (
-        <div className="error-message">
-          <span className="material-icons">error</span>
-          {error}
-        </div>
-      )}
-
-      {testResult && (
-        <div className={`test-result ${testResult.success ? 'success' : 'error'}`}>
-          <span className="material-icons">
-            {testResult.success ? 'check_circle' : 'error'}
-          </span>
-          {testResult.message}
-        </div>
-      )}
 
       <div className="settings-section">
         <div className="settings-section-header">
@@ -1190,31 +1244,6 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
             <span className="threshold-percent">sec</span>
           </div>
 
-          {needsRestart && (
-            <div className="warning-message">
-              <span className="material-icons">info</span>
-              <span>Stats settings changed. Restart services to apply.</span>
-              <button
-                className="btn-restart"
-                onClick={handleRestart}
-                disabled={restarting}
-              >
-                <span className={`material-icons ${restarting ? 'spinning' : ''}`}>
-                  {restarting ? 'sync' : 'restart_alt'}
-                </span>
-                {restarting ? 'Restarting...' : 'Restart Now'}
-              </button>
-            </div>
-          )}
-
-          {restartResult && (
-            <div className={`restart-result ${restartResult.success ? 'success' : 'error'}`}>
-              <span className="material-icons">
-                {restartResult.success ? 'check_circle' : 'error'}
-              </span>
-              {restartResult.message}
-            </div>
-          )}
         </div>
 
         <div className="form-group-vertical">
@@ -1301,13 +1330,6 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
           />
         </div>
       </div>
-
-      {saveSuccess && (
-        <div className="success-message">
-          <span className="material-icons">check_circle</span>
-          Settings saved successfully
-        </div>
-      )}
 
       <div className="settings-actions">
         <div className="settings-actions-left" />
@@ -1594,13 +1616,6 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         </div>
       </div>
 
-      {saveSuccess && (
-        <div className="success-message">
-          <span className="material-icons">check_circle</span>
-          Settings saved successfully
-        </div>
-      )}
-
       <div className="settings-actions">
         <div className="settings-actions-left" />
         <button className="btn-primary" onClick={handleSave} disabled={loading}>
@@ -1617,13 +1632,6 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         <h2>Channel Defaults</h2>
         <p>Configure default options for bulk channel creation.</p>
       </div>
-
-      {error && (
-        <div className="error-message">
-          <span className="material-icons">error</span>
-          {error}
-        </div>
-      )}
 
       <div className="settings-section">
         <div className="settings-section-header">
@@ -1835,13 +1843,6 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         </div>
       </div>
 
-      {saveSuccess && (
-        <div className="success-message">
-          <span className="material-icons">check_circle</span>
-          Settings saved successfully
-        </div>
-      )}
-
       <div className="settings-actions">
         <div className="settings-actions-left" />
         <button className="btn-primary" onClick={handleSave} disabled={loading}>
@@ -1941,13 +1942,6 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       {/* Advanced Normalization Rules Engine */}
       <NormalizationEngineSection />
 
-      {saveSuccess && (
-        <div className="success-message">
-          <span className="material-icons">check_circle</span>
-          Settings saved successfully
-        </div>
-      )}
-
       <div className="settings-actions">
         <div className="settings-actions-left" />
         <button className="btn-primary" onClick={handleSave} disabled={loading}>
@@ -1991,29 +1985,83 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
     }
   };
 
+  // Handle Discord webhook test
+  const handleTestDiscord = async () => {
+    if (!discordWebhookUrl) {
+      notifications.error('Discord webhook URL is required', 'Discord Test');
+      return;
+    }
+
+    // Basic validation - accept discord.com, discordapp.com, and variants (canary, ptb)
+    const discordPattern = /^https:\/\/(discord\.com|discordapp\.com|canary\.discord\.com|ptb\.discord\.com)\/api\/webhooks\//;
+    if (!discordPattern.test(discordWebhookUrl)) {
+      notifications.error('Invalid Discord webhook URL format', 'Discord Test');
+      return;
+    }
+
+    setDiscordTesting(true);
+
+    try {
+      const result = await api.testDiscordWebhook(discordWebhookUrl);
+      if (result.success) {
+        notifications.success(result.message, 'Discord Test');
+      } else {
+        notifications.error(result.message, 'Discord Test');
+      }
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : 'Failed to test Discord webhook';
+      console.error('Discord test error:', err);
+      notifications.error(errorMessage, 'Discord Test');
+    } finally {
+      setDiscordTesting(false);
+    }
+  };
+
+  const handleTestTelegram = async () => {
+    if (!telegramBotToken) {
+      notifications.error('Telegram bot token is required', 'Telegram Test');
+      return;
+    }
+    if (!telegramChatId) {
+      notifications.error('Telegram chat ID is required', 'Telegram Test');
+      return;
+    }
+
+    setTelegramTesting(true);
+
+    try {
+      const result = await api.testTelegramBot(telegramBotToken, telegramChatId);
+      if (result.success) {
+        notifications.success(result.message, 'Telegram Test');
+      } else {
+        notifications.error(result.message, 'Telegram Test');
+      }
+    } catch (err) {
+      notifications.error('Failed to test Telegram bot', 'Telegram Test');
+    } finally {
+      setTelegramTesting(false);
+    }
+  };
+
   const renderEmailSettingsPage = () => (
     <div className="settings-page">
       <div className="settings-page-header">
-        <h2>Email Settings</h2>
-        <p>Configure shared SMTP settings for email features like M3U Digest reports.</p>
+        <h2>Notification Settings</h2>
+        <p>Configure notification channels (Email, Discord, Telegram) for alerts and reports.</p>
       </div>
 
       <div className="settings-section">
         <div className="settings-section-header">
           <span className="material-icons">mail_outline</span>
           <h3>SMTP Configuration</h3>
+          <span className={`config-badge ${smtpConfigured ? 'configured' : 'unconfigured'}`}>
+            {smtpConfigured ? 'Configured' : 'Unconfigured'}
+          </span>
         </div>
         <p className="section-description">
           Configure your SMTP server to enable email features. These settings are used by M3U Digest
           reports and Email alert methods.
         </p>
-
-        {smtpConfigured && (
-          <div className="status-badge status-success">
-            <span className="material-icons">check_circle</span>
-            SMTP Configured
-          </div>
-        )}
 
         <div className="form-group-vertical">
           <label htmlFor="smtpHost">SMTP Host</label>
@@ -2162,6 +2210,118 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         )}
       </div>
 
+      <div className="settings-section">
+        <div className="settings-section-header">
+          <span className="material-icons">discord</span>
+          <h3>Discord Webhook</h3>
+          <span className={`config-badge ${discordConfigured ? 'configured' : 'unconfigured'}`}>
+            {discordConfigured ? 'Configured' : 'Unconfigured'}
+          </span>
+        </div>
+        <p className="section-description">
+          Configure a Discord webhook to receive notifications. Used by M3U Digest and other features
+          that support Discord notifications.
+        </p>
+
+        <div className="form-group-vertical">
+          <label htmlFor="discordWebhookUrl">Webhook URL</label>
+          <input
+            type="text"
+            id="discordWebhookUrl"
+            value={discordWebhookUrl}
+            onChange={(e) => setDiscordWebhookUrl(e.target.value)}
+            placeholder="https://discord.com/api/webhooks/..."
+          />
+          <p className="field-hint">
+            Create a webhook in your Discord server: Server Settings → Integrations → Webhooks → New Webhook
+          </p>
+        </div>
+
+        <div className="form-group-vertical">
+          <button
+            className="btn-test"
+            onClick={handleTestDiscord}
+            disabled={discordTesting || !discordWebhookUrl}
+          >
+            {discordTesting ? (
+              <>
+                <span className="material-icons spinning">sync</span>
+                Testing...
+              </>
+            ) : (
+              <>
+                <span className="material-icons">send</span>
+                Send Test Message
+              </>
+            )}
+          </button>
+        </div>
+
+      </div>
+
+      <div className="settings-section">
+        <div className="settings-section-header">
+          <span className="material-icons">telegram</span>
+          <h3>Telegram Bot</h3>
+          <span className={`config-badge ${telegramConfigured ? 'configured' : 'unconfigured'}`}>
+            {telegramConfigured ? 'Configured' : 'Unconfigured'}
+          </span>
+        </div>
+        <p className="section-description">
+          Configure a Telegram bot to receive notifications. Used by M3U Digest and other features
+          that support Telegram notifications.
+        </p>
+
+        <div className="form-group-vertical">
+          <label htmlFor="telegramBotToken">Bot Token</label>
+          <input
+            type="password"
+            id="telegramBotToken"
+            value={telegramBotToken}
+            onChange={(e) => setTelegramBotToken(e.target.value)}
+            placeholder="123456789:ABCdefGHIjklMNOpqrsTUVwxyz..."
+          />
+          <p className="field-hint">
+            Create a bot via @BotFather on Telegram and copy the token
+          </p>
+        </div>
+
+        <div className="form-group-vertical">
+          <label htmlFor="telegramChatId">Chat ID</label>
+          <input
+            type="text"
+            id="telegramChatId"
+            value={telegramChatId}
+            onChange={(e) => setTelegramChatId(e.target.value)}
+            placeholder="-1001234567890"
+          />
+          <p className="field-hint">
+            Use @userinfobot or @RawDataBot to get your chat ID. For groups, use a negative number.
+          </p>
+        </div>
+
+        <div className="form-group-vertical">
+          <button
+            className="btn-test"
+            onClick={handleTestTelegram}
+            disabled={telegramTesting || !telegramBotToken || !telegramChatId}
+          >
+            {telegramTesting ? (
+              <>
+                <span className="material-icons spinning">sync</span>
+                Testing...
+              </>
+            ) : (
+              <>
+                <span className="material-icons">send</span>
+                Send Test Message
+              </>
+            )}
+          </button>
+        </div>
+
+      </div>
+
       <div className="settings-actions">
         <button
           className="btn btn-primary"
@@ -2170,8 +2330,6 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         >
           {loading ? 'Saving...' : 'Save Settings'}
         </button>
-        {saveSuccess && <span className="save-success">Settings saved!</span>}
-        {error && <span className="save-error">{error}</span>}
       </div>
     </div>
   );
@@ -2330,7 +2488,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                     className="link-button"
                     onClick={() => setActivePage('email')}
                   >
-                    Email Settings
+                    Notification Settings
                   </button>{' '}
                   before sending digests.
                 </span>
@@ -2392,6 +2550,46 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
             </div>
           </div>
 
+          {/* Discord Notification Section */}
+          <div className="settings-section">
+            <div className="settings-section-header">
+              <span className="material-icons">forum</span>
+              <h3>Discord Notification</h3>
+            </div>
+
+            {!discordConfigured && (
+              <div className="warning-banner">
+                <span className="material-icons">warning</span>
+                <span>
+                  Discord webhook is not configured. Please configure your Discord webhook in{' '}
+                  <button
+                    className="link-button"
+                    onClick={() => setActivePage('email')}
+                  >
+                    Notification Settings
+                  </button>{' '}
+                  before enabling Discord notifications.
+                </span>
+              </div>
+            )}
+
+            <div className="settings-group">
+              <div className="checkbox-group">
+                <input
+                  id="sendToDiscord"
+                  type="checkbox"
+                  checked={digestSettings.send_to_discord}
+                  onChange={(e) => handleDigestSettingChange('send_to_discord', e.target.checked)}
+                  disabled={!discordConfigured}
+                />
+                <div className="checkbox-content">
+                  <label htmlFor="sendToDiscord">Send digest to Discord</label>
+                  <p>Post M3U change digest to Discord using the shared webhook configured in Notification Settings.</p>
+                </div>
+              </div>
+            </div>
+          </div>
+
           {/* Last Digest Info */}
           {digestSettings.last_digest_at && (
             <div className="settings-section">
@@ -2420,7 +2618,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
             <button
               className="btn-secondary"
               onClick={handleSendTestDigest}
-              disabled={digestSaving || !smtpConfigured || digestSettings.email_recipients.length === 0}
+              disabled={digestSaving || ((!smtpConfigured || digestSettings.email_recipients.length === 0) && (!discordConfigured || !digestSettings.send_to_discord))}
             >
               <span className="material-icons">send</span>
               Send Test Digest
@@ -2619,31 +2817,6 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
               </span>
             </div>
 
-            {needsRestart && (
-              <div className="warning-message">
-                <span className="material-icons">info</span>
-                <span>Probe settings changed. Restart services for schedule changes to take effect.</span>
-                <button
-                  className="btn-restart"
-                  onClick={handleRestart}
-                  disabled={restarting}
-                >
-                  <span className={`material-icons ${restarting ? 'spinning' : ''}`}>
-                    {restarting ? 'sync' : 'restart_alt'}
-                  </span>
-                  {restarting ? 'Restarting...' : 'Restart Now'}
-                </button>
-              </div>
-            )}
-
-            {restartResult && (
-              <div className={`restart-result ${restartResult.success ? 'success' : 'error'}`}>
-                <span className="material-icons">
-                  {restartResult.success ? 'check_circle' : 'error'}
-                </span>
-                {restartResult.message}
-              </div>
-            )}
           </div>
         </div>
 
@@ -2974,12 +3147,6 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
             </div>
           )}
 
-          {cleanupResult && (
-            <div className={cleanupResult.includes('Failed') ? 'error-message' : 'success-message'} style={{ marginTop: '1rem' }}>
-              <span className="material-icons">{cleanupResult.includes('Failed') ? 'error' : 'check_circle'}</span>
-              {cleanupResult}
-            </div>
-          )}
         </div>
       </div>
 
@@ -3098,26 +3265,8 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
             </div>
           )}
 
-          {autoCreatedResult && (
-            <div
-              className={autoCreatedResult.success ? 'success-message' : 'error-message'}
-              style={{ marginTop: '1rem' }}
-            >
-              <span className="material-icons">
-                {autoCreatedResult.success ? 'check_circle' : 'error'}
-              </span>
-              {autoCreatedResult.message}
-            </div>
-          )}
         </div>
       </div>
-
-      {saveSuccess && (
-        <div className="success-message">
-          <span className="material-icons">check_circle</span>
-          Settings saved successfully
-        </div>
-      )}
 
       <div className="settings-actions">
         <div className="settings-actions-left" />
@@ -3172,8 +3321,8 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
             className={`settings-nav-item ${activePage === 'email' ? 'active' : ''}`}
             onClick={() => setActivePage('email')}
           >
-            <span className="material-icons">email</span>
-            Email Settings
+            <span className="material-icons">notifications</span>
+            Notification Settings
           </li>
           <li
             className={`settings-nav-item ${activePage === 'scheduled-tasks' ? 'active' : ''}`}
@@ -3181,13 +3330,6 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
           >
             <span className="material-icons">schedule</span>
             Scheduled Tasks
-          </li>
-          <li
-            className={`settings-nav-item ${activePage === 'alert-methods' ? 'active' : ''}`}
-            onClick={() => setActivePage('alert-methods')}
-          >
-            <span className="material-icons">campaign</span>
-            Alert Methods
           </li>
           <li
             className={`settings-nav-item ${activePage === 'm3u-digest' ? 'active' : ''}`}
@@ -3214,7 +3356,6 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         {activePage === 'appearance' && renderAppearancePage()}
         {activePage === 'email' && renderEmailSettingsPage()}
         {activePage === 'scheduled-tasks' && <ScheduledTasksSection userTimezone={userTimezone} />}
-        {activePage === 'alert-methods' && <AlertMethodSettings />}
         {activePage === 'm3u-digest' && renderM3UDigestPage()}
         {activePage === 'maintenance' && renderMaintenancePage()}
       </div>

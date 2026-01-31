@@ -116,6 +116,11 @@ class DispatcharrSettings(BaseModel):
     smtp_from_name: str = "ECM Alerts"
     smtp_use_tls: bool = True
     smtp_use_ssl: bool = False
+    # Shared Discord webhook for notifications (M3U Digest, etc.)
+    discord_webhook_url: str = ""
+    # Shared Telegram bot for notifications (M3U Digest, etc.)
+    telegram_bot_token: str = ""
+    telegram_chat_id: str = ""
     # Stream preview mode: how to handle audio codecs in browser preview
     # "passthrough" - Direct playback, may fail on AC-3/E-AC-3/DTS codecs
     # "transcode" - FFmpeg transcodes unsupported audio to AAC (CPU intensive)
@@ -128,6 +133,14 @@ class DispatcharrSettings(BaseModel):
     def is_smtp_configured(self) -> bool:
         """Check if shared SMTP settings are configured."""
         return bool(self.smtp_host and self.smtp_from_email)
+
+    def is_discord_configured(self) -> bool:
+        """Check if shared Discord webhook is configured."""
+        return bool(self.discord_webhook_url)
+
+    def is_telegram_configured(self) -> bool:
+        """Check if shared Telegram bot is configured."""
+        return bool(self.telegram_bot_token and self.telegram_chat_id)
 
 
 class Settings(BaseSettings):

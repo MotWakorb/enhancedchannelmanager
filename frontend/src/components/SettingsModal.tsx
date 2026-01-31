@@ -1,5 +1,6 @@
 import { useState, useEffect, memo } from 'react';
 import * as api from '../services/api';
+import { useNotifications } from '../contexts/NotificationContext';
 import type { Theme } from '../services/api';
 import './ModalBase.css';
 import './SettingsModal.css';
@@ -11,6 +12,7 @@ interface SettingsModalProps {
 }
 
 export const SettingsModal = memo(function SettingsModal({ isOpen, onClose, onSaved }: SettingsModalProps) {
+  const notifications = useNotifications();
   const [url, setUrl] = useState('');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
@@ -106,8 +108,10 @@ export const SettingsModal = memo(function SettingsModal({ isOpen, onClose, onSa
       });
       onSaved();
       onClose();
+      notifications.success('Settings saved successfully');
     } catch (err) {
       console.error('Failed to save settings:', err);
+      notifications.error('Failed to save settings', 'Save Failed');
     } finally {
       setLoading(false);
     }

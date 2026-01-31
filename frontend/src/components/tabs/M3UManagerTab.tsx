@@ -8,6 +8,7 @@ import { M3UFiltersModal } from '../M3UFiltersModal';
 import { M3ULinkedAccountsModal } from '../M3ULinkedAccountsModal';
 import { M3UProfileModal } from '../M3UProfileModal';
 import { CustomSelect } from '../CustomSelect';
+import { useNotifications } from '../../contexts/NotificationContext';
 import './M3UManagerTab.css';
 
 interface M3UManagerTabProps {
@@ -271,6 +272,7 @@ export function M3UManagerTab({
   onAccountsChange,
   hideM3uUrls = false,
 }: M3UManagerTabProps) {
+  const notifications = useNotifications();
   const [accounts, setAccounts] = useState<M3UAccount[]>([]);
   const [serverGroups, setServerGroups] = useState<ServerGroup[]>([]);
   const [loading, setLoading] = useState(true);
@@ -555,12 +557,14 @@ export function M3UManagerTab({
         m3u_account_priorities: pendingPriorities,
       });
       setM3uAccountPriorities(pendingPriorities);
+      notifications.success('M3U account priorities saved successfully.');
     } catch (err) {
       console.error('Failed to save M3U priorities:', err);
+      notifications.error('Failed to save M3U priorities.');
     } finally {
       setSavingPriorities(false);
     }
-  }, [pendingPriorities]);
+  }, [pendingPriorities, notifications]);
 
   const handleAccountSaved = () => {
     loadData();
@@ -693,19 +697,17 @@ export function M3UManagerTab({
           </p>
         </div>
         <div className="header-actions">
-          {hasPriorityChanges && (
-            <button
-              className="btn-primary save-priorities-btn"
-              onClick={handleSavePriorities}
-              disabled={savingPriorities}
-              title="Save priority changes"
-            >
-              <span className={`material-icons ${savingPriorities ? 'spinning' : ''}`}>
-                {savingPriorities ? 'sync' : 'save'}
-              </span>
-              {savingPriorities ? 'Saving...' : 'Save Priorities'}
-            </button>
-          )}
+          <button
+            className="btn-primary save-priorities-btn"
+            onClick={handleSavePriorities}
+            disabled={savingPriorities || !hasPriorityChanges}
+            title={hasPriorityChanges ? "Save priority changes" : "No priority changes to save"}
+          >
+            <span className={`material-icons ${savingPriorities ? 'spinning' : ''}`}>
+              {savingPriorities ? 'sync' : 'save'}
+            </span>
+            {savingPriorities ? 'Saving...' : 'Save Priorities'}
+          </button>
           {serverGroups.length > 0 && (
             <CustomSelect
               className="server-group-filter"

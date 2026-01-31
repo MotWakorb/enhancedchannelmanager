@@ -320,6 +320,12 @@ async def startup_event():
                 stream_fetch_page_limit=settings.stream_fetch_page_limit,
                 m3u_account_priorities=settings.m3u_account_priorities,
             )
+            prober.set_notification_callbacks(
+                create_callback=create_notification_internal,
+                update_callback=update_notification_internal,
+                delete_by_source_callback=delete_notifications_by_source_internal
+            )
+            logger.info("Notification callbacks configured for stream prober")
             logger.info(f"StreamProber instance created: {prober is not None}")
 
             set_prober(prober)
@@ -344,9 +350,18 @@ async def startup_event():
         logger.info("Task modules loaded and registered")
 
         # Start the task engine
-        from task_engine import start_engine
+        from task_engine import start_engine, get_engine
         await start_engine()
         logger.info("Task execution engine started")
+
+        # Set notification callbacks on the task engine for progress updates
+        engine = get_engine()
+        engine.set_notification_callbacks(
+            create_callback=create_notification_internal,
+            update_callback=update_notification_internal,
+            delete_callback=delete_notifications_by_source_internal,
+        )
+        logger.info("Task engine notification callbacks configured")
 
         # Connect the prober to the StreamProbeTask AFTER tasks are registered
         prober = get_prober()
@@ -620,6 +635,11 @@ class SettingsRequest(BaseModel):
     smtp_from_name: str = "ECM Alerts"
     smtp_use_tls: bool = True
     smtp_use_ssl: bool = False
+    # Shared Discord settings
+    discord_webhook_url: str = ""
+    # Shared Telegram settings
+    telegram_bot_token: str = ""
+    telegram_chat_id: str = ""
     # Stream preview mode: "passthrough", "transcode", or "video_only"
     stream_preview_mode: str = "passthrough"
 
@@ -678,6 +698,13 @@ class SettingsResponse(BaseModel):
     smtp_from_name: str
     smtp_use_tls: bool
     smtp_use_ssl: bool
+    # Shared Discord settings
+    discord_configured: bool  # Whether shared Discord webhook is configured
+    discord_webhook_url: str
+    # Shared Telegram settings
+    telegram_configured: bool  # Whether shared Telegram bot is configured
+    telegram_bot_token: str
+    telegram_chat_id: str
     # Stream preview mode
     stream_preview_mode: str
 
@@ -753,6 +780,13 @@ async def get_current_settings():
         smtp_from_name=settings.smtp_from_name,
         smtp_use_tls=settings.smtp_use_tls,
         smtp_use_ssl=settings.smtp_use_ssl,
+        # Shared Discord settings
+        discord_configured=settings.is_discord_configured(),
+        discord_webhook_url=settings.discord_webhook_url,
+        # Shared Telegram settings
+        telegram_configured=settings.is_telegram_configured(),
+        telegram_bot_token=settings.telegram_bot_token,
+        telegram_chat_id=settings.telegram_chat_id,
         stream_preview_mode=settings.stream_preview_mode,
     )
 
@@ -843,6 +877,11 @@ async def update_settings(request: SettingsRequest):
         smtp_from_name=request.smtp_from_name,
         smtp_use_tls=request.smtp_use_tls,
         smtp_use_ssl=request.smtp_use_ssl,
+        # Shared Discord settings
+        discord_webhook_url=request.discord_webhook_url,
+        # Shared Telegram settings
+        telegram_bot_token=request.telegram_bot_token,
+        telegram_chat_id=request.telegram_chat_id,
         stream_preview_mode=request.stream_preview_mode,
     )
     save_settings(new_settings)
@@ -1048,6 +1087,130 @@ You can now use email features like M3U Digest reports.
         return {"success": False, "message": str(e)}
 
 
+class DiscordTestRequest(BaseModel):
+    webhook_url: str
+
+
+@app.post("/api/settings/test-discord", tags=["Settings"])
+async def test_discord_webhook(request: DiscordTestRequest):
+    """Test Discord webhook by sending a test message."""
+    import aiohttp
+
+    webhook_url = request.webhook_url
+    logger.info(f"POST /api/settings/test-discord - Testing Discord webhook: {webhook_url[:50]}...")
+
+    if not webhook_url:
+        return {"success": False, "message": "Webhook URL is required"}
+
+    # Validate URL format - accept discord.com, discordapp.com, and variants (canary, ptb)
+    import re
+    discord_pattern = r'^https://(discord\.com|discordapp\.com|canary\.discord\.com|ptb\.discord\.com)/api/webhooks/'
+    if not re.match(discord_pattern, webhook_url):
+        return {"success": False, "message": "Invalid Discord webhook URL format"}
+
+    try:
+        payload = {
+            "content": (
+                "**\u2713 ECM Discord Test**\n\n"
+                "Your Discord webhook is configured correctly.\n"
+                "You will receive notifications from Enhanced Channel Manager here."
+            ),
+            "username": "ECM Test",
+        }
+
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                webhook_url,
+                json=payload,
+                timeout=aiohttp.ClientTimeout(total=10),
+            ) as response:
+                if response.status == 204:
+                    logger.info("Discord webhook test successful")
+                    return {"success": True, "message": "Test message sent successfully"}
+                elif response.status == 401:
+                    return {"success": False, "message": "Invalid webhook - unauthorized"}
+                elif response.status == 404:
+                    return {"success": False, "message": "Webhook not found - may have been deleted"}
+                elif response.status == 429:
+                    return {"success": False, "message": "Rate limited - try again later"}
+                else:
+                    text = await response.text()
+                    logger.error(f"Discord test failed: {response.status} - {text}")
+                    return {"success": False, "message": f"Discord returned error: {response.status}"}
+
+    except aiohttp.ClientError as e:
+        logger.error(f"Discord test failed - connection error: {e}")
+        return {"success": False, "message": f"Connection error: {str(e)}"}
+    except Exception as e:
+        logger.exception(f"Discord test failed - unexpected error: {e}")
+        return {"success": False, "message": str(e)}
+
+
+class TelegramTestRequest(BaseModel):
+    bot_token: str
+    chat_id: str
+
+
+@app.post("/api/settings/test-telegram", tags=["Settings"])
+async def test_telegram_bot(request: TelegramTestRequest):
+    """Test Telegram bot by sending a test message."""
+    import aiohttp
+
+    bot_token = request.bot_token
+    chat_id = request.chat_id
+    logger.debug("POST /api/settings/test-telegram - Testing Telegram bot")
+
+    if not bot_token:
+        return {"success": False, "message": "Bot token is required"}
+    if not chat_id:
+        return {"success": False, "message": "Chat ID is required"}
+
+    try:
+        # Telegram Bot API endpoint
+        url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+        payload = {
+            "chat_id": chat_id,
+            "text": (
+                "✓ *ECM Telegram Test*\n\n"
+                "Your Telegram bot is configured correctly\\.\n"
+                "You will receive notifications from Enhanced Channel Manager here\\."
+            ),
+            "parse_mode": "MarkdownV2",
+        }
+
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                url,
+                json=payload,
+                timeout=aiohttp.ClientTimeout(total=10),
+            ) as response:
+                data = await response.json()
+
+                if response.status == 200 and data.get("ok"):
+                    logger.info("Telegram bot test successful")
+                    return {"success": True, "message": "Test message sent successfully"}
+                elif response.status == 401:
+                    return {"success": False, "message": "Invalid bot token - unauthorized"}
+                elif response.status == 400:
+                    error_desc = data.get("description", "Unknown error")
+                    if "chat not found" in error_desc.lower():
+                        return {"success": False, "message": "Chat not found - check your chat ID"}
+                    return {"success": False, "message": f"Bad request: {error_desc}"}
+                elif response.status == 429:
+                    return {"success": False, "message": "Rate limited - try again later"}
+                else:
+                    error_desc = data.get("description", f"Status {response.status}")
+                    logger.error(f"Telegram test failed: {error_desc}")
+                    return {"success": False, "message": f"Telegram returned error: {error_desc}"}
+
+    except aiohttp.ClientError as e:
+        logger.error(f"Telegram test failed - connection error: {e}")
+        return {"success": False, "message": f"Connection error: {str(e)}"}
+    except Exception as e:
+        logger.exception(f"Telegram test failed - unexpected error: {e}")
+        return {"success": False, "message": str(e)}
+
+
 @app.post("/api/settings/restart-services", tags=["Settings"])
 async def restart_services():
     """Restart background services (bandwidth tracker and stream prober) to apply new settings."""
@@ -1092,6 +1255,12 @@ async def restart_services():
                 stream_fetch_page_limit=settings.stream_fetch_page_limit,
                 m3u_account_priorities=settings.m3u_account_priorities,
             )
+            new_prober.set_notification_callbacks(
+                create_callback=create_notification_internal,
+                update_callback=update_notification_internal,
+                delete_by_source_callback=delete_notifications_by_source_internal
+            )
+            logger.info("Notification callbacks configured for stream prober")
             set_prober(new_prober)
 
             # Connect the new prober to the StreamProbeTask
@@ -1681,6 +1850,10 @@ async def bulk_commit_operations(request: BulkCommitRequest):
 
         logger.debug(f"[BULK-VALIDATE] Referenced entities: {len(referenced_channel_ids)} channels, {len(referenced_stream_ids)} streams")
         logger.debug(f"[BULK-VALIDATE] Channels to create: {len(channels_to_create)} (temp IDs: {sorted(channels_to_create)})")
+        if referenced_channel_ids:
+            # Log a sample of referenced channel IDs (first 20)
+            sample_ids = sorted(referenced_channel_ids)[:20]
+            logger.debug(f"[BULK-VALIDATE] Referenced channel IDs (sample): {sample_ids}{'...' if len(referenced_channel_ids) > 20 else ''}")
 
         if referenced_channel_ids:
             try:
@@ -1695,6 +1868,12 @@ async def bulk_commit_operations(request: BulkCommitRequest):
                         break
                     page += 1
                 logger.debug(f"[BULK-VALIDATE] Loaded {len(existing_channels)} existing channels")
+                # Check which referenced channels don't exist
+                missing_channels = referenced_channel_ids - set(existing_channels.keys())
+                if missing_channels:
+                    logger.warning(f"[BULK-VALIDATE] Missing channels detected: {sorted(missing_channels)} ({len(missing_channels)} total)")
+                else:
+                    logger.debug(f"[BULK-VALIDATE] All {len(referenced_channel_ids)} referenced channels exist")
             except Exception as e:
                 logger.warning(f"[BULK-VALIDATE] Failed to fetch channels for validation: {e}")
 
@@ -1789,8 +1968,24 @@ async def bulk_commit_operations(request: BulkCommitRequest):
 
         # Log validation summary
         logger.debug(f"[BULK-VALIDATE] Validation complete: passed={result['validationPassed']}, issues={len(result['validationIssues'])}")
-        for issue in result['validationIssues']:
-            logger.debug(f"[BULK-VALIDATE] Issue: {issue['type']} - {issue['message']}")
+        if result['validationIssues']:
+            logger.warning(f"[BULK-VALIDATE] === VALIDATION ISSUES DETAIL ===")
+            for i, issue in enumerate(result['validationIssues'][:10]):  # Show first 10
+                op_idx = issue.get('operationIndex', '?')
+                ch_id = issue.get('channelId', '?')
+                stream_id = issue.get('streamId', '?')
+                # Get the actual operation for more context
+                if op_idx != '?' and op_idx < len(request.operations):
+                    op = request.operations[op_idx]
+                    logger.warning(f"[BULK-VALIDATE]   Issue {i+1}: {issue['type']} - {issue['message']}")
+                    logger.warning(f"[BULK-VALIDATE]     Operation[{op_idx}]: type={op.type}, channelId={op.channelId}, streamId={getattr(op, 'streamId', None)}")
+                    if op.type == "updateChannel" and op.data:
+                        logger.warning(f"[BULK-VALIDATE]     Update data: name={op.data.get('name')}, number={op.data.get('channel_number')}")
+                else:
+                    logger.warning(f"[BULK-VALIDATE]   Issue {i+1}: {issue['type']} - {issue['message']} (channelId={ch_id}, streamId={stream_id})")
+            if len(result['validationIssues']) > 10:
+                logger.warning(f"[BULK-VALIDATE]   ... and {len(result['validationIssues']) - 10} more issues")
+            logger.warning(f"[BULK-VALIDATE] === END VALIDATION ISSUES ===")
 
         # If validateOnly, return now without executing
         if request.validateOnly:
@@ -1801,6 +1996,13 @@ async def bulk_commit_operations(request: BulkCommitRequest):
         # If validation failed and continueOnError is false, return without executing
         if not result["validationPassed"] and not request.continueOnError:
             logger.warning(f"[BULK-COMMIT] Validation failed with {len(result['validationIssues'])} issues, aborting (continueOnError=false)")
+            logger.warning(f"[BULK-COMMIT] No operations will be executed. Total operations that would have been attempted: {len(request.operations)}")
+            # Log a hint about the issue
+            if result['validationIssues']:
+                first_issue = result['validationIssues'][0]
+                logger.warning(f"[BULK-COMMIT] First issue: {first_issue.get('message', 'Unknown')}")
+                if first_issue.get('type') == 'missing_channel':
+                    logger.warning(f"[BULK-COMMIT] Hint: Channel {first_issue.get('channelId')} may have been deleted from Dispatcharr. Try refreshing the page to sync.")
             result["success"] = False
             return result
 
@@ -4868,6 +5070,7 @@ class M3UDigestSettingsUpdate(BaseModel):
     include_stream_changes: Optional[bool] = None
     show_detailed_list: Optional[bool] = None  # Show detailed list vs just summary
     min_changes_threshold: Optional[int] = None
+    send_to_discord: Optional[bool] = None  # Send digest to Discord (uses shared webhook)
 
 
 @app.put("/api/m3u/digest/settings", tags=["M3U Digest"])
@@ -4919,6 +5122,9 @@ async def update_m3u_digest_settings(request: M3UDigestSettingsUpdate):
                     detail="min_changes_threshold must be at least 1"
                 )
             settings.min_changes_threshold = request.min_changes_threshold
+
+        if request.send_to_discord is not None:
+            settings.send_to_discord = request.send_to_discord
 
         db.commit()
         db.refresh(settings)
@@ -5090,6 +5296,7 @@ async def create_notification_internal(
     send_alerts: bool = True,
     alert_category: Optional[str] = None,
     entity_id: Optional[int] = None,
+    channel_settings: Optional[dict] = None,
 ) -> Optional[dict]:
     """Create a new notification (internal helper).
 
@@ -5107,6 +5314,7 @@ async def create_notification_internal(
         send_alerts: If True (default), also dispatch to configured alert channels.
         alert_category: Category for granular filtering ("epg_refresh", "m3u_refresh", "probe_failures")
         entity_id: Source/account ID for filtering (EPG source ID or M3U account ID)
+        channel_settings: Per-task channel settings (send_to_email, send_to_discord, send_to_telegram)
 
     Returns:
         Notification dict or None if message is empty
@@ -5151,6 +5359,7 @@ async def create_notification_internal(
                     metadata=metadata,
                     alert_category=alert_category,
                     entity_id=entity_id,
+                    channel_settings=channel_settings,
                 )
             )
 
@@ -5159,6 +5368,91 @@ async def create_notification_internal(
     except Exception as e:
         logger.error(f"Failed to create notification: {e}")
         return None
+    finally:
+        session.close()
+
+
+async def update_notification_internal(
+    notification_id: int,
+    notification_type: str = None,
+    message: str = None,
+    metadata: dict = None,
+) -> Optional[dict]:
+    """Update an existing notification's content.
+
+    Used for updating progress notifications like stream probe status.
+
+    Args:
+        notification_id: ID of the notification to update
+        notification_type: New type (info, success, warning, error) - optional
+        message: New message - optional
+        metadata: New metadata dict - optional (replaces existing metadata)
+
+    Returns:
+        Updated notification dict or None if not found
+    """
+    import json
+    from models import Notification
+
+    session = get_session()
+    try:
+        notification = session.query(Notification).filter(
+            Notification.id == notification_id
+        ).first()
+
+        if not notification:
+            logger.warning(f"Notification {notification_id} not found for update")
+            return None
+
+        if notification_type is not None and notification_type in ("info", "success", "warning", "error"):
+            notification.type = notification_type
+
+        if message is not None:
+            notification.message = message
+
+        if metadata is not None:
+            notification.extra_data = json.dumps(metadata)
+
+        session.commit()
+        session.refresh(notification)
+        result = notification.to_dict()
+
+        logger.debug(f"Updated notification {notification_id}: {notification_type or 'same type'} - {message[:50] if message else 'same message'}")
+        return result
+    except Exception as e:
+        logger.error(f"Failed to update notification {notification_id}: {e}")
+        session.rollback()
+        return None
+    finally:
+        session.close()
+
+
+async def delete_notifications_by_source_internal(source: str) -> int:
+    """Delete all notifications with a given source.
+
+    Used for cleanup of progress notifications (e.g., old probe notifications).
+
+    Args:
+        source: The source identifier to match
+
+    Returns:
+        Number of notifications deleted
+    """
+    from models import Notification
+
+    session = get_session()
+    try:
+        deleted = session.query(Notification).filter(
+            Notification.source == source
+        ).delete()
+        session.commit()
+        if deleted > 0:
+            logger.debug(f"Deleted {deleted} notification(s) with source '{source}'")
+        return deleted
+    except Exception as e:
+        logger.error(f"Failed to delete notifications by source '{source}': {e}")
+        session.rollback()
+        return 0
     finally:
         session.close()
 
@@ -5214,35 +5508,113 @@ async def _dispatch_to_alert_channels(
     metadata: Optional[dict],
     alert_category: Optional[str] = None,
     entity_id: Optional[int] = None,
+    channel_settings: Optional[dict] = None,
 ):
-    """Dispatch notification to all configured alert channels.
+    """Dispatch notification to configured alert channels using shared settings.
 
-    This runs asynchronously and won't block the notification creation.
-    Failures are logged but don't affect the original notification.
+    This sends directly to Discord/Telegram/Email using the shared notification
+    settings configured in Settings > Notification Settings.
+
+    Args:
+        channel_settings: Per-task channel settings (send_to_email, send_to_discord, send_to_telegram).
+                         If None, all channels are allowed.
     """
-    from alert_methods import send_alert
+    import aiohttp
 
-    try:
-        results = await send_alert(
-            title=title or "Notification",
-            message=message,
-            notification_type=notification_type,
-            source=source,
-            metadata=metadata,
-            alert_category=alert_category,
-            entity_id=entity_id,
-        )
-        if results:
-            success_count = sum(1 for v in results.values() if v)
-            fail_count = sum(1 for v in results.values() if not v)
-            if fail_count > 0:
-                logger.warning(
-                    f"Alert dispatch: {success_count} succeeded, {fail_count} failed"
-                )
-            else:
-                logger.debug(f"Alert dispatch: sent to {success_count} channel(s)")
-    except Exception as e:
-        logger.error(f"Failed to dispatch alerts: {e}")
+    settings = get_settings()
+    results = {"email": None, "discord": None, "telegram": None}
+    alert_title = title or "ECM Notification"
+
+    # Determine which channels are enabled
+    send_email = channel_settings.get("send_to_email", True) if channel_settings else True
+    send_discord = channel_settings.get("send_to_discord", True) if channel_settings else True
+    send_telegram = channel_settings.get("send_to_telegram", True) if channel_settings else True
+
+    # Format message with type indicator
+    type_emoji = {"info": "ℹ️", "success": "✅", "warning": "⚠️", "error": "❌"}.get(notification_type, "📢")
+
+    # Send to Discord if configured and enabled
+    if send_discord and settings.is_discord_configured():
+        try:
+            discord_message = f"**{type_emoji} {alert_title}**\n\n{message}"
+            if metadata:
+                if "task_name" in metadata:
+                    discord_message += f"\n\n**Task:** {metadata['task_name']}"
+                if "duration_seconds" in metadata:
+                    discord_message += f"\n**Duration:** {metadata['duration_seconds']:.1f}s"
+
+            payload = {
+                "content": discord_message,
+                "username": "ECM Alerts",
+            }
+
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    settings.discord_webhook_url,
+                    json=payload,
+                    timeout=aiohttp.ClientTimeout(total=10),
+                ) as response:
+                    if response.status == 204:
+                        results["discord"] = True
+                        logger.debug("Alert sent to Discord successfully")
+                    else:
+                        results["discord"] = False
+                        logger.warning(f"Discord alert failed: {response.status}")
+        except Exception as e:
+            results["discord"] = False
+            logger.error(f"Failed to send Discord alert: {e}")
+
+    # Send to Telegram if configured and enabled
+    if send_telegram and settings.is_telegram_configured():
+        try:
+            telegram_message = f"{type_emoji} <b>{alert_title}</b>\n\n{message}"
+            if metadata:
+                if "task_name" in metadata:
+                    telegram_message += f"\n\n<b>Task:</b> {metadata['task_name']}"
+                if "duration_seconds" in metadata:
+                    telegram_message += f"\n<b>Duration:</b> {metadata['duration_seconds']:.1f}s"
+
+            url = f"https://api.telegram.org/bot{settings.telegram_bot_token}/sendMessage"
+            payload = {
+                "chat_id": settings.telegram_chat_id,
+                "text": telegram_message,
+                "parse_mode": "HTML",
+            }
+
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    url,
+                    json=payload,
+                    timeout=aiohttp.ClientTimeout(total=10),
+                ) as response:
+                    if response.status == 200:
+                        results["telegram"] = True
+                        logger.debug("Alert sent to Telegram successfully")
+                    else:
+                        results["telegram"] = False
+                        text = await response.text()
+                        logger.warning(f"Telegram alert failed: {response.status} - {text}")
+        except Exception as e:
+            results["telegram"] = False
+            logger.error(f"Failed to send Telegram alert: {e}")
+
+    # Send to Email if configured and enabled
+    # Note: Email sending is more complex and would require SMTP setup
+    # For now, we log that email is enabled but skip actual sending
+    # (Email alerts for tasks can be implemented later if needed)
+    if send_email and settings.is_smtp_configured():
+        # TODO: Implement email alerts for task notifications
+        # For now, just log that it would be sent
+        logger.debug(f"Email alert would be sent (not yet implemented for task alerts)")
+        results["email"] = None  # None means not attempted
+
+    # Log summary
+    sent = [k for k, v in results.items() if v is True]
+    failed = [k for k, v in results.items() if v is False]
+    if sent:
+        logger.info(f"Alert dispatched to: {', '.join(sent)}")
+    if failed:
+        logger.warning(f"Alert failed for: {', '.join(failed)}")
 
 
 @app.patch("/api/notifications/mark-all-read", tags=["Notifications"])
@@ -6602,6 +6974,11 @@ class TaskConfigUpdate(BaseModel):
     alert_on_success: Optional[bool] = None  # Alert when task succeeds
     alert_on_warning: Optional[bool] = None  # Alert on partial failures
     alert_on_error: Optional[bool] = None  # Alert on complete failures
+    alert_on_info: Optional[bool] = None  # Alert on info messages
+    # Notification channels
+    send_to_email: Optional[bool] = None  # Send alerts via email
+    send_to_discord: Optional[bool] = None  # Send alerts via Discord
+    send_to_telegram: Optional[bool] = None  # Send alerts via Telegram
     show_notifications: Optional[bool] = None  # Show in NotificationCenter (bell icon)
 
 
@@ -6731,6 +7108,10 @@ async def update_task(task_id: str, config: TaskConfigUpdate):
             alert_on_success=config.alert_on_success,
             alert_on_warning=config.alert_on_warning,
             alert_on_error=config.alert_on_error,
+            alert_on_info=config.alert_on_info,
+            send_to_email=config.send_to_email,
+            send_to_discord=config.send_to_discord,
+            send_to_telegram=config.send_to_telegram,
             show_notifications=config.show_notifications,
         )
 

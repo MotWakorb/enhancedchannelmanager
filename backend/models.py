@@ -238,6 +238,11 @@ class ScheduledTask(Base):
     alert_on_success = Column(Boolean, default=True, nullable=False)  # Alert when task succeeds
     alert_on_warning = Column(Boolean, default=True, nullable=False)  # Alert on partial failures
     alert_on_error = Column(Boolean, default=True, nullable=False)  # Alert on complete failures
+    alert_on_info = Column(Boolean, default=False, nullable=False)  # Alert on info messages
+    # Notification channels - which channels to send alerts to
+    send_to_email = Column(Boolean, default=True, nullable=False)  # Send alerts via email (if SMTP configured)
+    send_to_discord = Column(Boolean, default=True, nullable=False)  # Send alerts via Discord (if webhook configured)
+    send_to_telegram = Column(Boolean, default=True, nullable=False)  # Send alerts via Telegram (if bot configured)
     show_notifications = Column(Boolean, default=True, nullable=False)  # Show in NotificationCenter (bell icon)
     # Timestamps
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
@@ -270,6 +275,10 @@ class ScheduledTask(Base):
             "alert_on_success": self.alert_on_success,
             "alert_on_warning": self.alert_on_warning,
             "alert_on_error": self.alert_on_error,
+            "alert_on_info": self.alert_on_info,
+            "send_to_email": self.send_to_email,
+            "send_to_discord": self.send_to_discord,
+            "send_to_telegram": self.send_to_telegram,
             "show_notifications": self.show_notifications,
             "created_at": self.created_at.isoformat() + "Z" if self.created_at else None,
             "updated_at": self.updated_at.isoformat() + "Z" if self.updated_at else None,
@@ -962,6 +971,8 @@ class M3UDigestSettings(Base):
     show_detailed_list = Column(Boolean, default=True, nullable=False)
     # Only send digest if at least this many changes occurred
     min_changes_threshold = Column(Integer, default=1, nullable=False)
+    # Send digest to Discord (uses shared Discord webhook from General Settings)
+    send_to_discord = Column(Boolean, default=False, nullable=False)
     # Tracking
     last_digest_at = Column(DateTime, nullable=True)
     # Timestamps
@@ -994,6 +1005,7 @@ class M3UDigestSettings(Base):
             "include_stream_changes": self.include_stream_changes,
             "show_detailed_list": self.show_detailed_list,
             "min_changes_threshold": self.min_changes_threshold,
+            "send_to_discord": self.send_to_discord,
             "last_digest_at": self.last_digest_at.isoformat() + "Z" if self.last_digest_at else None,
             "created_at": self.created_at.isoformat() + "Z" if self.created_at else None,
             "updated_at": self.updated_at.isoformat() + "Z" if self.updated_at else None,

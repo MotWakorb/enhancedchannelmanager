@@ -168,6 +168,14 @@ class TaskScheduler(ABC):
         self._history: list[TaskResult] = []
         self._max_history = 50
         self._enabled = True
+        # Notification callbacks (set by task_engine)
+        self._notification_id: Optional[int] = None
+        self._create_notification_callback = None
+        self._update_notification_callback = None
+        self._delete_notification_callback = None
+        self._show_notifications: bool = True  # Whether to show in NotificationCenter
+        self._last_notification_update: float = 0
+        self._notification_update_interval: float = 2.0  # Update every 2 seconds max
 
     # -------------------------------------------------------------------------
     # Abstract methods (must be implemented by subclasses)
@@ -258,6 +266,138 @@ class TaskScheduler(ABC):
         pass
 
     # -------------------------------------------------------------------------
+    # Notification Callbacks (set by task_engine for progress notifications)
+    # -------------------------------------------------------------------------
+
+    def set_notification_callbacks(
+        self,
+        create_callback=None,
+        update_callback=None,
+        delete_callback=None,
+        show_notifications: bool = True,
+    ):
+        """Set notification callbacks for progress updates."""
+        self._create_notification_callback = create_callback
+        self._update_notification_callback = update_callback
+        self._delete_notification_callback = delete_callback
+        self._show_notifications = show_notifications
+
+    async def _create_progress_notification(self):
+        """Create a progress notification when task starts."""
+        if not self._create_notification_callback:
+            return
+
+        # Respect the show_notifications setting
+        if not self._show_notifications:
+            logger.debug(f"[{self.task_id}] Skipping progress notification (show_notifications=False)")
+            return
+
+        try:
+            import time
+            result = await self._create_notification_callback(
+                notification_type="info",
+                message=f"{self.task_name} starting...",
+                title=self.task_name,
+                source=f"task_{self.task_id}",
+                source_id=f"progress_{int(time.time())}",
+                metadata={
+                    "progress": {
+                        "current": 0,
+                        "total": 0,
+                        "success": 0,
+                        "failed": 0,
+                        "skipped": 0,
+                        "status": "starting",
+                        "current_stream": "",
+                    }
+                },
+            )
+            if result and "id" in result:
+                self._notification_id = result["id"]
+                logger.debug(f"[{self.task_id}] Created progress notification {self._notification_id}")
+        except Exception as e:
+            logger.warning(f"[{self.task_id}] Failed to create progress notification: {e}")
+
+    async def _update_progress_notification(self, force: bool = False):
+        """Update the progress notification (rate-limited unless force=True)."""
+        if not self._notification_id or not self._update_notification_callback:
+            return
+
+        import time
+        now = time.time()
+        if not force and (now - self._last_notification_update) < self._notification_update_interval:
+            return
+
+        self._last_notification_update = now
+
+        try:
+            progress = self._progress
+            percentage = round(progress.percentage) if progress.total > 0 else 0
+            message = f"{progress.current}/{progress.total} ({percentage}%)"
+
+            await self._update_notification_callback(
+                notification_id=self._notification_id,
+                message=message,
+                metadata={
+                    "progress": {
+                        "current": progress.current,
+                        "total": progress.total,
+                        "success": progress.success_count,
+                        "failed": progress.failed_count,
+                        "skipped": progress.skipped_count,
+                        "status": progress.status,
+                        "current_stream": progress.current_item,
+                    }
+                },
+            )
+        except Exception as e:
+            logger.warning(f"[{self.task_id}] Failed to update progress notification: {e}")
+
+    async def _finalize_progress_notification(self, result: 'TaskResult'):
+        """Finalize the progress notification when task completes."""
+        if not self._notification_id or not self._update_notification_callback:
+            return
+
+        try:
+            # Determine final type and message
+            if result.error == "CANCELLED":
+                notification_type = "warning"
+                message = f"Cancelled: {result.success_count} completed"
+                status = "cancelled"
+            elif result.success:
+                notification_type = "success"
+                if result.failed_count > 0:
+                    notification_type = "warning"
+                    message = f"Completed: {result.success_count} ok, {result.failed_count} failed"
+                else:
+                    message = f"Completed: {result.success_count} ok"
+                status = "completed"
+            else:
+                notification_type = "error"
+                message = result.message or "Task failed"
+                status = "failed"
+
+            await self._update_notification_callback(
+                notification_id=self._notification_id,
+                notification_type=notification_type,
+                message=message,
+                metadata={
+                    "progress": {
+                        "current": result.total_items,
+                        "total": result.total_items,
+                        "success": result.success_count,
+                        "failed": result.failed_count,
+                        "skipped": result.skipped_count,
+                        "status": status,
+                        "current_stream": "",
+                    }
+                },
+            )
+            self._notification_id = None
+        except Exception as e:
+            logger.warning(f"[{self.task_id}] Failed to finalize progress notification: {e}")
+
+    # -------------------------------------------------------------------------
     # Progress Tracking (for use by subclasses)
     # -------------------------------------------------------------------------
 
@@ -292,6 +432,9 @@ class TaskScheduler(ABC):
         if skipped_count is not None:
             self._progress.skipped_count = skipped_count
 
+        # Schedule notification update (rate-limited)
+        self._schedule_notification_update()
+
     def _increment_progress(
         self,
         current: int = 0,
@@ -304,6 +447,19 @@ class TaskScheduler(ABC):
         self._progress.success_count += success_count
         self._progress.failed_count += failed_count
         self._progress.skipped_count += skipped_count
+
+        # Schedule notification update (rate-limited)
+        self._schedule_notification_update()
+
+    def _schedule_notification_update(self):
+        """Schedule a notification update if callbacks are set."""
+        if self._notification_id and self._update_notification_callback:
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    asyncio.create_task(self._update_progress_notification())
+            except RuntimeError:
+                pass  # No event loop, skip notification
 
     # -------------------------------------------------------------------------
     # Lifecycle Hooks (optional for subclasses to override)
@@ -383,6 +539,9 @@ class TaskScheduler(ABC):
             logger.info(f"[{self.task_id}] Starting task: {self.task_name}")
             await self.on_start()
 
+            # Create progress notification
+            await self._create_progress_notification()
+
             # Execute the task
             result = await self.execute()
             result.started_at = self._progress.started_at
@@ -412,6 +571,9 @@ class TaskScheduler(ABC):
             logger.exception(f"[{self.task_id}] Task error: {e}")
             await self.on_error(e, result)
         finally:
+            # Finalize progress notification
+            await self._finalize_progress_notification(result)
+
             # Record history
             self._add_to_history(result)
             self._last_run = result.completed_at or datetime.utcnow()

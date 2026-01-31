@@ -355,3 +355,81 @@ class M3UDigestTemplate:
         ])
 
         return "\n".join(lines)
+
+    def render_discord(self, changes: List[M3UChangeLog], since: datetime, show_detailed_list: bool = True) -> List[str]:
+        """
+        Render Discord-friendly content.
+
+        Returns a list of message chunks, each under 2000 characters.
+        Uses bold headers for groups and simple lists for streams.
+        """
+        DISCORD_CHAR_LIMIT = 1900  # Leave some margin for safety
+
+        summary = self._get_summary(changes)
+        by_account = self._group_changes(changes)
+
+        # Build header
+        header = (
+            f"**M3U Playlist Changes**\n"
+            f"Since: {since.strftime('%Y-%m-%d %H:%M UTC')}\n\n"
+            f"📊 **Summary**\n"
+            f"• Groups Added: **+{summary['groups_added']}**\n"
+            f"• Groups Removed: **-{summary['groups_removed']}**\n"
+            f"• Streams Added: **+{summary['streams_added']}**\n"
+            f"• Streams Removed: **-{summary['streams_removed']}**\n"
+        )
+
+        if not show_detailed_list:
+            return [header + "\n_Detailed list disabled in settings._"]
+
+        # Build content chunks
+        chunks = []
+        current_chunk = header
+
+        for account_id, type_changes in by_account.items():
+            account_section = f"\n**M3U Account #{account_id}**\n"
+
+            for change_type, change_list in type_changes.items():
+                label = self.LABELS.get(change_type, change_type)
+                emoji = "🟢" if "added" in change_type else "🔴"
+
+                type_header = f"\n{emoji} __{label}__\n"
+                type_content = ""
+
+                for change in change_list[:15]:  # Limit per type for Discord
+                    if change.group_name:
+                        if change.change_type in ("group_added", "group_removed"):
+                            type_content += f"• **{change.group_name}** ({change.count} streams)\n"
+                        else:
+                            stream_names = change.get_stream_names()
+                            if stream_names and len(stream_names) <= 5:
+                                names_str = ", ".join(stream_names)
+                                type_content += f"• **{change.group_name}**: {names_str}\n"
+                            else:
+                                type_content += f"• **{change.group_name}**: {change.count} streams\n"
+                    else:
+                        type_content += f"• {change.count} items\n"
+
+                if len(change_list) > 15:
+                    type_content += f"• _...and {len(change_list) - 15} more_\n"
+
+                section = type_header + type_content
+
+                # Check if we need to start a new chunk
+                if len(current_chunk) + len(account_section) + len(section) > DISCORD_CHAR_LIMIT:
+                    chunks.append(current_chunk)
+                    current_chunk = f"**M3U Changes (continued)**\n{account_section}{section}"
+                else:
+                    if account_section not in current_chunk:
+                        current_chunk += account_section
+                    current_chunk += section
+
+        # Add remaining content
+        if current_chunk:
+            chunks.append(current_chunk)
+
+        # If no chunks were created (empty changes), return header only
+        if not chunks:
+            chunks = [header]
+
+        return chunks

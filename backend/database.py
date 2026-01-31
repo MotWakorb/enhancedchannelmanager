@@ -159,6 +159,9 @@ def _run_migrations(engine) -> None:
             # Add bandwidth in/out tracking columns (v0.11.0)
             _add_bandwidth_inout_columns(conn)
 
+            # Add discord_webhook_url column to m3u_digest_settings (v0.11.0)
+            _add_m3u_digest_discord_webhook_column(conn)
+
             logger.debug("All migrations complete - schema is up to date")
     except Exception as e:
         logger.exception(f"Migration failed: {e}")
@@ -1032,6 +1035,34 @@ def _add_scheduled_task_alert_columns(conn) -> None:
             "ALTER TABLE scheduled_tasks ADD COLUMN show_notifications BOOLEAN DEFAULT 1 NOT NULL"
         ))
 
+    # Add alert_on_info column if not exists (v0.11.0)
+    if "alert_on_info" not in columns:
+        logger.info("Adding alert_on_info column to scheduled_tasks")
+        conn.execute(text(
+            "ALTER TABLE scheduled_tasks ADD COLUMN alert_on_info BOOLEAN DEFAULT 0 NOT NULL"
+        ))
+
+    # Add send_to_email column if not exists (v0.11.0)
+    if "send_to_email" not in columns:
+        logger.info("Adding send_to_email column to scheduled_tasks")
+        conn.execute(text(
+            "ALTER TABLE scheduled_tasks ADD COLUMN send_to_email BOOLEAN DEFAULT 1 NOT NULL"
+        ))
+
+    # Add send_to_discord column if not exists (v0.11.0)
+    if "send_to_discord" not in columns:
+        logger.info("Adding send_to_discord column to scheduled_tasks")
+        conn.execute(text(
+            "ALTER TABLE scheduled_tasks ADD COLUMN send_to_discord BOOLEAN DEFAULT 1 NOT NULL"
+        ))
+
+    # Add send_to_telegram column if not exists (v0.11.0)
+    if "send_to_telegram" not in columns:
+        logger.info("Adding send_to_telegram column to scheduled_tasks")
+        conn.execute(text(
+            "ALTER TABLE scheduled_tasks ADD COLUMN send_to_telegram BOOLEAN DEFAULT 1 NOT NULL"
+        ))
+
     conn.commit()
     logger.debug("scheduled_tasks alert columns migration complete")
 
@@ -1082,6 +1113,33 @@ def _add_bandwidth_inout_columns(conn) -> None:
 
     conn.commit()
     logger.debug("bandwidth_daily in/out columns migration complete")
+
+
+def _add_m3u_digest_discord_webhook_column(conn) -> None:
+    """Add send_to_discord column to m3u_digest_settings table."""
+    from sqlalchemy import text
+
+    # Check if m3u_digest_settings table exists
+    result = conn.execute(text(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='m3u_digest_settings'"
+    ))
+    if not result.fetchone():
+        logger.debug("m3u_digest_settings table doesn't exist yet, skipping migration")
+        return
+
+    # Check if send_to_discord column already exists
+    result = conn.execute(text("PRAGMA table_info(m3u_digest_settings)"))
+    columns = [row[1] for row in result.fetchall()]
+
+    if "send_to_discord" not in columns:
+        logger.info("Adding send_to_discord column to m3u_digest_settings")
+        conn.execute(text(
+            "ALTER TABLE m3u_digest_settings ADD COLUMN send_to_discord BOOLEAN DEFAULT 0 NOT NULL"
+        ))
+        conn.commit()
+        logger.info("Migration complete: added send_to_discord column to m3u_digest_settings")
+    else:
+        logger.debug("m3u_digest_settings.send_to_discord column already exists")
 
 
 def _perform_maintenance(engine) -> None:

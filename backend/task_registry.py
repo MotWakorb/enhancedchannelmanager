@@ -287,6 +287,11 @@ class TaskRegistry:
         alert_on_success: Optional[bool] = None,
         alert_on_warning: Optional[bool] = None,
         alert_on_error: Optional[bool] = None,
+        alert_on_info: Optional[bool] = None,
+        send_to_email: Optional[bool] = None,
+        send_to_discord: Optional[bool] = None,
+        send_to_telegram: Optional[bool] = None,
+        show_notifications: Optional[bool] = None,
     ) -> Optional[dict]:
         """
         Update configuration for a task.
@@ -304,6 +309,11 @@ class TaskRegistry:
             alert_on_success: Alert when task succeeds
             alert_on_warning: Alert on partial failures
             alert_on_error: Alert on complete failures
+            alert_on_info: Alert on info messages
+            send_to_email: Send alerts via email
+            send_to_discord: Send alerts via Discord
+            send_to_telegram: Send alerts via Telegram
+            show_notifications: Show in NotificationCenter (bell icon)
 
         Returns:
             Updated task status dict, or None if task not found
@@ -340,7 +350,9 @@ class TaskRegistry:
             instance._calculate_next_run()
 
         # Update alert configuration in database (stored on ScheduledTask, not instance)
-        if any(x is not None for x in [send_alerts, alert_on_success, alert_on_warning, alert_on_error]):
+        alert_fields = [send_alerts, alert_on_success, alert_on_warning, alert_on_error,
+                        alert_on_info, send_to_email, send_to_discord, send_to_telegram, show_notifications]
+        if any(x is not None for x in alert_fields):
             try:
                 session = get_session()
                 try:
@@ -356,6 +368,16 @@ class TaskRegistry:
                             db_task.alert_on_warning = alert_on_warning
                         if alert_on_error is not None:
                             db_task.alert_on_error = alert_on_error
+                        if alert_on_info is not None:
+                            db_task.alert_on_info = alert_on_info
+                        if send_to_email is not None:
+                            db_task.send_to_email = send_to_email
+                        if send_to_discord is not None:
+                            db_task.send_to_discord = send_to_discord
+                        if send_to_telegram is not None:
+                            db_task.send_to_telegram = send_to_telegram
+                        if show_notifications is not None:
+                            db_task.show_notifications = show_notifications
                         session.commit()
                         logger.debug(f"Updated alert config for {task_id}")
                 finally:

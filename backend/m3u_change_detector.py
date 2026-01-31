@@ -115,6 +115,7 @@ class M3UChangeDetector:
         groups_data: List[Dict],
         total_streams: int,
         dispatcharr_updated_at: Optional[str] = None,
+        stream_names_by_group: Optional[Dict[str, List[str]]] = None,
     ) -> M3USnapshot:
         """
         Create a new M3U snapshot from current state.
@@ -124,17 +125,28 @@ class M3UChangeDetector:
             groups_data: List of dicts with 'name' and 'stream_count' for each group
             total_streams: Total number of streams in the playlist
             dispatcharr_updated_at: Dispatcharr's updated_at timestamp (for change monitoring)
+            stream_names_by_group: Optional dict mapping group names to stream name lists
+                                   (stored in snapshot to enable removed stream tracking)
 
         Returns:
             The created M3USnapshot
         """
+        # Enrich groups_data with stream names if available
+        enriched_groups = []
+        for group in groups_data:
+            group_copy = dict(group)
+            group_name = group.get("name")
+            if stream_names_by_group and group_name in stream_names_by_group:
+                group_copy["stream_names"] = stream_names_by_group[group_name]
+            enriched_groups.append(group_copy)
+
         snapshot = M3USnapshot(
             m3u_account_id=m3u_account_id,
             snapshot_time=datetime.utcnow(),
             total_streams=total_streams,
             dispatcharr_updated_at=dispatcharr_updated_at,
         )
-        snapshot.set_groups_data({"groups": groups_data})
+        snapshot.set_groups_data({"groups": enriched_groups})
 
         self.db.add(snapshot)
         self.db.commit()
@@ -193,12 +205,13 @@ class M3UChangeDetector:
         # Get previous snapshot
         previous_snapshot = self.get_latest_snapshot(m3u_account_id)
 
-        # Create new snapshot for current state
+        # Create new snapshot for current state (include stream names for future removal tracking)
         current_snapshot = self.create_snapshot(
             m3u_account_id=m3u_account_id,
             groups_data=current_groups,
             total_streams=current_total_streams,
             dispatcharr_updated_at=dispatcharr_updated_at,
+            stream_names_by_group=stream_names_by_group,
         )
 
         change_set = M3UChangeSet(
@@ -273,27 +286,44 @@ class M3UChangeDetector:
             curr_count = curr_groups[group_name].get("stream_count", 0)
             curr_enabled = curr_groups[group_name].get("enabled", False)
 
+            # Get stream names from previous and current snapshots for comparison
+            prev_stream_names = set(prev_groups[group_name].get("stream_names", []))
+            curr_stream_names = set(stream_names_by_group.get(group_name, [])) if stream_names_by_group else set()
+
             if curr_count > prev_count:
                 diff = curr_count - prev_count
-                stream_names = []
-                if stream_names_by_group and group_name in stream_names_by_group:
-                    # Store all available stream names (up to 50) so users can see
-                    # what streams are in the group. The count field shows how many were added.
-                    stream_names = stream_names_by_group[group_name]
+                # Find actually added streams (in current but not in previous)
+                if prev_stream_names and curr_stream_names:
+                    added_streams = list(curr_stream_names - prev_stream_names)
+                elif curr_stream_names:
+                    # No previous stream names, show all current
+                    added_streams = list(curr_stream_names)
+                else:
+                    added_streams = []
 
                 change_set.streams_added.append(StreamChange(
                     group_name=group_name,
                     change_type="streams_added",
-                    stream_names=stream_names,
+                    stream_names=added_streams,
                     count=diff,
                     enabled=curr_enabled,
                 ))
             elif curr_count < prev_count:
                 diff = prev_count - curr_count
+                # Find actually removed streams (in previous but not in current)
+                if prev_stream_names and curr_stream_names:
+                    removed_streams = list(prev_stream_names - curr_stream_names)
+                elif prev_stream_names:
+                    # No current stream names available, but we have previous - show what was there
+                    # This can happen if the group was disabled
+                    removed_streams = list(prev_stream_names)
+                else:
+                    removed_streams = []
+
                 change_set.streams_removed.append(StreamChange(
                     group_name=group_name,
                     change_type="streams_removed",
-                    stream_names=[],  # We don't have removed stream names without more data
+                    stream_names=removed_streams,
                     count=diff,
                     enabled=curr_enabled,
                 ))
@@ -379,6 +409,7 @@ class M3UChangeDetector:
                 enabled=stream_change.enabled,
                 snapshot_id=change_set.current_snapshot_id,
             )
+            log.set_stream_names(stream_change.stream_names)
             self.db.add(log)
             logs.append(log)
 

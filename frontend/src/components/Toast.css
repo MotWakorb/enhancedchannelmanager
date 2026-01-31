@@ -164,6 +164,7 @@
 /* Action button (optional) */
 .toast-action {
   margin-top: 0.5rem;
+  text-align: right;
 }
 
 .toast-action-button {

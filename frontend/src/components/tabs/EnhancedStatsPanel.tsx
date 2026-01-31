@@ -269,29 +269,36 @@ export function EnhancedStatsPanel({ refreshTrigger }: EnhancedStatsPanelProps) 
           {/* Channel Bandwidth Chart */}
           {channelBandwidth.length > 0 && (
             <div className="chart-container">
-              <div className="chart-title">Channel Bandwidth (7 days)</div>
-              <ResponsiveContainer width="100%" height={Math.min(channelBandwidth.length * 35 + 40, 400)}>
+              <div className="chart-title">
+                {bandwidthSortBy === 'bytes' && 'Channel Bandwidth (7 days)'}
+                {bandwidthSortBy === 'connections' && 'Channel Connections (7 days)'}
+                {bandwidthSortBy === 'watch_time' && 'Channel Watch Time (7 days)'}
+              </div>
+              <ResponsiveContainer width="100%" height={200}>
                 <BarChart
                   data={channelBandwidth.slice(0, 10)}
-                  layout="vertical"
-                  margin={{ top: 10, right: 20, bottom: 5, left: 120 }}
+                  margin={{ top: 10, right: 20, bottom: 60, left: 10 }}
                 >
                   <XAxis
-                    type="number"
+                    dataKey="channel_name"
+                    tick={{ fontSize: 10, fill: 'var(--text-muted)', angle: -45, textAnchor: 'end' }}
+                    axisLine={{ stroke: 'var(--border-primary)' }}
+                    tickLine={false}
+                    height={60}
+                  />
+                  <YAxis
                     tick={{ fontSize: 10, fill: 'var(--text-muted)' }}
                     axisLine={{ stroke: 'var(--border-primary)' }}
                     tickLine={false}
-                    tickFormatter={(v) => formatBytes(v)}
-                  />
-                  <YAxis
-                    type="category"
-                    dataKey="channel_name"
-                    tick={{ fontSize: 11, fill: 'var(--text-secondary)' }}
-                    axisLine={{ stroke: 'var(--border-primary)' }}
-                    tickLine={false}
-                    width={110}
+                    tickFormatter={(v) => {
+                      if (bandwidthSortBy === 'bytes') return formatBytes(v);
+                      if (bandwidthSortBy === 'watch_time') return formatWatchTime(v);
+                      return String(v);
+                    }}
+                    width={70}
                   />
                   <Tooltip
+                    cursor={false}
                     content={({ active, payload }) => {
                       if (!active || !payload || payload.length === 0) return null;
                       const data = payload[0].payload as ChannelBandwidthStats;
@@ -305,7 +312,25 @@ export function EnhancedStatsPanel({ refreshTrigger }: EnhancedStatsPanelProps) 
                       );
                     }}
                   />
-                  <Bar dataKey="total_bytes" fill="#3b82f6" radius={[0, 4, 4, 0]} />
+                  <Bar
+                    dataKey={
+                      bandwidthSortBy === 'bytes' ? 'total_bytes' :
+                      bandwidthSortBy === 'connections' ? 'total_connections' :
+                      'total_watch_seconds'
+                    }
+                    fill={
+                      bandwidthSortBy === 'bytes' ? '#3b82f6' :
+                      bandwidthSortBy === 'connections' ? '#22c55e' :
+                      '#f59e0b'
+                    }
+                    radius={[4, 4, 0, 0]}
+                    isAnimationActive={false}
+                    activeBar={{
+                      fill: bandwidthSortBy === 'bytes' ? '#3b82f6' :
+                            bandwidthSortBy === 'connections' ? '#22c55e' :
+                            '#f59e0b'
+                    }}
+                  />
                 </BarChart>
               </ResponsiveContainer>
             </div>

@@ -44,6 +44,22 @@ class TaskEngine:
         self._task: Optional[asyncio.Task] = None
         self._active_tasks: set[str] = set()  # Currently running task IDs
         self._lock = asyncio.Lock()
+        # Notification callbacks for task progress
+        self._create_notification_callback = None
+        self._update_notification_callback = None
+        self._delete_notification_callback = None
+
+    def set_notification_callbacks(
+        self,
+        create_callback=None,
+        update_callback=None,
+        delete_callback=None,
+    ):
+        """Set notification callbacks for task progress updates."""
+        self._create_notification_callback = create_callback
+        self._update_notification_callback = update_callback
+        self._delete_notification_callback = delete_callback
+        logger.info("Task engine notification callbacks configured")
 
     async def start(self) -> None:
         """Start the task execution engine."""
@@ -54,6 +70,9 @@ class TaskEngine:
         logger.info("Starting task execution engine")
         self._running = True
 
+        # Cleanup any stale "running" executions from previous runs
+        self._cleanup_stale_executions()
+
         # Initialize registry from database
         registry = get_registry()
         registry.sync_from_database()
@@ -61,6 +80,30 @@ class TaskEngine:
         # Start the scheduler loop
         self._task = asyncio.create_task(self._scheduler_loop())
         logger.info(f"Task engine started (check_interval={self.check_interval}s, max_concurrent={self.max_concurrent})")
+
+    def _cleanup_stale_executions(self) -> None:
+        """Mark any 'running' task executions as 'terminated'.
+
+        Called on startup to clean up executions that were interrupted
+        by a container restart or crash.
+        """
+        try:
+            session = get_session()
+            stale_count = session.query(TaskExecution).filter(
+                TaskExecution.status == "running"
+            ).update({
+                "status": "terminated",
+                "completed_at": datetime.utcnow(),
+                "success": False,
+                "message": "Terminated: execution was interrupted by system restart",
+            })
+            session.commit()
+            session.close()
+
+            if stale_count > 0:
+                logger.info(f"Cleaned up {stale_count} stale 'running' task execution(s) - marked as terminated")
+        except Exception as e:
+            logger.error(f"Failed to cleanup stale executions: {e}")
 
     async def stop(self) -> None:
         """Stop the task execution engine."""
@@ -133,8 +176,10 @@ class TaskEngine:
             from main import create_notification_internal
             from models import ScheduledTask
 
-            # Check task-level alert settings
+            # Check task-level notification and alert settings
             should_send_alert = True
+            should_show_notification = True
+            channel_settings = None  # Per-task channel settings (email, discord, telegram)
             try:
                 session = get_session()
                 try:
@@ -142,10 +187,14 @@ class TaskEngine:
                         ScheduledTask.task_id == task_id
                     ).first()
                     if scheduled_task:
-                        # Check master toggle first
+                        # Check if notifications should appear in NotificationCenter
+                        if not scheduled_task.show_notifications:
+                            should_show_notification = False
+                            logger.debug(f"[{task_id}] NotificationCenter notifications disabled for this task")
+                        # Check master toggle for external alerts
                         if not scheduled_task.send_alerts:
                             should_send_alert = False
-                            logger.debug(f"[{task_id}] Alerts disabled for this task (send_alerts=False)")
+                            logger.debug(f"[{task_id}] External alerts disabled for this task (send_alerts=False)")
                         # Check type-specific toggle
                         elif notification_type == "success" and not scheduled_task.alert_on_success:
                             should_send_alert = False
@@ -156,10 +205,26 @@ class TaskEngine:
                         elif notification_type == "error" and not scheduled_task.alert_on_error:
                             should_send_alert = False
                             logger.debug(f"[{task_id}] Error alerts disabled for this task")
+                        elif notification_type == "info" and not scheduled_task.alert_on_info:
+                            should_send_alert = False
+                            logger.debug(f"[{task_id}] Info alerts disabled for this task")
+
+                        # Get per-task channel settings
+                        if should_send_alert:
+                            channel_settings = {
+                                "send_to_email": scheduled_task.send_to_email,
+                                "send_to_discord": scheduled_task.send_to_discord,
+                                "send_to_telegram": scheduled_task.send_to_telegram,
+                            }
                 finally:
                     session.close()
             except Exception as e:
                 logger.warning(f"[{task_id}] Failed to check task alert settings, defaulting to send: {e}")
+
+            # Skip notification entirely if show_notifications is disabled
+            if not should_show_notification:
+                logger.debug(f"[{task_id}] Skipping notification (show_notifications=False)")
+                return
 
             metadata = {
                 "task_id": task_id,
@@ -192,6 +257,7 @@ class TaskEngine:
                 metadata=metadata,
                 send_alerts=should_send_alert,
                 alert_category=alert_category,
+                channel_settings=channel_settings,
             )
         except Exception as e:
             # Don't let notification failures affect task execution
@@ -441,6 +507,31 @@ class TaskEngine:
                     logger.warning(f"[{task_id}] Failed to apply parameters: {e}")
 
             logger.info(f"[{task_id}] Starting task execution (triggered_by={triggered_by})")
+
+            # Get show_notifications setting from database
+            show_notifications = True  # Default to true
+            try:
+                session = get_session()
+                try:
+                    from models import ScheduledTask
+                    scheduled_task = session.query(ScheduledTask).filter(
+                        ScheduledTask.task_id == task_id
+                    ).first()
+                    if scheduled_task:
+                        show_notifications = scheduled_task.show_notifications
+                finally:
+                    session.close()
+            except Exception as e:
+                logger.warning(f"[{task_id}] Failed to get show_notifications setting: {e}")
+
+            # Set notification callbacks on the task instance
+            if self._create_notification_callback:
+                instance.set_notification_callbacks(
+                    create_callback=self._create_notification_callback,
+                    update_callback=self._update_notification_callback,
+                    delete_callback=self._delete_notification_callback,
+                    show_notifications=show_notifications,
+                )
 
             # Log task start to journal
             log_entry(

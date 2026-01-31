@@ -251,46 +251,6 @@ function TaskCard({ task, onRunNow, onCancel, onToggleEnabled, onEdit, isRunning
         </div>
       </div>
 
-      {/* Progress bar when running */}
-      {(isRunning || task.status === 'running') && task.progress.total > 0 && (
-        <div style={{ padding: '0 1rem 1rem 1rem' }}>
-          <div style={{
-            display: 'flex',
-            justifyContent: 'space-between',
-            marginBottom: '0.5rem',
-            fontSize: '0.85rem',
-          }}>
-            <span>{task.progress.current_item || 'Processing...'}</span>
-            <span>{task.progress.current} / {task.progress.total} ({task.progress.percentage}%)</span>
-          </div>
-          <div style={{
-            height: '6px',
-            backgroundColor: 'var(--bg-tertiary)',
-            borderRadius: '3px',
-            overflow: 'hidden',
-          }}>
-            <div style={{
-              width: `${task.progress.percentage}%`,
-              height: '100%',
-              backgroundColor: '#3498db',
-              transition: 'width 0.3s ease',
-            }} />
-          </div>
-          <div style={{
-            display: 'flex',
-            gap: '1rem',
-            marginTop: '0.5rem',
-            fontSize: '0.8rem',
-          }}>
-            <span style={{ color: '#2ecc71' }}>Success: {task.progress.success_count}</span>
-            <span style={{ color: '#e74c3c' }}>Failed: {task.progress.failed_count}</span>
-            {task.progress.skipped_count > 0 && (
-              <span style={{ color: '#f39c12' }}>Skipped: {task.progress.skipped_count}</span>
-            )}
-          </div>
-        </div>
-      )}
-
       {/* History panel */}
       <TaskHistoryPanel taskId={task.task_id} visible={showHistory} />
     </div>
@@ -339,21 +299,24 @@ export function ScheduledTasksSection({ userTimezone: _userTimezone }: Scheduled
       const result = await api.runTask(taskId);
       logger.info(`Task ${taskId} completed`, result);
 
-      // Show result notification
+      // Show result notification only if show_notifications is enabled for this task
       // Note: Cancelled tasks don't show notification here - handleCancel shows it via polling
       if (result.error === 'CANCELLED') {
         // Task was cancelled - notification already shown by handleCancel
         logger.info(`${taskName} was cancelled (notification handled by cancel handler)`);
-      } else if (result.success) {
-        notifications.success(
-          `${taskName} completed: ${result.success_count} succeeded, ${result.failed_count} failed`,
-          'Task Completed'
-        );
-      } else {
-        notifications.error(
-          result.message || `${taskName} failed`,
-          'Task Failed'
-        );
+      } else if (task?.show_notifications !== false) {
+        // Only show toast if show_notifications is not explicitly disabled
+        if (result.success) {
+          notifications.success(
+            `${taskName} completed: ${result.success_count} succeeded, ${result.failed_count} failed`,
+            'Task Completed'
+          );
+        } else {
+          notifications.error(
+            result.message || `${taskName} failed`,
+            'Task Failed'
+          );
+        }
       }
 
       // Reload tasks to get updated status

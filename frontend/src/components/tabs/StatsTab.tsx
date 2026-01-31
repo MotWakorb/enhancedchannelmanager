@@ -320,6 +320,7 @@ export function StatsTab() {
 
   // Top watched sort mode
   const [topWatchedSortBy, setTopWatchedSortBy] = useState<TopWatchedSortBy>('views');
+  const topWatchedSortByRef = useRef<TopWatchedSortBy>(topWatchedSortBy);
 
   // Build lookup maps for channel names by UUID and stream profiles by ID
   const channelNameMap = useRef<Map<string, { name: string; number: number | null }>>(new Map());
@@ -425,7 +426,7 @@ export function StatsTab() {
             logger.warn('Stats Tab: Bandwidth stats unavailable', err);
             return null;
           }),
-        api.getTopWatchedChannels(10, topWatchedSortBy)
+        api.getTopWatchedChannels(10, topWatchedSortByRef.current)
           .then(result => {
             logger.debug(`Stats Tab: Top watched channels fetched successfully (${result?.length || 0} channels)`);
             return result;
@@ -508,7 +509,29 @@ export function StatsTab() {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [topWatchedSortBy]);
+  }, []);
+
+  // Fetch only top watched channels (for sort changes without full refresh)
+  const fetchTopWatched = useCallback(async (sortBy: TopWatchedSortBy) => {
+    try {
+      const result = await api.getTopWatchedChannels(10, sortBy);
+      setTopWatchedChannels(result || []);
+    } catch (err) {
+      logger.warn('Stats Tab: Failed to refresh top watched channels', err);
+    }
+  }, []);
+
+  // Track if initial load is complete
+  const initialLoadComplete = useRef(false);
+
+  // When sort mode changes, only refresh top watched (not full page)
+  useEffect(() => {
+    topWatchedSortByRef.current = topWatchedSortBy;
+    // Only fetch if initial load is complete (avoids double-fetch on mount)
+    if (initialLoadComplete.current) {
+      fetchTopWatched(topWatchedSortBy);
+    }
+  }, [topWatchedSortBy, fetchTopWatched]);
 
   // Load M3U accounts for display
   const loadM3UAccounts = useCallback(async () => {
@@ -546,6 +569,7 @@ export function StatsTab() {
         // Now load stats
         logger.debug('Stats Tab: Lookup data loaded, fetching initial stats');
         await fetchData(false);
+        initialLoadComplete.current = true;
 
         const elapsed = Date.now() - startTime;
         logger.info(`Stats Tab: Initial data load completed in ${elapsed}ms`);

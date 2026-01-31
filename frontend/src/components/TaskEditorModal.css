@@ -316,11 +316,22 @@
 
 .task-editor-modal .alert-type-toggles {
   display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
+  flex-wrap: wrap;
+  gap: 0.75rem 1.5rem;
+}
+
+.task-editor-modal .alert-subsection {
   margin-left: 1.5rem;
-  padding-left: 0.75rem;
-  border-left: 2px solid var(--border-color);
+  margin-top: 0.75rem;
+}
+
+.task-editor-modal .alert-subsection-label {
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--text-secondary);
+  margin-bottom: 0.5rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
 }
 
 .task-editor-modal .alert-hint {

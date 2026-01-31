@@ -112,6 +112,23 @@
   flex: 1;
 }
 
+.settings-section-header .config-badge {
+  font-size: 0.75rem;
+  font-weight: 500;
+  padding: 0.25rem 0.5rem;
+  border-radius: 4px;
+}
+
+.settings-section-header .config-badge.configured {
+  background-color: rgba(46, 204, 113, 0.15);
+  color: var(--success);
+}
+
+.settings-section-header .config-badge.unconfigured {
+  background-color: var(--bg-tertiary);
+  color: var(--text-muted);
+}
+
 /* Edit button in section header */
 .btn-edit-connection {
   display: inline-flex;
@@ -322,6 +339,7 @@
 .settings-actions {
   display: flex;
   align-items: center;
+  justify-content: flex-end;
   gap: 0.75rem;
   margin-top: 1.5rem;
 }
@@ -420,11 +438,7 @@
   font-size: 16px;
 }
 
-.btn-restart .material-icons.spinning {
-  animation: spin 1s linear infinite reverse;
-}
-
-/* @keyframes spin is defined in shared/common.css */
+/* .spinning is defined in shared/common.css (counter-clockwise) */
 
 .restart-result {
   display: flex;
@@ -1424,19 +1438,7 @@
   font-size: 20px;
 }
 
-/* Spinning animation for loading states */
-.spinning {
-  animation: spin 1s linear infinite;
-}
-
-@keyframes spin {
-  from {
-    transform: rotate(0deg);
-  }
-  to {
-    transform: rotate(360deg);
-  }
-}
+/* .spinning is defined in shared/common.css (counter-clockwise) */
 
 /* Section description text */
 .section-description {

@@ -838,6 +838,7 @@ export interface M3UDigestSettings {
   include_stream_changes: boolean;
   show_detailed_list: boolean;
   min_changes_threshold: number;
+  send_to_discord: boolean;  // Send digest to Discord (uses shared webhook from General Settings)
   last_digest_at: string | null;  // ISO timestamp
   created_at: string;  // ISO timestamp
   updated_at: string;  // ISO timestamp
@@ -852,6 +853,7 @@ export interface M3UDigestSettingsUpdate {
   include_stream_changes?: boolean;
   show_detailed_list?: boolean;
   min_changes_threshold?: number;
+  send_to_discord?: boolean;
 }
 
 // =============================================================================

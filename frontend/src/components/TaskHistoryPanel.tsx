@@ -268,7 +268,7 @@ export function TaskHistoryPanel({ taskId, visible }: TaskHistoryPanelProps) {
           <span className="material-icons" style={{ fontSize: '24px', animation: 'spin 1s linear infinite', display: 'block', marginBottom: '0.5rem' }}>sync</span>
           Loading history...
         </div>
-      ) : history.length === 0 ? (
+      ) : history.filter(h => h.status !== 'running').length === 0 ? (
         <div style={{ padding: '1.5rem', textAlign: 'center', color: 'var(--text-secondary)' }}>
           <span className="material-icons" style={{ fontSize: '32px', display: 'block', marginBottom: '0.5rem' }}>history</span>
           No execution history yet
@@ -287,7 +287,8 @@ export function TaskHistoryPanel({ taskId, visible }: TaskHistoryPanelProps) {
               </tr>
             </thead>
             <tbody>
-              {history.map((exec) => (
+              {/* Filter out "running" executions - progress is shown in NotificationCenter */}
+              {history.filter(h => h.status !== 'running').map((exec) => (
                 <ExecutionRow
                   key={exec.id}
                   execution={exec}
@@ -319,24 +320,29 @@ export function TaskHistoryPanel({ taskId, visible }: TaskHistoryPanelProps) {
             </div>
           )}
 
-          {/* Summary footer */}
-          <div style={{
-            padding: '0.75rem 1rem',
-            borderTop: '1px solid var(--border-color)',
-            backgroundColor: 'var(--bg-tertiary)',
-            fontSize: '0.8rem',
-            color: 'var(--text-muted)',
-            display: 'flex',
-            justifyContent: 'space-between',
-            alignItems: 'center',
-          }}>
-            <span>Showing {history.length} execution{history.length !== 1 ? 's' : ''}</span>
-            {history.length > 0 && (
-              <span>
-                Success rate: {Math.round((history.filter(h => h.success === true).length / history.length) * 100)}%
-              </span>
-            )}
-          </div>
+          {/* Summary footer - only count completed executions */}
+          {(() => {
+            const completedHistory = history.filter(h => h.status !== 'running');
+            return (
+              <div style={{
+                padding: '0.75rem 1rem',
+                borderTop: '1px solid var(--border-color)',
+                backgroundColor: 'var(--bg-tertiary)',
+                fontSize: '0.8rem',
+                color: 'var(--text-muted)',
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+              }}>
+                <span>Showing {completedHistory.length} execution{completedHistory.length !== 1 ? 's' : ''}</span>
+                {completedHistory.length > 0 && (
+                  <span>
+                    Success rate: {Math.round((completedHistory.filter(h => h.success === true).length / completedHistory.length) * 100)}%
+                  </span>
+                )}
+              </div>
+            );
+          })()}
         </>
       )}
     </div>

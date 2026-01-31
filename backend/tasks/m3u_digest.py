@@ -128,12 +128,14 @@ class M3UDigestTask(TaskScheduler):
                     total_items=0,
                 )
 
-            # Check for recipients
+            # Check for at least one delivery method
             recipients = settings.get_email_recipients()
-            if not recipients:
+            send_to_discord = getattr(settings, 'send_to_discord', False)
+
+            if not recipients and not send_to_discord:
                 return TaskResult(
                     success=False,
-                    message="No email recipients configured for M3U digest",
+                    message="No delivery methods configured (no email recipients and Discord disabled)",
                     started_at=started_at,
                     completed_at=datetime.utcnow(),
                     total_items=0,
@@ -223,27 +225,47 @@ This is a test email from Enhanced Channel Manager.
                 plain_content = template.render_plain(changes, since, show_detailed_list=show_detailed)
                 subject = template.get_subject(changes)
 
-            self._set_progress(status="sending_email")
+            # Track delivery results
+            email_success = False
+            discord_success = False
+            delivery_methods = []
 
-            # Send via SMTP alert method (if configured)
-            send_success = await self._send_digest_email(
-                recipients=recipients,
-                subject=subject,
-                html_content=html_content,
-                plain_content=plain_content,
-            )
+            # Send email if recipients configured
+            if recipients:
+                self._set_progress(status="sending_email")
+                email_success = await self._send_digest_email(
+                    recipients=recipients,
+                    subject=subject,
+                    html_content=html_content,
+                    plain_content=plain_content,
+                )
+                if email_success:
+                    delivery_methods.append(f"email ({len(recipients)} recipients)")
 
-            if send_success:
+            # Send to Discord if enabled
+            if send_to_discord:
+                self._set_progress(status="sending_discord")
+                discord_content = template.render_discord(changes, since, show_detailed_list=show_detailed) if changes else None
+                discord_success = await self._send_digest_discord(
+                    changes=changes,
+                    discord_content=discord_content,
+                    is_test=not bool(changes),
+                )
+                if discord_success:
+                    delivery_methods.append("Discord")
+
+            # Check if at least one delivery succeeded
+            if email_success or discord_success:
                 # Update last digest time (only for real digests, not tests)
                 if changes:
                     settings.last_digest_at = datetime.utcnow()
                     db.commit()
 
-                # Different message for test vs real digest
+                # Build result message
                 if changes:
-                    message = f"Sent M3U digest with {len(changes)} changes to {len(recipients)} recipients"
+                    message = f"Sent M3U digest with {len(changes)} changes via {', '.join(delivery_methods)}"
                 else:
-                    message = f"Test email sent successfully to {len(recipients)} recipient{'s' if len(recipients) != 1 else ''}"
+                    message = f"Test sent successfully via {', '.join(delivery_methods)}"
 
                 return TaskResult(
                     success=True,
@@ -255,15 +277,24 @@ This is a test email from Enhanced Channel Manager.
                     details={
                         "changes_count": len(changes),
                         "recipients": recipients,
+                        "discord_enabled": send_to_discord,
+                        "email_success": email_success,
+                        "discord_success": discord_success,
                         "since": since.isoformat() if changes else None,
                         "is_test": not bool(changes),
                     },
                 )
             else:
+                failed_methods = []
+                if recipients and not email_success:
+                    failed_methods.append("email")
+                if send_to_discord and not discord_success:
+                    failed_methods.append("Discord")
+
                 return TaskResult(
                     success=False,
-                    message="Failed to send M3U digest email",
-                    error="Email sending failed",
+                    message=f"Failed to send M3U digest via {', '.join(failed_methods)}",
+                    error="All delivery methods failed",
                     started_at=started_at,
                     completed_at=datetime.utcnow(),
                     total_items=len(changes),
@@ -417,6 +448,117 @@ This is a test email from Enhanced Channel Manager.
 
         except Exception as e:
             logger.error(f"[{self.task_id}] SMTP error: {e}")
+            return False
+
+    async def _send_digest_discord(
+        self,
+        changes: List,
+        discord_content: Optional[List[str]],
+        is_test: bool = False,
+    ) -> bool:
+        """
+        Send digest to Discord using shared webhook from settings.
+
+        Args:
+            changes: List of M3UChangeLog entries
+            discord_content: List of message chunks (each under 2000 chars)
+            is_test: If True, send a test message instead of content
+
+        Returns True if message was sent successfully.
+        """
+        import aiohttp
+        from config import get_settings
+
+        settings = get_settings()
+        if not settings.is_discord_configured():
+            logger.warning(f"[{self.task_id}] Discord not configured in General Settings")
+            return False
+
+        webhook_url = settings.discord_webhook_url
+
+        # Validate webhook URL format
+        if not webhook_url.startswith("https://discord.com/api/webhooks/") and \
+           not webhook_url.startswith("https://discordapp.com/api/webhooks/"):
+            logger.error(f"[{self.task_id}] Invalid Discord webhook URL format")
+            return False
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                if is_test:
+                    # Send test message
+                    payload = {
+                        "content": (
+                            "**✓ M3U Digest Test Successful**\n\n"
+                            "Your Discord webhook is configured correctly for M3U Digest notifications.\n"
+                            "When there are actual M3U changes to report, you will receive digests here."
+                        ),
+                        "username": "ECM M3U Digest",
+                    }
+
+                    async with session.post(
+                        webhook_url,
+                        json=payload,
+                        timeout=aiohttp.ClientTimeout(total=10),
+                    ) as response:
+                        if response.status == 204:
+                            logger.info(f"[{self.task_id}] Discord test message sent successfully")
+                            return True
+                        else:
+                            text = await response.text()
+                            logger.error(f"[{self.task_id}] Discord webhook failed: {response.status} - {text}")
+                            return False
+
+                # Send actual digest content - may be multiple messages
+                if not discord_content:
+                    logger.warning(f"[{self.task_id}] No Discord content to send")
+                    return False
+
+                for i, chunk in enumerate(discord_content):
+                    payload = {
+                        "content": chunk,
+                        "username": "ECM M3U Digest",
+                    }
+
+                    async with session.post(
+                        webhook_url,
+                        json=payload,
+                        timeout=aiohttp.ClientTimeout(total=10),
+                    ) as response:
+                        if response.status == 204:
+                            logger.debug(f"[{self.task_id}] Discord message {i+1}/{len(discord_content)} sent")
+                        elif response.status == 429:
+                            # Rate limited - wait and retry
+                            retry_after = int(response.headers.get("Retry-After", 1))
+                            logger.warning(f"[{self.task_id}] Discord rate limited, waiting {retry_after}s")
+                            import asyncio
+                            await asyncio.sleep(retry_after)
+                            # Retry this message
+                            async with session.post(
+                                webhook_url,
+                                json=payload,
+                                timeout=aiohttp.ClientTimeout(total=10),
+                            ) as retry_response:
+                                if retry_response.status != 204:
+                                    logger.error(f"[{self.task_id}] Discord retry failed: {retry_response.status}")
+                                    return False
+                        else:
+                            text = await response.text()
+                            logger.error(f"[{self.task_id}] Discord webhook failed: {response.status} - {text}")
+                            return False
+
+                    # Small delay between messages to avoid rate limiting
+                    if i < len(discord_content) - 1:
+                        import asyncio
+                        await asyncio.sleep(0.5)
+
+                logger.info(f"[{self.task_id}] Sent {len(discord_content)} Discord message(s)")
+                return True
+
+        except aiohttp.ClientError as e:
+            logger.error(f"[{self.task_id}] Discord connection error: {e}")
+            return False
+        except Exception as e:
+            logger.error(f"[{self.task_id}] Discord unexpected error: {e}")
             return False
 
 

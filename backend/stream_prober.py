@@ -77,6 +77,7 @@ class StreamProber:
         self.stream_sort_enabled = stream_sort_enabled or {"resolution": True, "bitrate": True, "framerate": True, "m3u_priority": False, "audio_channels": False}
         self.m3u_account_priorities = m3u_account_priorities or {}
         self._probe_cancelled = False  # Controls cancellation of in-progress probe
+        self._probe_paused = False  # Controls pausing of in-progress probe
         self._probing_in_progress = False
         # Progress tracking for probe all streams
         self._probe_progress_total = 0
@@ -95,6 +96,13 @@ class StreamProber:
         # Rate limit tracking for adaptive backoff
         self._rate_limited_hosts = {}  # host -> {"last_429_time": timestamp, "backoff_until": timestamp, "consecutive_429s": count}
         self._rate_limit_lock = None  # Will be initialized as asyncio.Lock() when needed
+
+        # Notification callbacks for progress updates
+        self._notification_create_callback = None  # async fn(type, title, message, source, source_id, metadata) -> dict with id
+        self._notification_update_callback = None  # async fn(notification_id, type, message, metadata) -> dict
+        self._notification_delete_by_source_callback = None  # async fn(source) -> int (deleted count)
+        self._probe_notification_id = None  # Current probe notification ID
+        self._last_notification_update = 0  # Timestamp of last notification update
 
         # Load probe history from disk on initialization
         self._load_probe_history()
@@ -177,6 +185,163 @@ class StreamProber:
         logger.info(f"Updated sort settings: priority={old_priority}->{self.stream_sort_priority}, "
                     f"enabled={old_enabled}->{self.stream_sort_enabled}, "
                     f"m3u_priorities={old_m3u_priorities}->{self.m3u_account_priorities}")
+
+    def set_notification_callbacks(self, create_callback, update_callback, delete_by_source_callback=None):
+        """Set notification callback functions for probe progress updates.
+
+        Args:
+            create_callback: async fn(type, title, message, source, source_id, metadata) -> dict with 'id' key
+            update_callback: async fn(notification_id, type, message, metadata) -> dict
+            delete_by_source_callback: async fn(source) -> int (deleted count) - optional, used to clean up old notifications
+        """
+        self._notification_create_callback = create_callback
+        self._notification_update_callback = update_callback
+        self._notification_delete_by_source_callback = delete_by_source_callback
+        logger.info("Notification callbacks configured for stream prober")
+
+    async def _create_probe_notification(self, total_streams: int) -> Optional[int]:
+        """Create a notification for probe progress.
+
+        Deletes any existing probe notifications first to ensure only one exists.
+
+        Returns:
+            Notification ID or None if callbacks not configured
+        """
+        if not self._notification_create_callback:
+            return None
+
+        try:
+            # Delete any existing probe notifications first (only one probe at a time)
+            if self._notification_delete_by_source_callback:
+                deleted = await self._notification_delete_by_source_callback("stream_probe")
+                if deleted > 0:
+                    logger.info(f"Cleaned up {deleted} existing probe notification(s)")
+
+            metadata = {
+                "progress": {
+                    "current": 0,
+                    "total": total_streams,
+                    "success": 0,
+                    "failed": 0,
+                    "skipped": 0,
+                    "status": "running",
+                    "current_stream": ""
+                }
+            }
+            result = await self._notification_create_callback(
+                notification_type="info",
+                title="Stream Probe",
+                message=f"Stream probe started (0/{total_streams})",
+                source="stream_probe",
+                source_id=str(int(time.time())),
+                metadata=metadata
+            )
+            if result and "id" in result:
+                self._probe_notification_id = result["id"]
+                self._last_notification_update = time.time()
+                logger.debug(f"Created probe notification: {self._probe_notification_id}")
+                return result["id"]
+        except Exception as e:
+            logger.error(f"Failed to create probe notification: {e}")
+        return None
+
+    async def _update_probe_notification(self, force: bool = False) -> None:
+        """Update the probe progress notification.
+
+        Only updates every 5 seconds or every 10 streams to avoid excessive updates,
+        unless force=True.
+        """
+        if not self._notification_update_callback or not self._probe_notification_id:
+            return
+
+        current_time = time.time()
+        streams_since_update = self._probe_progress_current % 10
+
+        # Update every 10 streams or every 5 seconds, or when forced
+        if not force and streams_since_update != 0 and (current_time - self._last_notification_update) < 5:
+            return
+
+        try:
+            metadata = {
+                "progress": {
+                    "current": self._probe_progress_current,
+                    "total": self._probe_progress_total,
+                    "success": self._probe_progress_success_count,
+                    "failed": self._probe_progress_failed_count,
+                    "skipped": self._probe_progress_skipped_count,
+                    "status": self._probe_progress_status,
+                    "current_stream": self._probe_progress_current_stream
+                }
+            }
+
+            message = f"Probing streams... ({self._probe_progress_current}/{self._probe_progress_total})"
+
+            await self._notification_update_callback(
+                notification_id=self._probe_notification_id,
+                notification_type="info",
+                message=message,
+                metadata=metadata
+            )
+            self._last_notification_update = current_time
+            logger.debug(f"Updated probe notification: {self._probe_progress_current}/{self._probe_progress_total}")
+        except Exception as e:
+            logger.error(f"Failed to update probe notification: {e}")
+
+    async def _finalize_probe_notification(self) -> None:
+        """Update the notification with final probe results, or delete if cancelled."""
+        if not self._probe_notification_id:
+            return
+
+        try:
+            # If cancelled, delete the notification instead of updating it
+            if self._probe_cancelled and self._notification_delete_by_source_callback:
+                await self._notification_delete_by_source_callback("stream_probe")
+                logger.info("Deleted probe notification (probe was cancelled)")
+                return
+
+            if not self._notification_update_callback:
+                return
+
+            # Determine notification type based on results
+            if self._probe_progress_failed_count > 0:
+                notification_type = "warning"
+            else:
+                notification_type = "success"
+
+            # Build message
+            parts = []
+            if self._probe_progress_success_count > 0:
+                parts.append(f"{self._probe_progress_success_count} success")
+            if self._probe_progress_failed_count > 0:
+                parts.append(f"{self._probe_progress_failed_count} failed")
+            if self._probe_progress_skipped_count > 0:
+                parts.append(f"{self._probe_progress_skipped_count} skipped")
+
+            message = f"Stream probe complete: {', '.join(parts)}" if parts else "Stream probe complete"
+
+            metadata = {
+                "progress": {
+                    "current": self._probe_progress_total,
+                    "total": self._probe_progress_total,
+                    "success": self._probe_progress_success_count,
+                    "failed": self._probe_progress_failed_count,
+                    "skipped": self._probe_progress_skipped_count,
+                    "status": "completed",
+                    "current_stream": ""
+                }
+            }
+
+            await self._notification_update_callback(
+                notification_id=self._probe_notification_id,
+                notification_type=notification_type,
+                message=message,
+                metadata=metadata
+            )
+            logger.info(f"Finalized probe notification: {message}")
+        except Exception as e:
+            logger.error(f"Failed to finalize probe notification: {e}")
+        finally:
+            self._probe_notification_id = None
 
     def _persist_probe_history(self):
         """Persist probe history to disk."""
@@ -319,6 +484,38 @@ class StreamProber:
         # The probe loop will detect _probe_cancelled=True and set status to "cancelled"
         return {"status": "cancelling", "message": "Probe cancellation requested"}
 
+    def pause_probe(self) -> dict:
+        """Pause an in-progress probe operation.
+
+        Returns:
+            Dict with status of the pause request.
+        """
+        if not self._probing_in_progress:
+            return {"status": "no_probe_running", "message": "No probe is currently running"}
+
+        if self._probe_paused:
+            return {"status": "already_paused", "message": "Probe is already paused"}
+
+        logger.info("Pausing in-progress probe...")
+        self._probe_paused = True
+        return {"status": "paused", "message": "Probe paused"}
+
+    def resume_probe(self) -> dict:
+        """Resume a paused probe operation.
+
+        Returns:
+            Dict with status of the resume request.
+        """
+        if not self._probing_in_progress:
+            return {"status": "no_probe_running", "message": "No probe is currently running"}
+
+        if not self._probe_paused:
+            return {"status": "not_paused", "message": "Probe is not paused"}
+
+        logger.info("Resuming paused probe...")
+        self._probe_paused = False
+        return {"status": "resumed", "message": "Probe resumed"}
+
     def force_reset_probe_state(self) -> dict:
         """Force reset the probe state. Use this if a probe got stuck.
 
@@ -330,6 +527,7 @@ class StreamProber:
 
         self._probing_in_progress = False
         self._probe_cancelled = True  # Signal any running probe to stop
+        self._probe_paused = False  # Reset paused state
         self._probe_progress_status = "idle"
         self._probe_progress_current_stream = ""
 
@@ -1129,6 +1327,7 @@ class StreamProber:
 
         self._probing_in_progress = True
         self._probe_cancelled = False  # Reset cancellation flag
+        self._probe_paused = False  # Reset paused flag
         self._probe_progress_current = 0
         self._probe_progress_total = 0
         self._probe_progress_status = "fetching"
@@ -1252,6 +1451,9 @@ class StreamProber:
             self._probe_progress_total = len(streams_to_probe)
             self._probe_progress_status = "probing"
 
+            # Create progress notification
+            await self._create_probe_notification(len(streams_to_probe))
+
             # Log diagnostic info if no streams to probe
             if len(streams_to_probe) == 0:
                 logger.warning(f"[PROBE-DIAGNOSTIC] No streams to probe! channel_stream_ids={len(channel_stream_ids)}, "
@@ -1346,6 +1548,25 @@ class StreamProber:
                             task.cancel()
                         break
 
+                    # Check for pause - wait while paused
+                    while self._probe_paused and not self._probe_cancelled:
+                        if self._probe_progress_status != "paused":
+                            self._probe_progress_status = "paused"
+                            self._probe_progress_current_stream = "Probe paused"
+                            await self._update_probe_notification()
+                        await asyncio.sleep(1)
+
+                    # If cancelled while paused, break
+                    if self._probe_cancelled:
+                        self._probe_progress_status = "cancelled"
+                        for task in active_tasks:
+                            task.cancel()
+                        break
+
+                    # Restore status after unpause
+                    if self._probe_progress_status == "paused":
+                        self._probe_progress_status = "probing"
+
                     # Get fresh M3U connection counts from Dispatcharr
                     dispatcharr_connections = await self._get_all_m3u_active_connections()
 
@@ -1421,6 +1642,7 @@ class StreamProber:
                             probed_count += 1
                             streams_started_this_round.append(stream)
                             self._probe_progress_current = probed_count
+                            await self._update_probe_notification()
                             continue
 
                         if can_probe:
@@ -1468,12 +1690,14 @@ class StreamProber:
                                         self._probe_failed_streams.append(stream_info)
                                 probed_count += 1
                                 self._probe_progress_current = probed_count
+                                await self._update_probe_notification()
                             except asyncio.CancelledError:
                                 pass
                             except Exception as e:
                                 logger.error(f"Probe task failed: {e}")
                                 probed_count += 1
                                 self._probe_progress_current = probed_count
+                                await self._update_probe_notification()
 
                         # Small delay after probes complete to let devices (like HDHomeRun) release tuners
                         # This prevents rapid-fire requests that can cause 5XX errors
@@ -1492,6 +1716,23 @@ class StreamProber:
                     if self._probe_cancelled:
                         self._probe_progress_status = "cancelled"
                         break
+
+                    # Check for pause - wait while paused
+                    while self._probe_paused and not self._probe_cancelled:
+                        if self._probe_progress_status != "paused":
+                            self._probe_progress_status = "paused"
+                            self._probe_progress_current_stream = "Probe paused"
+                            await self._update_probe_notification()
+                        await asyncio.sleep(1)
+
+                    # If cancelled while paused, break
+                    if self._probe_cancelled:
+                        self._probe_progress_status = "cancelled"
+                        break
+
+                    # Restore status after unpause
+                    if self._probe_progress_status == "paused":
+                        self._probe_progress_status = "probing"
 
                     stream_id = stream["id"]
                     stream_name = stream.get("name", f"Stream {stream_id}")
@@ -1540,6 +1781,7 @@ class StreamProber:
                         self._probe_progress_skipped_count += 1
                         self._probe_skipped_streams.append(stream_info)
                         probed_count += 1
+                        await self._update_probe_notification()
                         continue
 
                     # Check if host is rate-limited and wait for backoff (sequential mode)
@@ -1571,6 +1813,7 @@ class StreamProber:
                             await self._record_rate_limit_error(stream_url)
 
                     probed_count += 1
+                    await self._update_probe_notification()
                     await asyncio.sleep(0.5)  # Base rate limiting delay
 
             logger.info(f"Completed probing {probed_count} streams")
@@ -1595,6 +1838,9 @@ class StreamProber:
             # Save to probe history
             self._save_probe_history(start_time, probed_count, reordered_channels=reordered_channels)
 
+            # Finalize notification with success/warning status
+            await self._finalize_probe_notification()
+
             return {"status": "completed", "probed": probed_count, "reordered_channels": len(reordered_channels)}
         except Exception as e:
             logger.error(f"Probe all streams failed: {e}")
@@ -1603,6 +1849,9 @@ class StreamProber:
 
             # Save failed run to history
             self._save_probe_history(start_time, probed_count, error=str(e))
+
+            # Finalize notification with error status
+            await self._finalize_probe_notification()
 
             return {"status": "failed", "error": str(e), "probed": probed_count}
         finally:

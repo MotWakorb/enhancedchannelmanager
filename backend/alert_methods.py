@@ -401,6 +401,7 @@ class AlertMethodManager:
         metadata: Optional[Dict[str, Any]] = None,
         alert_category: Optional[str] = None,
         entity_id: Optional[int] = None,
+        channel_settings: Optional[Dict[str, bool]] = None,
     ) -> Dict[int, bool]:
         """
         Queue an alert to be sent to all applicable methods.
@@ -416,6 +417,8 @@ class AlertMethodManager:
             metadata: Additional metadata
             alert_category: Category for granular filtering ("epg_refresh", "m3u_refresh", "probe_failures")
             entity_id: Source/account ID for filtering (EPG source ID or M3U account ID)
+            channel_settings: Per-task channel settings (send_to_email, send_to_discord, send_to_telegram).
+                             If None, all channels are allowed.
 
         Returns:
             Dict mapping method_id to queued status (True = queued successfully)
@@ -439,6 +442,14 @@ class AlertMethodManager:
         if metadata and "failed_count" in metadata:
             failed_count = metadata.get("failed_count", 0)
 
+        # Map channel_settings keys to method_type values
+        # send_to_email -> smtp, send_to_discord -> discord, send_to_telegram -> telegram
+        channel_type_map = {
+            "send_to_email": "smtp",
+            "send_to_discord": "discord",
+            "send_to_telegram": "telegram",
+        }
+
         try:
             async with self._buffer_lock:
                 for method_id, method in self._methods.items():
@@ -449,6 +460,19 @@ class AlertMethodManager:
 
                     if not method_model:
                         continue
+
+                    # Check per-task channel settings (if provided)
+                    if channel_settings is not None:
+                        method_type = method_model.method_type
+                        channel_enabled = True
+                        for setting_key, type_value in channel_type_map.items():
+                            if method_type == type_value:
+                                channel_enabled = channel_settings.get(setting_key, True)
+                                break
+
+                        if not channel_enabled:
+                            logger.debug(f"Method {method.name} skipped: channel disabled by task settings")
+                            continue
 
                     # Check notification type filter
                     type_enabled = {
@@ -584,6 +608,7 @@ async def send_alert(
     metadata: Optional[Dict[str, Any]] = None,
     alert_category: Optional[str] = None,
     entity_id: Optional[int] = None,
+    channel_settings: Optional[Dict[str, bool]] = None,
 ) -> Dict[int, bool]:
     """Convenience function to send an alert via the global manager.
 
@@ -595,6 +620,8 @@ async def send_alert(
         metadata: Additional metadata
         alert_category: Category for granular filtering ("epg_refresh", "m3u_refresh", "probe_failures")
         entity_id: Source/account ID for filtering (EPG source ID or M3U account ID)
+        channel_settings: Per-task channel settings (send_to_email, send_to_discord, send_to_telegram).
+                         If None, all channels are allowed.
     """
     manager = get_alert_manager()
     return await manager.send_alert(
@@ -605,4 +632,5 @@ async def send_alert(
         metadata=metadata,
         alert_category=alert_category,
         entity_id=entity_id,
+        channel_settings=channel_settings,
     )

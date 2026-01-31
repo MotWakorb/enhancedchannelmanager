@@ -93,13 +93,7 @@
 /* @keyframes spin is defined in shared/common.css */
 
 .refresh-select {
-  padding: 0.4rem 0.6rem;
-  border: 1px solid var(--border-primary);
-  border-radius: 6px;
-  background: var(--bg-secondary);
-  color: var(--text-primary);
   font-size: 0.8rem;
-  cursor: pointer;
 }
 
 /* .btn-secondary is defined in shared/common.css */
