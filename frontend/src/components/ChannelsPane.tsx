@@ -4376,7 +4376,12 @@ export function ChannelsPane({
                       onPreviewChannel={() => handlePreviewChannel(channel)}
                     />
                     {selectedChannelId === channel.id && (
-                      <div className="inline-streams">
+                      <div
+                        className={`inline-streams ${dragOverChannelId === channel.id ? 'drag-over' : ''}`}
+                        onDragOver={(e) => handleStreamDragOver(e, channel.id)}
+                        onDragLeave={handleStreamDragLeave}
+                        onDrop={(e) => handleStreamDrop(e, channel.id)}
+                      >
                         {streamsLoading ? (
                           <div className="inline-streams-loading">Loading streams...</div>
                         ) : channelStreams.length === 0 ? (
