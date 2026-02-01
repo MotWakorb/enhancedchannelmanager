@@ -409,7 +409,8 @@ class TestM3UChangeDetector:
             stream_names_by_group=stream_names_by_group,
         )
 
-        assert change_set.streams_added[0].stream_names == stream_names_by_group["Sports"]
+        # Compare as sets since order is not guaranteed
+        assert set(change_set.streams_added[0].stream_names) == set(stream_names_by_group["Sports"])
 
     def test_detect_changes_complex_scenario(self, test_session):
         """Test detection with multiple types of changes at once."""

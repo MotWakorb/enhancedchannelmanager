@@ -133,12 +133,16 @@ class M3UChangeDetector:
         """
         # Enrich groups_data with stream names if available
         enriched_groups = []
+        groups_with_names = 0
         for group in groups_data:
             group_copy = dict(group)
             group_name = group.get("name")
             if stream_names_by_group and group_name in stream_names_by_group:
                 group_copy["stream_names"] = stream_names_by_group[group_name]
+                groups_with_names += 1
             enriched_groups.append(group_copy)
+
+        logger.info(f"[M3U-SNAPSHOT-DEBUG] Creating snapshot: {len(groups_data)} groups, {groups_with_names} with stream_names")
 
         snapshot = M3USnapshot(
             m3u_account_id=m3u_account_id,
@@ -257,6 +261,12 @@ class M3UChangeDetector:
         prev_groups = {g["name"]: g for g in prev_data.get("groups", [])}
         curr_groups = {g["name"]: g for g in current_groups}
 
+        # Debug: count how many previous groups have stream_names
+        prev_groups_with_names = sum(1 for g in prev_groups.values() if g.get("stream_names"))
+        curr_groups_with_names = len(stream_names_by_group) if stream_names_by_group else 0
+        logger.info(f"[M3U-CHANGE-DEBUG] Previous snapshot {previous_snapshot.id}: {len(prev_groups)} groups, {prev_groups_with_names} with stream_names")
+        logger.info(f"[M3U-CHANGE-DEBUG] Current state: {len(curr_groups)} groups, {curr_groups_with_names} with stream_names in lookup")
+
         prev_group_names = set(prev_groups.keys())
         curr_group_names = set(curr_groups.keys())
 
@@ -290,6 +300,11 @@ class M3UChangeDetector:
             prev_stream_names = set(prev_groups[group_name].get("stream_names", []))
             curr_stream_names = set(stream_names_by_group.get(group_name, [])) if stream_names_by_group else set()
 
+            # Debug log for groups with stream count changes
+            if curr_count != prev_count:
+                logger.info(f"[M3U-CHANGE-DEBUG] Group '{group_name}': prev_count={prev_count}, curr_count={curr_count}, "
+                           f"prev_names_count={len(prev_stream_names)}, curr_names_count={len(curr_stream_names)}")
+
             if curr_count > prev_count:
                 diff = curr_count - prev_count
                 # Find actually added streams (in current but not in previous)
@@ -301,6 +316,7 @@ class M3UChangeDetector:
                 else:
                     added_streams = []
 
+                logger.info(f"[M3U-CHANGE-DEBUG] Group '{group_name}': Recording {diff} streams added, {len(added_streams)} names captured")
                 change_set.streams_added.append(StreamChange(
                     group_name=group_name,
                     change_type="streams_added",
@@ -320,6 +336,7 @@ class M3UChangeDetector:
                 else:
                     removed_streams = []
 
+                logger.info(f"[M3U-CHANGE-DEBUG] Group '{group_name}': Recording {diff} streams removed, {len(removed_streams)} names captured")
                 change_set.streams_removed.append(StreamChange(
                     group_name=group_name,
                     change_type="streams_removed",
