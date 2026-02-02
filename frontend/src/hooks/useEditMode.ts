@@ -199,6 +199,7 @@ function consolidateOperations(operations: StagedOperation[], workingCopy: Chann
       }
       case 'createGroup':
       case 'deleteChannelGroup':
+      case 'renameChannelGroup':
         orderedOperations.push(op);
         break;
     }
@@ -441,6 +442,12 @@ export function useEditMode({
 
         case 'deleteChannelGroup': {
           // Group deletion doesn't affect the working copy of channels
+          // It's a separate entity handled at commit time
+          return workingCopy;
+        }
+
+        case 'renameChannelGroup': {
+          // Group rename doesn't affect the working copy of channels
           // It's a separate entity handled at commit time
           return workingCopy;
         }
@@ -691,6 +698,17 @@ export function useEditMode({
     [stageOperation]
   );
 
+  const stageRenameChannelGroup = useCallback(
+    (groupId: number, newName: string, description: string) => {
+      stageOperation(
+        { type: 'renameChannelGroup', groupId, newName },
+        description,
+        [] // No channels directly affected
+      );
+    },
+    [stageOperation]
+  );
+
   // Add a newly created channel to the working copy
   // This is used when a channel is created via API during edit mode
   const addChannelToWorkingCopy = useCallback(
@@ -911,6 +929,7 @@ export function useEditMode({
       deletedChannels: 0,
       newGroups: 0,
       deletedGroups: 0,
+      renamedGroups: 0,
       operationDetails: [],
     };
 
@@ -967,6 +986,9 @@ export function useEditMode({
           break;
         case 'deleteChannelGroup':
           summary.deletedGroups++;
+          break;
+        case 'renameChannelGroup':
+          summary.renamedGroups++;
           break;
       }
     }
@@ -1134,6 +1156,14 @@ export function useEditMode({
             groupId: apiCall.groupId,
           });
           break;
+
+        case 'renameChannelGroup':
+          bulkOperations.push({
+            type: 'renameChannelGroup',
+            groupId: apiCall.groupId,
+            newName: apiCall.newName,
+          });
+          break;
       }
     }
 
@@ -1234,6 +1264,7 @@ export function useEditMode({
       assignNumbers: 0,
       createGroup: 0,
       deleteGroup: 0,
+      renameGroup: 0,
     };
 
     for (const op of consolidatedOps) {
@@ -1249,6 +1280,7 @@ export function useEditMode({
           break;
         case 'createGroup': opCounts.createGroup++; break;
         case 'deleteChannelGroup': opCounts.deleteGroup++; break;
+        case 'renameChannelGroup': opCounts.renameGroup++; break;
       }
     }
     // Add groups from createChannel newGroupName
@@ -1282,6 +1314,9 @@ export function useEditMode({
     }
     if (opCounts.deleteGroup > 0) {
       summaryParts.push(`${opCounts.deleteGroup} group deletion${opCounts.deleteGroup !== 1 ? 's' : ''}`);
+    }
+    if (opCounts.renameGroup > 0) {
+      summaryParts.push(`${opCounts.renameGroup} group rename${opCounts.renameGroup !== 1 ? 's' : ''}`);
     }
 
     const operationSummary = summaryParts.length > 0
@@ -1558,6 +1593,22 @@ export function useEditMode({
     return ids;
   }, [state.isActive, state.stagedOperations]);
 
+  // Compute map of group IDs to their staged new names (for visual display during edit mode)
+  const renamedGroupNames = useMemo(() => {
+    if (!state.isActive) {
+      return new Map<number, string>();
+    }
+
+    const renames = new Map<number, string>();
+    // Process in order so later renames override earlier ones
+    for (const op of state.stagedOperations) {
+      if (op.apiCall.type === 'renameChannelGroup') {
+        renames.set(op.apiCall.groupId, op.apiCall.newName);
+      }
+    }
+    return renames;
+  }, [state.isActive, state.stagedOperations]);
+
   return {
     // State
     isEditMode: state.isActive,
@@ -1567,6 +1618,7 @@ export function useEditMode({
     displayChannels,
     stagedGroups: stagedGroupsArray,
     deletedGroupIds,
+    renamedGroupNames,
     canLocalUndo: state.localUndoStack.length > 0,
     canLocalRedo: state.localRedoStack.length > 0,
     editModeDuration,
@@ -1585,6 +1637,7 @@ export function useEditMode({
     stageDeleteChannel,
     stageCreateGroup,
     stageDeleteChannelGroup,
+    stageRenameChannelGroup,
     addChannelToWorkingCopy,
 
     // Local undo/redo

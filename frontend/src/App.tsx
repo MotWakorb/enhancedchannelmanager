@@ -200,6 +200,7 @@ function App() {
     displayChannels,
     stagedGroups,
     deletedGroupIds,
+    renamedGroupNames,
     canLocalUndo,
     canLocalRedo,
     editModeDuration,
@@ -213,6 +214,7 @@ function App() {
     stageCreateChannel,
     stageDeleteChannel,
     stageDeleteChannelGroup,
+    stageRenameChannelGroup,
     summary,
     commit,
     discard,
@@ -1974,6 +1976,7 @@ function App() {
               onStageBulkAssignNumbers={stageBulkAssignNumbers}
               onStageDeleteChannel={stageDeleteChannel}
               onStageDeleteChannelGroup={stageDeleteChannelGroup}
+              onStageRenameChannelGroup={stageRenameChannelGroup}
               onStartBatch={startBatch}
               onEndBatch={endBatch}
 
@@ -2009,6 +2012,7 @@ function App() {
               // Provider & Filter Settings
               providerGroupSettings={providerGroupSettings}
               deletedGroupIds={deletedGroupIds}
+              renamedGroupNames={renamedGroupNames}
               channelListFilters={channelListFilters}
               onChannelListFiltersChange={updateChannelListFilters}
               newlyCreatedGroupIds={newlyCreatedGroupIds}

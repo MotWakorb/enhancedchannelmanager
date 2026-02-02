@@ -73,6 +73,7 @@ interface ChannelsPaneProps {
   onStageBulkAssignNumbers?: (channelIds: number[], startingNumber: number, description: string) => void;
   onStageDeleteChannel?: (channelId: number, description: string) => void;
   onStageDeleteChannelGroup?: (groupId: number, description: string) => void;
+  onStageRenameChannelGroup?: (groupId: number, newName: string, description: string) => void;
   onStartBatch?: (description: string) => void;
   onEndBatch?: () => void;
   isCommitting?: boolean;
@@ -108,6 +109,7 @@ interface ChannelsPaneProps {
   channelDefaults?: ChannelDefaults;
   // Channel list filter props
   providerGroupSettings?: Record<number, M3UGroupSetting>;
+  renamedGroupNames?: Map<number, string>;
   channelListFilters?: ChannelListFilterSettings;
   onChannelListFiltersChange?: (updates: Partial<ChannelListFilterSettings>) => void;
   newlyCreatedGroupIds?: Set<number>;
@@ -293,6 +295,7 @@ interface DroppableGroupHeaderProps {
   onToggle: () => void;
   onSortAndRenumber?: () => void;
   onDeleteGroup?: () => void;
+  onRenameGroup?: () => void;
   onSelectAll?: () => void;
   onStreamDropOnGroup?: (groupId: number | 'ungrouped', streamIds: number[]) => void;
   onContextMenu?: (e: React.MouseEvent) => void;
@@ -320,6 +323,7 @@ const DroppableGroupHeader = memo(function DroppableGroupHeader({
   onToggle,
   onSortAndRenumber,
   onDeleteGroup,
+  onRenameGroup,
   onSelectAll,
   onStreamDropOnGroup,
   onContextMenu,
@@ -362,6 +366,11 @@ const DroppableGroupHeader = memo(function DroppableGroupHeader({
   const handleDeleteClick = (e: React.MouseEvent) => {
     e.stopPropagation();
     onDeleteGroup?.();
+  };
+
+  const handleRenameClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    onRenameGroup?.();
   };
 
   const handleCheckboxClick = (e: React.MouseEvent) => {
@@ -553,6 +562,15 @@ const DroppableGroupHeader = memo(function DroppableGroupHeader({
           <span className="material-icons">sort_by_alpha</span>
         </button>
       )}
+      {isEditMode && groupId !== 'ungrouped' && onRenameGroup && (
+        <button
+          className="group-rename-btn"
+          onClick={handleRenameClick}
+          title="Rename this group"
+        >
+          <span className="material-icons">edit</span>
+        </button>
+      )}
       {isEditMode && isManualGroup && onDeleteGroup && (
         <button
           className="group-delete-btn"
@@ -626,6 +644,7 @@ export function ChannelsPane({
   onStageBulkAssignNumbers: _onStageBulkAssignNumbers, // Handled in App.tsx for channel reorder
   onStageDeleteChannel,
   onStageDeleteChannelGroup,
+  onStageRenameChannelGroup,
   onStartBatch,
   onEndBatch,
   isCommitting = false,
@@ -661,6 +680,7 @@ export function ChannelsPane({
   channelDefaults,
   // Channel list filter props
   providerGroupSettings = {},
+  renamedGroupNames = new Map(),
   channelListFilters,
   onChannelListFiltersChange,
   newlyCreatedGroupIds = new Set(),
@@ -772,6 +792,12 @@ export function ChannelsPane({
   const [groupToDelete, setGroupToDelete] = useState<ChannelGroup | null>(null);
   const [deletingGroup, setDeletingGroup] = useState(false);
   const [deleteGroupChannels, setDeleteGroupChannels] = useState(false);
+
+  // Rename group state
+  const renameGroupModal = useModal();
+  const [groupToRename, setGroupToRename] = useState<ChannelGroup | null>(null);
+  const [renameGroupName, setRenameGroupName] = useState('');
+  const [renamingGroup, setRenamingGroup] = useState(false);
 
   // Bulk delete channels state
   const bulkDeleteConfirmModal = useModal();
@@ -1603,6 +1629,64 @@ export function ChannelsPane({
     deleteGroupConfirmModal.close();
     setGroupToDelete(null);
     setDeleteGroupChannels(false);
+  };
+
+  // Handle initiating group rename
+  const handleRenameGroupClick = (group: ChannelGroup) => {
+    setGroupToRename(group);
+    setRenameGroupName(group.name);
+    renameGroupModal.open();
+  };
+
+  // Handle confirming group rename
+  const handleConfirmRenameGroup = async () => {
+    if (!groupToRename || !renameGroupName.trim()) return;
+
+    const newName = renameGroupName.trim();
+    if (newName === groupToRename.name) {
+      // No change, just close
+      renameGroupModal.close();
+      setGroupToRename(null);
+      setRenameGroupName('');
+      return;
+    }
+
+    // In edit mode, stage the rename operation instead of calling API directly
+    if (isEditMode && onStageRenameChannelGroup) {
+      onStageRenameChannelGroup(
+        groupToRename.id,
+        newName,
+        `Rename group "${groupToRename.name}" to "${newName}"`
+      );
+      renameGroupModal.close();
+      setGroupToRename(null);
+      setRenameGroupName('');
+      return;
+    }
+
+    // Not in edit mode - call API directly
+    setRenamingGroup(true);
+    try {
+      await api.updateChannelGroup(groupToRename.id, { name: newName });
+      // Refresh the channel groups to pick up the new name
+      if (onChannelGroupsChange) {
+        await onChannelGroupsChange();
+      }
+      renameGroupModal.close();
+      setGroupToRename(null);
+      setRenameGroupName('');
+    } catch (err) {
+      console.error('Failed to rename group:', err);
+    } finally {
+      setRenamingGroup(false);
+    }
+  };
+
+  // Handle canceling group rename
+  const handleCancelRenameGroup = () => {
+    renameGroupModal.close();
+    setGroupToRename(null);
+    setRenameGroupName('');
   };
 
   // Handle bulk delete channels
@@ -4278,6 +4362,7 @@ export function ChannelsPane({
           onToggle={() => toggleGroup(numericGroupId)}
           onSortAndRenumber={() => handleOpenSortRenumber(groupId, groupName, groupChannels)}
           onDeleteGroup={group ? () => handleDeleteGroupClick(group) : undefined}
+          onRenameGroup={group ? () => handleRenameGroupClick(group) : undefined}
           onSelectAll={handleSelectAllInGroup}
           onStreamDropOnGroup={handleStreamDropOnGroup}
           onContextMenu={(e) => handleGroupContextMenu(groupChannels.map(ch => ch.id), e)}
@@ -4968,6 +5053,50 @@ export function ChannelsPane({
               </div>
             </div>
           </div>
+      )}
+
+      {/* Rename Group Dialog */}
+      {renameGroupModal.isOpen && groupToRename && (
+        <div className="modal-overlay">
+          <div className="modal-content rename-dialog" onClick={(e) => e.stopPropagation()}>
+            <h3>Rename Group</h3>
+            <div className="rename-form">
+              <label htmlFor="rename-group-input">Group Name</label>
+              <input
+                id="rename-group-input"
+                type="text"
+                className="rename-input"
+                value={renameGroupName}
+                onChange={(e) => setRenameGroupName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && renameGroupName.trim()) {
+                    handleConfirmRenameGroup();
+                  } else if (e.key === 'Escape') {
+                    handleCancelRenameGroup();
+                  }
+                }}
+                autoFocus
+                disabled={renamingGroup}
+              />
+            </div>
+            <div className="modal-actions">
+              <button
+                className="modal-btn cancel"
+                onClick={handleCancelRenameGroup}
+                disabled={renamingGroup}
+              >
+                Cancel
+              </button>
+              <button
+                className="modal-btn primary"
+                onClick={handleConfirmRenameGroup}
+                disabled={renamingGroup || !renameGroupName.trim()}
+              >
+                {renamingGroup ? 'Renaming...' : 'Rename'}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Bulk Delete Channels Confirmation Dialog */}
@@ -6068,7 +6197,7 @@ export function ChannelsPane({
               {/* Render filtered groups with channels, with drop zones between them */}
               {filteredChannelGroups.map((group) => (
                 <React.Fragment key={group.id}>
-                  {renderGroup(group.id, group.name, channelsByGroup[group.id] || [])}
+                  {renderGroup(group.id, renamedGroupNames.get(group.id) || group.name, channelsByGroup[group.id] || [])}
                   {/* Drop zone after each group */}
                   {streamGroupDragOver && isEditMode && (
                     <div
@@ -6101,7 +6230,7 @@ export function ChannelsPane({
               })
               .map((groupId) => {
                 const group = channelGroups.find((g) => g.id === groupId);
-                return group ? renderGroup(group.id, group.name, [], true) : null;
+                return group ? renderGroup(group.id, renamedGroupNames.get(group.id) || group.name, [], true) : null;
               })
             }
             {/* Render newly created empty groups that pass the filter */}
@@ -6113,7 +6242,7 @@ export function ChannelsPane({
               })
               .map((groupId) => {
                 const group = channelGroups.find((g) => g.id === groupId);
-                return group ? renderGroup(group.id, group.name, [], true) : null;
+                return group ? renderGroup(group.id, renamedGroupNames.get(group.id) || group.name, [], true) : null;
               })
             }
 

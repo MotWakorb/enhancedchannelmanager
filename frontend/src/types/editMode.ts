@@ -20,7 +20,8 @@ export type ApiCallSpec =
   | { type: 'createChannel'; name: string; channelNumber?: number; groupId?: number; newGroupName?: string; logoId?: number; logoUrl?: string; tvgId?: string; tvcGuideStationId?: string }
   | { type: 'deleteChannel'; channelId: number }
   | { type: 'createGroup'; name: string }
-  | { type: 'deleteChannelGroup'; groupId: number };
+  | { type: 'deleteChannelGroup'; groupId: number }
+  | { type: 'renameChannelGroup'; groupId: number; newName: string };
 
 /**
  * A staged operation in the edit mode queue
@@ -73,6 +74,7 @@ export interface EditModeSummary {
   deletedChannels: number;
   newGroups: number;
   deletedGroups: number;
+  renamedGroups: number;
   // Detailed list of all operations with descriptions
   operationDetails: OperationDetail[];
 }
@@ -201,6 +203,7 @@ export interface UseEditModeReturn {
   modifiedChannelIds: Set<number>;
   displayChannels: Channel[]; // working copy if in edit mode, else real channels
   stagedGroups: ChannelGroup[]; // new groups being staged (empty array if not in edit mode)
+  renamedGroupNames: Map<number, string>; // groupId -> newName for staged renames
   canLocalUndo: boolean;
   canLocalRedo: boolean;
   editModeDuration: number | null; // milliseconds since entering edit mode
@@ -219,6 +222,7 @@ export interface UseEditModeReturn {
   stageDeleteChannel: (channelId: number, description: string) => void;
   stageCreateGroup: (name: string) => void;
   stageDeleteChannelGroup: (groupId: number, description: string) => void;
+  stageRenameChannelGroup: (groupId: number, newName: string, description: string) => void;
   addChannelToWorkingCopy: (channel: Channel) => void; // Add a newly created channel to working copy
 
   // Local undo/redo (within edit session)
