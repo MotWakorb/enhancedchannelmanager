@@ -1,0 +1,236 @@
+/**
+ * CSVImportModal.css - Styles for CSV Import Modal
+ */
+
+/* Dropzone */
+.csv-dropzone {
+  border: 2px dashed var(--border-secondary, #3a3a5a);
+  border-radius: 8px;
+  padding: 2rem;
+  text-align: center;
+  cursor: pointer;
+  transition: border-color 0.2s, background-color 0.2s;
+  margin-bottom: 1rem;
+}
+
+.csv-dropzone:hover,
+.csv-dropzone.dragging {
+  border-color: var(--accent-primary, #6366f1);
+  background-color: rgba(99, 102, 241, 0.05);
+}
+
+.csv-dropzone.has-file {
+  border-style: solid;
+  border-color: var(--success, #4ade80);
+  background-color: rgba(74, 222, 128, 0.05);
+}
+
+.csv-file-input {
+  position: absolute;
+  width: 0;
+  height: 0;
+  opacity: 0;
+  overflow: hidden;
+}
+
+.dropzone-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.5rem;
+  cursor: pointer;
+}
+
+.dropzone-icon {
+  font-size: 48px;
+  color: var(--text-muted, #666);
+}
+
+.csv-dropzone.has-file .dropzone-icon {
+  color: var(--success, #4ade80);
+}
+
+.dropzone-text {
+  font-size: 1rem;
+  color: var(--text-primary, #fff);
+}
+
+.dropzone-hint {
+  font-size: 0.8rem;
+  color: var(--text-muted, #666);
+}
+
+.file-info {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.file-name {
+  font-size: 1rem;
+  font-weight: 500;
+  color: var(--text-primary, #fff);
+}
+
+.file-size {
+  font-size: 0.8rem;
+  color: var(--text-secondary, #888);
+}
+
+/* Preview Table */
+.csv-preview {
+  margin-top: 1rem;
+}
+
+.preview-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.9rem;
+  font-weight: 500;
+  color: var(--text-primary, #fff);
+  margin-bottom: 0.75rem;
+}
+
+.preview-header .material-icons {
+  font-size: 20px;
+  color: var(--accent-primary, #6366f1);
+}
+
+.preview-table-wrapper {
+  border: 1px solid var(--border-secondary, #3a3a5a);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.csv-preview-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+
+.csv-preview-table th,
+.csv-preview-table td {
+  padding: 0.5rem 0.75rem;
+  text-align: left;
+  border-bottom: 1px solid var(--border-primary, #2a2a4a);
+}
+
+.csv-preview-table th {
+  background: var(--bg-secondary, #252540);
+  color: var(--text-secondary, #888);
+  font-weight: 500;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.csv-preview-table tr:last-child td {
+  border-bottom: none;
+}
+
+.csv-preview-table tr:hover td {
+  background-color: rgba(99, 102, 241, 0.05);
+}
+
+.csv-preview-table .empty-value {
+  color: var(--text-muted, #666);
+  font-style: italic;
+}
+
+.preview-more {
+  padding: 0.5rem 0.75rem;
+  font-size: 0.8rem;
+  color: var(--text-muted, #666);
+  background: var(--bg-secondary, #252540);
+  text-align: center;
+}
+
+/* Validation Errors */
+.csv-validation-errors {
+  margin-top: 1rem;
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  border-radius: 6px;
+  background: rgba(239, 68, 68, 0.1);
+}
+
+.errors-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.75rem 1rem;
+  color: var(--error-color, #ef4444);
+  font-weight: 500;
+  border-bottom: 1px solid rgba(239, 68, 68, 0.2);
+}
+
+.errors-header .material-icons {
+  font-size: 20px;
+}
+
+.errors-list {
+  list-style: none;
+  margin: 0;
+  padding: 0.5rem 1rem;
+}
+
+.errors-list li {
+  padding: 0.25rem 0;
+  font-size: 0.85rem;
+  color: var(--text-secondary, #888);
+}
+
+.errors-list li strong {
+  color: var(--error-color, #ef4444);
+}
+
+.errors-list .more-errors {
+  color: var(--text-muted, #666);
+  font-style: italic;
+}
+
+/* Success State */
+.csv-import-success {
+  display: flex;
+  align-items: flex-start;
+  gap: 1rem;
+  padding: 1.5rem;
+  background: rgba(74, 222, 128, 0.1);
+  border: 1px solid rgba(74, 222, 128, 0.3);
+  border-radius: 8px;
+}
+
+.csv-import-success > .material-icons {
+  font-size: 36px;
+  color: var(--success, #4ade80);
+}
+
+.success-details {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.success-details strong {
+  font-size: 1.1rem;
+  color: var(--success, #4ade80);
+}
+
+.success-details p {
+  margin: 0;
+  font-size: 0.95rem;
+  color: var(--text-primary, #fff);
+}
+
+.success-warnings {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  font-size: 0.85rem;
+  color: var(--warning, #f59e0b);
+}
+
+.success-warnings .material-icons {
+  font-size: 16px;
+}
