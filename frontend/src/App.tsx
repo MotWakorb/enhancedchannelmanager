@@ -801,6 +801,38 @@ function App() {
     }
   };
 
+  // Handle CSV import completion - refreshes data and adds new groups to filter
+  const handleCSVImportComplete = useCallback(async () => {
+    try {
+      // Get current group IDs before refresh
+      const currentGroupIds = new Set(channelGroups.map(g => g.id));
+
+      // Fetch fresh data
+      const [newGroups] = await Promise.all([
+        api.getChannelGroups(),
+        loadChannels(),
+      ]);
+
+      // Update groups state
+      setChannelGroups(newGroups);
+
+      // Find newly created groups and add them to filter
+      const newGroupIds = newGroups
+        .filter(g => !currentGroupIds.has(g.id))
+        .map(g => g.id);
+
+      if (newGroupIds.length > 0) {
+        console.log('[App] Adding new groups from CSV import to filter:', newGroupIds);
+        setChannelFilters(prev => ({
+          ...prev,
+          groupFilter: [...prev.groupFilter, ...newGroupIds],
+        }));
+      }
+    } catch (err) {
+      logger.error('Failed to refresh after CSV import:', err);
+    }
+  }, [channelGroups]);
+
   const loadProviders = async () => {
     try {
       const accounts = await api.getM3UAccounts();
@@ -2006,6 +2038,8 @@ function App() {
 
               // Channels
               channels={displayChannels}
+              onChannelsChange={loadChannels}
+              onCSVImportComplete={handleCSVImportComplete}
               selectedChannelId={selectedChannel?.id ?? null}
               onChannelSelect={handleChannelSelect}
               onChannelUpdate={handleChannelUpdate}

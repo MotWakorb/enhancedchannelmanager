@@ -12,6 +12,8 @@ export interface ChannelManagerTabProps {
 
   // Channels
   channels: Channel[];
+  onChannelsChange?: () => Promise<void>;
+  onCSVImportComplete?: () => Promise<void>;
   selectedChannelId: number | null;
   onChannelSelect: (channel: Channel | null) => void;
   onChannelUpdate: (channel: Channel, changeInfo?: ChangeInfo) => void;
@@ -192,6 +194,8 @@ export function ChannelManagerTab({
 
   // Channels
   channels,
+  onChannelsChange,
+  onCSVImportComplete,
   selectedChannelId,
   onChannelSelect,
   onChannelUpdate,
@@ -392,6 +396,8 @@ export function ChannelManagerTab({
           logos={logos}
           onLogosChange={onLogosChange}
           onChannelGroupsChange={onChannelGroupsChange}
+          onChannelsChange={onChannelsChange}
+          onCSVImportComplete={onCSVImportComplete}
           onDeleteChannelGroup={onDeleteChannelGroup}
           epgData={epgData}
           epgSources={epgSources}

@@ -1569,6 +1569,26 @@ export function useEditMode({
     return () => clearInterval(interval);
   }, [state.isActive, state.enteredAt]);
 
+  // Sync new channels from API into the working copy (e.g., from CSV import)
+  // This adds channels that exist in the API but not yet in the working copy
+  useEffect(() => {
+    if (!state.isActive) return;
+
+    const workingCopyIds = new Set(state.workingCopy.map((ch) => ch.id));
+    const newChannels = channels.filter((ch) => !workingCopyIds.has(ch.id));
+
+    if (newChannels.length > 0) {
+      console.log('[useEditMode] Syncing', newChannels.length, 'new channels from API into working copy');
+      setState((prev) => ({
+        ...prev,
+        workingCopy: [
+          ...prev.workingCopy,
+          ...newChannels.map((ch) => ({ ...ch, streams: [...ch.streams] })),
+        ],
+      }));
+    }
+  }, [state.isActive, channels]);
+
   // Determine which channels to display
   const displayChannels = state.isActive ? state.workingCopy : channels;
 
