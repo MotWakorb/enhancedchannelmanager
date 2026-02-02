@@ -94,6 +94,8 @@ interface StreamsPaneProps {
     pushDownOnConflict?: boolean,
     normalize?: boolean
   ) => Promise<void>;
+  // Create a single channel (for manual entry mode)
+  onCreateChannel?: (name: string, channelNumber?: number, groupId?: number, newGroupName?: string) => Promise<void>;
   // Default value for normalize toggle (from settings)
   defaultNormalizeOnCreate?: boolean;
   // Callback to check for conflicts with existing channel numbers
@@ -143,6 +145,7 @@ export function StreamsPane({
   externalTriggerManualEntry = false,
   onExternalTriggerHandled,
   onBulkCreateFromGroup,
+  onCreateChannel,
   onCheckConflicts,
   onGetHighestChannelNumber,
   showStreamUrls = true,
@@ -322,6 +325,8 @@ export function StreamsPane({
   const [bulkCreateGroup, setBulkCreateGroup] = useState<StreamGroup | null>(null);
   const [bulkCreateGroups, setBulkCreateGroups] = useState<StreamGroup[]>([]); // For multi-group creation
   const [bulkCreateStreams, setBulkCreateStreams] = useState<Stream[]>([]); // For selected streams
+  const [isManualEntry, setIsManualEntry] = useState(false); // For creating channels without streams
+  const [manualEntryChannelName, setManualEntryChannelName] = useState(''); // Channel name for manual entry
 
   // Stream preview modal state
   const [previewStream, setPreviewStream] = useState<Stream | null>(null);
@@ -710,6 +715,8 @@ export function StreamsPane({
     setBulkCreateGroup(null);
     setBulkCreateGroups([]);
     setBulkCreateStreams([]);
+    setIsManualEntry(false);
+    setManualEntryChannelName('');
     setBulkCreateCustomGroupNames(new Map());
     setBulkCreateGroupStartNumbers(new Map());
     setBulkCreateSelectedProfiles(new Set());
@@ -723,6 +730,8 @@ export function StreamsPane({
     setBulkCreateGroup(null);
     setBulkCreateGroups([]);
     setBulkCreateStreams([]);
+    setIsManualEntry(true);
+    setManualEntryChannelName('');
     // Pre-fill starting number if provided
     setBulkCreateStartingNumber(startingNumber != null ? startingNumber.toString() : '');
     // Pre-select group if provided
@@ -1116,6 +1125,45 @@ export function StreamsPane({
   // Actually perform the bulk create with the specified pushDown option
   // startingNumberOverride: optionally override the starting number (used by "insert at end" option)
   const doBulkCreate = useCallback(async (pushDown: boolean, startingNumberOverride?: number) => {
+    // Handle manual entry mode - create a single channel without streams
+    if (isManualEntry && onCreateChannel) {
+      if (!manualEntryChannelName.trim()) return;
+
+      setBulkCreateLoading(true);
+      try {
+        // Determine group
+        let groupId: number | null = null;
+        let newGroupName: string | undefined;
+
+        if (bulkCreateGroupOption === 'existing') {
+          groupId = bulkCreateSelectedGroupId;
+        } else if (bulkCreateGroupOption === 'new') {
+          if (bulkCreateNewGroupName.trim()) {
+            newGroupName = bulkCreateNewGroupName.trim();
+          }
+        }
+
+        // Parse channel number (optional)
+        const channelNumber = bulkCreateStartingNumber ? parseFloat(bulkCreateStartingNumber) : undefined;
+
+        // Create the channel
+        await onCreateChannel(
+          manualEntryChannelName.trim(),
+          channelNumber,
+          groupId ?? undefined,
+          newGroupName
+        );
+
+        closeBulkCreateModal();
+      } catch (err) {
+        console.error('Failed to create channel:', err);
+        alert('Failed to create channel: ' + (err instanceof Error ? err.message : 'Unknown error'));
+      } finally {
+        setBulkCreateLoading(false);
+      }
+      return;
+    }
+
     if (streamsToCreate.length === 0 || !onBulkCreateFromGroup) return;
 
     const useSeparateMode = isFromMultipleGroups && bulkCreateMultiGroupOption === 'separate';
@@ -1256,10 +1304,23 @@ export function StreamsPane({
     onBulkCreateFromGroup,
     clearSelection,
     closeBulkCreateModal,
+    isManualEntry,
+    manualEntryChannelName,
+    onCreateChannel,
   ]);
 
   // Check for conflicts and show dialog, or proceed directly if no conflicts
   const handleBulkCreate = useCallback(async () => {
+    // Handle manual entry mode separately
+    if (isManualEntry) {
+      if (!manualEntryChannelName.trim()) {
+        alert('Please enter a channel name');
+        return;
+      }
+      await doBulkCreate(false);
+      return;
+    }
+
     if (streamsToCreate.length === 0 || !onBulkCreateFromGroup) return;
 
     // For separate groups mode, we use per-group starting numbers
@@ -1310,6 +1371,8 @@ export function StreamsPane({
     onCheckConflicts,
     onGetHighestChannelNumber,
     doBulkCreate,
+    isManualEntry,
+    manualEntryChannelName,
   ]);
 
   // Handle copying stream URL to clipboard
@@ -1913,16 +1976,18 @@ export function StreamsPane({
       )}
 
       {/* Bulk Create Modal */}
-      {bulkCreateModalOpen && streamsToCreate.length > 0 && (
+      {bulkCreateModalOpen && (streamsToCreate.length > 0 || isManualEntry) && (
         <div className="modal-overlay">
           <div className="bulk-create-modal" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
               <h3>
-                {isFromGroup
-                  ? `Create Channels from "${bulkCreateGroup!.name}"`
-                  : isFromMultipleGroups
-                    ? `Create Channels from ${bulkCreateGroups.length} Groups`
-                    : `Create Channels from ${streamsToCreate.length} Selected Streams`
+                {isManualEntry
+                  ? 'Create Channel'
+                  : isFromGroup
+                    ? `Create Channels from "${bulkCreateGroup!.name}"`
+                    : isFromMultipleGroups
+                      ? `Create Channels from ${bulkCreateGroups.length} Groups`
+                      : `Create Channels from ${streamsToCreate.length} Selected Streams`
                 }
               </h3>
               <button className="modal-close-btn" onClick={closeBulkCreateModal}>
@@ -1931,8 +1996,23 @@ export function StreamsPane({
             </div>
 
             <div className="modal-body">
+              {/* Manual entry mode - channel name input */}
+              {isManualEntry && (
+                <div className="form-group">
+                  <label className="form-label">Channel Name</label>
+                  <input
+                    type="text"
+                    className="form-input"
+                    value={manualEntryChannelName}
+                    onChange={(e) => setManualEntryChannelName(e.target.value)}
+                    placeholder="Enter channel name"
+                    autoFocus
+                  />
+                </div>
+              )}
+
               {/* Multi-group option - only show when multiple groups selected */}
-              {isFromMultipleGroups && (
+              {isFromMultipleGroups && !isManualEntry && (
                 <div className="form-group multi-group-option">
                   <div className="multi-group-info">
                     <span className="material-icons">folder_copy</span>
@@ -2537,10 +2617,13 @@ export function StreamsPane({
                 className="btn-create"
                 onClick={handleBulkCreate}
                 disabled={bulkCreateLoading || (
-                  // In separate groups mode, check first group has a start number
-                  isFromMultipleGroups && bulkCreateMultiGroupOption === 'separate'
-                    ? !bulkCreateGroupStartNumbers.get(bulkCreateGroups[0]?.name)
-                    : !bulkCreateStartingNumber
+                  isManualEntry
+                    // Manual entry: require channel name
+                    ? !manualEntryChannelName.trim()
+                    // In separate groups mode, check first group has a start number
+                    : isFromMultipleGroups && bulkCreateMultiGroupOption === 'separate'
+                      ? !bulkCreateGroupStartNumbers.get(bulkCreateGroups[0]?.name)
+                      : !bulkCreateStartingNumber
                 )}
               >
                 {bulkCreateLoading ? (
@@ -2551,7 +2634,7 @@ export function StreamsPane({
                 ) : (
                   <>
                     <span className="material-icons">add</span>
-                    Create {bulkCreateStats.streamCount} Channels
+                    {isManualEntry ? 'Create Channel' : `Create ${bulkCreateStats.streamCount} Channels`}
                   </>
                 )}
               </button>

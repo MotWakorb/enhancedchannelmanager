@@ -1332,6 +1332,74 @@ function App() {
     [isEditMode, stageCreateChannel, defaultChannelProfileIds]
   );
 
+  // Create channel for manual entry mode (from StreamsPane bulk create modal)
+  // This supports creating a new group if newGroupName is provided
+  const handleCreateChannelManual = useCallback(
+    async (name: string, channelNumber?: number, groupId?: number, newGroupName?: string) => {
+      try {
+        if (isEditMode) {
+          // In edit mode, stage the creation
+          // stageCreateChannel handles newGroupName internally
+          const tempId = stageCreateChannel(
+            name,
+            channelNumber,
+            groupId,
+            newGroupName,  // Pass newGroupName to stage creation
+            undefined,     // logoId
+            undefined,     // logoUrl
+            undefined,     // tvgId
+            undefined,     // tvcGuideStationId
+            false          // normalize
+          );
+
+          // Track profile assignments (use default profiles for manual creation)
+          if (channelNumber !== undefined && defaultChannelProfileIds.length > 0) {
+            pendingProfileAssignmentsRef.current.push({
+              startNumber: channelNumber,
+              count: 1,
+              profileIds: defaultChannelProfileIds,
+              increment: 1,
+            });
+          }
+
+          // Track the newly created group so it appears in the filter
+          if (newGroupName) {
+            trackNewlyCreatedGroup(tempId);  // tempId acts as marker for new group
+          }
+
+          // Refresh UI
+          await loadChannels();
+        } else {
+          // Non-edit mode - create immediately
+          let targetGroupId = groupId ?? null;
+
+          // Create new group if needed
+          if (newGroupName && !targetGroupId) {
+            const newGroup = await api.createChannelGroup({
+              name: newGroupName,
+              channel_profile_ids: defaultChannelProfileIds.length > 0 ? defaultChannelProfileIds : undefined,
+            });
+            targetGroupId = newGroup.id;
+            await loadChannelGroups();
+          }
+
+          // Create the channel
+          await api.createChannel({
+            name,
+            channel_number: channelNumber,
+            channel_group_id: targetGroupId,
+          });
+
+          await loadChannels();
+        }
+      } catch (err) {
+        console.error('Failed to create channel:', err);
+        throw err;
+      }
+    },
+    [isEditMode, stageCreateChannel, defaultChannelProfileIds, loadChannels, loadChannelGroups, trackNewlyCreatedGroup]
+  );
+
   // Check for conflicts with existing channel numbers
   // Returns the count of conflicting channels
   const handleCheckConflicts = useCallback((startingNumber: number, count: number): number => {
@@ -2050,6 +2118,7 @@ function App() {
               onBulkStreamsDrop={handleBulkStreamsDrop}
               onOpenCreateChannelModal={handleOpenCreateChannelModal}
               onBulkCreateFromGroup={handleBulkCreateFromGroup}
+              onCreateChannelManual={handleCreateChannelManual}
               defaultNormalizeOnCreate={normalizeOnChannelCreate}
               onCheckConflicts={handleCheckConflicts}
               onGetHighestChannelNumber={handleGetHighestChannelNumber}
