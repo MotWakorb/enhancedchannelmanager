@@ -166,6 +166,8 @@ export interface ChannelManagerTabProps {
     pushDownOnConflict?: boolean,
     normalize?: boolean
   ) => Promise<void>;
+  // Create a single channel (for manual entry mode - supports new group creation)
+  onCreateChannelManual?: (name: string, channelNumber?: number, groupId?: number, newGroupName?: string) => Promise<void>;
   // Default value for normalization toggle (from settings)
   defaultNormalizeOnCreate?: boolean;
   // Callback to check for conflicts with existing channel numbers
@@ -318,6 +320,7 @@ export function ChannelManagerTab({
   onBulkStreamsDrop,
   onOpenCreateChannelModal,
   onBulkCreateFromGroup,
+  onCreateChannelManual,
   defaultNormalizeOnCreate = false,
   onCheckConflicts,
   onGetHighestChannelNumber,
@@ -451,6 +454,7 @@ export function ChannelManagerTab({
           externalTriggerManualEntry={externalTriggerManualEntry}
           onExternalTriggerHandled={onExternalTriggerHandled}
           onBulkCreateFromGroup={onBulkCreateFromGroup}
+          onCreateChannel={onCreateChannelManual}
           onCheckConflicts={onCheckConflicts}
           onGetHighestChannelNumber={onGetHighestChannelNumber}
           showStreamUrls={showStreamUrls}
