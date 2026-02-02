@@ -42,6 +42,8 @@ import { useModal } from '../hooks/useModal';
 import { ChannelListItem } from './ChannelListItem';
 import { StreamListItem } from './StreamListItem';
 import { PreviewStreamModal } from './PreviewStreamModal';
+import { CSVImportModal } from './CSVImportModal';
+import { exportChannelsToCSV, downloadCSVTemplate } from '../services/api';
 import './ChannelsPane.css';
 
 interface ChannelsPaneProps {
@@ -96,6 +98,8 @@ interface ChannelsPaneProps {
   onLogosChange?: () => void;
   // Channel group callback
   onChannelGroupsChange?: () => void;
+  onChannelsChange?: () => void;
+  onCSVImportComplete?: () => Promise<void>;
   onDeleteChannelGroup?: (groupId: number) => Promise<void>;
   // EPG and Stream Profile props
   epgData?: EPGData[];
@@ -667,6 +671,8 @@ export function ChannelsPane({
   onLogosChange,
   // Channel group callback
   onChannelGroupsChange,
+  onChannelsChange,
+  onCSVImportComplete,
   onDeleteChannelGroup,
   // EPG and Stream Profile props
   epgData = [],
@@ -833,6 +839,9 @@ export function ChannelsPane({
 
   // Normalize names modal state
   const normalizeModal = useModal();
+
+  // CSV import modal state
+  const csvImportModal = useModal();
 
   // Context menu management
   const {
@@ -2347,6 +2356,40 @@ export function ChannelsPane({
     hiddenGroupsModal.open();
     loadHiddenGroups();
   };
+
+  // CSV Export - download channels as CSV
+  const handleExportCSV = useCallback(async () => {
+    try {
+      const blob = await exportChannelsToCSV();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `channels-${new Date().toISOString().split('T')[0]}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      logger.error('Failed to export CSV', err);
+    }
+  }, []);
+
+  // CSV Template Download
+  const handleDownloadTemplate = useCallback(async () => {
+    try {
+      const blob = await downloadCSVTemplate();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'channel-import-template.csv';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      logger.error('Failed to download template', err);
+    }
+  }, []);
 
   // Get the next available channel number at the end of a group
   // Use localChannels in edit mode since it may have been modified
@@ -4807,6 +4850,14 @@ export function ChannelsPane({
               >
                 <span className="material-icons">visibility_off</span>
               </button>
+              <button
+                className="csv-import-btn"
+                onClick={() => csvImportModal.open()}
+                title="Import channels from CSV"
+                data-testid="csv-import-button"
+              >
+                <span className="material-icons">upload_file</span>
+              </button>
               {selectedChannelIds.size === 0 && (
                 <SortDropdownButton
                   onSortByMode={handleSortAllStreamsByMode}
@@ -4818,6 +4869,22 @@ export function ChannelsPane({
               )}
             </>
           )}
+          <button
+            className="csv-export-btn"
+            onClick={handleExportCSV}
+            title="Export channels to CSV"
+            data-testid="csv-export-button"
+          >
+            <span className="material-icons">download</span>
+          </button>
+          <button
+            className="csv-template-btn"
+            onClick={handleDownloadTemplate}
+            title="Download CSV template"
+            data-testid="csv-template-button"
+          >
+            <span className="material-icons">description</span>
+          </button>
           <button
             className="profiles-btn"
             onClick={() => profilesModal.open()}
@@ -6358,6 +6425,23 @@ export function ChannelsPane({
           channel={previewChannel}
           channelName={previewChannelName}
           providerName={previewStream?.m3u_account ? providers.find((p) => p.id === previewStream.m3u_account)?.name : undefined}
+        />
+
+        {/* CSV Import Modal */}
+        <CSVImportModal
+          isOpen={csvImportModal.isOpen}
+          onClose={() => csvImportModal.close()}
+          onSuccess={() => {
+            // Trigger a refresh of channels and groups data, adding new groups to filter
+            console.log('[ChannelsPane] CSV import onSuccess triggered, refreshing data...');
+            if (onCSVImportComplete) {
+              onCSVImportComplete();
+            } else {
+              // Fallback if new callback not provided
+              onChannelGroupsChange?.();
+              onChannelsChange?.();
+            }
+          }}
         />
       </div>
     </div>

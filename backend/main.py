@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Request, Body, UploadFile, File
+from fastapi import FastAPI, HTTPException, Request, Body, UploadFile, File, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, StreamingResponse
@@ -1292,6 +1292,39 @@ async def restart_services():
         return {"success": False, "message": "Settings not configured"}
 
 
+@app.post("/api/settings/reset-stats", tags=["Settings"])
+async def reset_stats():
+    """Reset all channel/stream statistics. Use when switching Dispatcharr servers."""
+    from models import HiddenChannelGroup, ChannelWatchStats, ChannelBandwidth, StreamStats, ChannelPopularityScore
+
+    try:
+        with get_session() as db:
+            hidden = db.query(HiddenChannelGroup).delete()
+            watch = db.query(ChannelWatchStats).delete()
+            bandwidth = db.query(ChannelBandwidth).delete()
+            streams = db.query(StreamStats).delete()
+            popularity = db.query(ChannelPopularityScore).delete()
+            db.commit()
+
+            total = hidden + watch + bandwidth + streams + popularity
+            logger.info(f"Reset stats: {hidden} hidden groups, {watch} watch stats, {bandwidth} bandwidth, {streams} stream stats, {popularity} popularity")
+
+            return {
+                "success": True,
+                "message": f"Cleared {total} records",
+                "details": {
+                    "hidden_groups": hidden,
+                    "watch_stats": watch,
+                    "bandwidth_records": bandwidth,
+                    "stream_stats": streams,
+                    "popularity_scores": popularity
+                }
+            }
+    except Exception as e:
+        logger.error(f"Failed to reset stats: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # Channels
 class CreateChannelRequest(BaseModel):
     name: str
@@ -1479,7 +1512,341 @@ async def delete_logo(logo_id: int):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# Channel by ID routes - must come after /api/channels/logos
+# CSV Import/Export - MUST be defined before /api/channels/{channel_id} routes
+from csv_handler import parse_csv, generate_csv, generate_template, CSVParseError
+from datetime import date
+
+
+@app.get("/api/channels/csv-template", tags=["Channels"])
+async def get_csv_template():
+    """Download CSV template for channel import."""
+    template_content = generate_template()
+    return Response(
+        content=template_content,
+        media_type="text/csv",
+        headers={
+            "Content-Disposition": "attachment; filename=channel-import-template.csv"
+        }
+    )
+
+
+@app.get("/api/channels/export-csv", tags=["Channels"])
+async def export_channels_csv():
+    """Export all channels to CSV format."""
+    client = get_client()
+    try:
+        # Fetch channel groups to build ID -> name lookup
+        groups = await client.get_channel_groups()
+        group_lookup = {g.get("id"): g.get("name", "") for g in groups}
+
+        # Fetch all channels (handle pagination)
+        all_channels = []
+        page = 1
+        page_size = 100
+        while True:
+            result = await client.get_channels(page=page, page_size=page_size)
+            channels = result.get("results", [])
+            all_channels.extend(channels)
+            if not result.get("next"):
+                break
+            page += 1
+
+        # Filter out auto-created channels and sort by channel number ascending
+        manual_channels = [ch for ch in all_channels if not ch.get("auto_created", False)]
+        manual_channels.sort(key=lambda ch: ch.get("channel_number", 0) or 0)
+
+        # Collect all stream IDs from channels
+        all_stream_ids = set()
+        for ch in manual_channels:
+            stream_ids = ch.get("streams", [])
+            all_stream_ids.update(stream_ids)
+
+        # Fetch stream details to get URLs (batch by 100)
+        stream_url_lookup = {}
+        stream_ids_list = list(all_stream_ids)
+        for i in range(0, len(stream_ids_list), 100):
+            batch = stream_ids_list[i:i+100]
+            if batch:
+                try:
+                    streams = await client.get_streams_by_ids(batch)
+                    for s in streams:
+                        stream_url_lookup[s.get("id")] = s.get("url", "")
+                except Exception as e:
+                    logger.warning(f"Failed to fetch stream batch: {e}")
+
+        # Transform channel data for CSV export
+        csv_channels = []
+        for ch in manual_channels:
+            group_id = ch.get("channel_group_id")
+            group_name = group_lookup.get(group_id, "") if group_id else ""
+
+            # Get stream URLs for this channel
+            stream_ids = ch.get("streams", [])
+            stream_urls = [stream_url_lookup.get(sid, "") for sid in stream_ids if stream_url_lookup.get(sid)]
+            stream_urls_str = ";".join(stream_urls) if stream_urls else ""
+
+            csv_channels.append({
+                "channel_number": ch.get("channel_number"),
+                "name": ch.get("name", ""),
+                "group_name": group_name,
+                "tvg_id": ch.get("tvg_id", ""),
+                "gracenote_id": ch.get("tvc_guide_stationid", ""),
+                "logo_url": ch.get("logo_url", ""),
+                "stream_urls": stream_urls_str
+            })
+
+        csv_content = generate_csv(csv_channels)
+        filename = f"channels-export-{date.today().isoformat()}.csv"
+
+        return Response(
+            content=csv_content,
+            media_type="text/csv",
+            headers={
+                "Content-Disposition": f"attachment; filename={filename}"
+            }
+        )
+    except Exception as e:
+        logger.error(f"CSV export failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/channels/import-csv", tags=["Channels"])
+async def import_channels_csv(file: UploadFile = File(...)):
+    """Import channels from CSV file."""
+    client = get_client()
+
+    # Read and decode the file
+    try:
+        content = await file.read()
+        csv_content = content.decode("utf-8")
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to read file: {e}")
+
+    # Parse CSV
+    try:
+        rows, parse_errors = parse_csv(csv_content)
+    except CSVParseError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    if not rows and not parse_errors:
+        # Empty file or header only
+        return {
+            "success": True,
+            "channels_created": 0,
+            "groups_created": 0,
+            "errors": [],
+            "warnings": []
+        }
+
+    # Get existing channel groups for matching
+    try:
+        existing_groups = await client.get_channel_groups()
+        group_map = {g["name"].lower(): g for g in existing_groups}
+    except Exception as e:
+        logger.error(f"Failed to fetch channel groups: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to fetch channel groups: {e}")
+
+    # Build URL -> stream ID lookup for stream linking
+    stream_url_to_id = {}
+    try:
+        page = 1
+        page_size = 500
+        while True:
+            result = await client.get_streams(page=page, page_size=page_size)
+            streams = result.get("results", [])
+            for s in streams:
+                url = s.get("url", "")
+                if url:
+                    stream_url_to_id[url] = s.get("id")
+            if not result.get("next"):
+                break
+            page += 1
+        logger.info(f"Built stream URL lookup with {len(stream_url_to_id)} streams")
+    except Exception as e:
+        logger.warning(f"Failed to fetch streams for URL lookup: {e}")
+
+    # Build EPG tvg_id -> icon_url lookup for logo assignment
+    epg_tvg_id_to_icon = {}
+    epg_name_to_icon = {}
+    try:
+        epg_data = await client.get_epg_data()
+        for entry in epg_data:
+            tvg_id = entry.get("tvg_id", "")
+            icon_url = entry.get("icon_url", "")
+            name = entry.get("name", "")
+            if tvg_id and icon_url:
+                epg_tvg_id_to_icon[tvg_id.lower()] = icon_url
+            if name and icon_url:
+                # Normalize name for matching (lowercase, strip common suffixes)
+                normalized_name = name.lower().strip()
+                for suffix in [" hd", " sd", " (hd)", " (sd)"]:
+                    if normalized_name.endswith(suffix):
+                        normalized_name = normalized_name[:-len(suffix)]
+                epg_name_to_icon[normalized_name] = icon_url
+        logger.info(f"Built EPG logo lookup with {len(epg_tvg_id_to_icon)} tvg_id entries and {len(epg_name_to_icon)} name entries")
+    except Exception as e:
+        logger.warning(f"Failed to fetch EPG data for logo lookup: {e}")
+
+    channels_created = 0
+    groups_created = 0
+    streams_linked = 0
+    logos_from_epg = 0
+    errors = parse_errors.copy()
+    warnings = []
+
+    # Process each valid row
+    for i, row in enumerate(rows):
+        row_num = i + 2  # Account for header row
+
+        try:
+            # Handle group creation/lookup
+            group_id = None
+            group_name = row.get("group_name", "").strip()
+            if group_name:
+                group_key = group_name.lower()
+                if group_key in group_map:
+                    group_id = group_map[group_key]["id"]
+                else:
+                    # Create new group
+                    try:
+                        new_group = await client.create_channel_group(group_name)
+                        group_id = new_group["id"]
+                        group_map[group_key] = new_group
+                        groups_created += 1
+                        logger.info(f"Created channel group: {group_name}")
+                    except Exception as ge:
+                        warnings.append(f"Row {row_num}: Failed to create group '{group_name}': {ge}")
+
+            # Build channel data
+            channel_data = {
+                "name": row["name"],
+            }
+
+            # Add optional fields
+            channel_number = row.get("channel_number", "").strip()
+            if channel_number:
+                try:
+                    channel_data["channel_number"] = float(channel_number)
+                except ValueError:
+                    pass  # Skip invalid numbers
+
+            if group_id:
+                channel_data["channel_group_id"] = group_id
+
+            tvg_id = row.get("tvg_id", "").strip()
+            if tvg_id:
+                channel_data["tvg_id"] = tvg_id
+
+            gracenote_id = row.get("gracenote_id", "").strip()
+            if gracenote_id:
+                channel_data["tvc_guide_stationid"] = gracenote_id
+
+            logo_url = row.get("logo_url", "").strip()
+            if logo_url:
+                channel_data["logo_url"] = logo_url
+
+            # Create the channel
+            created_channel = await client.create_channel(channel_data)
+            channels_created += 1
+
+            # If no logo_url provided, try to get one from EPG data
+            if not logo_url and created_channel:
+                epg_icon_url = None
+                # First try tvg_id match
+                if tvg_id:
+                    epg_icon_url = epg_tvg_id_to_icon.get(tvg_id.lower())
+                # Fall back to name match
+                if not epg_icon_url:
+                    channel_name = row["name"].lower().strip()
+                    # Try exact match first
+                    epg_icon_url = epg_name_to_icon.get(channel_name)
+                    # Try without HD/SD suffix
+                    if not epg_icon_url:
+                        for suffix in [" hd", " sd", " (hd)", " (sd)"]:
+                            if channel_name.endswith(suffix):
+                                channel_name = channel_name[:-len(suffix)]
+                                epg_icon_url = epg_name_to_icon.get(channel_name)
+                                break
+
+                if epg_icon_url:
+                    try:
+                        channel_id = created_channel.get("id")
+                        channel_name_for_logo = row["name"]
+                        # Find existing logo by URL or create new one
+                        existing_logo = await client.find_logo_by_url(epg_icon_url)
+                        if existing_logo:
+                            logo_id = existing_logo["id"]
+                            logger.debug(f"Row {row_num}: Found existing logo ID {logo_id} for EPG icon")
+                        else:
+                            new_logo = await client.create_logo({"name": channel_name_for_logo, "url": epg_icon_url})
+                            logo_id = new_logo["id"]
+                            logger.debug(f"Row {row_num}: Created new logo ID {logo_id} for EPG icon")
+                        # Update channel with logo_id
+                        await client.update_channel(channel_id, {"logo_id": logo_id})
+                        logos_from_epg += 1
+                        logger.debug(f"Row {row_num}: Assigned EPG logo to channel '{row['name']}'")
+                    except Exception as le:
+                        warnings.append(f"Row {row_num}: Failed to assign EPG logo: {le}")
+
+            # Handle stream linking if stream_urls provided
+            stream_urls_str = row.get("stream_urls", "").strip()
+            if stream_urls_str and created_channel:
+                stream_urls = [url.strip() for url in stream_urls_str.split(";") if url.strip()]
+                stream_ids = []
+                for url in stream_urls:
+                    stream_id = stream_url_to_id.get(url)
+                    if stream_id:
+                        stream_ids.append(stream_id)
+                    else:
+                        warnings.append(f"Row {row_num}: Stream URL not found: {url[:50]}...")
+
+                if stream_ids:
+                    try:
+                        channel_id = created_channel.get("id")
+                        await client.update_channel(channel_id, {"streams": stream_ids})
+                        streams_linked += len(stream_ids)
+                    except Exception as se:
+                        warnings.append(f"Row {row_num}: Failed to link streams: {se}")
+
+        except Exception as e:
+            errors.append({"row": row_num, "error": str(e)})
+
+    # Log the import
+    logger.info(f"CSV import completed: {channels_created} channels created, {groups_created} groups created, {streams_linked} streams linked, {logos_from_epg} logos from EPG, {len(errors)} errors")
+
+    return {
+        "success": len(errors) == 0,
+        "channels_created": channels_created,
+        "groups_created": groups_created,
+        "streams_linked": streams_linked,
+        "logos_from_epg": logos_from_epg,
+        "errors": errors,
+        "warnings": warnings
+    }
+
+
+@app.post("/api/channels/preview-csv", tags=["Channels"])
+async def preview_csv(data: dict):
+    """Preview CSV content and validate before import."""
+    content = data.get("content", "")
+    if not content:
+        return {"rows": [], "errors": []}
+
+    try:
+        rows, errors = parse_csv(content)
+        # Convert rows to list of dicts for JSON response
+        return {
+            "rows": rows,
+            "errors": errors
+        }
+    except CSVParseError as e:
+        return {
+            "rows": [],
+            "errors": [{"row": 1, "error": str(e)}]
+        }
+
+
+# Channel by ID routes - must come after /api/channels/logos and CSV routes
 @app.get("/api/channels/{channel_id}", tags=["Channels"])
 async def get_channel(channel_id: int):
     client = get_client()
