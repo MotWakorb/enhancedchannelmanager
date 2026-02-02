@@ -2727,3 +2727,87 @@ export async function sendTestM3UDigest(): Promise<{ success: boolean; message: 
     method: 'POST',
   });
 }
+
+// =============================================================================
+// CSV Import/Export API
+// =============================================================================
+
+/**
+ * Result of a CSV import operation.
+ */
+export interface CSVImportResult {
+  success: boolean;
+  channels_created: number;
+  groups_created: number;
+  streams_linked: number;
+  errors: Array<{ row: number; error: string }>;
+  warnings: Array<string>;
+}
+
+/**
+ * Result of CSV preview parsing.
+ */
+export interface CSVPreviewResult {
+  rows: Array<Record<string, string>>;
+  errors: Array<{ row: number; error: string }>;
+}
+
+/**
+ * Export all channels to CSV file.
+ * Returns a Blob containing the CSV content.
+ */
+export async function exportChannelsToCSV(): Promise<Blob> {
+  const response = await fetch(`${API_BASE}/channels/export-csv`);
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({ detail: 'Export failed' }));
+    throw new Error(errorData.detail || 'Export failed');
+  }
+  return response.blob();
+}
+
+/**
+ * Download the CSV template for channel imports.
+ * Returns a Blob containing the template CSV content.
+ */
+export async function downloadCSVTemplate(): Promise<Blob> {
+  const response = await fetch(`${API_BASE}/channels/csv-template`);
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({ detail: 'Download failed' }));
+    throw new Error(errorData.detail || 'Download failed');
+  }
+  return response.blob();
+}
+
+/**
+ * Import channels from a CSV file.
+ * @param file - The CSV file to import
+ * @returns Import result with counts and any errors
+ */
+export async function importChannelsFromCSV(file: File): Promise<CSVImportResult> {
+  const formData = new FormData();
+  formData.append('file', file);
+
+  const response = await fetch(`${API_BASE}/channels/import-csv`, {
+    method: 'POST',
+    body: formData,
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({ detail: 'Import failed' }));
+    throw new Error(errorData.detail || 'Import failed');
+  }
+
+  return response.json();
+}
+
+/**
+ * Parse CSV content and return preview of rows for validation.
+ * @param content - Raw CSV content as string
+ * @returns Parsed rows and any validation errors
+ */
+export async function parseCSVPreview(content: string): Promise<CSVPreviewResult> {
+  return fetchJson(`${API_BASE}/channels/preview-csv`, {
+    method: 'POST',
+    body: JSON.stringify({ content }),
+  });
+}
