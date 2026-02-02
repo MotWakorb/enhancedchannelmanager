@@ -109,6 +109,11 @@ export function EditModeExitDialog({
                     {summary.deletedGroups} group{summary.deletedGroups !== 1 ? 's' : ''} deleted
                   </li>
                 )}
+                {summary.renamedGroups > 0 && (
+                  <li>
+                    {summary.renamedGroups} group{summary.renamedGroups !== 1 ? 's' : ''} renamed
+                  </li>
+                )}
               </ul>
 
               {/* Toggle for detailed change list */}

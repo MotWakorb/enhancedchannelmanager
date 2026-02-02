@@ -498,6 +498,12 @@ class BulkDeleteGroupOp(BaseModel):
     groupId: int
 
 
+class BulkRenameGroupOp(BaseModel):
+    type: Literal["renameChannelGroup"] = "renameChannelGroup"
+    groupId: int
+    newName: str
+
+
 # Union type for all bulk operations
 BulkOperation = Union[
     BulkUpdateChannelOp,
@@ -509,6 +515,7 @@ BulkOperation = Union[
     BulkDeleteChannelOp,
     BulkCreateGroupOp,
     BulkDeleteGroupOp,
+    BulkRenameGroupOp,
 ]
 
 
@@ -2184,6 +2191,12 @@ async def bulk_commit_operations(request: BulkCommitRequest):
                     await client.delete_channel_group(op.groupId)
                     result["operationsApplied"] += 1
                     logger.debug(f"[BULK-APPLY] Deleted group {op.groupId}")
+
+                elif op.type == "renameChannelGroup":
+                    logger.debug(f"[BULK-APPLY] [{idx+1}/{len(request.operations)}] renameChannelGroup: groupId={op.groupId}, newName='{op.newName}'")
+                    await client.update_channel_group(op.groupId, {"name": op.newName})
+                    result["operationsApplied"] += 1
+                    logger.debug(f"[BULK-APPLY] Renamed group {op.groupId} to '{op.newName}'")
 
             except Exception as e:
                 # Build detailed error info with channel/stream names

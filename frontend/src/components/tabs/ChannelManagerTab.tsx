@@ -50,6 +50,7 @@ export interface ChannelManagerTabProps {
   onStageBulkAssignNumbers: (channelIds: number[], startingNumber: number, description: string) => void;
   onStageDeleteChannel: (channelId: number, description: string) => void;
   onStageDeleteChannelGroup: (groupId: number, description: string) => void;
+  onStageRenameChannelGroup: (groupId: number, newName: string, description: string) => void;
   onStartBatch: (description: string) => void;
   onEndBatch: () => void;
 
@@ -85,6 +86,7 @@ export interface ChannelManagerTabProps {
   // Provider & Filter Settings
   providerGroupSettings: Record<number, M3UGroupSetting>;
   deletedGroupIds?: Set<number>; // Groups staged for deletion in edit mode
+  renamedGroupNames?: Map<number, string>; // Groups staged for rename in edit mode
   channelListFilters: ChannelListFilterSettings;
   onChannelListFiltersChange: (updates: Partial<ChannelListFilterSettings>) => void;
   newlyCreatedGroupIds: Set<number>;
@@ -226,6 +228,7 @@ export function ChannelManagerTab({
   onStageBulkAssignNumbers,
   onStageDeleteChannel,
   onStageDeleteChannelGroup,
+  onStageRenameChannelGroup,
   onStartBatch,
   onEndBatch,
 
@@ -261,6 +264,7 @@ export function ChannelManagerTab({
   // Provider & Filter Settings
   providerGroupSettings,
   deletedGroupIds,
+  renamedGroupNames,
   channelListFilters,
   onChannelListFiltersChange,
   newlyCreatedGroupIds,
@@ -365,6 +369,7 @@ export function ChannelManagerTab({
           onStageBulkAssignNumbers={onStageBulkAssignNumbers}
           onStageDeleteChannel={onStageDeleteChannel}
           onStageDeleteChannelGroup={onStageDeleteChannelGroup}
+          onStageRenameChannelGroup={onStageRenameChannelGroup}
           onStartBatch={onStartBatch}
           onEndBatch={onEndBatch}
           isCommitting={isCommitting}
@@ -393,6 +398,7 @@ export function ChannelManagerTab({
           onChannelProfilesChange={onChannelProfilesChange}
           channelDefaults={channelDefaults}
           providerGroupSettings={providerGroupSettings}
+          renamedGroupNames={renamedGroupNames}
           channelListFilters={channelListFilters}
           onChannelListFiltersChange={onChannelListFiltersChange}
           newlyCreatedGroupIds={newlyCreatedGroupIds}
