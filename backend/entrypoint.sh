@@ -138,6 +138,29 @@ check_application() {
     return 0
 }
 
+check_tls_config() {
+    # Check if TLS is configured by reading the settings file
+    TLS_CONFIG="/config/tls_settings.json"
+    TLS_CERT="/config/tls/cert.pem"
+    TLS_KEY="/config/tls/key.pem"
+
+    if [ -f "$TLS_CONFIG" ]; then
+        # Extract enabled and check if certs exist
+        TLS_ENABLED=$(python3 -c "import json; print(json.load(open('$TLS_CONFIG')).get('enabled', False))" 2>/dev/null || echo "False")
+
+        if [ "$TLS_ENABLED" = "True" ] && [ -f "$TLS_CERT" ] && [ -f "$TLS_KEY" ]; then
+            print_success "TLS enabled with valid certificates"
+            return 0  # TLS enabled
+        elif [ "$TLS_ENABLED" = "True" ]; then
+            print_warning "TLS enabled but certificates not found, starting without TLS"
+            return 1  # TLS configured but certs missing
+        fi
+    fi
+
+    print_info "TLS not configured, using HTTP"
+    return 1  # TLS not enabled
+}
+
 print_startup_info() {
     echo ""
     echo "${GREEN}════════════════════════════════════════════════════════════${NC}"
@@ -145,7 +168,11 @@ print_startup_info() {
     echo "${GREEN}════════════════════════════════════════════════════════════${NC}"
     echo ""
     print_info "Starting Enhanced Channel Manager..."
-    print_info "API Server: http://0.0.0.0:6100"
+    if [ "$USE_TLS" = "1" ]; then
+        print_info "API Server: https://0.0.0.0:6100 (TLS enabled)"
+    else
+        print_info "API Server: http://0.0.0.0:6100"
+    fi
     print_info "Health Check: http://0.0.0.0:6100/api/health"
     echo ""
 }
@@ -174,6 +201,18 @@ run_preflight_checks() {
 # Main execution
 run_preflight_checks
 
+# Check TLS configuration
+USE_TLS=0
+if check_tls_config; then
+    USE_TLS=1
+fi
+
 # Switch to non-root user and run the application
 cd /app
-exec gosu appuser uvicorn main:app --host 0.0.0.0 --port 6100
+if [ "$USE_TLS" = "1" ]; then
+    exec gosu appuser uvicorn main:app --host 0.0.0.0 --port 6100 \
+        --ssl-keyfile /config/tls/key.pem \
+        --ssl-certfile /config/tls/cert.pem
+else
+    exec gosu appuser uvicorn main:app --host 0.0.0.0 --port 6100
+fi
