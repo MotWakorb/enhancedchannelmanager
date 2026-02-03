@@ -77,20 +77,30 @@ def override_get_session(test_session):
 async def async_client(test_session):
     """
     Create an async test client for the FastAPI app.
-    Patches database.get_session to return the test session.
+    Uses FastAPI's dependency_overrides to inject the test session.
     """
-    from unittest.mock import patch
     from httpx import AsyncClient, ASGITransport
+    import database
+    from database import get_session
     from main import app
 
-    # Patch get_session at the module level where it's called
-    # This intercepts direct calls to get_session() in endpoint code
-    with patch('database.get_session', return_value=test_session):
-        # Also patch in main.py in case it imports get_session directly
-        with patch('main.get_session', return_value=test_session, create=True):
-            transport = ASGITransport(app=app)
-            async with AsyncClient(transport=transport, base_url="http://test") as client:
-                yield client
+    # Override the get_session dependency with a function that yields test_session
+    def override_get_session():
+        try:
+            yield test_session
+        finally:
+            pass  # Don't close - the test_session fixture handles cleanup
+
+    # Use FastAPI's dependency_overrides
+    app.dependency_overrides[get_session] = override_get_session
+
+    try:
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            yield client
+    finally:
+        # Clear overrides after test
+        app.dependency_overrides.clear()
 
 
 @pytest.fixture
