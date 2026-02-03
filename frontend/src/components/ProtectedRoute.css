@@ -1,0 +1,51 @@
+/**
+ * Protected route styles.
+ */
+
+.protected-route-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  background: var(--bg-primary);
+  color: var(--text-secondary);
+}
+
+.protected-route-spinner {
+  width: 40px;
+  height: 40px;
+  border: 3px solid var(--border-primary);
+  border-top-color: var(--button-primary-bg, #6366f1);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+  margin-bottom: 1rem;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.protected-route-denied {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  text-align: center;
+  padding: 2rem;
+}
+
+.protected-route-denied h2 {
+  margin: 0 0 0.5rem;
+  color: var(--danger-text, rgb(239, 68, 68));
+}
+
+.protected-route-denied p {
+  margin: 0;
+  color: var(--text-secondary);
+}
