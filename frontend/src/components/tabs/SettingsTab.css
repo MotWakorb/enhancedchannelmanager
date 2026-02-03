@@ -183,6 +183,44 @@
   font-family: monospace;
 }
 
+.connection-actions {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  margin-top: 1rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border-primary);
+}
+
+.btn-reset-stats {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.5rem 1rem;
+  font-size: 0.85rem;
+  background-color: var(--bg-tertiary);
+  border: 1px solid var(--border-secondary);
+  border-radius: 4px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.btn-reset-stats:hover:not(:disabled) {
+  background-color: var(--warning-bg, rgba(245, 158, 11, 0.1));
+  color: var(--warning, #f59e0b);
+  border-color: var(--warning, #f59e0b);
+}
+
+.btn-reset-stats:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.btn-reset-stats .material-icons {
+  font-size: 18px;
+}
+
 /* .form-group and .form-hint are defined in shared/common.css */
 
 .form-row {

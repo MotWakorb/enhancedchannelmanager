@@ -1039,3 +1039,46 @@ export interface WatchHistoryResponse {
   summary: WatchHistorySummary;
   history: WatchHistoryEntry[];
 }
+
+// =============================================================================
+// Authentication Types
+// =============================================================================
+
+// User information
+export interface User {
+  id: number;
+  username: string;
+  email: string | null;
+  display_name: string | null;
+  is_admin: boolean;
+  auth_provider: string;
+}
+
+// Auth status from server
+export interface AuthStatus {
+  setup_complete: boolean;
+  require_auth: boolean;
+  enabled_providers: string[];
+  primary_auth_mode: string;
+}
+
+// Login response
+export interface LoginResponse {
+  user: User;
+  message: string;
+}
+
+// Current user response
+export interface MeResponse {
+  user: User;
+}
+
+// Logout response
+export interface LogoutResponse {
+  message: string;
+}
+
+// Refresh response
+export interface RefreshResponse {
+  message: string;
+}

@@ -7,3 +7,8 @@ export { EditModeToggle } from './EditModeToggle';
 export { EditModeBanner } from './EditModeBanner';
 export { EditModeExitDialog } from './EditModeExitDialog';
 export { TabNavigation, type TabId } from './TabNavigation';
+export { CSVImportModal } from './CSVImportModal';
+// Auth components
+export { LoginPage } from './LoginPage';
+export { ProtectedRoute } from './ProtectedRoute';
+export { UserMenu } from './UserMenu';

@@ -25,7 +25,11 @@ from models import (
     JournalEntry, BandwidthDaily, ChannelWatchStats, HiddenChannelGroup,
     StreamStats, ScheduledTask, TaskSchedule, TaskExecution, Notification, AlertMethod,
     TagGroup, Tag, NormalizationRuleGroup, NormalizationRule,
-    M3USnapshot, M3UChangeLog
+    M3USnapshot, M3UChangeLog,
+    # v0.11.0 Enhanced Stats models
+    UniqueClientConnection, ChannelBandwidth, ChannelPopularityScore,
+    # v0.11.5 Authentication models
+    User, UserSession, PasswordResetToken,
 )
 
 

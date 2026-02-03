@@ -335,6 +335,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   const [cleaningOrphaned, setCleaningOrphaned] = useState(false);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [showConnectionModal, setShowConnectionModal] = useState(false);
+  const [resettingStats, setResettingStats] = useState(false);
 
   // Auto-created channels maintenance state
   const [autoCreatedGroups, setAutoCreatedGroups] = useState<api.AutoCreatedGroup[]>([]);
@@ -627,6 +628,26 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       notifications.error('Failed to test connection', 'Connection Test');
     } finally {
       setTesting(false);
+    }
+  };
+
+  const handleResetStats = async () => {
+    if (!confirm('This will clear all channel/stream statistics, watch history, and hidden groups. Use this when switching Dispatcharr servers. Continue?')) {
+      return;
+    }
+
+    setResettingStats(true);
+    try {
+      const result = await api.resetStats();
+      if (result.success) {
+        notifications.success(result.message, 'Reset Statistics');
+      } else {
+        notifications.error('Failed to reset statistics', 'Reset Statistics');
+      }
+    } catch (err) {
+      notifications.error('Failed to reset statistics', 'Reset Statistics');
+    } finally {
+      setResettingStats(false);
     }
   };
 
@@ -1207,6 +1228,20 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
             <span className="connection-label">Password:</span>
             <span className="connection-value">••••••••</span>
           </div>
+        </div>
+        <div className="connection-actions">
+          <button
+            className="btn-reset-stats"
+            onClick={handleResetStats}
+            disabled={resettingStats}
+            title="Clear all statistics when switching Dispatcharr servers"
+          >
+            <span className="material-icons">{resettingStats ? 'sync' : 'refresh'}</span>
+            {resettingStats ? 'Resetting...' : 'Reset Statistics'}
+          </button>
+          <span className="form-description">
+            Clear all channel/stream statistics when switching servers.
+          </span>
         </div>
       </div>
 

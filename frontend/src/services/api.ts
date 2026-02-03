@@ -52,6 +52,13 @@ import type {
   M3UDigestSettings,
   M3UDigestSettingsUpdate,
   M3UChangeType,
+  // Authentication
+  User,
+  AuthStatus,
+  LoginResponse,
+  MeResponse,
+  LogoutResponse,
+  RefreshResponse,
 } from '../types';
 import { logger } from '../utils/logger';
 import {
@@ -124,6 +131,7 @@ async function fetchJson<T>(url: string, options?: RequestInit): Promise<T> {
   try {
     const response = await fetch(url, {
       ...options,
+      credentials: 'include', // Include cookies for auth
       headers: {
         'Content-Type': 'application/json',
         ...options?.headers,
@@ -963,6 +971,24 @@ export async function testTelegramBot(botToken: string, chatId: string): Promise
 
 export async function restartServices(): Promise<{ success: boolean; message: string }> {
   return fetchJson(`${API_BASE}/settings/restart-services`, {
+    method: 'POST',
+  });
+}
+
+export interface ResetStatsResult {
+  success: boolean;
+  message: string;
+  details: {
+    hidden_groups: number;
+    watch_stats: number;
+    bandwidth_records: number;
+    stream_stats: number;
+    popularity_scores: number;
+  };
+}
+
+export async function resetStats(): Promise<ResetStatsResult> {
+  return fetchJson(`${API_BASE}/settings/reset-stats`, {
     method: 'POST',
   });
 }
@@ -2809,5 +2835,61 @@ export async function parseCSVPreview(content: string): Promise<CSVPreviewResult
   return fetchJson(`${API_BASE}/channels/preview-csv`, {
     method: 'POST',
     body: JSON.stringify({ content }),
+  });
+}
+
+// =============================================================================
+// Authentication API
+// =============================================================================
+
+/**
+ * Get authentication status and configuration.
+ * This is always public - used to check if auth is required.
+ */
+export async function getAuthStatus(): Promise<AuthStatus> {
+  return fetchJson(`${API_BASE}/auth/status`);
+}
+
+/**
+ * Login with username and password.
+ * Sets httpOnly cookies with JWT tokens.
+ */
+export async function login(username: string, password: string): Promise<LoginResponse> {
+  return fetchJson(`${API_BASE}/auth/login`, {
+    method: 'POST',
+    body: JSON.stringify({ username, password }),
+    credentials: 'include', // Important: include cookies in request
+  });
+}
+
+/**
+ * Get current authenticated user information.
+ * Requires valid access token (sent via cookie).
+ */
+export async function getCurrentUser(): Promise<MeResponse> {
+  return fetchJson(`${API_BASE}/auth/me`, {
+    credentials: 'include',
+  });
+}
+
+/**
+ * Refresh access token using refresh token.
+ * Called automatically when access token expires.
+ */
+export async function refreshToken(): Promise<RefreshResponse> {
+  return fetchJson(`${API_BASE}/auth/refresh`, {
+    method: 'POST',
+    credentials: 'include',
+  });
+}
+
+/**
+ * Logout current user.
+ * Clears cookies and revokes refresh token.
+ */
+export async function logout(): Promise<LogoutResponse> {
+  return fetchJson(`${API_BASE}/auth/logout`, {
+    method: 'POST',
+    credentials: 'include',
   });
 }

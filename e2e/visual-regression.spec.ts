@@ -92,7 +92,7 @@ test.describe('Visual Regression - Tabs', () => {
 
 test.describe('Visual Regression - Components', () => {
   test('header and navigation', async ({ appPage }) => {
-    const header = appPage.locator('.app-header');
+    const header = appPage.locator('header.header');
     await expect(header).toHaveScreenshot('header.png');
   });
 

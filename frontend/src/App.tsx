@@ -3,6 +3,7 @@ import {
   SettingsModal,
   EditModeExitDialog,
   TabNavigation,
+  UserMenu,
   type TabId,
 } from './components';
 import { ChannelManagerTab } from './components/tabs/ChannelManagerTab';
@@ -2000,6 +2001,7 @@ function App() {
             </>
           )}
           <NotificationCenter />
+          <UserMenu />
         </div>
       </header>
 
