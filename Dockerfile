@@ -52,9 +52,11 @@ COPY backend/ ./
 # Copy built frontend to static directory
 COPY --from=frontend-builder /app/frontend/dist ./static
 
-# Create config directory and set ownership
+# Create config and TLS directories with proper permissions
 # Convert entrypoint line endings (handles Windows CRLF -> Unix LF)
-RUN mkdir -p /config && chown -R appuser:appuser /config /app \
+RUN mkdir -p /config /config/tls \
+    && chown -R appuser:appuser /config /app \
+    && chmod 700 /config/tls \
     && sed -i 's/\r$//' /app/entrypoint.sh \
     && chmod +x /app/entrypoint.sh
 
