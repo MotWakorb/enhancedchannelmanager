@@ -1,7 +1,7 @@
 from fastapi import FastAPI, HTTPException, Request, Body, UploadFile, File, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse, PlainTextResponse
 import asyncio
 import subprocess
 from fastapi.exceptions import RequestValidationError
@@ -81,6 +81,7 @@ tags_metadata = [
     {"name": "Cache", "description": "Cache management"},
     {"name": "Cron", "description": "Cron expression utilities"},
     {"name": "Authentication", "description": "User authentication and session management"},
+    {"name": "TLS", "description": "TLS/SSL certificate management with Let's Encrypt"},
 ]
 
 app = FastAPI(
@@ -123,6 +124,26 @@ app.add_middleware(
 # Include auth router
 from auth.routes import router as auth_router
 app.include_router(auth_router)
+
+# Include admin router
+from auth.admin_routes import router as admin_router
+app.include_router(admin_router)
+
+# Include TLS router
+from tls.routes import router as tls_router
+app.include_router(tls_router)
+
+# Root-level ACME challenge endpoint (Let's Encrypt expects this path exactly)
+from tls.challenges import get_http_challenge_response
+
+
+@app.get("/.well-known/acme-challenge/{token}", include_in_schema=False)
+async def acme_challenge_root(token: str):
+    """Serve ACME HTTP-01 challenge at root level for Let's Encrypt validation."""
+    response = get_http_challenge_response(token)
+    if response:
+        return PlainTextResponse(response)
+    raise HTTPException(404, "Challenge not found")
 
 
 # ============================================================================
@@ -386,6 +407,19 @@ async def startup_event():
         logger.error(f"Failed to start task engine: {e}", exc_info=True)
         logger.error("Scheduled tasks will not be available!")
 
+    # Start TLS certificate renewal manager
+    try:
+        from tls.settings import get_tls_settings
+        from tls.renewal import renewal_manager
+        tls_settings = get_tls_settings()
+        if tls_settings.enabled and tls_settings.mode == "letsencrypt" and tls_settings.auto_renew:
+            renewal_manager.start(check_interval=86400)  # Check every 24 hours
+            logger.info("TLS certificate renewal manager started")
+        else:
+            logger.info("TLS auto-renewal not enabled, skipping renewal manager")
+    except Exception as e:
+        logger.warning(f"Failed to start TLS renewal manager: {e}")
+
     logger.info("=" * 60)
 
 
@@ -393,6 +427,14 @@ async def startup_event():
 async def shutdown_event():
     """Clean up on shutdown."""
     logger.info("Enhanced Channel Manager shutting down")
+
+    # Stop TLS renewal manager
+    try:
+        from tls.renewal import renewal_manager
+        renewal_manager.stop()
+        logger.info("TLS renewal manager stopped")
+    except Exception as e:
+        logger.error(f"Error stopping TLS renewal manager: {e}")
 
     # Stop task engine
     try:
