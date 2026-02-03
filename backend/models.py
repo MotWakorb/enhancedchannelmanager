@@ -1208,6 +1208,7 @@ class User(Base):
 
     # Relationships
     sessions = relationship("UserSession", back_populates="user", cascade="all, delete-orphan")
+    identities = relationship("UserIdentity", back_populates="user", cascade="all, delete-orphan")
 
     __table_args__ = (
         Index("idx_user_auth_provider", auth_provider),
@@ -1308,3 +1309,48 @@ class PasswordResetToken(Base):
 
     def __repr__(self):
         return f"<PasswordResetToken(id={self.id}, user_id={self.user_id})>"
+
+
+class UserIdentity(Base):
+    """
+    Links multiple authentication providers to a single user account.
+    Allows users to log in with any linked identity and access the same account.
+
+    Providers: 'local', 'dispatcharr', 'oidc', 'saml', 'ldap'
+    """
+    __tablename__ = "user_identities"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    provider = Column(String(50), nullable=False)  # local, dispatcharr, oidc, saml, ldap
+    external_id = Column(String(255), nullable=True)  # Provider-specific ID (null for local)
+    identifier = Column(String(255), nullable=False)  # Username/email used with this provider
+    linked_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    last_used_at = Column(DateTime, nullable=True)
+
+    # Relationships
+    user = relationship("User", back_populates="identities")
+
+    __table_args__ = (
+        UniqueConstraint("provider", "external_id", name="uq_identity_provider_external"),
+        UniqueConstraint("provider", "identifier", name="uq_identity_provider_identifier"),
+        Index("idx_identity_user_id", user_id),
+        Index("idx_identity_provider", provider),
+        Index("idx_identity_external_id", provider, external_id),
+        Index("idx_identity_identifier", provider, identifier),
+    )
+
+    def to_dict(self) -> dict:
+        """Convert to dictionary for API responses."""
+        return {
+            "id": self.id,
+            "user_id": self.user_id,
+            "provider": self.provider,
+            "external_id": self.external_id,
+            "identifier": self.identifier,
+            "linked_at": self.linked_at.isoformat() + "Z" if self.linked_at else None,
+            "last_used_at": self.last_used_at.isoformat() + "Z" if self.last_used_at else None,
+        }
+
+    def __repr__(self):
+        return f"<UserIdentity(id={self.id}, user_id={self.user_id}, provider={self.provider}, identifier={self.identifier})>"

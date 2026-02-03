@@ -53,7 +53,7 @@ def init_db() -> None:
         _SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=_engine)
 
         # Import models to register them with Base
-        from models import JournalEntry, BandwidthDaily, ChannelWatchStats, HiddenChannelGroup, StreamStats, ScheduledTask, TaskSchedule, TaskExecution, Notification, AlertMethod, TagGroup, Tag, NormalizationRuleGroup, NormalizationRule  # noqa: F401
+        from models import JournalEntry, BandwidthDaily, ChannelWatchStats, HiddenChannelGroup, StreamStats, ScheduledTask, TaskSchedule, TaskExecution, Notification, AlertMethod, TagGroup, Tag, NormalizationRuleGroup, NormalizationRule, User, UserSession, PasswordResetToken, UserIdentity  # noqa: F401
 
         # Create all tables
         Base.metadata.create_all(bind=_engine)
@@ -161,6 +161,9 @@ def _run_migrations(engine) -> None:
 
             # Add discord_webhook_url column to m3u_digest_settings (v0.11.0)
             _add_m3u_digest_discord_webhook_column(conn)
+
+            # Migrate existing users to user_identities table (v0.12.0 - Account Linking)
+            _migrate_user_identities(conn)
 
             logger.debug("All migrations complete - schema is up to date")
     except Exception as e:
@@ -1140,6 +1143,76 @@ def _add_m3u_digest_discord_webhook_column(conn) -> None:
         logger.info("Migration complete: added send_to_discord column to m3u_digest_settings")
     else:
         logger.debug("m3u_digest_settings.send_to_discord column already exists")
+
+
+def _migrate_user_identities(conn) -> None:
+    """Migrate existing users to user_identities table (v0.12.0 - Account Linking).
+
+    For each existing user, creates a UserIdentity row from their current
+    auth_provider, external_id, and username. This populates the new
+    user_identities table with existing authentication data.
+    """
+    from sqlalchemy import text
+
+    # Check if user_identities table exists
+    result = conn.execute(text(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='user_identities'"
+    ))
+    if not result.fetchone():
+        logger.debug("user_identities table doesn't exist yet, skipping migration")
+        return
+
+    # Check if users table exists
+    result = conn.execute(text(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='users'"
+    ))
+    if not result.fetchone():
+        logger.debug("users table doesn't exist yet, skipping migration")
+        return
+
+    # Check if we've already migrated (table has data)
+    result = conn.execute(text("SELECT COUNT(*) FROM user_identities"))
+    count = result.fetchone()[0]
+    if count > 0:
+        logger.debug(f"user_identities already has {count} entries, skipping migration")
+        return
+
+    # Get all existing users
+    result = conn.execute(text("""
+        SELECT id, username, auth_provider, external_id
+        FROM users
+    """))
+    users = result.fetchall()
+
+    if not users:
+        logger.debug("No users to migrate to user_identities")
+        return
+
+    logger.info(f"Migrating {len(users)} users to user_identities table")
+
+    migrated_count = 0
+    for user in users:
+        user_id, username, auth_provider, external_id = user
+
+        # For local users, external_id is null
+        # For external providers, external_id is the provider's user ID
+        try:
+            conn.execute(text("""
+                INSERT INTO user_identities
+                (user_id, provider, external_id, identifier, linked_at)
+                VALUES (:user_id, :provider, :external_id, :identifier, datetime('now'))
+            """), {
+                "user_id": user_id,
+                "provider": auth_provider or "local",
+                "external_id": external_id,
+                "identifier": username,
+            })
+            migrated_count += 1
+        except Exception as e:
+            logger.warning(f"Failed to migrate user {user_id} ({username}): {e}")
+
+    conn.commit()
+    logger.info(f"Migrated {migrated_count} users to user_identities table")
 
 
 def _perform_maintenance(engine) -> None:
