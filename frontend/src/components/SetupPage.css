@@ -1,0 +1,133 @@
+/**
+ * Setup page styles using theme-aware CSS variables.
+ */
+
+.setup-page {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  background: var(--bg-primary);
+  padding: 1rem;
+}
+
+.setup-container {
+  width: 100%;
+  max-width: 480px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-primary);
+  border-radius: 8px;
+  padding: 2rem;
+  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+}
+
+.setup-header {
+  text-align: center;
+  margin-bottom: 2rem;
+}
+
+.setup-header h1 {
+  margin: 0 0 0.5rem;
+  font-size: 1.5rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.setup-header p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 0.875rem;
+}
+
+.setup-form {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+.setup-error {
+  padding: 0.75rem;
+  background: var(--danger-bg, rgba(239, 68, 68, 0.1));
+  border: 1px solid var(--danger-border, rgb(239, 68, 68));
+  border-radius: 4px;
+  color: var(--danger-text, rgb(239, 68, 68));
+  font-size: 0.875rem;
+}
+
+.setup-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.setup-field label {
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
+.setup-field input {
+  padding: 0.75rem;
+  background: var(--input-bg);
+  border: 1px solid var(--border-primary);
+  border-radius: 4px;
+  color: var(--text-primary);
+  font-size: 1rem;
+  outline: none;
+  transition: border-color 0.15s ease;
+}
+
+.setup-field input::placeholder {
+  color: var(--text-muted);
+}
+
+.setup-field input:focus {
+  border-color: var(--button-primary-bg, #6366f1);
+  box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.2);
+}
+
+.setup-field input:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.setup-hint {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  margin-top: 0.25rem;
+}
+
+.setup-submit {
+  margin-top: 0.5rem;
+  padding: 0.875rem 1rem;
+  background: var(--button-primary-bg);
+  color: var(--button-primary-text);
+  border: none;
+  border-radius: 4px;
+  font-size: 1rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: opacity 0.15s ease;
+}
+
+.setup-submit:hover:not(:disabled) {
+  opacity: 0.9;
+}
+
+.setup-submit:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.setup-footer {
+  margin-top: 1.5rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border-primary);
+  text-align: center;
+}
+
+.setup-footer p {
+  margin: 0;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
