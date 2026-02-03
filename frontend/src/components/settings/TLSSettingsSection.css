@@ -1,0 +1,350 @@
+/**
+ * TLSSettingsSection styles - follows common settings section patterns
+ */
+
+.tls-settings-section {
+  padding: 20px;
+  max-width: 800px;
+}
+
+.tls-settings-no-access {
+  color: var(--text-secondary);
+  text-align: center;
+  padding: 40px;
+}
+
+.tls-settings-loading {
+  color: var(--text-secondary);
+  text-align: center;
+  padding: 40px;
+}
+
+.tls-settings-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 16px;
+  background: var(--error-bg, rgba(239, 68, 68, 0.1));
+  border: 1px solid var(--error-border, rgba(239, 68, 68, 0.3));
+  border-radius: 8px;
+  margin-bottom: 20px;
+}
+
+.tls-settings-error .material-icons {
+  color: var(--error-text, #ef4444);
+  font-size: 20px;
+}
+
+.tls-settings-error pre {
+  margin: 0;
+  font-size: 13px;
+  white-space: pre-wrap;
+  color: var(--error-text, #ef4444);
+}
+
+/* Status Card */
+.tls-status-card {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-primary);
+  border-radius: 8px;
+  padding: 20px;
+  margin-bottom: 20px;
+}
+
+.tls-status-card h3 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 16px 0;
+  font-size: 16px;
+  color: var(--text-primary);
+}
+
+.tls-status-card h3 .material-icons {
+  font-size: 20px;
+  color: var(--text-secondary);
+}
+
+.tls-status-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 12px;
+}
+
+.status-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.status-item.error {
+  grid-column: 1 / -1;
+}
+
+.status-label {
+  font-size: 12px;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+}
+
+.status-value {
+  font-size: 14px;
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+.status-value.enabled {
+  color: var(--success-text, #22c55e);
+}
+
+.status-value.disabled {
+  color: var(--text-muted);
+}
+
+.status-value.valid {
+  color: var(--success-text, #22c55e);
+}
+
+.status-value.invalid {
+  color: var(--error-text, #ef4444);
+}
+
+.status-value.warning {
+  color: var(--warning-text, #f59e0b);
+}
+
+.status-item.error .status-value {
+  color: var(--error-text, #ef4444);
+}
+
+/* Config Card */
+.tls-config-card {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-primary);
+  border-radius: 8px;
+  padding: 20px;
+  margin-bottom: 20px;
+}
+
+.tls-config-card h3 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 20px 0;
+  font-size: 16px;
+  color: var(--text-primary);
+}
+
+.tls-config-card h3 .material-icons {
+  font-size: 20px;
+  color: var(--text-secondary);
+}
+
+/* Form Elements */
+.form-group {
+  margin-bottom: 16px;
+}
+
+.form-group label {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.form-group input[type="text"],
+.form-group input[type="email"],
+.form-group input[type="password"],
+.form-group input[type="number"],
+.form-group select {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--border-primary);
+  border-radius: 6px;
+  background: var(--input-bg);
+  color: var(--text-primary);
+  font-size: 14px;
+}
+
+.form-group input:focus,
+.form-group select:focus {
+  outline: none;
+  border-color: var(--button-primary-bg);
+}
+
+.form-group input[type="file"] {
+  padding: 8px 0;
+}
+
+.form-help {
+  display: block;
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+/* Toggle/Checkbox Label */
+.toggle-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  font-weight: normal !important;
+}
+
+.toggle-label input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+}
+
+/* Radio Group */
+.radio-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.radio-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  font-weight: normal !important;
+}
+
+.radio-label input[type="radio"] {
+  width: 16px;
+  height: 16px;
+}
+
+/* Challenge Info Box */
+.challenge-info {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  background: var(--bg-tertiary);
+  border-radius: 6px;
+  margin: 12px 0;
+}
+
+.challenge-info .material-icons {
+  color: var(--text-secondary);
+  font-size: 20px;
+}
+
+.challenge-info p {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+/* Manual Upload Section */
+.manual-upload-section {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border-primary);
+}
+
+/* Actions */
+.tls-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
+.btn-primary,
+.btn-secondary,
+.btn-danger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 10px 20px;
+  border: none;
+  border-radius: 6px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color 0.2s, opacity 0.2s;
+}
+
+.btn-primary {
+  background: var(--button-primary-bg);
+  color: var(--button-primary-text);
+}
+
+.btn-primary:hover:not(:disabled) {
+  opacity: 0.9;
+}
+
+.btn-secondary {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  border: 1px solid var(--border-primary);
+}
+
+.btn-secondary:hover:not(:disabled) {
+  background: var(--bg-secondary);
+}
+
+.btn-danger {
+  background: var(--error-bg, rgba(239, 68, 68, 0.1));
+  color: var(--error-text, #ef4444);
+  border: 1px solid var(--error-border, rgba(239, 68, 68, 0.3));
+}
+
+.btn-danger:hover:not(:disabled) {
+  background: rgba(239, 68, 68, 0.2);
+}
+
+.btn-primary:disabled,
+.btn-secondary:disabled,
+.btn-danger:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Info Box */
+.tls-info-box {
+  background: var(--bg-tertiary);
+  border-radius: 8px;
+  padding: 20px;
+}
+
+.tls-info-box h4 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 12px 0;
+  font-size: 14px;
+  color: var(--text-primary);
+}
+
+.tls-info-box h4 .material-icons {
+  font-size: 18px;
+  color: var(--text-secondary);
+}
+
+.tls-info-box ul {
+  margin: 0;
+  padding-left: 20px;
+}
+
+.tls-info-box li {
+  margin-bottom: 8px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+.tls-info-box li:last-child {
+  margin-bottom: 0;
+}
+
+.tls-info-box li strong {
+  color: var(--text-primary);
+}

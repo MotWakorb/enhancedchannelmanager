@@ -1,0 +1,254 @@
+/**
+ * AuthSettingsSection styles - follows common settings section patterns
+ */
+
+.auth-settings-section {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+/* Header - matches tag-engine-header pattern */
+.auth-settings-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 0.5rem;
+}
+
+.auth-settings-header .header-info h3 {
+  margin: 0 0 0.25rem 0;
+  color: var(--text-primary);
+  font-size: 1.25rem;
+}
+
+.auth-settings-header .header-description {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.875rem;
+}
+
+/* Error and Loading States */
+.auth-settings-error {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.75rem 1rem;
+  background: var(--error-bg, rgba(239, 68, 68, 0.1));
+  border: 1px solid var(--error-border, #ef4444);
+  border-radius: 6px;
+  color: var(--error-text, #ef4444);
+  font-size: 0.875rem;
+}
+
+.auth-settings-error .material-icons {
+  font-size: 1.125rem;
+}
+
+.auth-settings-error button {
+  margin-left: auto;
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0;
+  display: flex;
+  color: inherit;
+}
+
+.auth-settings-loading,
+.auth-settings-no-access {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 3rem;
+  color: var(--text-muted);
+  font-size: 0.875rem;
+}
+
+.spinning {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+/* Provider Cards - follows tag-group-card pattern */
+.auth-provider-card {
+  background: var(--card-bg);
+  border: 1px solid var(--border-primary);
+  border-radius: 8px;
+  overflow: hidden;
+  transition: border-color 0.2s;
+}
+
+.auth-provider-card.expanded {
+  border-color: var(--accent-primary);
+}
+
+.auth-provider-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.75rem 1rem;
+  cursor: default;
+  user-select: none;
+}
+
+.auth-provider-header:hover {
+  background: var(--hover-bg);
+}
+
+.auth-provider-header h4 {
+  margin: 0;
+  font-size: 0.9375rem;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.auth-provider-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.auth-provider-badge {
+  font-size: 0.6875rem;
+  padding: 0.125rem 0.375rem;
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  border: 1px solid var(--border-primary);
+  border-radius: 4px;
+  font-weight: 500;
+}
+
+.auth-provider-badge-coming-soon {
+  background: var(--warning-bg, rgba(245, 158, 11, 0.1));
+  border-color: var(--warning-border, rgba(245, 158, 11, 0.3));
+  color: var(--warning-text, #f59e0b);
+}
+
+.auth-provider-body {
+  padding: 1rem;
+  border-top: 1px solid var(--border-primary);
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.auth-provider-info {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 0.8125rem;
+  font-style: italic;
+}
+
+/* Form Fields - follows form-group pattern */
+.auth-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+}
+
+.auth-field label {
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
+.auth-field input[type="text"],
+.auth-field input[type="url"],
+.auth-field input[type="password"],
+.auth-field input[type="number"] {
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--border-primary);
+  border-radius: 6px;
+  background: var(--input-bg);
+  color: var(--text-primary);
+  font-size: 0.875rem;
+}
+
+.auth-field input[type="text"]:focus,
+.auth-field input[type="url"]:focus,
+.auth-field input[type="password"]:focus,
+.auth-field input[type="number"]:focus {
+  outline: none;
+  border-color: var(--accent-primary);
+}
+
+.auth-field input[type="number"] {
+  width: 100px;
+}
+
+.auth-field-hint {
+  margin: 0;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.auth-field-row {
+  display: flex;
+  gap: 1.5rem;
+}
+
+/* Checkbox labels */
+.auth-checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  cursor: pointer;
+  font-weight: normal;
+}
+
+.auth-checkbox-label input[type="checkbox"] {
+  width: 1rem;
+  height: 1rem;
+  cursor: pointer;
+  accent-color: var(--button-primary-bg);
+}
+
+.auth-checkbox-label span {
+  color: var(--text-primary);
+  font-size: 0.875rem;
+}
+
+/* Actions - follows modal-footer pattern */
+.auth-settings-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.75rem;
+  padding: 1rem 0;
+  border-top: 1px solid var(--border-primary);
+  margin-top: 0.5rem;
+}
+
+/* Buttons - uses common btn-primary pattern */
+.auth-save-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.5rem 1rem;
+  background: var(--button-primary-bg);
+  color: var(--button-primary-text);
+  border: none;
+  border-radius: 6px;
+  font-size: 0.875rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: opacity 0.2s;
+}
+
+.auth-save-button:hover {
+  opacity: 0.9;
+}
+
+.auth-save-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.auth-save-button .material-icons {
+  font-size: 1.125rem;
+}
