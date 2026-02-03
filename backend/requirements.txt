@@ -4,6 +4,12 @@ httpx>=0.28.0
 pydantic>=2.10.0
 pydantic-settings>=2.6.0
 python-multipart>=0.0.18
+
+# Authentication
+passlib[bcrypt]>=1.7.4
+python-jose[cryptography]>=3.3.0
+cryptography>=42.0.0
+
 sqlalchemy>=2.0.0
 aiosqlite>=0.19.0
 aiofiles>=23.0.0

@@ -1172,3 +1172,139 @@ class ChannelPopularityScore(Base):
 
     def __repr__(self):
         return f"<ChannelPopularityScore(id={self.id}, channel={self.channel_name}, score={self.score}, rank={self.rank})>"
+
+
+# =============================================================================
+# Authentication Models (v0.11.5)
+# =============================================================================
+
+class User(Base):
+    """
+    User account for authentication.
+    Supports local auth and external providers (OIDC, SAML, LDAP, Dispatcharr).
+    """
+    __tablename__ = "users"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    username = Column(String(100), unique=True, nullable=False, index=True)
+    email = Column(String(255), unique=True, nullable=True, index=True)
+    password_hash = Column(String(255), nullable=True)  # Null for external auth
+
+    # External authentication
+    auth_provider = Column(String(50), default="local", nullable=False)  # local, oidc, saml, ldap, dispatcharr
+    external_id = Column(String(255), nullable=True)  # ID from external provider
+
+    # Profile
+    display_name = Column(String(255), nullable=True)
+
+    # Status
+    is_active = Column(Boolean, default=True, nullable=False)
+    is_admin = Column(Boolean, default=False, nullable=False)
+
+    # Timestamps
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+    last_login_at = Column(DateTime, nullable=True)
+
+    # Relationships
+    sessions = relationship("UserSession", back_populates="user", cascade="all, delete-orphan")
+
+    __table_args__ = (
+        Index("idx_user_auth_provider", auth_provider),
+        Index("idx_user_external_id", auth_provider, external_id),
+    )
+
+    def to_dict(self, include_sensitive: bool = False) -> dict:
+        """Convert to dictionary for API responses."""
+        result = {
+            "id": self.id,
+            "username": self.username,
+            "email": self.email,
+            "display_name": self.display_name,
+            "auth_provider": self.auth_provider,
+            "is_active": self.is_active,
+            "is_admin": self.is_admin,
+            "created_at": self.created_at.isoformat() + "Z" if self.created_at else None,
+            "last_login_at": self.last_login_at.isoformat() + "Z" if self.last_login_at else None,
+        }
+        if include_sensitive:
+            result["external_id"] = self.external_id
+        return result
+
+    def __repr__(self):
+        return f"<User(id={self.id}, username={self.username}, provider={self.auth_provider})>"
+
+
+class UserSession(Base):
+    """
+    Active user session tracking.
+    Stores refresh tokens and session metadata.
+    """
+    __tablename__ = "user_sessions"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+
+    # Token tracking (store hash of refresh token, not the token itself)
+    refresh_token_hash = Column(String(255), nullable=False, unique=True)
+
+    # Session metadata
+    ip_address = Column(String(45), nullable=True)  # IPv6 can be up to 45 chars
+    user_agent = Column(String(500), nullable=True)
+
+    # Expiration
+    expires_at = Column(DateTime, nullable=False)
+
+    # Timestamps
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    last_used_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    # Status
+    is_revoked = Column(Boolean, default=False, nullable=False)
+
+    # Relationships
+    user = relationship("User", back_populates="sessions")
+
+    __table_args__ = (
+        Index("idx_session_user", user_id),
+        Index("idx_session_expires", expires_at),
+        Index("idx_session_token_hash", refresh_token_hash),
+    )
+
+    def to_dict(self) -> dict:
+        """Convert to dictionary for API responses."""
+        return {
+            "id": self.id,
+            "user_id": self.user_id,
+            "ip_address": self.ip_address,
+            "user_agent": self.user_agent,
+            "expires_at": self.expires_at.isoformat() + "Z" if self.expires_at else None,
+            "created_at": self.created_at.isoformat() + "Z" if self.created_at else None,
+            "last_used_at": self.last_used_at.isoformat() + "Z" if self.last_used_at else None,
+            "is_revoked": self.is_revoked,
+        }
+
+    def __repr__(self):
+        return f"<UserSession(id={self.id}, user_id={self.user_id}, expires={self.expires_at})>"
+
+
+class PasswordResetToken(Base):
+    """
+    Password reset tokens for forgot password flow.
+    """
+    __tablename__ = "password_reset_tokens"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    token_hash = Column(String(255), nullable=False, unique=True)
+    expires_at = Column(DateTime, nullable=False)
+    used_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        Index("idx_reset_token_hash", token_hash),
+        Index("idx_reset_token_user", user_id),
+    )
+
+    def __repr__(self):
+        return f"<PasswordResetToken(id={self.id}, user_id={self.user_id})>"

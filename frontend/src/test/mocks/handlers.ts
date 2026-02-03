@@ -215,6 +215,72 @@ interface MockNotification {
   expires_at: string | null
 }
 
+// v0.11.0 Enhanced Stats Types
+interface MockPopularityScore {
+  id: number
+  channel_id: string
+  channel_name: string
+  score: number
+  rank: number | null
+  watch_count_7d: number | null
+  watch_time_7d: number | null
+  unique_viewers_7d: number | null
+  bandwidth_7d: number | null
+  trend: 'up' | 'down' | 'stable'
+  trend_percent: number
+  previous_score: number | null
+  previous_rank: number | null
+  calculated_at: string
+  created_at: string
+}
+
+interface MockUniqueViewersSummary {
+  period_days: number
+  total_unique_viewers: number
+  today_unique_viewers: number
+  total_connections: number
+  avg_watch_seconds: number
+  top_viewer_ip: string | null
+}
+
+interface MockChannelBandwidthStats {
+  channel_id: string
+  channel_name: string
+  total_bytes: number
+  total_connections: number
+  total_watch_seconds: number
+  avg_bytes_per_connection: number
+}
+
+interface MockChannelUniqueViewers {
+  channel_id: string
+  channel_name: string
+  unique_viewers: number
+  total_connections: number
+  total_watch_seconds: number
+}
+
+export function createMockPopularityScore(overrides: Partial<MockPopularityScore> = {}): MockPopularityScore {
+  const id = overrides.id ?? nextId()
+  return {
+    id,
+    channel_id: overrides.channel_id ?? `channel-uuid-${id}`,
+    channel_name: overrides.channel_name ?? `Channel ${id}`,
+    score: overrides.score ?? 75.5,
+    rank: overrides.rank ?? id,
+    watch_count_7d: overrides.watch_count_7d ?? 100,
+    watch_time_7d: overrides.watch_time_7d ?? 3600,
+    unique_viewers_7d: overrides.unique_viewers_7d ?? 10,
+    bandwidth_7d: overrides.bandwidth_7d ?? 1000000,
+    trend: overrides.trend ?? 'stable',
+    trend_percent: overrides.trend_percent ?? 0.0,
+    previous_score: overrides.previous_score ?? null,
+    previous_rank: overrides.previous_rank ?? null,
+    calculated_at: overrides.calculated_at ?? new Date().toISOString(),
+    created_at: overrides.created_at ?? new Date().toISOString(),
+  }
+}
+
 // =============================================================================
 // Mock Data Store
 // =============================================================================
@@ -226,6 +292,7 @@ interface MockDataStore {
   tasks: MockScheduledTask[]
   alertMethods: MockAlertMethod[]
   notifications: MockNotification[]
+  popularityScores: MockPopularityScore[]
   settings: object
 }
 
@@ -236,6 +303,7 @@ export const mockDataStore: MockDataStore = {
   tasks: [],
   alertMethods: [],
   notifications: [],
+  popularityScores: [],
   settings: {
     configured: true,
     url: 'http://dispatcharr.test',
@@ -274,6 +342,7 @@ export function resetMockDataStore(): void {
   mockDataStore.tasks = []
   mockDataStore.alertMethods = []
   mockDataStore.notifications = []
+  mockDataStore.popularityScores = []
   resetIdCounter()
 }
 
@@ -527,5 +596,114 @@ export const handlers = [
       n.read_at = now
     })
     return HttpResponse.json({ success: true })
+  }),
+
+  // -------------------------------------------------------------------------
+  // Enhanced Stats (v0.11.0)
+  // -------------------------------------------------------------------------
+
+  http.get(`${API_BASE}/stats/bandwidth`, () => {
+    return HttpResponse.json({
+      today: 1000000000,
+      this_week: 5000000000,
+      this_month: 20000000000,
+      this_year: 100000000000,
+      today_in: 400000000,
+      today_out: 600000000,
+      week_in: 2000000000,
+      week_out: 3000000000,
+      month_in: 8000000000,
+      month_out: 12000000000,
+      year_in: 40000000000,
+      year_out: 60000000000,
+      daily_history: [],
+    })
+  }),
+
+  http.get(`${API_BASE}/stats/unique-viewers`, ({ request }) => {
+    const url = new URL(request.url)
+    const days = parseInt(url.searchParams.get('days') ?? '7')
+    return HttpResponse.json({
+      period_days: days,
+      total_unique_viewers: 150,
+      today_unique_viewers: 25,
+      total_connections: 500,
+      avg_watch_seconds: 1800,
+      top_viewer_ip: '192.168.1.100',
+    })
+  }),
+
+  http.get(`${API_BASE}/stats/channel-bandwidth`, ({ request }) => {
+    const url = new URL(request.url)
+    const limit = parseInt(url.searchParams.get('limit') ?? '20')
+    const results = mockDataStore.channels.slice(0, limit).map((ch, idx) => ({
+      channel_id: ch.uuid,
+      channel_name: ch.name,
+      total_bytes: 1000000000 - idx * 100000000,
+      total_connections: 100 - idx * 10,
+      total_watch_seconds: 36000 - idx * 1000,
+      avg_bytes_per_connection: 10000000,
+    }))
+    return HttpResponse.json(results)
+  }),
+
+  http.get(`${API_BASE}/stats/unique-viewers-by-channel`, ({ request }) => {
+    const url = new URL(request.url)
+    const limit = parseInt(url.searchParams.get('limit') ?? '20')
+    const results = mockDataStore.channels.slice(0, limit).map((ch, idx) => ({
+      channel_id: ch.uuid,
+      channel_name: ch.name,
+      unique_viewers: 50 - idx * 5,
+      total_connections: 100 - idx * 10,
+      total_watch_seconds: 36000 - idx * 1000,
+    }))
+    return HttpResponse.json(results)
+  }),
+
+  // -------------------------------------------------------------------------
+  // Popularity (v0.11.0)
+  // -------------------------------------------------------------------------
+
+  http.get(`${API_BASE}/stats/popularity/rankings`, ({ request }) => {
+    const url = new URL(request.url)
+    const limit = parseInt(url.searchParams.get('limit') ?? '50')
+    const offset = parseInt(url.searchParams.get('offset') ?? '0')
+    const paginatedResults = mockDataStore.popularityScores.slice(offset, offset + limit)
+    return HttpResponse.json({
+      total: mockDataStore.popularityScores.length,
+      rankings: paginatedResults,
+    })
+  }),
+
+  http.get(`${API_BASE}/stats/popularity/channel/:channelId`, ({ params }) => {
+    const score = mockDataStore.popularityScores.find(s => s.channel_id === params.channelId)
+    if (!score) {
+      return HttpResponse.json({ detail: 'Channel not found' }, { status: 404 })
+    }
+    return HttpResponse.json(score)
+  }),
+
+  http.get(`${API_BASE}/stats/popularity/trending`, ({ request }) => {
+    const url = new URL(request.url)
+    const direction = url.searchParams.get('direction') ?? 'up'
+    const limit = parseInt(url.searchParams.get('limit') ?? '10')
+    const filtered = mockDataStore.popularityScores
+      .filter(s => s.trend === direction)
+      .sort((a, b) => Math.abs(b.trend_percent) - Math.abs(a.trend_percent))
+      .slice(0, limit)
+    return HttpResponse.json(filtered)
+  }),
+
+  http.post(`${API_BASE}/stats/popularity/calculate`, () => {
+    return HttpResponse.json({
+      channels_scored: mockDataStore.channels.length,
+      channels_updated: Math.floor(mockDataStore.channels.length * 0.7),
+      channels_created: Math.ceil(mockDataStore.channels.length * 0.3),
+      top_channels: mockDataStore.popularityScores.slice(0, 5).map(s => ({
+        channel_id: s.channel_id,
+        channel_name: s.channel_name,
+        score: s.score,
+      })),
+    })
   }),
 ]

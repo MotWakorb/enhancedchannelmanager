@@ -245,6 +245,27 @@ Real-time monitoring of your streaming infrastructure:
 - **Auto-Refresh** - Configurable refresh interval (10s, 30s, 1m, 5m) or manual refresh
 - **Visibility-Aware** - Polling pauses when tab is hidden to save resources
 
+### Enhanced Stats (v0.11.0)
+
+Advanced analytics and channel popularity tracking:
+
+- **Unique Viewer Tracking** - Count unique connecting IPs per channel over configurable time periods
+- **Per-Channel Bandwidth** - Track bandwidth consumption by channel with breakdown by connections and watch time
+- **Popularity Scoring** - Weighted algorithm calculates channel popularity based on:
+  - Watch count (default 30% weight)
+  - Watch time (default 30% weight)
+  - Unique viewers (default 25% weight)
+  - Bandwidth usage (default 15% weight)
+- **Popularity Rankings** - View channels ranked by popularity score with pagination
+- **Trend Analysis** - Track popularity changes over time:
+  - **Trending Up** - Channels gaining popularity (>10% increase)
+  - **Trending Down** - Channels losing popularity (>10% decrease)
+  - **Stable** - Channels with consistent viewership
+- **Trend Indicators** - Visual arrows and percentage changes on channel rankings
+- **Period Selector** - View stats for 7, 14, or 30 day periods
+- **On-Demand Calculation** - Trigger popularity score recalculation manually
+- **Watch History Log** - Detailed log of all channel viewing sessions with IP addresses and durations
+
 ### Journal (Activity Log)
 
 Track all system activity with filtering and search:
@@ -523,14 +544,26 @@ Embedded video player for stream and channel preview:
 - **VLC Protocol Handler Scripts** - One-click "Open in VLC" with scripts for Windows, Linux, and macOS
 - **VLC Protocol Helper Modal** - Download scripts and view setup instructions in Settings → Advanced
 
-### v0.11.0 - Mobile Interface
+### ~~v0.11.0 - Enhanced Stats~~ ✅ Implemented
+Advanced analytics and channel popularity tracking:
+- **Channel Watch Tracking** - Track watch time and view counts per channel
+- **Unique Viewer Tracking** - Count unique connecting IPs per channel
+- **Per-Channel Bandwidth** - Monitor bandwidth consumption per channel
+- **Popularity Scoring** - Weighted algorithm based on watch count, watch time, unique viewers, and bandwidth
+- **Popularity Rankings** - View channels ranked by popularity with pagination
+- **Trend Analysis** - Track popularity changes (trending up, down, or stable)
+- **Period Selection** - View stats for 7, 14, or 30 day periods
+- **On-Demand Calculation** - Manually trigger popularity score recalculation
+- **Watch History Log** - Detailed log of viewing sessions with IP addresses
+
+### v0.12.0 - Mobile Interface
 Full mobile support for managing channels on the go:
 - Responsive layouts for phones and tablets
 - Touch-optimized controls
 - Mobile-friendly navigation
 - Progressive Web App (PWA) support
 
-### v0.12.0 - Channel Auto-Creation Pipeline
+### v0.13.0 - Channel Auto-Creation Pipeline
 Rules engine for automatic channel management:
 - **Rule-Based Automation** - Create rules to automatically create/delete channels
 - **Condition Builder** - Define conditions based on stream properties, groups, M3U sources
@@ -541,16 +574,12 @@ Rules engine for automatic channel management:
 - **Dry Run Mode** - Preview what changes a pipeline would make before executing
 - **Audit Trail** - Full logging of automated actions for troubleshooting
 
-### v0.13.0 - Enhanced Stats
-Advanced analytics and popularity-based channel management:
-- **Channel Watch Tracking** - Track watch time and view counts per channel
-- **Unique Client Tracking** - Count unique connecting IPs per channel
-- **Upstream/Downstream Bandwidth** - Monitor bandwidth utilization in both directions
-- **Popularity Scoring** - Calculate channel popularity based on multiple metrics
+### v0.14.0 - Auto-Channel Management
+Popularity-based automatic channel management:
 - **Auto-Add Popular Channels** - Automatically add channels that become popular
 - **Auto-Remove Unpopular** - Optionally remove channels with low viewership
-- **Popularity Dashboard** - Visual analytics for channel performance
-- **Trend Analysis** - Track popularity changes over time
+- **Popularity Thresholds** - Configurable thresholds for auto-add/remove actions
+- **Notification on Changes** - Alert when channels are auto-added or removed
 
 ---
 
@@ -665,6 +694,17 @@ uvicorn main:app --reload
 - `GET /api/stream-stats/probe/progress` - Get probe progress
 - `POST /api/stream-stats/probe/cancel` - Cancel running probe
 - `GET /api/stream-stats/probe/history` - Get probe history
+
+### Enhanced Stats (v0.11.0)
+- `GET /api/stats/bandwidth` - Get bandwidth summary with in/out breakdown
+- `GET /api/stats/unique-viewers` - Get unique viewer summary for period
+- `GET /api/stats/channel-bandwidth` - Get per-channel bandwidth stats
+- `GET /api/stats/unique-viewers-by-channel` - Get unique viewers per channel
+- `GET /api/stats/popularity/rankings` - Get channel popularity rankings (paginated)
+- `GET /api/stats/popularity/channel/{id}` - Get popularity score for specific channel
+- `GET /api/stats/popularity/trending` - Get trending channels (up or down)
+- `POST /api/stats/popularity/calculate` - Trigger popularity score calculation
+- `GET /api/stats/watch-history` - Get watch history log (paginated)
 
 ### Journal
 - `GET /api/journal` - Get journal entries (paginated, filterable)

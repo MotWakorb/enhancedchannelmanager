@@ -80,6 +80,7 @@ tags_metadata = [
     {"name": "Tags", "description": "Tag management for channels"},
     {"name": "Cache", "description": "Cache management"},
     {"name": "Cron", "description": "Cron expression utilities"},
+    {"name": "Authentication", "description": "User authentication and session management"},
 ]
 
 app = FastAPI(
@@ -118,6 +119,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Include auth router
+from auth.routes import router as auth_router
+app.include_router(auth_router)
 
 
 # ============================================================================

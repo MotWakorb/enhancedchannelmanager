@@ -348,7 +348,10 @@
 }
 
 .profiles-btn,
-.hidden-groups-btn {
+.hidden-groups-btn,
+.csv-import-btn,
+.csv-export-btn,
+.csv-template-btn {
   display: flex;
   align-items: center;
   gap: 0.375rem;
@@ -364,14 +367,20 @@
 }
 
 .profiles-btn:hover,
-.hidden-groups-btn:hover {
+.hidden-groups-btn:hover,
+.csv-import-btn:hover,
+.csv-export-btn:hover,
+.csv-template-btn:hover {
   background-color: var(--button-hover-bg);
   border-color: var(--accent-primary);
   color: var(--text-primary);
 }
 
 .profiles-btn .material-icons,
-.hidden-groups-btn .material-icons {
+.hidden-groups-btn .material-icons,
+.csv-import-btn .material-icons,
+.csv-export-btn .material-icons,
+.csv-template-btn .material-icons {
   font-size: 18px;
 }
 
