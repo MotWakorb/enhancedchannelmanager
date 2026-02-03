@@ -1,0 +1,383 @@
+/**
+ * UserManagementSection styles - follows common settings section patterns
+ */
+
+.user-management-section {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+/* Header - matches tag-engine-header pattern */
+.user-management-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 0.5rem;
+}
+
+.user-management-header .header-info h3 {
+  margin: 0 0 0.25rem 0;
+  color: var(--text-primary);
+  font-size: 1.25rem;
+}
+
+.user-management-header .header-description {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.875rem;
+}
+
+.user-management-header .header-stats {
+  display: flex;
+  gap: 1rem;
+}
+
+.user-management-header .header-stats .stat {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  color: var(--text-secondary);
+  font-size: 0.875rem;
+}
+
+.user-management-header .header-stats .stat .material-icons {
+  font-size: 1rem;
+  color: var(--text-muted);
+}
+
+/* Error and Loading States */
+.user-management-error {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.75rem 1rem;
+  background: var(--error-bg, rgba(239, 68, 68, 0.1));
+  border: 1px solid var(--error-border, #ef4444);
+  border-radius: 6px;
+  color: var(--error-text, #ef4444);
+  font-size: 0.875rem;
+}
+
+.user-management-error .material-icons {
+  font-size: 1.125rem;
+}
+
+.user-management-error button {
+  margin-left: auto;
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0;
+  display: flex;
+  color: inherit;
+}
+
+.user-management-loading,
+.user-management-no-access {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 3rem;
+  color: var(--text-muted);
+  font-size: 0.875rem;
+}
+
+.spinning {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+/* User List - follows card pattern */
+.user-list {
+  background: var(--card-bg);
+  border: 1px solid var(--border-primary);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.user-list-header {
+  display: grid;
+  grid-template-columns: 1.5fr 1.5fr 1fr 0.8fr 0.8fr 1.2fr;
+  gap: 0.5rem;
+  padding: 0.75rem 1rem;
+  background: var(--hover-bg);
+  border-bottom: 1px solid var(--border-primary);
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.025em;
+}
+
+.user-list-row {
+  display: grid;
+  grid-template-columns: 1.5fr 1.5fr 1fr 0.8fr 0.8fr 1.2fr;
+  gap: 0.5rem;
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid var(--border-primary);
+  font-size: 0.875rem;
+  align-items: center;
+}
+
+.user-list-row:last-child {
+  border-bottom: none;
+}
+
+.user-list-row:hover {
+  background: var(--hover-bg);
+}
+
+.user-list-row.user-inactive {
+  opacity: 0.6;
+}
+
+.user-list-row.user-current {
+  background: rgba(99, 102, 241, 0.05);
+}
+
+.user-list-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 3rem;
+  color: var(--text-muted);
+  font-size: 0.875rem;
+}
+
+/* User columns */
+.user-col-username {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+}
+
+.user-col-username strong {
+  color: var(--text-primary);
+}
+
+.user-display-name {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.user-badge-you {
+  font-size: 0.6875rem;
+  padding: 0.125rem 0.375rem;
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  border: 1px solid var(--border-primary);
+  border-radius: 4px;
+  font-weight: 500;
+  margin-left: 0.375rem;
+}
+
+.user-col-email {
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Provider badges - follows builtin-badge pattern */
+.user-provider-badge {
+  display: inline-block;
+  font-size: 0.6875rem;
+  padding: 0.125rem 0.375rem;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-primary);
+  border-radius: 4px;
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+.user-provider-local {
+  background: rgba(99, 102, 241, 0.1);
+  border-color: rgba(99, 102, 241, 0.3);
+  color: var(--button-primary-bg);
+}
+
+.user-provider-dispatcharr {
+  background: var(--success-bg);
+  border-color: var(--success);
+  color: var(--success-text, #10b981);
+}
+
+/* Status badges */
+.user-status-badge {
+  display: inline-block;
+  font-size: 0.6875rem;
+  padding: 0.125rem 0.375rem;
+  border-radius: 4px;
+  border: 1px solid transparent;
+  cursor: pointer;
+  font-weight: 500;
+  transition: opacity 0.15s ease;
+}
+
+.user-status-badge:hover:not(:disabled) {
+  opacity: 0.8;
+}
+
+.user-status-badge:disabled {
+  cursor: default;
+}
+
+.user-status-active {
+  background: var(--success-bg);
+  border-color: var(--success);
+  color: var(--success-text, #10b981);
+}
+
+.user-status-inactive {
+  background: var(--error-bg, rgba(239, 68, 68, 0.1));
+  border-color: var(--error-border, #ef4444);
+  color: var(--error-text, #ef4444);
+}
+
+/* Role badges */
+.user-role-badge {
+  display: inline-block;
+  font-size: 0.6875rem;
+  padding: 0.125rem 0.375rem;
+  border-radius: 4px;
+  font-weight: 500;
+}
+
+.user-role-admin {
+  background: var(--warning-bg, rgba(245, 158, 11, 0.1));
+  border: 1px solid var(--warning-border, rgba(245, 158, 11, 0.3));
+  color: var(--warning-text, #f59e0b);
+}
+
+.user-role-user {
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-primary);
+  color: var(--text-secondary);
+}
+
+/* Action buttons - follows btn-secondary pattern */
+.user-col-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.user-action-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.25rem 0.5rem;
+  font-size: 0.75rem;
+  border-radius: 4px;
+  border: 1px solid var(--border-primary);
+  background: var(--input-bg);
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.user-action-btn:hover:not(:disabled) {
+  background: var(--hover-bg);
+}
+
+.user-action-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.user-action-save {
+  background: var(--button-primary-bg);
+  color: var(--button-primary-text);
+  border-color: var(--button-primary-bg);
+}
+
+.user-action-save:hover:not(:disabled) {
+  opacity: 0.9;
+}
+
+.user-action-delete {
+  color: var(--error-text, #ef4444);
+  border-color: var(--error-text, #ef4444);
+}
+
+.user-action-delete:hover:not(:disabled) {
+  background: var(--error-bg, rgba(239, 68, 68, 0.1));
+}
+
+/* Edit inputs - follows form field pattern */
+.user-edit-input {
+  width: 100%;
+  padding: 0.375rem 0.5rem;
+  font-size: 0.8125rem;
+  background: var(--input-bg);
+  border: 1px solid var(--border-primary);
+  border-radius: 4px;
+  color: var(--text-primary);
+}
+
+.user-edit-input:focus {
+  outline: none;
+  border-color: var(--accent-primary);
+}
+
+/* Checkbox labels */
+.user-checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  cursor: pointer;
+  font-size: 0.8125rem;
+}
+
+.user-checkbox-label input[type="checkbox"] {
+  width: 0.875rem;
+  height: 0.875rem;
+  cursor: pointer;
+  accent-color: var(--button-primary-bg);
+}
+
+.user-checkbox-label input[type="checkbox"]:disabled {
+  cursor: not-allowed;
+}
+
+.user-checkbox-label span {
+  color: var(--text-primary);
+}
+
+/* Summary - follows header-stats pattern */
+.user-management-summary {
+  display: flex;
+  gap: 1rem;
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+}
+
+.user-management-summary .stat {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.user-management-summary .stat .material-icons {
+  font-size: 1rem;
+  color: var(--text-muted);
+}
+
+/* Responsive */
+@media (max-width: 900px) {
+  .user-list-header,
+  .user-list-row {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .user-col-email,
+  .user-col-provider {
+    display: none;
+  }
+}
