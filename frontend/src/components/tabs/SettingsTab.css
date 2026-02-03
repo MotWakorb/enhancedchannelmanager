@@ -55,6 +55,17 @@
   font-size: 20px;
 }
 
+.settings-nav-divider {
+  padding: 1rem 1.25rem 0.5rem;
+  margin-top: 0.5rem;
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+  border-top: 1px solid var(--border-primary);
+}
+
 .settings-content {
   flex: 1;
   overflow-y: auto;

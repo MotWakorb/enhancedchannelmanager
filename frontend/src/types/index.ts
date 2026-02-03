@@ -1051,7 +1051,9 @@ export interface User {
   email: string | null;
   display_name: string | null;
   is_admin: boolean;
+  is_active: boolean;
   auth_provider: string;
+  external_id: string | null;
 }
 
 // Auth status from server
@@ -1060,6 +1062,18 @@ export interface AuthStatus {
   require_auth: boolean;
   enabled_providers: string[];
   primary_auth_mode: string;
+}
+
+// Auth provider info
+export interface AuthProviderInfo {
+  type: string;
+  name: string;
+  enabled: boolean;
+}
+
+// Auth providers response
+export interface AuthProvidersResponse {
+  providers: AuthProviderInfo[];
 }
 
 // Login response
@@ -1081,4 +1095,281 @@ export interface LogoutResponse {
 // Refresh response
 export interface RefreshResponse {
   message: string;
+}
+
+// Setup required check response
+export interface SetupRequiredResponse {
+  required: boolean;
+}
+
+// Setup request (first admin creation)
+export interface SetupRequest {
+  username: string;
+  email: string;
+  password: string;
+}
+
+// Setup response
+export interface SetupResponse {
+  user: User;
+  message: string;
+}
+
+// =============================================================================
+// Admin Auth Settings Types
+// =============================================================================
+
+// Auth settings (public - no secrets)
+export interface AuthSettingsPublic {
+  require_auth: boolean;
+  primary_auth_mode: string;
+  // Local auth
+  local_enabled: boolean;
+  local_allow_registration: boolean;
+  local_min_password_length: number;
+  // Dispatcharr
+  dispatcharr_enabled: boolean;
+  dispatcharr_auto_create_users: boolean;
+  // OIDC
+  oidc_enabled: boolean;
+  oidc_provider_name: string;
+  oidc_discovery_url: string;
+  oidc_auto_create_users: boolean;
+  // SAML
+  saml_enabled: boolean;
+  saml_provider_name: string;
+  saml_idp_metadata_url: string;
+  saml_auto_create_users: boolean;
+  // LDAP
+  ldap_enabled: boolean;
+  ldap_server_url: string;
+  ldap_use_ssl: boolean;
+  ldap_use_tls: boolean;
+  ldap_user_search_base: string;
+  ldap_auto_create_users: boolean;
+}
+
+// Auth settings update request (partial)
+export interface AuthSettingsUpdate {
+  require_auth?: boolean;
+  primary_auth_mode?: string;
+  // Local
+  local_enabled?: boolean;
+  local_allow_registration?: boolean;
+  local_min_password_length?: number;
+  // Dispatcharr
+  dispatcharr_enabled?: boolean;
+  dispatcharr_auto_create_users?: boolean;
+  // OIDC
+  oidc_enabled?: boolean;
+  oidc_provider_name?: string;
+  oidc_client_id?: string;
+  oidc_client_secret?: string;
+  oidc_discovery_url?: string;
+  oidc_auto_create_users?: boolean;
+  // SAML
+  saml_enabled?: boolean;
+  saml_provider_name?: string;
+  saml_idp_metadata_url?: string;
+  saml_sp_entity_id?: string;
+  saml_auto_create_users?: boolean;
+  // LDAP
+  ldap_enabled?: boolean;
+  ldap_server_url?: string;
+  ldap_use_ssl?: boolean;
+  ldap_use_tls?: boolean;
+  ldap_bind_dn?: string;
+  ldap_bind_password?: string;
+  ldap_user_search_base?: string;
+  ldap_user_search_filter?: string;
+  ldap_auto_create_users?: boolean;
+}
+
+// =============================================================================
+// Admin User Management Types
+// =============================================================================
+
+// User list response
+export interface UserListResponse {
+  users: User[];
+  total: number;
+}
+
+// User detail response
+export interface UserDetailResponse {
+  user: User;
+  session_count: number;
+  last_login_at: string | null;
+  created_at: string;
+}
+
+// User update request
+export interface UserUpdateRequest {
+  is_admin?: boolean;
+  is_active?: boolean;
+  display_name?: string;
+  email?: string;
+}
+
+// User update response
+export interface UserUpdateResponse {
+  user: User;
+  message: string;
+}
+
+// =============================================================================
+// User Profile Types
+// =============================================================================
+
+// Update profile request
+export interface UpdateProfileRequest {
+  display_name?: string;
+  email?: string;
+}
+
+// Update profile response
+export interface UpdateProfileResponse {
+  user: User;
+  message: string;
+}
+
+// Change password request
+export interface ChangePasswordRequest {
+  current_password: string;
+  new_password: string;
+}
+
+// Change password response
+export interface ChangePasswordResponse {
+  message: string;
+}
+
+// =============================================================================
+// Linked Identity Types (Account Linking)
+// =============================================================================
+
+// Provider types for identities
+export type IdentityProvider = 'local' | 'dispatcharr' | 'oidc' | 'saml' | 'ldap';
+
+// A linked identity for a user account
+export interface UserIdentity {
+  id: number;
+  user_id: number;
+  provider: IdentityProvider;
+  external_id: string | null;
+  identifier: string;
+  linked_at: string;  // ISO timestamp
+  last_used_at: string | null;  // ISO timestamp
+}
+
+// Response from GET /api/auth/identities
+export interface LinkedIdentitiesResponse {
+  identities: UserIdentity[];
+}
+
+// Request to link a new identity
+export interface LinkIdentityRequest {
+  provider: IdentityProvider;
+  username: string;
+  password: string;
+}
+
+// Response from POST /api/auth/identities/link
+export interface LinkIdentityResponse {
+  identity: UserIdentity;
+  message: string;
+}
+
+// Response from DELETE /api/auth/identities/{id}
+export interface UnlinkIdentityResponse {
+  message: string;
+}
+
+// =============================================================================
+// TLS Certificate Management Types
+// =============================================================================
+
+// TLS status response
+export interface TLSStatus {
+  enabled: boolean;
+  mode: 'letsencrypt' | 'manual' | 'none';
+  domain: string | null;
+  cert_issued_at: string | null;
+  cert_expires_at: string | null;
+  cert_subject: string | null;
+  cert_issuer: string | null;
+  days_until_expiry: number | null;
+  auto_renew: boolean;
+  last_renewal_attempt: string | null;
+  last_renewal_error: string | null;
+  has_certificate: boolean;
+  certificate_valid: boolean;
+}
+
+// TLS settings (for form)
+export interface TLSSettings {
+  enabled: boolean;
+  mode: 'letsencrypt' | 'manual';
+  domain: string;
+  acme_email: string;
+  challenge_type: 'http-01' | 'dns-01';
+  use_staging: boolean;
+  dns_provider: string;
+  dns_api_token: string;  // Cloudflare API token
+  dns_zone_id: string;
+  // AWS Route53 credentials
+  aws_access_key_id: string;
+  aws_secret_access_key: string;
+  aws_region: string;
+  auto_renew: boolean;
+  renew_days_before_expiry: number;
+}
+
+// TLS configure request
+export interface TLSConfigureRequest {
+  enabled: boolean;
+  mode: 'letsencrypt' | 'manual';
+  domain: string;
+  acme_email: string;
+  challenge_type: 'http-01' | 'dns-01';
+  use_staging: boolean;
+  dns_provider: string;
+  dns_api_token: string;  // Cloudflare API token
+  dns_zone_id: string;
+  // AWS Route53 credentials
+  aws_access_key_id: string;
+  aws_secret_access_key: string;
+  aws_region: string;
+  auto_renew: boolean;
+  renew_days_before_expiry: number;
+}
+
+// Certificate request response
+export interface CertificateRequestResponse {
+  success: boolean;
+  message: string;
+  challenge_type?: string;
+  challenge_url?: string;
+  txt_record_name?: string;
+  txt_record_value?: string;
+  cert_expires_at?: string;
+}
+
+// DNS provider test request
+export interface DNSProviderTestRequest {
+  provider: string;
+  api_token: string;  // Cloudflare API token
+  zone_id: string;
+  domain: string;
+  // AWS Route53 credentials
+  aws_access_key_id: string;
+  aws_secret_access_key: string;
+  aws_region: string;
+}
+
+// DNS provider test response
+export interface DNSProviderTestResponse {
+  success: boolean;
+  message: string;
+  zone_id?: string;
 }

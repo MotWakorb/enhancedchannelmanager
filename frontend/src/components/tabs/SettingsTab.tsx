@@ -5,6 +5,11 @@ import { useNotifications } from '../../contexts/NotificationContext';
 import type { Theme, ProbeHistoryEntry, SortCriterion, SortEnabledMap, GracenoteConflictMode, StreamPreviewMode } from '../../services/api';
 import { NormalizationEngineSection } from '../settings/NormalizationEngineSection';
 import { TagEngineSection } from '../settings/TagEngineSection';
+import { AuthSettingsSection } from '../settings/AuthSettingsSection';
+import { UserManagementSection } from '../settings/UserManagementSection';
+import { LinkedAccountsSection } from '../settings/LinkedAccountsSection';
+import { TLSSettingsSection } from '../settings/TLSSettingsSection';
+import { useAuth } from '../../hooks/useAuth';
 import type { ChannelProfile, M3UDigestSettings, M3UDigestFrequency } from '../../types';
 import { logger } from '../../utils/logger';
 import { copyToClipboard } from '../../utils/clipboard';
@@ -181,11 +186,12 @@ interface SettingsTabProps {
   onProbeComplete?: () => void;
 }
 
-type SettingsPage = 'general' | 'channel-defaults' | 'normalization' | 'tag-engine' | 'appearance' | 'email' | 'scheduled-tasks' | 'm3u-digest' | 'maintenance';
+type SettingsPage = 'general' | 'channel-defaults' | 'normalization' | 'tag-engine' | 'appearance' | 'email' | 'scheduled-tasks' | 'm3u-digest' | 'maintenance' | 'linked-accounts' | 'auth-settings' | 'user-management' | 'tls-settings';
 
 export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onProbeComplete }: SettingsTabProps) {
   const [activePage, setActivePage] = useState<SettingsPage>('general');
   const notifications = useNotifications();
+  const { user } = useAuth();
   const restartToastIdRef = useRef<string | null>(null);
 
   // Listen for restart events from NotificationCenter to dismiss the restart toast
@@ -3380,6 +3386,39 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
             <span className="material-icons">build</span>
             Maintenance
           </li>
+          <li
+            className={`settings-nav-item ${activePage === 'linked-accounts' ? 'active' : ''}`}
+            onClick={() => setActivePage('linked-accounts')}
+          >
+            <span className="material-icons">link</span>
+            Linked Accounts
+          </li>
+          {user?.is_admin && (
+            <>
+              <li className="settings-nav-divider">Administration</li>
+              <li
+                className={`settings-nav-item ${activePage === 'auth-settings' ? 'active' : ''}`}
+                onClick={() => setActivePage('auth-settings')}
+              >
+                <span className="material-icons">security</span>
+                Authentication
+              </li>
+              <li
+                className={`settings-nav-item ${activePage === 'user-management' ? 'active' : ''}`}
+                onClick={() => setActivePage('user-management')}
+              >
+                <span className="material-icons">people</span>
+                User Management
+              </li>
+              <li
+                className={`settings-nav-item ${activePage === 'tls-settings' ? 'active' : ''}`}
+                onClick={() => setActivePage('tls-settings')}
+              >
+                <span className="material-icons">https</span>
+                TLS Certificates
+              </li>
+            </>
+          )}
         </ul>
       </nav>
 
@@ -3393,6 +3432,10 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         {activePage === 'scheduled-tasks' && <ScheduledTasksSection userTimezone={userTimezone} />}
         {activePage === 'm3u-digest' && renderM3UDigestPage()}
         {activePage === 'maintenance' && renderMaintenancePage()}
+        {activePage === 'linked-accounts' && <LinkedAccountsSection />}
+        {activePage === 'auth-settings' && <AuthSettingsSection isAdmin={user?.is_admin ?? false} />}
+        {activePage === 'user-management' && <UserManagementSection isAdmin={user?.is_admin ?? false} currentUserId={user?.id ?? 0} />}
+        {activePage === 'tls-settings' && <TLSSettingsSection isAdmin={user?.is_admin ?? false} />}
       </div>
 
       <DeleteOrphanedGroupsModal

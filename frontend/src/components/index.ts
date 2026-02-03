@@ -10,5 +10,6 @@ export { TabNavigation, type TabId } from './TabNavigation';
 export { CSVImportModal } from './CSVImportModal';
 // Auth components
 export { LoginPage } from './LoginPage';
+export { SetupPage } from './SetupPage';
 export { ProtectedRoute } from './ProtectedRoute';
 export { UserMenu } from './UserMenu';

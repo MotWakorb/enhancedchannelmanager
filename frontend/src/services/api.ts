@@ -55,10 +55,38 @@ import type {
   // Authentication
   User,
   AuthStatus,
+  AuthProvidersResponse,
   LoginResponse,
   MeResponse,
   LogoutResponse,
   RefreshResponse,
+  SetupRequiredResponse,
+  SetupRequest,
+  SetupResponse,
+  // Admin Auth Settings
+  AuthSettingsPublic,
+  AuthSettingsUpdate,
+  UserListResponse,
+  UserDetailResponse,
+  UserUpdateRequest,
+  UserUpdateResponse,
+  // User Profile
+  UpdateProfileRequest,
+  UpdateProfileResponse,
+  ChangePasswordRequest,
+  ChangePasswordResponse,
+  // Linked Identities (Account Linking)
+  LinkedIdentitiesResponse,
+  LinkIdentityRequest,
+  LinkIdentityResponse,
+  UnlinkIdentityResponse,
+  // TLS Certificate Management
+  TLSStatus,
+  TLSSettings,
+  TLSConfigureRequest,
+  CertificateRequestResponse,
+  DNSProviderTestRequest,
+  DNSProviderTestResponse,
 } from '../types';
 import { logger } from '../utils/logger';
 import {
@@ -2851,7 +2879,15 @@ export async function getAuthStatus(): Promise<AuthStatus> {
 }
 
 /**
- * Login with username and password.
+ * Get list of available authentication providers.
+ * Returns provider names and enabled status.
+ */
+export async function getAuthProviders(): Promise<AuthProvidersResponse> {
+  return fetchJson(`${API_BASE}/auth/providers`);
+}
+
+/**
+ * Login with username and password (local authentication).
  * Sets httpOnly cookies with JWT tokens.
  */
 export async function login(username: string, password: string): Promise<LoginResponse> {
@@ -2859,6 +2895,19 @@ export async function login(username: string, password: string): Promise<LoginRe
     method: 'POST',
     body: JSON.stringify({ username, password }),
     credentials: 'include', // Important: include cookies in request
+  });
+}
+
+/**
+ * Login with Dispatcharr credentials.
+ * Authenticates against Dispatcharr and creates/updates local user.
+ * Sets httpOnly cookies with JWT tokens.
+ */
+export async function dispatcharrLogin(username: string, password: string): Promise<LoginResponse> {
+  return fetchJson(`${API_BASE}/auth/dispatcharr/login`, {
+    method: 'POST',
+    body: JSON.stringify({ username, password }),
+    credentials: 'include',
   });
 }
 
@@ -2890,6 +2939,279 @@ export async function refreshToken(): Promise<RefreshResponse> {
 export async function logout(): Promise<LogoutResponse> {
   return fetchJson(`${API_BASE}/auth/logout`, {
     method: 'POST',
+    credentials: 'include',
+  });
+}
+
+/**
+ * Check if first-time setup is required.
+ * Returns true if no users exist in the system.
+ * This endpoint is always public.
+ */
+export async function checkSetupRequired(): Promise<SetupRequiredResponse> {
+  return fetchJson(`${API_BASE}/auth/setup-required`);
+}
+
+/**
+ * Complete first-time setup by creating the initial admin user.
+ * Only works when no users exist in the system.
+ */
+export async function completeSetup(request: SetupRequest): Promise<SetupResponse> {
+  return fetchJson(`${API_BASE}/auth/setup`, {
+    method: 'POST',
+    body: JSON.stringify(request),
+  });
+}
+
+// =============================================================================
+// Admin Auth Settings API
+// =============================================================================
+
+/**
+ * Get auth settings (admin only).
+ * Returns settings with sensitive data excluded.
+ */
+export async function getAuthSettings(): Promise<AuthSettingsPublic> {
+  return fetchJson(`${API_BASE}/auth/admin/settings`, {
+    credentials: 'include',
+  });
+}
+
+/**
+ * Update auth settings (admin only).
+ * Only provided fields are updated.
+ */
+export async function updateAuthSettings(settings: AuthSettingsUpdate): Promise<{ message: string }> {
+  return fetchJson(`${API_BASE}/auth/admin/settings`, {
+    method: 'PUT',
+    body: JSON.stringify(settings),
+    credentials: 'include',
+  });
+}
+
+// =============================================================================
+// Admin User Management API
+// =============================================================================
+
+/**
+ * List all users (admin only).
+ */
+export async function listUsers(): Promise<UserListResponse> {
+  return fetchJson(`${API_BASE}/auth/admin/users`, {
+    credentials: 'include',
+  });
+}
+
+/**
+ * Get user details (admin only).
+ */
+export async function getUser(userId: number): Promise<UserDetailResponse> {
+  return fetchJson(`${API_BASE}/auth/admin/users/${userId}`, {
+    credentials: 'include',
+  });
+}
+
+/**
+ * Update user (admin only).
+ */
+export async function updateUser(userId: number, data: UserUpdateRequest): Promise<UserUpdateResponse> {
+  return fetchJson(`${API_BASE}/auth/admin/users/${userId}`, {
+    method: 'PUT',
+    body: JSON.stringify(data),
+    credentials: 'include',
+  });
+}
+
+/**
+ * Delete user (admin only).
+ */
+export async function deleteUser(userId: number): Promise<{ message: string }> {
+  return fetchJson(`${API_BASE}/auth/admin/users/${userId}`, {
+    method: 'DELETE',
+    credentials: 'include',
+  });
+}
+
+// =============================================================================
+// User Profile API
+// =============================================================================
+
+/**
+ * Update current user's profile.
+ */
+export async function updateProfile(data: UpdateProfileRequest): Promise<UpdateProfileResponse> {
+  return fetchJson(`${API_BASE}/auth/me`, {
+    method: 'PUT',
+    body: JSON.stringify(data),
+    credentials: 'include',
+  });
+}
+
+/**
+ * Change current user's password.
+ */
+export async function changePassword(data: ChangePasswordRequest): Promise<ChangePasswordResponse> {
+  return fetchJson(`${API_BASE}/auth/change-password`, {
+    method: 'POST',
+    body: JSON.stringify(data),
+    credentials: 'include',
+  });
+}
+
+// =============================================================================
+// Linked Identities API (Account Linking)
+// =============================================================================
+
+/**
+ * Get all identities linked to the current user's account.
+ */
+export async function getLinkedIdentities(): Promise<LinkedIdentitiesResponse> {
+  return fetchJson(`${API_BASE}/auth/identities`, {
+    credentials: 'include',
+  });
+}
+
+/**
+ * Link a new identity to the current user's account.
+ * Requires valid credentials for the target provider.
+ */
+export async function linkIdentity(data: LinkIdentityRequest): Promise<LinkIdentityResponse> {
+  return fetchJson(`${API_BASE}/auth/identities/link`, {
+    method: 'POST',
+    body: JSON.stringify(data),
+    credentials: 'include',
+  });
+}
+
+/**
+ * Unlink an identity from the current user's account.
+ * Cannot unlink the last remaining identity.
+ */
+export async function unlinkIdentity(identityId: number): Promise<UnlinkIdentityResponse> {
+  return fetchJson(`${API_BASE}/auth/identities/${identityId}`, {
+    method: 'DELETE',
+    credentials: 'include',
+  });
+}
+
+// =============================================================================
+// TLS Certificate Management API
+// =============================================================================
+
+/**
+ * Get TLS configuration status.
+ */
+export async function getTLSStatus(): Promise<TLSStatus> {
+  return fetchJson(`${API_BASE}/tls/status`, {
+    credentials: 'include',
+  });
+}
+
+/**
+ * Get TLS settings (for form).
+ */
+export async function getTLSSettings(): Promise<TLSSettings> {
+  return fetchJson(`${API_BASE}/tls/settings`, {
+    credentials: 'include',
+  });
+}
+
+/**
+ * Configure TLS settings.
+ */
+export async function configureTLS(settings: TLSConfigureRequest): Promise<{ success: boolean; message: string }> {
+  return fetchJson(`${API_BASE}/tls/configure`, {
+    method: 'POST',
+    body: JSON.stringify(settings),
+    credentials: 'include',
+  });
+}
+
+/**
+ * Request a Let's Encrypt certificate.
+ */
+export async function requestCertificate(): Promise<CertificateRequestResponse> {
+  return fetchJson(`${API_BASE}/tls/request-cert`, {
+    method: 'POST',
+    credentials: 'include',
+  });
+}
+
+/**
+ * Complete a pending DNS-01 challenge.
+ */
+export async function completeDNSChallenge(): Promise<CertificateRequestResponse> {
+  return fetchJson(`${API_BASE}/tls/complete-challenge`, {
+    method: 'POST',
+    credentials: 'include',
+  });
+}
+
+/**
+ * Upload a certificate and key manually.
+ */
+export async function uploadCertificate(
+  certFile: File,
+  keyFile: File,
+  chainFile?: File
+): Promise<{ success: boolean; message: string; expires_at?: string }> {
+  const formData = new FormData();
+  formData.append('cert_file', certFile);
+  formData.append('key_file', keyFile);
+  if (chainFile) {
+    formData.append('chain_file', chainFile);
+  }
+
+  const response = await fetch(`${API_BASE}/tls/upload-cert`, {
+    method: 'POST',
+    body: formData,
+    credentials: 'include',
+  });
+
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(error.detail || 'Failed to upload certificate');
+  }
+
+  return response.json();
+}
+
+/**
+ * Trigger certificate renewal.
+ */
+export async function renewCertificate(): Promise<{ success: boolean; message: string; expires_at?: string }> {
+  return fetchJson(`${API_BASE}/tls/renew`, {
+    method: 'POST',
+    credentials: 'include',
+  });
+}
+
+/**
+ * Delete certificate and disable TLS.
+ */
+export async function deleteCertificate(): Promise<{ success: boolean; message: string }> {
+  return fetchJson(`${API_BASE}/tls/certificate`, {
+    method: 'DELETE',
+    credentials: 'include',
+  });
+}
+
+/**
+ * Test DNS provider credentials.
+ */
+export async function testDNSProvider(data: DNSProviderTestRequest): Promise<DNSProviderTestResponse> {
+  return fetchJson(`${API_BASE}/tls/test-dns-provider`, {
+    method: 'POST',
+    body: JSON.stringify(data),
+    credentials: 'include',
+  });
+}
+
+/**
+ * Test HTTP-01 challenge endpoint reachability.
+ */
+export async function testHTTPChallenge(): Promise<{ success: boolean; message: string }> {
+  return fetchJson(`${API_BASE}/tls/test-http-challenge`, {
     credentials: 'include',
   });
 }
