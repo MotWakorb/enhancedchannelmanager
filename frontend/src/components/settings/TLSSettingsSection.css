@@ -1,80 +1,88 @@
 /**
- * TLSSettingsSection styles - follows common settings section patterns
+ * TLSSettingsSection styles
+ *
+ * Uses common.css for: .btn-primary, .btn-secondary, .btn-danger, .form-group, .form-hint, .spinning
+ * Uses SettingsTab.css for: .settings-page-header
  */
 
 .tls-settings-section {
-  padding: 20px;
-  max-width: 800px;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
 }
 
-.tls-settings-no-access {
-  color: var(--text-secondary);
-  text-align: center;
-  padding: 40px;
-}
-
+.tls-settings-no-access,
 .tls-settings-loading {
-  color: var(--text-secondary);
-  text-align: center;
-  padding: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 3rem;
+  color: var(--text-muted);
+  font-size: 0.875rem;
 }
 
 .tls-settings-error {
   display: flex;
   align-items: flex-start;
-  gap: 12px;
-  padding: 16px;
+  gap: 0.5rem;
+  padding: 0.75rem 1rem;
   background: var(--error-bg, rgba(239, 68, 68, 0.1));
-  border: 1px solid var(--error-border, rgba(239, 68, 68, 0.3));
-  border-radius: 8px;
-  margin-bottom: 20px;
+  border: 1px solid var(--error-border, #ef4444);
+  border-radius: 6px;
+  color: var(--error-text, #ef4444);
+  font-size: 0.875rem;
 }
 
 .tls-settings-error .material-icons {
-  color: var(--error-text, #ef4444);
-  font-size: 20px;
+  font-size: 1.125rem;
+  flex-shrink: 0;
 }
 
 .tls-settings-error pre {
   margin: 0;
-  font-size: 13px;
+  font-size: 0.8125rem;
   white-space: pre-wrap;
-  color: var(--error-text, #ef4444);
+  word-break: break-word;
 }
 
-/* Status Card */
+/* Status Card - follows auth-provider-card pattern */
 .tls-status-card {
-  background: var(--bg-secondary);
+  background: var(--card-bg);
   border: 1px solid var(--border-primary);
   border-radius: 8px;
-  padding: 20px;
-  margin-bottom: 20px;
+  overflow: hidden;
 }
 
 .tls-status-card h3 {
   display: flex;
   align-items: center;
-  gap: 8px;
-  margin: 0 0 16px 0;
-  font-size: 16px;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0.75rem 1rem;
+  font-size: 0.9375rem;
+  font-weight: 500;
   color: var(--text-primary);
+  background: var(--hover-bg);
+  border-bottom: 1px solid var(--border-primary);
 }
 
 .tls-status-card h3 .material-icons {
-  font-size: 20px;
+  font-size: 1.125rem;
   color: var(--text-secondary);
 }
 
 .tls-status-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-  gap: 12px;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 1rem;
+  padding: 1rem;
 }
 
 .status-item {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 0.25rem;
 }
 
 .status-item.error {
@@ -82,13 +90,14 @@
 }
 
 .status-label {
-  font-size: 12px;
+  font-size: 0.75rem;
   color: var(--text-secondary);
   text-transform: uppercase;
+  letter-spacing: 0.025em;
 }
 
 .status-value {
-  font-size: 14px;
+  font-size: 0.875rem;
   color: var(--text-primary);
   font-weight: 500;
 }
@@ -117,226 +126,117 @@
   color: var(--error-text, #ef4444);
 }
 
-/* Config Card */
+/* Config Card - follows auth-provider-card pattern */
 .tls-config-card {
-  background: var(--bg-secondary);
+  background: var(--card-bg);
   border: 1px solid var(--border-primary);
   border-radius: 8px;
-  padding: 20px;
-  margin-bottom: 20px;
+  overflow: hidden;
 }
 
 .tls-config-card h3 {
   display: flex;
   align-items: center;
-  gap: 8px;
-  margin: 0 0 20px 0;
-  font-size: 16px;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0.75rem 1rem;
+  font-size: 0.9375rem;
+  font-weight: 500;
   color: var(--text-primary);
+  background: var(--hover-bg);
+  border-bottom: 1px solid var(--border-primary);
 }
 
 .tls-config-card h3 .material-icons {
-  font-size: 20px;
+  font-size: 1.125rem;
   color: var(--text-secondary);
 }
 
-/* Form Elements */
-.form-group {
-  margin-bottom: 16px;
-}
-
-.form-group label {
-  display: block;
-  margin-bottom: 6px;
-  font-size: 14px;
-  font-weight: 500;
-  color: var(--text-primary);
-}
-
-.form-group input[type="text"],
-.form-group input[type="email"],
-.form-group input[type="password"],
-.form-group input[type="number"],
-.form-group select {
-  width: 100%;
-  padding: 10px 12px;
-  border: 1px solid var(--border-primary);
-  border-radius: 6px;
-  background: var(--input-bg);
-  color: var(--text-primary);
-  font-size: 14px;
-}
-
-.form-group input:focus,
-.form-group select:focus {
-  outline: none;
-  border-color: var(--button-primary-bg);
-}
-
-.form-group input[type="file"] {
-  padding: 8px 0;
-}
-
-.form-help {
-  display: block;
-  margin-top: 4px;
-  font-size: 12px;
-  color: var(--text-muted);
-}
-
-/* Toggle/Checkbox Label */
-.toggle-label {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  cursor: pointer;
-  font-weight: normal !important;
-}
-
-.toggle-label input[type="checkbox"] {
-  width: 18px;
-  height: 18px;
-}
-
-/* Radio Group */
-.radio-group {
+/* Form content area inside config card */
+.tls-config-content {
+  padding: 1rem;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 1rem;
 }
 
-.radio-label {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  cursor: pointer;
-  font-weight: normal !important;
-}
-
-.radio-label input[type="radio"] {
-  width: 16px;
-  height: 16px;
-}
+/* Checkbox and radio styles use common patterns from SettingsTab.css:
+ * .checkbox-label - for checkbox + label inline
+ * .radio-group, .radio-option - for radio groups
+ */
 
 /* Challenge Info Box */
 .challenge-info {
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  padding: 16px;
+  gap: 0.75rem;
+  padding: 1rem;
   background: var(--bg-tertiary);
+  border: 1px solid var(--border-primary);
   border-radius: 6px;
-  margin: 12px 0;
+  margin: 0.75rem 0;
 }
 
 .challenge-info .material-icons {
   color: var(--text-secondary);
-  font-size: 20px;
+  font-size: 1.125rem;
 }
 
 .challenge-info p {
   margin: 0;
-  font-size: 13px;
+  font-size: 0.8125rem;
   color: var(--text-secondary);
   line-height: 1.5;
 }
 
 /* Manual Upload Section */
 .manual-upload-section {
-  margin-top: 16px;
-  padding-top: 16px;
+  margin-top: 1rem;
+  padding-top: 1rem;
   border-top: 1px solid var(--border-primary);
 }
 
-/* Actions */
+/* Actions - follows auth-settings-actions pattern */
 .tls-actions {
   display: flex;
   flex-wrap: wrap;
-  gap: 12px;
-  margin-bottom: 20px;
-}
-
-.btn-primary,
-.btn-secondary,
-.btn-danger {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  padding: 10px 20px;
-  border: none;
-  border-radius: 6px;
-  font-size: 14px;
-  font-weight: 500;
-  cursor: pointer;
-  transition: background-color 0.2s, opacity 0.2s;
-}
-
-.btn-primary {
-  background: var(--button-primary-bg);
-  color: var(--button-primary-text);
-}
-
-.btn-primary:hover:not(:disabled) {
-  opacity: 0.9;
-}
-
-.btn-secondary {
-  background: var(--bg-tertiary);
-  color: var(--text-primary);
-  border: 1px solid var(--border-primary);
-}
-
-.btn-secondary:hover:not(:disabled) {
-  background: var(--bg-secondary);
-}
-
-.btn-danger {
-  background: var(--error-bg, rgba(239, 68, 68, 0.1));
-  color: var(--error-text, #ef4444);
-  border: 1px solid var(--error-border, rgba(239, 68, 68, 0.3));
-}
-
-.btn-danger:hover:not(:disabled) {
-  background: rgba(239, 68, 68, 0.2);
-}
-
-.btn-primary:disabled,
-.btn-secondary:disabled,
-.btn-danger:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
+  gap: 0.75rem;
+  padding: 1rem 0;
+  border-top: 1px solid var(--border-primary);
+  margin-top: 0.5rem;
 }
 
 /* Info Box */
 .tls-info-box {
   background: var(--bg-tertiary);
+  border: 1px solid var(--border-primary);
   border-radius: 8px;
-  padding: 20px;
+  padding: 1rem;
 }
 
 .tls-info-box h4 {
   display: flex;
   align-items: center;
-  gap: 8px;
-  margin: 0 0 12px 0;
-  font-size: 14px;
+  gap: 0.5rem;
+  margin: 0 0 0.75rem 0;
+  font-size: 0.875rem;
+  font-weight: 500;
   color: var(--text-primary);
 }
 
 .tls-info-box h4 .material-icons {
-  font-size: 18px;
+  font-size: 1.125rem;
   color: var(--text-secondary);
 }
 
 .tls-info-box ul {
   margin: 0;
-  padding-left: 20px;
+  padding-left: 1.25rem;
 }
 
 .tls-info-box li {
-  margin-bottom: 8px;
-  font-size: 13px;
+  margin-bottom: 0.5rem;
+  font-size: 0.8125rem;
   color: var(--text-secondary);
   line-height: 1.5;
 }

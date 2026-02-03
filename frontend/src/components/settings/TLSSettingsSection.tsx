@@ -422,23 +422,24 @@ export function TLSSettingsSection({ isAdmin }: Props) {
           Configuration
         </h3>
 
-        <div className="form-group">
-          <label className="toggle-label">
-            <input
-              type="checkbox"
-              checked={enabled}
-              onChange={(e) => setEnabled(e.target.checked)}
-            />
-            <span>Enable TLS/HTTPS</span>
-          </label>
-        </div>
+        <div className="tls-config-content">
+          <div className="form-group">
+            <label className="checkbox-label">
+              <input
+                type="checkbox"
+                checked={enabled}
+                onChange={(e) => setEnabled(e.target.checked)}
+              />
+              <span>Enable TLS/HTTPS</span>
+            </label>
+          </div>
 
-        {enabled && (
+          {enabled && (
           <>
             <div className="form-group">
               <label>Certificate Mode</label>
               <div className="radio-group">
-                <label className="radio-label">
+                <label className="radio-option">
                   <input
                     type="radio"
                     name="mode"
@@ -448,7 +449,7 @@ export function TLSSettingsSection({ isAdmin }: Props) {
                   />
                   <span>Let's Encrypt (Automatic)</span>
                 </label>
-                <label className="radio-label">
+                <label className="radio-option">
                   <input
                     type="radio"
                     name="mode"
@@ -472,7 +473,7 @@ export function TLSSettingsSection({ isAdmin }: Props) {
                     onChange={(e) => setDomain(e.target.value)}
                     placeholder="ecm.example.com"
                   />
-                  <span className="form-help">The domain where ECM will be accessible (must point to this server)</span>
+                  <span className="form-hint">The domain where ECM will be accessible (must point to this server)</span>
                 </div>
 
                 <div className="form-group">
@@ -484,13 +485,13 @@ export function TLSSettingsSection({ isAdmin }: Props) {
                     onChange={(e) => setAcmeEmail(e.target.value)}
                     placeholder="admin@example.com"
                   />
-                  <span className="form-help">Contact email for Let's Encrypt account (renewal notifications)</span>
+                  <span className="form-hint">Contact email for Let's Encrypt account (renewal notifications)</span>
                 </div>
 
                 <div className="form-group">
                   <label>Challenge Type</label>
                   <div className="radio-group">
-                    <label className="radio-label">
+                    <label className="radio-option">
                       <input
                         type="radio"
                         name="challengeType"
@@ -500,7 +501,7 @@ export function TLSSettingsSection({ isAdmin }: Props) {
                       />
                       <span>HTTP-01 (requires port 80)</span>
                     </label>
-                    <label className="radio-label">
+                    <label className="radio-option">
                       <input
                         type="radio"
                         name="challengeType"
@@ -555,7 +556,7 @@ export function TLSSettingsSection({ isAdmin }: Props) {
                           onChange={(e) => setDnsApiToken(e.target.value)}
                           placeholder="Enter Cloudflare API token..."
                         />
-                        <span className="form-help">API token with DNS:Edit permission for your zone</span>
+                        <span className="form-hint">API token with DNS:Edit permission for your zone</span>
                       </div>
                     )}
 
@@ -570,7 +571,7 @@ export function TLSSettingsSection({ isAdmin }: Props) {
                             onChange={(e) => setAwsAccessKeyId(e.target.value)}
                             placeholder="AKIA..."
                           />
-                          <span className="form-help">IAM user access key with Route53 permissions</span>
+                          <span className="form-hint">IAM user access key with Route53 permissions</span>
                         </div>
 
                         <div className="form-group">
@@ -602,7 +603,7 @@ export function TLSSettingsSection({ isAdmin }: Props) {
                             <option value="ap-southeast-1">Asia Pacific (Singapore)</option>
                             <option value="ap-southeast-2">Asia Pacific (Sydney)</option>
                           </select>
-                          <span className="form-help">Route53 is global, but SDK requires a region</span>
+                          <span className="form-hint">Route53 is global, but SDK requires a region</span>
                         </div>
                       </>
                     )}
@@ -616,7 +617,7 @@ export function TLSSettingsSection({ isAdmin }: Props) {
                         onChange={(e) => setDnsZoneId(e.target.value)}
                         placeholder="Auto-detected from domain"
                       />
-                      <span className="form-help">Leave empty to auto-detect from domain</span>
+                      <span className="form-hint">Leave empty to auto-detect from domain</span>
                     </div>
 
                     <button
@@ -631,7 +632,7 @@ export function TLSSettingsSection({ isAdmin }: Props) {
                 )}
 
                 <div className="form-group">
-                  <label className="toggle-label">
+                  <label className="checkbox-label">
                     <input
                       type="checkbox"
                       checked={useStaging}
@@ -639,11 +640,11 @@ export function TLSSettingsSection({ isAdmin }: Props) {
                     />
                     <span>Use Staging Environment (for testing)</span>
                   </label>
-                  <span className="form-help">Uses Let's Encrypt staging server (certificates won't be trusted)</span>
+                  <span className="form-hint">Uses Let's Encrypt staging server (certificates won't be trusted)</span>
                 </div>
 
                 <div className="form-group">
-                  <label className="toggle-label">
+                  <label className="checkbox-label">
                     <input
                       type="checkbox"
                       checked={autoRenew}
@@ -699,7 +700,7 @@ export function TLSSettingsSection({ isAdmin }: Props) {
                     ref={chainFileRef}
                     accept=".pem,.crt"
                   />
-                  <span className="form-help">Intermediate certificates (if not included in certificate file)</span>
+                  <span className="form-hint">Intermediate certificates (if not included in certificate file)</span>
                 </div>
 
                 <button
@@ -714,6 +715,7 @@ export function TLSSettingsSection({ isAdmin }: Props) {
             )}
           </>
         )}
+        </div>
       </div>
 
       {/* Actions */}
