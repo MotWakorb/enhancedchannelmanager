@@ -2,7 +2,7 @@
 ACME client for Let's Encrypt certificate management.
 
 Implements the ACME protocol for automatic certificate issuance and renewal
-using HTTP-01 or DNS-01 challenges.
+using DNS-01 challenges.
 """
 import asyncio
 import hashlib
@@ -20,7 +20,7 @@ from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import rsa, ec, padding
 from cryptography.x509.oid import NameOID
-from josepy import JWKRSA, JWKECKey
+from josepy import JWKRSA
 import josepy as jose
 
 
@@ -47,24 +47,25 @@ class CertificateResult:
 
 @dataclass
 class ChallengeInfo:
-    """Information about a pending ACME challenge."""
+    """Information about a pending ACME DNS-01 challenge."""
 
-    type: Literal["http-01", "dns-01"]
     token: str
     key_authorization: str
     domain: str
-    # For HTTP-01
-    url_path: Optional[str] = None
-    # For DNS-01
     txt_record_name: Optional[str] = None
     txt_record_value: Optional[str] = None
+    # URLs needed to complete the challenge
+    challenge_url: Optional[str] = None
+    auth_url: Optional[str] = None
+    order_url: Optional[str] = None
+    finalize_url: Optional[str] = None
 
 
 class ACMEClient:
     """
     ACME client for Let's Encrypt certificate management.
 
-    Supports HTTP-01 and DNS-01 challenges for domain validation.
+    Uses DNS-01 challenges for domain validation.
     """
 
     def __init__(
@@ -191,7 +192,8 @@ class ACMEClient:
         }
 
         if use_jwk:
-            protected["jwk"] = self.account_key.public_key().fields_to_partial_json()
+            # ACME requires full JWK with "kty" field, not just key fields
+            protected["jwk"] = self.account_key.public_key().to_partial_json()
         else:
             protected["kid"] = self.account_url
 
@@ -264,21 +266,20 @@ class ACMEClient:
             use_jwk=True,
         )
 
-        self.account_url = headers.get("Location")
+        # httpx lowercases header names when converting to dict
+        self.account_url = headers.get("location")
         logger.info(f"ACME account registered/retrieved: {self.account_url}")
 
     async def request_certificate(
         self,
         domain: str,
-        challenge_type: Literal["http-01", "dns-01"] = "http-01",
         key_type: Literal["rsa", "ec"] = "ec",
     ) -> CertificateResult:
         """
-        Request a new certificate for a domain.
+        Request a new certificate for a domain using DNS-01 challenge.
 
         Args:
             domain: The domain to get a certificate for
-            challenge_type: Type of ACME challenge to use
             key_type: Type of key to generate (RSA or EC)
 
         Returns:
@@ -289,7 +290,7 @@ class ACMEClient:
                 await self.initialize()
 
             # Step 1: Create new order
-            logger.info(f"Creating certificate order for {domain}")
+            logger.debug(f"Creating certificate order for {domain}")
             order_payload = {
                 "identifiers": [{"type": "dns", "value": domain}],
             }
@@ -297,23 +298,23 @@ class ACMEClient:
                 self.directory["newOrder"],
                 order_payload,
             )
-            order_url = order_headers.get("Location")
+            order_url = order_headers.get("location")
 
             # Step 2: Get authorizations
             for auth_url in order["authorizations"]:
                 auth, _ = await self._acme_request(auth_url, None)
 
-                # Find the requested challenge type
+                # Find the DNS-01 challenge
                 challenge = None
                 for ch in auth["challenges"]:
-                    if ch["type"] == challenge_type:
+                    if ch["type"] == "dns-01":
                         challenge = ch
                         break
 
                 if not challenge:
                     return CertificateResult(
                         success=False,
-                        error=f"Challenge type {challenge_type} not available",
+                        error="DNS-01 challenge not available",
                     )
 
                 # Prepare challenge
@@ -321,37 +322,35 @@ class ACMEClient:
                 thumbprint = self._get_thumbprint()
                 key_authorization = f"{token}.{thumbprint}"
 
+                # DNS TXT record value is base64url(sha256(key_authorization))
+                digest = hashlib.sha256(key_authorization.encode()).digest()
+                txt_value = jose.json_util.encode_b64jose(digest)
+
                 challenge_info = ChallengeInfo(
-                    type=challenge_type,
                     token=token,
                     key_authorization=key_authorization,
                     domain=domain,
+                    txt_record_name=f"_acme-challenge.{domain}",
+                    txt_record_value=txt_value,
+                    challenge_url=challenge["url"],
+                    auth_url=auth_url,
+                    order_url=order_url,
+                    finalize_url=order.get("finalize"),
                 )
-
-                if challenge_type == "http-01":
-                    challenge_info.url_path = f"/.well-known/acme-challenge/{token}"
-                elif challenge_type == "dns-01":
-                    # DNS TXT record value is base64url(sha256(key_authorization))
-                    digest = hashlib.sha256(key_authorization.encode()).digest()
-                    txt_value = jose.json_util.encode_b64jose(digest)
-                    challenge_info.txt_record_name = f"_acme-challenge.{domain}"
-                    challenge_info.txt_record_value = txt_value
 
                 # Store challenge for external handlers
                 self._pending_challenges[token] = challenge_info
 
-                logger.info(
-                    f"Challenge prepared: {challenge_type} for {domain}, "
-                    f"token={token}"
+                logger.debug(
+                    f"DNS-01 challenge prepared for {domain}, token={token}"
                 )
 
                 # Return challenge info for external handling
-                # Caller must set up the challenge (HTTP endpoint or DNS record)
-                # then call complete_challenge()
+                # Caller must set up the DNS TXT record then call complete_challenge()
 
             return CertificateResult(
                 success=False,
-                error="Challenge pending - call complete_challenge() after setup",
+                error="Challenge pending - call complete_challenge() after DNS setup",
             )
 
         except Exception as e:
@@ -366,27 +365,19 @@ class ACMEClient:
         """Get all pending challenges."""
         return list(self._pending_challenges.values())
 
-    def get_http_challenge_response(self, token: str) -> Optional[str]:
-        """Get the response to serve for an HTTP-01 challenge."""
-        challenge = self._pending_challenges.get(token)
-        if challenge and challenge.type == "http-01":
-            return challenge.key_authorization
-        return None
-
     async def complete_challenge(
         self,
         domain: str,
-        challenge_type: Literal["http-01", "dns-01"] = "http-01",
         key_type: Literal["rsa", "ec"] = "ec",
     ) -> CertificateResult:
         """
-        Complete the ACME challenge and finalize the certificate.
+        Complete the ACME DNS-01 challenge and finalize the certificate.
 
-        This should be called after setting up the HTTP endpoint or DNS record.
+        This should be called after setting up the DNS TXT record.
+        Uses the stored challenge info from request_certificate().
 
         Args:
             domain: The domain being validated
-            challenge_type: Type of challenge being used
             key_type: Type of key to generate for the certificate
 
         Returns:
@@ -396,68 +387,57 @@ class ACMEClient:
             if not self.account_url:
                 await self.initialize()
 
-            # Create new order (or resume if already created)
-            order_payload = {
-                "identifiers": [{"type": "dns", "value": domain}],
-            }
-            order, order_headers = await self._acme_request(
-                self.directory["newOrder"],
-                order_payload,
-            )
-            order_url = order_headers.get("Location")
+            # Find the pending challenge for this domain
+            challenge_info = None
+            for token, info in self._pending_challenges.items():
+                if info.domain == domain:
+                    challenge_info = info
+                    break
 
-            # Process authorizations
-            for auth_url in order["authorizations"]:
-                auth, _ = await self._acme_request(auth_url, None)
+            if not challenge_info:
+                return CertificateResult(
+                    success=False,
+                    error=f"No pending DNS-01 challenge for {domain}. Call request_certificate() first.",
+                )
+
+            if not challenge_info.challenge_url or not challenge_info.auth_url:
+                return CertificateResult(
+                    success=False,
+                    error="Challenge info incomplete - missing URLs",
+                )
+
+            # Respond to challenge (tell ACME server we're ready)
+            logger.debug(f"Responding to DNS-01 challenge for {domain}")
+            await self._acme_request(challenge_info.challenge_url, {})
+
+            # Poll for authorization status
+            for _ in range(30):  # Max 30 attempts
+                await asyncio.sleep(2)
+                auth, _ = await self._acme_request(challenge_info.auth_url, None)
 
                 if auth["status"] == "valid":
+                    logger.debug(f"Authorization valid for {domain}")
+                    break
+                elif auth["status"] == "invalid":
+                    # Get challenge error
+                    for ch in auth.get("challenges", []):
+                        if ch["type"] == "dns-01":
+                            error = ch.get("error", {})
+                            return CertificateResult(
+                                success=False,
+                                error=f"Challenge failed: {error.get('detail', 'Unknown error')}",
+                            )
+                    return CertificateResult(
+                        success=False,
+                        error="Authorization invalid",
+                    )
+                elif auth["status"] == "pending":
                     continue
-
-                # Find the challenge
-                challenge = None
-                for ch in auth["challenges"]:
-                    if ch["type"] == challenge_type:
-                        challenge = ch
-                        break
-
-                if not challenge:
-                    return CertificateResult(
-                        success=False,
-                        error=f"Challenge type {challenge_type} not available",
-                    )
-
-                # Respond to challenge (tell ACME server we're ready)
-                logger.info(f"Responding to {challenge_type} challenge")
-                await self._acme_request(challenge["url"], {})
-
-                # Poll for authorization status
-                for _ in range(30):  # Max 30 attempts
-                    await asyncio.sleep(2)
-                    auth, _ = await self._acme_request(auth_url, None)
-
-                    if auth["status"] == "valid":
-                        logger.info(f"Authorization valid for {domain}")
-                        break
-                    elif auth["status"] == "invalid":
-                        # Get challenge error
-                        for ch in auth["challenges"]:
-                            if ch["type"] == challenge_type:
-                                error = ch.get("error", {})
-                                return CertificateResult(
-                                    success=False,
-                                    error=f"Challenge failed: {error.get('detail', 'Unknown error')}",
-                                )
-                        return CertificateResult(
-                            success=False,
-                            error="Authorization invalid",
-                        )
-                    elif auth["status"] == "pending":
-                        continue
-                else:
-                    return CertificateResult(
-                        success=False,
-                        error="Authorization timeout",
-                    )
+            else:
+                return CertificateResult(
+                    success=False,
+                    error="Authorization timeout",
+                )
 
             # Generate certificate key
             if key_type == "ec":
@@ -485,14 +465,14 @@ class ACMEClient:
             csr_b64 = jose.json_util.encode_b64jose(csr_der)
 
             # Finalize order
-            logger.info("Finalizing certificate order")
+            logger.debug("Finalizing certificate order")
             finalize_payload = {"csr": csr_b64}
-            order, _ = await self._acme_request(order["finalize"], finalize_payload)
+            order, _ = await self._acme_request(challenge_info.finalize_url, finalize_payload)
 
             # Poll for certificate
             for _ in range(30):
                 await asyncio.sleep(2)
-                order, _ = await self._acme_request(order_url, None)
+                order, _ = await self._acme_request(challenge_info.order_url, None)
 
                 if order["status"] == "valid":
                     break
@@ -557,8 +537,11 @@ class ACMEClient:
 
     def _get_thumbprint(self) -> str:
         """Get the account key thumbprint for key authorization."""
-        jwk_json = self.account_key.public_key().fields_to_partial_json()
-        # JWK thumbprint per RFC 7638
+        # RFC 7638 requires "kty" field for thumbprint calculation
+        # Use to_partial_json() which includes kty, not fields_to_partial_json()
+        jwk_json = self.account_key.public_key().to_partial_json()
+        # JWK thumbprint per RFC 7638 - must include required members in sorted order
+        # For RSA: e, kty, n (lexicographic order)
         thumbprint_input = json.dumps(
             {k: jwk_json[k] for k in sorted(jwk_json.keys())},
             separators=(",", ":"),
