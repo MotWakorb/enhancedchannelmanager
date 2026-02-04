@@ -1062,6 +1062,7 @@ export interface AuthStatus {
   require_auth: boolean;
   enabled_providers: string[];
   primary_auth_mode: string;
+  smtp_configured: boolean;
 }
 
 // Auth provider info
@@ -1125,28 +1126,10 @@ export interface AuthSettingsPublic {
   primary_auth_mode: string;
   // Local auth
   local_enabled: boolean;
-  local_allow_registration: boolean;
   local_min_password_length: number;
   // Dispatcharr
   dispatcharr_enabled: boolean;
   dispatcharr_auto_create_users: boolean;
-  // OIDC
-  oidc_enabled: boolean;
-  oidc_provider_name: string;
-  oidc_discovery_url: string;
-  oidc_auto_create_users: boolean;
-  // SAML
-  saml_enabled: boolean;
-  saml_provider_name: string;
-  saml_idp_metadata_url: string;
-  saml_auto_create_users: boolean;
-  // LDAP
-  ldap_enabled: boolean;
-  ldap_server_url: string;
-  ldap_use_ssl: boolean;
-  ldap_use_tls: boolean;
-  ldap_user_search_base: string;
-  ldap_auto_create_users: boolean;
 }
 
 // Auth settings update request (partial)
@@ -1155,34 +1138,10 @@ export interface AuthSettingsUpdate {
   primary_auth_mode?: string;
   // Local
   local_enabled?: boolean;
-  local_allow_registration?: boolean;
   local_min_password_length?: number;
   // Dispatcharr
   dispatcharr_enabled?: boolean;
   dispatcharr_auto_create_users?: boolean;
-  // OIDC
-  oidc_enabled?: boolean;
-  oidc_provider_name?: string;
-  oidc_client_id?: string;
-  oidc_client_secret?: string;
-  oidc_discovery_url?: string;
-  oidc_auto_create_users?: boolean;
-  // SAML
-  saml_enabled?: boolean;
-  saml_provider_name?: string;
-  saml_idp_metadata_url?: string;
-  saml_sp_entity_id?: string;
-  saml_auto_create_users?: boolean;
-  // LDAP
-  ldap_enabled?: boolean;
-  ldap_server_url?: string;
-  ldap_use_ssl?: boolean;
-  ldap_use_tls?: boolean;
-  ldap_bind_dn?: string;
-  ldap_bind_password?: string;
-  ldap_user_search_base?: string;
-  ldap_user_search_filter?: string;
-  ldap_auto_create_users?: boolean;
 }
 
 // =============================================================================
@@ -1249,7 +1208,7 @@ export interface ChangePasswordResponse {
 // =============================================================================
 
 // Provider types for identities
-export type IdentityProvider = 'local' | 'dispatcharr' | 'oidc' | 'saml' | 'ldap';
+export type IdentityProvider = 'local' | 'dispatcharr';
 
 // A linked identity for a user account
 export interface UserIdentity {
@@ -1294,6 +1253,7 @@ export interface TLSStatus {
   enabled: boolean;
   mode: 'letsencrypt' | 'manual' | 'none';
   domain: string | null;
+  https_port: number;
   cert_issued_at: string | null;
   cert_expires_at: string | null;
   cert_subject: string | null;
@@ -1311,8 +1271,8 @@ export interface TLSSettings {
   enabled: boolean;
   mode: 'letsencrypt' | 'manual';
   domain: string;
+  https_port: number;
   acme_email: string;
-  challenge_type: 'http-01' | 'dns-01';
   use_staging: boolean;
   dns_provider: string;
   dns_api_token: string;  // Cloudflare API token
@@ -1330,8 +1290,8 @@ export interface TLSConfigureRequest {
   enabled: boolean;
   mode: 'letsencrypt' | 'manual';
   domain: string;
+  https_port: number;
   acme_email: string;
-  challenge_type: 'http-01' | 'dns-01';
   use_staging: boolean;
   dns_provider: string;
   dns_api_token: string;  // Cloudflare API token
@@ -1348,8 +1308,7 @@ export interface TLSConfigureRequest {
 export interface CertificateRequestResponse {
   success: boolean;
   message: string;
-  challenge_type?: string;
-  challenge_url?: string;
+  // DNS-01 challenge info (when manual DNS setup required)
   txt_record_name?: string;
   txt_record_value?: string;
   cert_expires_at?: string;

@@ -26,8 +26,8 @@ export function TLSSettingsSection({ isAdmin }: Props) {
   const [enabled, setEnabled] = useState(false);
   const [mode, setMode] = useState<'letsencrypt' | 'manual'>('letsencrypt');
   const [domain, setDomain] = useState('');
+  const [httpsPort, setHttpsPort] = useState(6143);
   const [acmeEmail, setAcmeEmail] = useState('');
-  const [challengeType, setChallengeType] = useState<'http-01' | 'dns-01'>('http-01');
   const [useStaging, setUseStaging] = useState(false);
   const [dnsProvider, setDnsProvider] = useState('');
   const [dnsApiToken, setDnsApiToken] = useState('');
@@ -62,8 +62,8 @@ export function TLSSettingsSection({ isAdmin }: Props) {
         setEnabled(settingsData.enabled);
         setMode(settingsData.mode);
         setDomain(settingsData.domain);
+        setHttpsPort(settingsData.https_port || 6143);
         setAcmeEmail(settingsData.acme_email);
-        setChallengeType(settingsData.challenge_type);
         setUseStaging(settingsData.use_staging);
         setDnsProvider(settingsData.dns_provider);
         setDnsZoneId(settingsData.dns_zone_id);
@@ -93,8 +93,8 @@ export function TLSSettingsSection({ isAdmin }: Props) {
         enabled,
         mode,
         domain,
+        https_port: httpsPort,
         acme_email: acmeEmail,
-        challenge_type: challengeType,
         use_staging: useStaging,
         dns_provider: dnsProvider,
         dns_api_token: dnsApiToken,
@@ -117,13 +117,12 @@ export function TLSSettingsSection({ isAdmin }: Props) {
       setStatus(newStatus);
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to save settings';
-      setError(message);
       notifications.error(message);
     } finally {
       setSaving(false);
     }
   }, [
-    enabled, mode, domain, acmeEmail, challengeType, useStaging,
+    enabled, mode, domain, httpsPort, acmeEmail, useStaging,
     dnsProvider, dnsApiToken, dnsZoneId, awsAccessKeyId, awsSecretAccessKey, awsRegion,
     autoRenew, renewDaysBefore, notifications,
   ]);
@@ -141,8 +140,8 @@ export function TLSSettingsSection({ isAdmin }: Props) {
         const newStatus = await api.getTLSStatus();
         setStatus(newStatus);
       } else {
-        if (result.challenge_type === 'dns-01' && result.txt_record_name) {
-          // Show DNS challenge info
+        if (result.txt_record_name) {
+          // Show DNS challenge info inline (needs to persist on screen)
           setError(
             `DNS-01 Challenge Required:\n` +
             `Create a TXT record:\n` +
@@ -151,13 +150,13 @@ export function TLSSettingsSection({ isAdmin }: Props) {
             `After creating the record, click "Complete Challenge".`
           );
         } else {
-          setError(result.message);
+          // Simple error - just toast, don't clutter the page
           notifications.error(result.message);
         }
       }
     } catch (err) {
+      // API errors - just toast, don't clutter the page
       const message = err instanceof Error ? err.message : 'Certificate request failed';
-      setError(message);
       notifications.error(message);
     } finally {
       setRequesting(false);
@@ -178,12 +177,10 @@ export function TLSSettingsSection({ isAdmin }: Props) {
         const newStatus = await api.getTLSStatus();
         setStatus(newStatus);
       } else {
-        setError(result.message);
         notifications.error(result.message);
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Challenge completion failed';
-      setError(message);
       notifications.error(message);
     } finally {
       setRequesting(false);
@@ -216,12 +213,10 @@ export function TLSSettingsSection({ isAdmin }: Props) {
         const newStatus = await api.getTLSStatus();
         setStatus(newStatus);
       } else {
-        setError(result.message);
         notifications.error(result.message);
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Certificate upload failed';
-      setError(message);
       notifications.error(message);
     } finally {
       setRequesting(false);
@@ -241,12 +236,10 @@ export function TLSSettingsSection({ isAdmin }: Props) {
         const newStatus = await api.getTLSStatus();
         setStatus(newStatus);
       } else {
-        setError(result.message);
         notifications.error(result.message);
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Certificate renewal failed';
-      setError(message);
       notifications.error(message);
     } finally {
       setRequesting(false);
@@ -270,24 +263,9 @@ export function TLSSettingsSection({ isAdmin }: Props) {
       setEnabled(false);
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to delete certificate';
-      setError(message);
       notifications.error(message);
     } finally {
       setRequesting(false);
-    }
-  }, [notifications]);
-
-  const handleTestHTTPChallenge = useCallback(async () => {
-    try {
-      const result = await api.testHTTPChallenge();
-      if (result.success) {
-        notifications.success(result.message);
-      } else {
-        notifications.error(result.message);
-      }
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'HTTP challenge test failed';
-      notifications.error(message);
     }
   }, [notifications]);
 
@@ -364,54 +342,12 @@ export function TLSSettingsSection({ isAdmin }: Props) {
 
       {/* Current Status */}
       {status && (
-        <div className="tls-status-card">
-          <h3>
-            <span className="material-icons">info</span>
-            Current Status
-          </h3>
-          <div className="tls-status-grid">
-            <div className="status-item">
-              <span className="status-label">TLS Enabled</span>
-              <span className={`status-value ${status.enabled ? 'enabled' : 'disabled'}`}>
-                {status.enabled ? 'Yes' : 'No'}
-              </span>
-            </div>
-            {status.has_certificate && (
-              <>
-                <div className="status-item">
-                  <span className="status-label">Mode</span>
-                  <span className="status-value">{status.mode}</span>
-                </div>
-                <div className="status-item">
-                  <span className="status-label">Domain</span>
-                  <span className="status-value">{status.domain || 'N/A'}</span>
-                </div>
-                <div className="status-item">
-                  <span className="status-label">Certificate Valid</span>
-                  <span className={`status-value ${status.certificate_valid ? 'valid' : 'invalid'}`}>
-                    {status.certificate_valid ? 'Yes' : 'No'}
-                  </span>
-                </div>
-                <div className="status-item">
-                  <span className="status-label">Expires</span>
-                  <span className={`status-value ${(status.days_until_expiry ?? 0) < 30 ? 'warning' : ''}`}>
-                    {status.cert_expires_at ? new Date(status.cert_expires_at).toLocaleDateString() : 'N/A'}
-                    {status.days_until_expiry !== null && ` (${status.days_until_expiry} days)`}
-                  </span>
-                </div>
-                <div className="status-item">
-                  <span className="status-label">Issuer</span>
-                  <span className="status-value">{status.cert_issuer || 'N/A'}</span>
-                </div>
-              </>
-            )}
-            {status.last_renewal_error && (
-              <div className="status-item error">
-                <span className="status-label">Last Renewal Error</span>
-                <span className="status-value">{status.last_renewal_error}</span>
-              </div>
-            )}
-          </div>
+        <div className="tls-status-line">
+          <span className="tls-status-label">Current Status:</span>
+          <span className={`tls-status-badge ${status.enabled && status.has_certificate ? 'encrypted' : 'unencrypted'}`}>
+            {status.enabled && status.has_certificate ? `Encrypted (port ${status.https_port})` : 'UNENCRYPTED'}
+          </span>
+          <span className="tls-status-fallback">HTTP fallback on port 6100</span>
         </div>
       )}
 
@@ -477,6 +413,19 @@ export function TLSSettingsSection({ isAdmin }: Props) {
                 </div>
 
                 <div className="form-group">
+                  <label htmlFor="httpsPort">HTTPS Port</label>
+                  <input
+                    type="number"
+                    id="httpsPort"
+                    value={httpsPort}
+                    onChange={(e) => setHttpsPort(parseInt(e.target.value) || 6143)}
+                    min={1}
+                    max={65535}
+                  />
+                  <span className="form-hint">HTTPS will listen on this port (default: 6143). HTTP always stays on 6100 as fallback.</span>
+                </div>
+
+                <div className="form-group">
                   <label htmlFor="acmeEmail">Email Address</label>
                   <input
                     type="email"
@@ -489,147 +438,104 @@ export function TLSSettingsSection({ isAdmin }: Props) {
                 </div>
 
                 <div className="form-group">
-                  <label>Challenge Type</label>
-                  <div className="radio-group">
-                    <label className="radio-option">
-                      <input
-                        type="radio"
-                        name="challengeType"
-                        value="http-01"
-                        checked={challengeType === 'http-01'}
-                        onChange={() => setChallengeType('http-01')}
-                      />
-                      <span>HTTP-01 (requires port 80)</span>
-                    </label>
-                    <label className="radio-option">
-                      <input
-                        type="radio"
-                        name="challengeType"
-                        value="dns-01"
-                        checked={challengeType === 'dns-01'}
-                        onChange={() => setChallengeType('dns-01')}
-                      />
-                      <span>DNS-01 (requires DNS API access)</span>
-                    </label>
-                  </div>
+                  <label htmlFor="dnsProvider">DNS Provider (for automatic TXT record management)</label>
+                  <select
+                    id="dnsProvider"
+                    value={dnsProvider}
+                    onChange={(e) => setDnsProvider(e.target.value)}
+                  >
+                    <option value="">Manual / Other Provider</option>
+                    <option value="cloudflare">Cloudflare (automatic)</option>
+                    <option value="route53">AWS Route53 (automatic)</option>
+                  </select>
+                  <span className="form-hint">
+                    Select Cloudflare or Route53 for automatic DNS record creation.
+                    For other providers, select "Manual" and create the TXT record yourself when prompted.
+                  </span>
                 </div>
 
-                {challengeType === 'http-01' && (
-                  <div className="challenge-info">
-                    <span className="material-icons">info</span>
-                    <p>
-                      HTTP-01 challenge requires port 80 to be accessible from the internet.
-                      Let's Encrypt will verify domain ownership by requesting a file from your server.
-                    </p>
-                    <button
-                      type="button"
-                      className="btn-secondary"
-                      onClick={handleTestHTTPChallenge}
-                    >
-                      Test HTTP Challenge Endpoint
-                    </button>
+                {dnsProvider === 'cloudflare' && (
+                  <div className="form-group">
+                    <label htmlFor="dnsApiToken">Cloudflare API Token</label>
+                    <input
+                      type="password"
+                      id="dnsApiToken"
+                      value={dnsApiToken}
+                      onChange={(e) => setDnsApiToken(e.target.value)}
+                      placeholder="Enter Cloudflare API token..."
+                    />
+                    <span className="form-hint">API token with DNS:Edit permission for your zone</span>
                   </div>
                 )}
 
-                {challengeType === 'dns-01' && (
+                {dnsProvider === 'route53' && (
                   <>
                     <div className="form-group">
-                      <label htmlFor="dnsProvider">DNS Provider</label>
-                      <select
-                        id="dnsProvider"
-                        value={dnsProvider}
-                        onChange={(e) => setDnsProvider(e.target.value)}
-                      >
-                        <option value="">Select provider...</option>
-                        <option value="cloudflare">Cloudflare</option>
-                        <option value="route53">AWS Route53</option>
-                      </select>
-                    </div>
-
-                    {dnsProvider === 'cloudflare' && (
-                      <div className="form-group">
-                        <label htmlFor="dnsApiToken">Cloudflare API Token</label>
-                        <input
-                          type="password"
-                          id="dnsApiToken"
-                          value={dnsApiToken}
-                          onChange={(e) => setDnsApiToken(e.target.value)}
-                          placeholder="Enter Cloudflare API token..."
-                        />
-                        <span className="form-hint">API token with DNS:Edit permission for your zone</span>
-                      </div>
-                    )}
-
-                    {dnsProvider === 'route53' && (
-                      <>
-                        <div className="form-group">
-                          <label htmlFor="awsAccessKeyId">AWS Access Key ID</label>
-                          <input
-                            type="text"
-                            id="awsAccessKeyId"
-                            value={awsAccessKeyId}
-                            onChange={(e) => setAwsAccessKeyId(e.target.value)}
-                            placeholder="AKIA..."
-                          />
-                          <span className="form-hint">IAM user access key with Route53 permissions</span>
-                        </div>
-
-                        <div className="form-group">
-                          <label htmlFor="awsSecretAccessKey">AWS Secret Access Key</label>
-                          <input
-                            type="password"
-                            id="awsSecretAccessKey"
-                            value={awsSecretAccessKey}
-                            onChange={(e) => setAwsSecretAccessKey(e.target.value)}
-                            placeholder="Enter secret access key..."
-                          />
-                        </div>
-
-                        <div className="form-group">
-                          <label htmlFor="awsRegion">AWS Region</label>
-                          <select
-                            id="awsRegion"
-                            value={awsRegion}
-                            onChange={(e) => setAwsRegion(e.target.value)}
-                          >
-                            <option value="us-east-1">US East (N. Virginia)</option>
-                            <option value="us-east-2">US East (Ohio)</option>
-                            <option value="us-west-1">US West (N. California)</option>
-                            <option value="us-west-2">US West (Oregon)</option>
-                            <option value="eu-west-1">EU (Ireland)</option>
-                            <option value="eu-west-2">EU (London)</option>
-                            <option value="eu-central-1">EU (Frankfurt)</option>
-                            <option value="ap-northeast-1">Asia Pacific (Tokyo)</option>
-                            <option value="ap-southeast-1">Asia Pacific (Singapore)</option>
-                            <option value="ap-southeast-2">Asia Pacific (Sydney)</option>
-                          </select>
-                          <span className="form-hint">Route53 is global, but SDK requires a region</span>
-                        </div>
-                      </>
-                    )}
-
-                    <div className="form-group">
-                      <label htmlFor="dnsZoneId">Zone/Hosted Zone ID (Optional)</label>
+                      <label htmlFor="awsAccessKeyId">AWS Access Key ID</label>
                       <input
                         type="text"
-                        id="dnsZoneId"
-                        value={dnsZoneId}
-                        onChange={(e) => setDnsZoneId(e.target.value)}
-                        placeholder="Auto-detected from domain"
+                        id="awsAccessKeyId"
+                        value={awsAccessKeyId}
+                        onChange={(e) => setAwsAccessKeyId(e.target.value)}
+                        placeholder="AKIA..."
                       />
-                      <span className="form-hint">Leave empty to auto-detect from domain</span>
+                      <span className="form-hint">IAM user access key with Route53 permissions</span>
                     </div>
 
-                    <button
-                      type="button"
-                      className="btn-secondary"
-                      onClick={handleTestDNSProvider}
-                      disabled={!dnsProvider}
-                    >
-                      Test DNS Provider
-                    </button>
+                    <div className="form-group">
+                      <label htmlFor="awsSecretAccessKey">AWS Secret Access Key</label>
+                      <input
+                        type="password"
+                        id="awsSecretAccessKey"
+                        value={awsSecretAccessKey}
+                        onChange={(e) => setAwsSecretAccessKey(e.target.value)}
+                        placeholder="Enter secret access key..."
+                      />
+                    </div>
+
+                    <div className="form-group">
+                      <label htmlFor="awsRegion">AWS Region</label>
+                      <select
+                        id="awsRegion"
+                        value={awsRegion}
+                        onChange={(e) => setAwsRegion(e.target.value)}
+                      >
+                        <option value="us-east-1">US East (N. Virginia)</option>
+                        <option value="us-east-2">US East (Ohio)</option>
+                        <option value="us-west-1">US West (N. California)</option>
+                        <option value="us-west-2">US West (Oregon)</option>
+                        <option value="eu-west-1">EU (Ireland)</option>
+                        <option value="eu-west-2">EU (London)</option>
+                        <option value="eu-central-1">EU (Frankfurt)</option>
+                        <option value="ap-northeast-1">Asia Pacific (Tokyo)</option>
+                        <option value="ap-southeast-1">Asia Pacific (Singapore)</option>
+                        <option value="ap-southeast-2">Asia Pacific (Sydney)</option>
+                      </select>
+                      <span className="form-hint">Route53 is global, but SDK requires a region</span>
+                    </div>
                   </>
                 )}
+
+                <div className="form-group">
+                  <label htmlFor="dnsZoneId">Zone/Hosted Zone ID (Optional)</label>
+                  <input
+                    type="text"
+                    id="dnsZoneId"
+                    value={dnsZoneId}
+                    onChange={(e) => setDnsZoneId(e.target.value)}
+                    placeholder="Auto-detected from domain"
+                  />
+                  <span className="form-hint">Leave empty to auto-detect from domain</span>
+                </div>
+
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  onClick={handleTestDNSProvider}
+                  disabled={!dnsProvider}
+                >
+                  Test DNS Provider
+                </button>
 
                 <div className="form-group">
                   <label className="checkbox-label">
@@ -726,7 +632,7 @@ export function TLSSettingsSection({ isAdmin }: Props) {
           onClick={handleSave}
           disabled={saving}
         >
-          {saving ? 'Saving...' : 'Save Settings'}
+          {saving ? 'Saving...' : '1. Save Settings'}
         </button>
 
         {enabled && mode === 'letsencrypt' && (
@@ -737,17 +643,18 @@ export function TLSSettingsSection({ isAdmin }: Props) {
               onClick={handleRequestCertificate}
               disabled={requesting || !domain || !acmeEmail}
             >
-              {requesting ? 'Requesting...' : 'Request Certificate'}
+              {requesting ? 'Requesting...' : '2. Request Certificate'}
             </button>
 
-            {challengeType === 'dns-01' && (
+            {/* Only show Complete DNS Challenge for manual DNS setup (no provider configured) */}
+            {!dnsProvider && (
               <button
                 type="button"
                 className="btn-secondary"
                 onClick={handleCompleteDNSChallenge}
                 disabled={requesting}
               >
-                Complete DNS Challenge
+                3. Complete DNS Challenge
               </button>
             )}
           </>
@@ -786,24 +693,24 @@ export function TLSSettingsSection({ isAdmin }: Props) {
         </h4>
         <ul>
           <li>
+            <strong>Dual-Port Setup:</strong> HTTP always runs on port 6100 as a fallback.
+            HTTPS runs on the configured port (default 6143) when TLS is enabled.
+          </li>
+          <li>
             <strong>Let's Encrypt</strong> provides free, automated certificates valid for 90 days.
             Auto-renewal will request a new certificate before expiry.
           </li>
           <li>
-            <strong>HTTP-01 Challenge</strong> requires port 80 to be accessible from the internet.
-            This is the simplest method but may not work behind some firewalls.
-          </li>
-          <li>
-            <strong>DNS-01 Challenge</strong> requires API access to your DNS provider.
-            This works for wildcard certificates and behind firewalls.
+            <strong>DNS-01 Challenge</strong> validates domain ownership via DNS TXT record.
+            Requires API access to Cloudflare or AWS Route53. Works behind firewalls and NAT.
           </li>
           <li>
             <strong>Manual Upload</strong> allows using certificates from any Certificate Authority.
             You are responsible for renewal.
           </li>
           <li>
-            After enabling TLS, ECM will restart to apply the new configuration.
-            Access ECM via HTTPS on the same port.
+            After enabling TLS, ECM will restart. Access via HTTPS on port {httpsPort},
+            or HTTP on port 6100 as fallback.
           </li>
         </ul>
       </div>

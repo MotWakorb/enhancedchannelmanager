@@ -13,7 +13,6 @@ from typing import Optional, Callable, Awaitable
 
 from .settings import get_tls_settings, save_tls_settings, TLS_DIR
 from .storage import CertificateStorage
-from .challenges import register_http_challenge, clear_http_challenge
 
 # ACME client and DNS providers require josepy - import conditionally
 try:
@@ -160,14 +159,13 @@ async def renew_certificate() -> CertificateResult:
             save_tls_settings(settings)
             return CertificateResult(success=False, error=error)
 
-        # Request new certificate
+        # Request new certificate (DNS-01 challenge)
         result = await acme.request_certificate(
             domain=settings.domain,
-            challenge_type=settings.challenge_type,
         )
 
         if not result.success and "Challenge pending" in (result.error or ""):
-            # Set up challenge
+            # Set up DNS-01 challenge
             challenges = acme.get_all_pending_challenges()
             if not challenges:
                 error = "No challenges returned"
@@ -177,59 +175,44 @@ async def renew_certificate() -> CertificateResult:
 
             challenge = challenges[0]
 
-            if settings.challenge_type == "http-01":
-                # Register HTTP challenge
-                register_http_challenge(challenge.token, challenge.key_authorization)
+            # Use DNS provider to create TXT record
+            try:
+                provider = get_dns_provider(
+                    settings.dns_provider,
+                    api_token=settings.dns_api_token,
+                    zone_id=settings.dns_zone_id,
+                    aws_access_key_id=settings.aws_access_key_id,
+                    aws_secret_access_key=settings.aws_secret_access_key,
+                    aws_region=settings.aws_region,
+                )
+
+                # Create TXT record
+                record_id, zone_id = await provider.create_and_get_zone(
+                    challenge.txt_record_name,
+                    challenge.txt_record_value,
+                )
+
+                # Wait for DNS propagation
+                logger.debug("Waiting for DNS propagation...")
+                await asyncio.sleep(30)
 
                 # Complete challenge
                 result = await acme.complete_challenge(
                     domain=settings.domain,
-                    challenge_type="http-01",
                 )
 
-                # Clean up
-                clear_http_challenge(challenge.token)
-
-            elif settings.challenge_type == "dns-01":
-                # Use DNS provider
+                # Clean up DNS record
                 try:
-                    provider = get_dns_provider(
-                        settings.dns_provider,
-                        api_token=settings.dns_api_token,
-                        zone_id=settings.dns_zone_id,
-                        aws_access_key_id=settings.aws_access_key_id,
-                        aws_secret_access_key=settings.aws_secret_access_key,
-                        aws_region=settings.aws_region,
-                    )
-
-                    # Create TXT record
-                    record_id, zone_id = await provider.create_and_get_zone(
-                        challenge.txt_record_name,
-                        challenge.txt_record_value,
-                    )
-
-                    # Wait for DNS propagation
-                    logger.info("Waiting for DNS propagation...")
-                    await asyncio.sleep(30)
-
-                    # Complete challenge
-                    result = await acme.complete_challenge(
-                        domain=settings.domain,
-                        challenge_type="dns-01",
-                    )
-
-                    # Clean up DNS record
-                    try:
-                        provider.zone_id = zone_id
-                        await provider.delete_txt_record(record_id)
-                    except Exception as e:
-                        logger.warning(f"Failed to delete DNS record: {e}")
-
+                    provider.zone_id = zone_id
+                    await provider.delete_txt_record(record_id)
                 except Exception as e:
-                    error = f"DNS challenge failed: {e}"
-                    settings.last_renewal_error = error
-                    save_tls_settings(settings)
-                    return CertificateResult(success=False, error=error)
+                    logger.warning(f"Failed to delete DNS record: {e}")
+
+            except Exception as e:
+                error = f"DNS challenge failed: {e}"
+                settings.last_renewal_error = error
+                save_tls_settings(settings)
+                return CertificateResult(success=False, error=error)
 
         if result.success:
             # Save the new certificate

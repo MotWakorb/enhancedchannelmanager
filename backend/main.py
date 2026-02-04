@@ -133,18 +133,6 @@ app.include_router(admin_router)
 from tls.routes import router as tls_router
 app.include_router(tls_router)
 
-# Root-level ACME challenge endpoint (Let's Encrypt expects this path exactly)
-from tls.challenges import get_http_challenge_response
-
-
-@app.get("/.well-known/acme-challenge/{token}", include_in_schema=False)
-async def acme_challenge_root(token: str):
-    """Serve ACME HTTP-01 challenge at root level for Let's Encrypt validation."""
-    response = get_http_challenge_response(token)
-    if response:
-        return PlainTextResponse(response)
-    raise HTTPException(404, "Challenge not found")
-
 
 # ============================================================================
 # Request Timing and Rate Tracking Middleware (for CPU diagnostics)
