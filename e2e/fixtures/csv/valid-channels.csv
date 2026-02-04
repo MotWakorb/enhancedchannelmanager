@@ -1,0 +1,4 @@
+channel_number,name,group_name,tvg_id,gracenote_id,logo_url
+101,ESPN HD,Sports,ESPN.US,12345,https://example.com/espn.png
+102,CNN,News,CNN.US,67890,https://example.com/cnn.png
+103,HBO,Movies,HBO.US,11111,https://example.com/hbo.png

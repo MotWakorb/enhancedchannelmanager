@@ -195,36 +195,83 @@
   background: var(--border-primary);
 }
 
-/* OIDC Button */
-.login-oidc-button {
+/* Success message styles */
+.login-success {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 1.5rem;
+  background: var(--success-bg, rgba(34, 197, 94, 0.1));
+  border: 1px solid var(--success-border, rgba(34, 197, 94, 0.3));
+  border-radius: 6px;
+  text-align: center;
+}
+
+.login-success .material-icons {
+  font-size: 2.5rem;
+  color: var(--success-text, #22c55e);
+}
+
+.login-success p {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 0.9375rem;
+  line-height: 1.5;
+}
+
+.login-success-hint {
+  color: var(--text-secondary) !important;
+  font-size: 0.8125rem !important;
+}
+
+/* Links section */
+.login-links {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  margin-top: 1.5rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid var(--border-primary);
+}
+
+.login-link {
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 0.5rem;
-  width: 100%;
-  margin-top: 1rem;
-  padding: 0.75rem 1rem;
-  background: var(--bg-tertiary);
-  color: var(--text-primary);
-  border: 1px solid var(--border-primary);
-  border-radius: 4px;
-  font-size: 1rem;
-  font-weight: 500;
-  cursor: pointer;
-  transition: all 0.15s ease;
-}
-
-.login-oidc-button:hover:not(:disabled) {
-  background: var(--hover-bg);
-  border-color: var(--border-secondary);
-}
-
-.login-oidc-button:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
-}
-
-.login-oidc-button .material-icons {
-  font-size: 1.25rem;
   color: var(--text-secondary);
+  font-size: 0.875rem;
+  text-decoration: none;
+  transition: color 0.15s ease;
+}
+
+.login-link:hover {
+  color: var(--text-primary);
+}
+
+.login-link .material-icons {
+  font-size: 1.125rem;
+}
+
+/* Forgot password link (inline in form) */
+.login-forgot-link {
+  display: inline-block;
+  margin-top: 0.25rem;
+  color: var(--text-secondary);
+  font-size: 0.8125rem;
+  text-decoration: none;
+  transition: color 0.15s ease;
+}
+
+.login-forgot-link:hover {
+  color: var(--text-primary);
+  text-decoration: underline;
+}
+
+/* Field hint text */
+.login-field-hint {
+  margin: 0.25rem 0 0;
+  color: var(--text-muted);
+  font-size: 0.75rem;
 }

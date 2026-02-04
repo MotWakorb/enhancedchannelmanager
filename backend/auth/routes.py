@@ -1,17 +1,22 @@
 """
 Authentication API endpoints.
 
-Provides login, logout, token refresh, user registration, and password management.
+Provides login, logout, token refresh, and password management.
 """
 import logging
 import secrets
+import smtplib
+import ssl
 from datetime import datetime, timedelta
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel, EmailStr, field_validator
 from sqlalchemy.orm import Session
 
+from config import get_settings
 from database import get_session
 from models import User, UserSession, PasswordResetToken
 from .password import verify_password, hash_password, validate_password
@@ -37,6 +42,137 @@ from .dependencies import (
 
 
 logger = logging.getLogger(__name__)
+
+
+def send_password_reset_email(to_email: str, reset_token: str, base_url: str) -> bool:
+    """
+    Send a password reset email using the shared SMTP settings.
+
+    Args:
+        to_email: Recipient email address.
+        reset_token: The raw reset token to include in the link.
+        base_url: The base URL of the application (e.g., http://localhost:6100).
+
+    Returns:
+        True if email was sent successfully, False otherwise.
+    """
+    settings = get_settings()
+
+    if not settings.is_smtp_configured():
+        logger.warning("Password reset email not sent: SMTP not configured")
+        return False
+
+    smtp_host = settings.smtp_host
+    smtp_port = settings.smtp_port
+    smtp_user = settings.smtp_user
+    smtp_password = settings.smtp_password
+    from_email = settings.smtp_from_email
+    from_name = settings.smtp_from_name or "Enhanced Channel Manager"
+    use_tls = settings.smtp_use_tls
+    use_ssl = settings.smtp_use_ssl
+
+    # Build the reset URL
+    reset_url = f"{base_url}/reset-password?token={reset_token}"
+
+    # Build the email
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = "Password Reset Request"
+    msg["From"] = f"{from_name} <{from_email}>"
+    msg["To"] = to_email
+
+    # Plain text version
+    plain_text = f"""Password Reset Request
+
+You requested to reset your password for Enhanced Channel Manager.
+
+Click the link below to reset your password:
+{reset_url}
+
+This link will expire in 1 hour.
+
+If you didn't request this, you can safely ignore this email.
+
+---
+Enhanced Channel Manager
+"""
+
+    # HTML version
+    html_text = f"""
+    <html>
+    <head>
+        <style>
+            body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }}
+            .container {{ max-width: 600px; margin: 0 auto; padding: 20px; }}
+            .header {{ background-color: #4F46E5; color: white; padding: 20px; border-radius: 8px 8px 0 0; text-align: center; }}
+            .header h1 {{ margin: 0; font-size: 24px; }}
+            .body {{ background-color: #f8f9fa; padding: 30px; border: 1px solid #e9ecef; border-top: none; }}
+            .message {{ color: #333; line-height: 1.6; }}
+            .button {{ display: inline-block; background-color: #4F46E5; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; margin: 20px 0; font-weight: 600; }}
+            .button:hover {{ background-color: #4338CA; }}
+            .footer {{ font-size: 12px; color: #666; margin-top: 20px; padding-top: 20px; border-top: 1px solid #e9ecef; }}
+            .warning {{ color: #666; font-size: 14px; margin-top: 15px; }}
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <div class="header">
+                <h1>Password Reset</h1>
+            </div>
+            <div class="body">
+                <div class="message">
+                    <p>You requested to reset your password for Enhanced Channel Manager.</p>
+                    <p>Click the button below to set a new password:</p>
+                    <p style="text-align: center;">
+                        <a href="{reset_url}" style="display: inline-block; background-color: #4F46E5; color: #ffffff !important; padding: 12px 24px; text-decoration: none; border-radius: 6px; margin: 20px 0; font-weight: 600;">Reset Password</a>
+                    </p>
+                    <p class="warning">This link will expire in 1 hour.</p>
+                    <p class="warning">If you didn't request this password reset, you can safely ignore this email.</p>
+                </div>
+                <div class="footer">
+                    <p>If the button doesn't work, copy and paste this link into your browser:</p>
+                    <p style="word-break: break-all;">{reset_url}</p>
+                </div>
+            </div>
+        </div>
+    </body>
+    </html>
+    """
+
+    msg.attach(MIMEText(plain_text, "plain"))
+    msg.attach(MIMEText(html_text, "html"))
+
+    try:
+        # Connect to SMTP server
+        if use_ssl:
+            context = ssl.create_default_context()
+            server = smtplib.SMTP_SSL(smtp_host, smtp_port, context=context, timeout=10)
+        else:
+            server = smtplib.SMTP(smtp_host, smtp_port, timeout=10)
+
+        try:
+            if use_tls and not use_ssl:
+                server.starttls(context=ssl.create_default_context())
+
+            if smtp_user and smtp_password:
+                server.login(smtp_user, smtp_password)
+
+            server.sendmail(from_email, [to_email], msg.as_string())
+            logger.info(f"Password reset email sent to: {to_email}")
+            return True
+
+        finally:
+            server.quit()
+
+    except smtplib.SMTPAuthenticationError as e:
+        logger.error(f"SMTP authentication failed: {e}")
+        return False
+    except smtplib.SMTPException as e:
+        logger.error(f"SMTP error sending password reset email: {e}")
+        return False
+    except Exception as e:
+        logger.error(f"Failed to send password reset email: {e}")
+        return False
+
 
 # Create router with auth tag
 router = APIRouter(prefix="/api/auth", tags=["Authentication"])
@@ -91,31 +227,7 @@ class AuthStatusResponse(BaseModel):
     require_auth: bool
     enabled_providers: list[str]
     primary_auth_mode: str
-
-
-# User Registration Models
-class RegisterRequest(BaseModel):
-    """User registration request body."""
-    username: str
-    email: EmailStr
-    password: str
-
-    @field_validator("username")
-    @classmethod
-    def validate_username(cls, v: str) -> str:
-        if len(v) < 3:
-            raise ValueError("Username must be at least 3 characters")
-        if len(v) > 100:
-            raise ValueError("Username must be at most 100 characters")
-        if not v.isalnum() and not all(c.isalnum() or c in "_-" for c in v):
-            raise ValueError("Username can only contain letters, numbers, underscores, and hyphens")
-        return v
-
-
-class RegisterResponse(BaseModel):
-    """User registration response body."""
-    user: UserResponse
-    message: str = "Registration successful"
+    smtp_configured: bool = False
 
 
 # Password Management Models
@@ -224,12 +336,14 @@ async def get_auth_status():
     Returns information about whether auth is enabled, setup complete,
     and which providers are available. This endpoint is always public.
     """
-    settings = get_auth_settings()
+    auth_settings = get_auth_settings()
+    app_settings = get_settings()
     return AuthStatusResponse(
-        setup_complete=settings.setup_complete,
-        require_auth=settings.require_auth,
-        enabled_providers=settings.get_enabled_providers(),
-        primary_auth_mode=settings.primary_auth_mode,
+        setup_complete=auth_settings.setup_complete,
+        require_auth=auth_settings.require_auth,
+        enabled_providers=auth_settings.get_enabled_providers(),
+        primary_auth_mode=auth_settings.primary_auth_mode,
+        smtp_configured=app_settings.is_smtp_configured(),
     )
 
 
@@ -579,79 +693,6 @@ async def logout(
 
 
 # =============================================================================
-# User Registration
-# =============================================================================
-
-@router.post("/register", response_model=RegisterResponse, status_code=status.HTTP_201_CREATED)
-async def register(
-    register_request: RegisterRequest,
-    session: Session = Depends(get_session),
-):
-    """
-    Register a new user account.
-
-    Creates a new local user with the provided username, email, and password.
-    Password must meet strength requirements.
-    """
-    # Check if username already exists
-    existing_user = session.query(User).filter(User.username == register_request.username).first()
-    if existing_user:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Username already exists",
-        )
-
-    # Check if email already exists
-    existing_email = session.query(User).filter(User.email == register_request.email).first()
-    if existing_email:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Email already registered",
-        )
-
-    # Validate password strength
-    password_result = validate_password(register_request.password, register_request.username)
-    if not password_result.valid:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=password_result.error,
-        )
-
-    from models import UserIdentity
-
-    # Create user
-    user = User(
-        username=register_request.username,
-        email=register_request.email,
-        password_hash=hash_password(register_request.password),
-        auth_provider="local",
-        is_admin=False,  # New users are not admin by default
-        is_active=True,
-    )
-    session.add(user)
-    session.flush()  # Get user ID
-
-    # Create local identity for the user
-    identity = UserIdentity(
-        user_id=user.id,
-        provider="local",
-        identifier=register_request.username,
-        external_id=None,
-    )
-    session.add(identity)
-
-    session.commit()
-    session.refresh(user)
-
-    logger.info(f"New user registered: {user.username}")
-
-    return RegisterResponse(
-        user=UserResponse.model_validate(user),
-        message="Registration successful",
-    )
-
-
-# =============================================================================
 # Password Management
 # =============================================================================
 
@@ -694,6 +735,7 @@ async def change_password(
 @router.post("/forgot-password", response_model=ForgotPasswordResponse)
 async def forgot_password(
     forgot_request: ForgotPasswordRequest,
+    request: Request,
     session: Session = Depends(get_session),
 ):
     """
@@ -718,9 +760,19 @@ async def forgot_password(
         session.add(reset_token)
         session.commit()
 
-        # TODO: Send email with reset link containing raw_token
-        # For now, log it (remove in production)
-        logger.info(f"Password reset token generated for user: {user.email} (token: {raw_token})")
+        # Build base URL from request
+        # Use X-Forwarded headers if behind a proxy, otherwise use request URL
+        forwarded_proto = request.headers.get("X-Forwarded-Proto", request.url.scheme)
+        forwarded_host = request.headers.get("X-Forwarded-Host", request.url.netloc)
+        base_url = f"{forwarded_proto}://{forwarded_host}"
+
+        # Send the password reset email
+        email_sent = send_password_reset_email(user.email, raw_token, base_url)
+        if email_sent:
+            logger.info(f"Password reset email sent to: {user.email}")
+        else:
+            # Still log the token for debugging if email fails
+            logger.warning(f"Password reset email failed for {user.email}, token: {raw_token}")
 
     # Always return success for security
     return ForgotPasswordResponse()
@@ -828,13 +880,6 @@ async def get_auth_providers():
         providers.append(AuthProviderInfo(
             type="dispatcharr",
             name="Dispatcharr",
-            enabled=True,
-        ))
-
-    if settings.oidc.enabled:
-        providers.append(AuthProviderInfo(
-            type="oidc",
-            name=settings.oidc.provider_name or "OpenID Connect",
             enabled=True,
         ))
 
@@ -1045,28 +1090,10 @@ class AuthSettingsPublicResponse(BaseModel):
     primary_auth_mode: str
     # Local auth settings
     local_enabled: bool
-    local_allow_registration: bool
     local_min_password_length: int
     # Dispatcharr settings
     dispatcharr_enabled: bool
     dispatcharr_auto_create_users: bool
-    # OIDC settings (no secrets)
-    oidc_enabled: bool
-    oidc_provider_name: str
-    oidc_discovery_url: str
-    oidc_auto_create_users: bool
-    # SAML settings (no secrets)
-    saml_enabled: bool
-    saml_provider_name: str
-    saml_idp_metadata_url: str
-    saml_auto_create_users: bool
-    # LDAP settings (no secrets)
-    ldap_enabled: bool
-    ldap_server_url: str
-    ldap_use_ssl: bool
-    ldap_use_tls: bool
-    ldap_user_search_base: str
-    ldap_auto_create_users: bool
 
 
 class AuthSettingsUpdateRequest(BaseModel):
@@ -1075,34 +1102,10 @@ class AuthSettingsUpdateRequest(BaseModel):
     primary_auth_mode: Optional[str] = None
     # Local auth settings
     local_enabled: Optional[bool] = None
-    local_allow_registration: Optional[bool] = None
     local_min_password_length: Optional[int] = None
     # Dispatcharr settings
     dispatcharr_enabled: Optional[bool] = None
     dispatcharr_auto_create_users: Optional[bool] = None
-    # OIDC settings
-    oidc_enabled: Optional[bool] = None
-    oidc_provider_name: Optional[str] = None
-    oidc_client_id: Optional[str] = None
-    oidc_client_secret: Optional[str] = None
-    oidc_discovery_url: Optional[str] = None
-    oidc_auto_create_users: Optional[bool] = None
-    # SAML settings
-    saml_enabled: Optional[bool] = None
-    saml_provider_name: Optional[str] = None
-    saml_idp_metadata_url: Optional[str] = None
-    saml_sp_entity_id: Optional[str] = None
-    saml_auto_create_users: Optional[bool] = None
-    # LDAP settings
-    ldap_enabled: Optional[bool] = None
-    ldap_server_url: Optional[str] = None
-    ldap_use_ssl: Optional[bool] = None
-    ldap_use_tls: Optional[bool] = None
-    ldap_bind_dn: Optional[str] = None
-    ldap_bind_password: Optional[str] = None
-    ldap_user_search_base: Optional[str] = None
-    ldap_user_search_filter: Optional[str] = None
-    ldap_auto_create_users: Optional[bool] = None
 
 
 @router.get("/admin/settings", response_model=AuthSettingsPublicResponse)
@@ -1119,24 +1122,9 @@ async def get_admin_auth_settings(
         require_auth=settings.require_auth,
         primary_auth_mode=settings.primary_auth_mode,
         local_enabled=settings.local.enabled,
-        local_allow_registration=settings.local.allow_registration,
         local_min_password_length=settings.local.min_password_length,
         dispatcharr_enabled=settings.dispatcharr.enabled,
         dispatcharr_auto_create_users=settings.dispatcharr.auto_create_users,
-        oidc_enabled=settings.oidc.enabled,
-        oidc_provider_name=settings.oidc.provider_name,
-        oidc_discovery_url=settings.oidc.discovery_url,
-        oidc_auto_create_users=settings.oidc.auto_create_users,
-        saml_enabled=settings.saml.enabled,
-        saml_provider_name=settings.saml.provider_name,
-        saml_idp_metadata_url=settings.saml.idp_metadata_url,
-        saml_auto_create_users=settings.saml.auto_create_users,
-        ldap_enabled=settings.ldap.enabled,
-        ldap_server_url=settings.ldap.server_url,
-        ldap_use_ssl=settings.ldap.use_ssl,
-        ldap_use_tls=settings.ldap.use_tls,
-        ldap_user_search_base=settings.ldap.user_search_base,
-        ldap_auto_create_users=settings.ldap.auto_create_users,
     )
 
 
@@ -1166,8 +1154,6 @@ async def update_admin_auth_settings(
     # Update local auth settings
     if update_request.local_enabled is not None:
         settings.local.enabled = update_request.local_enabled
-    if update_request.local_allow_registration is not None:
-        settings.local.allow_registration = update_request.local_allow_registration
     if update_request.local_min_password_length is not None:
         settings.local.min_password_length = update_request.local_min_password_length
 
@@ -1176,52 +1162,6 @@ async def update_admin_auth_settings(
         settings.dispatcharr.enabled = update_request.dispatcharr_enabled
     if update_request.dispatcharr_auto_create_users is not None:
         settings.dispatcharr.auto_create_users = update_request.dispatcharr_auto_create_users
-
-    # Update OIDC settings
-    if update_request.oidc_enabled is not None:
-        settings.oidc.enabled = update_request.oidc_enabled
-    if update_request.oidc_provider_name is not None:
-        settings.oidc.provider_name = update_request.oidc_provider_name
-    if update_request.oidc_client_id is not None:
-        settings.oidc.client_id = update_request.oidc_client_id
-    if update_request.oidc_client_secret is not None:
-        settings.oidc.client_secret = update_request.oidc_client_secret
-    if update_request.oidc_discovery_url is not None:
-        settings.oidc.discovery_url = update_request.oidc_discovery_url
-    if update_request.oidc_auto_create_users is not None:
-        settings.oidc.auto_create_users = update_request.oidc_auto_create_users
-
-    # Update SAML settings
-    if update_request.saml_enabled is not None:
-        settings.saml.enabled = update_request.saml_enabled
-    if update_request.saml_provider_name is not None:
-        settings.saml.provider_name = update_request.saml_provider_name
-    if update_request.saml_idp_metadata_url is not None:
-        settings.saml.idp_metadata_url = update_request.saml_idp_metadata_url
-    if update_request.saml_sp_entity_id is not None:
-        settings.saml.sp_entity_id = update_request.saml_sp_entity_id
-    if update_request.saml_auto_create_users is not None:
-        settings.saml.auto_create_users = update_request.saml_auto_create_users
-
-    # Update LDAP settings
-    if update_request.ldap_enabled is not None:
-        settings.ldap.enabled = update_request.ldap_enabled
-    if update_request.ldap_server_url is not None:
-        settings.ldap.server_url = update_request.ldap_server_url
-    if update_request.ldap_use_ssl is not None:
-        settings.ldap.use_ssl = update_request.ldap_use_ssl
-    if update_request.ldap_use_tls is not None:
-        settings.ldap.use_tls = update_request.ldap_use_tls
-    if update_request.ldap_bind_dn is not None:
-        settings.ldap.bind_dn = update_request.ldap_bind_dn
-    if update_request.ldap_bind_password is not None:
-        settings.ldap.bind_password = update_request.ldap_bind_password
-    if update_request.ldap_user_search_base is not None:
-        settings.ldap.user_search_base = update_request.ldap_user_search_base
-    if update_request.ldap_user_search_filter is not None:
-        settings.ldap.user_search_filter = update_request.ldap_user_search_filter
-    if update_request.ldap_auto_create_users is not None:
-        settings.ldap.auto_create_users = update_request.ldap_auto_create_users
 
     save_auth_settings(settings)
     logger.info(f"Auth settings updated by admin: {admin_user.username}")
@@ -1719,441 +1659,3 @@ async def unlink_identity(
 
     return UnlinkIdentityResponse(message="Identity unlinked successfully")
 
-
-# =============================================================================
-# OIDC Authentication
-# =============================================================================
-
-@router.get("/oidc/authorize")
-async def oidc_authorize(
-    request: Request,
-):
-    """
-    Start OIDC authorization flow.
-
-    Generates PKCE challenge, stores state, and redirects to OIDC provider.
-    """
-    from fastapi.responses import RedirectResponse
-    from auth.providers.oidc import OIDCClient, get_state_store, OIDCDiscoveryError
-
-    settings = get_auth_settings()
-    if not settings.oidc.enabled:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="OIDC authentication is not enabled",
-        )
-
-    if not settings.oidc.discovery_url:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="OIDC discovery URL not configured",
-        )
-
-    # Build the callback URL
-    # Use the request's base URL to construct the callback
-    base_url = str(request.base_url).rstrip("/")
-    redirect_uri = f"{base_url}/api/auth/oidc/callback"
-
-    # Create auth state with PKCE
-    state_store = get_state_store()
-    auth_state = state_store.create_state(redirect_uri)
-
-    # Get authorization URL
-    try:
-        async with OIDCClient(settings.oidc) as client:
-            auth_url = await client.get_authorization_url(
-                redirect_uri=redirect_uri,
-                state=auth_state.state,
-                nonce=auth_state.nonce,
-                code_verifier=auth_state.code_verifier,
-            )
-    except OIDCDiscoveryError as e:
-        logger.error(f"OIDC discovery failed: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=f"OIDC provider unavailable: {e}",
-        )
-    except Exception as e:
-        logger.exception(f"OIDC authorization error: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to start OIDC authentication",
-        )
-
-    logger.info(f"Redirecting to OIDC provider for authorization")
-    return RedirectResponse(url=auth_url, status_code=302)
-
-
-@router.get("/oidc/callback")
-async def oidc_callback(
-    request: Request,
-    response: Response,
-    code: Optional[str] = None,
-    state: Optional[str] = None,
-    error: Optional[str] = None,
-    error_description: Optional[str] = None,
-    session: Session = Depends(get_session),
-):
-    """
-    Handle OIDC callback from provider.
-
-    Exchanges authorization code for tokens, validates ID token,
-    creates/updates user, and sets session cookies.
-    """
-    from fastapi.responses import RedirectResponse
-    from auth.providers.oidc import (
-        OIDCClient,
-        get_state_store,
-        OIDCError,
-        OIDCTokenError,
-        OIDCValidationError,
-    )
-    from models import UserIdentity
-
-    settings = get_auth_settings()
-    if not settings.oidc.enabled:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="OIDC authentication is not enabled",
-        )
-
-    # Handle error responses from provider
-    if error:
-        logger.warning(f"OIDC provider returned error: {error} - {error_description}")
-        # Redirect to login with error
-        return RedirectResponse(
-            url=f"/login?error=oidc_error&message={error_description or error}",
-            status_code=302,
-        )
-
-    # Validate required parameters
-    if not code or not state:
-        logger.warning("OIDC callback missing code or state")
-        return RedirectResponse(
-            url="/login?error=oidc_error&message=Invalid callback parameters",
-            status_code=302,
-        )
-
-    # Retrieve and validate state
-    state_store = get_state_store()
-    auth_state = state_store.get_state(state)
-
-    if not auth_state:
-        logger.warning("OIDC state not found or expired")
-        return RedirectResponse(
-            url="/login?error=oidc_error&message=Session expired, please try again",
-            status_code=302,
-        )
-
-    # Exchange code for tokens and authenticate
-    try:
-        async with OIDCClient(settings.oidc) as client:
-            auth_result = await client.authenticate(
-                code=code,
-                redirect_uri=auth_state.redirect_uri,
-                code_verifier=auth_state.code_verifier,
-                nonce=auth_state.nonce,
-            )
-    except OIDCTokenError as e:
-        logger.error(f"OIDC token exchange failed: {e}")
-        return RedirectResponse(
-            url="/login?error=oidc_error&message=Authentication failed",
-            status_code=302,
-        )
-    except OIDCValidationError as e:
-        logger.error(f"OIDC token validation failed: {e}")
-        return RedirectResponse(
-            url="/login?error=oidc_error&message=Token validation failed",
-            status_code=302,
-        )
-    except OIDCError as e:
-        logger.error(f"OIDC authentication error: {e}")
-        return RedirectResponse(
-            url="/login?error=oidc_error&message=Authentication error",
-            status_code=302,
-        )
-    except Exception as e:
-        logger.exception(f"Unexpected OIDC error: {e}")
-        return RedirectResponse(
-            url="/login?error=oidc_error&message=Unexpected error",
-            status_code=302,
-        )
-
-    # Find or create user
-    # First, try to find user via identity table using 'sub' (subject identifier)
-    identity = session.query(UserIdentity).filter(
-        UserIdentity.provider == "oidc",
-        UserIdentity.external_id == auth_result.sub,
-    ).first()
-
-    user = None
-    if identity:
-        user = identity.user
-        # Update identity last_used_at
-        identity.last_used_at = datetime.utcnow()
-        # Update user info from OIDC
-        if auth_result.email:
-            user.email = auth_result.email
-        if auth_result.name:
-            user.display_name = auth_result.name
-        logger.info(f"OIDC user found via identity: {user.username}")
-    else:
-        # Fallback to direct user lookup for backwards compatibility
-        user = session.query(User).filter(
-            User.auth_provider == "oidc",
-            User.external_id == auth_result.sub,
-        ).first()
-
-        if user is not None:
-            # Update existing user info from OIDC
-            if auth_result.email:
-                user.email = auth_result.email
-            if auth_result.name:
-                user.display_name = auth_result.name
-            logger.info(f"Updated user info from OIDC: {user.username}")
-        elif settings.oidc.auto_create_users:
-            # Create new user from OIDC
-            # Check if username exists with different provider
-            existing = session.query(User).filter(User.username == auth_result.username).first()
-            if existing:
-                # Username taken - create with modified username
-                username = f"oidc_{auth_result.username}"
-                logger.info(f"Username '{auth_result.username}' taken, using '{username}'")
-            else:
-                username = auth_result.username
-
-            user = User(
-                username=username,
-                email=auth_result.email,
-                display_name=auth_result.name,
-                auth_provider="oidc",
-                external_id=auth_result.sub,
-                is_admin=False,  # OIDC users are not admins by default
-                is_active=True,
-            )
-            session.add(user)
-            session.flush()  # Flush to get the user ID
-
-            # Create identity for the new user
-            new_identity = UserIdentity(
-                user_id=user.id,
-                provider="oidc",
-                external_id=auth_result.sub,
-                identifier=auth_result.username,
-            )
-            session.add(new_identity)
-            logger.info(f"Created new user from OIDC: {user.username} (id={user.id})")
-        else:
-            # Auto-create is disabled
-            logger.warning(f"OIDC user not found and auto-create disabled: {auth_result.sub}")
-            return RedirectResponse(
-                url="/login?error=oidc_error&message=User not found. Contact administrator.",
-                status_code=302,
-            )
-
-    # Check if user is active
-    if not user.is_active:
-        logger.warning(f"OIDC login for disabled user: {user.username}")
-        return RedirectResponse(
-            url="/login?error=oidc_error&message=User account is disabled",
-            status_code=302,
-        )
-
-    # Create tokens
-    access_token = create_access_token(user_id=user.id, username=user.username)
-    refresh_token = create_refresh_token(user_id=user.id)
-
-    # Create session record
-    user_session = UserSession(
-        user_id=user.id,
-        refresh_token_hash=hash_token(refresh_token),
-        ip_address=request.client.host if request.client else None,
-        user_agent=request.headers.get("User-Agent", "")[:500],
-        expires_at=datetime.utcnow() + timedelta(days=settings.jwt.refresh_token_expire_days),
-    )
-    session.add(user_session)
-
-    # Update last login
-    user.last_login_at = datetime.utcnow()
-    session.commit()
-
-    # Create redirect response with cookies
-    redirect_response = RedirectResponse(url="/", status_code=302)
-    _set_auth_cookies(redirect_response, access_token, refresh_token)
-
-    logger.info(f"OIDC user logged in: {user.username}")
-
-    return redirect_response
-
-
-# =============================================================================
-# OIDC Account Linking
-# =============================================================================
-
-@router.get("/identities/link/oidc/authorize")
-async def oidc_link_authorize(
-    request: Request,
-    current_user: User = Depends(get_current_user),
-):
-    """
-    Start OIDC linking flow for an authenticated user.
-
-    Similar to authorize, but stores the user ID to link after callback.
-    """
-    from fastapi.responses import RedirectResponse
-    from auth.providers.oidc import OIDCClient, get_state_store, OIDCDiscoveryError
-
-    settings = get_auth_settings()
-    if not settings.oidc.enabled:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="OIDC authentication is not enabled",
-        )
-
-    # Build the callback URL for linking
-    base_url = str(request.base_url).rstrip("/")
-    redirect_uri = f"{base_url}/api/auth/identities/link/oidc/callback"
-
-    # Create auth state with PKCE and linking user ID
-    state_store = get_state_store()
-    auth_state = state_store.create_state(redirect_uri, linking_user_id=current_user.id)
-
-    # Get authorization URL
-    try:
-        async with OIDCClient(settings.oidc) as client:
-            auth_url = await client.get_authorization_url(
-                redirect_uri=redirect_uri,
-                state=auth_state.state,
-                nonce=auth_state.nonce,
-                code_verifier=auth_state.code_verifier,
-            )
-    except OIDCDiscoveryError as e:
-        logger.error(f"OIDC discovery failed: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=f"OIDC provider unavailable: {e}",
-        )
-
-    logger.info(f"Redirecting user {current_user.username} to OIDC provider for linking")
-    return RedirectResponse(url=auth_url, status_code=302)
-
-
-@router.get("/identities/link/oidc/callback")
-async def oidc_link_callback(
-    request: Request,
-    code: Optional[str] = None,
-    state: Optional[str] = None,
-    error: Optional[str] = None,
-    error_description: Optional[str] = None,
-    session: Session = Depends(get_session),
-):
-    """
-    Handle OIDC linking callback.
-
-    Links the OIDC identity to the user who initiated the linking flow.
-    """
-    from fastapi.responses import RedirectResponse
-    from auth.providers.oidc import (
-        OIDCClient,
-        get_state_store,
-        OIDCError,
-    )
-    from models import UserIdentity
-
-    settings = get_auth_settings()
-
-    # Handle error responses from provider
-    if error:
-        logger.warning(f"OIDC link error: {error} - {error_description}")
-        return RedirectResponse(
-            url=f"/settings?tab=linked-accounts&error=oidc_error&message={error_description or error}",
-            status_code=302,
-        )
-
-    # Validate required parameters
-    if not code or not state:
-        return RedirectResponse(
-            url="/settings?tab=linked-accounts&error=oidc_error&message=Invalid callback",
-            status_code=302,
-        )
-
-    # Retrieve and validate state
-    state_store = get_state_store()
-    auth_state = state_store.get_state(state)
-
-    if not auth_state or not auth_state.linking_user_id:
-        return RedirectResponse(
-            url="/settings?tab=linked-accounts&error=oidc_error&message=Session expired",
-            status_code=302,
-        )
-
-    # Get the user who initiated linking
-    user = session.query(User).filter(User.id == auth_state.linking_user_id).first()
-    if not user:
-        return RedirectResponse(
-            url="/login?error=oidc_error&message=User not found",
-            status_code=302,
-        )
-
-    # Exchange code for tokens and authenticate
-    try:
-        async with OIDCClient(settings.oidc) as client:
-            auth_result = await client.authenticate(
-                code=code,
-                redirect_uri=auth_state.redirect_uri,
-                code_verifier=auth_state.code_verifier,
-                nonce=auth_state.nonce,
-            )
-    except OIDCError as e:
-        logger.error(f"OIDC link authentication error: {e}")
-        return RedirectResponse(
-            url="/settings?tab=linked-accounts&error=oidc_error&message=Authentication failed",
-            status_code=302,
-        )
-
-    # Check if this OIDC identity is already linked to another account
-    existing_identity = session.query(UserIdentity).filter(
-        UserIdentity.provider == "oidc",
-        UserIdentity.external_id == auth_result.sub,
-    ).first()
-
-    if existing_identity:
-        if existing_identity.user_id == user.id:
-            return RedirectResponse(
-                url="/settings?tab=linked-accounts&message=OIDC account already linked",
-                status_code=302,
-            )
-        else:
-            return RedirectResponse(
-                url="/settings?tab=linked-accounts&error=oidc_error&message=This OIDC account is linked to another user",
-                status_code=302,
-            )
-
-    # Check if user already has an OIDC identity
-    user_oidc_identity = session.query(UserIdentity).filter(
-        UserIdentity.user_id == user.id,
-        UserIdentity.provider == "oidc",
-    ).first()
-
-    if user_oidc_identity:
-        return RedirectResponse(
-            url="/settings?tab=linked-accounts&error=oidc_error&message=You already have an OIDC identity linked",
-            status_code=302,
-        )
-
-    # Create the identity link
-    new_identity = UserIdentity(
-        user_id=user.id,
-        provider="oidc",
-        external_id=auth_result.sub,
-        identifier=auth_result.username,
-    )
-    session.add(new_identity)
-    session.commit()
-
-    logger.info(f"User {user.username} linked OIDC identity: {auth_result.sub}")
-
-    return RedirectResponse(
-        url="/settings?tab=linked-accounts&message=OIDC account linked successfully",
-        status_code=302,
-    )

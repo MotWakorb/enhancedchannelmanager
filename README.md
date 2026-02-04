@@ -12,9 +12,41 @@ A professional-grade web interface for managing IPTV configurations with Dispatc
 - **Logo Manager** - Logo management with search, upload, and URL import
 - **Journal** - Activity log tracking all changes to channels, EPG, and M3U accounts
 - **Stats** - Live streaming statistics, M3U connection counts, bandwidth tracking, and charts
-- **Settings** - Configure Dispatcharr connection, channel defaults, stream probing, scheduled tasks, alert methods, and appearance
+- **Settings** - Configure Dispatcharr connection, channel defaults, stream probing, scheduled tasks, alert methods, authentication, and appearance
 
 ## Features
+
+### Authentication (v0.11.5)
+
+ECM includes a comprehensive authentication system to secure access to your channel management:
+
+- **First-Run Setup** - On first launch, create an administrator account through a setup wizard
+- **Local Authentication** - Username/password authentication with secure bcrypt password hashing
+- **Dispatcharr SSO** - Single sign-on using your existing Dispatcharr credentials
+- **Password Reset** - Email-based password reset with secure time-limited tokens (requires SMTP configuration)
+- **User Management** - Admin panel for managing user accounts, roles, and access
+- **Session Management** - JWT-based sessions with automatic token refresh
+
+#### Authentication Providers
+
+- **Local** - Create and manage local user accounts with password authentication
+- **Dispatcharr** - Authenticate using your Dispatcharr server credentials (SSO)
+
+#### User Management (Admin)
+
+Administrators can manage users through Settings → Users:
+- View all user accounts with their roles and status
+- Edit user email, display name, admin status, and active status
+- Activate/deactivate user accounts
+- Delete user accounts (soft delete - deactivates the account)
+
+#### Password Reset
+
+When SMTP is configured in Settings → Email Settings:
+- Users see "Forgot password?" link on the login page
+- Password reset emails contain a secure link valid for 1 hour
+- Professional HTML email template with fallback plain text
+- Security: Always returns success to prevent email enumeration
 
 ### M3U Manager
 
@@ -378,6 +410,22 @@ Default options applied when using bulk channel creation:
 
 These defaults are pre-loaded when opening the bulk create modal, with a "(from settings)" indicator shown.
 
+#### Authentication
+Configure how users authenticate to ECM:
+
+- **Require Authentication** - Enable or disable authentication requirement
+- **Primary Auth Mode** - Choose between Local or Dispatcharr as the primary authentication method
+- **Local Authentication** - Enable/disable local username/password authentication
+- **Dispatcharr Authentication** - Enable/disable Dispatcharr SSO authentication
+
+#### User Management
+Admin panel for managing user accounts (requires admin privileges):
+
+- **User List** - View all users with username, email, provider, status, and role
+- **Edit Users** - Modify user email, display name, admin status, and active status
+- **Toggle Active Status** - Quickly activate or deactivate user accounts
+- **Delete Users** - Remove user accounts (soft delete)
+
 #### Appearance
 - **Theme** - Choose from three themes:
   - **Dark** (default) - Dark theme for low-light environments
@@ -556,6 +604,16 @@ Advanced analytics and channel popularity tracking:
 - **On-Demand Calculation** - Manually trigger popularity score recalculation
 - **Watch History Log** - Detailed log of viewing sessions with IP addresses
 
+### ~~v0.11.5 - Authentication System~~ ✅ Implemented
+Comprehensive authentication and user management:
+- **First-Run Setup Wizard** - Create initial admin account on first launch
+- **Local Authentication** - Username/password auth with bcrypt password hashing
+- **Dispatcharr SSO** - Single sign-on using Dispatcharr credentials
+- **Password Reset** - Email-based password reset with secure time-limited tokens
+- **User Management** - Admin panel for managing users, roles, and access
+- **Session Management** - JWT-based sessions with automatic token refresh
+- **SMTP Integration** - Password reset requires SMTP configuration; link hidden when not configured
+
 ### v0.12.0 - Mobile Interface
 Full mobile support for managing channels on the go:
 - Responsive layouts for phones and tablets
@@ -611,12 +669,17 @@ services:
   ecm:
     image: ghcr.io/motwakorb/enhancedchannelmanager:latest
     ports:
-      - "6100:6100"
+      - "6100:6100"   # HTTP (always available)
+      - "6143:6143"   # HTTPS (when TLS is enabled)
     volumes:
       - ./config:/config
 ```
 
 The Dispatcharr URL can be configured through the Settings modal in the UI, which persists to the config volume.
+
+**Port Configuration:**
+- **Port 6100** - HTTP interface (always available as fallback)
+- **Port 6143** - HTTPS interface (when TLS is configured in Settings → TLS Certificates)
 
 ### Development
 
@@ -736,6 +799,26 @@ uvicorn main:app --reload
 - `POST /api/tasks/{id}/schedules` - Add schedule to task
 - `PATCH /api/tasks/{id}/schedules/{schedule_id}` - Update schedule
 - `DELETE /api/tasks/{id}/schedules/{schedule_id}` - Delete schedule
+
+### Authentication
+- `GET /api/auth/status` - Get authentication status and configuration
+- `GET /api/auth/setup-required` - Check if first-run setup is needed
+- `POST /api/auth/setup` - Complete first-run setup (create admin account)
+- `POST /api/auth/login` - Login with username/password
+- `POST /api/auth/logout` - Logout and clear session
+- `POST /api/auth/refresh` - Refresh access token
+- `GET /api/auth/me` - Get current user info
+- `POST /api/auth/change-password` - Change current user's password
+- `POST /api/auth/forgot-password` - Request password reset email
+- `POST /api/auth/reset-password` - Reset password with token
+- `GET /api/auth/providers` - List available auth providers
+
+### User Management (Admin)
+- `GET /api/admin/users` - List all users (paginated, searchable)
+- `POST /api/admin/users` - Create new user
+- `GET /api/admin/users/{id}` - Get user details
+- `PATCH /api/admin/users/{id}` - Update user
+- `DELETE /api/admin/users/{id}` - Delete (deactivate) user
 
 ### Health
 - `GET /api/health` - Health check

@@ -63,8 +63,8 @@ RUN mkdir -p /config /config/tls \
 # Environment
 ENV CONFIG_DIR=/config
 
-# Expose port
-EXPOSE 6100
+# Expose ports (HTTP on 6100, HTTPS on 6143 when TLS enabled)
+EXPOSE 6100 6143
 
 # Add healthcheck
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
