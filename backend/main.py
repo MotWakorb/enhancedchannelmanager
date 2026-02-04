@@ -408,6 +408,13 @@ async def startup_event():
     except Exception as e:
         logger.warning(f"Failed to start TLS renewal manager: {e}")
 
+    # Start HTTPS server if TLS is configured
+    try:
+        from tls.https_server import start_https_if_configured
+        await start_https_if_configured()
+    except Exception as e:
+        logger.warning(f"Failed to start HTTPS server: {e}")
+
     logger.info("=" * 60)
 
 
@@ -415,6 +422,14 @@ async def startup_event():
 async def shutdown_event():
     """Clean up on shutdown."""
     logger.info("Enhanced Channel Manager shutting down")
+
+    # Stop HTTPS server
+    try:
+        from tls.https_server import stop_https_server
+        await stop_https_server()
+        logger.info("HTTPS server stopped")
+    except Exception as e:
+        logger.error(f"Error stopping HTTPS server: {e}")
 
     # Stop TLS renewal manager
     try:

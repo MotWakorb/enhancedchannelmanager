@@ -25,6 +25,7 @@ from .settings import (
 )
 from .storage import CertificateStorage
 from .challenges import verify_dns_challenge
+from .https_server import https_server_manager
 
 # ACME client and DNS providers require josepy - import conditionally
 try:
@@ -68,6 +69,8 @@ class TLSStatusResponse(BaseModel):
     last_renewal_error: Optional[str] = None
     has_certificate: bool = False
     certificate_valid: bool = False
+    # HTTPS server status
+    https_server_running: bool = False
 
 
 class TLSConfigureRequest(BaseModel):
@@ -143,6 +146,7 @@ async def get_tls_status():
         last_renewal_attempt=settings.last_renewal_attempt,
         last_renewal_error=settings.last_renewal_error,
         has_certificate=storage.has_certificate(),
+        https_server_running=https_server_manager.is_running,
     )
 
     # Get certificate info if exists
@@ -223,7 +227,27 @@ async def configure_tls(request: TLSConfigureRequest):
 
     save_tls_settings(settings)
 
-    return {"success": True, "message": "TLS settings updated"}
+    # Start or stop HTTPS server based on enabled state
+    https_message = ""
+    if request.enabled:
+        storage = CertificateStorage(TLS_DIR)
+        if storage.has_certificate():
+            if not https_server_manager.is_running:
+                success, error = await https_server_manager.start()
+                if success:
+                    https_message = f" HTTPS server started on port {settings.https_port}."
+                else:
+                    https_message = f" Warning: Failed to start HTTPS server: {error}"
+            else:
+                https_message = " HTTPS server already running."
+        else:
+            https_message = " Certificate required before HTTPS server can start."
+    else:
+        if https_server_manager.is_running:
+            await https_server_manager.stop()
+            https_message = " HTTPS server stopped."
+
+    return {"success": True, "message": f"TLS settings updated.{https_message}"}
 
 
 @router.post("/request-cert", response_model=CertificateRequestResponse)
@@ -283,9 +307,18 @@ async def request_certificate():
             settings.cert_expires_at = result.expires_at.isoformat()
             save_tls_settings(settings)
 
+            # Start HTTPS server
+            https_msg = ""
+            if settings.enabled:
+                success, error = await https_server_manager.start()
+                if success:
+                    https_msg = f" HTTPS server started on port {settings.https_port}."
+                else:
+                    https_msg = f" Warning: HTTPS server failed to start: {error}"
+
             return CertificateRequestResponse(
                 success=True,
-                message="Certificate issued successfully",
+                message=f"Certificate issued successfully.{https_msg}",
                 cert_expires_at=result.expires_at.isoformat(),
             )
 
@@ -358,9 +391,18 @@ async def request_certificate():
                         settings.cert_issuer = info.issuer
                     save_tls_settings(settings)
 
+                    # Start HTTPS server
+                    https_msg = ""
+                    if settings.enabled:
+                        start_success, start_error = await https_server_manager.start()
+                        if start_success:
+                            https_msg = f" HTTPS server started on port {settings.https_port}."
+                        else:
+                            https_msg = f" Warning: HTTPS server failed to start: {start_error}"
+
                     return CertificateRequestResponse(
                         success=True,
-                        message="Certificate issued successfully",
+                        message=f"Certificate issued successfully.{https_msg}",
                         cert_expires_at=result.expires_at.isoformat(),
                     )
                 else:
@@ -443,9 +485,18 @@ async def complete_dns_challenge():
                 settings.cert_issuer = info.issuer
             save_tls_settings(settings)
 
+            # Start HTTPS server
+            https_msg = ""
+            if settings.enabled:
+                start_success, start_error = await https_server_manager.start()
+                if start_success:
+                    https_msg = f" HTTPS server started on port {settings.https_port}."
+                else:
+                    https_msg = f" Warning: HTTPS server failed to start: {start_error}"
+
             return CertificateRequestResponse(
                 success=True,
-                message="Certificate issued successfully",
+                message=f"Certificate issued successfully.{https_msg}",
                 cert_expires_at=result.expires_at.isoformat(),
             )
         else:
@@ -510,9 +561,17 @@ async def upload_certificate(
             settings.domain = validation.domains[0]
         save_tls_settings(settings)
 
+        # Start HTTPS server
+        https_msg = ""
+        start_success, start_error = await https_server_manager.start()
+        if start_success:
+            https_msg = f" HTTPS server started on port {settings.https_port}."
+        else:
+            https_msg = f" Warning: HTTPS server failed to start: {start_error}"
+
         return {
             "success": True,
-            "message": "Certificate uploaded successfully",
+            "message": f"Certificate uploaded successfully.{https_msg}",
             "subject": validation.subject,
             "issuer": validation.issuer,
             "expires_at": validation.not_after.isoformat(),
@@ -553,9 +612,18 @@ async def trigger_renewal():
     result = await renew_certificate()
 
     if result.success:
+        # Restart HTTPS server to load new certificate
+        https_msg = ""
+        if https_server_manager.is_running:
+            restart_success, restart_error = await https_server_manager.restart()
+            if restart_success:
+                https_msg = " HTTPS server restarted with new certificate."
+            else:
+                https_msg = f" Warning: HTTPS server restart failed: {restart_error}"
+
         return {
             "success": True,
-            "message": "Certificate renewed successfully",
+            "message": f"Certificate renewed successfully.{https_msg}",
             "expires_at": result.expires_at.isoformat(),
         }
     else:
@@ -563,6 +631,84 @@ async def trigger_renewal():
             "success": False,
             "message": f"Renewal failed: {result.error}",
         }
+
+
+# ============================================================================
+# HTTPS Server Control
+# ============================================================================
+
+
+@router.post("/https/start")
+async def start_https_server():
+    """
+    Start the HTTPS server.
+
+    Starts the HTTPS server if TLS is enabled and a certificate exists.
+    """
+    settings = get_tls_settings()
+
+    if not settings.enabled:
+        raise HTTPException(400, "TLS is not enabled")
+
+    storage = CertificateStorage(TLS_DIR)
+    if not storage.has_certificate():
+        raise HTTPException(400, "No certificate found")
+
+    if https_server_manager.is_running:
+        return {"success": True, "message": "HTTPS server already running"}
+
+    success, error = await https_server_manager.start()
+    if success:
+        return {"success": True, "message": f"HTTPS server started on port {settings.https_port}"}
+    else:
+        return {"success": False, "message": f"Failed to start HTTPS server: {error}"}
+
+
+@router.post("/https/stop")
+async def stop_https_server():
+    """
+    Stop the HTTPS server.
+
+    Stops the HTTPS server. The HTTP server on port 6100 continues running.
+    """
+    if not https_server_manager.is_running:
+        return {"success": True, "message": "HTTPS server not running"}
+
+    await https_server_manager.stop()
+    return {"success": True, "message": "HTTPS server stopped"}
+
+
+@router.post("/https/restart")
+async def restart_https_server():
+    """
+    Restart the HTTPS server.
+
+    Useful after certificate renewal or configuration changes.
+    """
+    settings = get_tls_settings()
+
+    if not settings.enabled:
+        raise HTTPException(400, "TLS is not enabled")
+
+    storage = CertificateStorage(TLS_DIR)
+    if not storage.has_certificate():
+        raise HTTPException(400, "No certificate found")
+
+    success, error = await https_server_manager.restart()
+    if success:
+        return {"success": True, "message": f"HTTPS server restarted on port {settings.https_port}"}
+    else:
+        return {"success": False, "message": f"Failed to restart HTTPS server: {error}"}
+
+
+@router.get("/https/status")
+async def get_https_server_status():
+    """
+    Get HTTPS server status.
+
+    Returns whether the HTTPS server is running and on which port.
+    """
+    return https_server_manager.get_status()
 
 
 # ============================================================================
@@ -582,6 +728,12 @@ async def delete_certificate():
     if not storage.has_certificate():
         raise HTTPException(404, "No certificate found")
 
+    # Stop HTTPS server first
+    https_msg = ""
+    if https_server_manager.is_running:
+        await https_server_manager.stop()
+        https_msg = " HTTPS server stopped."
+
     if not storage.delete_certificate():
         raise HTTPException(500, "Failed to delete certificate")
 
@@ -594,7 +746,7 @@ async def delete_certificate():
     settings.cert_issuer = None
     save_tls_settings(settings)
 
-    return {"success": True, "message": "Certificate deleted and TLS disabled"}
+    return {"success": True, "message": f"Certificate deleted and TLS disabled.{https_msg}"}
 
 
 # ============================================================================
