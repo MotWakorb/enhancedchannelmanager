@@ -329,7 +329,7 @@ def _clear_auth_cookies(response: Response) -> None:
 
 
 @router.get("/status", response_model=AuthStatusResponse)
-async def get_auth_status():
+async def get_auth_status(session: Session = Depends(get_session)):
     """
     Get authentication status and configuration.
 
@@ -338,8 +338,21 @@ async def get_auth_status():
     """
     auth_settings = get_auth_settings()
     app_settings = get_settings()
+
+    # Auto-fix setup_complete if users exist but flag is False
+    # This handles upgrades where users were created before auth system
+    setup_complete = auth_settings.setup_complete
+    if not setup_complete:
+        user_count = session.query(User).count()
+        if user_count > 0:
+            setup_complete = True
+            # Persist the fix
+            from .settings import save_auth_settings
+            auth_settings.setup_complete = True
+            save_auth_settings(auth_settings)
+
     return AuthStatusResponse(
-        setup_complete=auth_settings.setup_complete,
+        setup_complete=setup_complete,
         require_auth=auth_settings.require_auth,
         enabled_providers=auth_settings.get_enabled_providers(),
         primary_auth_mode=auth_settings.primary_auth_mode,
