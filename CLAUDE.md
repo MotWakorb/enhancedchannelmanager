@@ -46,6 +46,12 @@ cd /home/lecaptainc/ecm/enhancedchannelmanager/.git/beads-worktrees/dev
 docker cp <local-file> ecm-ecm-1:/app/<destination-path>
 ```
 
+**Python Package Management:**
+This project uses **uv** (not pip) for Python package management. When installing packages in the container:
+```bash
+docker exec ecm-ecm-1 uv pip install <package>
+```
+
 When doing work on this project, follow these steps in order:
 
 **During Development (iterative, fast cycle):**

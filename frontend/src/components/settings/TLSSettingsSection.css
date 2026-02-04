@@ -9,6 +9,7 @@
   display: flex;
   flex-direction: column;
   gap: 1rem;
+  max-width: 800px;
 }
 
 .tls-settings-no-access,
@@ -46,7 +47,53 @@
   word-break: break-word;
 }
 
-/* Status Card - follows auth-provider-card pattern */
+/* Status Line - simplified single-line status */
+.tls-status-line {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 1rem;
+  background: var(--card-bg);
+  border: 1px solid var(--border-primary);
+  border-radius: 8px;
+}
+
+.tls-status-label {
+  font-size: 0.9375rem;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.tls-status-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.25rem 0.75rem;
+  border-radius: 9999px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.025em;
+}
+
+.tls-status-badge.encrypted {
+  background: rgba(34, 197, 94, 0.15);
+  color: #22c55e;
+  border: 1px solid rgba(34, 197, 94, 0.3);
+}
+
+.tls-status-badge.unencrypted {
+  background: rgba(234, 179, 8, 0.15);
+  color: #eab308;
+  border: 1px solid rgba(234, 179, 8, 0.3);
+}
+
+.tls-status-fallback {
+  margin-left: auto;
+  font-size: 0.8125rem;
+  color: var(--text-muted);
+}
+
+/* Status Card - follows auth-provider-card pattern (kept for potential future use) */
 .tls-status-card {
   background: var(--card-bg);
   border: 1px solid var(--border-primary);
@@ -160,6 +207,18 @@
   gap: 1rem;
 }
 
+/* Constrain form group widths inside TLS config */
+.tls-config-content .form-group {
+  max-width: 400px;
+}
+
+.tls-config-content .form-group input[type="email"],
+.tls-config-content .form-group input[type="text"],
+.tls-config-content .form-group input[type="password"],
+.tls-config-content .form-group select {
+  max-width: 100%;
+}
+
 /* Checkbox and radio styles use common patterns from SettingsTab.css:
  * .checkbox-label - for checkbox + label inline
  * .radio-group, .radio-option - for radio groups
@@ -247,4 +306,9 @@
 
 .tls-info-box li strong {
   color: var(--text-primary);
+}
+
+/* Inline buttons inside config content should not stretch */
+.tls-config-content > .btn-secondary {
+  align-self: flex-start;
 }

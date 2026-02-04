@@ -101,11 +101,18 @@ check_filesystem() {
 check_network() {
     print_info "Checking network configuration..."
 
-    # Check if port 6100 is available
+    # Check if port 6100 (HTTP) is available
     if ! netstat -tuln 2>/dev/null | grep -q ":6100 "; then
-        print_success "Port 6100 is available"
+        print_success "Port 6100 (HTTP) is available"
     else
-        print_warning "Port 6100 is already in use"
+        print_warning "Port 6100 (HTTP) is already in use"
+    fi
+
+    # Check if port 6143 (HTTPS) is available
+    if ! netstat -tuln 2>/dev/null | grep -q ":6143 "; then
+        print_success "Port 6143 (HTTPS) is available"
+    else
+        print_warning "Port 6143 (HTTPS) is already in use"
     fi
 
     return 0
@@ -145,19 +152,21 @@ check_tls_config() {
     TLS_KEY="/config/tls/key.pem"
 
     if [ -f "$TLS_CONFIG" ]; then
-        # Extract enabled and check if certs exist
+        # Extract enabled, https_port, and check if certs exist
         TLS_ENABLED=$(python3 -c "import json; print(json.load(open('$TLS_CONFIG')).get('enabled', False))" 2>/dev/null || echo "False")
+        HTTPS_PORT=$(python3 -c "import json; print(json.load(open('$TLS_CONFIG')).get('https_port', 6143))" 2>/dev/null || echo "6143")
 
         if [ "$TLS_ENABLED" = "True" ] && [ -f "$TLS_CERT" ] && [ -f "$TLS_KEY" ]; then
             print_success "TLS enabled with valid certificates"
+            print_info "HTTPS will be available on port $HTTPS_PORT"
             return 0  # TLS enabled
         elif [ "$TLS_ENABLED" = "True" ]; then
-            print_warning "TLS enabled but certificates not found, starting without TLS"
+            print_warning "TLS enabled but certificates not found, starting HTTP only"
             return 1  # TLS configured but certs missing
         fi
     fi
 
-    print_info "TLS not configured, using HTTP"
+    print_info "TLS not configured, using HTTP only"
     return 1  # TLS not enabled
 }
 
@@ -168,10 +177,9 @@ print_startup_info() {
     echo "${GREEN}════════════════════════════════════════════════════════════${NC}"
     echo ""
     print_info "Starting Enhanced Channel Manager..."
+    print_info "HTTP Server: http://0.0.0.0:6100 (always available)"
     if [ "$USE_TLS" = "1" ]; then
-        print_info "API Server: https://0.0.0.0:6100 (TLS enabled)"
-    else
-        print_info "API Server: http://0.0.0.0:6100"
+        print_info "HTTPS Server: https://0.0.0.0:${HTTPS_PORT} (TLS enabled)"
     fi
     print_info "Health Check: http://0.0.0.0:6100/api/health"
     echo ""
@@ -201,8 +209,13 @@ run_preflight_checks() {
 # Main execution
 run_preflight_checks
 
-# Check TLS configuration
+# Check TLS configuration and set HTTPS_PORT
 USE_TLS=0
+HTTPS_PORT=6143
+TLS_CONFIG="/config/tls_settings.json"
+if [ -f "$TLS_CONFIG" ]; then
+    HTTPS_PORT=$(python3 -c "import json; print(json.load(open('$TLS_CONFIG')).get('https_port', 6143))" 2>/dev/null || echo "6143")
+fi
 if check_tls_config; then
     USE_TLS=1
 fi
@@ -210,9 +223,21 @@ fi
 # Switch to non-root user and run the application
 cd /app
 if [ "$USE_TLS" = "1" ]; then
-    exec gosu appuser uvicorn main:app --host 0.0.0.0 --port 6100 \
+    # Dual-port mode: HTTP on 6100 (fallback) + HTTPS on configured port
+    # Start HTTP server in background (always available as fallback)
+    print_info "Starting HTTP fallback server on port 6100..."
+    gosu appuser uvicorn main:app --host 0.0.0.0 --port 6100 &
+    HTTP_PID=$!
+
+    # Give HTTP server a moment to start
+    sleep 1
+
+    # Start HTTPS server as main process (foreground)
+    print_info "Starting HTTPS server on port ${HTTPS_PORT}..."
+    exec gosu appuser uvicorn main:app --host 0.0.0.0 --port ${HTTPS_PORT} \
         --ssl-keyfile /config/tls/key.pem \
         --ssl-certfile /config/tls/cert.pem
 else
+    # HTTP-only mode
     exec gosu appuser uvicorn main:app --host 0.0.0.0 --port 6100
 fi

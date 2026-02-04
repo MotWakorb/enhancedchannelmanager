@@ -2,7 +2,7 @@
 Authentication configuration settings.
 
 Manages auth-related configuration including JWT settings, session options,
-and auth provider configurations (local, OIDC, SAML, LDAP).
+and auth provider configurations (local, SAML, LDAP, Dispatcharr).
 """
 import json
 import logging
@@ -47,74 +47,12 @@ class LocalAuthSettings(BaseModel):
     """Local authentication configuration."""
     # Whether local auth is enabled
     enabled: bool = True
-    # Allow user self-registration
-    allow_registration: bool = False
-    # Require email verification for registration
-    require_email_verification: bool = False
     # Password requirements
     min_password_length: int = 8
     require_uppercase: bool = True
     require_lowercase: bool = True
     require_number: bool = True
     require_special: bool = False
-
-
-class OIDCSettings(BaseModel):
-    """OpenID Connect (OIDC) configuration."""
-    enabled: bool = False
-    provider_name: str = ""
-    client_id: str = ""
-    client_secret: str = ""
-    discovery_url: str = ""  # e.g., https://provider/.well-known/openid-configuration
-    scopes: list[str] = ["openid", "profile", "email"]
-    # Claim mappings
-    username_claim: str = "preferred_username"
-    email_claim: str = "email"
-    name_claim: str = "name"
-    # Auto-create users from OIDC
-    auto_create_users: bool = True
-
-
-class SAMLSettings(BaseModel):
-    """SAML 2.0 configuration."""
-    enabled: bool = False
-    provider_name: str = ""
-    # Identity Provider metadata URL or XML
-    idp_metadata_url: str = ""
-    idp_metadata_xml: str = ""
-    # Service Provider settings
-    sp_entity_id: str = ""
-    sp_acs_url: str = ""  # Assertion Consumer Service URL
-    # Attribute mappings
-    username_attribute: str = "username"
-    email_attribute: str = "email"
-    name_attribute: str = "displayName"
-    # Auto-create users from SAML
-    auto_create_users: bool = True
-
-
-class LDAPSettings(BaseModel):
-    """LDAP/Active Directory configuration."""
-    enabled: bool = False
-    server_url: str = ""  # e.g., ldap://ldap.example.com:389
-    use_ssl: bool = False
-    use_tls: bool = True
-    # Bind credentials (for searching)
-    bind_dn: str = ""
-    bind_password: str = ""
-    # User search settings
-    user_search_base: str = ""  # e.g., ou=users,dc=example,dc=com
-    user_search_filter: str = "(uid={username})"  # {username} is replaced
-    # Attribute mappings
-    username_attribute: str = "uid"
-    email_attribute: str = "mail"
-    name_attribute: str = "cn"
-    # Group settings (optional)
-    group_search_base: str = ""
-    group_search_filter: str = "(member={user_dn})"
-    admin_group_dn: str = ""  # Users in this group get admin rights
-    # Auto-create users from LDAP
-    auto_create_users: bool = True
 
 
 class DispatcharrAuthSettings(BaseModel):
@@ -132,9 +70,8 @@ class AuthSettings(BaseModel):
     setup_complete: bool = False
 
     # Primary auth mode: which provider is the default
-    # "local" = username/password, "oidc" = OpenID Connect, "saml" = SAML 2.0
-    # "ldap" = LDAP/AD, "dispatcharr" = Dispatcharr SSO
-    primary_auth_mode: Literal["local", "oidc", "saml", "ldap", "dispatcharr"] = "local"
+    # "local" = username/password, "dispatcharr" = Dispatcharr SSO
+    primary_auth_mode: Literal["local", "dispatcharr"] = "local"
 
     # Whether authentication is required at all
     # If False, the app runs in "open" mode (no login required)
@@ -144,9 +81,6 @@ class AuthSettings(BaseModel):
     jwt: JWTSettings = JWTSettings()
     session: SessionSettings = SessionSettings()
     local: LocalAuthSettings = LocalAuthSettings()
-    oidc: OIDCSettings = OIDCSettings()
-    saml: SAMLSettings = SAMLSettings()
-    ldap: LDAPSettings = LDAPSettings()
     dispatcharr: DispatcharrAuthSettings = DispatcharrAuthSettings()
 
     def is_setup_required(self) -> bool:
@@ -158,12 +92,6 @@ class AuthSettings(BaseModel):
         providers = []
         if self.local.enabled:
             providers.append("local")
-        if self.oidc.enabled:
-            providers.append("oidc")
-        if self.saml.enabled:
-            providers.append("saml")
-        if self.ldap.enabled:
-            providers.append("ldap")
         if self.dispatcharr.enabled:
             providers.append("dispatcharr")
         return providers

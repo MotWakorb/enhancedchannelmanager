@@ -2,12 +2,17 @@
  * Login page component.
  *
  * Displays login options based on enabled auth providers.
- * Supports local authentication, Dispatcharr SSO, and OIDC.
+ * Supports local authentication and Dispatcharr SSO.
  */
 import React, { useState, FormEvent, useEffect } from 'react';
 import { useAuth } from '../hooks/useAuth';
-import * as api from '../services/api';
 import './LoginPage.css';
+
+// Simple navigation helper (no React Router)
+const navigateTo = (path: string) => {
+  window.history.pushState({}, '', path);
+  window.dispatchEvent(new PopStateEvent('popstate'));
+};
 
 interface LoginPageProps {
   onLoginSuccess?: () => void;
@@ -15,11 +20,6 @@ interface LoginPageProps {
 
 type AuthProvider = 'local' | 'dispatcharr';
 
-// OIDC provider info
-interface OIDCProviderInfo {
-  name: string;
-  enabled: boolean;
-}
 
 export function LoginPage({ onLoginSuccess }: LoginPageProps) {
   const { login, loginWithDispatcharr, authStatus, isLoading: authLoading } = useAuth();
@@ -28,15 +28,13 @@ export function LoginPage({ onLoginSuccess }: LoginPageProps) {
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [selectedProvider, setSelectedProvider] = useState<AuthProvider>('local');
-  const [oidcProvider, setOidcProvider] = useState<OIDCProviderInfo | null>(null);
 
   // Check which providers are enabled
   const enabledProviders = authStatus?.enabled_providers || ['local'];
   const hasLocal = enabledProviders.includes('local');
   const hasDispatcharr = enabledProviders.includes('dispatcharr');
-  const hasOidc = enabledProviders.includes('oidc');
 
-  // Check for OIDC errors in URL params (returned from callback)
+  // Check for auth errors in URL params (returned from SSO callback)
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const urlError = params.get('error');
@@ -48,25 +46,6 @@ export function LoginPage({ onLoginSuccess }: LoginPageProps) {
     }
   }, []);
 
-  // Fetch OIDC provider info if enabled
-  useEffect(() => {
-    if (hasOidc) {
-      api.getAuthProviders().then(response => {
-        const oidc = response.providers.find(p => p.type === 'oidc');
-        if (oidc) {
-          setOidcProvider({ name: oidc.name, enabled: oidc.enabled });
-        }
-      }).catch(() => {
-        // Ignore errors fetching provider info
-      });
-    }
-  }, [hasOidc]);
-
-  // Handle OIDC login (redirect)
-  const handleOidcLogin = () => {
-    // Redirect to OIDC authorize endpoint
-    window.location.href = '/api/auth/oidc/authorize';
-  };
   const hasMultipleProviders = hasLocal && hasDispatcharr;
 
   const handleSubmit = async (e: FormEvent) => {
@@ -191,6 +170,18 @@ export function LoginPage({ onLoginSuccess }: LoginPageProps) {
               autoComplete="current-password"
               onKeyDown={handleKeyDown}
             />
+            {effectiveProvider === 'local' && authStatus?.smtp_configured && (
+              <a
+                href="/forgot-password"
+                className="login-forgot-link"
+                onClick={(e) => {
+                  e.preventDefault();
+                  navigateTo('/forgot-password');
+                }}
+              >
+                Forgot password?
+              </a>
+            )}
           </div>
 
           <button
@@ -212,24 +203,6 @@ export function LoginPage({ onLoginSuccess }: LoginPageProps) {
             <div className="login-divider">
               <span>Dispatcharr authentication enabled</span>
             </div>
-          </div>
-        )}
-
-        {/* OIDC Provider Button */}
-        {hasOidc && (
-          <div className="login-alt-providers">
-            <div className="login-divider">
-              <span>or</span>
-            </div>
-            <button
-              type="button"
-              className="login-oidc-button"
-              onClick={handleOidcLogin}
-              disabled={isLoading}
-            >
-              <span className="material-icons">verified_user</span>
-              Sign in with {oidcProvider?.name || 'SSO'}
-            </button>
           </div>
         )}
       </div>

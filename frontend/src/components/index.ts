@@ -13,3 +13,5 @@ export { LoginPage } from './LoginPage';
 export { SetupPage } from './SetupPage';
 export { ProtectedRoute } from './ProtectedRoute';
 export { UserMenu } from './UserMenu';
+export { ForgotPasswordPage } from './ForgotPasswordPage';
+export { ResetPasswordPage } from './ResetPasswordPage';
