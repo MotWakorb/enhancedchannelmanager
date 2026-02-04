@@ -25,7 +25,6 @@ class TestTLSSettings:
         assert settings.enabled is False
         assert settings.mode == "letsencrypt"
         assert settings.domain == ""
-        assert settings.challenge_type == "http-01"
         assert settings.auto_renew is True
         assert settings.renew_days_before_expiry == 30
 
@@ -48,33 +47,41 @@ class TestTLSSettings:
         assert settings.acme_email == "admin@example.com"
 
     def test_is_configured_for_letsencrypt(self):
-        """Test Let's Encrypt configuration check."""
+        """Test Let's Encrypt DNS-01 configuration check."""
         # Not configured without domain and email
         settings = TLSSettings()
         assert settings.is_configured_for_letsencrypt() is False
 
-        # Configured with HTTP-01
+        # Configured with just domain and email (manual DNS setup)
         settings = TLSSettings(
             domain="example.com",
             acme_email="admin@example.com",
-            challenge_type="http-01",
         )
         assert settings.is_configured_for_letsencrypt() is True
 
-        # DNS-01 requires dns_provider and api_token
+        # Configured with Cloudflare provider requires api_token
         settings = TLSSettings(
             domain="example.com",
             acme_email="admin@example.com",
-            challenge_type="dns-01",
+            dns_provider="cloudflare",
         )
         assert settings.is_configured_for_letsencrypt() is False
 
         settings = TLSSettings(
             domain="example.com",
             acme_email="admin@example.com",
-            challenge_type="dns-01",
             dns_provider="cloudflare",
             dns_api_token="token123",
+        )
+        assert settings.is_configured_for_letsencrypt() is True
+
+        # Configured with Route53 provider
+        settings = TLSSettings(
+            domain="example.com",
+            acme_email="admin@example.com",
+            dns_provider="route53",
+            aws_access_key_id="AKIA...",
+            aws_secret_access_key="secret",
         )
         assert settings.is_configured_for_letsencrypt() is True
 
@@ -182,45 +189,6 @@ class TestCertificateStorageMocked:
         assert storage.has_certificate() is True
 
 
-# Test challenges module (doesn't need crypto)
-class TestChallenges:
-    """Test ACME challenge handlers."""
-
-    def test_register_and_get_http_challenge(self):
-        """Test HTTP challenge registration."""
-        from tls.challenges import (
-            register_http_challenge,
-            get_http_challenge_response,
-            clear_http_challenge,
-            clear_all_http_challenges,
-        )
-
-        # Clear any existing challenges
-        clear_all_http_challenges()
-
-        # Register challenge
-        register_http_challenge("token123", "response456")
-        assert get_http_challenge_response("token123") == "response456"
-        assert get_http_challenge_response("unknown") is None
-
-        # Clear challenge
-        clear_http_challenge("token123")
-        assert get_http_challenge_response("token123") is None
-
-    def test_get_pending_challenge_count(self):
-        """Test challenge count."""
-        from tls.challenges import (
-            register_http_challenge,
-            get_pending_challenge_count,
-            clear_all_http_challenges,
-        )
-
-        clear_all_http_challenges()
-        assert get_pending_challenge_count() == 0
-
-        register_http_challenge("token1", "resp1")
-        register_http_challenge("token2", "resp2")
-        assert get_pending_challenge_count() == 2
-
-        clear_all_http_challenges()
-        assert get_pending_challenge_count() == 0
+# Note: HTTP-01 challenge tests removed - only DNS-01 is supported
+# The challenges module now only contains verify_dns_challenge() which
+# requires network access and is tested in integration tests

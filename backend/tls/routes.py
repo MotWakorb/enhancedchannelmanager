@@ -3,10 +3,9 @@ TLS API endpoints for certificate management.
 
 Provides REST endpoints for:
 - TLS configuration status
-- Let's Encrypt certificate issuance
+- Let's Encrypt certificate issuance (DNS-01 challenge)
 - Manual certificate upload
 - Certificate renewal
-- ACME HTTP-01 challenge serving
 """
 import asyncio
 import logging
@@ -25,13 +24,7 @@ from .settings import (
     TLS_DIR,
 )
 from .storage import CertificateStorage
-from .challenges import (
-    get_http_challenge_response,
-    register_http_challenge,
-    clear_http_challenge,
-    verify_http_challenge_reachable,
-    verify_dns_challenge,
-)
+from .challenges import verify_dns_challenge
 
 # ACME client and DNS providers require josepy - import conditionally
 try:
@@ -64,6 +57,7 @@ class TLSStatusResponse(BaseModel):
     enabled: bool
     mode: str  # "letsencrypt" | "manual" | "none"
     domain: Optional[str] = None
+    https_port: int = 6143
     cert_issued_at: Optional[str] = None
     cert_expires_at: Optional[str] = None
     cert_subject: Optional[str] = None
@@ -82,8 +76,8 @@ class TLSConfigureRequest(BaseModel):
     enabled: bool
     mode: Literal["letsencrypt", "manual"] = "letsencrypt"
     domain: str = ""
+    https_port: int = 6143
     acme_email: str = ""
-    challenge_type: Literal["http-01", "dns-01"] = "http-01"
     use_staging: bool = False
     dns_provider: str = ""
     dns_api_token: str = ""  # Cloudflare API token
@@ -101,10 +95,7 @@ class CertificateRequestResponse(BaseModel):
 
     success: bool
     message: str
-    challenge_type: Optional[str] = None
-    # For HTTP-01
-    challenge_url: Optional[str] = None
-    # For DNS-01
+    # For DNS-01 challenge (when manual DNS setup required)
     txt_record_name: Optional[str] = None
     txt_record_value: Optional[str] = None
     # On success
@@ -122,28 +113,6 @@ class DNSProviderTestRequest(BaseModel):
     aws_access_key_id: str = ""
     aws_secret_access_key: str = ""
     aws_region: str = "us-east-1"
-
-
-# ============================================================================
-# ACME HTTP-01 Challenge Endpoint
-# ============================================================================
-
-
-@router.get("/.well-known/acme-challenge/{token}")
-async def acme_http_challenge(token: str):
-    """
-    Serve ACME HTTP-01 challenge response.
-
-    This endpoint is called by Let's Encrypt to validate domain ownership.
-    The response must match the expected key authorization.
-    """
-    response = get_http_challenge_response(token)
-    if response:
-        logger.info(f"Serving HTTP-01 challenge for token: {token[:16]}...")
-        return PlainTextResponse(response)
-
-    logger.warning(f"HTTP-01 challenge not found for token: {token[:16]}...")
-    raise HTTPException(status_code=404, detail="Challenge not found")
 
 
 # ============================================================================
@@ -165,6 +134,7 @@ async def get_tls_status():
         enabled=settings.enabled,
         mode=settings.mode if settings.enabled else "none",
         domain=settings.domain if settings.domain else None,
+        https_port=settings.https_port,
         cert_issued_at=settings.cert_issued_at,
         cert_expires_at=settings.cert_expires_at,
         cert_subject=settings.cert_subject,
@@ -229,8 +199,8 @@ async def configure_tls(request: TLSConfigureRequest):
     settings.enabled = request.enabled
     settings.mode = request.mode
     settings.domain = request.domain
+    settings.https_port = request.https_port
     settings.acme_email = request.acme_email
-    settings.challenge_type = request.challenge_type
     settings.use_staging = request.use_staging
     settings.dns_provider = request.dns_provider
     settings.auto_renew = request.auto_renew
@@ -259,12 +229,12 @@ async def configure_tls(request: TLSConfigureRequest):
 @router.post("/request-cert", response_model=CertificateRequestResponse)
 async def request_certificate():
     """
-    Request a new certificate from Let's Encrypt.
+    Request a new certificate from Let's Encrypt using DNS-01 challenge.
 
     This initiates the ACME certificate issuance process.
-    For HTTP-01 challenges, the challenge is handled automatically.
-    For DNS-01 challenges, you must create the TXT record manually
-    or have configured a DNS provider.
+    If a DNS provider (Cloudflare/Route53) is configured, the TXT record
+    is created automatically. Otherwise, you must create the TXT record
+    manually and call /api/tls/complete-challenge.
     """
     if not _acme_available:
         raise HTTPException(503, "ACME functionality not available (josepy not installed)")
@@ -294,10 +264,9 @@ async def request_certificate():
                 message="Failed to initialize ACME client",
             )
 
-        # Start certificate request
+        # Start certificate request (DNS-01 challenge)
         result = await acme.request_certificate(
             domain=settings.domain,
-            challenge_type=settings.challenge_type,
         )
 
         if result.success:
@@ -330,134 +299,90 @@ async def request_certificate():
 
         challenge = challenges[0]
 
-        if settings.challenge_type == "http-01":
-            # Register HTTP challenge and complete automatically
-            register_http_challenge(challenge.token, challenge.key_authorization)
+        # Check if we have DNS provider configured for automatic handling
+        has_cloudflare_creds = settings.dns_provider.lower() == "cloudflare" and settings.dns_api_token
+        has_route53_creds = settings.dns_provider.lower() == "route53" and (
+            (settings.aws_access_key_id and settings.aws_secret_access_key) or
+            settings.dns_provider.lower() == "route53"  # IAM role auth
+        )
 
-            # Complete the challenge
-            result = await acme.complete_challenge(
-                domain=settings.domain,
-                challenge_type="http-01",
-            )
-
-            # Clean up challenge
-            clear_http_challenge(challenge.token)
-
-            if result.success:
-                # Save certificate
-                storage = CertificateStorage(TLS_DIR)
-                storage.save_certificate(
-                    cert_pem=result.cert_pem,
-                    key_pem=result.key_pem,
-                    chain_pem=result.chain_pem,
+        if settings.dns_provider and (has_cloudflare_creds or has_route53_creds):
+            try:
+                provider = get_dns_provider(
+                    settings.dns_provider,
+                    api_token=settings.dns_api_token,
+                    zone_id=settings.dns_zone_id,
+                    aws_access_key_id=settings.aws_access_key_id,
+                    aws_secret_access_key=settings.aws_secret_access_key,
+                    aws_region=settings.aws_region,
                 )
 
-                # Update settings
-                settings.cert_issued_at = datetime.now().isoformat()
-                settings.cert_expires_at = result.expires_at.isoformat()
-                info = storage.get_certificate_info()
-                if info:
-                    settings.cert_subject = info.subject
-                    settings.cert_issuer = info.issuer
-                save_tls_settings(settings)
-
-                return CertificateRequestResponse(
-                    success=True,
-                    message="Certificate issued successfully",
-                    cert_expires_at=result.expires_at.isoformat(),
-                )
-            else:
-                return CertificateRequestResponse(
-                    success=False,
-                    message=f"Challenge failed: {result.error}",
+                # Create TXT record
+                logger.debug(f"Creating TXT record: {challenge.txt_record_name} = {challenge.txt_record_value}")
+                record_id, zone_id = await provider.create_and_get_zone(
+                    challenge.txt_record_name,
+                    challenge.txt_record_value,
                 )
 
-        elif settings.challenge_type == "dns-01":
-            # Check if we have DNS provider configured
-            has_cloudflare_creds = settings.dns_provider.lower() == "cloudflare" and settings.dns_api_token
-            has_route53_creds = settings.dns_provider.lower() == "route53" and (
-                (settings.aws_access_key_id and settings.aws_secret_access_key) or
-                settings.dns_provider.lower() == "route53"  # IAM role auth
-            )
+                # Wait for DNS propagation
+                logger.debug("Waiting 30s for DNS propagation...")
+                await asyncio.sleep(30)
 
-            if settings.dns_provider and (has_cloudflare_creds or has_route53_creds):
+                # Complete challenge
+                result = await acme.complete_challenge(
+                    domain=settings.domain,
+                )
+
+                # Clean up DNS record
                 try:
-                    provider = get_dns_provider(
-                        settings.dns_provider,
-                        api_token=settings.dns_api_token,
-                        zone_id=settings.dns_zone_id,
-                        aws_access_key_id=settings.aws_access_key_id,
-                        aws_secret_access_key=settings.aws_secret_access_key,
-                        aws_region=settings.aws_region,
+                    provider.zone_id = zone_id
+                    await provider.delete_txt_record(record_id)
+                except Exception as e:
+                    logger.warning(f"Failed to delete DNS record: {e}")
+
+                if result.success:
+                    # Save certificate
+                    storage = CertificateStorage(TLS_DIR)
+                    storage.save_certificate(
+                        cert_pem=result.cert_pem,
+                        key_pem=result.key_pem,
+                        chain_pem=result.chain_pem,
                     )
 
-                    # Create TXT record
-                    record_id, zone_id = await provider.create_and_get_zone(
-                        challenge.txt_record_name,
-                        challenge.txt_record_value,
+                    # Update settings
+                    settings.cert_issued_at = datetime.now().isoformat()
+                    settings.cert_expires_at = result.expires_at.isoformat()
+                    info = storage.get_certificate_info()
+                    if info:
+                        settings.cert_subject = info.subject
+                        settings.cert_issuer = info.issuer
+                    save_tls_settings(settings)
+
+                    return CertificateRequestResponse(
+                        success=True,
+                        message="Certificate issued successfully",
+                        cert_expires_at=result.expires_at.isoformat(),
                     )
-
-                    # Wait for DNS propagation
-                    logger.info("Waiting 30s for DNS propagation...")
-                    await asyncio.sleep(30)
-
-                    # Complete challenge
-                    result = await acme.complete_challenge(
-                        domain=settings.domain,
-                        challenge_type="dns-01",
-                    )
-
-                    # Clean up DNS record
-                    try:
-                        provider.zone_id = zone_id
-                        await provider.delete_txt_record(record_id)
-                    except Exception as e:
-                        logger.warning(f"Failed to delete DNS record: {e}")
-
-                    if result.success:
-                        # Save certificate
-                        storage = CertificateStorage(TLS_DIR)
-                        storage.save_certificate(
-                            cert_pem=result.cert_pem,
-                            key_pem=result.key_pem,
-                            chain_pem=result.chain_pem,
-                        )
-
-                        # Update settings
-                        settings.cert_issued_at = datetime.now().isoformat()
-                        settings.cert_expires_at = result.expires_at.isoformat()
-                        info = storage.get_certificate_info()
-                        if info:
-                            settings.cert_subject = info.subject
-                            settings.cert_issuer = info.issuer
-                        save_tls_settings(settings)
-
-                        return CertificateRequestResponse(
-                            success=True,
-                            message="Certificate issued successfully",
-                            cert_expires_at=result.expires_at.isoformat(),
-                        )
-                    else:
-                        return CertificateRequestResponse(
-                            success=False,
-                            message=f"Challenge failed: {result.error}",
-                        )
-
-                except DNSProviderError as e:
+                else:
                     return CertificateRequestResponse(
                         success=False,
-                        message=f"DNS provider error: {e}",
+                        message=f"Challenge failed: {result.error}",
                     )
 
-            else:
-                # Return challenge info for manual DNS setup
+            except DNSProviderError as e:
                 return CertificateRequestResponse(
                     success=False,
-                    message="DNS-01 challenge pending. Create the TXT record and call /api/tls/complete-challenge",
-                    challenge_type="dns-01",
-                    txt_record_name=challenge.txt_record_name,
-                    txt_record_value=challenge.txt_record_value,
+                    message=f"DNS provider error: {e}",
                 )
+
+        else:
+            # Return challenge info for manual DNS setup
+            return CertificateRequestResponse(
+                success=False,
+                message="DNS-01 challenge pending. Create the TXT record and call /api/tls/complete-challenge",
+                txt_record_name=challenge.txt_record_name,
+                txt_record_value=challenge.txt_record_value,
+            )
 
     except Exception as e:
         logger.error(f"Certificate request failed: {e}")
@@ -479,11 +404,8 @@ async def complete_dns_challenge():
 
     settings = get_tls_settings()
 
-    if settings.challenge_type != "dns-01":
-        raise HTTPException(400, "Not a DNS-01 challenge")
-
     # Verify DNS record exists
-    logger.info("Verifying DNS record...")
+    logger.debug("Verifying DNS record...")
 
     # Initialize ACME client
     acme = ACMEClient(
@@ -501,7 +423,6 @@ async def complete_dns_challenge():
 
         result = await acme.complete_challenge(
             domain=settings.domain,
-            challenge_type="dns-01",
         )
 
         if result.success:
@@ -733,41 +654,3 @@ async def test_dns_provider(request: DNSProviderTestRequest):
         return {"success": False, "message": f"Test failed: {e}"}
 
 
-@router.get("/test-http-challenge")
-async def test_http_challenge():
-    """
-    Test if the HTTP-01 challenge endpoint is reachable.
-
-    This creates a temporary test challenge and verifies
-    it can be reached from the internet.
-    """
-    settings = get_tls_settings()
-
-    if not settings.domain:
-        raise HTTPException(400, "Domain not configured")
-
-    # Create test challenge
-    test_token = "test-challenge-token"
-    test_response = "test-challenge-response"
-    register_http_challenge(test_token, test_response)
-
-    try:
-        success, error = await verify_http_challenge_reachable(
-            settings.domain,
-            test_token,
-            test_response,
-        )
-
-        if success:
-            return {
-                "success": True,
-                "message": f"HTTP-01 challenge endpoint is reachable at {settings.domain}",
-            }
-        else:
-            return {
-                "success": False,
-                "message": f"HTTP-01 challenge not reachable: {error}",
-            }
-
-    finally:
-        clear_http_challenge(test_token)

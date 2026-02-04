@@ -36,7 +36,6 @@ class TLSSettings(BaseModel):
 
     # Let's Encrypt / ACME settings
     acme_email: str = ""  # Contact email for ACME account
-    challenge_type: Literal["http-01", "dns-01"] = "http-01"
     use_staging: bool = False  # Use Let's Encrypt staging for testing
 
     # DNS-01 challenge settings
@@ -67,8 +66,8 @@ class TLSSettings(BaseModel):
     last_renewal_attempt: Optional[str] = None  # ISO format datetime
     last_renewal_error: Optional[str] = None
 
-    # HTTP-01 challenge port (for standalone HTTP server)
-    http_challenge_port: int = 80
+    # HTTPS port for TLS connections (HTTP always stays on 6100 as fallback)
+    https_port: int = 6143
 
     @field_validator("domain")
     @classmethod
@@ -95,12 +94,12 @@ class TLSSettings(BaseModel):
         return v
 
     def is_configured_for_letsencrypt(self) -> bool:
-        """Check if Let's Encrypt settings are complete."""
+        """Check if Let's Encrypt DNS-01 settings are complete."""
         if not self.domain or not self.acme_email:
             return False
-        if self.challenge_type == "dns-01":
-            if not self.dns_provider:
-                return False
+        # DNS-01 challenge requires a DNS provider (or manual setup)
+        # Allow configuration without provider for manual DNS setup
+        if self.dns_provider:
             # Check provider-specific credentials
             if self.dns_provider.lower() == "cloudflare":
                 return bool(self.dns_api_token)
@@ -112,7 +111,9 @@ class TLSSettings(BaseModel):
                 # Otherwise assume IAM role authentication
                 return True
             else:
+                # Unknown provider
                 return False
+        # No provider means manual DNS setup - still valid
         return True
 
     def is_configured_for_manual(self) -> bool:
