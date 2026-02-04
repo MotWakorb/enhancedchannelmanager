@@ -146,28 +146,26 @@ check_application() {
 }
 
 check_tls_config() {
-    # Check if TLS is configured by reading the settings file
+    # Check if TLS is configured (informational only - app manages HTTPS)
     TLS_CONFIG="/config/tls_settings.json"
     TLS_CERT="/config/tls/cert.pem"
     TLS_KEY="/config/tls/key.pem"
 
     if [ -f "$TLS_CONFIG" ]; then
-        # Extract enabled, https_port, and check if certs exist
         TLS_ENABLED=$(python3 -c "import json; print(json.load(open('$TLS_CONFIG')).get('enabled', False))" 2>/dev/null || echo "False")
         HTTPS_PORT=$(python3 -c "import json; print(json.load(open('$TLS_CONFIG')).get('https_port', 6143))" 2>/dev/null || echo "6143")
 
         if [ "$TLS_ENABLED" = "True" ] && [ -f "$TLS_CERT" ] && [ -f "$TLS_KEY" ]; then
             print_success "TLS enabled with valid certificates"
-            print_info "HTTPS will be available on port $HTTPS_PORT"
-            return 0  # TLS enabled
+            print_info "HTTPS will start on port $HTTPS_PORT (managed by application)"
         elif [ "$TLS_ENABLED" = "True" ]; then
-            print_warning "TLS enabled but certificates not found, starting HTTP only"
-            return 1  # TLS configured but certs missing
+            print_warning "TLS enabled but certificates not found"
+        else
+            print_info "TLS not enabled"
         fi
+    else
+        print_info "TLS not configured"
     fi
-
-    print_info "TLS not configured, using HTTP only"
-    return 1  # TLS not enabled
 }
 
 print_startup_info() {
@@ -177,10 +175,8 @@ print_startup_info() {
     echo "${GREEN}════════════════════════════════════════════════════════════${NC}"
     echo ""
     print_info "Starting Enhanced Channel Manager..."
-    print_info "HTTP Server: http://0.0.0.0:6100 (always available)"
-    if [ "$USE_TLS" = "1" ]; then
-        print_info "HTTPS Server: https://0.0.0.0:${HTTPS_PORT} (TLS enabled)"
-    fi
+    print_info "HTTP Server: http://0.0.0.0:6100"
+    print_info "HTTPS Server: Managed by application (if TLS enabled)"
     print_info "Health Check: http://0.0.0.0:6100/api/health"
     echo ""
 }
@@ -209,35 +205,11 @@ run_preflight_checks() {
 # Main execution
 run_preflight_checks
 
-# Check TLS configuration and set HTTPS_PORT
-USE_TLS=0
-HTTPS_PORT=6143
-TLS_CONFIG="/config/tls_settings.json"
-if [ -f "$TLS_CONFIG" ]; then
-    HTTPS_PORT=$(python3 -c "import json; print(json.load(open('$TLS_CONFIG')).get('https_port', 6143))" 2>/dev/null || echo "6143")
-fi
-if check_tls_config; then
-    USE_TLS=1
-fi
+# Display TLS configuration status (informational only)
+check_tls_config
 
 # Switch to non-root user and run the application
+# HTTP server runs as main process on port 6100
+# HTTPS server is managed by the application as a subprocess (if TLS enabled)
 cd /app
-if [ "$USE_TLS" = "1" ]; then
-    # Dual-port mode: HTTP on 6100 (fallback) + HTTPS on configured port
-    # Start HTTP server in background (always available as fallback)
-    print_info "Starting HTTP fallback server on port 6100..."
-    gosu appuser uvicorn main:app --host 0.0.0.0 --port 6100 &
-    HTTP_PID=$!
-
-    # Give HTTP server a moment to start
-    sleep 1
-
-    # Start HTTPS server as main process (foreground)
-    print_info "Starting HTTPS server on port ${HTTPS_PORT}..."
-    exec gosu appuser uvicorn main:app --host 0.0.0.0 --port ${HTTPS_PORT} \
-        --ssl-keyfile /config/tls/key.pem \
-        --ssl-certfile /config/tls/cert.pem
-else
-    # HTTP-only mode
-    exec gosu appuser uvicorn main:app --host 0.0.0.0 --port 6100
-fi
+exec gosu appuser uvicorn main:app --host 0.0.0.0 --port 6100
