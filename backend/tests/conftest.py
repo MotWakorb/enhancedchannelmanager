@@ -74,10 +74,11 @@ def override_get_session(test_session):
 
 
 @pytest.fixture(scope="function")
-async def async_client(test_session):
+async def async_client(test_session, test_engine):
     """
     Create an async test client for the FastAPI app.
     Uses FastAPI's dependency_overrides to inject the test session.
+    Also patches database module internals for endpoints that call get_session() directly.
     """
     from httpx import AsyncClient, ASGITransport
     import database
@@ -94,6 +95,12 @@ async def async_client(test_session):
     # Use FastAPI's dependency_overrides
     app.dependency_overrides[get_session] = override_get_session
 
+    # Also patch database module internals for endpoints that call get_session() directly
+    # (rather than using Depends(get_session))
+    original_session_local = database._SessionLocal
+    TestSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=test_engine, expire_on_commit=False)
+    database._SessionLocal = TestSessionLocal
+
     try:
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as client:
@@ -101,6 +108,8 @@ async def async_client(test_session):
     finally:
         # Clear overrides after test
         app.dependency_overrides.clear()
+        # Restore original session local
+        database._SessionLocal = original_session_local
 
 
 @pytest.fixture

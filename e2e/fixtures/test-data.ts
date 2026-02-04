@@ -5,6 +5,34 @@
  */
 
 // =============================================================================
+// Test Credentials
+// =============================================================================
+
+/**
+ * Default test user credentials.
+ * These should match a user created during test setup or seeded in the database.
+ *
+ * To create the test user in a running container:
+ * docker exec <container> python -c "
+ * from auth.password import hash_password
+ * from database import get_session, init_db
+ * from models import User
+ * init_db()
+ * session = get_session()
+ * hashed = hash_password('e2e_test_password')
+ * new_user = User(username='e2e_test', email='e2e@test.local', password_hash=hashed, auth_provider='local', is_active=True)
+ * session.add(new_user)
+ * session.commit()
+ * print(f'Created user with id {new_user.id}')
+ * session.close()
+ * "
+ */
+export const testCredentials = {
+  username: process.env.E2E_TEST_USERNAME || 'e2e_test',
+  password: process.env.E2E_TEST_PASSWORD || 'e2e_test_password',
+}
+
+// =============================================================================
 // Settings Data
 // =============================================================================
 
@@ -229,6 +257,13 @@ export function createMockNotification(overrides: Partial<MockNotification> = {}
 // =============================================================================
 
 export const selectors = {
+  // Authentication
+  loginPage: '.login-page, .login-container, form:has(input[name="username"]):has(input[name="password"])',
+  loginUsername: 'input[name="username"]',
+  loginPassword: 'input[name="password"]',
+  loginSubmit: 'button[type="submit"], button:has-text("Sign In"), button:has-text("Login")',
+  loginError: '.login-error, .error-message, [role="alert"]',
+
   // Header
   header: 'header.header',
   headerTitle: 'header h1',

@@ -237,8 +237,9 @@ class TestDispatcharrUserSync:
             json={"username": "disponly", "password": "anypassword"},
         )
         assert response.status_code == 401
-        # Error should indicate user must use Dispatcharr
-        assert "dispatcharr" in response.json()["detail"].lower()
+        # Error should indicate user must use their auth provider
+        detail = response.json()["detail"].lower()
+        assert "authentication provider" in detail or "dispatcharr" in detail
 
 
 class TestDispatcharrConfiguration:

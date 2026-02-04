@@ -4,7 +4,81 @@
  * Provides extended test fixtures with common setup and utilities.
  */
 import { test as base, expect, Page } from '@playwright/test'
-import { selectors } from './test-data'
+import { selectors, testCredentials } from './test-data'
+
+// =============================================================================
+// Authentication Helpers
+// =============================================================================
+
+/**
+ * Check if the current page is a login page
+ */
+async function isLoginPage(page: Page): Promise<boolean> {
+  // Wait a moment for the page to stabilize
+  await page.waitForLoadState('domcontentloaded')
+
+  // Check for login form indicators
+  const usernameField = page.locator(selectors.loginUsername)
+  const passwordField = page.locator(selectors.loginPassword)
+
+  try {
+    // Wait briefly for the form to potentially appear
+    await usernameField.waitFor({ state: 'visible', timeout: 2000 })
+    return true
+  } catch {
+    // Username field not found, check if we're already logged in
+    const header = page.locator(selectors.header)
+    try {
+      await header.waitFor({ state: 'visible', timeout: 2000 })
+      return false // Already logged in
+    } catch {
+      // Neither login form nor header visible - wait a bit more
+      await page.waitForTimeout(1000)
+      const hasUsername = await usernameField.isVisible().catch(() => false)
+      const hasPassword = await passwordField.isVisible().catch(() => false)
+      return hasUsername && hasPassword
+    }
+  }
+}
+
+/**
+ * Perform login with test credentials
+ */
+async function performLogin(page: Page, username?: string, password?: string): Promise<void> {
+  const user = username || testCredentials.username
+  const pass = password || testCredentials.password
+
+  // Wait for login form to be ready
+  const usernameField = page.locator(selectors.loginUsername)
+  const passwordField = page.locator(selectors.loginPassword)
+  const submitButton = page.locator(selectors.loginSubmit)
+
+  await usernameField.waitFor({ state: 'visible', timeout: 5000 })
+  await passwordField.waitFor({ state: 'visible', timeout: 5000 })
+
+  // Fill login form
+  await usernameField.fill(user)
+  await passwordField.fill(pass)
+
+  // Submit
+  await submitButton.click()
+
+  // Wait for either:
+  // 1. Header to appear (successful login)
+  // 2. Error message (login failed)
+  const header = page.locator(selectors.header)
+  const errorMessage = page.locator(selectors.loginError)
+
+  const result = await Promise.race([
+    header.waitFor({ state: 'visible', timeout: 15000 }).then(() => 'success'),
+    errorMessage.waitFor({ state: 'visible', timeout: 15000 }).then(() => 'error'),
+  ])
+
+  if (result === 'error') {
+    const errorText = await errorMessage.textContent()
+    throw new Error(`Login failed: ${errorText || 'Unknown error'} - check test credentials`)
+  }
+}
 
 // =============================================================================
 // Custom Fixtures
@@ -23,6 +97,11 @@ export const test = base.extend<CustomFixtures>({
     // Navigate to app
     await page.goto('/')
 
+    // Check if we're on a login page and need to authenticate
+    if (await isLoginPage(page)) {
+      await performLogin(page)
+    }
+
     // Wait for app to be ready (header visible)
     await page.waitForSelector(selectors.header, { timeout: 15000 })
 
@@ -33,6 +112,9 @@ export const test = base.extend<CustomFixtures>({
 
 // Re-export expect for convenience
 export { expect }
+
+// Export login helpers for tests that need custom auth
+export { isLoginPage, performLogin }
 
 // =============================================================================
 // Page Object Helpers

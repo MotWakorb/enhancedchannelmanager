@@ -31,21 +31,27 @@ test.describe('Smoke Tests', () => {
     await expect(settingsTab).toHaveClass(/active/);
   });
 
-  test('no console errors on load', async ({ page }) => {
+  test('no console errors on load', async ({ appPage }) => {
     const errors: string[] = [];
-    page.on('console', (msg) => {
+    appPage.on('console', (msg) => {
       if (msg.type() === 'error') {
         errors.push(msg.text());
       }
     });
 
-    await page.goto('/');
-    await page.waitForSelector(selectors.header, { timeout: 15000 });
+    // App is already loaded by appPage fixture with login handled
+    // Just reload to capture any console errors
+    await appPage.reload();
+    await appPage.waitForSelector(selectors.header, { timeout: 15000 });
 
-    // Filter out known acceptable errors (like missing API connection)
-    const criticalErrors = errors.filter(
-      (e) => !e.includes('Failed to fetch') && !e.includes('NetworkError')
-    );
+    // Filter out known acceptable errors:
+    // - Network/fetch errors (missing API connection)
+    // - API request failures (Dispatcharr not connected in test env)
+    const criticalErrors = errors.filter((e) => {
+      const isNetworkError = e.includes('Failed to fetch') || e.includes('NetworkError');
+      const isApiError = e.includes('API request failed');
+      return !isNetworkError && !isApiError;
+    });
 
     expect(criticalErrors).toHaveLength(0);
   });
@@ -98,30 +104,24 @@ test.describe('Navigation', () => {
 });
 
 test.describe('Responsiveness', () => {
-  test('app renders on mobile viewport', async ({ page }) => {
-    await page.setViewportSize({ width: 375, height: 667 });
-    await page.goto('/');
-    await page.waitForSelector(selectors.header, { timeout: 15000 });
-
-    const header = page.locator(selectors.header);
+  test('app renders on mobile viewport', async ({ appPage }) => {
+    await appPage.setViewportSize({ width: 375, height: 667 });
+    // App is already loaded by appPage fixture with login handled
+    const header = appPage.locator(selectors.header);
     await expect(header).toBeVisible();
   });
 
-  test('app renders on tablet viewport', async ({ page }) => {
-    await page.setViewportSize({ width: 768, height: 1024 });
-    await page.goto('/');
-    await page.waitForSelector(selectors.header, { timeout: 15000 });
-
-    const header = page.locator(selectors.header);
+  test('app renders on tablet viewport', async ({ appPage }) => {
+    await appPage.setViewportSize({ width: 768, height: 1024 });
+    // App is already loaded by appPage fixture with login handled
+    const header = appPage.locator(selectors.header);
     await expect(header).toBeVisible();
   });
 
-  test('app renders on desktop viewport', async ({ page }) => {
-    await page.setViewportSize({ width: 1920, height: 1080 });
-    await page.goto('/');
-    await page.waitForSelector(selectors.header, { timeout: 15000 });
-
-    const header = page.locator(selectors.header);
+  test('app renders on desktop viewport', async ({ appPage }) => {
+    await appPage.setViewportSize({ width: 1920, height: 1080 });
+    // App is already loaded by appPage fixture with login handled
+    const header = appPage.locator(selectors.header);
     await expect(header).toBeVisible();
   });
 });

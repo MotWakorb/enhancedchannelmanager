@@ -62,6 +62,8 @@ class TestCSVExport:
         with patch("main.get_client") as mock_get_client:
             mock_client = MagicMock()
             mock_client.get_channels = AsyncMock(return_value={"results": [], "next": None, "count": 0})
+            mock_client.get_channel_groups = AsyncMock(return_value=[])
+            mock_client.get_streams = AsyncMock(return_value={"results": []})
             mock_get_client.return_value = mock_client
 
             response = await async_client.get("/api/channels/export-csv")
@@ -75,6 +77,8 @@ class TestCSVExport:
         with patch("main.get_client") as mock_get_client:
             mock_client = MagicMock()
             mock_client.get_channels = AsyncMock(return_value={"results": [], "next": None, "count": 0})
+            mock_client.get_channel_groups = AsyncMock(return_value=[])
+            mock_client.get_streams = AsyncMock(return_value={"results": []})
             mock_get_client.return_value = mock_client
 
             response = await async_client.get("/api/channels/export-csv")
@@ -91,6 +95,8 @@ class TestCSVExport:
         with patch("main.get_client") as mock_get_client:
             mock_client = MagicMock()
             mock_client.get_channels = AsyncMock(return_value={"results": [], "next": None, "count": 0})
+            mock_client.get_channel_groups = AsyncMock(return_value=[])
+            mock_client.get_streams = AsyncMock(return_value={"results": []})
             mock_get_client.return_value = mock_client
 
             response = await async_client.get("/api/channels/export-csv")
@@ -110,15 +116,18 @@ class TestCSVExport:
                         "id": 1,
                         "channel_number": 101,
                         "name": "ESPN HD",
-                        "channel_group": {"name": "Sports"},
+                        "channel_group_id": 1,
                         "tvg_id": "ESPN.US",
                         "tvc_guide_stationid": "12345",
-                        "logo_url": "https://example.com/espn.png"
+                        "logo_url": "https://example.com/espn.png",
+                        "streams": []
                     }
                 ],
                 "next": None,
                 "count": 1
             })
+            mock_client.get_channel_groups = AsyncMock(return_value=[{"id": 1, "name": "Sports"}])
+            mock_client.get_streams = AsyncMock(return_value={"results": []})
             mock_get_client.return_value = mock_client
 
             response = await async_client.get("/api/channels/export-csv")
@@ -134,7 +143,7 @@ class TestCSVExport:
         """Export handles Dispatcharr API errors gracefully."""
         with patch("main.get_client") as mock_get_client:
             mock_client = MagicMock()
-            mock_client.get_channels = AsyncMock(side_effect=Exception("API Error"))
+            mock_client.get_channel_groups = AsyncMock(side_effect=Exception("API Error"))
             mock_get_client.return_value = mock_client
 
             response = await async_client.get("/api/channels/export-csv")

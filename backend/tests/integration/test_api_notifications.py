@@ -112,10 +112,9 @@ class TestCreateNotification:
     @pytest.mark.asyncio
     async def test_create_notification(self, async_client):
         """POST /api/notifications creates notification."""
-        # API uses query params, not JSON body
         response = await async_client.post(
             "/api/notifications",
-            params={
+            json={
                 "notification_type": "info",
                 "title": "Test Notification",
                 "message": "This is a test message",
@@ -132,7 +131,7 @@ class TestCreateNotification:
         """POST /api/notifications requires message field."""
         response = await async_client.post(
             "/api/notifications",
-            params={
+            json={
                 "notification_type": "info",
                 "title": "No Message",
                 "message": "",  # Empty message should fail
@@ -145,7 +144,7 @@ class TestCreateNotification:
         """POST /api/notifications validates notification type."""
         response = await async_client.post(
             "/api/notifications",
-            params={
+            json={
                 "notification_type": "invalid_type",
                 "message": "Test",
             },
