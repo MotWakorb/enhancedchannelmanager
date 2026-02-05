@@ -1,11 +1,10 @@
 /**
- * Alert Configuration Panel Component (v0.11.6)
+ * Alert Configuration Panel Component (v0.11.6-0010)
  *
  * Admin panel for configuring service alert rules.
  */
 import { useState, useEffect, useMemo } from 'react';
 import type { ServiceAlertRule, ServiceWithStatus } from '../../types';
-import type { AlertMethod } from '../../services/api';
 import * as api from '../../services/api';
 import { CustomSelect } from '../CustomSelect';
 import './AlertConfigurationPanel.css';
@@ -13,6 +12,13 @@ import './AlertConfigurationPanel.css';
 export interface AlertConfigurationPanelProps {
   /** Refresh callback */
   onRefresh?: () => void;
+}
+
+// Notification method type for display
+interface NotificationMethod {
+  id: string;
+  name: string;
+  type: string;
 }
 
 // Condition options
@@ -32,7 +38,7 @@ const STATUS_THRESHOLDS = [
 export function AlertConfigurationPanel({ onRefresh: _onRefresh }: AlertConfigurationPanelProps) {
   // State
   const [rules, setRules] = useState<ServiceAlertRule[]>([]);
-  const [alertMethods, setAlertMethods] = useState<AlertMethod[]>([]);
+  const [notificationMethods, setNotificationMethods] = useState<NotificationMethod[]>([]);
   const [services, setServices] = useState<ServiceWithStatus[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -45,22 +51,34 @@ export function AlertConfigurationPanel({ onRefresh: _onRefresh }: AlertConfigur
     service_id: '',
     condition: 'status_change',
     threshold: 'any',
-    notify_method_ids: [] as number[],
+    notify_method_ids: [] as string[],
   });
 
-  // Fetch rules, alert methods, and services
+  // Fetch rules, settings, and services
   useEffect(() => {
     const fetchData = async () => {
       setLoading(true);
       try {
-        const [rulesData, methodsData, servicesData] = await Promise.all([
+        const [rulesData, settingsData, servicesData] = await Promise.all([
           api.getServiceAlertRules(),
-          api.getAlertMethods(),
+          api.getSettings(),
           api.getServices(),
         ]);
         setRules(rulesData);
-        setAlertMethods(methodsData);
         setServices(servicesData);
+
+        // Build notification methods from configured settings
+        const methods: NotificationMethod[] = [];
+        if (settingsData.smtp_configured) {
+          methods.push({ id: 'smtp', name: 'Email (SMTP)', type: 'email' });
+        }
+        if (settingsData.discord_configured) {
+          methods.push({ id: 'discord', name: 'Discord', type: 'discord' });
+        }
+        if (settingsData.telegram_configured) {
+          methods.push({ id: 'telegram', name: 'Telegram', type: 'telegram' });
+        }
+        setNotificationMethods(methods);
       } catch (err) {
         setError('Failed to load alert configuration');
       } finally {
@@ -271,10 +289,10 @@ export function AlertConfigurationPanel({ onRefresh: _onRefresh }: AlertConfigur
           <div className="form-group">
             <label>Notification Methods</label>
             <div className="method-checkboxes">
-              {alertMethods.length === 0 ? (
-                <span className="no-methods">No alert methods configured</span>
+              {notificationMethods.length === 0 ? (
+                <span className="no-methods">No notification methods configured. Configure them in Settings → Notification Settings.</span>
               ) : (
-                alertMethods.map(method => (
+                notificationMethods.map(method => (
                   <label key={method.id} className="checkbox-label">
                     <input
                       type="checkbox"
@@ -294,7 +312,7 @@ export function AlertConfigurationPanel({ onRefresh: _onRefresh }: AlertConfigur
                       }}
                     />
                     <span className="method-name">{method.name}</span>
-                    <span className="method-type">{method.method_type}</span>
+                    <span className="method-type">{method.type}</span>
                   </label>
                 ))
               )}
