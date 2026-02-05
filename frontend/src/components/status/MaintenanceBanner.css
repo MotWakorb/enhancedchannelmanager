@@ -1,0 +1,150 @@
+/* Maintenance Banner Styles (v0.11.6) */
+
+.maintenance-banner {
+  background: linear-gradient(135deg, rgba(59, 130, 246, 0.1), rgba(99, 102, 241, 0.1));
+  border: 1px solid rgba(99, 102, 241, 0.2);
+  border-radius: 8px;
+  margin-bottom: 1rem;
+  overflow: hidden;
+}
+
+.banner-content {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem 1rem;
+  cursor: pointer;
+}
+
+.maintenance-banner:not(:has(.banner-expanded)) .banner-content {
+  cursor: default;
+}
+
+.banner-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  background: rgba(99, 102, 241, 0.1);
+  border-radius: 8px;
+  flex-shrink: 0;
+}
+
+.banner-icon .material-icons {
+  font-size: 20px;
+  color: #6366f1;
+}
+
+.banner-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.banner-title {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.875rem;
+  color: var(--text-primary);
+  margin-bottom: 0.25rem;
+}
+
+.banner-title .badge {
+  padding: 0.125rem 0.375rem;
+  font-size: 0.65rem;
+  font-weight: 600;
+  background: rgba(99, 102, 241, 0.2);
+  color: #6366f1;
+  border-radius: 10px;
+}
+
+.banner-details {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+
+.maintenance-title {
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.maintenance-remaining {
+  color: #6366f1;
+  font-weight: 500;
+}
+
+.expand-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  border-radius: 4px;
+  transition: all 0.2s;
+}
+
+.expand-btn:hover {
+  background: rgba(99, 102, 241, 0.1);
+  color: #6366f1;
+}
+
+.alerts-suppressed {
+  display: flex;
+  align-items: center;
+  padding: 0.25rem 0.5rem;
+  background: rgba(245, 158, 11, 0.1);
+  border-radius: 4px;
+  color: var(--status-warning);
+}
+
+.alerts-suppressed .material-icons {
+  font-size: 16px;
+}
+
+/* Expanded List */
+.banner-expanded {
+  border-top: 1px solid rgba(99, 102, 241, 0.2);
+  padding: 0.5rem 1rem 0.75rem;
+}
+
+.additional-window {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.5rem 0;
+  font-size: 0.75rem;
+  border-bottom: 1px solid var(--border-primary);
+}
+
+.additional-window:last-child {
+  border-bottom: none;
+}
+
+.window-title {
+  flex: 1;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.window-time {
+  color: var(--text-secondary);
+}
+
+.window-remaining {
+  color: #6366f1;
+  font-weight: 500;
+}
+
+.alerts-icon {
+  font-size: 14px;
+  color: var(--status-warning);
+}

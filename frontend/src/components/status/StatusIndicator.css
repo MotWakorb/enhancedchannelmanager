@@ -1,0 +1,139 @@
+/* Status Indicator Styles (v0.11.6) */
+
+.status-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+/* Status Dot */
+.status-dot {
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+/* Size variants */
+.status-indicator.size-small .status-dot {
+  width: 8px;
+  height: 8px;
+}
+
+.status-indicator.size-medium .status-dot {
+  width: 10px;
+  height: 10px;
+}
+
+.status-indicator.size-large .status-dot {
+  width: 12px;
+  height: 12px;
+}
+
+/* Status colors */
+.status-indicator.status-healthy .status-dot {
+  background-color: var(--status-healthy, #22c55e);
+  box-shadow: 0 0 6px var(--status-healthy, #22c55e);
+}
+
+.status-indicator.status-degraded .status-dot {
+  background-color: var(--status-warning, #f59e0b);
+  box-shadow: 0 0 6px var(--status-warning, #f59e0b);
+}
+
+.status-indicator.status-unhealthy .status-dot {
+  background-color: var(--status-error, #ef4444);
+  box-shadow: 0 0 6px var(--status-error, #ef4444);
+}
+
+.status-indicator.status-unconfigured .status-dot {
+  background-color: var(--status-unconfigured, #8b5cf6);
+  box-shadow: 0 0 6px var(--status-unconfigured, #8b5cf6);
+}
+
+.status-indicator.status-unknown .status-dot {
+  background-color: var(--status-unknown, #6b7280);
+}
+
+/* Animation (pulse) */
+.status-indicator.animate .status-dot {
+  animation: pulse 2s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.7;
+    transform: scale(1.1);
+  }
+}
+
+/* Icon and Label */
+.status-icon {
+  font-size: 16px;
+}
+
+.status-indicator.size-small .status-icon {
+  font-size: 14px;
+}
+
+.status-indicator.size-large .status-icon {
+  font-size: 20px;
+}
+
+.status-indicator.status-healthy .status-icon {
+  color: var(--status-healthy, #22c55e);
+}
+
+.status-indicator.status-degraded .status-icon {
+  color: var(--status-warning, #f59e0b);
+}
+
+.status-indicator.status-unhealthy .status-icon {
+  color: var(--status-error, #ef4444);
+}
+
+.status-indicator.status-unconfigured .status-icon {
+  color: var(--status-unconfigured, #8b5cf6);
+}
+
+.status-indicator.status-unknown .status-icon {
+  color: var(--status-unknown, #6b7280);
+}
+
+.status-label {
+  font-weight: 500;
+}
+
+.status-indicator.size-small .status-label {
+  font-size: 0.75rem;
+}
+
+.status-indicator.size-medium .status-label {
+  font-size: 0.875rem;
+}
+
+.status-indicator.size-large .status-label {
+  font-size: 1rem;
+}
+
+.status-indicator.status-healthy .status-label {
+  color: var(--status-healthy, #22c55e);
+}
+
+.status-indicator.status-degraded .status-label {
+  color: var(--status-warning, #f59e0b);
+}
+
+.status-indicator.status-unhealthy .status-label {
+  color: var(--status-error, #ef4444);
+}
+
+.status-indicator.status-unconfigured .status-label {
+  color: var(--status-unconfigured, #8b5cf6);
+}
+
+.status-indicator.status-unknown .status-label {
+  color: var(--status-unknown, #6b7280);
+}

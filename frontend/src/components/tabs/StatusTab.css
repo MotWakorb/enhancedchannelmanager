@@ -1,0 +1,571 @@
+/* Status Tab Styles (v0.11.6) - Settings-style sidebar layout */
+
+.status-tab {
+  display: flex;
+  height: 100%;
+  width: 100%;
+  background-color: var(--bg-tertiary);
+  overflow: hidden;
+  box-sizing: border-box;
+}
+
+/* Sidebar Navigation */
+.status-sidebar {
+  width: 220px;
+  min-width: 220px;
+  background-color: var(--bg-secondary);
+  border-right: 1px solid var(--border-primary);
+  padding: 1rem 0 0 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.status-nav {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  flex: 1;
+}
+
+.status-nav-item {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem 1.25rem;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.15s;
+  border-left: 3px solid transparent;
+}
+
+.status-nav-item:hover {
+  background-color: var(--bg-tertiary);
+  color: var(--button-text);
+}
+
+.status-nav-item.active {
+  background-color: rgba(100, 108, 255, 0.1);
+  color: var(--accent-secondary);
+  border-left-color: var(--accent-primary);
+}
+
+.status-nav-item .material-icons {
+  font-size: 20px;
+}
+
+.status-nav-item .badge {
+  margin-left: auto;
+  padding: 0.125rem 0.5rem;
+  font-size: 0.7rem;
+  border-radius: 10px;
+  background: var(--status-warning);
+  color: #000;
+}
+
+/* Sidebar Header */
+.sidebar-header {
+  padding: 0 1.25rem 1rem;
+  border-bottom: 1px solid var(--border-primary);
+  margin-bottom: 0.5rem;
+}
+
+.sidebar-header h2 {
+  margin: 0 0 0.5rem 0;
+  font-size: 1.25rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.sidebar-header .status-overview {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+/* Connection Status in Sidebar */
+.sidebar-connection {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 1.25rem;
+  margin-top: auto;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+
+.connection-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  transition: background-color 0.3s;
+}
+
+.connection-dot.connected {
+  background-color: var(--status-healthy);
+  box-shadow: 0 0 6px var(--status-healthy);
+}
+
+.connection-dot.disconnected {
+  background-color: var(--status-error);
+}
+
+/* Main Content Area */
+.status-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.status-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 1.5rem 2rem;
+}
+
+.status-page {
+  max-width: 1200px;
+}
+
+.status-page-header {
+  margin-bottom: 1.5rem;
+}
+
+.status-page-header h3 {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 1.25rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin: 0 0 0.5rem 0;
+}
+
+.status-page-header h3 .material-icons {
+  font-size: 24px;
+  color: var(--text-secondary);
+}
+
+.status-page-header p {
+  font-size: 0.9rem;
+  color: var(--text-secondary);
+  margin: 0;
+}
+
+/* Loading State */
+.status-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  height: 100%;
+  color: var(--text-secondary);
+  font-size: 1rem;
+}
+
+.status-loading .material-icons.spinning,
+.spinning {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+/* Error State */
+.status-error {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1rem;
+  height: 100%;
+  color: var(--text-secondary);
+}
+
+.status-error .material-icons {
+  font-size: 48px;
+  color: var(--status-error);
+}
+
+/* Stats Summary - Inline */
+.stats-summary-inline {
+  display: flex;
+  align-items: center;
+  gap: 1.5rem;
+  margin-bottom: 1.5rem;
+  padding: 0.75rem 1rem;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-primary);
+  border-radius: 8px;
+}
+
+.stat-inline {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+}
+
+.stat-inline strong {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.stat-inline.stat-healthy strong {
+  color: var(--status-healthy);
+}
+
+.stat-inline.stat-degraded strong {
+  color: var(--status-warning);
+}
+
+.stat-inline.stat-unhealthy strong {
+  color: var(--status-error);
+}
+
+.stat-inline.stat-unconfigured strong {
+  color: var(--status-unconfigured, #8b5cf6);
+}
+
+/* Status Dots */
+.status-dot {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.status-dot.healthy,
+.status-dot.operational {
+  background-color: var(--status-healthy);
+  box-shadow: 0 0 6px var(--status-healthy);
+}
+
+.status-dot.degraded {
+  background-color: var(--status-warning);
+  box-shadow: 0 0 6px var(--status-warning);
+}
+
+.status-dot.unhealthy,
+.status-dot.major_outage,
+.status-dot.partial_outage {
+  background-color: var(--status-error);
+  box-shadow: 0 0 6px var(--status-error);
+}
+
+.status-dot.unknown {
+  background-color: var(--status-unknown);
+}
+
+.status-dot.unconfigured {
+  background-color: var(--status-unconfigured, #8b5cf6);
+  box-shadow: 0 0 6px var(--status-unconfigured, #8b5cf6);
+}
+
+/* Services Table */
+.services-table-container {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-primary);
+  border-radius: 8px;
+  overflow-x: auto;
+  margin-bottom: 1.5rem;
+}
+
+.services-table {
+  display: table;
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.875rem;
+}
+
+.services-table colgroup {
+  display: table-column-group;
+}
+
+.services-table col {
+  display: table-column;
+}
+
+.services-table thead {
+  background: var(--bg-tertiary);
+  display: table-header-group;
+}
+
+.services-table thead tr {
+  display: table-row;
+}
+
+.services-table th {
+  display: table-cell;
+  padding: 0.75rem 0.75rem;
+  text-align: left;
+  font-weight: 600;
+  color: var(--text-secondary);
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  border-bottom: 1px solid var(--border-primary);
+}
+
+/* Header cell alignment via nth-child */
+.services-table th:nth-child(1),
+.services-table td:nth-child(1) { text-align: center; }  /* Status */
+.services-table th:nth-child(3),
+.services-table td:nth-child(3) { text-align: center; }  /* Type */
+.services-table th:nth-child(5),
+.services-table td:nth-child(5) { text-align: right; }   /* Response */
+.services-table th:nth-child(6),
+.services-table td:nth-child(6) { text-align: center; }  /* Last Check */
+.services-table th:nth-child(7),
+.services-table td:nth-child(7) { text-align: center; }  /* Actions */
+
+.services-table tbody {
+  display: table-row-group;
+}
+
+.services-table tbody tr {
+  display: table-row;
+}
+
+.services-table td {
+  display: table-cell;
+  padding: 0.75rem 0.75rem;
+  border-bottom: 1px solid var(--border-primary);
+  color: var(--text-primary);
+  vertical-align: middle;
+}
+
+.services-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.services-table .service-row {
+  cursor: pointer;
+  transition: background-color 0.15s;
+}
+
+.services-table .service-row:hover {
+  background-color: var(--bg-tertiary);
+}
+
+.services-table .service-row.selected {
+  background-color: rgba(100, 108, 255, 0.1);
+}
+
+/* Service Name Cell */
+.service-name-cell {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.service-name {
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.service-description {
+  display: block;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  margin-top: 0.125rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+
+/* Type Badge */
+.type-badge {
+  display: inline-block;
+  padding: 0.125rem 0.5rem;
+  font-size: 0.7rem;
+  font-weight: 500;
+  border-radius: 4px;
+  text-transform: uppercase;
+}
+
+.type-badge.internal {
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  border: 1px solid var(--border-primary);
+}
+
+.type-badge.external {
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  border: 1px solid var(--border-primary);
+}
+
+/* Status Message */
+.status-message {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+
+/* Action Button */
+.btn-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.btn-icon:hover {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+}
+
+.btn-icon .material-icons {
+  font-size: 18px;
+}
+
+/* Recent Incidents Section */
+.recent-incidents {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-primary);
+  border-radius: 8px;
+  padding: 1rem;
+}
+
+.recent-incidents h4 {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0 0 1rem 0;
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.recent-incidents h4 .material-icons {
+  font-size: 20px;
+  color: var(--status-warning);
+}
+
+.btn-text {
+  background: none;
+  border: none;
+  color: var(--button-primary-bg);
+  font-size: 0.875rem;
+  cursor: pointer;
+  padding: 0.5rem 0;
+  margin-top: 0.5rem;
+}
+
+.btn-text:hover {
+  text-decoration: underline;
+}
+
+/* Admin View */
+.admin-view {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+.admin-panels {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+  gap: 1.5rem;
+}
+
+/* Incidents View */
+.incidents-view {
+  height: 100%;
+}
+
+/* Footer */
+.status-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.75rem 2rem;
+  border-top: 1px solid var(--border-primary);
+  background: var(--bg-secondary);
+  flex-shrink: 0;
+}
+
+.last-updated {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.scheduler-status {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  font-size: 0.75rem;
+}
+
+.scheduler-status.running {
+  color: var(--status-healthy);
+}
+
+.scheduler-status.stopped {
+  color: var(--text-muted);
+}
+
+.scheduler-status .material-icons {
+  font-size: 14px;
+}
+
+/* Maintenance Banner */
+.maintenance-banner-container {
+  padding: 0 2rem;
+  padding-top: 1rem;
+}
+
+/* Status colors (fallback if not defined globally) */
+:root {
+  --status-healthy: #22c55e;
+  --status-warning: #f59e0b;
+  --status-error: #ef4444;
+  --status-unknown: #6b7280;
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+  .status-sidebar {
+    width: 60px;
+    min-width: 60px;
+  }
+
+  .status-nav-item span:not(.material-icons):not(.badge) {
+    display: none;
+  }
+
+  .status-nav-item {
+    justify-content: center;
+    padding: 0.75rem;
+  }
+
+  .sidebar-header {
+    padding: 0.5rem;
+    text-align: center;
+  }
+
+  .sidebar-header h2 {
+    font-size: 0.75rem;
+  }
+
+  .status-content {
+    padding: 1rem;
+  }
+
+  .admin-panels {
+    grid-template-columns: 1fr;
+  }
+}
