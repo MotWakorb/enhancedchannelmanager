@@ -69,10 +69,13 @@ class TestAutoCreationEngineLoadData:
     def setup_method(self):
         """Set up test fixtures."""
         self.client = MagicMock()
-        self.client.get_channels = AsyncMock(return_value=[
-            {"id": 1, "name": "ESPN"},
-            {"id": 2, "name": "CNN"},
-        ])
+        self.client.get_channels = AsyncMock(return_value={
+            "count": 2,
+            "results": [
+                {"id": 1, "name": "ESPN"},
+                {"id": 2, "name": "CNN"},
+            ]
+        })
         self.client.get_channel_groups = AsyncMock(return_value=[
             {"id": 1, "name": "Sports"},
             {"id": 2, "name": "News"},
@@ -87,7 +90,7 @@ class TestAutoCreationEngineLoadData:
 
         assert len(self.engine._existing_channels) == 2
         assert len(self.engine._existing_groups) == 2
-        self.client.get_channels.assert_called_once()
+        self.client.get_channels.assert_called_once_with(page=1, page_size=100)
         self.client.get_channel_groups.assert_called_once()
 
     def test_load_existing_data_api_failure(self):
@@ -104,7 +107,7 @@ class TestAutoCreationEngineLoadData:
 
     def test_load_existing_data_empty_response(self):
         """Load existing data handles empty responses."""
-        self.client.get_channels = AsyncMock(return_value=None)
+        self.client.get_channels = AsyncMock(return_value={"count": 0, "results": []})
         self.client.get_channel_groups = AsyncMock(return_value=None)
 
         asyncio.get_event_loop().run_until_complete(
@@ -182,11 +185,16 @@ class TestAutoCreationEngineFetchStreams:
             {"id": 1, "name": "Provider A"},
             {"id": 2, "name": "Provider B"},
         ])
-        self.client.get_streams_by_m3u = AsyncMock(return_value=[
-            {"id": 101, "name": "ESPN HD", "group_title": "Sports"},
-            {"id": 102, "name": "CNN HD", "group_title": "News"},
-        ])
+        self.client.get_streams = AsyncMock(return_value={
+            "count": 2,
+            "results": [
+                {"id": 101, "name": "ESPN HD", "group_title": "Sports"},
+                {"id": 102, "name": "CNN HD", "group_title": "News"},
+            ]
+        })
         self.engine = AutoCreationEngine(self.client)
+        # Pre-populate existing groups so _fetch_streams doesn't need them unset
+        self.engine._existing_groups = []
 
     @patch("auto_creation_engine.get_session")
     def test_fetch_streams_all_accounts(self, mock_get_session):
@@ -224,7 +232,7 @@ class TestAutoCreationEngineFetchStreams:
         mock_get_session.return_value = mock_session
         mock_session.query.return_value.filter.return_value.all.return_value = []
 
-        self.client.get_streams_by_m3u = AsyncMock(side_effect=Exception("API error"))
+        self.client.get_streams = AsyncMock(side_effect=Exception("API error"))
 
         streams = asyncio.get_event_loop().run_until_complete(
             self.engine._fetch_streams()
@@ -256,14 +264,17 @@ class TestAutoCreationEngineRunPipeline:
     def setup_method(self):
         """Set up test fixtures."""
         self.client = MagicMock()
-        self.client.get_channels = AsyncMock(return_value=[])
+        self.client.get_channels = AsyncMock(return_value={"count": 0, "results": []})
         self.client.get_channel_groups = AsyncMock(return_value=[])
         self.client.get_m3u_accounts = AsyncMock(return_value=[
             {"id": 1, "name": "Provider A"},
         ])
-        self.client.get_streams_by_m3u = AsyncMock(return_value=[
-            {"id": 101, "name": "ESPN HD", "group_title": "Sports"},
-        ])
+        self.client.get_streams = AsyncMock(return_value={
+            "count": 1,
+            "results": [
+                {"id": 101, "name": "ESPN HD", "group_title": "Sports"},
+            ]
+        })
         self.client.create_channel = AsyncMock(return_value={"id": 1, "name": "ESPN HD"})
         self.engine = AutoCreationEngine(self.client)
 
@@ -478,8 +489,12 @@ class TestAutoCreationEngineProcessStreams:
         self.engine._existing_channels = []
         self.engine._existing_groups = []
 
-    def test_process_streams_no_match(self):
+    @patch("auto_creation_engine.get_session")
+    def test_process_streams_no_match(self, mock_get_session):
         """Process streams with no matching rules."""
+        mock_session = MagicMock()
+        mock_get_session.return_value = mock_session
+
         streams = [
             StreamContext(stream_id=1, stream_name="ESPN", m3u_account_id=1, m3u_account_name="Provider")
         ]
@@ -502,8 +517,12 @@ class TestAutoCreationEngineProcessStreams:
         assert result["streams_evaluated"] == 1
         assert result["streams_matched"] == 0
 
-    def test_process_streams_match_skip(self):
+    @patch("auto_creation_engine.get_session")
+    def test_process_streams_match_skip(self, mock_get_session):
         """Process streams that match a skip rule."""
+        mock_session = MagicMock()
+        mock_get_session.return_value = mock_session
+
         streams = [
             StreamContext(stream_id=1, stream_name="ESPN", m3u_account_id=1, m3u_account_name="Provider")
         ]
@@ -571,8 +590,12 @@ class TestAutoCreationEngineProcessStreams:
         assert result["conflicts"][0]["winning_rule_id"] == 1
         assert result["conflicts"][0]["losing_rule_ids"] == [2]
 
-    def test_process_streams_stop_processing(self):
+    @patch("auto_creation_engine.get_session")
+    def test_process_streams_stop_processing(self, mock_get_session):
         """Process streams stops on stop_processing action."""
+        mock_session = MagicMock()
+        mock_get_session.return_value = mock_session
+
         streams = [
             StreamContext(stream_id=1, stream_name="ESPN", m3u_account_id=1, m3u_account_name="Provider"),
             StreamContext(stream_id=2, stream_name="CNN", m3u_account_id=1, m3u_account_name="Provider"),
@@ -595,8 +618,10 @@ class TestAutoCreationEngineProcessStreams:
             self.engine._process_streams(streams, [mock_rule], mock_execution, dry_run=True)
         )
 
-        # Only first stream should be processed
-        assert result["streams_evaluated"] == 1
+        # Both streams are evaluated in Pass 1, but stop_processing
+        # halts Pass 2 after the first match is actioned
+        assert result["streams_evaluated"] == 2
+        assert result["streams_matched"] == 1
 
 
 class TestAutoCreationEngineExecutionTracking:
@@ -783,30 +808,36 @@ class TestAutoCreationEngineIntegration:
     def setup_method(self):
         """Set up test fixtures."""
         self.client = MagicMock()
-        self.client.get_channels = AsyncMock(return_value=[
-            {"id": 1, "name": "ESPN", "channel_number": 100, "streams": [101]},
-        ])
+        self.client.get_channels = AsyncMock(return_value={
+            "count": 1,
+            "results": [
+                {"id": 1, "name": "ESPN", "channel_number": 100, "streams": [101]},
+            ]
+        })
         self.client.get_channel_groups = AsyncMock(return_value=[
             {"id": 1, "name": "Sports"},
         ])
         self.client.get_m3u_accounts = AsyncMock(return_value=[
             {"id": 1, "name": "Provider A"},
         ])
-        self.client.get_streams_by_m3u = AsyncMock(return_value=[
-            {
-                "id": 201,
-                "name": "ESPN2 HD",
-                "group_title": "Sports",
-                "tvg_id": "ESPN2.US",
-                "logo": "http://example.com/espn2.png",
-            },
-            {
-                "id": 202,
-                "name": "CNN HD",
-                "group_title": "News",
-                "tvg_id": "CNN.US",
-            },
-        ])
+        self.client.get_streams = AsyncMock(return_value={
+            "count": 2,
+            "results": [
+                {
+                    "id": 201,
+                    "name": "ESPN2 HD",
+                    "group_title": "Sports",
+                    "tvg_id": "ESPN2.US",
+                    "logo": "http://example.com/espn2.png",
+                },
+                {
+                    "id": 202,
+                    "name": "CNN HD",
+                    "group_title": "News",
+                    "tvg_id": "CNN.US",
+                },
+            ]
+        })
         self.client.create_channel = AsyncMock(return_value={"id": 2, "name": "ESPN2 HD"})
         self.engine = AutoCreationEngine(self.client)
 

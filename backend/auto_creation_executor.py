@@ -361,6 +361,12 @@ class ActionExecutor:
         # Create new channel
         if exec_ctx.dry_run:
             channel_number = self._get_next_channel_number(params.get("channel_number", "auto"))
+            # Track simulated channel so subsequent streams in this run
+            # see it as existing (matches execute-mode behavior)
+            simulated = {"id": -1, "name": channel_name, "channel_number": channel_number,
+                         "channel_group_id": group_id}
+            self._created_channels[channel_name.lower()] = simulated
+            self._used_channel_numbers.add(channel_number)
             return ActionResult(
                 success=True,
                 action_type=action.type,
@@ -582,6 +588,9 @@ class ActionExecutor:
 
         # Create new group
         if exec_ctx.dry_run:
+            # Track simulated group so subsequent streams see it as existing
+            simulated = {"id": -1, "name": group_name}
+            self._created_groups[group_name.lower()] = simulated
             return ActionResult(
                 success=True,
                 action_type=action.type,

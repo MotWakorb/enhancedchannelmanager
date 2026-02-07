@@ -1154,7 +1154,7 @@ class TestNameTransform:
 
         assert result.success is True
         call_args = self.client.create_channel_group.call_args[0][0]
-        assert call_args["name"] == "US: Sports"
+        assert call_args == "US: Sports"
 
     def test_no_name_transform(self):
         """Without name transform, name is unchanged."""

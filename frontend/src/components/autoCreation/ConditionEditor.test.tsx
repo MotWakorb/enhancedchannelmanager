@@ -130,87 +130,8 @@ describe('ConditionEditor', () => {
     });
   });
 
-  describe('logical operators', () => {
-    it('renders nested conditions for AND condition', () => {
-      render(
-        <ConditionEditor
-          condition={{
-            type: 'and',
-            conditions: [
-              { type: 'stream_name_contains', value: 'ESPN' },
-              { type: 'quality_min', value: 720 },
-            ],
-          }}
-          onChange={vi.fn()}
-          onRemove={vi.fn()}
-        />
-      );
-
-      // The main type selector shows "AND (All must match)"
-      const comboboxes = screen.getAllByRole('combobox');
-      expect(comboboxes[0]).toHaveTextContent(/AND/i);
-      // Nested conditions render with their values
-      expect(screen.getByDisplayValue('ESPN')).toBeInTheDocument();
-      expect(screen.getByDisplayValue('720')).toBeInTheDocument();
-    });
-
-    it('renders nested conditions for OR condition', () => {
-      render(
-        <ConditionEditor
-          condition={{
-            type: 'or',
-            conditions: [
-              { type: 'stream_name_contains', value: 'ESPN' },
-              { type: 'stream_name_contains', value: 'FOX' },
-            ],
-          }}
-          onChange={vi.fn()}
-          onRemove={vi.fn()}
-        />
-      );
-
-      // The main type selector shows "OR (Any must match)"
-      const comboboxes = screen.getAllByRole('combobox');
-      expect(comboboxes[0]).toHaveTextContent(/OR/i);
-    });
-
-    it('renders NOT wrapper for negated condition', () => {
-      render(
-        <ConditionEditor
-          condition={{
-            type: 'not',
-            conditions: [{ type: 'stream_name_contains', value: 'ESPN' }],
-          }}
-          onChange={vi.fn()}
-          onRemove={vi.fn()}
-        />
-      );
-
-      expect(screen.getByText(/not/i)).toBeInTheDocument();
-    });
-
-    it('allows adding nested conditions to logical operators', async () => {
-      const user = userEvent.setup();
-      const onChange = vi.fn();
-
-      render(
-        <ConditionEditor
-          condition={{
-            type: 'and',
-            conditions: [{ type: 'stream_name_contains', value: 'ESPN' }],
-          }}
-          onChange={onChange}
-          onRemove={vi.fn()}
-        />
-      );
-
-      const addButton = screen.getByRole('button', { name: /add nested/i });
-      await user.click(addButton);
-
-      // Should call onChange with updated conditions array
-      expect(onChange).toHaveBeenCalled();
-    });
-  });
+  // Note: Logical operators (AND/OR/NOT) are not supported by ConditionEditor.
+  // Logical grouping is handled at the rule level, not in individual condition editors.
 
   describe('onChange handling', () => {
     it('calls onChange when type is changed', async () => {
@@ -376,18 +297,8 @@ describe('ConditionEditor', () => {
       expect(errorAlert.textContent?.toLowerCase()).toContain('positive');
     });
 
-    it('shows error for empty nested conditions in logical operators', () => {
-      render(
-        <ConditionEditor
-          condition={{ type: 'and', conditions: [] }}
-          onChange={vi.fn()}
-          onRemove={vi.fn()}
-          showValidation={true}
-        />
-      );
-
-      expect(screen.getByText(/at least one nested condition/i)).toBeInTheDocument();
-    });
+    // Note: Logical operator validation (empty nested conditions) is not applicable
+    // since ConditionEditor only handles simple conditions, not logical operators.
   });
 
   describe('condition options', () => {
@@ -486,10 +397,10 @@ describe('ConditionEditor', () => {
 
       await user.click(screen.getByRole('combobox'));
 
-      // Should show category headers
+      // Should show category headers (Stream Conditions, Channel Conditions, Special)
       expect(screen.getByText(/stream conditions/i)).toBeInTheDocument();
       expect(screen.getByText(/channel conditions/i)).toBeInTheDocument();
-      expect(screen.getByText(/logical operators/i)).toBeInTheDocument();
+      expect(screen.getByText(/^special$/i)).toBeInTheDocument();
     });
   });
 
@@ -536,31 +447,34 @@ describe('ConditionEditor', () => {
     });
   });
 
-  describe('drag and drop', () => {
-    it('shows drag handle when draggable', () => {
+  describe('reorder controls', () => {
+    it('shows reorder controls when orderNumber and totalItems are provided', () => {
       render(
         <ConditionEditor
           condition={{ type: 'stream_name_contains', value: 'ESPN' }}
           onChange={vi.fn()}
           onRemove={vi.fn()}
-          draggable={true}
+          orderNumber={1}
+          totalItems={3}
         />
       );
 
-      expect(screen.getByTestId('drag-handle')).toBeInTheDocument();
+      expect(screen.getByTestId('reorder-controls')).toBeInTheDocument();
+      expect(screen.getByTestId('order-number')).toBeInTheDocument();
     });
 
-    it('hides drag handle when not draggable', () => {
+    it('hides reorder controls when totalItems is 1 or less', () => {
       render(
         <ConditionEditor
           condition={{ type: 'stream_name_contains', value: 'ESPN' }}
           onChange={vi.fn()}
           onRemove={vi.fn()}
-          draggable={false}
+          orderNumber={1}
+          totalItems={1}
         />
       );
 
-      expect(screen.queryByTestId('drag-handle')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('reorder-controls')).not.toBeInTheDocument();
     });
   });
 
