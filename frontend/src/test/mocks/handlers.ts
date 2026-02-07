@@ -129,6 +129,53 @@ export function createMockNotification(overrides: Partial<MockNotification> = {}
   }
 }
 
+export function createMockAutoCreationRule(overrides: Partial<MockAutoCreationRule> = {}): MockAutoCreationRule {
+  const id = overrides.id ?? nextId()
+  return {
+    id,
+    name: overrides.name ?? `Test Rule ${id}`,
+    description: overrides.description ?? 'A test auto-creation rule',
+    enabled: overrides.enabled ?? true,
+    priority: overrides.priority ?? id,
+    conditions: overrides.conditions ?? [{ type: 'stream_name_contains', value: 'test' }],
+    actions: overrides.actions ?? [{ type: 'create_channel', name_template: '{stream_name}' }],
+    m3u_account_id: overrides.m3u_account_id ?? null,
+    target_group_id: overrides.target_group_id ?? null,
+    run_on_refresh: overrides.run_on_refresh ?? false,
+    stop_on_first_match: overrides.stop_on_first_match ?? false,
+    last_run_at: overrides.last_run_at ?? null,
+    match_count: overrides.match_count ?? 0,
+    created_at: overrides.created_at ?? new Date().toISOString(),
+    updated_at: overrides.updated_at ?? new Date().toISOString(),
+  }
+}
+
+export function createMockAutoCreationExecution(overrides: Partial<MockAutoCreationExecution> = {}): MockAutoCreationExecution {
+  const id = overrides.id ?? nextId()
+  return {
+    id,
+    mode: overrides.mode ?? 'execute',
+    triggered_by: overrides.triggered_by ?? 'manual',
+    started_at: overrides.started_at ?? new Date().toISOString(),
+    completed_at: overrides.completed_at ?? new Date().toISOString(),
+    duration_seconds: overrides.duration_seconds ?? 1.5,
+    status: overrides.status ?? 'completed',
+    streams_evaluated: overrides.streams_evaluated ?? 100,
+    streams_matched: overrides.streams_matched ?? 10,
+    channels_created: overrides.channels_created ?? 5,
+    channels_updated: overrides.channels_updated ?? 3,
+    groups_created: overrides.groups_created ?? 1,
+    streams_merged: overrides.streams_merged ?? 2,
+    streams_skipped: overrides.streams_skipped ?? 0,
+    created_entities: overrides.created_entities ?? [],
+    modified_entities: overrides.modified_entities ?? [],
+    dry_run_results: overrides.dry_run_results ?? undefined,
+    rolled_back_at: overrides.rolled_back_at ?? undefined,
+    rolled_back_by: overrides.rolled_back_by ?? undefined,
+    error: overrides.error ?? undefined,
+  }
+}
+
 // =============================================================================
 // Type Definitions
 // =============================================================================
@@ -260,6 +307,47 @@ interface MockChannelUniqueViewers {
   total_watch_seconds: number
 }
 
+interface MockAutoCreationRule {
+  id: number
+  name: string
+  description: string | null
+  enabled: boolean
+  priority: number
+  conditions: object[]
+  actions: object[]
+  m3u_account_id: number | null
+  target_group_id: number | null
+  run_on_refresh: boolean
+  stop_on_first_match: boolean
+  last_run_at: string | null
+  match_count: number
+  created_at: string
+  updated_at: string
+}
+
+interface MockAutoCreationExecution {
+  id: number
+  mode: 'execute' | 'dry_run'
+  triggered_by: 'manual' | 'scheduled' | 'm3u_refresh'
+  started_at: string
+  completed_at: string | null
+  duration_seconds: number | null
+  status: 'running' | 'completed' | 'failed' | 'rolled_back'
+  streams_evaluated: number
+  streams_matched: number
+  channels_created: number
+  channels_updated: number
+  groups_created: number
+  streams_merged: number
+  streams_skipped: number
+  created_entities: object[]
+  modified_entities: object[]
+  dry_run_results?: object[]
+  rolled_back_at?: string
+  rolled_back_by?: string
+  error?: string
+}
+
 export function createMockPopularityScore(overrides: Partial<MockPopularityScore> = {}): MockPopularityScore {
   const id = overrides.id ?? nextId()
   return {
@@ -293,6 +381,8 @@ interface MockDataStore {
   alertMethods: MockAlertMethod[]
   notifications: MockNotification[]
   popularityScores: MockPopularityScore[]
+  autoCreationRules: MockAutoCreationRule[]
+  autoCreationExecutions: MockAutoCreationExecution[]
   settings: object
 }
 
@@ -304,6 +394,8 @@ export const mockDataStore: MockDataStore = {
   alertMethods: [],
   notifications: [],
   popularityScores: [],
+  autoCreationRules: [],
+  autoCreationExecutions: [],
   settings: {
     configured: true,
     url: 'http://dispatcharr.test',
@@ -343,6 +435,8 @@ export function resetMockDataStore(): void {
   mockDataStore.alertMethods = []
   mockDataStore.notifications = []
   mockDataStore.popularityScores = []
+  mockDataStore.autoCreationRules = []
+  mockDataStore.autoCreationExecutions = []
   resetIdCounter()
 }
 
@@ -704,6 +798,273 @@ export const handlers = [
         channel_name: s.channel_name,
         score: s.score,
       })),
+    })
+  }),
+
+  // -------------------------------------------------------------------------
+  // Auto-Creation Rules
+  // -------------------------------------------------------------------------
+
+  http.get(`${API_BASE}/auto-creation/rules`, () => {
+    return HttpResponse.json({ rules: mockDataStore.autoCreationRules })
+  }),
+
+  http.post(`${API_BASE}/auto-creation/rules`, async ({ request }) => {
+    const data = await request.json() as object
+    const newRule = createMockAutoCreationRule(data as Partial<MockAutoCreationRule>)
+    mockDataStore.autoCreationRules.push(newRule)
+    return HttpResponse.json(newRule, { status: 201 })
+  }),
+
+  http.get(`${API_BASE}/auto-creation/rules/:id`, ({ params }) => {
+    const id = parseInt(params.id as string)
+    const rule = mockDataStore.autoCreationRules.find(r => r.id === id)
+    if (!rule) {
+      return HttpResponse.json(
+        { detail: 'Rule not found' },
+        { status: 404 }
+      )
+    }
+    return HttpResponse.json(rule)
+  }),
+
+  http.put(`${API_BASE}/auto-creation/rules/:id`, async ({ params, request }) => {
+    const id = parseInt(params.id as string)
+    const updates = await request.json() as object
+    const index = mockDataStore.autoCreationRules.findIndex(r => r.id === id)
+    if (index === -1) {
+      return HttpResponse.json(
+        { detail: 'Rule not found' },
+        { status: 404 }
+      )
+    }
+    mockDataStore.autoCreationRules[index] = {
+      ...mockDataStore.autoCreationRules[index],
+      ...updates,
+      updated_at: new Date().toISOString(),
+    }
+    return HttpResponse.json(mockDataStore.autoCreationRules[index])
+  }),
+
+  http.delete(`${API_BASE}/auto-creation/rules/:id`, ({ params }) => {
+    const id = parseInt(params.id as string)
+    const index = mockDataStore.autoCreationRules.findIndex(r => r.id === id)
+    if (index === -1) {
+      return HttpResponse.json(
+        { detail: 'Rule not found' },
+        { status: 404 }
+      )
+    }
+    mockDataStore.autoCreationRules.splice(index, 1)
+    return HttpResponse.json({ status: 'deleted' })
+  }),
+
+  http.post(`${API_BASE}/auto-creation/rules/:id/toggle`, ({ params }) => {
+    const id = parseInt(params.id as string)
+    const rule = mockDataStore.autoCreationRules.find(r => r.id === id)
+    if (!rule) {
+      return HttpResponse.json({ detail: 'Rule not found' }, { status: 404 })
+    }
+    rule.enabled = !rule.enabled
+    rule.updated_at = new Date().toISOString()
+    return HttpResponse.json(rule)
+  }),
+
+  http.post(`${API_BASE}/auto-creation/rules/:id/duplicate`, ({ params }) => {
+    const id = parseInt(params.id as string)
+    const rule = mockDataStore.autoCreationRules.find(r => r.id === id)
+    if (!rule) {
+      return HttpResponse.json({ detail: 'Rule not found' }, { status: 404 })
+    }
+    const newRule = createMockAutoCreationRule({
+      ...rule,
+      id: undefined,
+      name: `${rule.name} (Copy)`,
+    })
+    mockDataStore.autoCreationRules.push(newRule)
+    return HttpResponse.json(newRule, { status: 201 })
+  }),
+
+  // -------------------------------------------------------------------------
+  // Auto-Creation Validation & Schema
+  // -------------------------------------------------------------------------
+
+  http.post(`${API_BASE}/auto-creation/validate`, async ({ request }) => {
+    const data = await request.json() as { conditions: object[]; actions: object[] }
+    const errors: string[] = []
+    if (!data.conditions || data.conditions.length === 0) {
+      errors.push('At least one condition is required')
+    }
+    if (!data.actions || data.actions.length === 0) {
+      errors.push('At least one action is required')
+    }
+    return HttpResponse.json({
+      valid: errors.length === 0,
+      errors,
+    })
+  }),
+
+  http.get(`${API_BASE}/auto-creation/schema/conditions`, () => {
+    return HttpResponse.json({
+      conditions: [
+        { type: 'stream_name_contains', label: 'Stream Name Contains', description: 'Match streams whose name contains a substring', category: 'stream', value_type: 'string', supports_negate: true, supports_case_sensitive: true },
+        { type: 'stream_name_matches', label: 'Stream Name Matches', description: 'Match streams whose name matches a regex pattern', category: 'stream', value_type: 'regex', supports_negate: true },
+        { type: 'stream_group_matches', label: 'Stream Group Matches', description: 'Match streams in a specific group', category: 'stream', value_type: 'string' },
+        { type: 'always', label: 'Always', description: 'Always matches', category: 'special', value_type: 'none' },
+        { type: 'never', label: 'Never', description: 'Never matches', category: 'special', value_type: 'none' },
+        { type: 'and', label: 'All Of (AND)', description: 'All sub-conditions must match', category: 'logical', value_type: 'none' },
+        { type: 'or', label: 'Any Of (OR)', description: 'Any sub-condition must match', category: 'logical', value_type: 'none' },
+        { type: 'not', label: 'Not', description: 'Negate a condition', category: 'logical', value_type: 'none' },
+      ],
+    })
+  }),
+
+  http.get(`${API_BASE}/auto-creation/schema/actions`, () => {
+    return HttpResponse.json({
+      actions: [
+        { type: 'create_channel', label: 'Create Channel', description: 'Create a new channel from the stream', category: 'creation', params: [{ name: 'name_template', label: 'Name Template', type: 'template', required: true, placeholder: '{stream_name}' }] },
+        { type: 'create_group', label: 'Create Group', description: 'Create a new channel group', category: 'creation', params: [{ name: 'name_template', label: 'Group Name', type: 'template', required: true }] },
+        { type: 'merge_streams', label: 'Merge Streams', description: 'Merge stream into an existing channel', category: 'creation', params: [{ name: 'target', label: 'Target', type: 'select', options: [{ value: 'auto', label: 'Auto-detect' }] }] },
+        { type: 'skip', label: 'Skip', description: 'Skip this stream', category: 'control', params: [] },
+        { type: 'stop_processing', label: 'Stop Processing', description: 'Stop processing further rules', category: 'control', params: [] },
+      ],
+    })
+  }),
+
+  http.get(`${API_BASE}/auto-creation/schema/template-variables`, () => {
+    return HttpResponse.json({
+      variables: [
+        { name: '{stream_name}', description: 'The original stream name', example: 'ESPN HD' },
+        { name: '{stream_group}', description: 'The stream group name', example: 'Sports' },
+        { name: '{quality}', description: 'Detected quality label', example: 'HD' },
+        { name: '{quality_raw}', description: 'Raw quality string', example: '1080p' },
+        { name: '{provider}', description: 'M3U provider name', example: 'Provider A' },
+        { name: '{tvg_id}', description: 'TVG ID from the stream', example: 'ESPN.us' },
+        { name: '{normalized_name}', description: 'Cleaned/normalized stream name', example: 'ESPN' },
+      ],
+    })
+  }),
+
+  // -------------------------------------------------------------------------
+  // Auto-Creation Executions
+  // -------------------------------------------------------------------------
+
+  http.get(`${API_BASE}/auto-creation/executions`, ({ request }) => {
+    const url = new URL(request.url)
+    const limit = parseInt(url.searchParams.get('limit') ?? '20')
+    const offset = parseInt(url.searchParams.get('offset') ?? '0')
+    const statusFilter = url.searchParams.get('status')
+    let filtered = mockDataStore.autoCreationExecutions
+    if (statusFilter) {
+      filtered = filtered.filter(e => e.status === statusFilter)
+    }
+    const paginatedResults = filtered.slice(offset, offset + limit)
+    return HttpResponse.json({
+      executions: paginatedResults,
+      total: filtered.length,
+    })
+  }),
+
+  http.get(`${API_BASE}/auto-creation/executions/:id`, ({ params }) => {
+    const id = parseInt(params.id as string)
+    const execution = mockDataStore.autoCreationExecutions.find(e => e.id === id)
+    if (!execution) {
+      return HttpResponse.json(
+        { detail: 'Execution not found' },
+        { status: 404 }
+      )
+    }
+    return HttpResponse.json(execution)
+  }),
+
+  http.post(`${API_BASE}/auto-creation/run`, async ({ request }) => {
+    const data = await request.json() as { dry_run?: boolean; rule_ids?: number[] }
+    const dryRun = data.dry_run ?? false
+    const execution = createMockAutoCreationExecution({
+      mode: dryRun ? 'dry_run' : 'execute',
+      triggered_by: 'manual',
+      status: 'completed',
+      channels_created: dryRun ? 0 : 3,
+      streams_matched: 5,
+      streams_evaluated: 100,
+    })
+    if (!dryRun) {
+      mockDataStore.autoCreationExecutions.unshift(execution)
+    }
+    return HttpResponse.json({
+      success: true,
+      execution_id: execution.id,
+      mode: execution.mode,
+      duration_seconds: execution.duration_seconds,
+      streams_evaluated: execution.streams_evaluated,
+      streams_matched: execution.streams_matched,
+      channels_created: execution.channels_created,
+      channels_updated: execution.channels_updated,
+      groups_created: execution.groups_created,
+      streams_merged: execution.streams_merged,
+      streams_skipped: execution.streams_skipped,
+      created_entities: execution.created_entities,
+      modified_entities: execution.modified_entities,
+      dry_run_results: dryRun ? [] : undefined,
+    })
+  }),
+
+  http.post(`${API_BASE}/auto-creation/executions/:id/rollback`, ({ params }) => {
+    const id = parseInt(params.id as string)
+    const execution = mockDataStore.autoCreationExecutions.find(e => e.id === id)
+    if (!execution) {
+      return HttpResponse.json(
+        { detail: 'Execution not found' },
+        { status: 404 }
+      )
+    }
+    // Cannot rollback dry_run executions
+    if (execution.mode === 'dry_run') {
+      return HttpResponse.json(
+        { detail: 'Cannot rollback a dry-run execution' },
+        { status: 400 }
+      )
+    }
+    // Cannot rollback already rolled-back executions
+    if (execution.status === 'rolled_back') {
+      return HttpResponse.json(
+        { detail: 'Execution has already been rolled back' },
+        { status: 400 }
+      )
+    }
+    // Cannot rollback running executions
+    if (execution.status === 'running') {
+      return HttpResponse.json(
+        { detail: 'Cannot rollback a running execution' },
+        { status: 400 }
+      )
+    }
+    execution.status = 'rolled_back'
+    execution.rolled_back_at = new Date().toISOString()
+    return HttpResponse.json({
+      success: true,
+      entities_removed: execution.channels_created,
+      entities_restored: 0,
+    })
+  }),
+
+  http.get(`${API_BASE}/auto-creation/export/yaml`, () => {
+    // exportAutoCreationRulesYAML uses fetchText, so return plain text
+    return new HttpResponse('rules:\n  - name: Test Rule\n    enabled: true\n', {
+      headers: { 'Content-Type': 'text/plain' },
+    })
+  }),
+
+  http.post(`${API_BASE}/auto-creation/import/yaml`, async ({ request }) => {
+    const data = await request.json() as { yaml_content: string }
+    // Simulate importing 1 rule
+    const newRule = createMockAutoCreationRule({ name: 'Imported Rule' })
+    mockDataStore.autoCreationRules.push(newRule)
+    return HttpResponse.json({
+      success: true,
+      imported: ['Imported Rule'],
+      skipped: [],
+      errors: [],
     })
   }),
 ]

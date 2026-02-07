@@ -53,7 +53,7 @@ def init_db() -> None:
         _SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=_engine)
 
         # Import models to register them with Base
-        from models import JournalEntry, BandwidthDaily, ChannelWatchStats, HiddenChannelGroup, StreamStats, ScheduledTask, TaskSchedule, TaskExecution, Notification, AlertMethod, TagGroup, Tag, NormalizationRuleGroup, NormalizationRule, User, UserSession, PasswordResetToken, UserIdentity  # noqa: F401
+        from models import JournalEntry, BandwidthDaily, ChannelWatchStats, HiddenChannelGroup, StreamStats, ScheduledTask, TaskSchedule, TaskExecution, Notification, AlertMethod, TagGroup, Tag, NormalizationRuleGroup, NormalizationRule, User, UserSession, PasswordResetToken, UserIdentity, AutoCreationRule, AutoCreationExecution, AutoCreationConflict  # noqa: F401
 
         # Create all tables
         Base.metadata.create_all(bind=_engine)
@@ -164,6 +164,22 @@ def _run_migrations(engine) -> None:
 
             # Migrate existing users to user_identities table (v0.12.0 - Account Linking)
             _migrate_user_identities(conn)
+
+            # Add execution_log column to auto_creation_executions (v0.12.0)
+            _add_auto_creation_execution_log_column(conn)
+
+            # Add match_count column to auto_creation_rules (v0.12.0)
+            _add_auto_creation_rules_match_count_column(conn)
+
+            # Add sort_field and sort_order columns to auto_creation_rules (v0.12.0)
+            _add_auto_creation_rules_sort_columns(conn)
+
+            # Add normalize_names column to auto_creation_rules (v0.12.0)
+            _add_auto_creation_rules_normalize_names_column(conn)
+
+            # Add managed_channel_ids and orphan_action columns to auto_creation_rules (v0.12.0 - Reconciliation)
+            _add_auto_creation_rules_managed_channel_ids_column(conn)
+            _add_auto_creation_rules_orphan_action_column(conn)
 
             logger.debug("All migrations complete - schema is up to date")
     except Exception as e:
@@ -1213,6 +1229,117 @@ def _migrate_user_identities(conn) -> None:
 
     conn.commit()
     logger.info(f"Migrated {migrated_count} users to user_identities table")
+
+
+def _add_auto_creation_execution_log_column(conn) -> None:
+    """Add execution_log column to auto_creation_executions table (v0.12.0)."""
+    from sqlalchemy import text
+
+    # Check if auto_creation_executions table exists
+    result = conn.execute(text(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='auto_creation_executions'"
+    ))
+    if not result.fetchone():
+        logger.debug("auto_creation_executions table doesn't exist yet, skipping")
+        return
+
+    columns = [r[1] for r in conn.execute(text("PRAGMA table_info(auto_creation_executions)")).fetchall()]
+    if "execution_log" not in columns:
+        logger.info("Adding execution_log column to auto_creation_executions")
+        conn.execute(text("ALTER TABLE auto_creation_executions ADD COLUMN execution_log TEXT"))
+        conn.commit()
+        logger.info("Migration complete: added execution_log column")
+
+
+def _add_auto_creation_rules_match_count_column(conn) -> None:
+    """Add match_count column to auto_creation_rules table."""
+    from sqlalchemy import text
+
+    result = conn.execute(text(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='auto_creation_rules'"
+    ))
+    if not result.fetchone():
+        return
+
+    columns = [r[1] for r in conn.execute(text("PRAGMA table_info(auto_creation_rules)")).fetchall()]
+    if "match_count" not in columns:
+        logger.info("Adding match_count column to auto_creation_rules")
+        conn.execute(text("ALTER TABLE auto_creation_rules ADD COLUMN match_count INTEGER DEFAULT 0"))
+        conn.commit()
+        logger.info("Migration complete: added match_count column")
+
+
+def _add_auto_creation_rules_sort_columns(conn) -> None:
+    """Add sort_field and sort_order columns to auto_creation_rules table."""
+    from sqlalchemy import text
+
+    result = conn.execute(text(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='auto_creation_rules'"
+    ))
+    if not result.fetchone():
+        return
+
+    columns = [r[1] for r in conn.execute(text("PRAGMA table_info(auto_creation_rules)")).fetchall()]
+    if "sort_field" not in columns:
+        logger.info("Adding sort_field and sort_order columns to auto_creation_rules")
+        conn.execute(text("ALTER TABLE auto_creation_rules ADD COLUMN sort_field TEXT"))
+        conn.execute(text("ALTER TABLE auto_creation_rules ADD COLUMN sort_order TEXT DEFAULT 'asc'"))
+        conn.commit()
+        logger.info("Migration complete: added sort_field and sort_order columns")
+
+
+def _add_auto_creation_rules_normalize_names_column(conn) -> None:
+    """Add normalize_names column to auto_creation_rules table."""
+    from sqlalchemy import text
+
+    result = conn.execute(text(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='auto_creation_rules'"
+    ))
+    if not result.fetchone():
+        return
+
+    columns = [r[1] for r in conn.execute(text("PRAGMA table_info(auto_creation_rules)")).fetchall()]
+    if "normalize_names" not in columns:
+        logger.info("Adding normalize_names column to auto_creation_rules")
+        conn.execute(text("ALTER TABLE auto_creation_rules ADD COLUMN normalize_names BOOLEAN DEFAULT 0 NOT NULL"))
+        conn.commit()
+        logger.info("Migration complete: added normalize_names column")
+
+
+def _add_auto_creation_rules_managed_channel_ids_column(conn) -> None:
+    """Add managed_channel_ids column to auto_creation_rules table for reconciliation tracking."""
+    from sqlalchemy import text
+
+    result = conn.execute(text(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='auto_creation_rules'"
+    ))
+    if not result.fetchone():
+        return
+
+    columns = [r[1] for r in conn.execute(text("PRAGMA table_info(auto_creation_rules)")).fetchall()]
+    if "managed_channel_ids" not in columns:
+        logger.info("Adding managed_channel_ids column to auto_creation_rules")
+        conn.execute(text("ALTER TABLE auto_creation_rules ADD COLUMN managed_channel_ids TEXT"))
+        conn.commit()
+        logger.info("Migration complete: added managed_channel_ids column")
+
+
+def _add_auto_creation_rules_orphan_action_column(conn) -> None:
+    """Add orphan_action column to auto_creation_rules table for per-rule orphan behavior."""
+    from sqlalchemy import text
+
+    result = conn.execute(text(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='auto_creation_rules'"
+    ))
+    if not result.fetchone():
+        return
+
+    columns = [r[1] for r in conn.execute(text("PRAGMA table_info(auto_creation_rules)")).fetchall()]
+    if "orphan_action" not in columns:
+        logger.info("Adding orphan_action column to auto_creation_rules")
+        conn.execute(text("ALTER TABLE auto_creation_rules ADD COLUMN orphan_action VARCHAR(30) DEFAULT 'delete' NOT NULL"))
+        conn.commit()
+        logger.info("Migration complete: added orphan_action column")
 
 
 def _perform_maintenance(engine) -> None:

@@ -2365,7 +2365,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
 
       <div className="settings-actions">
         <button
-          className="btn btn-primary"
+          className="btn-primary"
           onClick={handleSave}
           disabled={loading}
         >

@@ -126,7 +126,6 @@ class DispatcharrSettings(BaseModel):
     # "transcode" - FFmpeg transcodes unsupported audio to AAC (CPU intensive)
     # "video_only" - Strip audio for quick preview (fast, no audio)
     stream_preview_mode: str = "passthrough"
-
     def is_configured(self) -> bool:
         return bool(self.url and self.username and self.password)
 

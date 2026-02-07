@@ -1354,3 +1354,441 @@ class UserIdentity(Base):
 
     def __repr__(self):
         return f"<UserIdentity(id={self.id}, user_id={self.user_id}, provider={self.provider}, identifier={self.identifier})>"
+
+
+# =============================================================================
+# Auto-Creation Pipeline Models (v0.12.0)
+# =============================================================================
+
+class AutoCreationRule(Base):
+    """
+    Rule for automatic channel creation from streams.
+
+    Rules evaluate streams from M3U accounts and perform actions to create/configure
+    channels. Rules run in priority order (lower number = higher priority) when:
+    - Manually triggered
+    - After M3U refresh (if run_on_refresh is enabled)
+    - On schedule (optional)
+
+    Conditions are stored as JSON array and support logical operators (AND/OR/NOT).
+    Actions are stored as JSON array and execute in sequence when conditions match.
+    """
+    __tablename__ = "auto_creation_rules"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String(100), nullable=False)  # e.g., "Create Sports Channels"
+    description = Column(Text, nullable=True)  # User notes about this rule
+    enabled = Column(Boolean, default=True, nullable=False)
+    priority = Column(Integer, default=0, nullable=False)  # Lower = runs first
+
+    # Scope - which streams this rule applies to
+    m3u_account_id = Column(Integer, nullable=True)  # Null = all accounts
+    target_group_id = Column(Integer, nullable=True)  # Default group for created channels
+
+    # Rule logic - stored as JSON
+    conditions = Column(Text, nullable=False)  # JSON array of condition objects
+    actions = Column(Text, nullable=False)  # JSON array of action objects
+
+    # Behavior
+    run_on_refresh = Column(Boolean, default=False, nullable=False)  # Auto-run after M3U refresh
+    stop_on_first_match = Column(Boolean, default=True, nullable=False)  # Don't process further rules for matched streams
+
+    # Sorting - applied to matched streams before executing actions
+    sort_field = Column(String(50), nullable=True)   # None = no sort (process in fetch order)
+    sort_order = Column(String(4), default="asc")    # "asc" or "desc"
+
+    # Normalization - apply normalization engine rules to channel names
+    normalize_names = Column(Boolean, default=False, nullable=False)
+
+    # Tracking
+    last_run_at = Column(DateTime, nullable=True)
+    last_run_stats = Column(Text, nullable=True)  # JSON: {matched: 10, created: 5, skipped: 5, errors: 0}
+    match_count = Column(Integer, default=0)  # Cumulative match count across all executions
+
+    # Reconciliation - tracks which channels this rule currently owns
+    # JSON array of channel IDs. Null = never run (first run will populate without deletions)
+    managed_channel_ids = Column(Text, nullable=True)
+
+    # Orphan cleanup behavior: "delete", "move_uncategorized", "delete_and_cleanup_groups", or "none"
+    orphan_action = Column(String(30), default="delete", nullable=False)
+
+    # Timestamps
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        Index("idx_auto_rule_enabled", enabled),
+        Index("idx_auto_rule_priority", priority),
+        Index("idx_auto_rule_enabled_priority", enabled, priority),
+        Index("idx_auto_rule_m3u_account", m3u_account_id),
+        Index("idx_auto_rule_run_on_refresh", run_on_refresh),
+    )
+
+    def get_conditions(self) -> list:
+        """Parse conditions JSON into list."""
+        if not self.conditions:
+            return []
+        try:
+            import json
+            return json.loads(self.conditions)
+        except (ValueError, TypeError):
+            return []
+
+    def set_conditions(self, conditions: list) -> None:
+        """Set conditions from list."""
+        import json
+        self.conditions = json.dumps(conditions) if conditions else "[]"
+
+    def get_actions(self) -> list:
+        """Parse actions JSON into list."""
+        if not self.actions:
+            return []
+        try:
+            import json
+            return json.loads(self.actions)
+        except (ValueError, TypeError):
+            return []
+
+    def set_actions(self, actions: list) -> None:
+        """Set actions from list."""
+        import json
+        self.actions = json.dumps(actions) if actions else "[]"
+
+    def get_last_run_stats(self) -> dict:
+        """Parse last_run_stats JSON into dict."""
+        if not self.last_run_stats:
+            return {}
+        try:
+            import json
+            return json.loads(self.last_run_stats)
+        except (ValueError, TypeError):
+            return {}
+
+    def set_last_run_stats(self, stats: dict) -> None:
+        """Set last_run_stats from dict."""
+        import json
+        self.last_run_stats = json.dumps(stats) if stats else None
+
+    def get_managed_channel_ids(self) -> list[int]:
+        """Parse managed_channel_ids JSON into list of ints."""
+        if not self.managed_channel_ids:
+            return []
+        try:
+            import json
+            return json.loads(self.managed_channel_ids)
+        except (ValueError, TypeError):
+            return []
+
+    def set_managed_channel_ids(self, ids: list[int]) -> None:
+        """Set managed_channel_ids from list of ints."""
+        import json
+        self.managed_channel_ids = json.dumps(sorted(set(ids))) if ids else None
+
+    def to_dict(self) -> dict:
+        """Convert to dictionary for API responses."""
+        return {
+            "id": self.id,
+            "name": self.name,
+            "description": self.description,
+            "enabled": self.enabled,
+            "priority": self.priority,
+            "m3u_account_id": self.m3u_account_id,
+            "target_group_id": self.target_group_id,
+            "conditions": self.get_conditions(),
+            "actions": self.get_actions(),
+            "run_on_refresh": self.run_on_refresh,
+            "stop_on_first_match": self.stop_on_first_match,
+            "sort_field": self.sort_field,
+            "sort_order": self.sort_order or "asc",
+            "normalize_names": self.normalize_names or False,
+            "orphan_action": self.orphan_action or "delete",
+            "last_run_at": self.last_run_at.isoformat() + "Z" if self.last_run_at else None,
+            "last_run_stats": self.get_last_run_stats(),
+            "match_count": self.match_count or 0,
+            "created_at": self.created_at.isoformat() + "Z" if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() + "Z" if self.updated_at else None,
+        }
+
+    def __repr__(self):
+        return f"<AutoCreationRule(id={self.id}, name={self.name}, enabled={self.enabled}, priority={self.priority})>"
+
+
+class AutoCreationExecution(Base):
+    """
+    Tracks each pipeline execution for audit and undo support.
+
+    Records what was created/modified during each run, enabling:
+    - Audit trail of all changes
+    - Rollback/undo of a specific execution
+    - Dry-run mode that shows what would happen without executing
+    """
+    __tablename__ = "auto_creation_executions"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+
+    # Execution context
+    rule_id = Column(Integer, ForeignKey("auto_creation_rules.id", ondelete="SET NULL"), nullable=True)
+    rule_name = Column(String(100), nullable=True)  # Cached for display after rule deletion
+    mode = Column(String(20), nullable=False, default="execute")  # execute, dry_run
+    triggered_by = Column(String(20), nullable=False, default="manual")  # manual, scheduled, m3u_refresh, api
+
+    # Timing
+    started_at = Column(DateTime, nullable=False)
+    completed_at = Column(DateTime, nullable=True)
+    duration_seconds = Column(Float, nullable=True)
+
+    # Status
+    status = Column(String(20), nullable=False, default="pending")  # pending, running, completed, failed, rolled_back
+    error_message = Column(Text, nullable=True)  # Error details if failed
+
+    # Statistics
+    streams_evaluated = Column(Integer, default=0, nullable=False)
+    streams_matched = Column(Integer, default=0, nullable=False)
+    channels_created = Column(Integer, default=0, nullable=False)
+    channels_updated = Column(Integer, default=0, nullable=False)
+    groups_created = Column(Integer, default=0, nullable=False)
+    streams_merged = Column(Integer, default=0, nullable=False)
+    streams_skipped = Column(Integer, default=0, nullable=False)
+
+    # For rollback - tracks what was created/modified
+    # JSON array: [{type: "channel", id: 123, name: "ESPN HD"}, ...]
+    created_entities = Column(Text, nullable=True)
+    # JSON array: [{type: "channel", id: 99, previous: {name: "...", streams: [...]}}, ...]
+    modified_entities = Column(Text, nullable=True)
+
+    # Dry-run results (if mode=dry_run)
+    # JSON array of planned actions
+    dry_run_results = Column(Text, nullable=True)
+
+    # Per-stream execution log (JSON array of log entries)
+    # Captures condition evaluations and action results for each matched stream
+    execution_log = Column(Text, nullable=True)
+
+    # Rollback tracking
+    rolled_back_at = Column(DateTime, nullable=True)
+    rolled_back_by = Column(String(100), nullable=True)  # username or "system"
+
+    # Timestamps
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    # Relationship to rule
+    rule = relationship("AutoCreationRule", lazy="joined")
+
+    __table_args__ = (
+        Index("idx_auto_exec_rule", rule_id),
+        Index("idx_auto_exec_status", status),
+        Index("idx_auto_exec_mode", mode),
+        Index("idx_auto_exec_started", started_at.desc()),
+        Index("idx_auto_exec_triggered_by", triggered_by),
+    )
+
+    def get_created_entities(self) -> list:
+        """Parse created_entities JSON into list."""
+        if not self.created_entities:
+            return []
+        try:
+            import json
+            return json.loads(self.created_entities)
+        except (ValueError, TypeError):
+            return []
+
+    def set_created_entities(self, entities: list) -> None:
+        """Set created_entities from list."""
+        import json
+        self.created_entities = json.dumps(entities) if entities else None
+
+    def add_created_entity(self, entity_type: str, entity_id: int, name: str = None, extra: dict = None) -> None:
+        """Add a created entity to the tracking list."""
+        import json
+        entities = self.get_created_entities()
+        entity = {"type": entity_type, "id": entity_id}
+        if name:
+            entity["name"] = name
+        if extra:
+            entity.update(extra)
+        entities.append(entity)
+        self.created_entities = json.dumps(entities)
+
+    def get_modified_entities(self) -> list:
+        """Parse modified_entities JSON into list."""
+        if not self.modified_entities:
+            return []
+        try:
+            import json
+            return json.loads(self.modified_entities)
+        except (ValueError, TypeError):
+            return []
+
+    def set_modified_entities(self, entities: list) -> None:
+        """Set modified_entities from list."""
+        import json
+        self.modified_entities = json.dumps(entities) if entities else None
+
+    def add_modified_entity(self, entity_type: str, entity_id: int, previous_state: dict, name: str = None) -> None:
+        """Add a modified entity to the tracking list with its previous state for rollback."""
+        import json
+        entities = self.get_modified_entities()
+        entity = {"type": entity_type, "id": entity_id, "previous": previous_state}
+        if name:
+            entity["name"] = name
+        entities.append(entity)
+        self.modified_entities = json.dumps(entities)
+
+    def get_dry_run_results(self) -> list:
+        """Parse dry_run_results JSON into list."""
+        if not self.dry_run_results:
+            return []
+        try:
+            import json
+            return json.loads(self.dry_run_results)
+        except (ValueError, TypeError):
+            return []
+
+    def set_dry_run_results(self, results: list) -> None:
+        """Set dry_run_results from list."""
+        import json
+        self.dry_run_results = json.dumps(results) if results else None
+
+    def get_execution_log(self) -> list:
+        """Parse execution_log JSON into list."""
+        if not self.execution_log:
+            return []
+        try:
+            import json
+            return json.loads(self.execution_log)
+        except (ValueError, TypeError):
+            return []
+
+    def set_execution_log(self, log: list) -> None:
+        """Set execution_log from list."""
+        import json
+        self.execution_log = json.dumps(log) if log else None
+
+    def to_dict(self, include_entities: bool = False, include_log: bool = False) -> dict:
+        """Convert to dictionary for API responses."""
+        result = {
+            "id": self.id,
+            "rule_id": self.rule_id,
+            "rule_name": self.rule_name or (self.rule.name if self.rule else None),
+            "mode": self.mode,
+            "triggered_by": self.triggered_by,
+            "started_at": self.started_at.isoformat() + "Z" if self.started_at else None,
+            "completed_at": self.completed_at.isoformat() + "Z" if self.completed_at else None,
+            "duration_seconds": self.duration_seconds,
+            "status": self.status,
+            "error_message": self.error_message,
+            "streams_evaluated": self.streams_evaluated,
+            "streams_matched": self.streams_matched,
+            "channels_created": self.channels_created,
+            "channels_updated": self.channels_updated,
+            "groups_created": self.groups_created,
+            "streams_merged": self.streams_merged,
+            "streams_skipped": self.streams_skipped,
+            "rolled_back_at": self.rolled_back_at.isoformat() + "Z" if self.rolled_back_at else None,
+            "rolled_back_by": self.rolled_back_by,
+            "created_at": self.created_at.isoformat() + "Z" if self.created_at else None,
+        }
+        if include_entities:
+            result["created_entities"] = self.get_created_entities()
+            result["modified_entities"] = self.get_modified_entities()
+        if self.mode == "dry_run":
+            result["dry_run_results"] = self.get_dry_run_results()
+        if include_log:
+            result["execution_log"] = self.get_execution_log()
+        return result
+
+    def __repr__(self):
+        return f"<AutoCreationExecution(id={self.id}, rule_id={self.rule_id}, status={self.status}, mode={self.mode})>"
+
+
+class AutoCreationConflict(Base):
+    """
+    Tracks conflicts detected during pipeline execution.
+
+    Conflicts occur when:
+    - Multiple rules match the same stream
+    - A channel with the target name already exists
+    - Merge operation finds conflicting data
+    """
+    __tablename__ = "auto_creation_conflicts"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    execution_id = Column(Integer, ForeignKey("auto_creation_executions.id", ondelete="CASCADE"), nullable=False)
+
+    # What conflicted
+    stream_id = Column(Integer, nullable=True)  # Dispatcharr stream ID
+    stream_name = Column(String(255), nullable=True)  # Cached for display
+
+    # Which rules were involved
+    winning_rule_id = Column(Integer, nullable=True)  # Rule that was applied
+    losing_rule_ids = Column(Text, nullable=True)  # JSON array of rule IDs that also matched but didn't execute
+
+    # Conflict details
+    conflict_type = Column(String(30), nullable=False)  # duplicate_match, channel_exists, merge_conflict, name_collision
+    resolution = Column(String(30), nullable=False)  # skipped, merged, overwritten, created_anyway
+    description = Column(Text, nullable=True)  # Human-readable description
+
+    # Additional context (JSON)
+    details = Column(Text, nullable=True)  # {existing_channel_id: 123, existing_channel_name: "...", ...}
+
+    # Timestamps
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    # Relationship to execution
+    execution = relationship("AutoCreationExecution", lazy="joined")
+
+    __table_args__ = (
+        Index("idx_auto_conflict_execution", execution_id),
+        Index("idx_auto_conflict_type", conflict_type),
+        Index("idx_auto_conflict_stream", stream_id),
+        Index("idx_auto_conflict_winning_rule", winning_rule_id),
+    )
+
+    def get_losing_rule_ids(self) -> list:
+        """Parse losing_rule_ids JSON into list."""
+        if not self.losing_rule_ids:
+            return []
+        try:
+            import json
+            return json.loads(self.losing_rule_ids)
+        except (ValueError, TypeError):
+            return []
+
+    def set_losing_rule_ids(self, rule_ids: list) -> None:
+        """Set losing_rule_ids from list."""
+        import json
+        self.losing_rule_ids = json.dumps(rule_ids) if rule_ids else None
+
+    def get_details(self) -> dict:
+        """Parse details JSON into dict."""
+        if not self.details:
+            return {}
+        try:
+            import json
+            return json.loads(self.details)
+        except (ValueError, TypeError):
+            return {}
+
+    def set_details(self, details: dict) -> None:
+        """Set details from dict."""
+        import json
+        self.details = json.dumps(details) if details else None
+
+    def to_dict(self) -> dict:
+        """Convert to dictionary for API responses."""
+        return {
+            "id": self.id,
+            "execution_id": self.execution_id,
+            "stream_id": self.stream_id,
+            "stream_name": self.stream_name,
+            "winning_rule_id": self.winning_rule_id,
+            "losing_rule_ids": self.get_losing_rule_ids(),
+            "conflict_type": self.conflict_type,
+            "resolution": self.resolution,
+            "description": self.description,
+            "details": self.get_details(),
+            "created_at": self.created_at.isoformat() + "Z" if self.created_at else None,
+        }
+
+    def __repr__(self):
+        return f"<AutoCreationConflict(id={self.id}, execution_id={self.execution_id}, type={self.conflict_type})>"

@@ -54,6 +54,7 @@ const M3UChangesTab = lazy(() => import('./components/tabs/M3UChangesTab').then(
 const JournalTab = lazy(() => import('./components/tabs/JournalTab').then(m => ({ default: m.JournalTab })));
 const StatsTab = lazy(() => import('./components/tabs/StatsTab').then(m => ({ default: m.StatsTab })));
 const SettingsTab = lazy(() => import('./components/tabs/SettingsTab').then(m => ({ default: m.SettingsTab })));
+const AutoCreationTab = lazy(() => import('./components/autoCreation/AutoCreationTab').then(m => ({ default: m.AutoCreationTab })));
 
 function App() {
   // Health check and version info
@@ -172,6 +173,9 @@ function App() {
   const streamsExplicitlyRequested = useRef(false);
   // Track which stream groups have been loaded (for per-group lazy loading)
   const loadedStreamGroupsRef = useRef<Set<string>>(new Set());
+  // Ref to track current channel groups for comparison in event handlers (avoids stale closures)
+  const channelGroupsRef = useRef(channelGroups);
+  channelGroupsRef.current = channelGroups;
 
   // Edit mode exit dialog state
   const [showExitDialog, setShowExitDialog] = useState(false);
@@ -1018,6 +1022,50 @@ function App() {
       abortController.abort(); // Cancel in-flight request when search changes
     };
   }, [channelFilters.search]);
+
+  // Refresh channels/groups when auto-creation pipeline modifies them
+  // Uses api.* directly and channelGroupsRef to avoid stale closures (empty [] deps)
+  useEffect(() => {
+    const handleChannelsChanged = async () => {
+      try {
+        // Snapshot current group IDs before refresh
+        const currentGroupIds = new Set(channelGroupsRef.current.map(g => g.id));
+
+        // Fetch fresh channels (all pages) and groups in parallel
+        const groupsPromise = api.getChannelGroups();
+        const allChannels: Channel[] = [];
+        let page = 1;
+        let hasMore = true;
+        while (hasMore) {
+          const response = await api.getChannels({ page, pageSize: 500 });
+          allChannels.push(...response.results);
+          hasMore = response.next !== null;
+          page++;
+        }
+        setChannels(allChannels);
+
+        const newGroups = await groupsPromise;
+        setChannelGroups(newGroups);
+
+        // Add newly created groups to filter so they're immediately visible
+        const newGroupIds = newGroups
+          .filter(g => !currentGroupIds.has(g.id))
+          .map(g => g.id);
+        if (newGroupIds.length > 0) {
+          setChannelFilters(prev => ({
+            ...prev,
+            groupFilter: [...prev.groupFilter, ...newGroupIds],
+          }));
+        }
+      } catch (err) {
+        if (err instanceof Error && err.name !== 'AbortError') {
+          logger.error('Failed to refresh after channel change:', err);
+        }
+      }
+    };
+    window.addEventListener('channels-changed', handleChannelsChanged);
+    return () => window.removeEventListener('channels-changed', handleChannelsChanged);
+  }, []);
 
   // Reload streams when filters change - but only if explicitly requested OR searching
   // This prevents loading 27,000+ streams on app startup which causes high CPU
@@ -2211,6 +2259,7 @@ function App() {
           )}
           {activeTab === 'logo-manager' && <LogoManagerTab />}
           {activeTab === 'm3u-changes' && <M3UChangesTab />}
+          {activeTab === 'auto-creation' && <AutoCreationTab />}
           {activeTab === 'journal' && <JournalTab />}
           {activeTab === 'stats' && <StatsTab />}
           {activeTab === 'settings' && <SettingsTab onSaved={handleSettingsSaved} channelProfiles={channelProfiles} onProbeComplete={loadChannels} />}

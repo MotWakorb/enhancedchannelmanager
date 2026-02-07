@@ -35,5 +35,7 @@ export {
   createMockScheduledTask,
   createMockAlertMethod,
   createMockNotification,
+  createMockAutoCreationRule,
+  createMockAutoCreationExecution,
   resetIdCounter,
 } from './handlers'

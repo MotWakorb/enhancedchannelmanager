@@ -318,6 +318,31 @@ export const selectors = {
   toastSuccess: '.toast.toast-success',
   toastError: '.toast.toast-error',
   toastWarning: '.toast.toast-warning',
+
+  // Auto-Creation
+  autoCreationTab: '.auto-creation-tab, [data-testid="auto-creation-tab"]',
+  autoCreationRulesList: '.auto-creation-rules-list, [data-testid="rules-list"]',
+  autoCreationRuleItem: '.auto-creation-rule-item, [data-testid="rule-row"]',
+  autoCreationCreateRuleBtn: 'button:has-text("Create Rule"), .create-rule-btn',
+  autoCreationRunBtn: 'button:has-text("Run"):not(:has-text("Dry")), .run-pipeline-btn',
+  autoCreationDryRunBtn: 'button:has-text("Dry Run"), .dry-run-btn',
+  autoCreationImportBtn: 'button:has-text("Import"), .import-btn',
+  autoCreationExportBtn: 'button:has-text("Export"), .export-btn',
+  autoCreationRuleBuilder: '.rule-builder, [data-testid="rule-builder"]',
+  autoCreationRuleNameInput: 'input[name="ruleName"], input[aria-label*="Rule name"], .rule-name-input',
+  autoCreationRuleDescInput: 'textarea[name="description"], input[name="description"], .rule-description-input',
+  autoCreationRulePriorityInput: 'input[name="priority"], input[type="number"][aria-label*="Priority"], .rule-priority-input',
+  autoCreationRuleEnabledCheckbox: 'input[name="enabled"], input[type="checkbox"][aria-label*="Enabled"], .rule-enabled-checkbox',
+  autoCreationAddConditionBtn: 'button:has-text("Add Condition"), .add-condition-btn',
+  autoCreationAddActionBtn: 'button:has-text("Add Action"), .add-action-btn',
+  autoCreationConditionEditor: '.condition-editor, [data-testid="condition-editor"]',
+  autoCreationActionEditor: '.action-editor, [data-testid="action-editor"]',
+  autoCreationSaveRuleBtn: 'button:has-text("Save"), .save-rule-btn',
+  autoCreationCancelBtn: 'button:has-text("Cancel"), .cancel-btn',
+  autoCreationExecutionHistory: '.execution-history, [data-testid="execution-history"]',
+  autoCreationExecutionItem: '.execution-item, [data-testid="execution-row"]',
+  autoCreationRollbackBtn: 'button:has-text("Rollback"), .rollback-btn',
+  autoCreationViewDetailsBtn: 'button:has-text("View Details"), .view-details-btn',
 }
 
 // =============================================================================

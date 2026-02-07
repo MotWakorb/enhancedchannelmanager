@@ -133,6 +133,7 @@ const tabContentSelectors: Record<string, string> = {
   'logo-manager': '.logo-manager-tab, [class*="logo"]',
   'guide': '.guide-tab',
   'journal': '.journal-tab',
+  'auto-creation': '.auto-creation-tab, [data-testid="auto-creation-tab"]',
 }
 
 /**

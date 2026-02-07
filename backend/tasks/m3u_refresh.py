@@ -334,6 +334,21 @@ class M3URefreshTask(TaskScheduler):
                     details={"refreshed": refreshed, "errors": errors},
                 )
 
+            # Run auto-creation rules if any have run_on_refresh=True
+            try:
+                from tasks.auto_creation import run_auto_creation_after_refresh
+                refreshed_account_ids = [a["id"] for a in accounts_to_refresh]
+                auto_result = await run_auto_creation_after_refresh(
+                    m3u_account_ids=refreshed_account_ids,
+                    triggered_by="m3u_refresh"
+                )
+                if auto_result.get("channels_created", 0) > 0:
+                    logger.info(
+                        f"[{self.task_id}] Auto-creation: {auto_result.get('channels_created', 0)} channels created"
+                    )
+            except Exception as e:
+                logger.warning(f"[{self.task_id}] Auto-creation after refresh failed: {e}")
+
             return TaskResult(
                 success=True,
                 message=f"Successfully refreshed {success_count} M3U accounts",

@@ -1,0 +1,338 @@
+/* ConditionEditor Styles */
+
+.condition-editor {
+  display: flex;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 12px 32px 12px 12px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-primary);
+  border-radius: 8px;
+  position: relative;
+}
+
+.condition-editor.compact {
+  padding: 8px;
+  margin-left: 16px;
+  border-left: 2px solid var(--accent-primary);
+}
+
+.condition-editor.has-error {
+  border-color: var(--error-color, #dc3545);
+}
+
+/* Reorder Controls */
+.condition-editor .reorder-controls {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.condition-editor .reorder-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 22px;
+  padding: 0;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.condition-editor .reorder-btn:hover:not(:disabled) {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  border-color: var(--border-primary);
+}
+
+.condition-editor .reorder-btn:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+.condition-editor .reorder-btn .material-icons {
+  font-size: 18px;
+}
+
+/* Order Number Input */
+.condition-editor .order-number-input {
+  width: 36px;
+  height: 28px;
+  padding: 2px 4px;
+  text-align: center;
+  font-size: 13px;
+  font-weight: 600;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-primary);
+  border-radius: 6px;
+  color: var(--text-primary);
+  flex-shrink: 0;
+  -moz-appearance: textfield;
+}
+
+.condition-editor .order-number-input::-webkit-inner-spin-button,
+.condition-editor .order-number-input::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.condition-editor .order-number-input:focus {
+  outline: none;
+  border-color: var(--accent-primary);
+}
+
+.condition-content {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+}
+
+.condition-main-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+/* Type Selector */
+.condition-type-wrapper {
+  position: relative;
+}
+
+.condition-type-button {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 12px;
+  background: var(--input-bg);
+  border: 1px solid var(--border-primary);
+  border-radius: 6px;
+  color: var(--text-primary);
+  cursor: pointer;
+  min-width: 180px;
+  font-size: 14px;
+}
+
+.condition-type-button:hover:not(:disabled) {
+  border-color: var(--accent-primary);
+}
+
+.condition-type-button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.condition-type-dropdown {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  z-index: 100;
+  min-width: 250px;
+  max-height: 300px;
+  overflow-y: auto;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-primary);
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  margin-top: 4px;
+}
+
+.condition-category {
+  padding: 4px 0;
+}
+
+.condition-category-label {
+  padding: 8px 12px 4px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  letter-spacing: 0.5px;
+}
+
+.condition-type-option {
+  display: block;
+  width: 100%;
+  padding: 8px 12px;
+  text-align: left;
+  background: transparent;
+  border: none;
+  color: var(--text-primary);
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.condition-type-option:hover {
+  background: var(--bg-tertiary);
+}
+
+.condition-type-option.selected {
+  background: var(--accent-primary);
+  color: var(--bg-primary);
+}
+
+/* Value Input */
+.condition-value-wrapper {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 1;
+  min-width: 150px;
+}
+
+.condition-value-input {
+  flex: 1;
+  padding: 8px 12px;
+  background: var(--input-bg);
+  border: 1px solid var(--border-primary);
+  border-radius: 6px;
+  color: var(--text-primary);
+  font-size: 14px;
+}
+
+.condition-value-input:focus {
+  outline: none;
+  border-color: var(--accent-primary);
+}
+
+.condition-value-input:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.condition-value-input[aria-invalid="true"] {
+  border-color: var(--error-color, #dc3545);
+}
+
+.condition-hint {
+  font-size: 11px;
+  color: var(--text-muted);
+  padding: 2px 6px;
+  background: var(--bg-tertiary);
+  border-radius: 4px;
+}
+
+/* Boolean Toggle */
+.condition-boolean-wrapper {
+  display: flex;
+  align-items: center;
+}
+
+.condition-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.condition-toggle input {
+  display: none;
+}
+
+.toggle-slider {
+  width: 36px;
+  height: 20px;
+  background: var(--bg-tertiary);
+  border-radius: 10px;
+  position: relative;
+  transition: background 0.2s;
+}
+
+.toggle-slider::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  background: white;
+  border-radius: 50%;
+  transition: transform 0.2s;
+}
+
+.condition-toggle input:checked + .toggle-slider {
+  background: var(--success-color, #28a745);
+}
+
+.condition-toggle input:checked + .toggle-slider::after {
+  transform: translateX(16px);
+}
+
+.toggle-label {
+  font-size: 14px;
+  color: var(--text-secondary);
+}
+
+/* Options */
+.condition-options {
+  display: flex;
+  gap: 12px;
+}
+
+.condition-option {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.condition-option input {
+  cursor: pointer;
+}
+
+/* Error Message */
+.condition-error {
+  width: 100%;
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--error-color, #dc3545);
+}
+
+/* Remove Button */
+.condition-remove-btn {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  padding: 4px;
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.condition-remove-btn:hover {
+  background: var(--bg-tertiary);
+  color: var(--error-color, #dc3545);
+}
+
+.condition-remove-btn .material-icons {
+  font-size: 18px;
+}
+
+/* Screen reader only */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
