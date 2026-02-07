@@ -1396,6 +1396,7 @@ class AutoCreationRule(Base):
     # Sorting - applied to matched streams before executing actions
     sort_field = Column(String(50), nullable=True)   # None = no sort (process in fetch order)
     sort_order = Column(String(4), default="asc")    # "asc" or "desc"
+    probe_on_sort = Column(Boolean, default=False, nullable=False)  # Probe unprobed streams before quality sort
 
     # Normalization - apply normalization engine rules to channel names
     normalize_names = Column(Boolean, default=False, nullable=False)
@@ -1500,6 +1501,7 @@ class AutoCreationRule(Base):
             "stop_on_first_match": self.stop_on_first_match,
             "sort_field": self.sort_field,
             "sort_order": self.sort_order or "asc",
+            "probe_on_sort": self.probe_on_sort or False,
             "normalize_names": self.normalize_names or False,
             "orphan_action": self.orphan_action or "delete",
             "last_run_at": self.last_run_at.isoformat() + "Z" if self.last_run_at else None,

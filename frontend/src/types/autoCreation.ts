@@ -187,6 +187,7 @@ export interface AutoCreationRule {
   stop_on_first_match: boolean;
   sort_field?: string | null;
   sort_order?: 'asc' | 'desc';
+  probe_on_sort?: boolean;
   normalize_names?: boolean;
   orphan_action?: 'delete' | 'move_uncategorized' | 'delete_and_cleanup_groups' | 'none';
   last_run_at?: string;
@@ -211,6 +212,7 @@ export interface CreateRuleData {
   stop_on_first_match?: boolean;
   sort_field?: string | null;
   sort_order?: string;
+  probe_on_sort?: boolean;
   normalize_names?: boolean;
   orphan_action?: string;
 }

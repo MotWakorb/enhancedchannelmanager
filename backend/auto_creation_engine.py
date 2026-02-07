@@ -9,6 +9,7 @@ The main orchestrator for the auto-creation pipeline. Coordinates:
 - Tracking changes for audit and rollback
 - Conflict detection and resolution
 """
+import asyncio
 import logging
 import re
 from collections import defaultdict
@@ -398,6 +399,213 @@ class AutoCreationEngine:
         finally:
             session.close()
 
+    async def _probe_unprobed_streams(
+        self,
+        matched_entries: list,
+        rules: list[AutoCreationRule],
+        results: dict,
+        dry_run: bool
+    ):
+        """
+        Probe streams that haven't been probed yet, for rules that have
+        probe_on_sort=True and sort_field='quality'.
+
+        This runs after Pass 1 (match collection) and before sorting,
+        so that quality data is available for the sort.
+        """
+        from stream_prober import get_prober
+
+        # Collect streams that need probing
+        rule_map = {r.id: r for r in rules}
+        streams_to_probe = {}  # stream_id -> (url, name, stream_ctx)
+
+        for stream, winning_rule, _losing, _log in matched_entries:
+            rule = rule_map.get(winning_rule.id)
+            if not rule:
+                continue
+            if rule.sort_field != "quality" or not getattr(rule, 'probe_on_sort', False):
+                continue
+            # Only probe streams without existing stats
+            if stream.stream_id in self._stream_stats_cache:
+                continue
+            if not stream.stream_url:
+                continue
+            streams_to_probe[stream.stream_id] = (
+                stream.stream_url, stream.stream_name, stream
+            )
+
+        if not streams_to_probe:
+            return
+
+        prober = get_prober()
+        if not prober:
+            logger.warning("[Probe-on-sort] Prober not available, skipping probe step")
+            return
+
+        count = len(streams_to_probe)
+        logger.info(f"[Probe-on-sort] Probing {count} unprobed stream(s) for quality sorting")
+
+        if dry_run:
+            results["dry_run_results"].append({
+                "stream_id": None,
+                "stream_name": "[Probe-on-sort]",
+                "rule_id": None,
+                "rule_name": None,
+                "action": f"Would probe {count} unprobed stream(s) for quality data",
+                "would_create": False,
+                "would_modify": False
+            })
+            return
+
+        # Probe with concurrency limit
+        semaphore = asyncio.Semaphore(3)
+
+        async def probe_one(stream_id, url, name):
+            async with semaphore:
+                try:
+                    await prober.probe_stream(stream_id, url, name)
+                except Exception as e:
+                    logger.warning(f"[Probe-on-sort] Failed to probe stream {stream_id} ({name}): {e}")
+
+        tasks = [
+            probe_one(sid, url, name)
+            for sid, (url, name, _ctx) in streams_to_probe.items()
+        ]
+        await asyncio.gather(*tasks)
+
+        # Reload stats cache
+        await self._load_stream_stats()
+
+        # Update resolution_height on matched stream contexts
+        for stream, _rule, _losing, _log in matched_entries:
+            stats = self._stream_stats_cache.get(stream.stream_id)
+            if stats and stats.get("resolution"):
+                try:
+                    parts = stats["resolution"].split("x")
+                    if len(parts) == 2:
+                        stream.resolution_height = int(parts[1])
+                except (ValueError, IndexError):
+                    pass
+
+        results["execution_log"].append({
+            "stream_id": None,
+            "stream_name": f"[Probe-on-sort]",
+            "m3u_account_id": None,
+            "rules_evaluated": [],
+            "actions_executed": [{
+                "type": "probe_streams",
+                "description": f"Probed {count} unprobed stream(s) for quality sorting",
+                "success": True,
+                "entity_id": None,
+                "error": None
+            }]
+        })
+
+    async def _reorder_channel_streams(
+        self,
+        rules: list[AutoCreationRule],
+        rule_merged_channels: dict,
+        results: dict,
+        dry_run: bool
+    ):
+        """
+        Pass 3.5: Reorder streams within channels by quality (resolution).
+
+        For each rule with sort_field set, collect channels that had streams
+        merged during this execution, and reorder the streams within each
+        channel by resolution_height.
+        """
+        for rule in rules:
+            if not rule.sort_field:
+                continue
+
+            channel_ids = rule_merged_channels.get(rule.id)
+            if not channel_ids:
+                continue
+
+            sort_reverse = (rule.sort_order == "desc")
+
+            for channel_id in channel_ids:
+                # Find channel in existing channels cache
+                channel = None
+                for ch in (self._existing_channels or []):
+                    if ch.get("id") == channel_id:
+                        channel = ch
+                        break
+                if not channel:
+                    continue
+
+                # Get current stream IDs in the channel
+                current_streams = [
+                    s["id"] if isinstance(s, dict) else s
+                    for s in channel.get("streams", [])
+                ]
+                if len(current_streams) < 2:
+                    continue
+
+                # Look up resolution for each stream
+                def stream_sort_key(sid):
+                    stats = self._stream_stats_cache.get(sid)
+                    if stats and stats.get("resolution"):
+                        try:
+                            parts = stats["resolution"].split("x")
+                            if len(parts) == 2:
+                                return int(parts[1])
+                        except (ValueError, IndexError):
+                            pass
+                    return 0
+
+                sorted_streams = sorted(
+                    current_streams,
+                    key=stream_sort_key,
+                    reverse=sort_reverse
+                )
+
+                # Skip if order didn't change
+                if sorted_streams == current_streams:
+                    continue
+
+                channel_name = channel.get("name", f"Channel #{channel_id}")
+
+                if dry_run:
+                    results["dry_run_results"].append({
+                        "stream_id": None,
+                        "stream_name": f"[Stream-reorder] {channel_name}",
+                        "rule_id": rule.id,
+                        "rule_name": rule.name,
+                        "action": f"Would reorder {len(sorted_streams)} streams in '{channel_name}' "
+                                  f"by {rule.sort_field} {rule.sort_order or 'asc'}",
+                        "would_create": False,
+                        "would_modify": True
+                    })
+                else:
+                    try:
+                        await self.client.update_channel(channel_id, {"streams": sorted_streams})
+                        # Update cache
+                        channel["streams"] = sorted_streams
+                        results["execution_log"].append({
+                            "stream_id": None,
+                            "stream_name": f"[Stream-reorder] {channel_name}",
+                            "m3u_account_id": None,
+                            "rules_evaluated": [],
+                            "actions_executed": [{
+                                "type": "reorder_streams",
+                                "description": f"Reordered {len(sorted_streams)} streams in '{channel_name}' "
+                                              f"by {rule.sort_field} {rule.sort_order or 'asc'}",
+                                "success": True,
+                                "entity_id": channel_id,
+                                "error": None
+                            }]
+                        })
+                        logger.info(
+                            f"[Stream-reorder] Reordered {len(sorted_streams)} streams in "
+                            f"'{channel_name}' by {rule.sort_field} {rule.sort_order or 'asc'}"
+                        )
+                    except Exception as e:
+                        logger.error(
+                            f"[Stream-reorder] Failed to reorder streams in '{channel_name}': {e}"
+                        )
+
     # =========================================================================
     # Stream Processing
     # =========================================================================
@@ -541,6 +749,11 @@ class AutoCreationEngine:
             matched_entries.append((stream, winning_rule, losing_rules, stream_rules_log))
 
         # =====================================================================
+        # Pass 1.5: Probe unprobed streams (for rules with probe_on_sort)
+        # =====================================================================
+        await self._probe_unprobed_streams(matched_entries, rules, results, dry_run)
+
+        # =====================================================================
         # Between passes: Sort matched entries by rule's sort configuration
         # =====================================================================
         rule_map = {r.id: r for r in rules}
@@ -560,6 +773,8 @@ class AutoCreationEngine:
 
         # Track channel IDs per rule in sorted order (for Pass 3 renumber)
         rule_channel_order = defaultdict(list)  # rule_id -> [channel_id, ...] in sorted order
+        # Track channels that had streams merged (for Pass 3.5 stream reorder)
+        rule_merged_channels = defaultdict(set)  # rule_id -> set of channel_ids with merges
 
         # =====================================================================
         # Pass 2: Execute actions on sorted matches
@@ -651,6 +866,9 @@ class AutoCreationEngine:
             # Track channel ID for Pass 3 renumber
             if exec_ctx.current_channel_id:
                 rule_channel_order[winning_rule.id].append(exec_ctx.current_channel_id)
+                # Track merged channels for Pass 3.5 stream reorder
+                if exec_ctx.streams_merged > 0:
+                    rule_merged_channels[winning_rule.id].add(exec_ctx.current_channel_id)
 
             if stop_processing:
                 break
@@ -716,6 +934,13 @@ class AutoCreationEngine:
                             "error": str(e)
                         }]
                     })
+
+        # =====================================================================
+        # Pass 3.5: Reorder streams within channels by quality
+        # =====================================================================
+        await self._reorder_channel_streams(
+            rules, rule_merged_channels, results, dry_run
+        )
 
         # =====================================================================
         # Pass 4: Reconcile — clean up orphaned channels

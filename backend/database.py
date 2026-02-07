@@ -181,6 +181,9 @@ def _run_migrations(engine) -> None:
             _add_auto_creation_rules_managed_channel_ids_column(conn)
             _add_auto_creation_rules_orphan_action_column(conn)
 
+            # Add probe_on_sort column to auto_creation_rules (v0.12.0 - Quality probing)
+            _add_auto_creation_rules_probe_on_sort_column(conn)
+
             logger.debug("All migrations complete - schema is up to date")
     except Exception as e:
         logger.exception(f"Migration failed: {e}")
@@ -1340,6 +1343,24 @@ def _add_auto_creation_rules_orphan_action_column(conn) -> None:
         conn.execute(text("ALTER TABLE auto_creation_rules ADD COLUMN orphan_action VARCHAR(30) DEFAULT 'delete' NOT NULL"))
         conn.commit()
         logger.info("Migration complete: added orphan_action column")
+
+
+def _add_auto_creation_rules_probe_on_sort_column(conn) -> None:
+    """Add probe_on_sort column to auto_creation_rules table."""
+    from sqlalchemy import text
+
+    result = conn.execute(text(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='auto_creation_rules'"
+    ))
+    if not result.fetchone():
+        return
+
+    columns = [r[1] for r in conn.execute(text("PRAGMA table_info(auto_creation_rules)")).fetchall()]
+    if "probe_on_sort" not in columns:
+        logger.info("Adding probe_on_sort column to auto_creation_rules")
+        conn.execute(text("ALTER TABLE auto_creation_rules ADD COLUMN probe_on_sort BOOLEAN DEFAULT 0 NOT NULL"))
+        conn.commit()
+        logger.info("Migration complete: added probe_on_sort column")
 
 
 def _perform_maintenance(engine) -> None:

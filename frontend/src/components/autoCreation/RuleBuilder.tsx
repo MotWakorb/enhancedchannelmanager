@@ -36,6 +36,7 @@ export function RuleBuilder({
   const [stopOnFirstMatch, setStopOnFirstMatch] = useState(rule?.stop_on_first_match ?? true);
   const [sortField, setSortField] = useState(rule?.sort_field || '');
   const [sortOrder, setSortOrder] = useState(rule?.sort_order || 'asc');
+  const [probeOnSort, setProbeOnSort] = useState(rule?.probe_on_sort ?? false);
   const [normalizeNames, setNormalizeNames] = useState(rule?.normalize_names ?? false);
   const [orphanAction, setOrphanAction] = useState(rule?.orphan_action || 'delete');
   const [conditions, setConditions] = useState<Condition[]>(rule?.conditions || []);
@@ -141,6 +142,7 @@ export function RuleBuilder({
         stop_on_first_match: stopOnFirstMatch,
         sort_field: sortField || null,
         sort_order: sortOrder,
+        probe_on_sort: probeOnSort,
         normalize_names: normalizeNames,
         orphan_action: orphanAction,
       });
@@ -347,6 +349,23 @@ export function RuleBuilder({
                 />
               )}
             </div>
+            {sortField === 'quality' && (
+              <div className="checkbox-group">
+                <label className="checkbox-option">
+                  <input
+                    type="checkbox"
+                    checked={probeOnSort}
+                    onChange={e => setProbeOnSort(e.target.checked)}
+                    disabled={isLoading}
+                    aria-label="Probe unprobed streams before sorting"
+                  />
+                  <span>Probe unprobed streams before sorting</span>
+                </label>
+                <p className="form-hint">
+                  Gathers resolution data for streams that haven't been probed. Adds time to execution.
+                </p>
+              </div>
+            )}
           </div>
 
           <div className="form-field">
