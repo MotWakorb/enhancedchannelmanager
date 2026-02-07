@@ -311,7 +311,7 @@ export function AutoCreationTab() {
   if (rulesError && !rulesLoading) {
     return (
       <div className={`auto-creation-tab ${isMobile ? 'mobile' : ''}`} data-testid="auto-creation-tab">
-        <div className="auto-creation-error">
+        <div className="loading-state">
           <span className="material-icons">error</span>
           <p>Failed to load auto-creation rules</p>
           <button className="btn-primary" onClick={handleRetry} aria-label="Retry">
@@ -326,7 +326,7 @@ export function AutoCreationTab() {
   return (
     <div className={`auto-creation-tab ${isMobile ? 'mobile' : ''}`} data-testid="auto-creation-tab">
       {/* Header */}
-      <header className="auto-creation-header">
+      <header className="tab-header">
         <h2>Auto-Creation Pipeline</h2>
         <div className="header-actions">
           <button
