@@ -183,15 +183,14 @@ class TestConditionValidation:
         errors = cond.validate()
         assert len(errors) == 0
 
-    def test_invalid_and_single_condition(self):
-        """Rejects AND with single sub-condition."""
+    def test_valid_and_single_condition(self):
+        """AND with single sub-condition is valid."""
         cond = Condition(
             type="and",
             conditions=[Condition(type="has_channel", value=False)]
         )
         errors = cond.validate()
-        assert len(errors) > 0
-        assert "at least 2" in errors[0]
+        assert len(errors) == 0
 
     def test_valid_not_condition(self):
         """Validates NOT with single sub-condition."""

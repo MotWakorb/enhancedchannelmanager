@@ -90,7 +90,7 @@ describe('ActionEditor', () => {
         />
       );
 
-      expect(screen.getByLabelText(/target group/i)).toBeInTheDocument();
+      expect(screen.getByText(/target group/i)).toBeInTheDocument();
     });
 
     it('renders if_exists selector', () => {
@@ -102,7 +102,7 @@ describe('ActionEditor', () => {
         />
       );
 
-      expect(screen.getByLabelText(/if.*exists/i)).toBeInTheDocument();
+      expect(screen.getByText(/if already exists/i)).toBeInTheDocument();
     });
 
     it('shows all if_exists options', async () => {
@@ -115,12 +115,17 @@ describe('ActionEditor', () => {
         />
       );
 
-      await user.click(screen.getByLabelText(/if.*exists/i));
+      // The if_exists field uses CustomSelect - find its trigger button by the displayed value
+      // Default is 'skip', so find the button showing "Skip" near the "If already exists" label
+      const ifExistsLabel = screen.getByText(/if already exists/i);
+      const ifExistsField = ifExistsLabel.closest('.action-field')!;
+      const ifExistsTrigger = ifExistsField.querySelector('.custom-select-trigger') as HTMLElement;
+      await user.click(ifExistsTrigger);
 
-      expect(screen.getByText(/skip/i)).toBeInTheDocument();
-      expect(screen.getByText(/merge/i)).toBeInTheDocument();
-      expect(screen.getByText(/update/i)).toBeInTheDocument();
-      expect(screen.getByText(/use existing/i)).toBeInTheDocument();
+      expect(screen.getByRole('option', { name: /^skip$/i })).toBeInTheDocument();
+      expect(screen.getByRole('option', { name: /^merge$/i })).toBeInTheDocument();
+      expect(screen.getByRole('option', { name: /^update$/i })).toBeInTheDocument();
+      expect(screen.getByRole('option', { name: /use existing/i })).toBeInTheDocument();
     });
   });
 
@@ -146,7 +151,7 @@ describe('ActionEditor', () => {
         />
       );
 
-      expect(screen.getByLabelText(/if.*exists/i)).toBeInTheDocument();
+      expect(screen.getByText(/if already exists/i)).toBeInTheDocument();
     });
   });
 
@@ -160,7 +165,7 @@ describe('ActionEditor', () => {
         />
       );
 
-      expect(screen.getByLabelText(/target/i)).toBeInTheDocument();
+      expect(screen.getByText('Target')).toBeInTheDocument();
     });
 
     it('shows find_channel_by options when target is existing_channel', async () => {
@@ -173,13 +178,17 @@ describe('ActionEditor', () => {
         />
       );
 
-      expect(screen.getByLabelText(/find.*by/i)).toBeInTheDocument();
+      expect(screen.getByText(/find channel by/i)).toBeInTheDocument();
 
-      await user.click(screen.getByLabelText(/find.*by/i));
+      // Click the CustomSelect trigger for "Find channel by"
+      const findByLabel = screen.getByText(/find channel by/i);
+      const findByField = findByLabel.closest('.action-field')!;
+      const findByTrigger = findByField.querySelector('.custom-select-trigger') as HTMLElement;
+      await user.click(findByTrigger);
 
-      expect(screen.getByText(/exact name/i)).toBeInTheDocument();
-      expect(screen.getByText(/regex/i)).toBeInTheDocument();
-      expect(screen.getByText(/tvg.*id/i)).toBeInTheDocument();
+      expect(screen.getByRole('option', { name: /exact name/i })).toBeInTheDocument();
+      expect(screen.getByRole('option', { name: /regex/i })).toBeInTheDocument();
+      expect(screen.getByRole('option', { name: /tvg.*id/i })).toBeInTheDocument();
     });
 
     it('shows find_channel_value input when find_by is set', () => {
@@ -392,8 +401,14 @@ describe('ActionEditor', () => {
         />
       );
 
-      // Change the select value
-      await user.selectOptions(screen.getByLabelText(/if.*exists/i), 'merge');
+      // Find the if_exists CustomSelect trigger and click to open
+      const ifExistsLabel = screen.getByText(/if already exists/i);
+      const ifExistsField = ifExistsLabel.closest('.action-field')!;
+      const ifExistsTrigger = ifExistsField.querySelector('.custom-select-trigger') as HTMLElement;
+      await user.click(ifExistsTrigger);
+
+      // Click the "Merge" option
+      await user.click(screen.getByRole('option', { name: /^merge$/i }));
 
       expect(onChange).toHaveBeenCalledWith(
         expect.objectContaining({ if_exists: 'merge' })
@@ -414,13 +429,22 @@ describe('ActionEditor', () => {
         />
       );
 
-      // Wait for groups to load
+      // Wait for groups to load - look for the Target Group label
       await waitFor(() => {
-        expect(screen.getByLabelText(/target group/i)).toBeInTheDocument();
+        expect(screen.getByText(/target group/i)).toBeInTheDocument();
       });
 
-      // Select the group
-      await user.selectOptions(screen.getByLabelText(/target group/i), String(group.id));
+      // Find the Target Group CustomSelect trigger and click to open
+      const groupLabel = screen.getByText(/target group/i);
+      const groupField = groupLabel.closest('.action-field')!;
+      const groupTrigger = groupField.querySelector('.custom-select-trigger') as HTMLElement;
+      await user.click(groupTrigger);
+
+      // Wait for the dropdown to appear and click the Sports option
+      await waitFor(() => {
+        expect(screen.getByRole('option', { name: /sports/i })).toBeInTheDocument();
+      });
+      await user.click(screen.getByRole('option', { name: /sports/i }));
 
       expect(onChange).toHaveBeenCalledWith(
         expect.objectContaining({ group_id: group.id })
@@ -674,31 +698,31 @@ describe('ActionEditor', () => {
     });
   });
 
-  describe('drag and drop', () => {
-    it('shows drag handle when draggable', () => {
+  describe('reorder controls', () => {
+    it('shows reorder controls when orderNumber and totalItems are provided', () => {
       render(
         <ActionEditor
           action={{ type: 'create_channel' }}
           onChange={vi.fn()}
           onRemove={vi.fn()}
-          draggable={true}
+          orderNumber={1}
+          totalItems={3}
         />
       );
 
-      expect(screen.getByTestId('drag-handle')).toBeInTheDocument();
+      expect(screen.getByTestId('reorder-controls')).toBeInTheDocument();
     });
 
-    it('hides drag handle when not draggable', () => {
+    it('hides reorder controls when orderNumber/totalItems are not provided', () => {
       render(
         <ActionEditor
           action={{ type: 'create_channel' }}
           onChange={vi.fn()}
           onRemove={vi.fn()}
-          draggable={false}
         />
       );
 
-      expect(screen.queryByTestId('drag-handle')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('reorder-controls')).not.toBeInTheDocument();
     });
   });
 

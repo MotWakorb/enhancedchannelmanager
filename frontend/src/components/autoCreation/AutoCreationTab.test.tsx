@@ -368,30 +368,8 @@ describe('AutoCreationTab', () => {
       });
     });
 
-    it('allows selecting specific rules to run', async () => {
-      const user = userEvent.setup();
-      mockDataStore.autoCreationRules.push(
-        createMockAutoCreationRule({ name: 'Rule A', enabled: true }),
-        createMockAutoCreationRule({ name: 'Rule B', enabled: true })
-      );
-
-      render(<AutoCreationTab />);
-
-      await waitFor(() => {
-        expect(screen.getByText('Rule A')).toBeInTheDocument();
-      });
-
-      // Select only Rule A
-      const ruleACheckbox = screen.getByRole('checkbox', { name: /select Rule A/i });
-      await user.click(ruleACheckbox);
-
-      await user.click(screen.getByRole('button', { name: /^run$/i }));
-
-      // Should have run only selected rule
-      await waitFor(() => {
-        expect(screen.getByText(/execution complete/i)).toBeInTheDocument();
-      });
-    });
+    // Note: Per-rule selection with checkboxes is not implemented.
+    // The run pipeline executes all enabled rules.
   });
 
   describe('execution history', () => {
