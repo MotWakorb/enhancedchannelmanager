@@ -364,7 +364,7 @@ class ActionExecutor:
             # Track simulated channel so subsequent streams in this run
             # see it as existing (matches execute-mode behavior)
             simulated = {"id": -1, "name": channel_name, "channel_number": channel_number,
-                         "channel_group_id": group_id}
+                         "channel_group_id": group_id, "streams": [stream_ctx.stream_id]}
             self._created_channels[channel_name.lower()] = simulated
             self._used_channel_numbers.add(channel_number)
             return ActionResult(
@@ -441,6 +441,8 @@ class ActionExecutor:
             )
 
         if exec_ctx.dry_run:
+            # Update cached channel so subsequent dry-run merges see this stream
+            channel["streams"] = current_streams + [stream_ctx.stream_id]
             return ActionResult(
                 success=True,
                 action_type="merge_stream",
@@ -461,6 +463,8 @@ class ActionExecutor:
             new_streams = current_streams + [stream_ctx.stream_id]
             await self.client.update_channel(channel_id, {"streams": new_streams})
 
+            # Update cached channel so subsequent merges see the full list
+            channel["streams"] = new_streams
             exec_ctx.current_channel_id = channel_id
 
             return ActionResult(
