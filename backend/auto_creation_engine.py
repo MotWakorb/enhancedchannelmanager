@@ -504,22 +504,22 @@ class AutoCreationEngine:
     async def _reorder_channel_streams(
         self,
         rules: list[AutoCreationRule],
-        rule_merged_channels: dict,
+        rule_channel_order: dict,
         results: dict,
         dry_run: bool
     ):
         """
         Pass 3.5: Reorder streams within channels by quality (resolution).
 
-        For each rule with sort_field set, collect channels that had streams
-        merged during this execution, and reorder the streams within each
-        channel by resolution_height.
+        For each rule with sort_field set, reorder the streams within each
+        channel the rule touched by resolution_height.
         """
         for rule in rules:
             if not rule.sort_field:
                 continue
 
-            channel_ids = rule_merged_channels.get(rule.id)
+            # Deduplicate — rule_channel_order may list the same channel multiple times
+            channel_ids = list(dict.fromkeys(rule_channel_order.get(rule.id, [])))
             if not channel_ids:
                 continue
 
@@ -555,6 +555,14 @@ class AutoCreationEngine:
                             pass
                     return 0
 
+                # Log what we're working with
+                channel_name = channel.get("name", f"Channel #{channel_id}")
+                stream_resolutions = {sid: stream_sort_key(sid) for sid in current_streams}
+                logger.info(
+                    f"[Stream-reorder] Channel '{channel_name}' ({channel_id}): "
+                    f"stream resolutions: {stream_resolutions}"
+                )
+
                 sorted_streams = sorted(
                     current_streams,
                     key=stream_sort_key,
@@ -563,9 +571,8 @@ class AutoCreationEngine:
 
                 # Skip if order didn't change
                 if sorted_streams == current_streams:
+                    logger.info(f"[Stream-reorder] Channel '{channel_name}': order unchanged, skipping")
                     continue
-
-                channel_name = channel.get("name", f"Channel #{channel_id}")
 
                 if dry_run:
                     results["dry_run_results"].append({
@@ -771,10 +778,8 @@ class AutoCreationEngine:
                 )
             sorted_entries.extend(entries)
 
-        # Track channel IDs per rule in sorted order (for Pass 3 renumber)
+        # Track channel IDs per rule in sorted order (for Pass 3 renumber + Pass 3.5 stream reorder)
         rule_channel_order = defaultdict(list)  # rule_id -> [channel_id, ...] in sorted order
-        # Track channels that had streams merged (for Pass 3.5 stream reorder)
-        rule_merged_channels = defaultdict(set)  # rule_id -> set of channel_ids with merges
 
         # =====================================================================
         # Pass 2: Execute actions on sorted matches
@@ -863,12 +868,9 @@ class AutoCreationEngine:
             results["created_entities"].extend(exec_ctx.created_entities)
             results["modified_entities"].extend(exec_ctx.modified_entities)
 
-            # Track channel ID for Pass 3 renumber
+            # Track channel ID for Pass 3 renumber + Pass 3.5 stream reorder
             if exec_ctx.current_channel_id:
                 rule_channel_order[winning_rule.id].append(exec_ctx.current_channel_id)
-                # Track merged channels for Pass 3.5 stream reorder
-                if exec_ctx.streams_merged > 0:
-                    rule_merged_channels[winning_rule.id].add(exec_ctx.current_channel_id)
 
             if stop_processing:
                 break
@@ -939,7 +941,7 @@ class AutoCreationEngine:
         # Pass 3.5: Reorder streams within channels by quality
         # =====================================================================
         await self._reorder_channel_streams(
-            rules, rule_merged_channels, results, dry_run
+            rules, rule_channel_order, results, dry_run
         )
 
         # =====================================================================
