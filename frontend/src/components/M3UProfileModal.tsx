@@ -5,6 +5,7 @@ import * as api from '../services/api';
 import { useAsyncOperation } from '../hooks/useAsyncOperation';
 import './ModalBase.css';
 import './M3UProfileModal.css';
+import { ModalOverlay } from './ModalOverlay';
 
 interface M3UProfileModalProps {
   isOpen: boolean;
@@ -162,8 +163,8 @@ export const M3UProfileModal = memo(function M3UProfileModal({
   const isEditingDefault = editingProfile?.is_default === true;
 
   return (
-    <div className="modal-overlay" onClick={onClose}>
-      <div className="modal-container modal-lg m3u-profile-modal" onClick={(e) => e.stopPropagation()}>
+    <ModalOverlay onClose={onClose}>
+      <div className="modal-container modal-lg m3u-profile-modal">
         <div className="modal-header">
           <h2>
             <span className="material-icons">account_circle</span>
@@ -373,6 +374,6 @@ export const M3UProfileModal = memo(function M3UProfileModal({
           )}
         </div>
       </div>
-    </div>
+    </ModalOverlay>
   );
 });

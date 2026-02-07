@@ -15,6 +15,10 @@ import {
   createMockAutoCreationExecution,
 } from '../../test/mocks/server';
 import { AutoCreationTab } from './AutoCreationTab';
+import { NotificationProvider } from '../../contexts/NotificationContext';
+
+const renderWithProviders = (ui: JSX.Element) =>
+  render(<NotificationProvider>{ui}</NotificationProvider>);
 
 // Setup MSW server
 beforeAll(() => server.listen({ onUnhandledRequest: 'error' }));
@@ -27,26 +31,26 @@ afterAll(() => server.close());
 describe('AutoCreationTab', () => {
   describe('rendering', () => {
     it('renders the auto-creation tab container', () => {
-      render(<AutoCreationTab />);
+      renderWithProviders(<AutoCreationTab />);
 
       expect(screen.getByTestId('auto-creation-tab')).toBeInTheDocument();
     });
 
     it('renders tab header with title', () => {
-      render(<AutoCreationTab />);
+      renderWithProviders(<AutoCreationTab />);
 
       expect(screen.getByRole('heading', { name: /auto.*creation/i })).toBeInTheDocument();
     });
 
     it('renders rules section and execution section', () => {
-      render(<AutoCreationTab />);
+      renderWithProviders(<AutoCreationTab />);
 
       expect(screen.getByRole('heading', { name: /^rules$/i })).toBeInTheDocument();
       expect(screen.getByRole('heading', { name: /execution/i })).toBeInTheDocument();
     });
 
     it('renders action buttons', () => {
-      render(<AutoCreationTab />);
+      renderWithProviders(<AutoCreationTab />);
 
       expect(screen.getByRole('button', { name: /create rule/i })).toBeInTheDocument();
       expect(screen.getByRole('button', { name: /^run$/i })).toBeInTheDocument();
@@ -62,7 +66,7 @@ describe('AutoCreationTab', () => {
         createMockAutoCreationRule({ name: 'Rule 3' })
       );
 
-      render(<AutoCreationTab />);
+      renderWithProviders(<AutoCreationTab />);
 
       await waitFor(() => {
         expect(screen.getByText('Rule 1')).toBeInTheDocument();
@@ -72,7 +76,7 @@ describe('AutoCreationTab', () => {
     });
 
     it('shows empty state when no rules exist', async () => {
-      render(<AutoCreationTab />);
+      renderWithProviders(<AutoCreationTab />);
 
       await waitFor(() => {
         expect(screen.getByText(/no rules/i)).toBeInTheDocument();
@@ -85,7 +89,7 @@ describe('AutoCreationTab', () => {
         createMockAutoCreationRule({ name: 'Disabled Rule', enabled: false })
       );
 
-      render(<AutoCreationTab />);
+      renderWithProviders(<AutoCreationTab />);
 
       await waitFor(() => {
         const enabledRow = screen.getByText('Enabled Rule').closest('tr');
@@ -106,7 +110,7 @@ describe('AutoCreationTab', () => {
         createMockAutoCreationRule({ name: 'Low Priority', priority: 100 })
       );
 
-      render(<AutoCreationTab />);
+      renderWithProviders(<AutoCreationTab />);
 
       await waitFor(() => {
         const highRow = screen.getByText('High Priority').closest('tr');
@@ -119,7 +123,7 @@ describe('AutoCreationTab', () => {
         createMockAutoCreationRule({ name: 'Popular Rule', match_count: 150 })
       );
 
-      render(<AutoCreationTab />);
+      renderWithProviders(<AutoCreationTab />);
 
       await waitFor(() => {
         // Match count appears in multiple places; just verify at least one exists
@@ -135,7 +139,7 @@ describe('AutoCreationTab', () => {
         createMockAutoCreationRule({ name: 'Second', priority: 20 })
       );
 
-      render(<AutoCreationTab />);
+      renderWithProviders(<AutoCreationTab />);
 
       await waitFor(() => {
         const rows = screen.getAllByRole('row').slice(1); // Skip header row
@@ -152,7 +156,7 @@ describe('AutoCreationTab', () => {
       const rule = createMockAutoCreationRule({ name: 'Test Rule', enabled: true });
       mockDataStore.autoCreationRules.push(rule);
 
-      render(<AutoCreationTab />);
+      renderWithProviders(<AutoCreationTab />);
 
       await waitFor(() => {
         expect(screen.getByText('Test Rule')).toBeInTheDocument();
@@ -171,7 +175,7 @@ describe('AutoCreationTab', () => {
       const rule = createMockAutoCreationRule({ name: 'Editable Rule' });
       mockDataStore.autoCreationRules.push(rule);
 
-      render(<AutoCreationTab />);
+      renderWithProviders(<AutoCreationTab />);
 
       await waitFor(() => {
         expect(screen.getByText('Editable Rule')).toBeInTheDocument();
@@ -192,7 +196,7 @@ describe('AutoCreationTab', () => {
       const rule = createMockAutoCreationRule({ name: 'Deletable Rule' });
       mockDataStore.autoCreationRules.push(rule);
 
-      render(<AutoCreationTab />);
+      renderWithProviders(<AutoCreationTab />);
 
       await waitFor(() => {
         expect(screen.getByText('Deletable Rule')).toBeInTheDocument();
@@ -217,7 +221,7 @@ describe('AutoCreationTab', () => {
       const rule = createMockAutoCreationRule({ name: 'Original Rule' });
       mockDataStore.autoCreationRules.push(rule);
 
-      render(<AutoCreationTab />);
+      renderWithProviders(<AutoCreationTab />);
 
       await waitFor(() => {
         expect(screen.getByText('Original Rule')).toBeInTheDocument();
@@ -234,7 +238,7 @@ describe('AutoCreationTab', () => {
   describe('create rule', () => {
     it('opens rule builder when create button clicked', async () => {
       const user = userEvent.setup();
-      render(<AutoCreationTab />);
+      renderWithProviders(<AutoCreationTab />);
 
       await user.click(screen.getByRole('button', { name: /create rule/i }));
 
@@ -246,7 +250,7 @@ describe('AutoCreationTab', () => {
 
     it('adds new rule to list after creation', async () => {
       const user = userEvent.setup();
-      render(<AutoCreationTab />);
+      renderWithProviders(<AutoCreationTab />);
 
       await user.click(screen.getByRole('button', { name: /create rule/i }));
 
@@ -278,7 +282,7 @@ describe('AutoCreationTab', () => {
         createMockAutoCreationRule({ name: 'Active Rule', enabled: true })
       );
 
-      render(<AutoCreationTab />);
+      renderWithProviders(<AutoCreationTab />);
 
       await waitFor(() => {
         expect(screen.getByText('Active Rule')).toBeInTheDocument();
@@ -299,7 +303,7 @@ describe('AutoCreationTab', () => {
         createMockAutoCreationRule({ name: 'Active Rule', enabled: true })
       );
 
-      render(<AutoCreationTab />);
+      renderWithProviders(<AutoCreationTab />);
 
       await waitFor(() => {
         expect(screen.getByText('Active Rule')).toBeInTheDocument();
@@ -341,7 +345,7 @@ describe('AutoCreationTab', () => {
         })
       );
 
-      render(<AutoCreationTab />);
+      renderWithProviders(<AutoCreationTab />);
 
       await waitFor(() => {
         expect(screen.getByRole('button', { name: /^run$/i })).toBeInTheDocument();
@@ -360,7 +364,7 @@ describe('AutoCreationTab', () => {
         createMockAutoCreationRule({ enabled: false })
       );
 
-      render(<AutoCreationTab />);
+      renderWithProviders(<AutoCreationTab />);
 
       await waitFor(() => {
         expect(screen.getByRole('button', { name: /^run$/i })).toBeDisabled();
@@ -379,7 +383,7 @@ describe('AutoCreationTab', () => {
         createMockAutoCreationExecution({ status: 'completed', channels_created: 3 })
       );
 
-      render(<AutoCreationTab />);
+      renderWithProviders(<AutoCreationTab />);
 
       // Click to show history
       await waitFor(() => {
@@ -395,7 +399,7 @@ describe('AutoCreationTab', () => {
         createMockAutoCreationExecution({ status: 'rolled_back' })
       );
 
-      render(<AutoCreationTab />);
+      renderWithProviders(<AutoCreationTab />);
 
       await waitFor(() => {
         expect(screen.getByText(/completed/i)).toBeInTheDocument();
@@ -410,7 +414,7 @@ describe('AutoCreationTab', () => {
         createMockAutoCreationExecution({ streams_matched: 25, channels_created: 10 })
       );
 
-      render(<AutoCreationTab />);
+      renderWithProviders(<AutoCreationTab />);
 
       await waitFor(() => {
         expect(screen.getByRole('button', { name: /view details/i })).toBeInTheDocument();
@@ -433,7 +437,7 @@ describe('AutoCreationTab', () => {
         createMockAutoCreationExecution({ status: 'completed', mode: 'execute' })
       );
 
-      render(<AutoCreationTab />);
+      renderWithProviders(<AutoCreationTab />);
 
       await waitFor(() => {
         expect(screen.getByRole('button', { name: /rollback/i })).toBeInTheDocument();
@@ -458,7 +462,7 @@ describe('AutoCreationTab', () => {
         createMockAutoCreationExecution({ status: 'completed', mode: 'dry_run' })
       );
 
-      render(<AutoCreationTab />);
+      renderWithProviders(<AutoCreationTab />);
 
       await waitFor(() => {
         const rollbackBtn = screen.queryByRole('button', { name: /rollback/i });
@@ -469,7 +473,7 @@ describe('AutoCreationTab', () => {
 
   describe('import/export', () => {
     it('shows import/export buttons', () => {
-      render(<AutoCreationTab />);
+      renderWithProviders(<AutoCreationTab />);
 
       expect(screen.getByRole('button', { name: /import/i })).toBeInTheDocument();
       expect(screen.getByRole('button', { name: /export/i })).toBeInTheDocument();
@@ -481,7 +485,7 @@ describe('AutoCreationTab', () => {
         createMockAutoCreationRule({ name: 'Export Me' })
       );
 
-      render(<AutoCreationTab />);
+      renderWithProviders(<AutoCreationTab />);
 
       await user.click(screen.getByRole('button', { name: /export/i }));
 
@@ -493,7 +497,7 @@ describe('AutoCreationTab', () => {
 
     it('opens import dialog', async () => {
       const user = userEvent.setup();
-      render(<AutoCreationTab />);
+      renderWithProviders(<AutoCreationTab />);
 
       await user.click(screen.getByRole('button', { name: /import/i }));
 
@@ -505,7 +509,7 @@ describe('AutoCreationTab', () => {
 
     it('imports rules from YAML', async () => {
       const user = userEvent.setup();
-      render(<AutoCreationTab />);
+      renderWithProviders(<AutoCreationTab />);
 
       // Open import dialog
       await user.click(screen.getByRole('button', { name: /^import$/i }));
@@ -537,7 +541,7 @@ describe('AutoCreationTab', () => {
         })
       );
 
-      render(<AutoCreationTab />);
+      renderWithProviders(<AutoCreationTab />);
 
       await waitFor(() => {
         expect(screen.getByText(/failed to load/i)).toBeInTheDocument();
@@ -551,7 +555,7 @@ describe('AutoCreationTab', () => {
         })
       );
 
-      render(<AutoCreationTab />);
+      renderWithProviders(<AutoCreationTab />);
 
       await waitFor(() => {
         expect(screen.getByRole('button', { name: /retry/i })).toBeInTheDocument();
@@ -573,7 +577,7 @@ describe('AutoCreationTab', () => {
       );
 
       const user = userEvent.setup();
-      render(<AutoCreationTab />);
+      renderWithProviders(<AutoCreationTab />);
 
       await waitFor(() => {
         expect(screen.getByRole('button', { name: /^run$/i })).toBeInTheDocument();
@@ -589,7 +593,7 @@ describe('AutoCreationTab', () => {
 
   describe('loading states', () => {
     it('shows loading skeleton while fetching rules', async () => {
-      render(<AutoCreationTab />);
+      renderWithProviders(<AutoCreationTab />);
 
       expect(screen.getByTestId('rules-skeleton')).toBeInTheDocument();
 
@@ -607,7 +611,7 @@ describe('AutoCreationTab', () => {
         createMockAutoCreationRule({ name: 'Rule Two', enabled: false })
       );
 
-      render(<AutoCreationTab />);
+      renderWithProviders(<AutoCreationTab />);
 
       // Both rules should be visible initially
       await waitFor(() => {
@@ -632,7 +636,7 @@ describe('AutoCreationTab', () => {
         createMockAutoCreationRule({ name: 'FOX Rule' })
       );
 
-      render(<AutoCreationTab />);
+      renderWithProviders(<AutoCreationTab />);
 
       await waitFor(() => {
         expect(screen.getByText('ESPN Rule')).toBeInTheDocument();
@@ -655,7 +659,7 @@ describe('AutoCreationTab', () => {
         createMockAutoCreationRule({ name: 'Third', priority: 3 })
       );
 
-      render(<AutoCreationTab />);
+      renderWithProviders(<AutoCreationTab />);
 
       await waitFor(() => {
         expect(screen.getByText('First')).toBeInTheDocument();
@@ -675,7 +679,7 @@ describe('AutoCreationTab', () => {
         createMockAutoCreationRule({ name: 'Rule 2' })
       );
 
-      render(<AutoCreationTab />);
+      renderWithProviders(<AutoCreationTab />);
 
       await waitFor(() => {
         expect(screen.getByText('Rule 1')).toBeInTheDocument();
@@ -698,7 +702,7 @@ describe('AutoCreationTab', () => {
       Object.defineProperty(window, 'innerWidth', { value: 375 });
       window.dispatchEvent(new Event('resize'));
 
-      render(<AutoCreationTab />);
+      renderWithProviders(<AutoCreationTab />);
 
       expect(screen.getByTestId('auto-creation-tab')).toHaveClass('mobile');
     });
@@ -712,7 +716,7 @@ describe('AutoCreationTab', () => {
         createMockAutoCreationRule({ enabled: false, match_count: 20 })
       );
 
-      render(<AutoCreationTab />);
+      renderWithProviders(<AutoCreationTab />);
 
       // Statistics are displayed as value and label in separate elements
       await waitFor(() => {

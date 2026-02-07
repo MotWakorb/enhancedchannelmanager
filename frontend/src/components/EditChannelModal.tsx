@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, memo } from 'react';
 import type { Channel, Logo } from '../types';
 import * as api from '../services/api';
+import { ModalOverlay } from './ModalOverlay';
 import './ModalBase.css';
 
 export interface ChannelMetadataChanges {
@@ -116,6 +117,10 @@ export const EditChannelModal = memo(function EditChannelModal({
 
   // Handle close with unsaved changes check
   const handleClose = () => {
+    if (showDiscardConfirm) {
+      setShowDiscardConfirm(false);
+      return;
+    }
     if (hasChanges) {
       setShowDiscardConfirm(true);
     } else {
@@ -364,7 +369,7 @@ export const EditChannelModal = memo(function EditChannelModal({
       : `${selectedEpgSourceIds.size} sources`;
 
   return (
-    <div className="modal-overlay">
+    <ModalOverlay onClose={handleClose}>
       <div className="modal-container edit-channel-modal">
         <div className="modal-header">
           <h2>Edit Channel</h2>
@@ -839,7 +844,7 @@ export const EditChannelModal = memo(function EditChannelModal({
 
         {/* Discard Changes Confirmation Dialog */}
         {showDiscardConfirm && (
-          <div className="discard-confirm-overlay" onClick={() => setShowDiscardConfirm(false)}>
+          <div className="discard-confirm-overlay">
             <div className="discard-confirm-dialog" onClick={(e) => e.stopPropagation()}>
               <div className="discard-confirm-title">Unsaved Changes</div>
               <div className="discard-confirm-message">
@@ -863,7 +868,7 @@ export const EditChannelModal = memo(function EditChannelModal({
           </div>
         )}
       </div>
-    </div>
+    </ModalOverlay>
   );
 });
 

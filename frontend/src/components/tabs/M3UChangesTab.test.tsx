@@ -4,11 +4,15 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { M3UChangesTab } from './M3UChangesTab';
+import { NotificationProvider } from '../../contexts/NotificationContext';
 import * as api from '../../services/api';
 import type { M3UChangeLog, M3UChangeSummary, M3UAccount } from '../../types';
 
 // Mock the API module
 vi.mock('../../services/api');
+
+const renderWithProviders = (ui: JSX.Element) =>
+  render(<NotificationProvider>{ui}</NotificationProvider>);
 
 // Helper function tests - extracted from the component for testing
 // We test these through the component's rendered output
@@ -89,19 +93,19 @@ describe('M3UChangesTab', () => {
 
   describe('initial rendering', () => {
     it('renders the M3U Changes header', async () => {
-      render(<M3UChangesTab />);
+      renderWithProviders(<M3UChangesTab />);
 
       expect(screen.getByText('M3U Changes')).toBeInTheDocument();
     });
 
     it('shows loading state initially', async () => {
-      render(<M3UChangesTab />);
+      renderWithProviders(<M3UChangesTab />);
 
       expect(screen.getByText('Loading changes...')).toBeInTheDocument();
     });
 
     it('fetches accounts, changes, and summary on mount', async () => {
-      render(<M3UChangesTab />);
+      renderWithProviders(<M3UChangesTab />);
 
       await waitFor(() => {
         expect(api.getM3UAccounts).toHaveBeenCalled();
@@ -113,7 +117,7 @@ describe('M3UChangesTab', () => {
 
   describe('data display', () => {
     it('displays summary statistics', async () => {
-      render(<M3UChangesTab />);
+      renderWithProviders(<M3UChangesTab />);
 
       await waitFor(() => {
         // Check the header stats
@@ -130,7 +134,7 @@ describe('M3UChangesTab', () => {
     });
 
     it('displays change rows after loading', async () => {
-      render(<M3UChangesTab />);
+      renderWithProviders(<M3UChangesTab />);
 
       await waitFor(() => {
         expect(screen.queryByText('Loading changes...')).not.toBeInTheDocument();
@@ -143,7 +147,7 @@ describe('M3UChangesTab', () => {
     });
 
     it('displays change type badges correctly', async () => {
-      render(<M3UChangesTab />);
+      renderWithProviders(<M3UChangesTab />);
 
       await waitFor(() => {
         expect(screen.queryByText('Loading changes...')).not.toBeInTheDocument();
@@ -156,7 +160,7 @@ describe('M3UChangesTab', () => {
     });
 
     it('displays enabled/disabled badges', async () => {
-      render(<M3UChangesTab />);
+      renderWithProviders(<M3UChangesTab />);
 
       await waitFor(() => {
         expect(screen.queryByText('Loading changes...')).not.toBeInTheDocument();
@@ -170,7 +174,7 @@ describe('M3UChangesTab', () => {
     });
 
     it('displays account names', async () => {
-      render(<M3UChangesTab />);
+      renderWithProviders(<M3UChangesTab />);
 
       await waitFor(() => {
         expect(screen.queryByText('Loading changes...')).not.toBeInTheDocument();
@@ -192,7 +196,7 @@ describe('M3UChangesTab', () => {
         total_pages: 0,
       });
 
-      render(<M3UChangesTab />);
+      renderWithProviders(<M3UChangesTab />);
 
       await waitFor(() => {
         expect(screen.getByText('No Changes Detected')).toBeInTheDocument();
@@ -206,27 +210,18 @@ describe('M3UChangesTab', () => {
     it('displays error message when API fails', async () => {
       vi.mocked(api.getM3UChanges).mockRejectedValue(new Error('Network error'));
 
-      render(<M3UChangesTab />);
+      renderWithProviders(<M3UChangesTab />);
 
       await waitFor(() => {
         expect(screen.getByText('Network error')).toBeInTheDocument();
       });
     });
 
-    it('shows retry button on error', async () => {
-      vi.mocked(api.getM3UChanges).mockRejectedValue(new Error('Network error'));
-
-      render(<M3UChangesTab />);
-
-      await waitFor(() => {
-        expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
-      });
-    });
   });
 
   describe('row expansion', () => {
     it('expands row when clicked', async () => {
-      render(<M3UChangesTab />);
+      renderWithProviders(<M3UChangesTab />);
 
       await waitFor(() => {
         expect(screen.queryByText('Loading changes...')).not.toBeInTheDocument();
@@ -246,7 +241,7 @@ describe('M3UChangesTab', () => {
     });
 
     it('shows stream names in expanded view', async () => {
-      render(<M3UChangesTab />);
+      renderWithProviders(<M3UChangesTab />);
 
       await waitFor(() => {
         expect(screen.queryByText('Loading changes...')).not.toBeInTheDocument();
@@ -267,7 +262,7 @@ describe('M3UChangesTab', () => {
 
   describe('refresh functionality', () => {
     it('refreshes data when refresh button is clicked', async () => {
-      render(<M3UChangesTab />);
+      renderWithProviders(<M3UChangesTab />);
 
       await waitFor(() => {
         expect(screen.queryByText('Loading changes...')).not.toBeInTheDocument();
@@ -290,7 +285,7 @@ describe('M3UChangesTab', () => {
 
   describe('pagination', () => {
     it('displays pagination controls', async () => {
-      render(<M3UChangesTab />);
+      renderWithProviders(<M3UChangesTab />);
 
       await waitFor(() => {
         expect(screen.queryByText('Loading changes...')).not.toBeInTheDocument();
@@ -301,7 +296,7 @@ describe('M3UChangesTab', () => {
     });
 
     it('disables previous/first buttons on first page', async () => {
-      render(<M3UChangesTab />);
+      renderWithProviders(<M3UChangesTab />);
 
       await waitFor(() => {
         expect(screen.queryByText('Loading changes...')).not.toBeInTheDocument();
@@ -323,7 +318,7 @@ describe('M3UChangesTab', () => {
         total_pages: 2,
       });
 
-      render(<M3UChangesTab />);
+      renderWithProviders(<M3UChangesTab />);
 
       await waitFor(() => {
         expect(screen.getByText('Page 1 of 2')).toBeInTheDocument();

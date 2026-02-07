@@ -13,7 +13,8 @@ import { useAutoCreationExecution } from '../../hooks/useAutoCreationExecution';
 import { RuleBuilder } from './RuleBuilder';
 import * as autoCreationApi from '../../services/autoCreationApi';
 import { copyToClipboard } from '../../utils/clipboard';
-import { ToastContainer, type ToastData } from '../ToastContainer';
+import { useNotifications } from '../../contexts/NotificationContext';
+import { ModalOverlay } from '../ModalOverlay';
 import '../ModalBase.css';
 import './AutoCreationTab.css';
 
@@ -69,15 +70,7 @@ export function AutoCreationTab() {
   const [importLoading, setImportLoading] = useState(false);
   const [importError, setImportError] = useState<string | null>(null);
 
-  // Toast state (uses shared Toast component)
-  const [toasts, setToasts] = useState<ToastData[]>([]);
-  const addToast = useCallback((type: ToastData['type'], message: string, duration = 5000) => {
-    const id = `toast-${Date.now()}`;
-    setToasts(prev => [...prev, { id, type, message, duration }]);
-  }, []);
-  const dismissToast = useCallback((id: string) => {
-    setToasts(prev => prev.filter(t => t.id !== id));
-  }, []);
+  const notifications = useNotifications();
 
   // Responsive state
   const [isMobile, setIsMobile] = useState(window.innerWidth <= 768);
@@ -155,7 +148,7 @@ export function AutoCreationTab() {
       setShowRuleBuilder(false);
       setEditingRule(null);
     } catch (err) {
-      addToast('error',err instanceof Error ? err.message : 'Failed to save rule');
+      notifications.error(err instanceof Error ? err.message : 'Failed to save rule', 'Auto-Creation');
     }
   }, [editingRule, updateRule, createRule]);
 
@@ -174,7 +167,7 @@ export function AutoCreationTab() {
         await deleteRule(showDeleteConfirm.id);
         setShowDeleteConfirm(null);
       } catch (err) {
-        addToast('error',err instanceof Error ? err.message : 'Failed to delete rule');
+        notifications.error(err instanceof Error ? err.message : 'Failed to delete rule', 'Auto-Creation');
       }
     }
   }, [showDeleteConfirm, deleteRule]);
@@ -183,7 +176,7 @@ export function AutoCreationTab() {
     try {
       await toggleRule(rule.id);
     } catch (err) {
-      addToast('error',err instanceof Error ? err.message : 'Failed to toggle rule');
+      notifications.error(err instanceof Error ? err.message : 'Failed to toggle rule', 'Auto-Creation');
     }
   }, [toggleRule]);
 
@@ -191,7 +184,7 @@ export function AutoCreationTab() {
     try {
       await duplicateRule(rule.id);
     } catch (err) {
-      addToast('error',err instanceof Error ? err.message : 'Failed to duplicate rule');
+      notifications.error(err instanceof Error ? err.message : 'Failed to duplicate rule', 'Auto-Creation');
     }
   }, [duplicateRule]);
 
@@ -210,7 +203,7 @@ export function AutoCreationTab() {
         const msg = dryRun
           ? `Dry run complete - Would create ${created} channel${created !== 1 ? 's' : ''}${orphanSuffix ? `, would remove ${removed} orphan${removed !== 1 ? 's' : ''}` : ''}`
           : `Execution complete - Created ${created} channel${created !== 1 ? 's' : ''}${orphanSuffix}`;
-        addToast('success', msg, 10000);
+        notifications.success(msg, 'Auto-Creation');
         // Refresh executions list and rule stats (match counts)
         await fetchExecutions();
         await fetchRules();
@@ -221,9 +214,9 @@ export function AutoCreationTab() {
       }
       // If response is undefined, the hook caught an error and set executionsError
     } catch (err) {
-      addToast('error', err instanceof Error ? err.message : 'Pipeline failed');
+      notifications.error(err instanceof Error ? err.message : 'Pipeline failed', 'Auto-Creation');
     }
-  }, [runPipelineApi, fetchExecutions, fetchRules, addToast]);
+  }, [runPipelineApi, fetchExecutions, fetchRules, notifications]);
 
   const handleRunSingleRule = useCallback(async (ruleId: number, dryRun: boolean) => {
     setRunningSingleRule(ruleId);
@@ -245,7 +238,7 @@ export function AutoCreationTab() {
         setShowRollbackConfirm(null);
         await fetchExecutions();
       } catch (err) {
-        addToast('error',err instanceof Error ? err.message : 'Failed to rollback');
+        notifications.error(err instanceof Error ? err.message : 'Failed to rollback', 'Auto-Creation');
       }
     }
   }, [showRollbackConfirm, rollback, fetchExecutions]);
@@ -273,7 +266,7 @@ export function AutoCreationTab() {
       setExportYaml(yaml);
       setShowExportDialog(true);
     } catch (err) {
-      addToast('error',err instanceof Error ? err.message : 'Failed to export rules');
+      notifications.error(err instanceof Error ? err.message : 'Failed to export rules', 'Auto-Creation');
     }
   }, []);
 
@@ -287,7 +280,7 @@ export function AutoCreationTab() {
       await fetchRules();
       setImportYaml('');
       setShowImportDialog(false);
-      addToast('success', `Imported ${importedCount} rule${importedCount !== 1 ? 's' : ''}`);
+      notifications.success(`Imported ${importedCount} rule${importedCount !== 1 ? 's' : ''}`, 'Auto-Creation');
     } catch (err) {
       setImportError(err instanceof Error ? err.message : 'Failed to import rules');
     } finally {
@@ -303,9 +296,10 @@ export function AutoCreationTab() {
   // Propagate hook errors to the toast
   useEffect(() => {
     if (executionsError) {
-      addToast('error', executionsError);
+      notifications.error(executionsError, 'Auto-Creation');
     }
-  }, [executionsError, addToast]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [executionsError]);
 
   // Error state
   if (rulesError && !rulesLoading) {
@@ -398,9 +392,6 @@ export function AutoCreationTab() {
           <span className="stat-label">Matches</span>
         </div>
       </div>
-
-      {/* Toast notifications */}
-      <ToastContainer toasts={toasts} onDismiss={dismissToast} position="top-right" />
 
       {/* Main Content */}
       <div className="auto-creation-content">
@@ -634,8 +625,8 @@ export function AutoCreationTab() {
 
       {/* Rule Builder Modal */}
       {showRuleBuilder && (
-        <div className="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="rule-builder-title" onClick={e => e.target === e.currentTarget && handleCancelRuleBuilder()}>
-          <div className="modal-container modal-lg rule-builder-modal" onClick={e => e.stopPropagation()}>
+        <ModalOverlay onClose={handleCancelRuleBuilder} role="dialog" aria-modal="true" aria-labelledby="rule-builder-title">
+          <div className="modal-container modal-lg rule-builder-modal">
             <div className="modal-header">
               <h2 id="rule-builder-title">
                 {editingRule ? 'Edit Rule' : 'Create Rule'}
@@ -654,13 +645,13 @@ export function AutoCreationTab() {
               onCancel={handleCancelRuleBuilder}
             />
           </div>
-        </div>
+        </ModalOverlay>
       )}
 
       {/* Delete Confirmation Dialog */}
       {showDeleteConfirm && (
-        <div className="modal-overlay" role="dialog" aria-modal="true" onClick={e => e.target === e.currentTarget && setShowDeleteConfirm(null)}>
-          <div className="modal-container modal-sm" onClick={e => e.stopPropagation()}>
+        <ModalOverlay onClose={() => setShowDeleteConfirm(null)} role="dialog" aria-modal="true">
+          <div className="modal-container modal-sm">
             <div className="modal-header">
               <h2>Confirm Delete</h2>
             </div>
@@ -683,13 +674,13 @@ export function AutoCreationTab() {
               </button>
             </div>
           </div>
-        </div>
+        </ModalOverlay>
       )}
 
       {/* Rollback Confirmation Dialog */}
       {showRollbackConfirm && (
-        <div className="modal-overlay" role="dialog" aria-modal="true" onClick={e => e.target === e.currentTarget && setShowRollbackConfirm(null)}>
-          <div className="modal-container modal-sm" onClick={e => e.stopPropagation()}>
+        <ModalOverlay onClose={() => setShowRollbackConfirm(null)} role="dialog" aria-modal="true">
+          <div className="modal-container modal-sm">
             <div className="modal-header">
               <h2>Confirm Rollback</h2>
             </div>
@@ -715,7 +706,7 @@ export function AutoCreationTab() {
               </button>
             </div>
           </div>
-        </div>
+        </ModalOverlay>
       )}
 
       {/* Execution Details Dialog */}
@@ -738,8 +729,8 @@ export function AutoCreationTab() {
         };
 
         return (
-        <div className="modal-overlay" role="dialog" aria-modal="true" onClick={e => e.target === e.currentTarget && setShowExecutionDetails(null)}>
-          <div className="modal-container modal-lg" onClick={e => e.stopPropagation()}>
+        <ModalOverlay onClose={() => setShowExecutionDetails(null)} role="dialog" aria-modal="true">
+          <div className="modal-container modal-lg">
             <div className="modal-header">
               <h2>Execution Details</h2>
               <button
@@ -955,14 +946,14 @@ export function AutoCreationTab() {
               </div>
             </div>
           </div>
-        </div>
+        </ModalOverlay>
         );
       })()}
 
       {/* Import Dialog */}
       {showImportDialog && (
-        <div className="modal-overlay" role="dialog" aria-modal="true" onClick={e => e.target === e.currentTarget && setShowImportDialog(false)}>
-          <div className="modal-container modal-md" onClick={e => e.stopPropagation()}>
+        <ModalOverlay onClose={() => setShowImportDialog(false)} role="dialog" aria-modal="true">
+          <div className="modal-container modal-md">
             <div className="modal-header">
               <h2>Import Rules</h2>
               <button
@@ -1006,13 +997,13 @@ export function AutoCreationTab() {
               </button>
             </div>
           </div>
-        </div>
+        </ModalOverlay>
       )}
 
       {/* Export Dialog */}
       {showExportDialog && (
-        <div className="modal-overlay" role="dialog" aria-modal="true" onClick={e => e.target === e.currentTarget && setShowExportDialog(false)}>
-          <div className="modal-container modal-md" onClick={e => e.stopPropagation()}>
+        <ModalOverlay onClose={() => setShowExportDialog(false)} role="dialog" aria-modal="true">
+          <div className="modal-container modal-md">
             <div className="modal-header">
               <h2>Export Rules (YAML)</h2>
               <button
@@ -1035,9 +1026,9 @@ export function AutoCreationTab() {
                 onClick={async () => {
                   const success = await copyToClipboard(exportYaml, 'YAML rules');
                   if (success) {
-                    addToast('success', 'Copied YAML to clipboard');
+                    notifications.success('Copied YAML to clipboard', 'Auto-Creation');
                   } else {
-                    addToast('error', 'Failed to copy to clipboard. Please check browser permissions.');
+                    notifications.error('Failed to copy to clipboard. Please check browser permissions.', 'Auto-Creation');
                   }
                 }}
               >
@@ -1054,7 +1045,7 @@ export function AutoCreationTab() {
               </button>
             </div>
           </div>
-        </div>
+        </ModalOverlay>
       )}
     </div>
   );

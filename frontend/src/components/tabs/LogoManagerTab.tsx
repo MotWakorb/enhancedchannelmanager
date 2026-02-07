@@ -2,15 +2,18 @@ import { useState, useEffect, useCallback } from 'react';
 import type { Logo } from '../../types';
 import * as api from '../../services/api';
 import { LogoModal } from '../LogoModal';
+import { ModalOverlay } from '../ModalOverlay';
 import './LogoManagerTab.css';
+import { useNotifications } from '../../contexts/NotificationContext';
 
 type ViewMode = 'list' | 'grid';
 
 export function LogoManagerTab() {
+  const notifications = useNotifications();
+
   // Data state
   const [logos, setLogos] = useState<Logo[]>([]);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
 
   // Search state
   const [search, setSearch] = useState('');
@@ -33,14 +36,13 @@ export function LogoManagerTab() {
   // Load all logos (no pagination)
   const loadLogos = useCallback(async () => {
     setLoading(true);
-    setError(null);
     setFailedImages(new Set()); // Clear failed images on reload
     try {
       // Request a large page size to get all logos
       const result = await api.getLogos({ page: 1, pageSize: 10000, search });
       setLogos(result.results);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load logos');
+      notifications.error(err instanceof Error ? err.message : 'Failed to load logos', 'Logos');
     } finally {
       setLoading(false);
     }
@@ -86,7 +88,7 @@ export function LogoManagerTab() {
       setDeletingLogo(null);
       loadLogos();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to delete logo');
+      notifications.error(err instanceof Error ? err.message : 'Failed to delete logo', 'Logos');
     } finally {
       setDeleteLoading(false);
     }
@@ -178,15 +180,6 @@ export function LogoManagerTab() {
           </button>
         </div>
       </div>
-
-      {/* Error Banner */}
-      {error && (
-        <div className="error-banner">
-          <span className="material-icons">error</span>
-          <span>{error}</span>
-          <button onClick={() => setError(null)}>&times;</button>
-        </div>
-      )}
 
       {/* Content */}
       <div className="logos-container">
@@ -342,10 +335,9 @@ export function LogoManagerTab() {
 
       {/* Delete Confirmation Modal */}
       {deletingLogo && (
-        <div className="modal-overlay" onClick={() => setDeletingLogo(null)}>
+        <ModalOverlay onClose={() => setDeletingLogo(null)}>
           <div
             className="modal-content delete-confirm-modal"
-            onClick={(e) => e.stopPropagation()}
           >
             <div className="modal-header">
               <h2>Delete Logo</h2>
@@ -384,7 +376,7 @@ export function LogoManagerTab() {
               </button>
             </div>
           </div>
-        </div>
+        </ModalOverlay>
       )}
     </div>
   );

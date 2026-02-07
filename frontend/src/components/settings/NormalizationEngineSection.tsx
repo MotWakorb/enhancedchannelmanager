@@ -23,6 +23,7 @@ import {
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import * as api from '../../services/api';
+import { useNotifications } from '../../contexts/NotificationContext';
 import type {
   NormalizationRuleGroup,
   NormalizationRule,
@@ -35,6 +36,7 @@ import type {
   TagGroup,
   TagMatchPosition,
 } from '../../types';
+import { ModalOverlay } from '../ModalOverlay';
 import './NormalizationEngineSection.css';
 import '../ModalBase.css';
 import { CustomSelect, type SelectOption } from '../CustomSelect';
@@ -245,11 +247,11 @@ function SortableGroupItem({
 }
 
 export function NormalizationEngineSection() {
+  const notifications = useNotifications();
   // Data state
   const [groups, setGroups] = useState<NormalizationRuleGroup[]>([]);
   const [tagGroups, setTagGroups] = useState<TagGroup[]>([]);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
 
   // UI state
   const [expandedGroups, setExpandedGroups] = useState<Set<number>>(new Set());
@@ -311,7 +313,6 @@ export function NormalizationEngineSection() {
   const loadData = useCallback(async () => {
     try {
       setLoading(true);
-      setError(null);
       const [rulesResponse, tagsResponse] = await Promise.all([
         api.getNormalizationRules(),
         api.getTagGroups(),
@@ -319,7 +320,7 @@ export function NormalizationEngineSection() {
       setGroups(rulesResponse.groups);
       setTagGroups(tagsResponse.groups);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load rules');
+      notifications.error(err instanceof Error ? err.message : 'Failed to load rules', 'Normalization');
     } finally {
       setLoading(false);
     }
@@ -371,7 +372,7 @@ export function NormalizationEngineSection() {
       await api.reorderNormalizationRules(group.id, ruleIds);
     } catch (err) {
       // Revert on error
-      setError(err instanceof Error ? err.message : 'Failed to reorder rules');
+      notifications.error(err instanceof Error ? err.message : 'Failed to reorder rules', 'Normalization');
       await loadData();
     }
   }, [loadData]);
@@ -401,7 +402,7 @@ export function NormalizationEngineSection() {
       await api.reorderNormalizationGroups(groupIds);
     } catch (err) {
       // Revert on error
-      setError(err instanceof Error ? err.message : 'Failed to reorder groups');
+      notifications.error(err instanceof Error ? err.message : 'Failed to reorder groups', 'Normalization');
       await loadData();
     }
   }, [groups, loadData]);
@@ -420,7 +421,7 @@ export function NormalizationEngineSection() {
       setGroups((prev) =>
         prev.map((g) => (g.id === group.id ? { ...g, enabled: !newEnabled } : g))
       );
-      setError(err instanceof Error ? err.message : 'Failed to update group');
+      notifications.error(err instanceof Error ? err.message : 'Failed to update group', 'Normalization');
     }
   }, []);
 
@@ -448,7 +449,7 @@ export function NormalizationEngineSection() {
           ),
         }))
       );
-      setError(err instanceof Error ? err.message : 'Failed to update rule');
+      notifications.error(err instanceof Error ? err.message : 'Failed to update rule', 'Normalization');
     }
   }, []);
 
@@ -462,7 +463,7 @@ export function NormalizationEngineSection() {
         setSelectedRule(null);
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to delete rule');
+      notifications.error(err instanceof Error ? err.message : 'Failed to delete rule', 'Normalization');
     }
   }, [loadData, selectedRule]);
 
@@ -473,7 +474,7 @@ export function NormalizationEngineSection() {
       await api.deleteNormalizationGroup(group.id);
       await loadData();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to delete group');
+      notifications.error(err instanceof Error ? err.message : 'Failed to delete group', 'Normalization');
     }
   }, [loadData]);
 
@@ -596,7 +597,7 @@ export function NormalizationEngineSection() {
       closeRuleEditor();
       await loadData();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to save rule');
+      notifications.error(err instanceof Error ? err.message : 'Failed to save rule', 'Normalization');
     }
   }, [ruleEditor, closeRuleEditor, loadData]);
 
@@ -644,7 +645,7 @@ export function NormalizationEngineSection() {
       closeGroupEditor();
       await loadData();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to save group');
+      notifications.error(err instanceof Error ? err.message : 'Failed to save group', 'Normalization');
     }
   }, [groupEditor, groups, closeGroupEditor, loadData]);
 
@@ -659,7 +660,7 @@ export function NormalizationEngineSection() {
       const response = await api.testNormalizationBatch(texts);
       setTestResults(response.results);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to test normalization');
+      notifications.error(err instanceof Error ? err.message : 'Failed to test normalization', 'Normalization');
     } finally {
       setTesting(false);
     }
@@ -775,17 +776,6 @@ export function NormalizationEngineSection() {
         Configure rules to automatically normalize stream names when creating channels.
         Rules are processed in priority order within each group.
       </p>
-
-      {/* Error message */}
-      {error && (
-        <div className="norm-engine-error">
-          <span className="material-icons">error</span>
-          {error}
-          <button onClick={() => setError(null)} type="button">
-            <span className="material-icons">close</span>
-          </button>
-        </div>
-      )}
 
       {/* Stats */}
       <div className="norm-engine-stats">
@@ -1003,8 +993,8 @@ export function NormalizationEngineSection() {
 
       {/* Rule Editor Modal */}
       {ruleEditor.isOpen && (
-        <div className="modal-overlay" onClick={closeRuleEditor}>
-          <div className="modal-container modal-md" onClick={(e) => e.stopPropagation()}>
+        <ModalOverlay onClose={closeRuleEditor}>
+          <div className="modal-container modal-md">
             <div className="modal-header">
               <h2 className="modal-title">{ruleEditor.editingRule ? 'Edit Rule' : 'New Rule'}</h2>
               <button
@@ -1402,13 +1392,13 @@ export function NormalizationEngineSection() {
               </button>
             </div>
           </div>
-        </div>
+        </ModalOverlay>
       )}
 
       {/* Group Editor Modal */}
       {groupEditor.isOpen && (
-        <div className="modal-overlay" onClick={closeGroupEditor}>
-          <div className="modal-container modal-sm" onClick={(e) => e.stopPropagation()}>
+        <ModalOverlay onClose={closeGroupEditor}>
+          <div className="modal-container modal-sm">
             <div className="modal-header">
               <h2 className="modal-title">{groupEditor.editingGroup ? 'Edit Group' : 'New Rule Group'}</h2>
               <button
@@ -1460,7 +1450,7 @@ export function NormalizationEngineSection() {
               </button>
             </div>
           </div>
-        </div>
+        </ModalOverlay>
       )}
     </div>
   );

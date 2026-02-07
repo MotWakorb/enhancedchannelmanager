@@ -213,10 +213,10 @@ describe('PreviewStreamModal', () => {
       expect(defaultProps.onClose).toHaveBeenCalled();
     });
 
-    it('calls onClose when overlay clicked', () => {
+    it('does not close when overlay clicked', () => {
       render(<PreviewStreamModal {...defaultProps} stream={mockStream} />);
       fireEvent.click(document.querySelector('.modal-overlay')!);
-      expect(defaultProps.onClose).toHaveBeenCalled();
+      expect(defaultProps.onClose).not.toHaveBeenCalled();
     });
 
     it('does not close when modal content clicked', async () => {

@@ -276,7 +276,6 @@ export function M3UManagerTab({
   const [accounts, setAccounts] = useState<M3UAccount[]>([]);
   const [serverGroups, setServerGroups] = useState<ServerGroup[]>([]);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
   const [editingAccount, setEditingAccount] = useState<M3UAccount | null>(null);
   const pollingRef = useRef<NodeJS.Timeout | null>(null);
@@ -319,9 +318,8 @@ export function M3UManagerTab({
       const priorities = settings.m3u_account_priorities ?? {};
       setM3uAccountPriorities(priorities);
       setPendingPriorities(priorities);
-      setError(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load M3U accounts');
+      notifications.error(err instanceof Error ? err.message : 'Failed to load M3U accounts', 'M3U Manager');
     } finally {
       setLoading(false);
     }
@@ -426,7 +424,7 @@ export function M3UManagerTab({
       await loadData();
       onAccountsChange?.();  // Notify parent to reload providers
     } catch (err) {
-      setError('Failed to delete M3U account');
+      notifications.error('Failed to delete M3U account', 'M3U Manager');
     }
   };
 
@@ -449,7 +447,7 @@ export function M3UManagerTab({
         a.id === account.id ? { ...a, status: 'fetching' } : a
       ));
     } catch (err) {
-      setError('Failed to refresh M3U account');
+      notifications.error('Failed to refresh M3U account', 'M3U Manager');
     }
   };
 
@@ -458,7 +456,7 @@ export function M3UManagerTab({
       await api.patchM3UAccount(account.id, { is_active: !account.is_active });
       await loadData();
     } catch (err) {
-      setError('Failed to update M3U account');
+      notifications.error('Failed to update M3U account', 'M3U Manager');
     }
   };
 
@@ -494,7 +492,7 @@ export function M3UManagerTab({
         a.is_active && a.name.toLowerCase() !== 'custom' ? { ...a, status: 'fetching' } : a
       ));
     } catch (err) {
-      setError('Failed to refresh M3U accounts');
+      notifications.error('Failed to refresh M3U accounts', 'M3U Manager');
     }
   };
 
@@ -581,7 +579,7 @@ export function M3UManagerTab({
       });
       setLinkedM3UAccounts(linkGroups);
     } catch (err) {
-      setError('Failed to save linked accounts');
+      notifications.error('Failed to save linked accounts', 'M3U Manager');
     }
   };
 
@@ -589,12 +587,11 @@ export function M3UManagerTab({
   // If a group is enabled in ANY linked account, enable it in ALL linked accounts
   const handleSyncGroups = async () => {
     if (linkedM3UAccounts.length === 0) {
-      setError('No linked accounts configured. Use "Manage Links" to set up linked accounts first.');
+      notifications.warning('No linked accounts configured. Use "Manage Links" to set up linked accounts first.', 'M3U Manager');
       return;
     }
 
     setSyncingGroups(true);
-    setError(null);
 
     try {
       // Process each link group
@@ -634,7 +631,7 @@ export function M3UManagerTab({
       // Reload data to show updated state
       await loadData();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to sync groups');
+      notifications.error(err instanceof Error ? err.message : 'Failed to sync groups', 'M3U Manager');
     } finally {
       setSyncingGroups(false);
     }
@@ -745,14 +742,6 @@ export function M3UManagerTab({
           </button>
         </div>
       </div>
-
-      {error && (
-        <div className="error-banner">
-          <span className="material-icons">error</span>
-          {error}
-          <button onClick={() => setError(null)}>&times;</button>
-        </div>
-      )}
 
       {filteredAccounts.length === 0 ? (
         <div className="empty-state">

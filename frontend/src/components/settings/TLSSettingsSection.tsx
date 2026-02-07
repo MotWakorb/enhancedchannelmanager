@@ -20,7 +20,7 @@ export function TLSSettingsSection({ isAdmin }: Props) {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [requesting, setRequesting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [dnsChallenge, setDnsChallenge] = useState<string | null>(null);
 
   // Form state
   const [enabled, setEnabled] = useState(false);
@@ -74,7 +74,7 @@ export function TLSSettingsSection({ isAdmin }: Props) {
         setAutoRenew(settingsData.auto_renew);
         setRenewDaysBefore(settingsData.renew_days_before_expiry);
       } catch (err) {
-        setError('Failed to load TLS settings');
+        notifications.error('Failed to load TLS settings', 'TLS');
         console.error('Failed to load TLS settings:', err);
       } finally {
         setLoading(false);
@@ -86,7 +86,7 @@ export function TLSSettingsSection({ isAdmin }: Props) {
 
   const handleSave = useCallback(async () => {
     setSaving(true);
-    setError(null);
+    setDnsChallenge(null);
 
     try {
       await api.configureTLS({
@@ -129,7 +129,7 @@ export function TLSSettingsSection({ isAdmin }: Props) {
 
   const handleRequestCertificate = useCallback(async () => {
     setRequesting(true);
-    setError(null);
+    setDnsChallenge(null);
 
     try {
       const result = await api.requestCertificate();
@@ -142,7 +142,7 @@ export function TLSSettingsSection({ isAdmin }: Props) {
       } else {
         if (result.txt_record_name) {
           // Show DNS challenge info inline (needs to persist on screen)
-          setError(
+          setDnsChallenge(
             `DNS-01 Challenge Required:\n` +
             `Create a TXT record:\n` +
             `Name: ${result.txt_record_name}\n` +
@@ -165,14 +165,14 @@ export function TLSSettingsSection({ isAdmin }: Props) {
 
   const handleCompleteDNSChallenge = useCallback(async () => {
     setRequesting(true);
-    setError(null);
+    setDnsChallenge(null);
 
     try {
       const result = await api.completeDNSChallenge();
 
       if (result.success) {
         notifications.success(result.message);
-        setError(null);
+        setDnsChallenge(null);
         // Refresh status
         const newStatus = await api.getTLSStatus();
         setStatus(newStatus);
@@ -198,7 +198,7 @@ export function TLSSettingsSection({ isAdmin }: Props) {
     }
 
     setRequesting(true);
-    setError(null);
+    setDnsChallenge(null);
 
     try {
       const result = await api.uploadCertificate(certFile, keyFile, chainFile);
@@ -225,7 +225,7 @@ export function TLSSettingsSection({ isAdmin }: Props) {
 
   const handleRenewCertificate = useCallback(async () => {
     setRequesting(true);
-    setError(null);
+    setDnsChallenge(null);
 
     try {
       const result = await api.renewCertificate();
@@ -252,7 +252,7 @@ export function TLSSettingsSection({ isAdmin }: Props) {
     }
 
     setRequesting(true);
-    setError(null);
+    setDnsChallenge(null);
 
     try {
       const result = await api.deleteCertificate();
@@ -333,10 +333,10 @@ export function TLSSettingsSection({ isAdmin }: Props) {
         <p>Configure HTTPS with Let's Encrypt automatic certificates or manual certificate upload.</p>
       </div>
 
-      {error && (
+      {dnsChallenge && (
         <div className="tls-settings-error">
-          <span className="material-icons">error</span>
-          <pre>{error}</pre>
+          <span className="material-icons">info</span>
+          <pre>{dnsChallenge}</pre>
         </div>
       )}
 

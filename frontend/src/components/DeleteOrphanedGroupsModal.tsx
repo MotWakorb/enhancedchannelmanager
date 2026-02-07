@@ -1,6 +1,7 @@
 import { useState, useEffect, memo } from 'react';
 import './ModalBase.css';
 import './DeleteOrphanedGroupsModal.css';
+import { ModalOverlay } from './ModalOverlay';
 
 interface OrphanedGroup {
   id: number;
@@ -56,8 +57,8 @@ export const DeleteOrphanedGroupsModal = memo(function DeleteOrphanedGroupsModal
   };
 
   return (
-    <div className="modal-overlay" onClick={onClose}>
-      <div className="modal-container modal-md delete-orphaned-modal" onClick={(e) => e.stopPropagation()}>
+    <ModalOverlay onClose={onClose}>
+      <div className="modal-container modal-md delete-orphaned-modal">
         <div className="modal-header">
           <h2>Delete Orphaned Channel Groups</h2>
           <button className="modal-close-btn" onClick={onClose}>
@@ -126,6 +127,6 @@ export const DeleteOrphanedGroupsModal = memo(function DeleteOrphanedGroupsModal
           </button>
         </div>
       </div>
-    </div>
+    </ModalOverlay>
   );
 });

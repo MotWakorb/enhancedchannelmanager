@@ -1,6 +1,8 @@
 import { useState, useEffect, useCallback, useRef, memo } from 'react';
 import type { M3UAccount, M3UFilter, M3UFilterCreateRequest } from '../types';
 import * as api from '../services/api';
+import { useNotifications } from '../contexts/NotificationContext';
+import { ModalOverlay } from './ModalOverlay';
 import './ModalBase.css';
 import './M3UFiltersModal.css';
 
@@ -34,10 +36,10 @@ export const M3UFiltersModal = memo(function M3UFiltersModal({
   onSaved,
   account,
 }: M3UFiltersModalProps) {
+  const notifications = useNotifications();
   const [filters, setFilters] = useState<M3UFilter[]>([]);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const [editingFilter, setEditingFilter] = useState<EditingFilter | null>(null);
   const [isAddingNew, setIsAddingNew] = useState(false);
 
@@ -49,12 +51,11 @@ export const M3UFiltersModal = memo(function M3UFiltersModal({
 
   const loadFilters = useCallback(async () => {
     setLoading(true);
-    setError(null);
     try {
       const data = await api.getM3UFilters(account.id);
       setFilters(data);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load filters');
+      notifications.error(err instanceof Error ? err.message : 'Failed to load filters', 'Filters');
     } finally {
       setLoading(false);
     }
@@ -116,12 +117,11 @@ export const M3UFiltersModal = memo(function M3UFiltersModal({
     if (!editingFilter) return;
 
     if (!editingFilter.regex_pattern.trim()) {
-      setError('Regex pattern is required');
+      notifications.error('Regex pattern is required', 'Filters');
       return;
     }
 
     setSaving(true);
-    setError(null);
 
     try {
       const filterData: M3UFilterCreateRequest = {
@@ -142,7 +142,7 @@ export const M3UFiltersModal = memo(function M3UFiltersModal({
       setIsAddingNew(false);
       onSaved();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to save filter');
+      notifications.error(err instanceof Error ? err.message : 'Failed to save filter', 'Filters');
     } finally {
       setSaving(false);
     }
@@ -153,13 +153,12 @@ export const M3UFiltersModal = memo(function M3UFiltersModal({
       return;
     }
 
-    setError(null);
     try {
       await api.deleteM3UFilter(account.id, filter.id);
       await loadFilters();
       onSaved();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to delete filter');
+      notifications.error(err instanceof Error ? err.message : 'Failed to delete filter', 'Filters');
     }
   };
 
@@ -174,8 +173,8 @@ export const M3UFiltersModal = memo(function M3UFiltersModal({
   if (!isOpen) return null;
 
   return (
-    <div className="modal-overlay">
-      <div className="modal-container m3u-filters-modal" onClick={(e) => e.stopPropagation()}>
+    <ModalOverlay onClose={onClose}>
+      <div className="modal-container m3u-filters-modal">
         <div className="modal-header">
           <div className="header-info">
             <h2>Manage Filters</h2>
@@ -385,9 +384,8 @@ export const M3UFiltersModal = memo(function M3UFiltersModal({
             </>
           )}
 
-          {error && <div className="modal-error-banner">{error}</div>}
         </div>
       </div>
-    </div>
+    </ModalOverlay>
   );
 });

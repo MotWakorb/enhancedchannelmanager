@@ -1,5 +1,6 @@
 import { useState, useCallback, memo } from 'react';
 import { importChannelsFromCSV, parseCSVPreview, CSVImportResult, CSVPreviewResult } from '../services/api';
+import { ModalOverlay } from './ModalOverlay';
 import './ModalBase.css';
 import './CSVImportModal.css';
 
@@ -110,8 +111,8 @@ export const CSVImportModal = memo(function CSVImportModal({
   const canImport = file && preview && preview.rows.length > 0 && importState !== 'importing';
 
   return (
-    <div className="modal-overlay csv-import-modal" onClick={handleClose} data-testid="csv-import-modal">
-      <div className="modal-container modal-lg" onClick={(e) => e.stopPropagation()}>
+    <ModalOverlay onClose={handleClose} className="modal-overlay csv-import-modal" data-testid="csv-import-modal">
+      <div className="modal-container modal-lg">
         <div className="modal-header">
           <h2>
             <span className="material-icons">upload_file</span>
@@ -289,6 +290,6 @@ export const CSVImportModal = memo(function CSVImportModal({
           )}
         </div>
       </div>
-    </div>
+    </ModalOverlay>
   );
 });

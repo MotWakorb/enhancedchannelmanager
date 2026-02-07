@@ -3,6 +3,7 @@ import { previewNameNormalizations } from '../utils/epgMatching';
 import { naturalCompare } from '../utils/naturalSort';
 import './ModalBase.css';
 import './NormalizeNamesModal.css';
+import { ModalOverlay } from './ModalOverlay';
 
 interface Channel {
   id: number;
@@ -31,8 +32,8 @@ export const NormalizeNamesModal = memo(function NormalizeNamesModal({ channels,
   };
 
   return (
-    <div className="modal-overlay" onClick={onCancel}>
-      <div className="modal-container modal-md normalize-names-modal" onClick={e => e.stopPropagation()}>
+    <ModalOverlay onClose={onCancel}>
+      <div className="modal-container modal-md normalize-names-modal">
         <div className="modal-header">
           <h2>Normalize Channel Names</h2>
           <button className="modal-close-btn" onClick={onCancel}>
@@ -85,6 +86,6 @@ export const NormalizeNamesModal = memo(function NormalizeNamesModal({ channels,
           )}
         </div>
       </div>
-    </div>
+    </ModalOverlay>
   );
 });

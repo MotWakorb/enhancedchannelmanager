@@ -470,11 +470,35 @@ This is a test email from Enhanced Channel Manager.
         from config import get_settings
 
         settings = get_settings()
-        if not settings.is_discord_configured():
-            logger.warning(f"[{self.task_id}] Discord not configured in General Settings")
-            return False
+        webhook_url = None
 
-        webhook_url = settings.discord_webhook_url
+        # Try shared webhook from General Settings first
+        if settings.is_discord_configured():
+            webhook_url = settings.discord_webhook_url
+        else:
+            # Fall back to first enabled Discord alert method
+            try:
+                from database import get_session as get_db_session
+                from models import AlertMethod
+                import json
+                db = get_db_session()
+                try:
+                    method = db.query(AlertMethod).filter(
+                        AlertMethod.method_type == "discord",
+                        AlertMethod.enabled == True,
+                    ).first()
+                    if method:
+                        config = json.loads(method.config) if isinstance(method.config, str) else method.config
+                        webhook_url = config.get("webhook_url")
+                        logger.info(f"[{self.task_id}] Using Discord webhook from alert method '{method.name}'")
+                finally:
+                    db.close()
+            except Exception as e:
+                logger.warning(f"[{self.task_id}] Failed to look up Discord alert method: {e}")
+
+        if not webhook_url:
+            logger.warning(f"[{self.task_id}] No Discord webhook configured (checked General Settings and Alert Methods)")
+            return False
 
         # Validate webhook URL format
         if not webhook_url.startswith("https://discord.com/api/webhooks/") and \

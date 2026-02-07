@@ -241,6 +241,8 @@ class AutoCreationEngine:
 
             return {
                 "success": True,
+                "execution_id": execution_id,
+                "rule_name": execution.rule_name or f"Execution {execution_id}",
                 "entities_removed": len(created),
                 "entities_restored": len(modified)
             }

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import './EditMode.css';
 
 interface EditModeBannerProps {
@@ -28,6 +28,17 @@ export function EditModeBanner({
 }: EditModeBannerProps) {
   const [showCancelConfirm, setShowCancelConfirm] = useState(false);
   const showWarning = duration !== null && duration > 10 * 60 * 1000; // 10 minutes
+
+  useEffect(() => {
+    if (!showCancelConfirm) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setShowCancelConfirm(false);
+      }
+    };
+    document.addEventListener('keydown', handler);
+    return () => document.removeEventListener('keydown', handler);
+  }, [showCancelConfirm]);
 
   const handleCancelClick = () => {
     if (stagedCount > 0) {
@@ -77,7 +88,7 @@ export function EditModeBanner({
       </div>
 
       {showCancelConfirm && (
-        <div className="edit-mode-dialog-overlay" onClick={() => setShowCancelConfirm(false)}>
+        <div className="edit-mode-dialog-overlay">
           <div className="edit-mode-dialog" onClick={(e) => e.stopPropagation()}>
             <div className="edit-mode-dialog-header">
               <h2>Discard Changes?</h2>

@@ -1,8 +1,10 @@
 import { useState, useEffect, useMemo, memo } from 'react';
 import type { M3UAccount, ChannelGroupM3UAccount, ChannelGroup, AutoSyncCustomProperties, ChannelProfile, StreamProfile, EPGSource } from '../types';
 import * as api from '../services/api';
+import { useNotifications } from '../contexts/NotificationContext';
 import { naturalCompare } from '../utils/naturalSort';
 import { AutoSyncSettingsModal } from './AutoSyncSettingsModal';
+import { ModalOverlay } from './ModalOverlay';
 import './ModalBase.css';
 import './M3UGroupsModal.css';
 
@@ -39,13 +41,13 @@ export const M3UGroupsModal = memo(function M3UGroupsModal({
   streamProfiles = [],
   onChannelGroupsChange,
 }: M3UGroupsModalProps) {
+  const notifications = useNotifications();
   const [groups, setGroups] = useState<GroupWithName[]>([]);
   const [search, setSearch] = useState('');
   const [hideDisabled, setHideDisabled] = useState(false);
   const [showOnlyAutoSync, setShowOnlyAutoSync] = useState(false);
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const [hasChanges, setHasChanges] = useState(false);
   // Auto-sync settings modal state
   const [settingsModalGroup, setSettingsModalGroup] = useState<GroupWithName | null>(null);
@@ -88,7 +90,6 @@ export const M3UGroupsModal = memo(function M3UGroupsModal({
   useEffect(() => {
     if (isOpen && account) {
       setSearch('');
-      setError(null);
       setHasChanges(false);
       setLoading(true);
 
@@ -112,7 +113,7 @@ export const M3UGroupsModal = memo(function M3UGroupsModal({
           setGroups(groupsWithNames);
         })
         .catch(err => {
-          setError(err instanceof Error ? err.message : 'Failed to load group data');
+          notifications.error(err instanceof Error ? err.message : 'Failed to load group data', 'M3U Groups');
           // Fall back to showing groups from prop without names
           setGroups(account.channel_groups.map(g => ({
             ...g,
@@ -208,7 +209,6 @@ export const M3UGroupsModal = memo(function M3UGroupsModal({
 
   const handleSave = async () => {
     setSaving(true);
-    setError(null);
 
     try {
       // Build settings for this account
@@ -261,7 +261,7 @@ export const M3UGroupsModal = memo(function M3UGroupsModal({
       onSaved();
       onClose();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to save group settings');
+      notifications.error(err instanceof Error ? err.message : 'Failed to save group settings', 'M3U Groups');
     } finally {
       setSaving(false);
     }
@@ -272,8 +272,8 @@ export const M3UGroupsModal = memo(function M3UGroupsModal({
   if (!isOpen) return null;
 
   return (
-    <div className="modal-overlay">
-      <div className="modal-container modal-lg m3u-groups-modal" style={{ height: '80vh', minHeight: '80vh', maxHeight: '80vh' }} onClick={(e) => e.stopPropagation()}>
+    <ModalOverlay onClose={onClose}>
+      <div className="modal-container modal-lg m3u-groups-modal" style={{ height: '80vh', minHeight: '80vh', maxHeight: '80vh' }}>
         <div className="modal-header">
           <div className="header-info">
             <h2>Manage Groups</h2>
@@ -405,7 +405,6 @@ export const M3UGroupsModal = memo(function M3UGroupsModal({
             </div>
           )}
 
-          {error && <div className="modal-error-banner">{error}</div>}
         </div>
 
         <div className="modal-footer">
@@ -451,6 +450,6 @@ export const M3UGroupsModal = memo(function M3UGroupsModal({
           onGroupsChange={onChannelGroupsChange}
         />
       )}
-    </div>
+    </ModalOverlay>
   );
 });

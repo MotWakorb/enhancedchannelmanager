@@ -7,6 +7,7 @@
  */
 
 import { useState, useMemo, memo } from 'react';
+import { ModalOverlay } from './ModalOverlay';
 import './ModalBase.css';
 import './GracenoteConflictModal.css';
 
@@ -65,8 +66,8 @@ export const GracenoteConflictModal = memo(function GracenoteConflictModal({
   if (!isOpen) return null;
 
   return (
-    <div className="modal-overlay">
-      <div className="modal-container gracenote-conflict-modal" onClick={e => e.stopPropagation()}>
+    <ModalOverlay onClose={onCancel}>
+      <div className="modal-container gracenote-conflict-modal">
         <div className="modal-header">
           <h2>Gracenote ID Conflicts</h2>
           <button className="modal-close-btn" onClick={onCancel}>
@@ -133,6 +134,6 @@ export const GracenoteConflictModal = memo(function GracenoteConflictModal({
           </button>
         </div>
       </div>
-    </div>
+    </ModalOverlay>
   );
 });

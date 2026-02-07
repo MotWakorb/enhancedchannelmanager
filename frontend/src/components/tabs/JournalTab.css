@@ -122,7 +122,7 @@
 
 .list-header {
   display: grid;
-  grid-template-columns: 140px 90px 110px 180px 1fr 40px;
+  grid-template-columns: 140px 120px 110px 180px 1fr 40px;
   gap: 0.75rem;
   padding: 0.5rem 1rem;
   background-color: var(--input-bg);
@@ -149,7 +149,7 @@
 
 .entry-row {
   display: grid;
-  grid-template-columns: 140px 90px 110px 180px 1fr 40px;
+  grid-template-columns: 140px 120px 110px 180px 1fr 40px;
   gap: 0.75rem;
   padding: 0.5rem 1rem;
   align-items: center;
@@ -215,6 +215,11 @@
 .category-task {
   background-color: rgba(139, 92, 246, 0.2);
   color: #a78bfa;
+}
+
+.category-auto_creation {
+  background-color: rgba(20, 184, 166, 0.2);
+  color: #2dd4bf;
 }
 
 .entry-action {

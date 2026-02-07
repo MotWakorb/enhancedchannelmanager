@@ -1,6 +1,7 @@
 import { useState, useEffect, memo } from 'react';
 import * as api from '../services/api';
 import { useNotifications } from '../contexts/NotificationContext';
+import { ModalOverlay } from './ModalOverlay';
 import type { Theme } from '../services/api';
 import './ModalBase.css';
 import './SettingsModal.css';
@@ -120,8 +121,8 @@ export const SettingsModal = memo(function SettingsModal({ isOpen, onClose, onSa
   if (!isOpen) return null;
 
   return (
-    <div className="modal-overlay">
-      <div className="settings-modal modal-container modal-sm" onClick={(e) => e.stopPropagation()}>
+    <ModalOverlay onClose={onClose}>
+      <div className="settings-modal modal-container modal-sm">
         <div className="modal-header">
           <h2>Dispatcharr Connection Settings</h2>
           <button className="modal-close-btn" onClick={onClose}>
@@ -187,6 +188,6 @@ export const SettingsModal = memo(function SettingsModal({ isOpen, onClose, onSa
           </button>
         </div>
       </div>
-    </div>
+    </ModalOverlay>
   );
 });

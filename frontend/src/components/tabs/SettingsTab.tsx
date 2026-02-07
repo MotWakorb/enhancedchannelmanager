@@ -18,6 +18,7 @@ import { DeleteOrphanedGroupsModal } from '../DeleteOrphanedGroupsModal';
 import { ScheduledTasksSection } from '../ScheduledTasksSection';
 import { SettingsModal } from '../SettingsModal';
 import { CustomSelect } from '../CustomSelect';
+import { ModalOverlay } from '../ModalOverlay';
 import {
   DndContext,
   closestCenter,
@@ -254,9 +255,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   // M3U Digest settings
   const [digestSettings, setDigestSettings] = useState<M3UDigestSettings | null>(null);
   const [digestLoading, setDigestLoading] = useState(false);
-  const [digestError, setDigestError] = useState<string | null>(null);
   const [digestSaving, setDigestSaving] = useState(false);
-  const [digestTestResult, setDigestTestResult] = useState<{ success: boolean; message: string } | null>(null);
 
   // Shared SMTP (Email) settings
   const [smtpHost, setSmtpHost] = useState('');
@@ -270,7 +269,6 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   const [smtpConfigured, setSmtpConfigured] = useState(false);
   const [smtpTestEmail, setSmtpTestEmail] = useState('');
   const [smtpTesting, setSmtpTesting] = useState(false);
-  const [smtpTestResult, setSmtpTestResult] = useState<{ success: boolean; message: string } | null>(null);
 
   // Shared Discord settings
   const [discordWebhookUrl, setDiscordWebhookUrl] = useState('');
@@ -294,7 +292,6 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   const [autoReorderAfterProbe, setAutoReorderAfterProbe] = useState(false);
   const [streamFetchPageLimit, setStreamFetchPageLimit] = useState(200);
   const [probingAll, setProbingAll] = useState(false);
-  const [probeAllResult, setProbeAllResult] = useState<{ success: boolean; message: string } | null>(null);
   const [totalStreamCount, setTotalStreamCount] = useState(100); // Default to 100, will be updated on load
   const [probeProgress, setProbeProgress] = useState<{
     in_progress: boolean;
@@ -361,7 +358,6 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   const [originalRefreshM3usBeforeProbe, setOriginalRefreshM3usBeforeProbe] = useState(true);
   const [needsRestart, setNeedsRestart] = useState(false);
   const [restarting, setRestarting] = useState(false);
-  const [restartResult, setRestartResult] = useState<{ success: boolean; message: string } | null>(null);
 
   // DnD sensors for sort priority
   const sensors = useSensors(
@@ -474,17 +470,12 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
           onProbeComplete?.();
           if (progress.status === 'completed') {
             const skippedMsg = progress.skipped_count > 0 ? `, Skipped: ${progress.skipped_count}` : '';
-            setProbeAllResult({
-              success: true,
-              message: `Probe completed! ${progress.total} streams probed. Success: ${progress.success_count}, Failed: ${progress.failed_count}${skippedMsg}`
-            });
+            notifications.success(`Probe completed! ${progress.total} streams probed. Success: ${progress.success_count}, Failed: ${progress.failed_count}${skippedMsg}`, 'Stream Probe');
           } else if (progress.status === 'failed') {
-            setProbeAllResult({ success: false, message: 'Probe failed' });
+            notifications.error('Probe failed', 'Stream Probe');
           } else if (progress.status === 'cancelled') {
-            setProbeAllResult({ success: false, message: 'Probe was cancelled' });
+            notifications.warning('Probe was cancelled', 'Stream Probe');
           }
-          // Clear result after 8 seconds
-          setTimeout(() => setProbeAllResult(null), 8000);
         }
       } catch (err) {
         console.error('Failed to fetch probe progress:', err);
@@ -601,7 +592,6 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       setTelegramChatId(settings.telegram_chat_id ?? '');
       setTelegramConfigured(settings.telegram_configured ?? false);
       setNeedsRestart(false);
-      setRestartResult(null);
     } catch (err) {
       console.error('Failed to load settings:', err);
     }
@@ -824,12 +814,11 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   // M3U Digest Settings Management
   const loadDigestSettings = async () => {
     setDigestLoading(true);
-    setDigestError(null);
     try {
       const settings = await api.getM3UDigestSettings();
       setDigestSettings(settings);
     } catch (err) {
-      setDigestError(err instanceof Error ? err.message : 'Failed to load digest settings');
+      notifications.error(err instanceof Error ? err.message : 'Failed to load digest settings', 'Digest Settings');
     } finally {
       setDigestLoading(false);
     }
@@ -846,7 +835,6 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   const handleSaveDigestSettings = async () => {
     if (!digestSettings) return;
     setDigestSaving(true);
-    setDigestError(null);
     try {
       const updated = await api.updateM3UDigestSettings({
         enabled: digestSettings.enabled,
@@ -856,12 +844,12 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         include_stream_changes: digestSettings.include_stream_changes,
         show_detailed_list: digestSettings.show_detailed_list,
         min_changes_threshold: digestSettings.min_changes_threshold,
+        send_to_discord: digestSettings.send_to_discord,
       });
       setDigestSettings(updated);
       notifications.success('Settings saved successfully');
     } catch (err) {
-      setDigestError(err instanceof Error ? err.message : 'Failed to save digest settings');
-      notifications.error('Failed to save digest settings', 'Save Failed');
+      notifications.error(err instanceof Error ? err.message : 'Failed to save digest settings', 'Save Failed');
     } finally {
       setDigestSaving(false);
     }
@@ -869,7 +857,6 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
 
   const handleSendTestDigest = async () => {
     if (!digestSettings) return;
-    setDigestTestResult(null);
     setDigestSaving(true);
     try {
       // Save settings first to ensure recipients are in the database
@@ -881,16 +868,17 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         include_stream_changes: digestSettings.include_stream_changes,
         show_detailed_list: digestSettings.show_detailed_list,
         min_changes_threshold: digestSettings.min_changes_threshold,
+        send_to_discord: digestSettings.send_to_discord,
       });
       // Now send the test
       const result = await api.sendTestM3UDigest();
-      setDigestTestResult(result);
-      setTimeout(() => setDigestTestResult(null), 5000);
+      if (result.success) {
+        notifications.success(result.message, 'Test Digest');
+      } else {
+        notifications.error(result.message, 'Test Digest');
+      }
     } catch (err) {
-      setDigestTestResult({
-        success: false,
-        message: err instanceof Error ? err.message : 'Failed to send test digest',
-      });
+      notifications.error(err instanceof Error ? err.message : 'Failed to send test digest', 'Test Digest');
     } finally {
       setDigestSaving(false);
     }
@@ -916,10 +904,8 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
 
   const handleRestart = async () => {
     setRestarting(true);
-    setRestartResult(null);
     try {
       const result = await api.restartServices();
-      setRestartResult(result);
       if (result.success) {
         setOriginalPollInterval(statsPollInterval);
         setOriginalTimezone(userTimezone);
@@ -933,16 +919,11 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
           restartToastIdRef.current = null;
         }
 
-        // Show success notification
         notifications.success('Services restarted successfully with new settings.', 'Restart Complete');
-
-        // Clear result after 3 seconds
-        setTimeout(() => setRestartResult(null), 3000);
       } else {
         notifications.error(result.message || 'Failed to restart services', 'Restart Failed');
       }
     } catch (err) {
-      setRestartResult({ success: false, message: 'Failed to restart services' });
       notifications.error('Failed to restart services', 'Restart Failed');
     } finally {
       setRestarting(false);
@@ -951,16 +932,14 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
 
   const handleProbeAllStreams = async () => {
     setProbingAll(true);
-    setProbeAllResult(null);
     setProbeProgress(null);
     try {
       // Probe all streams (empty array = all groups)
       const result = await api.probeAllStreams([]);
-      setProbeAllResult({ success: true, message: result.message || 'Background probe started' });
-      // Start polling for progress
+      notifications.info(result.message || 'Background probe started', 'Stream Probe');
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'Failed to start probe';
-      setProbeAllResult({ success: false, message: errorMessage });
+      notifications.error(errorMessage, 'Stream Probe');
       setProbingAll(false);
     }
   };
@@ -968,33 +947,32 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   const handleCancelProbe = async () => {
     try {
       const result = await api.cancelProbe();
-      setProbeAllResult({ success: true, message: result.message || 'Probe cancelled' });
-      // Progress polling will detect the cancelled status and update probingAll
+      notifications.info(result.message || 'Probe cancelled', 'Stream Probe');
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'Failed to cancel probe';
-      setProbeAllResult({ success: false, message: errorMessage });
+      notifications.error(errorMessage, 'Stream Probe');
     }
   };
 
   const handleResetProbeState = async () => {
     try {
       const result = await api.resetProbeState();
-      setProbeAllResult({ success: true, message: result.message || 'Probe state reset' });
+      notifications.success(result.message || 'Probe state reset', 'Stream Probe');
       setProbingAll(false);
       setProbeProgress(null);
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'Failed to reset probe state';
-      setProbeAllResult({ success: false, message: errorMessage });
+      notifications.error(errorMessage, 'Stream Probe');
     }
   };
 
   const handleClearAllProbeStats = async () => {
     try {
       const result = await api.clearAllStreamStats();
-      setProbeAllResult({ success: true, message: `Cleared ${result.cleared} probe stats` });
+      notifications.success(`Cleared ${result.cleared} probe stats`, 'Stream Probe');
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'Failed to clear probe stats';
-      setProbeAllResult({ success: false, message: errorMessage });
+      notifications.error(errorMessage, 'Stream Probe');
     }
   };
 
@@ -1017,19 +995,18 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
 
     logger.info(`Re-probing ${failedStreamIds.length} failed streams`);
     setProbingAll(true);
-    setProbeAllResult(null);
     setProbeProgress(null);  // Reset progress to show fresh progress for re-probe
 
     try {
       // Use probeAllStreams with stream_ids filter for proper progress tracking
       // Skip M3U refresh for re-probes (already have fresh data from initial probe)
       const result = await api.probeAllStreams([], true, failedStreamIds);
-      setProbeAllResult({ success: true, message: result.message || `Re-probing ${failedStreamIds.length} failed streams...` });
+      notifications.info(result.message || `Re-probing ${failedStreamIds.length} failed streams...`, 'Stream Probe');
       // Progress polling will handle the rest - probingAll will be set to false when complete
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'Failed to re-probe streams';
       logger.error('Failed to re-probe failed streams', err);
-      setProbeAllResult({ success: false, message: errorMessage });
+      notifications.error(errorMessage, 'Stream Probe');
       setProbingAll(false);
     }
   };
@@ -1999,12 +1976,11 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   // Handle SMTP test
   const handleTestSmtp = async () => {
     if (!smtpHost || !smtpFromEmail || !smtpTestEmail) {
-      setSmtpTestResult({ success: false, message: 'SMTP host, from email, and test recipient are required' });
+      notifications.error('SMTP host, from email, and test recipient are required', 'SMTP Test');
       return;
     }
 
     setSmtpTesting(true);
-    setSmtpTestResult(null);
 
     try {
       const result = await api.testSmtpConnection({
@@ -2018,9 +1994,13 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         smtp_use_ssl: smtpUseSsl,
         to_email: smtpTestEmail,
       });
-      setSmtpTestResult(result);
+      if (result.success) {
+        notifications.success(result.message, 'SMTP Test');
+      } else {
+        notifications.error(result.message, 'SMTP Test');
+      }
     } catch (err) {
-      setSmtpTestResult({ success: false, message: 'Failed to test SMTP connection' });
+      notifications.error('Failed to test SMTP connection', 'SMTP Test');
     } finally {
       setSmtpTesting(false);
     }
@@ -2241,14 +2221,6 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
           </div>
         </div>
 
-        {smtpTestResult && (
-          <div className={`test-result ${smtpTestResult.success ? 'success' : 'error'}`}>
-            <span className="material-icons">
-              {smtpTestResult.success ? 'check_circle' : 'error'}
-            </span>
-            {smtpTestResult.message}
-          </div>
-        )}
       </div>
 
       <div className="settings-section">
@@ -2386,14 +2358,6 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         <div className="loading-state">
           <span className="material-icons spinning">sync</span>
           <span>Loading digest settings...</span>
-        </div>
-      )}
-
-      {digestError && (
-        <div className="error-banner">
-          <span className="material-icons">error</span>
-          {digestError}
-          <button onClick={loadDigestSettings}>Retry</button>
         </div>
       )}
 
@@ -2644,16 +2608,6 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
             </div>
           )}
 
-          {/* Test Result */}
-          {digestTestResult && (
-            <div className={`result-banner ${digestTestResult.success ? 'success' : 'error'}`}>
-              <span className="material-icons">
-                {digestTestResult.success ? 'check_circle' : 'error'}
-              </span>
-              {digestTestResult.message}
-            </div>
-          )}
-
           {/* Actions */}
           <div className="settings-actions">
             <button
@@ -2861,10 +2815,9 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
           </div>
         </div>
 
-      {/* Probe Status Indicator - shows when probing or has result */}
-      {(probingAll || probeAllResult) && (
+      {/* Probe Status Indicator - shows when probing */}
+      {probingAll && (
         <div className="settings-section" style={{ padding: '1rem' }}>
-          {probingAll && (
             <div style={{
               display: 'flex',
               flexDirection: 'column',
@@ -2932,38 +2885,6 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                 </button>
               </div>
             </div>
-          )}
-          {!probingAll && probeAllResult && (
-            <div style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: '0.75rem',
-              padding: '0.75rem 1rem',
-              backgroundColor: 'var(--bg-tertiary)',
-              borderRadius: '6px',
-              border: `1px solid ${probeAllResult.success ? '#2ecc71' : '#e74c3c'}`
-            }}>
-              <span className="material-icons" style={{ color: probeAllResult.success ? '#2ecc71' : '#e74c3c' }}>
-                {probeAllResult.success ? 'check_circle' : 'error'}
-              </span>
-              <span>{probeAllResult.message}</span>
-              <button
-                onClick={() => setProbeAllResult(null)}
-                style={{
-                  marginLeft: 'auto',
-                  background: 'none',
-                  border: 'none',
-                  cursor: 'pointer',
-                  color: 'var(--text-secondary)',
-                  fontSize: '1.2rem',
-                  padding: '0.25rem'
-                }}
-                title="Dismiss"
-              >
-                ×
-              </button>
-            </div>
-          )}
         </div>
       )}
 
@@ -3446,13 +3367,9 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       />
 
       {showProbeResultsModal && probeResults && (
-        <div
-          className="modal-overlay"
-          onClick={() => setShowProbeResultsModal(false)}
-        >
+        <ModalOverlay onClose={() => setShowProbeResultsModal(false)}>
           <div
             className="modal-container modal-lg probe-results-modal"
-            onClick={(e) => e.stopPropagation()}
           >
             <div className="modal-header">
               <h2 className={probeResultsType === 'success' ? 'success' : probeResultsType === 'skipped' ? 'skipped' : 'failed'}>
@@ -3581,18 +3498,14 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
               </div>
             )}
           </div>
-        </div>
+        </ModalOverlay>
       )}
 
       {/* Reordered Channels Modal */}
       {showReorderModal && reorderData && (
-        <div
-          className="modal-overlay"
-          onClick={() => setShowReorderModal(false)}
-        >
+        <ModalOverlay onClose={() => setShowReorderModal(false)}>
           <div
             className="modal-container modal-xl reorder-modal"
-            onClick={(e) => e.stopPropagation()}
           >
             <div className="modal-header">
               <h2>
@@ -3747,7 +3660,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
             </div>
 
           </div>
-        </div>
+        </ModalOverlay>
       )}
 
       <SettingsModal

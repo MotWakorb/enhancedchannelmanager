@@ -3,6 +3,7 @@ import type { Logo } from '../types';
 import * as api from '../services/api';
 import './ModalBase.css';
 import './LogoModal.css';
+import { ModalOverlay } from './ModalOverlay';
 
 interface LogoModalProps {
   isOpen: boolean;
@@ -206,8 +207,8 @@ export const LogoModal = memo(function LogoModal({ isOpen, onClose, onSaved, log
   if (!isOpen) return null;
 
   return (
-    <div className="modal-overlay" onClick={onClose}>
-      <div className="modal-container logo-modal" onClick={(e) => e.stopPropagation()}>
+    <ModalOverlay onClose={onClose}>
+      <div className="modal-container logo-modal">
         <div className="modal-header">
           <h2>{isEdit ? 'Edit Logo' : 'Add Logo'}</h2>
           <button className="modal-close-btn" onClick={onClose}>
@@ -357,6 +358,6 @@ export const LogoModal = memo(function LogoModal({ isOpen, onClose, onSaved, log
           </button>
         </div>
       </div>
-    </div>
+    </ModalOverlay>
   );
 });

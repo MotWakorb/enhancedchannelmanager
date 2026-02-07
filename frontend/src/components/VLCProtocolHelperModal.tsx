@@ -1,6 +1,7 @@
 import { memo, useState } from 'react';
 import './ModalBase.css';
 import './VLCProtocolHelperModal.css';
+import { ModalOverlay } from './ModalOverlay';
 
 interface VLCProtocolHelperModalProps {
   isOpen: boolean;
@@ -70,8 +71,8 @@ export const VLCProtocolHelperModal = memo(function VLCProtocolHelperModal({
   );
 
   return (
-    <div className="modal-overlay" onClick={onClose}>
-      <div className="modal-container modal-lg" onClick={(e) => e.stopPropagation()}>
+    <ModalOverlay onClose={onClose}>
+      <div className="modal-container modal-lg">
         <div className="modal-header">
           <h2>VLC Protocol Not Available</h2>
           <button className="modal-close-btn" onClick={onClose}>
@@ -365,6 +366,6 @@ NoDisplay=true`}
           </button>
         </div>
       </div>
-    </div>
+    </ModalOverlay>
   );
 });

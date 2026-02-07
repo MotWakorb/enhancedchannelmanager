@@ -1,7 +1,8 @@
 /**
- * TDD Tests for ConditionEditor component.
+ * Tests for ConditionEditor component.
  *
- * These tests define the expected behavior of the component BEFORE implementation.
+ * The editor uses a three-part layout: Field dropdown (CustomSelect),
+ * Operator dropdown (CustomSelect), Value input.
  */
 import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
@@ -23,8 +24,8 @@ afterAll(() => server.close());
 
 describe('ConditionEditor', () => {
   describe('rendering', () => {
-    it('renders condition type selector', () => {
-      render(
+    it('renders field and operator dropdowns', () => {
+      const { container } = render(
         <ConditionEditor
           condition={{ type: 'stream_name_contains' }}
           onChange={vi.fn()}
@@ -32,7 +33,9 @@ describe('ConditionEditor', () => {
         />
       );
 
-      expect(screen.getByRole('combobox')).toBeInTheDocument();
+      // Should have two CustomSelect elements (field + operator)
+      const selects = container.querySelectorAll('.custom-select');
+      expect(selects.length).toBeGreaterThanOrEqual(2);
     });
 
     it('renders remove button', () => {
@@ -47,7 +50,7 @@ describe('ConditionEditor', () => {
       expect(screen.getByRole('button', { name: /remove/i })).toBeInTheDocument();
     });
 
-    it('displays condition type label', () => {
+    it('displays field and operator labels separately', () => {
       render(
         <ConditionEditor
           condition={{ type: 'stream_name_contains' }}
@@ -56,7 +59,9 @@ describe('ConditionEditor', () => {
         />
       );
 
-      expect(screen.getByText(/stream name contains/i)).toBeInTheDocument();
+      // Field shows "Stream Name", Operator shows "Contains"
+      expect(screen.getByText(/stream name/i)).toBeInTheDocument();
+      expect(screen.getByText(/^Contains$/)).toBeInTheDocument();
     });
   });
 
@@ -98,11 +103,11 @@ describe('ConditionEditor', () => {
 
       const input = screen.getByRole('textbox');
       expect(input).toHaveValue('.*ESPN.*');
-      // Check for the regex hint (separate from the type label that also contains "Regex")
+      // Check for the regex hint
       expect(container.querySelector('.condition-hint')).toHaveTextContent('Regex');
     });
 
-    it('renders boolean toggle for boolean conditions', () => {
+    it('renders no value input for existence conditions', () => {
       render(
         <ConditionEditor
           condition={{ type: 'has_channel', value: true }}
@@ -111,8 +116,9 @@ describe('ConditionEditor', () => {
         />
       );
 
-      const toggle = screen.getByRole('checkbox');
-      expect(toggle).toBeChecked();
+      // has_channel maps to field "Channel" with operator "Exists" - no value input
+      expect(screen.queryByRole('textbox')).not.toBeInTheDocument();
+      expect(screen.queryByRole('spinbutton')).not.toBeInTheDocument();
     });
 
     it('renders no value input for valueless conditions', () => {
@@ -124,17 +130,13 @@ describe('ConditionEditor', () => {
         />
       );
 
-      // Should not have any input field
       expect(screen.queryByRole('textbox')).not.toBeInTheDocument();
       expect(screen.queryByRole('spinbutton')).not.toBeInTheDocument();
     });
   });
 
-  // Note: Logical operators (AND/OR/NOT) are not supported by ConditionEditor.
-  // Logical grouping is handled at the rule level, not in individual condition editors.
-
   describe('onChange handling', () => {
-    it('calls onChange when type is changed', async () => {
+    it('calls onChange when operator is changed', async () => {
       const user = userEvent.setup();
       const onChange = vi.fn();
 
@@ -146,9 +148,11 @@ describe('ConditionEditor', () => {
         />
       );
 
-      const typeSelect = screen.getByRole('combobox');
-      await user.click(typeSelect);
-      await user.click(screen.getByText(/stream name matches/i));
+      // Click the operator dropdown trigger (contains text "Contains")
+      const operatorTrigger = screen.getByText(/^Contains$/).closest('button')!;
+      await user.click(operatorTrigger);
+      // Select "Matches (Regex)" from the dropdown
+      await user.click(screen.getByText(/Matches.*Regex/i));
 
       expect(onChange).toHaveBeenCalledWith(
         expect.objectContaining({ type: 'stream_name_matches' })
@@ -170,33 +174,11 @@ describe('ConditionEditor', () => {
       const input = screen.getByRole('textbox');
       await user.type(input, 'N');
 
-      // onChange is called with the typed value
       await waitFor(() => {
         expect(onChange).toHaveBeenCalledWith(
           expect.objectContaining({ value: 'N' })
         );
       });
-    });
-
-    it('calls onChange when negate is toggled', async () => {
-      const user = userEvent.setup();
-      const onChange = vi.fn();
-
-      render(
-        <ConditionEditor
-          condition={{ type: 'stream_name_contains', value: 'ESPN', negate: false }}
-          onChange={onChange}
-          onRemove={vi.fn()}
-          showNegateOption={true}
-        />
-      );
-
-      const negateCheckbox = screen.getByLabelText(/negate/i);
-      await user.click(negateCheckbox);
-
-      expect(onChange).toHaveBeenCalledWith(
-        expect.objectContaining({ negate: true })
-      );
     });
 
     it('calls onChange when case_sensitive is toggled', async () => {
@@ -254,8 +236,7 @@ describe('ConditionEditor', () => {
   });
 
   describe('validation', () => {
-    it('shows error for empty required value', async () => {
-      const user = userEvent.setup();
+    it('shows error for empty required value', () => {
       render(
         <ConditionEditor
           condition={{ type: 'stream_name_contains', value: '' }}
@@ -291,42 +272,13 @@ describe('ConditionEditor', () => {
         />
       );
 
-      // Use getByRole to find the error alert
       const errorAlert = screen.getByRole('alert');
       expect(errorAlert.textContent?.toLowerCase()).toContain('must be');
       expect(errorAlert.textContent?.toLowerCase()).toContain('positive');
     });
-
-    // Note: Logical operator validation (empty nested conditions) is not applicable
-    // since ConditionEditor only handles simple conditions, not logical operators.
   });
 
   describe('condition options', () => {
-    it('shows negate option when supported', () => {
-      render(
-        <ConditionEditor
-          condition={{ type: 'stream_name_contains', value: 'test' }}
-          onChange={vi.fn()}
-          onRemove={vi.fn()}
-          showNegateOption={true}
-        />
-      );
-
-      expect(screen.getByLabelText(/negate/i)).toBeInTheDocument();
-    });
-
-    it('hides negate option by default', () => {
-      render(
-        <ConditionEditor
-          condition={{ type: 'stream_name_contains', value: 'test' }}
-          onChange={vi.fn()}
-          onRemove={vi.fn()}
-        />
-      );
-
-      expect(screen.queryByLabelText(/negate/i)).not.toBeInTheDocument();
-    });
-
     it('shows case sensitive option for string conditions', () => {
       render(
         <ConditionEditor
@@ -350,14 +302,13 @@ describe('ConditionEditor', () => {
         />
       );
 
-      // Should not show case sensitive for numeric conditions
       expect(screen.queryByLabelText(/case sensitive/i)).not.toBeInTheDocument();
     });
   });
 
   describe('readonly mode', () => {
     it('disables all inputs when readonly', () => {
-      render(
+      const { container } = render(
         <ConditionEditor
           condition={{ type: 'stream_name_contains', value: 'ESPN' }}
           onChange={vi.fn()}
@@ -367,7 +318,9 @@ describe('ConditionEditor', () => {
       );
 
       expect(screen.getByRole('textbox')).toBeDisabled();
-      expect(screen.getByRole('combobox')).toBeDisabled();
+      // CustomSelect triggers should be disabled
+      const selectTriggers = container.querySelectorAll('.custom-select-trigger');
+      selectTriggers.forEach(trigger => expect(trigger).toBeDisabled());
     });
 
     it('hides remove button when readonly', () => {
@@ -384,28 +337,8 @@ describe('ConditionEditor', () => {
     });
   });
 
-  describe('condition type categories', () => {
-    it('groups condition types by category in selector', async () => {
-      const user = userEvent.setup();
-      render(
-        <ConditionEditor
-          condition={{ type: 'stream_name_contains' }}
-          onChange={vi.fn()}
-          onRemove={vi.fn()}
-        />
-      );
-
-      await user.click(screen.getByRole('combobox'));
-
-      // Should show category headers (Stream Conditions, Channel Conditions, Special)
-      expect(screen.getByText(/stream conditions/i)).toBeInTheDocument();
-      expect(screen.getByText(/channel conditions/i)).toBeInTheDocument();
-      expect(screen.getByText(/^special$/i)).toBeInTheDocument();
-    });
-  });
-
   describe('accessibility', () => {
-    it('has accessible labels for inputs', () => {
+    it('has accessible label for value input', () => {
       render(
         <ConditionEditor
           condition={{ type: 'stream_name_contains', value: '' }}
@@ -414,7 +347,6 @@ describe('ConditionEditor', () => {
         />
       );
 
-      expect(screen.getByLabelText(/condition type/i)).toBeInTheDocument();
       expect(screen.getByLabelText(/value/i)).toBeInTheDocument();
     });
 

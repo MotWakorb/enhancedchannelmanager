@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 import type { ChangeRecord, SavePoint } from '../types';
+import { ModalOverlay } from './ModalOverlay';
 import './HistoryToolbar.css';
 
 interface HistoryToolbarProps {
@@ -197,8 +198,8 @@ export function HistoryToolbar({
 
       {/* Checkpoint Name Modal */}
       {showNameModal && (
-        <div className="checkpoint-name-modal-overlay" onClick={handleCancelCheckpoint}>
-          <div className="checkpoint-name-modal" onClick={(e) => e.stopPropagation()}>
+        <ModalOverlay onClose={handleCancelCheckpoint} className="checkpoint-name-modal-overlay">
+          <div className="checkpoint-name-modal">
             <h4>Create Checkpoint</h4>
             <input
               ref={nameInputRef}
@@ -218,7 +219,7 @@ export function HistoryToolbar({
               </button>
             </div>
           </div>
-        </div>
+        </ModalOverlay>
       )}
     </div>
   );

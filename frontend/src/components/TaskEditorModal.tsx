@@ -4,6 +4,7 @@ import type { TaskStatus, TaskSchedule, TaskScheduleCreate, TaskScheduleUpdate, 
 import type { EPGSource, M3UAccount, ChannelGroup } from '../types';
 import { logger } from '../utils/logger';
 import { ScheduleEditor } from './ScheduleEditor';
+import { ModalOverlay } from './ModalOverlay';
 import { useNotifications } from '../contexts/NotificationContext';
 import './ModalBase.css';
 import './TaskEditorModal.css';
@@ -51,7 +52,6 @@ export function TaskEditorModal({ task, onClose, onSaved }: TaskEditorModalProps
   const [saving, setSaving] = useState(false);
   const [savingSchedule, setSavingSchedule] = useState(false);
   const [runningSchedules, setRunningSchedules] = useState<Set<number>>(new Set());
-  const [error, setError] = useState<string | null>(null);
   const notifications = useNotifications();
 
   // Load data for task-specific config and schedule parameters
@@ -161,7 +161,6 @@ export function TaskEditorModal({ task, onClose, onSaved }: TaskEditorModalProps
 
   // Save task-level settings (enabled, config, alerts)
   const handleSaveTask = async () => {
-    setError(null);
     setSaving(true);
 
     try {
@@ -191,7 +190,6 @@ export function TaskEditorModal({ task, onClose, onSaved }: TaskEditorModalProps
       notifications.success('Settings saved successfully');
     } catch (err) {
       logger.error('Failed to save task configuration', err);
-      setError('Failed to save configuration');
       notifications.error('Failed to save configuration', 'Save Failed');
     } finally {
       setSaving(false);
@@ -323,8 +321,8 @@ export function TaskEditorModal({ task, onClose, onSaved }: TaskEditorModalProps
   };
 
   return (
-    <div className="modal-overlay" onClick={(e) => e.target === e.currentTarget && onClose()}>
-      <div className="modal-container modal-md task-editor-modal" onClick={(e) => e.stopPropagation()}>
+    <ModalOverlay onClose={onClose}>
+      <div className="modal-container modal-md task-editor-modal">
         {/* Header */}
         <div className="modal-header">
           <div>
@@ -598,13 +596,6 @@ export function TaskEditorModal({ task, onClose, onSaved }: TaskEditorModalProps
             </div>
           )}
 
-          {/* Error message */}
-          {error && (
-            <div className="modal-error-banner">
-              <span className="material-icons">error</span>
-              {error}
-            </div>
-          )}
         </div>
 
         {/* Footer */}
@@ -621,12 +612,8 @@ export function TaskEditorModal({ task, onClose, onSaved }: TaskEditorModalProps
 
       {/* Schedule Editor Modal (Add) */}
       {isAddingSchedule && (
-        <div
-          className="modal-overlay schedule-editor-modal"
-          style={{ zIndex: 1001 }}
-          onClick={(e) => e.target === e.currentTarget && setIsAddingSchedule(false)}
-        >
-          <div className="modal-container modal-sm" onClick={(e) => e.stopPropagation()}>
+        <ModalOverlay onClose={() => setIsAddingSchedule(false)} className="modal-overlay schedule-editor-modal" style={{ zIndex: 1001 }}>
+          <div className="modal-container modal-sm">
             <div className="modal-header">
               <h2>Add Schedule</h2>
               <button className="modal-close-btn" onClick={() => setIsAddingSchedule(false)}>
@@ -643,17 +630,13 @@ export function TaskEditorModal({ task, onClose, onSaved }: TaskEditorModalProps
               defaultParameters={defaultParameters}
             />
           </div>
-        </div>
+        </ModalOverlay>
       )}
 
       {/* Schedule Editor Modal (Edit) */}
       {editingSchedule && (
-        <div
-          className="modal-overlay schedule-editor-modal"
-          style={{ zIndex: 1001 }}
-          onClick={(e) => e.target === e.currentTarget && setEditingSchedule(null)}
-        >
-          <div className="modal-container modal-sm" onClick={(e) => e.stopPropagation()}>
+        <ModalOverlay onClose={() => setEditingSchedule(null)} className="modal-overlay schedule-editor-modal" style={{ zIndex: 1001 }}>
+          <div className="modal-container modal-sm">
             <div className="modal-header">
               <h2>Edit Schedule</h2>
               <button className="modal-close-btn" onClick={() => setEditingSchedule(null)}>
@@ -670,8 +653,8 @@ export function TaskEditorModal({ task, onClose, onSaved }: TaskEditorModalProps
               parameterOptions={parameterOptions}
             />
           </div>
-        </div>
+        </ModalOverlay>
       )}
-    </div>
+    </ModalOverlay>
   );
 }

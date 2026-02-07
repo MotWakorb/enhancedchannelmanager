@@ -8,6 +8,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { useAuth, useAuthRequired } from '../hooks/useAuth';
 import { useNotifications } from '../contexts/NotificationContext';
 import * as api from '../services/api';
+import { ModalOverlay } from './ModalOverlay';
 import './UserMenu.css';
 
 export function UserMenu() {
@@ -192,8 +193,8 @@ export function UserMenu() {
 
       {/* Profile Edit Modal */}
       {showProfileModal && (
-        <div className="user-modal-overlay" onClick={() => setShowProfileModal(false)}>
-          <div className="user-modal" onClick={(e) => e.stopPropagation()}>
+        <ModalOverlay onClose={() => setShowProfileModal(false)} className="user-modal-overlay">
+          <div className="user-modal">
             <div className="user-modal-header">
               <h3>Edit Profile</h3>
               <button
@@ -249,13 +250,13 @@ export function UserMenu() {
               </div>
             </form>
           </div>
-        </div>
+        </ModalOverlay>
       )}
 
       {/* Change Password Modal */}
       {showPasswordModal && (
-        <div className="user-modal-overlay" onClick={() => setShowPasswordModal(false)}>
-          <div className="user-modal" onClick={(e) => e.stopPropagation()}>
+        <ModalOverlay onClose={() => setShowPasswordModal(false)} className="user-modal-overlay">
+          <div className="user-modal">
             <div className="user-modal-header">
               <h3>Change Password</h3>
               <button
@@ -321,7 +322,7 @@ export function UserMenu() {
               </div>
             </form>
           </div>
-        </div>
+        </ModalOverlay>
       )}
     </>
   );

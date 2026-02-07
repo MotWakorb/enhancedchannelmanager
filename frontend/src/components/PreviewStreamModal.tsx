@@ -5,6 +5,7 @@ import type { PreviewStreamModalProps, VideoPlayerState, VideoPlayerError } from
 import type { StreamPreviewMode } from '../services/api';
 import './ModalBase.css';
 import './PreviewStreamModal.css';
+import { ModalOverlay } from './ModalOverlay';
 
 // Labels for preview modes
 const PREVIEW_MODE_LABELS: Record<StreamPreviewMode, { label: string; icon: string; description: string }> = {
@@ -141,10 +142,9 @@ export const PreviewStreamModal = memo(function PreviewStreamModal({
     : `${window.location.origin}/api/stream-preview/${stream!.id}`;
 
   return (
-    <div className="modal-overlay" onClick={onClose}>
+    <ModalOverlay onClose={onClose}>
       <div
         className="modal-container modal-lg preview-stream-modal"
-        onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
         <div className="modal-header">
@@ -326,6 +326,6 @@ export const PreviewStreamModal = memo(function PreviewStreamModal({
           </button>
         </div>
       </div>
-    </div>
+    </ModalOverlay>
   );
 });

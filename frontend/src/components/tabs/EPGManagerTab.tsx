@@ -20,6 +20,8 @@ import type { EPGSource, EPGSourceType } from '../../types';
 import * as api from '../../services/api';
 import { DummyEPGSourceModal } from '../DummyEPGSourceModal';
 import { CustomSelect } from '../CustomSelect';
+import { ModalOverlay } from '../ModalOverlay';
+import { useNotifications } from '../../contexts/NotificationContext';
 import './EPGManagerTab.css';
 
 interface SortableEPGSourceRowProps {
@@ -283,8 +285,8 @@ function EPGSourceModal({ isOpen, source, onClose, onSave }: EPGSourceModalProps
   if (!isOpen) return null;
 
   return (
-    <div className="modal-overlay">
-      <div className="epg-modal-content" onClick={(e) => e.stopPropagation()}>
+    <ModalOverlay onClose={onClose}>
+      <div className="epg-modal-content">
         <div className="modal-header">
           <h2>{source ? 'Edit EPG Source' : 'Add Standard EPG'}</h2>
           <button className="close-btn" onClick={onClose}>&times;</button>
@@ -397,7 +399,7 @@ function EPGSourceModal({ isOpen, source, onClose, onSave }: EPGSourceModalProps
           </div>
         </form>
       </div>
-    </div>
+    </ModalOverlay>
   );
 }
 
@@ -407,10 +409,10 @@ interface EPGManagerTabProps {
 }
 
 export function EPGManagerTab({ onSourcesChange, hideEpgUrls = false }: EPGManagerTabProps) {
+  const notifications = useNotifications();
   const [sources, setSources] = useState<EPGSource[]>([]);
   const [dummySources, setDummySources] = useState<EPGSource[]>([]);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
   const [editingSource, setEditingSource] = useState<EPGSource | null>(null);
   const [refreshingAll, setRefreshingAll] = useState(false);
@@ -437,9 +439,8 @@ export function EPGManagerTab({ onSourcesChange, hideEpgUrls = false }: EPGManag
         .sort((a, b) => a.name.localeCompare(b.name));
       setSources(standardSources);
       setDummySources(dummyEpgSources);
-      setError(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load EPG sources');
+      notifications.error(err instanceof Error ? err.message : 'Failed to load EPG sources', 'EPG Manager');
     } finally {
       setLoading(false);
     }
@@ -472,7 +473,7 @@ export function EPGManagerTab({ onSourcesChange, hideEpgUrls = false }: EPGManag
         );
         await loadSources();
       } catch (err) {
-        setError('Failed to update priorities');
+        notifications.error('Failed to update priorities', 'EPG Manager');
         await loadSources();
       }
     }
@@ -490,7 +491,7 @@ export function EPGManagerTab({ onSourcesChange, hideEpgUrls = false }: EPGManag
       setEditingSource(fullSource);
       setModalOpen(true);
     } catch (err) {
-      setError('Failed to load EPG source details');
+      notifications.error('Failed to load EPG source details', 'EPG Manager');
     }
   };
 
@@ -504,7 +505,7 @@ export function EPGManagerTab({ onSourcesChange, hideEpgUrls = false }: EPGManag
       await loadSources();
       onSourcesChange?.();
     } catch (err) {
-      setError('Failed to delete EPG source');
+      notifications.error('Failed to delete EPG source', 'EPG Manager');
     }
   };
 
@@ -528,7 +529,7 @@ export function EPGManagerTab({ onSourcesChange, hideEpgUrls = false }: EPGManag
       // Stop polling after 5 minutes max
       setTimeout(() => clearInterval(pollInterval), 300000);
     } catch (err) {
-      setError('Failed to refresh EPG source');
+      notifications.error('Failed to refresh EPG source', 'EPG Manager');
     }
   };
 
@@ -537,7 +538,7 @@ export function EPGManagerTab({ onSourcesChange, hideEpgUrls = false }: EPGManag
       await api.updateEPGSource(source.id, { is_active: !source.is_active });
       await loadSources();
     } catch (err) {
-      setError('Failed to update EPG source');
+      notifications.error('Failed to update EPG source', 'EPG Manager');
     }
   };
 
@@ -564,7 +565,7 @@ export function EPGManagerTab({ onSourcesChange, hideEpgUrls = false }: EPGManag
       setEditingDummySource(fullSource);
       setDummyModalOpen(true);
     } catch (err) {
-      setError('Failed to load EPG source details');
+      notifications.error('Failed to load EPG source details', 'EPG Manager');
     }
   };
 
@@ -578,7 +579,7 @@ export function EPGManagerTab({ onSourcesChange, hideEpgUrls = false }: EPGManag
       await loadSources();
       onSourcesChange?.();
     } catch (err) {
-      setError('Failed to delete dummy EPG source');
+      notifications.error('Failed to delete dummy EPG source', 'EPG Manager');
     }
   };
 
@@ -587,7 +588,7 @@ export function EPGManagerTab({ onSourcesChange, hideEpgUrls = false }: EPGManag
       await api.updateEPGSource(source.id, { is_active: !source.is_active });
       await loadSources();
     } catch (err) {
-      setError('Failed to update dummy EPG source');
+      notifications.error('Failed to update dummy EPG source', 'EPG Manager');
     }
   };
 
@@ -631,7 +632,7 @@ export function EPGManagerTab({ onSourcesChange, hideEpgUrls = false }: EPGManag
       }, 600000);
     } catch (err) {
       console.error('[EPGManagerTab] Failed to trigger EPG import:', err);
-      setError('Failed to trigger EPG import');
+      notifications.error('Failed to trigger EPG import', 'EPG Manager');
       setRefreshingAll(false);
     }
   };
@@ -667,14 +668,6 @@ export function EPGManagerTab({ onSourcesChange, hideEpgUrls = false }: EPGManag
           </button>
         </div>
       </div>
-
-      {error && (
-        <div className="error-banner">
-          <span className="material-icons">error</span>
-          {error}
-          <button onClick={() => setError(null)}>&times;</button>
-        </div>
-      )}
 
       {sources.length === 0 ? (
         <div className="empty-state">

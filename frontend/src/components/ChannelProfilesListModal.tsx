@@ -1,7 +1,9 @@
 import { useState, useEffect, useMemo, memo } from 'react';
 import type { ChannelProfile, Channel, ChannelGroup } from '../types';
 import * as api from '../services/api';
+import { useNotifications } from '../contexts/NotificationContext';
 import { naturalCompare } from '../utils/naturalSort';
+import { ModalOverlay } from './ModalOverlay';
 import './ChannelProfilesListModal.css';
 
 interface ChannelProfilesListModalProps {
@@ -26,10 +28,10 @@ export const ChannelProfilesListModal = memo(function ChannelProfilesListModal({
   channels,
   channelGroups,
 }: ChannelProfilesListModalProps) {
+  const notifications = useNotifications();
   const [profiles, setProfiles] = useState<ProfileWithState[]>([]);
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const [newProfileName, setNewProfileName] = useState('');
   const [isCreating, setIsCreating] = useState(false);
 
@@ -47,7 +49,6 @@ export const ChannelProfilesListModal = memo(function ChannelProfilesListModal({
   useEffect(() => {
     if (isOpen) {
       setSearch('');
-      setError(null);
       setNewProfileName('');
       setViewMode('list');
       setSelectedProfile(null);
@@ -57,12 +58,11 @@ export const ChannelProfilesListModal = memo(function ChannelProfilesListModal({
 
   const loadProfiles = async () => {
     setLoading(true);
-    setError(null);
     try {
       const data = await api.getChannelProfiles();
       setProfiles(data);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load profiles');
+      notifications.error(err instanceof Error ? err.message : 'Failed to load profiles', 'Profiles');
     } finally {
       setLoading(false);
     }
@@ -79,14 +79,13 @@ export const ChannelProfilesListModal = memo(function ChannelProfilesListModal({
   const handleCreateProfile = async () => {
     if (!newProfileName.trim()) return;
     setIsCreating(true);
-    setError(null);
     try {
       const newProfile = await api.createChannelProfile({ name: newProfileName.trim() });
       setProfiles(prev => [...prev, newProfile]);
       setNewProfileName('');
       onSaved();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to create profile');
+      notifications.error(err instanceof Error ? err.message : 'Failed to create profile', 'Profiles');
     } finally {
       setIsCreating(false);
     }
@@ -122,7 +121,7 @@ export const ChannelProfilesListModal = memo(function ChannelProfilesListModal({
       ));
       onSaved();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to update profile');
+      notifications.error(err instanceof Error ? err.message : 'Failed to update profile', 'Profiles');
     }
   };
 
@@ -133,7 +132,7 @@ export const ChannelProfilesListModal = memo(function ChannelProfilesListModal({
       setProfiles(prev => prev.filter(p => p.id !== profile.id));
       onSaved();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to delete profile');
+      notifications.error(err instanceof Error ? err.message : 'Failed to delete profile', 'Profiles');
     }
   };
 
@@ -301,7 +300,6 @@ export const ChannelProfilesListModal = memo(function ChannelProfilesListModal({
     if (!selectedProfile || channelChanges.size === 0) return;
 
     setSavingChannels(true);
-    setError(null);
 
     try {
       // Use individual channel updates to ensure membership records are created
@@ -320,7 +318,7 @@ export const ChannelProfilesListModal = memo(function ChannelProfilesListModal({
       setChannelChanges(new Map());
       onSaved();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to save channel changes');
+      notifications.error(err instanceof Error ? err.message : 'Failed to save channel changes', 'Profiles');
     } finally {
       setSavingChannels(false);
     }
@@ -337,8 +335,8 @@ export const ChannelProfilesListModal = memo(function ChannelProfilesListModal({
   if (!isOpen) return null;
 
   return (
-    <div className="modal-overlay">
-      <div className="modal-container modal-lg channel-profiles-modal" onClick={(e) => e.stopPropagation()}>
+    <ModalOverlay onClose={onClose}>
+      <div className="modal-container modal-lg channel-profiles-modal">
         {viewMode === 'list' ? (
           <>
             <div className="modal-header">
@@ -488,7 +486,6 @@ export const ChannelProfilesListModal = memo(function ChannelProfilesListModal({
                 </>
               )}
 
-              {error && <div className="modal-error-banner"><span className="material-icons">error</span><span>{error}</span></div>}
             </div>
 
             <div className="modal-footer">
@@ -616,8 +613,6 @@ export const ChannelProfilesListModal = memo(function ChannelProfilesListModal({
                 })}
             </div>
 
-            {error && <div className="modal-error-banner"><span className="material-icons">error</span><span>{error}</span></div>}
-
             <div className="modal-footer">
               <button className="modal-btn modal-btn-secondary" onClick={handleBackToList} disabled={savingChannels}>
                 Back
@@ -633,6 +628,6 @@ export const ChannelProfilesListModal = memo(function ChannelProfilesListModal({
           </>
         )}
       </div>
-    </div>
+    </ModalOverlay>
   );
 });

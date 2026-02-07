@@ -3,6 +3,7 @@ import type { M3UChangeLog, M3UChangeSummary, M3UChangeType, M3UAccount } from '
 import * as api from '../../services/api';
 import { CustomSelect } from '../CustomSelect';
 import './M3UChangesTab.css';
+import { useNotifications } from '../../contexts/NotificationContext';
 
 // Helper to format timestamp
 function formatTimestamp(isoString: string): string {
@@ -87,7 +88,7 @@ export function M3UChangesTab() {
   const [summary, setSummary] = useState<M3UChangeSummary | null>(null);
   const [accounts, setAccounts] = useState<M3UAccount[]>([]);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const notifications = useNotifications();
 
   // Pagination state
   const [page, setPage] = useState(1);
@@ -119,7 +120,6 @@ export function M3UChangesTab() {
   // Fetch changes
   const fetchChanges = useCallback(async () => {
     setLoading(true);
-    setError(null);
     try {
       const [changesRes, summaryRes] = await Promise.all([
         api.getM3UChanges({
@@ -142,7 +142,7 @@ export function M3UChangesTab() {
       setTotalPages(changesRes.total_pages);
       setSummary(summaryRes);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to fetch changes');
+      notifications.error(err instanceof Error ? err.message : 'Failed to fetch changes', 'Changes');
     } finally {
       setLoading(false);
     }
@@ -340,15 +340,6 @@ export function M3UChangesTab() {
         )}
       </div>
 
-      {/* Error Banner */}
-      {error && (
-        <div className="error-banner">
-          <span className="material-icons">error</span>
-          {error}
-          <button onClick={fetchChanges}>Retry</button>
-        </div>
-      )}
-
       {/* Loading State */}
       {loading && changes.length === 0 && (
         <div className="loading-state">
@@ -358,7 +349,7 @@ export function M3UChangesTab() {
       )}
 
       {/* Empty State */}
-      {!loading && changes.length === 0 && !error && (
+      {!loading && changes.length === 0 && (
         <div className="empty-state">
           <span className="material-icons">check_circle</span>
           <h3>No Changes Detected</h3>

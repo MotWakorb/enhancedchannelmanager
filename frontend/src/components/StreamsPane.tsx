@@ -10,6 +10,7 @@ import { useContextMenu } from '../hooks/useContextMenu';
 import { useKeyboardShortcuts } from '../hooks/useKeyboardShortcuts';
 import { CustomSelect } from './CustomSelect';
 import { PreviewStreamModal } from './PreviewStreamModal';
+import { ModalOverlay } from './ModalOverlay';
 import { logger } from '../utils/logger';
 import { setStreamDragData, clearStreamDragData } from '../utils/dragStore';
 import './StreamsPane.css';
@@ -1977,8 +1978,8 @@ export function StreamsPane({
 
       {/* Bulk Create Modal */}
       {bulkCreateModalOpen && (streamsToCreate.length > 0 || isManualEntry) && (
-        <div className="modal-overlay">
-          <div className="bulk-create-modal" onClick={(e) => e.stopPropagation()}>
+        <ModalOverlay onClose={closeBulkCreateModal}>
+          <div className="bulk-create-modal">
             <div className="modal-header">
               <h3>
                 {isManualEntry
@@ -2640,13 +2641,13 @@ export function StreamsPane({
               </button>
             </div>
           </div>
-        </div>
+        </ModalOverlay>
       )}
 
       {/* Bulk Create Conflict Dialog */}
       {bulkCreateShowConflict && (
-        <div className="modal-overlay">
-          <div className="modal-content conflict-dialog" onClick={(e) => e.stopPropagation()}>
+        <ModalOverlay onClose={() => setBulkCreateShowConflict(false)}>
+          <div className="modal-content conflict-dialog">
             <h3>Channel Number Conflict</h3>
             <div className="conflict-message">
               <p>
@@ -2700,7 +2701,7 @@ export function StreamsPane({
               </button>
             </div>
           </div>
-        </div>
+        </ModalOverlay>
       )}
 
       {/* Stream Preview Modal */}

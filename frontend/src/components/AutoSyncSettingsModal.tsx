@@ -3,6 +3,7 @@ import type { AutoSyncCustomProperties, ChannelGroup, ChannelProfile, StreamProf
 import * as api from '../services/api';
 import './ModalBase.css';
 import './AutoSyncSettingsModal.css';
+import { ModalOverlay } from './ModalOverlay';
 
 interface AutoSyncSettingsModalProps {
   isOpen: boolean;
@@ -323,8 +324,8 @@ export const AutoSyncSettingsModal = memo(function AutoSyncSettingsModal({
   if (!isOpen) return null;
 
   return (
-    <div className="modal-overlay" onClick={onClose}>
-      <div className="modal-container modal-md auto-sync-settings-modal" onClick={(e) => e.stopPropagation()}>
+    <ModalOverlay onClose={onClose}>
+      <div className="modal-container modal-md auto-sync-settings-modal">
         <div className="modal-header">
           <div className="header-info">
             <h2>Auto-Sync Settings</h2>
@@ -817,6 +818,6 @@ export const AutoSyncSettingsModal = memo(function AutoSyncSettingsModal({
           </div>
         </div>
       </div>
-    </div>
+    </ModalOverlay>
   );
 });

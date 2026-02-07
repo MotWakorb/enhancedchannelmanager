@@ -2,6 +2,7 @@ import { useState, useEffect, memo, useRef } from 'react';
 import type { M3UAccount, M3UAccountType, ServerGroup } from '../types';
 import * as api from '../services/api';
 import { useAsyncOperation } from '../hooks/useAsyncOperation';
+import { ModalOverlay } from './ModalOverlay';
 import './ModalBase.css';
 import './M3UAccountModal.css';
 
@@ -253,8 +254,8 @@ export const M3UAccountModal = memo(function M3UAccountModal({
   if (!isOpen) return null;
 
   return (
-    <div className="modal-overlay">
-      <div className="modal-container m3u-account-modal" onClick={(e) => e.stopPropagation()}>
+    <ModalOverlay onClose={onClose}>
+      <div className="modal-container m3u-account-modal">
         <div className="modal-header">
           <h2>{isEdit ? 'Edit M3U Account' : 'Add M3U Account'}</h2>
           <button className="modal-close-btn" onClick={onClose}>
@@ -560,6 +561,6 @@ export const M3UAccountModal = memo(function M3UAccountModal({
           </button>
         </div>
       </div>
-    </div>
+    </ModalOverlay>
   );
 });

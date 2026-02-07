@@ -16,6 +16,7 @@ import {
   type BatchMatchProgress,
 } from '../utils/epgMatching';
 import { naturalCompare } from '../utils/naturalSort';
+import { ModalOverlay } from './ModalOverlay';
 import './BulkEPGAssignModal.css';
 
 export type { EPGAssignment };
@@ -476,8 +477,8 @@ export const BulkEPGAssignModal = memo(function BulkEPGAssignModal({
   if (!isOpen) return null;
 
   return (
-    <div className="modal-overlay">
-      <div className="modal-container modal-xxl bulk-epg-modal" onClick={e => e.stopPropagation()}>
+    <ModalOverlay onClose={onClose}>
+      <div className="modal-container modal-xxl bulk-epg-modal">
         <div className="modal-header">
           <h2>Bulk EPG Assignment</h2>
           <button className="modal-close-btn" onClick={onClose}>
@@ -873,7 +874,7 @@ export const BulkEPGAssignModal = memo(function BulkEPGAssignModal({
           </button>
         </div>
       </div>
-    </div>
+    </ModalOverlay>
   );
 });
 

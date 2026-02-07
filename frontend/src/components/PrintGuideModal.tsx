@@ -2,6 +2,7 @@ import { useState, useMemo, useCallback, memo } from 'react';
 import type { Channel, ChannelGroup } from '../types';
 import './ModalBase.css';
 import './PrintGuideModal.css';
+import { ModalOverlay } from './ModalOverlay';
 
 // Clean channel name by removing channel number prefix
 // e.g., "2.1 | ABC News" -> "ABC News", "102 - ESPN" -> "ESPN"
@@ -190,8 +191,8 @@ export const PrintGuideModal = memo(function PrintGuideModal({
   if (!isOpen) return null;
 
   return (
-    <div className="modal-overlay" onClick={onClose}>
-      <div className="modal-container modal-md print-guide-modal" onClick={(e) => e.stopPropagation()}>
+    <ModalOverlay onClose={onClose}>
+      <div className="modal-container modal-md print-guide-modal">
         <div className="modal-header">
           <h2>Print Channel Guide</h2>
           <button className="modal-close-btn" onClick={onClose}>
@@ -272,7 +273,7 @@ export const PrintGuideModal = memo(function PrintGuideModal({
           </button>
         </div>
       </div>
-    </div>
+    </ModalOverlay>
   );
 });
 

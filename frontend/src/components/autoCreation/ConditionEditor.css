@@ -5,7 +5,7 @@
   align-items: flex-start;
   flex-wrap: wrap;
   gap: 8px;
-  padding: 12px 32px 12px 12px;
+  padding: 12px;
   background: var(--bg-secondary);
   border: 1px solid var(--border-primary);
   border-radius: 8px;
@@ -102,81 +102,15 @@
   align-items: center;
 }
 
-/* Type Selector */
-.condition-type-wrapper {
-  position: relative;
+/* Field & Operator CustomSelect sizing */
+.condition-field-select {
+  min-width: 160px;
+  flex-shrink: 0;
 }
 
-.condition-type-button {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 8px 12px;
-  background: var(--input-bg);
-  border: 1px solid var(--border-primary);
-  border-radius: 6px;
-  color: var(--text-primary);
-  cursor: pointer;
-  min-width: 180px;
-  font-size: 14px;
-}
-
-.condition-type-button:hover:not(:disabled) {
-  border-color: var(--accent-primary);
-}
-
-.condition-type-button:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
-}
-
-.condition-type-dropdown {
-  position: absolute;
-  top: 100%;
-  left: 0;
-  z-index: 100;
-  min-width: 250px;
-  max-height: 300px;
-  overflow-y: auto;
-  background: var(--bg-primary);
-  border: 1px solid var(--border-primary);
-  border-radius: 6px;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
-  margin-top: 4px;
-}
-
-.condition-category {
-  padding: 4px 0;
-}
-
-.condition-category-label {
-  padding: 8px 12px 4px;
-  font-size: 11px;
-  font-weight: 600;
-  text-transform: uppercase;
-  color: var(--text-muted);
-  letter-spacing: 0.5px;
-}
-
-.condition-type-option {
-  display: block;
-  width: 100%;
-  padding: 8px 12px;
-  text-align: left;
-  background: transparent;
-  border: none;
-  color: var(--text-primary);
-  cursor: pointer;
-  font-size: 14px;
-}
-
-.condition-type-option:hover {
-  background: var(--bg-tertiary);
-}
-
-.condition-type-option.selected {
-  background: var(--accent-primary);
-  color: var(--bg-primary);
+.condition-operator-select {
+  min-width: 160px;
+  flex-shrink: 0;
 }
 
 /* Value Input */
@@ -220,57 +154,6 @@
   border-radius: 4px;
 }
 
-/* Boolean Toggle */
-.condition-boolean-wrapper {
-  display: flex;
-  align-items: center;
-}
-
-.condition-toggle {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  cursor: pointer;
-}
-
-.condition-toggle input {
-  display: none;
-}
-
-.toggle-slider {
-  width: 36px;
-  height: 20px;
-  background: var(--bg-tertiary);
-  border-radius: 10px;
-  position: relative;
-  transition: background 0.2s;
-}
-
-.toggle-slider::after {
-  content: '';
-  position: absolute;
-  top: 2px;
-  left: 2px;
-  width: 16px;
-  height: 16px;
-  background: white;
-  border-radius: 50%;
-  transition: transform 0.2s;
-}
-
-.condition-toggle input:checked + .toggle-slider {
-  background: var(--success-color, #28a745);
-}
-
-.condition-toggle input:checked + .toggle-slider::after {
-  transform: translateX(16px);
-}
-
-.toggle-label {
-  font-size: 14px;
-  color: var(--text-secondary);
-}
-
 /* Options */
 .condition-options {
   display: flex;
@@ -300,9 +183,6 @@
 
 /* Remove Button */
 .condition-remove-btn {
-  position: absolute;
-  top: 10px;
-  right: 10px;
   padding: 4px;
   background: transparent;
   border: none;
@@ -313,6 +193,8 @@
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
+  align-self: flex-start;
+  margin-top: 4px;
 }
 
 .condition-remove-btn:hover {

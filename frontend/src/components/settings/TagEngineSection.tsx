@@ -8,6 +8,8 @@
 import { useState, useEffect, useCallback } from 'react';
 import * as api from '../../services/api';
 import type { TagGroup, Tag } from '../../types';
+import { useNotifications } from '../../contexts/NotificationContext';
+import { ModalOverlay } from '../ModalOverlay';
 import './TagEngineSection.css';
 
 interface TagGroupCardProps {
@@ -280,9 +282,9 @@ function TagGroupCard({ group, isExpanded, onToggleExpand, onRefresh }: TagGroup
 }
 
 export function TagEngineSection() {
+  const notifications = useNotifications();
   const [groups, setGroups] = useState<TagGroup[]>([]);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
   const [expandedGroupId, setExpandedGroupId] = useState<number | null>(null);
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [newGroupName, setNewGroupName] = useState('');
@@ -293,9 +295,8 @@ export function TagEngineSection() {
     try {
       const data = await api.getTagGroups();
       setGroups(data.groups);
-      setError(null);
     } catch (err) {
-      setError('Failed to load tag groups');
+      notifications.error('Failed to load tag groups', 'Tags');
       console.error(err);
     } finally {
       setLoading(false);
@@ -319,7 +320,7 @@ export function TagEngineSection() {
       setNewGroupName('');
       setNewGroupDescription('');
     } catch (err) {
-      setError('Failed to create tag group');
+      notifications.error('Failed to create tag group', 'Tags');
       console.error(err);
     }
   };
@@ -334,7 +335,7 @@ export function TagEngineSection() {
       await api.deleteTagGroup(groupId);
       await loadGroups();
     } catch (err) {
-      setError('Failed to delete tag group');
+      notifications.error('Failed to delete tag group', 'Tags');
       console.error(err);
     }
   };
@@ -387,16 +388,6 @@ export function TagEngineSection() {
         </button>
       </div>
 
-      {error && (
-        <div className="tag-engine-error">
-          <span className="material-icons">error</span>
-          {error}
-          <button onClick={() => setError(null)}>
-            <span className="material-icons">close</span>
-          </button>
-        </div>
-      )}
-
       {loading ? (
         <div className="tag-engine-loading">
           <span className="material-icons spinning">sync</span>
@@ -438,8 +429,8 @@ export function TagEngineSection() {
 
       {/* Create Group Modal */}
       {showCreateModal && (
-        <div className="modal-overlay" onClick={() => setShowCreateModal(false)}>
-          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+        <ModalOverlay onClose={() => setShowCreateModal(false)}>
+          <div className="modal-content">
             <div className="modal-header">
               <h3>Create Tag Group</h3>
               <button className="modal-close" onClick={() => setShowCreateModal(false)}>
@@ -480,7 +471,7 @@ export function TagEngineSection() {
               </button>
             </div>
           </div>
-        </div>
+        </ModalOverlay>
       )}
     </div>
   );

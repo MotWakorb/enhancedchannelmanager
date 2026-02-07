@@ -156,9 +156,9 @@ describe('RuleBuilder', () => {
 
       await user.click(screen.getByRole('button', { name: /add condition/i }));
 
-      // Should show condition type options
+      // Should show condition type options (ConditionTypeSelector still uses category labels)
       await waitFor(() => {
-        expect(screen.getByText(/stream name contains/i)).toBeInTheDocument();
+        expect(screen.getByText(/stream conditions/i)).toBeInTheDocument();
       });
     });
 
@@ -169,9 +169,9 @@ describe('RuleBuilder', () => {
       await user.click(screen.getByRole('button', { name: /add condition/i }));
       await user.click(screen.getByText(/stream name contains/i));
 
-      // Should show condition editor with the appropriate placeholder
+      // Should show condition editor with field and operator dropdowns
       await waitFor(() => {
-        expect(screen.getByPlaceholderText(/enter text to match/i)).toBeInTheDocument();
+        expect(screen.getByPlaceholderText(/enter text/i)).toBeInTheDocument();
       });
     });
 
@@ -441,7 +441,7 @@ describe('RuleBuilder', () => {
       // Add a condition that requires a value
       await user.click(screen.getByRole('button', { name: /add condition/i }));
       await waitFor(() => {
-        expect(screen.getByText(/stream name contains/i)).toBeInTheDocument();
+        expect(screen.getByText(/stream conditions/i)).toBeInTheDocument();
       });
       await user.click(screen.getByText(/stream name contains/i));
 

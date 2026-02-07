@@ -43,6 +43,7 @@ import { ChannelListItem } from './ChannelListItem';
 import { StreamListItem } from './StreamListItem';
 import { PreviewStreamModal } from './PreviewStreamModal';
 import { CSVImportModal } from './CSVImportModal';
+import { ModalOverlay } from './ModalOverlay';
 import { exportChannelsToCSV, downloadCSVTemplate } from '../services/api';
 import './ChannelsPane.css';
 
@@ -4897,8 +4898,8 @@ export function ChannelsPane({
 
       {/* Create Channel Group Modal */}
       {createGroupModal.isOpen && (
-        <div className="modal-overlay">
-          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+        <ModalOverlay onClose={handleCloseCreateGroupModal}>
+          <div className="modal-content">
             <h3>Create New Channel Group</h3>
             <div className="modal-form">
               <label>
@@ -4934,13 +4935,13 @@ export function ChannelsPane({
               </button>
             </div>
           </div>
-        </div>
+        </ModalOverlay>
       )}
 
       {/* Hidden Groups Modal */}
       {hiddenGroupsModal.isOpen && (
-        <div className="modal-overlay">
-          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+        <ModalOverlay onClose={() => hiddenGroupsModal.close()}>
+          <div className="modal-content">
             <h3>Hidden Channel Groups</h3>
             <div className="modal-form">
               {hiddenGroups.length === 0 ? (
@@ -4987,13 +4988,13 @@ export function ChannelsPane({
               </button>
             </div>
           </div>
-        </div>
+        </ModalOverlay>
       )}
 
       {/* Delete Channel Confirmation Dialog */}
       {deleteConfirmModal.isOpen && channelToDelete && (
-        <div className="modal-overlay">
-          <div className="modal-content delete-dialog" onClick={(e) => e.stopPropagation()}>
+        <ModalOverlay onClose={handleCancelDelete}>
+          <div className="modal-content delete-dialog">
             <h3>Delete Channel</h3>
             <div className="delete-message">
               <p>
@@ -5064,13 +5065,13 @@ export function ChannelsPane({
               </button>
             </div>
           </div>
-        </div>
+        </ModalOverlay>
       )}
 
       {/* Delete Group Confirmation Dialog */}
       {deleteGroupConfirmModal.isOpen && groupToDelete && (
-          <div className="modal-overlay">
-            <div className="modal-content delete-dialog" onClick={(e) => e.stopPropagation()}>
+          <ModalOverlay onClose={handleCancelDeleteGroup}>
+            <div className="modal-content delete-dialog">
               <h3>Delete Group</h3>
               <div className="delete-message">
                 <p>
@@ -5119,13 +5120,13 @@ export function ChannelsPane({
                 </button>
               </div>
             </div>
-          </div>
+          </ModalOverlay>
       )}
 
       {/* Rename Group Dialog */}
       {renameGroupModal.isOpen && groupToRename && (
-        <div className="modal-overlay">
-          <div className="modal-content rename-dialog" onClick={(e) => e.stopPropagation()}>
+        <ModalOverlay onClose={handleCancelRenameGroup}>
+          <div className="modal-content rename-dialog">
             <h3>Rename Group</h3>
             <div className="rename-form">
               <label htmlFor="rename-group-input">Group Name</label>
@@ -5163,7 +5164,7 @@ export function ChannelsPane({
               </button>
             </div>
           </div>
-        </div>
+        </ModalOverlay>
       )}
 
       {/* Bulk Delete Channels Confirmation Dialog */}
@@ -5190,8 +5191,8 @@ export function ChannelsPane({
         }
 
         return (
-          <div className="modal-overlay">
-            <div className="modal-content delete-dialog" onClick={(e) => e.stopPropagation()}>
+          <ModalOverlay onClose={handleCancelBulkDelete}>
+            <div className="modal-content delete-dialog">
               <h3>Delete {selectedChannelIds.size} Channel{selectedChannelIds.size !== 1 ? 's' : ''}</h3>
               <div className="delete-message">
                 <p>
@@ -5236,7 +5237,7 @@ export function ChannelsPane({
                 </button>
               </div>
             </div>
-          </div>
+          </ModalOverlay>
         );
       })()}
 
@@ -5379,8 +5380,8 @@ export function ChannelsPane({
 
       {/* Cross-Group Move Modal */}
       {crossGroupMoveModal.isOpen && crossGroupMoveData && (
-        <div className="modal-overlay">
-          <div className="modal-content cross-group-move-dialog" onClick={(e) => e.stopPropagation()}>
+        <ModalOverlay onClose={handleCrossGroupMoveCancel}>
+          <div className="modal-content cross-group-move-dialog">
             <h3>Move {crossGroupMoveData.channels.length > 1 ? `${crossGroupMoveData.channels.length} Channels` : 'Channel'} to Group</h3>
 
             <div className="cross-group-move-info">
@@ -5575,13 +5576,13 @@ export function ChannelsPane({
               </button>
             </div>
           </div>
-        </div>
+        </ModalOverlay>
       )}
 
       {/* Group Reorder Modal */}
       {groupReorderModal.isOpen && groupReorderData && (
-        <div className="modal-overlay">
-          <div className="modal-content cross-group-move-dialog" onClick={(e) => e.stopPropagation()}>
+        <ModalOverlay onClose={handleGroupReorderCancel}>
+          <div className="modal-content cross-group-move-dialog">
             <h3>Reorder Group</h3>
 
             <div className="cross-group-move-info">
@@ -5701,13 +5702,13 @@ export function ChannelsPane({
               </button>
             </div>
           </div>
-        </div>
+        </ModalOverlay>
       )}
 
       {/* Sort & Renumber Modal */}
       {sortRenumberModal.isOpen && sortRenumberData && (
-        <div className="modal-overlay">
-          <div className="modal-content sort-renumber-dialog" onClick={(e) => e.stopPropagation()}>
+        <ModalOverlay onClose={handleSortRenumberCancel}>
+          <div className="modal-content sort-renumber-dialog">
             <h3>Sort & Renumber Channels</h3>
 
             <div className="sort-renumber-info">
@@ -5825,13 +5826,13 @@ export function ChannelsPane({
               </button>
             </div>
           </div>
-        </div>
+        </ModalOverlay>
       )}
 
       {/* Mass Renumber Modal */}
       {massRenumberModal.isOpen && massRenumberChannels.length > 0 && (
-        <div className="modal-overlay">
-          <div className="modal-content mass-renumber-dialog" onClick={(e) => e.stopPropagation()}>
+        <ModalOverlay onClose={handleMassRenumberCancel}>
+          <div className="modal-content mass-renumber-dialog">
             <h3>Renumber Channels</h3>
 
             <div className="mass-renumber-info">
@@ -5954,7 +5955,7 @@ export function ChannelsPane({
               )}
             </div>
           </div>
-        </div>
+        </ModalOverlay>
       )}
 
       {/* Channel Profiles Modal */}

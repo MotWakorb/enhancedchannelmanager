@@ -263,7 +263,6 @@ export function ScheduledTasksSection({ userTimezone: _userTimezone }: Scheduled
   const [tasks, setTasks] = useState<TaskStatus[]>([]);
   const [loading, setLoading] = useState(true);
   const [runningTasks, setRunningTasks] = useState<Set<string>>(new Set());
-  const [error, setError] = useState<string | null>(null);
   const [editingTask, setEditingTask] = useState<TaskStatus | null>(null);
   const notifications = useNotifications();
 
@@ -271,10 +270,9 @@ export function ScheduledTasksSection({ userTimezone: _userTimezone }: Scheduled
     try {
       const result = await api.getTasks();
       setTasks(result.tasks);
-      setError(null);
     } catch (err) {
       logger.error('Failed to load tasks', err);
-      setError('Failed to load scheduled tasks');
+      notifications.error('Failed to load scheduled tasks', 'Tasks');
     } finally {
       setLoading(false);
     }
@@ -427,14 +425,6 @@ export function ScheduledTasksSection({ userTimezone: _userTimezone }: Scheduled
     return (
       <div style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>
         Loading scheduled tasks...
-      </div>
-    );
-  }
-
-  if (error) {
-    return (
-      <div style={{ padding: '2rem', textAlign: 'center', color: '#e74c3c' }}>
-        {error}
       </div>
     );
   }

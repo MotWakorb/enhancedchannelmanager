@@ -773,6 +773,22 @@ class TestConnectionRequest(BaseModel):
     password: str
 
 
+def _has_discord_alert_method() -> bool:
+    """Check if any enabled Discord alert method exists."""
+    try:
+        from models import AlertMethod
+        session = get_session()
+        try:
+            return session.query(AlertMethod).filter(
+                AlertMethod.method_type == "discord",
+                AlertMethod.enabled == True,
+            ).first() is not None
+        finally:
+            session.close()
+    except Exception:
+        return False
+
+
 @app.get("/api/settings", tags=["Settings"])
 async def get_current_settings():
     """Get current settings (password masked)."""
@@ -838,8 +854,8 @@ async def get_current_settings():
         smtp_from_name=settings.smtp_from_name,
         smtp_use_tls=settings.smtp_use_tls,
         smtp_use_ssl=settings.smtp_use_ssl,
-        # Shared Discord settings
-        discord_configured=settings.is_discord_configured(),
+        # Shared Discord settings (also check alert methods for Discord webhook)
+        discord_configured=settings.is_discord_configured() or _has_discord_alert_method(),
         discord_webhook_url=settings.discord_webhook_url,
         # Shared Telegram settings
         telegram_configured=settings.is_telegram_configured(),
@@ -5584,10 +5600,12 @@ async def send_test_m3u_digest():
     try:
         settings = get_or_create_digest_settings(db)
 
-        if not settings.get_email_recipients():
+        has_email = bool(settings.get_email_recipients())
+        has_discord = bool(settings.send_to_discord)
+        if not has_email and not has_discord:
             raise HTTPException(
                 status_code=400,
-                detail="No email recipients configured. Please add recipients first."
+                detail="No notification targets configured. Please add email recipients or enable Discord."
             )
 
         task = M3UDigestTask()
@@ -7216,6 +7234,10 @@ async def list_tasks():
                         task['alert_on_success'] = db_task.alert_on_success
                         task['alert_on_warning'] = db_task.alert_on_warning
                         task['alert_on_error'] = db_task.alert_on_error
+                        task['alert_on_info'] = db_task.alert_on_info
+                        task['send_to_email'] = db_task.send_to_email
+                        task['send_to_discord'] = db_task.send_to_discord
+                        task['send_to_telegram'] = db_task.send_to_telegram
                         task['show_notifications'] = db_task.show_notifications
 
                     # Get schedules
@@ -7270,6 +7292,10 @@ async def get_task(task_id: str):
                 status['alert_on_success'] = db_task.alert_on_success
                 status['alert_on_warning'] = db_task.alert_on_warning
                 status['alert_on_error'] = db_task.alert_on_error
+                status['alert_on_info'] = db_task.alert_on_info
+                status['send_to_email'] = db_task.send_to_email
+                status['send_to_discord'] = db_task.send_to_discord
+                status['send_to_telegram'] = db_task.send_to_telegram
                 status['show_notifications'] = db_task.show_notifications
 
             # Get schedules
@@ -9681,14 +9707,17 @@ async def rollback_auto_creation_execution(execution_id: int):
             raise HTTPException(status_code=400, detail=result.get("error", "Rollback failed"))
 
         # Log to journal
+        rule_name = result.get("rule_name", f"Execution {execution_id}")
+        removed = result.get("entities_removed", 0)
+        restored = result.get("entities_restored", 0)
         session = get_session()
         try:
             journal.log_entry(
                 category="auto_creation",
                 action_type="rollback",
                 entity_id=execution_id,
-                entity_name=f"Execution {execution_id}",
-                description=f"Rolled back auto-creation execution {execution_id}"
+                entity_name=rule_name,
+                description=f"Rolled back '{rule_name}': removed {removed} channel(s), restored {restored} entit{'y' if restored == 1 else 'ies'}"
             )
         finally:
             session.close()

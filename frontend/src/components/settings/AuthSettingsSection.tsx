@@ -19,7 +19,6 @@ export function AuthSettingsSection({ isAdmin }: Props) {
   const [settings, setSettings] = useState<AuthSettingsPublic | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
 
   // Form state for each provider
   const [localEnabled, setLocalEnabled] = useState(true);
@@ -49,7 +48,7 @@ export function AuthSettingsSection({ isAdmin }: Props) {
 
         setRequireAuth(data.require_auth);
       } catch (err) {
-        setError('Failed to load authentication settings');
+        notifications.error('Failed to load authentication settings', 'Auth Settings');
         console.error('Failed to load auth settings:', err);
       } finally {
         setLoading(false);
@@ -61,7 +60,6 @@ export function AuthSettingsSection({ isAdmin }: Props) {
 
   const handleSave = useCallback(async () => {
     setSaving(true);
-    setError(null);
 
     const update: AuthSettingsUpdate = {
       require_auth: requireAuth,
@@ -76,8 +74,7 @@ export function AuthSettingsSection({ isAdmin }: Props) {
       notifications.success('Authentication settings saved');
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to save settings';
-      setError(message);
-      notifications.error(message);
+      notifications.error(message, 'Auth Settings');
     } finally {
       setSaving(false);
     }
@@ -117,16 +114,6 @@ export function AuthSettingsSection({ isAdmin }: Props) {
           </p>
         </div>
       </div>
-
-      {error && (
-        <div className="auth-settings-error">
-          <span className="material-icons">error</span>
-          {error}
-          <button onClick={() => setError(null)}>
-            <span className="material-icons">close</span>
-          </button>
-        </div>
-      )}
 
       {/* Global Settings */}
       <div className="auth-provider-card">

@@ -3,6 +3,7 @@ import type { JournalEntry, JournalCategory, JournalActionType, JournalStats, Jo
 import * as api from '../../services/api';
 import { CustomSelect } from '../CustomSelect';
 import './JournalTab.css';
+import { useNotifications } from '../../contexts/NotificationContext';
 
 // Helper to format timestamp - always show actual date and time
 function formatTimestamp(isoString: string): string {
@@ -33,6 +34,8 @@ function getCategoryIcon(category: JournalCategory): string {
       return 'visibility';
     case 'task':
       return 'schedule';
+    case 'auto_creation':
+      return 'auto_fix_high';
     default:
       return 'article';
   }
@@ -76,17 +79,20 @@ function formatCategory(category: JournalCategory): string {
       return 'Watch';
     case 'task':
       return 'Task';
+    case 'auto_creation':
+      return 'Auto-Creation';
     default:
       return category;
   }
 }
 
 export function JournalTab() {
+  const notifications = useNotifications();
+
   // Data state
   const [entries, setEntries] = useState<JournalEntry[]>([]);
   const [stats, setStats] = useState<JournalStats | null>(null);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
 
   // Pagination state
   const [page, setPage] = useState(1);
@@ -106,7 +112,6 @@ export function JournalTab() {
   // Load entries
   const loadEntries = useCallback(async () => {
     setLoading(true);
-    setError(null);
     try {
       const params: JournalQueryParams = {
         page,
@@ -121,7 +126,7 @@ export function JournalTab() {
       setTotalPages(result.total_pages);
       setTotalCount(result.count);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load journal entries');
+      notifications.error(err instanceof Error ? err.message : 'Failed to load journal entries', 'Journal');
     } finally {
       setLoading(false);
     }
@@ -212,6 +217,10 @@ export function JournalTab() {
                 <span className="material-icons">stop_circle</span>
                 {stats.by_action_type.stop || 0}
               </span>
+              <span className="header-stat" title="Auto-Creation entries">
+                <span className="material-icons">auto_fix_high</span>
+                {stats.by_category.auto_creation || 0}
+              </span>
               <span className="header-total" title="Total journal entries">({stats.total_entries.toLocaleString()} total)</span>
             </div>
           )}
@@ -256,6 +265,7 @@ export function JournalTab() {
             { value: 'm3u', label: 'M3U' },
             { value: 'task', label: 'Task' },
             { value: 'watch', label: 'Watch' },
+            { value: 'auto_creation', label: 'Auto-Creation' },
           ]}
         />
         <CustomSelect
@@ -277,15 +287,6 @@ export function JournalTab() {
           ]}
         />
       </div>
-
-      {/* Error Banner */}
-      {error && (
-        <div className="error-banner">
-          <span className="material-icons">error</span>
-          <span>{error}</span>
-          <button onClick={() => setError(null)}>&times;</button>
-        </div>
-      )}
 
       {/* Entries List */}
       {entries.length === 0 ? (

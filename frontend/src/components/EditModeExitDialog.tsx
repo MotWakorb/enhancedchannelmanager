@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import type { EditModeExitDialogProps } from '../types';
 import './EditMode.css';
 
@@ -13,6 +13,17 @@ export function EditModeExitDialog({
 }: EditModeExitDialogProps) {
   const [showDetails, setShowDetails] = useState(false);
 
+  useEffect(() => {
+    if (!isOpen || isCommitting) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        onKeepEditing();
+      }
+    };
+    document.addEventListener('keydown', handler);
+    return () => document.removeEventListener('keydown', handler);
+  }, [isOpen, isCommitting, onKeepEditing]);
+
   if (!isOpen) return null;
 
   const hasChanges = summary.totalOperations > 0;
@@ -23,7 +34,7 @@ export function EditModeExitDialog({
     : 0;
 
   return (
-    <div className="edit-mode-dialog-overlay" onClick={isCommitting ? undefined : onKeepEditing}>
+    <div className="edit-mode-dialog-overlay">
       <div className="edit-mode-dialog" onClick={(e) => e.stopPropagation()}>
         <div className="edit-mode-dialog-header">
           <h2>{isCommitting ? 'Applying Changes' : 'Exit Edit Mode'}</h2>

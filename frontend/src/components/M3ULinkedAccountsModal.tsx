@@ -1,6 +1,7 @@
 import { useState, useMemo, memo } from 'react';
 import type { M3UAccount } from '../types';
 import { naturalCompare } from '../utils/naturalSort';
+import { ModalOverlay } from './ModalOverlay';
 import './ModalBase.css';
 import './M3ULinkedAccountsModal.css';
 
@@ -138,8 +139,8 @@ export const M3ULinkedAccountsModal = memo(function M3ULinkedAccountsModal({
   const isEditing = editingGroupIndex !== null;
 
   return (
-    <div className="modal-overlay">
-      <div className="modal-container modal-md m3u-linked-accounts-modal" onClick={(e) => e.stopPropagation()}>
+    <ModalOverlay onClose={onClose}>
+      <div className="modal-container modal-md m3u-linked-accounts-modal">
         <div className="modal-header">
           <h2>Manage Linked Accounts</h2>
           <button className="modal-close-btn" onClick={onClose}>
@@ -256,6 +257,6 @@ export const M3ULinkedAccountsModal = memo(function M3ULinkedAccountsModal({
           </div>
         )}
       </div>
-    </div>
+    </ModalOverlay>
   );
 });

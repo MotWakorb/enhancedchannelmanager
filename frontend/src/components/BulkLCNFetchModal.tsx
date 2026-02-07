@@ -8,7 +8,9 @@
 import { useState, useEffect, useMemo, useRef, memo } from 'react';
 import type { Channel, EPGData } from '../types';
 import { getEPGLcnBatch, type LCNLookupItem } from '../services/api';
+import { useNotifications } from '../contexts/NotificationContext';
 import { naturalCompare } from '../utils/naturalSort';
+import { ModalOverlay } from './ModalOverlay';
 import './BulkLCNFetchModal.css';
 
 export interface LCNAssignment {
@@ -42,9 +44,9 @@ export const BulkLCNFetchModal = memo(function BulkLCNFetchModal({
   onClose,
   onAssign,
 }: BulkLCNFetchModalProps) {
+  const notifications = useNotifications();
   const [phase, setPhase] = useState<Phase>('fetching');
   const [results, setResults] = useState<ChannelLCNResult[]>([]);
-  const [error, setError] = useState<string | null>(null);
 
   // Selection state - which results to include in assignment
   const [selectedForAssignment, setSelectedForAssignment] = useState<Set<number>>(new Set());
@@ -64,7 +66,6 @@ export const BulkLCNFetchModal = memo(function BulkLCNFetchModal({
       // Reset state when modal closes
       setPhase('fetching');
       setResults([]);
-      setError(null);
       setSelectedForAssignment(new Set());
       setFoundExpanded(true);
       setNoTvgIdExpanded(true);
@@ -83,7 +84,6 @@ export const BulkLCNFetchModal = memo(function BulkLCNFetchModal({
     // Start fetching
     const fetchLCNs = async () => {
       setPhase('fetching');
-      setError(null);
 
       // Build list of channels with TVG-IDs to look up
       const channelResults: ChannelLCNResult[] = [];
@@ -145,7 +145,7 @@ export const BulkLCNFetchModal = memo(function BulkLCNFetchModal({
           }
         } catch (err) {
           console.error('Failed to fetch LCNs:', err);
-          setError('Failed to fetch Gracenote IDs from EPG sources');
+          notifications.error('Failed to fetch Gracenote IDs from EPG sources', 'Gracenote');
           // Still show channels without LCN data
           for (const [tvgId, channels] of tvgIdToChannels.entries()) {
             for (const channel of channels) {
@@ -291,8 +291,8 @@ export const BulkLCNFetchModal = memo(function BulkLCNFetchModal({
   if (!isOpen) return null;
 
   return (
-    <div className="modal-overlay">
-      <div className="modal-container modal-lg bulk-lcn-modal" onClick={e => e.stopPropagation()}>
+    <ModalOverlay onClose={onClose}>
+      <div className="modal-container modal-lg bulk-lcn-modal">
         <div className="modal-header">
           <h2>Fetch Gracenote IDs</h2>
           <button className="modal-close-btn" onClick={onClose}>
@@ -311,14 +311,6 @@ export const BulkLCNFetchModal = memo(function BulkLCNFetchModal({
             </div>
           ) : (
             <>
-              {/* Error message */}
-              {error && (
-                <div className="modal-error-banner">
-                  <span className="material-icons">error</span>
-                  <span>{error}</span>
-                </div>
-              )}
-
               {/* Summary */}
               <div className="modal-summary">
                 <div className="modal-summary-item success">
@@ -507,7 +499,7 @@ export const BulkLCNFetchModal = memo(function BulkLCNFetchModal({
           </button>
         </div>
       </div>
-    </div>
+    </ModalOverlay>
   );
 });
 

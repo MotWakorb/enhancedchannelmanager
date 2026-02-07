@@ -9,6 +9,7 @@ import { useState, useEffect, useCallback } from 'react';
 import * as api from '../../services/api';
 import type { UserIdentity, IdentityProvider, AuthStatus } from '../../types';
 import { useNotifications } from '../../contexts/NotificationContext';
+import { ModalOverlay } from '../ModalOverlay';
 import './LinkedAccountsSection.css';
 import '../ModalBase.css';
 
@@ -64,8 +65,8 @@ function LinkModal({ provider, onClose, onLink, loading }: LinkModalProps) {
   const config = PROVIDER_CONFIG[provider];
 
   return (
-    <div className="modal-overlay" onClick={onClose}>
-      <div className="modal-container modal-sm" onClick={(e) => e.stopPropagation()}>
+    <ModalOverlay onClose={onClose}>
+      <div className="modal-container modal-sm">
         <div className="modal-header">
           <h2 className="modal-title">
             <span className="material-icons">{config.icon}</span>
@@ -126,7 +127,7 @@ function LinkModal({ provider, onClose, onLink, loading }: LinkModalProps) {
           </div>
         </form>
       </div>
-    </div>
+    </ModalOverlay>
   );
 }
 
@@ -135,7 +136,6 @@ export function LinkedAccountsSection() {
   const [identities, setIdentities] = useState<UserIdentity[]>([]);
   const [authStatus, setAuthStatus] = useState<AuthStatus | null>(null);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
   const [unlinking, setUnlinking] = useState<number | null>(null);
   const [linkingProvider, setLinkingProvider] = useState<IdentityProvider | null>(null);
   const [linkLoading, setLinkLoading] = useState(false);
@@ -152,7 +152,7 @@ export function LinkedAccountsSection() {
         setIdentities(identitiesResponse.identities);
         setAuthStatus(statusResponse);
       } catch (err) {
-        setError('Failed to load linked accounts');
+        notifications.error('Failed to load linked accounts', 'Linked Accounts');
         console.error('Failed to load linked accounts:', err);
       } finally {
         setLoading(false);
@@ -252,16 +252,6 @@ export function LinkedAccountsSection() {
           </p>
         </div>
       </div>
-
-      {error && (
-        <div className="linked-accounts-error">
-          <span className="material-icons">error</span>
-          {error}
-          <button onClick={() => setError(null)}>
-            <span className="material-icons">close</span>
-          </button>
-        </div>
-      )}
 
       {/* Current Linked Identities */}
       {identities.length === 0 ? (

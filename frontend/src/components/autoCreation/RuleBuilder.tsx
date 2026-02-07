@@ -48,6 +48,19 @@ export function RuleBuilder({
   const [showConditionSelector, setShowConditionSelector] = useState(false);
   const [showActionSelector, setShowActionSelector] = useState(false);
 
+  // Escape key closes the cancel confirm dialog (capture phase to intercept before parent ModalOverlay)
+  useEffect(() => {
+    if (!showCancelConfirm) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.stopImmediatePropagation();
+        setShowCancelConfirm(false);
+      }
+    };
+    document.addEventListener('keydown', handler, true);
+    return () => document.removeEventListener('keydown', handler, true);
+  }, [showCancelConfirm]);
+
   const handleReorderCondition = (fromIndex: number, newPosition: number) => {
     const toIndex = newPosition - 1;
     if (toIndex === fromIndex || toIndex < 0 || toIndex >= conditions.length) return;
