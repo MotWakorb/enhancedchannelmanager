@@ -61,7 +61,10 @@ jobs:
 
       - name: Run pip-audit
         working-directory: backend
-        run: pip-audit -r requirements.txt --ignore-vuln PYSEC-2024-48
+        # PYSEC-2024-48: aiohttp (no fix available for our version range)
+        # CVE-2024-23342: ecdsa timing attack - transitive dep via python-jose,
+        #   unused (cryptography backend handles actual signing), no fix planned
+        run: pip-audit -r requirements.txt --ignore-vuln PYSEC-2024-48 --ignore-vuln CVE-2024-23342
 
   codeql-analysis:
     name: CodeQL Analysis
