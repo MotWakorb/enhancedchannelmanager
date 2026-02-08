@@ -10,16 +10,22 @@ A comprehensive guide to using Enhanced Channel Manager for IPTV channel managem
 
 1. [Getting Started](#getting-started)
 2. [M3U Manager](#m3u-manager)
-3. [Channel Manager](#channel-manager)
-4. [EPG Manager](#epg-manager)
-5. [TV Guide](#tv-guide)
-6. [Logo Manager](#logo-manager)
-7. [Journal](#journal)
-8. [Stats Dashboard](#stats-dashboard)
-9. [Settings](#settings)
-10. [Keyboard Shortcuts](#keyboard-shortcuts)
-11. [Tips & Best Practices](#tips--best-practices)
-12. [Screenshot Checklist](#screenshot-checklist)
+3. [M3U Change Tracking](#m3u-change-tracking)
+4. [Channel Manager](#channel-manager)
+5. [EPG Manager](#epg-manager)
+6. [TV Guide](#tv-guide)
+7. [Logo Manager](#logo-manager)
+8. [Stream & Channel Preview](#stream--channel-preview)
+9. [Auto-Creation Pipeline](#auto-creation-pipeline)
+10. [Journal](#journal)
+11. [Stats Dashboard](#stats-dashboard)
+12. [Notifications](#notifications)
+13. [Settings](#settings)
+14. [Authentication & Users](#authentication--users)
+15. [CLI Tools](#cli-tools)
+16. [Keyboard Shortcuts](#keyboard-shortcuts)
+17. [Tips & Best Practices](#tips--best-practices)
+18. [Screenshot Checklist](#screenshot-checklist)
 
 ---
 
@@ -30,9 +36,20 @@ Enhanced Channel Manager (ECM) is a web-based interface for managing IPTV channe
 ### First-Time Setup
 
 ![Application Overview](docs/images/01-app-overview.png)
-<!-- Screenshot: Full application window showing the tab navigation bar at top with all tabs visible (M3U Manager, EPG Manager, Channel Manager, Guide, Logo Manager, Journal, Stats, Settings) -->
+<!-- Screenshot: Full application window showing the tab navigation bar at top with all tabs visible -->
 
-**Step 1: Open Settings**
+**Step 1: Create Your Admin Account**
+
+On first launch, ECM shows a setup wizard to create your administrator account.
+
+1. Enter a **Username**
+2. Enter your **Email** address
+3. Choose a **Password** (minimum 8 characters, must include uppercase, lowercase, and a number)
+4. Click **Create Account**
+
+You'll be logged in automatically after setup.
+
+**Step 2: Open Settings**
 
 ![Settings Navigation](docs/images/02-settings-nav.png)
 <!-- Screenshot: Click on the Settings tab in the navigation bar, showing the settings sidebar -->
@@ -40,7 +57,7 @@ Enhanced Channel Manager (ECM) is a web-based interface for managing IPTV channe
 1. Click **Settings** in the top navigation bar
 2. The settings sidebar will appear on the left
 
-**Step 2: Configure Dispatcharr Connection**
+**Step 3: Configure Dispatcharr Connection**
 
 ![Dispatcharr Connection Settings](docs/images/03-dispatcharr-settings.png)
 <!-- Screenshot: The General Settings section showing Server URL, Username, Password fields, and Test Connection button -->
@@ -50,7 +67,7 @@ Enhanced Channel Manager (ECM) is a web-based interface for managing IPTV channe
 3. Enter your **Password**
 4. Click **Test Connection**
 
-**Step 3: Verify Connection**
+**Step 4: Verify Connection**
 
 ![Connection Success](docs/images/04-connection-success.png)
 <!-- Screenshot: Show the green checkmark or "Connection verified" indicator after successful test -->
@@ -58,7 +75,7 @@ Enhanced Channel Manager (ECM) is a web-based interface for managing IPTV channe
 - A green checkmark indicates successful connection
 - If connection fails, verify your URL and credentials
 
-**Step 4: Save Settings**
+**Step 5: Save Settings**
 
 1. Click **Save** to store your configuration
 2. You're now ready to add M3U accounts
@@ -197,6 +214,47 @@ Filters let you include or exclude streams:
 4. Choose **Action**: Include or Exclude
 5. Enter a **Regex Pattern**
 6. Drag filters to reorder (executed top to bottom)
+
+---
+
+## M3U Change Tracking
+
+The M3U Changes tab tracks all changes detected in your M3U playlists over time.
+
+### Overview
+
+![M3U Changes Tab](docs/images/61-m3u-changes-overview.png)
+<!-- Screenshot: M3U Changes tab showing summary cards and change list -->
+
+Every time an M3U account is refreshed, ECM compares the new data against the previous snapshot and records any differences.
+
+### Summary Statistics
+
+At the top of the tab, dashboard cards show:
+- **Groups Added** - Total new groups discovered
+- **Groups Removed** - Total groups that disappeared
+- **Streams Added** - Total new streams found
+- **Streams Removed** - Total streams that disappeared
+
+### Filtering Changes
+
+- **M3U Account** - Filter by specific M3U account
+- **Change Type** - Group add/remove, stream add/remove
+- **Enabled Status** - Filter by whether the affected group was enabled or disabled
+- **Time Range** - Last 24 hours, 3 days, 7 days, 30 days, or 90 days
+- **Search** - Full-text search across change descriptions
+- **Sort** - Sort by time, account, type, group name, count, or enabled status
+
+### Change Details
+
+Click any change row to expand and see full details including individual stream names that were added or removed.
+
+### M3U Change Notifications
+
+Configure email digests for M3U changes in Settings → Alert Methods:
+- **Immediate** - Send notification as soon as changes are detected
+- **Hourly/Daily/Weekly** - Batched digest notifications
+- **Discord** - Send change notifications to Discord webhooks
 
 ---
 
@@ -351,6 +409,32 @@ In edit mode you can:
 - **Remove**: Click the **X** on a stream
 - **Reorder**: Drag streams up/down (higher = higher priority)
 
+### Sort & Renumber
+
+Sort and renumber channels within a group:
+
+1. Right-click a group header (or use the group menu)
+2. Choose **Sort & Renumber**
+3. Options:
+   - **Alphabetical Sort** - Sort channels A-Z
+   - **Smart Name Sorting** - Ignores channel number prefixes when sorting (e.g., "101 | Sports" sorts as "Sports")
+   - **Sequential Renumber** - Assign sequential numbers starting from any value
+4. Preview the result before applying
+5. The entire operation undoes as one action with Ctrl+Z
+
+### Copy Channel & Stream URLs
+
+- Click the **copy icon** on any channel to copy its Dispatcharr proxy stream URL
+- Click the **copy icon** on any stream to copy its direct URL
+- Useful for testing streams in external players
+
+### Channel Profiles
+
+- View and manage stream transcoding profiles
+- Set a **default channel profile** in Settings → Channel Defaults
+- Select profiles when creating channels (single or bulk)
+- Assign profiles to existing channels via the edit modal
+
 ### Filtering Channels and Streams
 
 ![Filter Options](docs/images/32-filter-options.png)
@@ -361,6 +445,12 @@ In edit mode you can:
 - Show/hide specific groups
 - Show/hide empty groups
 - Show/hide provider groups
+- **Missing Data Filters** - Filter by channels missing:
+  - Missing Logo
+  - Missing TVG-ID
+  - Missing EPG Data
+  - Missing Gracenote ID
+  - Active filter indicator on the filter button
 
 **Stream Filters (Right Pane)**:
 - Provider dropdown
@@ -506,12 +596,14 @@ Features:
 ### Logo Library
 
 ![Logo Manager](docs/images/46-logo-manager.png)
-<!-- Screenshot: Logo Manager showing grid of logos with search box, view mode toggle, and usage counts -->
+<!-- Screenshot: Logo Manager showing grid of logos with search box, pagination, and usage counts -->
 
 - Browse all logos with previews
 - Toggle between list and grid view
-- Search by name
+- **Search** logos by name
 - See usage count per logo
+- **Pagination** - Choose page size (25, 50, 100, 250) with page navigation
+- All logos are automatically loaded by paginating through Dispatcharr's API
 
 ### Adding Logos
 
@@ -519,7 +611,130 @@ Features:
 <!-- Screenshot: Add Logo modal with URL input field or file upload option -->
 
 - **From URL**: Enter image URL
-- **Upload**: Upload image file directly
+- **Upload**: Upload image files directly to Dispatcharr
+
+---
+
+## Stream & Channel Preview
+
+Preview streams and channels directly in your browser before assigning them.
+
+### Previewing a Stream
+
+1. Click the **play icon** on any stream in the streams pane
+2. The preview modal opens with embedded video player
+3. Stream metadata is displayed (name, TVG-ID, group, M3U provider)
+
+### Previewing a Channel
+
+1. Click the **play icon** on any channel
+2. This tests the actual Dispatcharr proxy stream output
+3. Verifies the channel is working correctly end-to-end
+
+### Preview Modes
+
+Configure the preview mode in Settings → Stream Preview:
+
+| Mode | Description |
+|------|-------------|
+| **Passthrough** | Direct proxy, fastest but may fail on AC-3/DTS audio |
+| **Transcode** | FFmpeg transcodes audio to AAC for browser compatibility (recommended) |
+| **Video Only** | Strips audio entirely for quick silent preview |
+
+The current mode is shown as an indicator in the preview modal.
+
+### Alternative Options
+
+From the preview modal you can also:
+- **Open in VLC** - Launch the stream in VLC media player
+- **Download M3U** - Download an M3U playlist file
+- **Copy URL** - Copy the direct stream URL
+
+---
+
+## Auto-Creation Pipeline
+
+The Auto-Creation tab lets you automate channel creation with a rules-based engine. Define conditions to match streams and actions to create channels, merge streams, and assign metadata automatically.
+
+### Creating a Rule
+
+1. Click **Add Rule** in the Auto-Creation tab
+2. Enter a **Rule Name** and optional **Description**
+3. Configure **Conditions** to match streams
+4. Configure **Actions** to define what happens
+5. Click **Save**
+
+### Conditions
+
+Build matching logic using a three-part editor (Field + Operator + Value) with AND/OR connectors:
+
+| Field | Operators |
+|-------|-----------|
+| **Stream Name** | contains, does not contain, begins with, ends with, matches (regex) |
+| **Stream Group** | contains, matches (regex) |
+| **TVG ID** | exists, does not exist, matches |
+| **Logo** | exists, does not exist |
+| **Provider** | is, is not (specific M3U account) |
+| **Quality** | at least, at most (2160p, 1080p, 720p, 480p, 360p) |
+| **Codec** | is, is not (H.264, HEVC, etc.) |
+| **Channel Exists** | by name, regex, or group |
+
+Combine multiple conditions with **AND** (all must match) or **OR** (any can match) connectors.
+
+### Actions
+
+Define what happens when conditions match:
+
+| Action | Description |
+|--------|-------------|
+| **Create Channel** | Template-based naming using `{stream_name}`, `{stream_group}`, `{quality}`, `{provider}`, etc. |
+| **Create Group** | Automatically create a channel group |
+| **Merge Streams** | Combine multiple streams into one channel with quality preference |
+| **Assign Logo** | Set channel logo from stream or URL |
+| **Assign EPG** | Assign EPG data source |
+| **Assign Profile** | Set stream transcoding profile |
+| **Set Channel Number** | Auto-assign or specify number/range |
+| **Set Variable** | Define reusable variables with regex extraction |
+| **Name Transform** | Apply regex find/replace to channel names |
+| **Skip / Stop** | Skip stream or stop processing further rules |
+
+When a channel already exists, choose behavior: **skip**, **merge** streams into it, **update** it, or **use existing**.
+
+### Rule Options
+
+- **Priority** - Drag rules to reorder execution priority
+- **Run on M3U Refresh** - Auto-execute when M3U accounts refresh
+- **Stop on First Match** - Stop evaluating further rules when a stream matches
+- **Normalize Names** - Apply name normalization during processing
+- **Sort Field** - Sort matched streams by name, group, or quality
+- **Probe on Sort** - Probe unprobed streams for resolution data before quality sorting
+
+### Execution
+
+**Dry Run** - Click **Dry Run** to preview what changes would occur without applying them. Review the execution results showing channels that would be created, streams that would be merged, and orphans that would be removed.
+
+**Execute** - Click **Run** to apply all rule actions. The execution log shows per-stream details of condition evaluation, rule matching, and action results.
+
+**Run Single Rule** - Execute or dry-run a specific rule in isolation from the rule's menu.
+
+**Rollback** - Undo a completed execution from the execution history to restore the previous state.
+
+### Orphan Reconciliation
+
+When a rule's conditions change and previously-matched streams no longer match, the channels they created become "orphans." Configure per-rule orphan handling:
+
+| Action | Behavior |
+|--------|----------|
+| **Delete** | Remove orphaned channels entirely |
+| **Move to Uncategorized** | Move channels out of managed groups |
+| **Delete & Cleanup Groups** | Delete channels and remove empty groups |
+| **None** | Preserve all channels, skip reconciliation |
+
+### YAML Import/Export
+
+- **Export** - Download all rules as YAML for backup or sharing
+- **Import** - Paste YAML rule definitions to create rules
+- Useful for version control and sharing configurations between instances
 
 ---
 
@@ -600,6 +815,68 @@ Set refresh interval:
 - 1 minute
 - 5 minutes
 
+Polling automatically pauses when the browser tab is hidden to save resources.
+
+### Enhanced Stats (Popularity & Analytics)
+
+The Stats tab also includes advanced analytics:
+
+**Unique Viewer Tracking**
+- Count unique connecting IPs per channel over configurable periods (7, 14, or 30 days)
+
+**Popularity Rankings**
+- Channels ranked by a weighted popularity score based on:
+  - Watch count (30%)
+  - Watch time (30%)
+  - Unique viewers (25%)
+  - Bandwidth usage (15%)
+- Paginated rankings with visual indicators
+
+**Trend Analysis**
+- **Trending Up** - Channels gaining popularity (>10% increase)
+- **Trending Down** - Channels losing popularity (>10% decrease)
+- **Stable** - Channels with consistent viewership
+- Visual trend arrows and percentage changes
+
+**Per-Channel Bandwidth**
+- Track bandwidth consumption per channel with breakdown by connections and watch time
+
+**Watch History Log**
+- Detailed log of all channel viewing sessions with IP addresses and durations
+
+**On-Demand Calculation**
+- Manually trigger popularity score recalculation
+
+---
+
+## Notifications
+
+### Notification Center
+
+Access the notification center from the **bell icon** in the header bar.
+
+- **Unread Badge** - Shows count of unread notifications
+- **Notification List** - View past notifications with timestamps
+- **Mark as Read** - Mark individual or all notifications as read
+- **Delete** - Clear individual or all notifications
+- **Color-Coded Types** - Info (blue), Success (green), Warning (yellow), Error (red)
+
+### Alert Methods
+
+Configure external notifications in Settings → Alert Methods:
+
+| Method | Configuration |
+|--------|--------------|
+| **Discord** | Webhook URL |
+| **Telegram** | Bot token + chat ID |
+| **Email (SMTP)** | Server, port, credentials, recipients |
+
+Each method supports:
+- **Source Filtering** - Control which event types trigger notifications
+- **Severity Levels** - Choose which severity levels to receive (info, success, warning, error)
+- **Test Alerts** - Send test notifications to verify configuration
+- **Failed Stream Details** - Task alerts include names of failed streams
+
 ---
 
 ## Settings
@@ -607,9 +884,45 @@ Set refresh interval:
 ### Settings Navigation
 
 ![Settings Sidebar](docs/images/55-settings-sidebar.png)
-<!-- Screenshot: Settings page showing sidebar navigation with all sections: General, Normalization, Probing, Sort Priority, Defaults, Appearance, Tasks, Alerts -->
+<!-- Screenshot: Settings page showing sidebar navigation with all sections -->
 
-Access different settings sections from the sidebar.
+The Settings sidebar contains the following sections:
+- **General** - Dispatcharr connection
+- **Tag-Based Normalization** - Tag stripping for stream name cleanup
+- **Normalization Engine** - Rule-based name transformations
+- **Stream Probing** - Automated stream health checks
+- **Stream Sort Priority** - Configure stream ordering criteria
+- **Stream Preview** - Preview mode configuration
+- **Channel Defaults** - Default options for bulk channel creation
+- **Appearance** - Theme, visibility toggles, log level
+- **VLC Integration** - VLC protocol handler setup
+- **Scheduled Tasks** - Automated background tasks
+- **Alert Methods** - External notification configuration
+- **Authentication** - Login requirements and providers
+- **Users** - User account management (admin only)
+
+### Tag-Based Normalization
+
+Configure which tags to strip from stream names during bulk channel creation:
+
+**5 Built-in Tag Groups:**
+- **Country** - US, UK, CA, AU, BR, and 60+ country codes
+- **League** - NFL, NBA, NHL, MLB, UFC, EPL, and 50+ league abbreviations
+- **Network** - PPV, LIVE, BACKUP, VIP, PREMIUM, 24/7, REPLAY
+- **Quality** - HD, FHD, UHD, 4K, SD, 1080P, 720P, HEVC, H264, etc.
+- **Timezone** - EST, PST, ET, PT, GMT, UTC, and 40+ timezone abbreviations
+
+**Managing Tags:**
+1. Click a tag group to expand it
+2. Toggle individual tags on/off
+3. Add **Custom Tags** with mode selection:
+   - **Prefix only** - Strip when tag appears at start of name
+   - **Suffix only** - Strip when tag appears at end of name
+   - **Any position** - Strip tag wherever it appears
+4. See counts of active, disabled, and custom tags per group
+5. Use **Reset to Defaults** to restore default configuration
+
+These settings are pre-loaded as defaults in the bulk create modal, adjustable per-operation via the Quick Tag Manager.
 
 ### Stream Probing
 
@@ -632,6 +945,56 @@ Configure automated stream health checking:
 1. Drag criteria to set priority order
 2. Toggle individual criteria on/off
 3. Enable "Deprioritize Failed Streams"
+
+### Stream Preview Settings
+
+Configure how streams and channels are previewed in the browser:
+
+| Mode | Description |
+|------|-------------|
+| **Passthrough** | Direct proxy, fastest but may fail on AC-3/E-AC-3/DTS audio |
+| **Transcode** | FFmpeg transcodes audio to AAC for browser compatibility (recommended) |
+| **Video Only** | Strip audio entirely for silent quick preview |
+
+Change mode anytime; takes effect on the next preview.
+
+### Channel Defaults
+
+Default options pre-loaded when using bulk channel creation:
+
+- **Default Channel Profile** - Stream profile for new channels
+- **Auto-Rename on Number Change** - Update channel names when numbers change
+- **Include Channel Number in Name** - Add number prefix (e.g., "101 - Sports Channel")
+- **Number Separator** - Choose hyphen (-), colon (:), or pipe (|)
+- **Remove Country Prefix** - Strip country codes from names (bulk create modal also offers "Keep" with normalized formatting)
+- **Timezone Preference** - Default handling for East/West regional variants
+
+These defaults appear in the bulk create modal with a "(from settings)" indicator.
+
+### Appearance
+
+- **Theme** - Dark (default), Light, or High Contrast
+- **Show Stream URLs** - Toggle stream URL visibility (hide for screenshots)
+- **Hide Auto-Sync Groups** - Auto-hide auto-sync channel groups on load
+- **Hide EPG URLs** - Hide EPG source URLs in the EPG Manager
+- **Hide M3U URLs** - Hide M3U server URLs in the M3U Manager
+- **Gracenote ID Conflict Handling** - Ask, Skip, or Overwrite when assigning conflicting Gracenote IDs
+- **Frontend Log Level** - Console logging verbosity (Error, Warn, Info, Debug)
+
+### VLC Integration
+
+Open streams directly in VLC from your browser:
+
+**Behavior Options:**
+- **Try VLC Protocol** - Attempt vlc:// protocol, show helper if it fails
+- **Fallback to M3U** - Try vlc:// first, download M3U file if it fails
+- **Always M3U** - Always download M3U file (most compatible)
+
+**Protocol Handler Setup:**
+Download and run the setup script for your OS:
+- **Windows** - PowerShell script with registry setup
+- **Linux** - Shell script creating .desktop file for xdg-open
+- **macOS** - Shell script creating AppleScript handler
 
 ### Normalization Engine
 
@@ -694,7 +1057,7 @@ Configure automated tasks:
 3. Set the timing
 4. Enable/disable as needed
 
-### Alert Methods
+### Alert Methods Configuration
 
 ![Alert Methods](docs/images/59-alert-methods.png)
 <!-- Screenshot: Alert Methods section showing Discord, Telegram, Email options with configuration fields -->
@@ -704,6 +1067,74 @@ Configure automated tasks:
 3. Enter configuration (webhook URL, bot token, SMTP settings)
 4. Select notification types to receive
 5. **Test** the configuration
+
+---
+
+## Authentication & Users
+
+### Login
+
+When authentication is enabled, ECM requires login to access the application.
+
+- Enter your **Username** and **Password**
+- Or click **Login with Dispatcharr** to use your Dispatcharr credentials (SSO)
+- Sessions are maintained with automatic token refresh
+
+### Authentication Settings
+
+Configure in Settings → Authentication:
+
+- **Require Authentication** - Enable or disable login requirement
+- **Primary Auth Mode** - Choose Local or Dispatcharr as the primary method
+- **Local Authentication** - Enable/disable username/password login
+- **Dispatcharr Authentication** - Enable/disable Dispatcharr SSO
+
+### User Management (Admin)
+
+Administrators can manage users in Settings → Users:
+
+- **View Users** - See all accounts with username, email, provider, status, and role
+- **Edit Users** - Modify email, display name, admin status, and active status
+- **Activate/Deactivate** - Toggle user account status
+- **Delete Users** - Remove accounts (soft delete)
+
+### Account Linking
+
+Users can link multiple authentication methods to a single account (e.g., local password + Dispatcharr SSO). This allows logging in with either method.
+
+### Password Reset
+
+**Via Email (SMTP Required):**
+1. Click "Forgot password?" on the login page
+2. Enter your email address
+3. Check email for a reset link (valid 1 hour)
+
+**Via Command Line (No SMTP Needed):**
+See [CLI Tools](#cli-tools) below.
+
+---
+
+## CLI Tools
+
+### Password Reset
+
+When locked out or SMTP is not configured, reset passwords from the command line:
+
+```bash
+# Interactive mode — lists users, prompts for everything
+docker exec -it enhancedchannelmanager python /app/reset_password.py
+
+# Non-interactive — specify username and password
+docker exec enhancedchannelmanager python /app/reset_password.py -u admin -p 'NewPass123'
+
+# Semi-interactive — specify username, prompt for password securely
+docker exec -it enhancedchannelmanager python /app/reset_password.py -u admin
+
+# Skip password strength validation
+docker exec enhancedchannelmanager python /app/reset_password.py -u admin -p 'simple' --force
+```
+
+Interactive mode displays a table of all users showing username, email, admin status, active status, and auth provider.
 
 ---
 
@@ -819,15 +1250,42 @@ Use this checklist to capture all screenshots for the guide:
 - [ ] `53-stats-charts.png` - Historical charts
 - [ ] `54-refresh-settings.png` - Auto-refresh dropdown
 
-### Settings (6 screenshots)
+### M3U Change Tracking (1 screenshot)
+- [ ] `61-m3u-changes-overview.png` - M3U Changes tab with summary cards and change list
+
+### Stream & Channel Preview (1 screenshot)
+- [ ] `62-stream-preview.png` - Stream preview modal with video player
+
+### Auto-Creation Pipeline (3 screenshots)
+- [ ] `63-auto-creation-overview.png` - Rules list with statistics
+- [ ] `64-auto-creation-rule-builder.png` - Rule builder with conditions and actions
+- [ ] `65-auto-creation-execution-log.png` - Execution results with per-stream log
+
+### Notifications (1 screenshot)
+- [ ] `66-notification-center.png` - Notification bell and dropdown
+
+### Settings (12 screenshots)
 - [ ] `55-settings-sidebar.png` - Settings navigation
 - [ ] `56-probe-settings.png` - Stream probing config
 - [ ] `57-sort-priority.png` - Sort priority settings
 - [ ] `58-scheduled-tasks.png` - Task scheduler
 - [ ] `59-alert-methods.png` - Alert configuration
 - [ ] `60-normalization-engine.png` - Normalization rules and test panel
+- [ ] `67-tag-normalization.png` - Tag-based normalization with tag groups
+- [ ] `68-channel-defaults.png` - Channel default settings
+- [ ] `69-appearance.png` - Theme and visibility settings
+- [ ] `70-vlc-integration.png` - VLC protocol handler setup
+- [ ] `71-authentication-settings.png` - Authentication configuration
+- [ ] `72-user-management.png` - User list and management
 
-**Total: 60 screenshots**
+### Authentication (2 screenshots)
+- [ ] `73-login-page.png` - Login page with local and Dispatcharr options
+- [ ] `74-setup-wizard.png` - First-run admin account setup
+
+### CLI Tools (1 screenshot)
+- [ ] `75-password-reset-cli.png` - Interactive password reset terminal output
+
+**Total: 75 screenshots**
 
 ---
 
