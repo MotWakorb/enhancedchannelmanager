@@ -4,11 +4,14 @@ Auto-Creation Pipeline Schema Definitions
 Defines the structure of conditions and actions used in auto-creation rules.
 Includes validation, parsing, and serialization utilities.
 """
+import logging
 from dataclasses import dataclass, field, asdict
 from enum import Enum
 from typing import Any, Optional, Union
 import re
 import json
+
+logger = logging.getLogger(__name__)
 
 
 # =============================================================================
@@ -114,6 +117,7 @@ class Condition:
         try:
             cond_type = ConditionType(self.type)
         except ValueError:
+            logger.warning(f"[Schema] Unknown condition type: {self.type}")
             errors.append(f"Unknown condition type: {self.type}")
             return errors
 
@@ -181,6 +185,8 @@ class Condition:
             if self.value is not None and not isinstance(self.value, bool):
                 errors.append(f"{self.type} value should be boolean or omitted")
 
+        if errors:
+            logger.warning(f"[Schema] Condition validation errors for type={self.type}: {errors}")
         return errors
 
 
@@ -338,6 +344,7 @@ class Action:
         try:
             action_type = ActionType(self.type)
         except ValueError:
+            logger.warning(f"[Schema] Unknown action type: {self.type}")
             errors.append(f"Unknown action type: {self.type}")
             return errors
 
@@ -446,6 +453,8 @@ class Action:
                     if not template or not isinstance(template, str):
                         errors.append("set_variable with mode 'literal' requires a 'template'")
 
+        if errors:
+            logger.warning(f"[Schema] Action validation errors for type={self.type}: {errors}")
         return errors
 
     def _validate_name_transform(self) -> list[str]:
@@ -530,7 +539,10 @@ class TemplateVariables:
                 placeholder = "{var:" + var_name + "}"
                 if placeholder in result:
                     result = result.replace(placeholder, str(value) if value else "")
-        return result.strip()
+        expanded = result.strip()
+        if expanded != template:
+            logger.debug(f"[Template] '{template}' -> '{expanded}'")
+        return expanded
 
 
 # =============================================================================
@@ -568,8 +580,13 @@ def validate_rule(conditions: list, actions: list) -> dict:
             action_errors = action.validate()
             errors.extend([f"actions[{i}]: {e}" for e in action_errors])
 
+    valid = len(errors) == 0
+    if not valid:
+        logger.warning(f"[Schema] Rule validation failed with {len(errors)} error(s): {errors}")
+    else:
+        logger.debug(f"[Schema] Rule validation passed ({len(conditions)} conditions, {len(actions)} actions)")
     return {
-        "valid": len(errors) == 0,
+        "valid": valid,
         "errors": errors
     }
 
@@ -578,8 +595,11 @@ def parse_conditions(conditions_json: str) -> list[Condition]:
     """Parse JSON string into list of Condition objects."""
     try:
         data = json.loads(conditions_json) if isinstance(conditions_json, str) else conditions_json
-        return [Condition.from_dict(c) for c in data]
+        conditions = [Condition.from_dict(c) for c in data]
+        logger.debug(f"[Schema] Parsed {len(conditions)} conditions")
+        return conditions
     except (json.JSONDecodeError, TypeError, KeyError) as e:
+        logger.error(f"[Schema] Failed to parse conditions JSON: {e}")
         raise ValueError(f"Invalid conditions JSON: {e}")
 
 
@@ -587,8 +607,11 @@ def parse_actions(actions_json: str) -> list[Action]:
     """Parse JSON string into list of Action objects."""
     try:
         data = json.loads(actions_json) if isinstance(actions_json, str) else actions_json
-        return [Action.from_dict(a) for a in data]
+        actions = [Action.from_dict(a) for a in data]
+        logger.debug(f"[Schema] Parsed {len(actions)} actions")
+        return actions
     except (json.JSONDecodeError, TypeError, KeyError) as e:
+        logger.error(f"[Schema] Failed to parse actions JSON: {e}")
         raise ValueError(f"Invalid actions JSON: {e}")
 
 

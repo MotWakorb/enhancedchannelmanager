@@ -163,6 +163,10 @@ class ConditionEvaluator:
                 details=f"Negated: {result.details}"
             )
 
+        logger.debug(
+            f"[Condition] stream={context.stream_name!r} type={result.condition_type} "
+            f"matched={result.matched} details={result.details}"
+        )
         return result
 
     def _evaluate_condition(self, condition: Condition, context: StreamContext) -> EvaluationResult:
@@ -284,11 +288,16 @@ class ConditionEvaluator:
             results.append(result)
             if not result.matched:
                 # Short-circuit on first failure
+                logger.debug(
+                    f"[AND] stream={context.stream_name!r} short-circuit fail at "
+                    f"sub-condition {result.condition_type}: {result.details}"
+                )
                 return EvaluationResult(
                     False, "and",
                     f"Failed at: {result.condition_type} - {result.details}"
                 )
 
+        logger.debug(f"[AND] stream={context.stream_name!r} all {len(results)} sub-conditions matched")
         return EvaluationResult(
             True, "and",
             f"All {len(results)} conditions matched"
@@ -303,11 +312,18 @@ class ConditionEvaluator:
             result = self.evaluate(sub_cond, context)
             if result.matched:
                 # Short-circuit on first success
+                logger.debug(
+                    f"[OR] stream={context.stream_name!r} short-circuit match at "
+                    f"sub-condition {result.condition_type}: {result.details}"
+                )
                 return EvaluationResult(
                     True, "or",
                     f"Matched: {result.condition_type} - {result.details}"
                 )
 
+        logger.debug(
+            f"[OR] stream={context.stream_name!r} none of {len(condition.conditions)} sub-conditions matched"
+        )
         return EvaluationResult(
             False, "or",
             f"None of {len(condition.conditions)} conditions matched"
@@ -543,6 +559,7 @@ def evaluate_conditions(conditions: list, context: StreamContext,
     evaluator = ConditionEvaluator(existing_channels, existing_groups)
 
     if not conditions:
+        logger.debug(f"[evaluate_conditions] stream={context.stream_name!r} no conditions -> True")
         return True
 
     # Group conditions by OR breaks (AND binds tighter than OR)
@@ -553,8 +570,13 @@ def evaluate_conditions(conditions: list, context: StreamContext,
             or_groups.append([])
         or_groups[-1].append(cond)
 
+    logger.debug(
+        f"[evaluate_conditions] stream={context.stream_name!r} "
+        f"{len(conditions)} conditions in {len(or_groups)} OR-group(s)"
+    )
+
     # Evaluate: any OR-group fully matching = overall match
-    for group in or_groups:
+    for group_idx, group in enumerate(or_groups):
         group_matched = True
         for condition in group:
             result = evaluator.evaluate(condition, context)
@@ -562,6 +584,14 @@ def evaluate_conditions(conditions: list, context: StreamContext,
                 group_matched = False
                 break
         if group_matched:
+            logger.debug(
+                f"[evaluate_conditions] stream={context.stream_name!r} "
+                f"OR-group {group_idx} matched -> overall True"
+            )
             return True
 
+    logger.debug(
+        f"[evaluate_conditions] stream={context.stream_name!r} "
+        f"no OR-group matched -> overall False"
+    )
     return False

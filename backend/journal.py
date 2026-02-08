@@ -44,6 +44,11 @@ def log_entry(
     """
     try:
         session: Session = get_session()
+        logger.debug(
+            f"[Journal] Creating entry: category={category} action={action_type} "
+            f"entity={entity_name!r} (id={entity_id}) user_initiated={user_initiated}"
+            + (f" batch_id={batch_id}" if batch_id else "")
+        )
         entry = JournalEntry(
             timestamp=datetime.utcnow(),
             category=category,
@@ -58,7 +63,7 @@ def log_entry(
         )
         session.add(entry)
         session.commit()
-        logger.debug(f"Journal entry logged: {category}/{action_type} - {entity_name}")
+        logger.debug(f"[Journal] Entry logged: {category}/{action_type} - {entity_name} (id={entry.id})")
         session.close()
         return entry
     except Exception as e:
@@ -82,7 +87,24 @@ def get_entries(
     Returns:
         Dict with count, page, page_size, total_pages, and results
     """
-    logger.debug(f"Querying journal entries - page: {page}, category: {category}, action: {action_type}, search: {search}")
+    filters_applied = []
+    if category:
+        filters_applied.append(f"category={category}")
+    if action_type:
+        filters_applied.append(f"action={action_type}")
+    if date_from:
+        filters_applied.append(f"from={date_from.isoformat()}")
+    if date_to:
+        filters_applied.append(f"to={date_to.isoformat()}")
+    if search:
+        filters_applied.append(f"search={search!r}")
+    if user_initiated is not None:
+        filters_applied.append(f"user_initiated={user_initiated}")
+
+    logger.debug(
+        f"[Journal] Querying entries: page={page} page_size={page_size} "
+        f"filters=[{', '.join(filters_applied) if filters_applied else 'none'}]"
+    )
     session: Session = get_session()
     try:
         query = session.query(JournalEntry)

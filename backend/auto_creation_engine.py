@@ -296,6 +296,12 @@ class AutoCreationEngine:
                 query = query.filter(AutoCreationRule.id.in_(rule_ids))
 
             rules = query.order_by(AutoCreationRule.priority).all()
+            for r in rules:
+                logger.debug(
+                    f"[LoadRules] Rule id={r.id} name={r.name!r} priority={r.priority} "
+                    f"m3u_account_id={r.m3u_account_id} sort_field={r.sort_field} "
+                    f"stop_on_first_match={r.stop_on_first_match}"
+                )
             return rules
 
         finally:
@@ -339,6 +345,7 @@ class AutoCreationEngine:
         all_streams = []
         m3u_accounts = await self.client.get_m3u_accounts() or []
         account_map = {a["id"]: a for a in m3u_accounts}
+        logger.debug(f"[FetchStreams] Accounts to fetch: {accounts_to_fetch}")
 
         # Load stream stats for quality info
         await self._load_stream_stats()
@@ -636,6 +643,16 @@ class AutoCreationEngine:
         """
         # Load user settings once for the entire pipeline run
         settings = get_settings()
+        logger.debug(
+            f"[Settings] include_channel_number_in_name={getattr(settings, 'include_channel_number_in_name', False)}, "
+            f"separator={getattr(settings, 'channel_number_separator', '-')!r}, "
+            f"default_profiles={getattr(settings, 'default_channel_profile_ids', [])}, "
+            f"timezone={getattr(settings, 'timezone_preference', 'both')}, "
+            f"auto_rename={getattr(settings, 'auto_rename_channel_number', False)}, "
+            f"sort_priority={getattr(settings, 'stream_sort_priority', [])}, "
+            f"sort_enabled={getattr(settings, 'stream_sort_enabled', {})}, "
+            f"deprioritize_failed={getattr(settings, 'deprioritize_failed_streams', True)}"
+        )
 
         # Initialize evaluator and executor
         evaluator = ConditionEvaluator(self._existing_channels, self._existing_groups)
@@ -696,10 +713,15 @@ class AutoCreationEngine:
         # =====================================================================
         # Pass 1: Evaluate all streams against all rules, collect matches
         # =====================================================================
+        logger.info(f"[Pass1] Evaluating {len(streams)} streams against {len(rules)} rules")
         matched_entries = []  # list of (stream, winning_rule, losing_rules, stream_rules_log)
 
         for stream in streams:
             results["streams_evaluated"] += 1
+            logger.debug(
+                f"[Pass1] Evaluating stream id={stream.stream_id} name={stream.stream_name!r} "
+                f"m3u={stream.m3u_account_id} group={stream.group_name!r}"
+            )
 
             # Track rules that match this stream
             matching_rules = []
@@ -710,6 +732,10 @@ class AutoCreationEngine:
             for rule in rules:
                 # Check if rule applies to this M3U account
                 if rule.m3u_account_id and rule.m3u_account_id != stream.m3u_account_id:
+                    logger.debug(
+                        f"[Pass1]   Rule '{rule.name}' skipped: m3u filter "
+                        f"(rule={rule.m3u_account_id} != stream={stream.m3u_account_id})"
+                    )
                     continue
 
                 # Evaluate conditions with connector logic (AND/OR)
@@ -752,6 +778,11 @@ class AutoCreationEngine:
                 }
                 stream_rules_log.append(rule_log)
 
+                logger.debug(
+                    f"[Pass1]   Rule '{rule.name}' (id={rule.id}): matched={matched} "
+                    f"({len(conditions)} conditions in {len(or_groups)} OR-group(s))"
+                )
+
                 if matched:
                     matching_rules.append(rule)
 
@@ -761,16 +792,25 @@ class AutoCreationEngine:
                     stream_rule_matches[stream.stream_id].append((rule.id, rule.priority))
 
                     if rule.stop_on_first_match:
+                        logger.debug(f"[Pass1]   Rule '{rule.name}' has stop_on_first_match, skipping remaining rules")
                         break
 
             if not matching_rules:
+                logger.debug(f"[Pass1] Stream {stream.stream_name!r}: no rules matched")
                 continue
 
             # Determine winning and losing rules
             winning_rule = matching_rules[0]
             losing_rules = matching_rules[1:] if len(matching_rules) > 1 else []
 
+            logger.debug(
+                f"[Pass1] Stream {stream.stream_name!r}: winner='{winning_rule.name}' (id={winning_rule.id})"
+                + (f", losers={[r.name for r in losing_rules]}" if losing_rules else "")
+            )
+
             matched_entries.append((stream, winning_rule, losing_rules, stream_rules_log))
+
+        logger.info(f"[Pass1] Complete: {len(matched_entries)} streams matched out of {len(streams)} evaluated")
 
         # =====================================================================
         # Pass 1.1: Timezone filter on matched entries
@@ -806,11 +846,17 @@ class AutoCreationEngine:
         for rule_id, entries in rule_groups.items():
             rule = rule_map.get(rule_id)
             if rule and rule.sort_field:
+                logger.debug(
+                    f"[Sort] Sorting {len(entries)} entries for rule '{rule.name}' "
+                    f"by {rule.sort_field} {rule.sort_order or 'asc'}"
+                )
                 entries.sort(
                     key=lambda e: _sort_key(e[0], rule.sort_field),
                     reverse=(rule.sort_order == "desc")
                 )
             sorted_entries.extend(entries)
+
+        logger.debug(f"[Sort] Total sorted entries: {len(sorted_entries)}")
 
         # Track channel IDs per rule in sorted order (for Pass 3 renumber + Pass 3.5 stream reorder)
         rule_channel_order = defaultdict(list)  # rule_id -> [channel_id, ...] in sorted order
@@ -818,8 +864,13 @@ class AutoCreationEngine:
         # =====================================================================
         # Pass 2: Execute actions on sorted matches
         # =====================================================================
+        logger.debug(f"[Pass2] Executing actions for {len(sorted_entries)} matched streams")
         for stream, winning_rule, losing_rules, stream_rules_log in sorted_entries:
             results["streams_matched"] += 1
+            logger.debug(
+                f"[Pass2] Stream {stream.stream_name!r} (id={stream.stream_id}): "
+                f"executing rule '{winning_rule.name}' actions"
+            )
 
             # Track per-rule match counts
             results["rule_match_counts"][winning_rule.id] = results["rule_match_counts"].get(winning_rule.id, 0) + 1
@@ -912,6 +963,7 @@ class AutoCreationEngine:
         # =====================================================================
         # Pass 3: Re-sort existing channels for rules with sort_field
         # =====================================================================
+        logger.debug("[Pass3] Starting channel renumbering pass")
         for rule in rules:
             if not rule.sort_field:
                 continue
@@ -979,6 +1031,7 @@ class AutoCreationEngine:
         # =====================================================================
         # Pass 3.5: Reorder streams within channels by smart sort
         # =====================================================================
+        logger.debug("[Pass3.5] Starting stream reorder within channels")
         await self._reorder_channel_streams(
             rules, rule_channel_order, results, dry_run,
             settings=settings, stream_m3u_map=stream_m3u_map
@@ -987,6 +1040,7 @@ class AutoCreationEngine:
         # =====================================================================
         # Pass 4: Reconcile — clean up orphaned channels
         # =====================================================================
+        logger.debug("[Pass4] Starting orphan reconciliation")
         await self._reconcile_orphans(
             rules, rule_channel_order, executor, execution, results, dry_run,
             settings=settings
@@ -1019,6 +1073,10 @@ class AutoCreationEngine:
         try:
             for rule in rules:
                 orphan_action = getattr(rule, 'orphan_action', 'delete') or 'delete'
+                logger.debug(
+                    f"[Reconcile] Rule '{rule.name}': orphan_action={orphan_action}, "
+                    f"managed_channel_ids={rule.managed_channel_ids is not None}"
+                )
 
                 # orphan_action "none" means skip reconciliation entirely for this rule
                 if orphan_action == 'none':
@@ -1044,6 +1102,11 @@ class AutoCreationEngine:
                     continue
 
                 orphan_ids = previous_ids - current_ids
+                logger.debug(
+                    f"[Reconcile] Rule '{rule.name}': previous={len(previous_ids)} "
+                    f"current={len(current_ids)} orphans={len(orphan_ids)} "
+                    f"orphan_ids={list(orphan_ids)[:20]}"
+                )
 
                 if not orphan_ids:
                     # No orphans — just update managed set
@@ -1492,9 +1555,15 @@ def _filter_by_timezone(stream_name: str, preference: str) -> bool:
 
     suffix = m.group(1).upper()
     if preference == "east":
-        return suffix != "WEST"
+        keep = suffix != "WEST"
+        if not keep:
+            logger.debug(f"[Timezone] Filtering out WEST stream: {stream_name!r}")
+        return keep
     if preference == "west":
-        return suffix != "EAST"
+        keep = suffix != "EAST"
+        if not keep:
+            logger.debug(f"[Timezone] Filtering out EAST stream: {stream_name!r}")
+        return keep
 
     return True
 
@@ -1516,10 +1585,13 @@ async def _auto_rename_after_renumber(
     Returns the number of channels renamed.
     """
     if not settings or not getattr(settings, 'auto_rename_channel_number', False):
+        logger.debug("[Auto-rename] Skipped: auto_rename_channel_number is disabled")
         return 0
     if starting_number is None:
+        logger.debug("[Auto-rename] Skipped: starting_number is None")
         return 0
 
+    logger.debug(f"[Auto-rename] Processing {len(channel_ids)} channels starting at #{starting_number}")
     renamed = 0
     for idx, channel_id in enumerate(channel_ids):
         try:
