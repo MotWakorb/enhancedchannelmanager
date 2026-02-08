@@ -176,11 +176,14 @@ export function useAutoCreationRules(
       return undefined;
     }
 
+    // Find a unique priority: max + 1 to avoid duplicates
+    const maxPriority = rules.length > 0 ? Math.max(...rules.map(r => r.priority)) : -1;
+
     const duplicateData: CreateRuleData = {
       name: `${originalRule.name} (Copy)`,
       description: originalRule.description,
       enabled: false, // Disabled by default
-      priority: originalRule.priority + 1,
+      priority: maxPriority + 1,
       conditions: originalRule.conditions,
       actions: originalRule.actions,
       m3u_account_id: originalRule.m3u_account_id,
@@ -189,8 +192,23 @@ export function useAutoCreationRules(
       stop_on_first_match: originalRule.stop_on_first_match,
     };
 
-    return createRule(duplicateData);
-  }, [rules, createRule]);
+    const newRule = await createRule(duplicateData);
+    if (!newRule) return undefined;
+
+    // Reorder so the duplicate appears right after the original
+    const sorted = [...rules, newRule].sort((a, b) => a.priority - b.priority);
+    const orderedIds = sorted.map(r => r.id);
+    // Move the new rule to right after the original
+    const origIndex = orderedIds.indexOf(id);
+    const newIndex = orderedIds.indexOf(newRule.id);
+    if (origIndex !== -1 && newIndex !== -1 && newIndex !== origIndex + 1) {
+      orderedIds.splice(newIndex, 1);
+      orderedIds.splice(origIndex + 1, 0, newRule.id);
+    }
+    await reorderRules(orderedIds);
+
+    return newRule;
+  }, [rules, createRule, reorderRules]);
 
   const clearError = useCallback(() => {
     setError(null);

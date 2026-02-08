@@ -164,7 +164,8 @@
 /* Rules List Table */
 .rules-list table {
   width: 100%;
-  border-collapse: collapse;
+  border-collapse: separate;
+  border-spacing: 0;
 }
 
 .rules-list th,
@@ -210,7 +211,46 @@
 }
 
 .col-priority {
-  width: 80px;
+  width: 60px;
+  text-align: center;
+}
+
+/* Drag-and-drop styles */
+.rules-list tr[draggable] {
+  cursor: default;
+}
+
+.rules-list tr.dragging {
+  opacity: 0.3;
+}
+
+.rules-list tr.drag-over td {
+  box-shadow: inset 0 3px 0 0 #3b82f6;
+}
+
+.rules-list tr.drag-over td:first-child {
+  box-shadow: inset 0 3px 0 0 #3b82f6;
+  position: relative;
+}
+
+.rules-list tr.drag-over td:first-child::before {
+  content: '';
+  position: absolute;
+  top: -4px;
+  left: -4px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #3b82f6;
+  z-index: 10;
+}
+
+.rules-list .drag-handle {
+  cursor: grab;
+}
+
+.rules-list .drag-handle:active {
+  cursor: grabbing;
 }
 
 .col-status {

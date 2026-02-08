@@ -73,7 +73,6 @@ describe('RuleBuilder', () => {
       expect(screen.getByLabelText(/rule name/i)).toHaveValue('Existing Rule');
       expect(screen.getByLabelText(/description/i)).toHaveValue('Rule description');
       expect(screen.getByLabelText(/enabled/i)).not.toBeChecked();
-      expect(screen.getByLabelText(/priority/i)).toHaveValue(5);
     });
   });
 
@@ -96,17 +95,6 @@ describe('RuleBuilder', () => {
       await user.type(descInput, 'This rule does something');
 
       expect(descInput).toHaveValue('This rule does something');
-    });
-
-    it('allows setting priority', async () => {
-      const user = userEvent.setup();
-      render(<RuleBuilder onSave={vi.fn()} onCancel={vi.fn()} />);
-
-      const priorityInput = screen.getByLabelText(/priority/i);
-      await user.clear(priorityInput);
-      await user.type(priorityInput, '10');
-
-      expect(priorityInput).toHaveValue(10);
     });
 
     it('allows toggling enabled state', async () => {
@@ -484,7 +472,6 @@ describe('RuleBuilder', () => {
 
       expect(screen.getByLabelText(/rule name/i)).toBeInTheDocument();
       expect(screen.getByLabelText(/description/i)).toBeInTheDocument();
-      expect(screen.getByLabelText(/priority/i)).toBeInTheDocument();
       expect(screen.getByLabelText(/enabled/i)).toBeInTheDocument();
     });
 
@@ -548,9 +535,6 @@ describe('RuleBuilder', () => {
 
       await user.tab();
       expect(screen.getByLabelText(/description/i)).toHaveFocus();
-
-      await user.tab();
-      expect(screen.getByLabelText(/priority/i)).toHaveFocus();
     });
 
     it('submits form on Enter in text fields', async () => {
