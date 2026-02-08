@@ -54,7 +54,7 @@ COPY --from=frontend-builder /app/frontend/dist ./static
 
 # Create config and TLS directories with proper permissions
 # Convert entrypoint line endings (handles Windows CRLF -> Unix LF)
-RUN mkdir -p /config /config/tls \
+RUN mkdir -p /config /config/tls /config/uploads/logos \
     && chown -R appuser:appuser /config /app \
     && chmod 700 /config/tls \
     && sed -i 's/\r$//' /app/entrypoint.sh \

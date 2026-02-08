@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import type { Logo } from '../../types';
 import * as api from '../../services/api';
 import { LogoModal } from '../LogoModal';
@@ -7,6 +7,7 @@ import './LogoManagerTab.css';
 import { useNotifications } from '../../contexts/NotificationContext';
 
 type ViewMode = 'list' | 'grid';
+const PAGE_SIZE_OPTIONS = [25, 50, 100, 250] as const;
 
 export function LogoManagerTab() {
   const notifications = useNotifications();
@@ -16,8 +17,11 @@ export function LogoManagerTab() {
   const [loading, setLoading] = useState(true);
 
   // Search state
-  const [search, setSearch] = useState('');
   const [searchInput, setSearchInput] = useState('');
+
+  // Pagination state
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState<number>(50);
 
   // View state
   const [viewMode, setViewMode] = useState<ViewMode>('list');
@@ -33,20 +37,26 @@ export function LogoManagerTab() {
   // Track logos with failed image loads
   const [failedImages, setFailedImages] = useState<Set<number>>(new Set());
 
-  // Load all logos (no pagination)
+  // Load all logos (Dispatcharr caps at 1000/page and ignores server-side search)
   const loadLogos = useCallback(async () => {
     setLoading(true);
-    setFailedImages(new Set()); // Clear failed images on reload
+    setFailedImages(new Set());
     try {
-      // Request a large page size to get all logos
-      const result = await api.getLogos({ page: 1, pageSize: 10000, search });
-      setLogos(result.results);
+      const allLogos: Logo[] = [];
+      let p = 1;
+      while (true) {
+        const result = await api.getLogos({ page: p, pageSize: 1000 });
+        allLogos.push(...result.results);
+        if (!result.next) break;
+        p++;
+      }
+      setLogos(allLogos);
     } catch (err) {
       notifications.error(err instanceof Error ? err.message : 'Failed to load logos', 'Logos');
     } finally {
       setLoading(false);
     }
-  }, [search]);
+  }, []);
 
   // Handle image load error
   const handleImageError = useCallback((logoId: number) => {
@@ -57,13 +67,23 @@ export function LogoManagerTab() {
     loadLogos();
   }, [loadLogos]);
 
-  // Debounced search
+  // Client-side filtering (Dispatcharr doesn't support server-side search)
+  const filteredLogos = useMemo(() => {
+    if (!searchInput) return logos;
+    const searchLower = searchInput.toLowerCase();
+    return logos.filter(l => l.name.toLowerCase().includes(searchLower));
+  }, [logos, searchInput]);
+
+  // Reset to page 1 when search or page size changes
   useEffect(() => {
-    const timer = setTimeout(() => {
-      setSearch(searchInput);
-    }, 300);
-    return () => clearTimeout(timer);
-  }, [searchInput]);
+    setPage(1);
+  }, [searchInput, pageSize]);
+
+  // Pagination calculations
+  const totalPages = Math.max(1, Math.ceil(filteredLogos.length / pageSize));
+  const safePage = Math.min(page, totalPages);
+  const startIdx = (safePage - 1) * pageSize;
+  const pageLogos = filteredLogos.slice(startIdx, startIdx + pageSize);
 
   const handleAddLogo = () => {
     setEditingLogo(null);
@@ -130,7 +150,7 @@ export function LogoManagerTab() {
         <div className="header-title">
           <h2>Logos</h2>
           <p className="header-description">
-            Manage logos for your channels ({logos.length} total)
+            Manage logos for your channels ({filteredLogos.length}{searchInput ? ` of ${logos.length}` : ''} total)
           </p>
         </div>
         <div className="header-actions">
@@ -183,17 +203,17 @@ export function LogoManagerTab() {
 
       {/* Content */}
       <div className="logos-container">
-        {logos.length === 0 ? (
+        {filteredLogos.length === 0 ? (
           // Empty State
           <div className="empty-state">
             <span className="material-icons">image</span>
-            <h3>{search ? 'No logos found' : 'No logos yet'}</h3>
+            <h3>{searchInput ? 'No logos found' : 'No logos yet'}</h3>
             <p>
-              {search
+              {searchInput
                 ? 'Try adjusting your search terms'
                 : 'Add your first logo to get started'}
             </p>
-            {!search && (
+            {!searchInput && (
               <button className="btn-primary" onClick={handleAddLogo}>
                 <span className="material-icons">add</span>
                 Add Logo
@@ -210,7 +230,7 @@ export function LogoManagerTab() {
               <span>Used By</span>
               <span>Actions</span>
             </div>
-            {logos.map((logo) => (
+            {pageLogos.map((logo) => (
               <div key={logo.id} className="logo-row">
                 <div className="logo-thumbnail">
                   {failedImages.has(logo.id) ? (
@@ -267,7 +287,7 @@ export function LogoManagerTab() {
         ) : (
           // Grid View
           <div className="logos-grid">
-            {logos.map((logo) => (
+            {pageLogos.map((logo) => (
               <div key={logo.id} className="logo-card">
                 <div className="card-thumbnail">
                   {failedImages.has(logo.id) ? (
@@ -324,6 +344,67 @@ export function LogoManagerTab() {
           </div>
         )}
       </div>
+
+      {/* Pagination */}
+      {filteredLogos.length > 0 && (
+        <div className="logo-pagination">
+          <div className="pagination-left">
+            <span className="pagination-info">
+              {startIdx + 1}–{Math.min(startIdx + pageSize, filteredLogos.length)} of {filteredLogos.length}
+            </span>
+          </div>
+          <div className="pagination-center">
+            <button
+              className="page-btn"
+              onClick={() => setPage(1)}
+              disabled={safePage <= 1}
+              title="First page"
+            >
+              <span className="material-icons">first_page</span>
+            </button>
+            <button
+              className="page-btn"
+              onClick={() => setPage(p => p - 1)}
+              disabled={safePage <= 1}
+              title="Previous page"
+            >
+              <span className="material-icons">chevron_left</span>
+            </button>
+            <span className="page-indicator">
+              Page {safePage} of {totalPages}
+            </span>
+            <button
+              className="page-btn"
+              onClick={() => setPage(p => p + 1)}
+              disabled={safePage >= totalPages}
+              title="Next page"
+            >
+              <span className="material-icons">chevron_right</span>
+            </button>
+            <button
+              className="page-btn"
+              onClick={() => setPage(totalPages)}
+              disabled={safePage >= totalPages}
+              title="Last page"
+            >
+              <span className="material-icons">last_page</span>
+            </button>
+          </div>
+          <div className="pagination-right">
+            <label className="page-size-label">
+              Per page:
+              <select
+                value={pageSize}
+                onChange={(e) => setPageSize(Number(e.target.value))}
+              >
+                {PAGE_SIZE_OPTIONS.map(size => (
+                  <option key={size} value={size}>{size}</option>
+                ))}
+              </select>
+            </label>
+          </div>
+        </div>
+      )}
 
       {/* Logo Modal */}
       <LogoModal

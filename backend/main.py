@@ -13,6 +13,7 @@ import os
 import re
 import logging
 import time
+import uuid
 from collections import defaultdict
 from datetime import datetime
 
@@ -1557,6 +1558,51 @@ async def create_logo(request: CreateLogoRequest):
             except Exception as search_err:
                 logger.error(f"Error searching for existing logo: {search_err}")
         logger.error(f"Logo creation failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+LOGO_UPLOAD_DIR = os.path.join(str(CONFIG_DIR), "uploads", "logos")
+os.makedirs(LOGO_UPLOAD_DIR, exist_ok=True)
+
+
+@app.post("/api/channels/logos/upload", tags=["Channels"])
+async def upload_logo(request: Request, file: UploadFile = File(...)):
+    """Upload a logo image file and create it in Dispatcharr."""
+    if not file.content_type or not file.content_type.startswith("image/"):
+        raise HTTPException(status_code=400, detail="File must be an image")
+
+    ext = os.path.splitext(file.filename or "logo.png")[1] or ".png"
+    filename = f"{uuid.uuid4().hex}{ext}"
+    filepath = os.path.join(LOGO_UPLOAD_DIR, filename)
+
+    contents = await file.read()
+    with open(filepath, "wb") as f:
+        f.write(contents)
+
+    # Build a URL that Dispatcharr can reach
+    logo_url = f"{request.base_url}uploads/logos/{filename}"
+
+    client = get_client()
+    name = os.path.splitext(file.filename or "logo")[0]
+    try:
+        result = await client.create_logo({"name": name, "url": str(logo_url)})
+        logger.info(f"Uploaded logo: id={result.get('id')}, name={name}, file={filename}")
+        return result
+    except Exception as e:
+        error_str = str(e)
+        if "logo with this url already exists" in error_str.lower() or "400" in error_str:
+            try:
+                existing_logo = await client.find_logo_by_url(str(logo_url))
+                if existing_logo:
+                    return existing_logo
+            except Exception:
+                pass
+        # Clean up file on failure
+        try:
+            os.remove(filepath)
+        except OSError:
+            pass
+        logger.error(f"Logo upload failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -10071,6 +10117,9 @@ async def get_auto_creation_template_variables():
         ]
     }
 
+
+# Serve uploaded logos
+app.mount("/uploads/logos", StaticFiles(directory=LOGO_UPLOAD_DIR), name="uploaded-logos")
 
 # Serve static files in production
 static_dir = os.path.join(os.path.dirname(__file__), "static")

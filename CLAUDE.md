@@ -21,6 +21,7 @@ bd sync                       # Sync beads data only (NOT for code commits)
 | Guide | Location |
 |---|---|
 | Project Architecture | `/home/user/.claude/projects/-home-user/memory/architecture.md` |
+| Beads (Issue Tracking) | `/home/user/.claude/projects/-home-user/memory/beads.md` |
 | CSS Guidelines | `/home/user/.claude/projects/-home-user/memory/css-guidelines.md` |
 | Discord Release Notes | `/home/user/.claude/projects/-home-user/memory/discord.md` |
 | Testing Details | `/home/user/.claude/projects/-home-user/memory/testing.md` |

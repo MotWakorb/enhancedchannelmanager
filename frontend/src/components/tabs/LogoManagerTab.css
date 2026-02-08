@@ -7,7 +7,7 @@
   height: 100%;
   width: 100%;
   padding: 1.5rem;
-  overflow: auto;
+  overflow: hidden;
   box-sizing: border-box;
 }
 
@@ -89,6 +89,7 @@
   flex: 1;
   min-height: 0;
   width: 100%;
+  overflow-y: auto;
 }
 
 /* ===================== */
@@ -446,3 +447,78 @@
 }
 
 /* .btn-danger is defined in shared/common.css */
+
+/* Pagination */
+.logo-pagination {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.75rem 1rem;
+  border-top: 1px solid var(--border-primary);
+  background: var(--bg-secondary);
+  flex-shrink: 0;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+
+.pagination-left,
+.pagination-center,
+.pagination-right {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.pagination-center {
+  gap: 0.25rem;
+}
+
+.logo-pagination .page-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-md);
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: background-color 0.15s;
+}
+
+.logo-pagination .page-btn:hover:not(:disabled) {
+  background: var(--bg-hover);
+}
+
+.logo-pagination .page-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.logo-pagination .page-btn .material-icons {
+  font-size: 18px;
+}
+
+.page-indicator {
+  padding: 0 0.5rem;
+  white-space: nowrap;
+}
+
+.page-size-label {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  white-space: nowrap;
+}
+
+.page-size-label select {
+  padding: 0.25rem 0.375rem;
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-md);
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  font-size: 0.8rem;
+  cursor: pointer;
+}
