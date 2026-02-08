@@ -233,7 +233,7 @@ export function LinkedAccountsSection() {
   if (loading) {
     return (
       <div className="linked-accounts-section">
-        <div className="linked-accounts-loading">
+        <div className="loading-state">
           <span className="material-icons spinning">sync</span>
           Loading linked accounts...
         </div>
@@ -243,19 +243,14 @@ export function LinkedAccountsSection() {
 
   return (
     <div className="linked-accounts-section">
-      <div className="linked-accounts-header">
-        <div className="header-info">
-          <h3>Linked Accounts</h3>
-          <p className="header-description">
-            Connect multiple authentication providers to your account.
-            You can log in using any linked identity.
-          </p>
-        </div>
+      <div className="settings-page-header">
+        <h2>Linked Accounts</h2>
+        <p>Link external service accounts for single sign-on and synchronization.</p>
       </div>
 
       {/* Current Linked Identities */}
       {identities.length === 0 ? (
-        <div className="linked-accounts-empty">
+        <div className="empty-state">
           <span className="material-icons">link_off</span>
           No linked accounts found
         </div>

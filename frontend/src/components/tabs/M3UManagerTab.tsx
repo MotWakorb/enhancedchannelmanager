@@ -676,7 +676,7 @@ export function M3UManagerTab({
   if (loading) {
     return (
       <div className="m3u-manager-tab">
-        <div className="loading-state">
+        <div className="tab-loading">
           <span className="material-icons spinning">sync</span>
           <p>Loading M3U accounts...</p>
         </div>

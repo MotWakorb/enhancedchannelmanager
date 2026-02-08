@@ -342,7 +342,7 @@ export function M3UChangesTab() {
 
       {/* Loading State */}
       {loading && changes.length === 0 && (
-        <div className="loading-state">
+        <div className="tab-loading">
           <span className="material-icons spinning">sync</span>
           <span>Loading changes...</span>
         </div>

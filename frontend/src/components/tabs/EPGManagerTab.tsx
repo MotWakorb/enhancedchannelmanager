@@ -640,7 +640,7 @@ export function EPGManagerTab({ onSourcesChange, hideEpgUrls = false }: EPGManag
   if (loading) {
     return (
       <div className="epg-manager-tab">
-        <div className="loading-state">
+        <div className="tab-loading">
           <span className="material-icons spinning">sync</span>
           <p>Loading EPG sources...</p>
         </div>

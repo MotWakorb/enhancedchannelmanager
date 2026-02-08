@@ -321,7 +321,10 @@ export function TLSSettingsSection({ isAdmin }: Props) {
   if (loading) {
     return (
       <div className="tls-settings-section">
-        <div className="tls-settings-loading">Loading TLS settings...</div>
+        <div className="loading-state">
+          <span className="material-icons spinning">sync</span>
+          Loading TLS settings...
+        </div>
       </div>
     );
   }
@@ -334,9 +337,9 @@ export function TLSSettingsSection({ isAdmin }: Props) {
       </div>
 
       {dnsChallenge && (
-        <div className="tls-settings-error">
-          <span className="material-icons">info</span>
-          <pre>{dnsChallenge}</pre>
+        <div className="error-banner">
+          <span className="material-icons">error</span>
+          <pre className="tls-settings-error">{dnsChallenge}</pre>
         </div>
       )}
 

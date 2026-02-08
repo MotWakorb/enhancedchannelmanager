@@ -181,7 +181,7 @@ export function JournalTab() {
   if (loading && entries.length === 0) {
     return (
       <div className="journal-tab">
-        <div className="loading-state">
+        <div className="tab-loading">
           <span className="material-icons spinning">sync</span>
           <p>Loading journal...</p>
         </div>

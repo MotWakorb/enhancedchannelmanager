@@ -520,21 +520,7 @@
   text-overflow: ellipsis;
 }
 
-/* Loading State */
-.stats-loading {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  padding: 3rem;
-  color: var(--text-muted);
-}
-
-.stats-loading .material-icons {
-  font-size: 32px;
-  margin-bottom: 0.5rem;
-  animation: spin 1s linear infinite reverse;
-}
+/* .tab-loading → App.css */
 
 /* Error State */
 .stats-error {
