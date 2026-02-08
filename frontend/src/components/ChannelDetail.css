@@ -23,7 +23,7 @@
   font-size: 1.25rem;
   cursor: pointer;
   padding: 0.25rem 0.5rem;
-  border-radius: 4px;
+  border-radius: var(--radius-md);
 }
 
 .close-btn:hover {
@@ -49,7 +49,7 @@
 .channel-detail .channel-number.editable {
   cursor: pointer;
   padding: 0.125rem 0.25rem;
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
 }
 
 .channel-detail .channel-number.editable:hover {
@@ -62,7 +62,7 @@
   padding: 0.25rem 0.5rem;
   background-color: var(--input-bg);
   border: 1px solid var(--accent-primary);
-  border-radius: 4px;
+  border-radius: var(--radius-md);
   color: var(--text-primary);
   font-size: 0.9rem;
   font-family: monospace;
@@ -141,7 +141,7 @@
   align-items: center;
   padding: 0.5rem;
   background-color: var(--input-bg);
-  border-radius: 4px;
+  border-radius: var(--radius-md);
   gap: 0.5rem;
 }
 
@@ -166,7 +166,7 @@
   width: 24px;
   height: 24px;
   object-fit: contain;
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   background-color: var(--bg-tertiary);
 }
 
@@ -185,7 +185,7 @@
   font-size: 0.9rem;
   cursor: pointer;
   padding: 0.25rem 0.5rem;
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   opacity: 0;
   transition: opacity 0.15s, background-color 0.15s;
 }

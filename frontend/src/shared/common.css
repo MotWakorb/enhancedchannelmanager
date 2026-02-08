@@ -14,6 +14,8 @@
  * 7. Empty States
  * 8. Error/Warning Displays
  * 9. Miscellaneous Patterns
+ * ...
+ * 22. Badges
  *
  * CSS Variables are defined in index.css - do not duplicate here.
  */
@@ -93,7 +95,7 @@
   gap: 0.5rem;
   padding: 0.625rem 1.25rem;
   border: none;
-  border-radius: 6px;
+  border-radius: var(--radius-lg);
   background-color: var(--button-primary-bg);
   color: var(--button-primary-text);
   font-size: 0.875rem;
@@ -122,7 +124,7 @@
   gap: 0.5rem;
   padding: 0.625rem 1.25rem;
   border: none;
-  border-radius: 6px;
+  border-radius: var(--radius-lg);
   background-color: var(--border-primary);
   color: var(--text-primary);
   font-size: 0.875rem;
@@ -151,7 +153,7 @@
   gap: 0.5rem;
   padding: 0.625rem 1.25rem;
   border: none;
-  border-radius: 6px;
+  border-radius: var(--radius-lg);
   background-color: var(--error);
   color: white;
   font-size: 0.875rem;
@@ -181,7 +183,7 @@
   padding: 0.625rem 1rem;
   background-color: var(--bg-hover);
   border: 1px solid var(--border-secondary);
-  border-radius: 6px;
+  border-radius: var(--radius-lg);
   color: var(--text-secondary);
   font-size: 0.875rem;
   cursor: pointer;
@@ -241,7 +243,7 @@
   width: 100%;
   padding: 0.625rem 0.75rem;
   border: 1px solid var(--border-secondary);
-  border-radius: 6px;
+  border-radius: var(--radius-lg);
   background-color: var(--input-bg);
   color: var(--text-primary);
   font-size: 0.875rem;
@@ -252,7 +254,7 @@
 .form-group select:focus {
   outline: none;
   border-color: var(--accent-primary);
-  box-shadow: 0 0 0 2px rgba(100, 108, 255, 0.2);
+  box-shadow: var(--shadow-focus);
 }
 
 .form-group input::placeholder {
@@ -272,7 +274,7 @@
   padding: 0.625rem 0.75rem;
   background-color: var(--input-bg);
   border: 1px solid var(--border-secondary);
-  border-radius: 6px;
+  border-radius: var(--radius-lg);
   color: var(--text-primary);
   font-size: 0.875rem;
   box-sizing: border-box;
@@ -283,7 +285,7 @@
 .form-select:focus {
   outline: none;
   border-color: var(--accent-primary);
-  box-shadow: 0 0 0 2px rgba(100, 108, 255, 0.2);
+  box-shadow: var(--shadow-focus);
 }
 
 .form-input::placeholder {
@@ -376,7 +378,7 @@
   gap: 1rem;
   padding: 4rem 2rem;
   background-color: var(--bg-primary);
-  border-radius: 8px;
+  border-radius: var(--radius-xl);
   border: 1px dashed #444;
   text-align: center;
 }
@@ -415,9 +417,9 @@
   align-items: center;
   gap: 0.5rem;
   padding: 0.75rem 1rem;
-  background-color: rgba(239, 68, 68, 0.15);
+  background-color: var(--error-bg);
   border: 1px solid rgba(239, 68, 68, 0.3);
-  border-radius: 6px;
+  border-radius: var(--radius-lg);
   color: var(--error);
   margin-bottom: 1rem;
 }
@@ -444,9 +446,9 @@
   align-items: center;
   gap: 0.5rem;
   padding: 0.75rem 1rem;
-  background-color: rgba(34, 197, 94, 0.15);
+  background-color: var(--success-bg);
   border: 1px solid rgba(34, 197, 94, 0.3);
-  border-radius: 6px;
+  border-radius: var(--radius-lg);
   color: var(--success);
   font-size: 0.875rem;
   margin-bottom: 1rem;
@@ -466,7 +468,7 @@
   padding: 0.75rem 1rem;
   background-color: rgba(234, 179, 8, 0.15);
   border: 1px solid rgba(234, 179, 8, 0.3);
-  border-radius: 6px;
+  border-radius: var(--radius-lg);
   color: var(--warning, #eab308);
   font-size: 0.875rem;
   margin-top: 0.75rem;
@@ -500,7 +502,7 @@
   padding: 0.625rem 0.75rem;
   background-color: var(--input-bg);
   border: 1px solid var(--border-secondary);
-  border-radius: 6px;
+  border-radius: var(--radius-lg);
   transition: background-color 0.15s, border-color 0.15s;
 }
 
@@ -536,7 +538,7 @@
   color: var(--text-secondary);
   background-color: var(--border-primary);
   padding: 0.125rem 0.5rem;
-  border-radius: 4px;
+  border-radius: var(--radius-md);
   max-width: 200px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -638,7 +640,7 @@
   padding: 7px 0;
   background-color: var(--input-bg);
   border: 1px solid var(--border-secondary);
-  border-radius: 4px;
+  border-radius: var(--radius-md);
   color: var(--text-secondary);
   cursor: pointer;
   transition: all 0.15s;
@@ -669,7 +671,7 @@
   padding: 0.5rem;
   background-color: var(--input-bg);
   border: 1px solid var(--border-secondary);
-  border-radius: 6px;
+  border-radius: var(--radius-lg);
   color: var(--text-primary);
   font-size: 0.9rem;
   transition: border-color 0.15s;
@@ -692,7 +694,7 @@
   padding: 0.5rem 0.75rem;
   background-color: var(--input-bg);
   border: 1px solid var(--border-secondary);
-  border-radius: 6px;
+  border-radius: var(--radius-lg);
   flex: 1;
   min-width: 200px;
 }
@@ -724,7 +726,7 @@
   padding: 0.125rem;
   cursor: pointer;
   color: var(--text-secondary);
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
 }
 
 .search-box .clear-search:hover {
@@ -755,7 +757,7 @@
   padding: 0.5rem;
   background-color: var(--input-bg);
   border: 1px solid var(--border-secondary);
-  border-radius: 4px;
+  border-radius: var(--radius-md);
   color: var(--text-primary);
   font-size: 0.9rem;
   cursor: pointer;
@@ -787,12 +789,12 @@
   margin-top: 4px;
   background-color: var(--bg-secondary);
   border: 1px solid var(--border-secondary);
-  border-radius: 6px;
-  z-index: 100;
+  border-radius: var(--radius-lg);
+  z-index: var(--z-dropdown);
   max-height: 300px;
   display: flex;
   flex-direction: column;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  box-shadow: var(--shadow-md);
 }
 
 .filter-dropdown-search {
@@ -835,7 +837,7 @@
   font-size: 0.75rem;
   background-color: var(--bg-tertiary);
   border: 1px solid var(--border-secondary);
-  border-radius: 4px;
+  border-radius: var(--radius-md);
   color: var(--text-secondary);
   cursor: pointer;
 }
@@ -856,7 +858,7 @@
   align-items: center;
   gap: 0.5rem;
   padding: 0.375rem 0.5rem;
-  border-radius: 4px;
+  border-radius: var(--radius-md);
   cursor: pointer;
   font-size: 0.85rem;
   color: var(--text-primary);
@@ -1009,7 +1011,7 @@
   max-height: 300px;
   overflow-y: auto;
   border: 1px solid var(--border-secondary);
-  border-radius: 6px;
+  border-radius: var(--radius-lg);
   background-color: var(--bg-primary);
 }
 
@@ -1027,11 +1029,11 @@
 }
 
 .preview-item.error {
-  background-color: rgba(239, 68, 68, 0.1);
+  background-color: var(--error-bg);
 }
 
 .preview-item.success {
-  background-color: rgba(34, 197, 94, 0.1);
+  background-color: var(--success-bg);
 }
 
 
@@ -1049,7 +1051,7 @@
   padding: 0.375rem;
   background: none;
   border: none;
-  border-radius: 4px;
+  border-radius: var(--radius-md);
   color: var(--text-secondary);
   cursor: pointer;
   transition: background-color 0.15s, color 0.15s;
@@ -1093,7 +1095,7 @@
   border: none;
   color: var(--text-muted);
   cursor: pointer;
-  border-radius: 4px;
+  border-radius: var(--radius-md);
   transition: color 0.15s, background 0.15s, opacity 0.15s;
   opacity: 0;
 }
@@ -1118,7 +1120,7 @@
   border: none;
   color: var(--text-muted);
   cursor: pointer;
-  border-radius: 4px;
+  border-radius: var(--radius-md);
   transition: color 0.15s, background 0.15s, opacity 0.15s;
   opacity: 0;
 }
@@ -1139,14 +1141,14 @@
   border: none;
   color: var(--text-muted);
   cursor: pointer;
-  border-radius: 4px;
+  border-radius: var(--radius-md);
   transition: color 0.15s, background 0.15s, opacity 0.15s;
   opacity: 0;
 }
 
 .preview-btn:hover {
   color: var(--success, #22c55e);
-  background: rgba(34, 197, 94, 0.1);
+  background: var(--success-bg);
 }
 
 .preview-btn .material-icons {
@@ -1167,7 +1169,7 @@
   gap: 0.75rem;
   padding: 0.5rem 0.75rem;
   background-color: var(--bg-secondary);
-  border-radius: 6px;
+  border-radius: var(--radius-lg);
   font-size: 0.875rem;
 }
 
@@ -1242,19 +1244,19 @@
   align-items: center;
   gap: 0.5rem;
   padding: 0.75rem 1rem;
-  border-radius: 6px;
+  border-radius: var(--radius-lg);
   margin-top: 1rem;
   font-size: 0.9rem;
 }
 
 .test-result.success {
-  background-color: rgba(34, 197, 94, 0.1);
+  background-color: var(--success-bg);
   border: 1px solid rgba(34, 197, 94, 0.3);
   color: var(--success);
 }
 
 .test-result.error {
-  background-color: rgba(239, 68, 68, 0.1);
+  background-color: var(--error-bg);
   border: 1px solid rgba(239, 68, 68, 0.3);
   color: var(--error);
 }
@@ -1262,3 +1264,62 @@
 .test-result .material-icons {
   font-size: 20px;
 }
+
+
+/* =============================================================================
+   22. BADGES
+   ============================================================================= */
+
+/* Standard badge - neutral default */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2, 0.25rem);
+  padding: var(--space-1, 0.125rem) var(--space-4, 0.5rem);
+  font-size: var(--text-sm, 0.75rem);
+  font-weight: 500;
+  line-height: 1.4;
+  border-radius: var(--radius-md, 4px);
+  white-space: nowrap;
+  vertical-align: middle;
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+}
+
+.badge .material-icons { font-size: 14px; }
+
+/* Semantic variants */
+.badge-success { background: var(--success-bg); color: var(--success); }
+.badge-error   { background: var(--error-bg);   color: var(--error); }
+.badge-warning { background: var(--warning-bg);  color: var(--warning-text, var(--warning)); }
+.badge-info    { background: var(--info-bg);     color: var(--info-text); }
+
+/* Size variants */
+.badge-sm { padding: var(--space-1, 0.125rem) var(--space-3, 0.375rem); font-size: 0.65rem; }
+.badge-lg { padding: var(--space-2, 0.25rem) var(--space-6, 0.75rem); font-size: var(--text-md, 0.875rem); }
+
+/* Shape variants */
+.badge-pill { border-radius: var(--radius-full, 9999px); }
+
+/* Style variants */
+.badge-outline { background: transparent; border: 1px solid currentColor; }
+.badge-uppercase { text-transform: uppercase; letter-spacing: 0.025em; font-weight: 600; }
+
+/* =============================================================================
+   23. TYPE BADGES
+   ============================================================================= */
+
+.type-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2, 0.25rem);
+  padding: var(--space-1, 0.125rem) var(--space-4, 0.5rem);
+  border-radius: var(--radius-md, 4px);
+  font-size: var(--text-xs, 0.6875rem);
+  font-weight: 500;
+  text-transform: uppercase;
+  white-space: nowrap;
+  line-height: 1.4;
+}
+
+.type-badge .material-icons { font-size: 14px; }

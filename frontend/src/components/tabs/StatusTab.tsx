@@ -256,7 +256,7 @@ export function StatusTab() {
             <span className="material-icons">warning</span>
             <span>Incidents</span>
             {activeIncidents.length > 0 && (
-              <span className="badge">{activeIncidents.length}</span>
+              <span className="badge badge-warning badge-pill badge-sm">{activeIncidents.length}</span>
             )}
           </li>
           <li

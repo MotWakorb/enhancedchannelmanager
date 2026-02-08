@@ -44,7 +44,7 @@
 .view-toggle {
   display: flex;
   border: 1px solid var(--border-secondary);
-  border-radius: 6px;
+  border-radius: var(--radius-lg);
   overflow: hidden;
 }
 
@@ -97,7 +97,7 @@
 
 .logos-list {
   background-color: var(--bg-primary);
-  border-radius: 8px;
+  border-radius: var(--radius-xl);
   border: 1px solid var(--border-primary);
   overflow: hidden;
 }
@@ -143,7 +143,7 @@
   align-items: center;
   justify-content: center;
   background-color: var(--input-bg);
-  border-radius: 6px;
+  border-radius: var(--radius-lg);
   overflow: hidden;
 }
 
@@ -196,7 +196,7 @@
   padding: 0;
   background: none;
   border: none;
-  border-radius: 4px;
+  border-radius: var(--radius-md);
   color: var(--text-muted);
   cursor: pointer;
   transition: background-color 0.15s, color 0.15s;
@@ -239,7 +239,7 @@
   padding: 0;
   background: none;
   border: none;
-  border-radius: 4px;
+  border-radius: var(--radius-md);
   color: var(--text-secondary);
   cursor: pointer;
   transition: background-color 0.15s, color 0.15s;
@@ -278,7 +278,7 @@
 .logo-card {
   background-color: var(--bg-primary);
   border: 1px solid var(--border-primary);
-  border-radius: 8px;
+  border-radius: var(--radius-xl);
   overflow: hidden;
   transition: border-color 0.15s, box-shadow 0.15s;
 }
@@ -344,7 +344,7 @@
   height: 16px;
   padding: 0 0.25rem;
   background-color: var(--border-primary);
-  border-radius: 8px;
+  border-radius: var(--radius-xl);
   font-size: 0.65rem;
   font-weight: 600;
   color: var(--text-secondary);
@@ -436,7 +436,7 @@
   padding: 0.75rem;
   background-color: var(--warning-bg);
   border: 1px solid var(--warning);
-  border-radius: 6px;
+  border-radius: var(--radius-lg);
   color: var(--warning);
   font-size: 0.9rem;
 }

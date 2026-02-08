@@ -680,6 +680,26 @@
   cursor: pointer;
 }
 
+.filter-settings-separator {
+  height: 1px;
+  background-color: var(--border-secondary);
+  margin: 6px 0;
+}
+
+.filter-settings-subheader {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+  padding: 2px 8px 4px;
+}
+
+.filter-settings-button.filter-active {
+  border-color: var(--button-primary-bg);
+  color: var(--button-primary-bg);
+}
+
 .pane-content {
   flex: 1;
   overflow-y: auto;

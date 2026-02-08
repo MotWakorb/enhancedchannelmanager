@@ -2075,7 +2075,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         <div className="settings-section-header">
           <span className="material-icons">mail_outline</span>
           <h3>SMTP Configuration</h3>
-          <span className={`config-badge ${smtpConfigured ? 'configured' : 'unconfigured'}`}>
+          <span className={`badge badge-sm ${smtpConfigured ? 'badge-success' : ''}`}>
             {smtpConfigured ? 'Configured' : 'Unconfigured'}
           </span>
         </div>
@@ -2227,7 +2227,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         <div className="settings-section-header">
           <span className="material-icons">discord</span>
           <h3>Discord Webhook</h3>
-          <span className={`config-badge ${discordConfigured ? 'configured' : 'unconfigured'}`}>
+          <span className={`badge badge-sm ${discordConfigured ? 'badge-success' : ''}`}>
             {discordConfigured ? 'Configured' : 'Unconfigured'}
           </span>
         </div>
@@ -2276,7 +2276,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         <div className="settings-section-header">
           <span className="material-icons">telegram</span>
           <h3>Telegram Bot</h3>
-          <span className={`config-badge ${telegramConfigured ? 'configured' : 'unconfigured'}`}>
+          <span className={`badge badge-sm ${telegramConfigured ? 'badge-success' : ''}`}>
             {telegramConfigured ? 'Configured' : 'Unconfigured'}
           </span>
         </div>

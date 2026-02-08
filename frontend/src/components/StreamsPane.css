@@ -35,7 +35,7 @@
   color: var(--text-secondary);
   cursor: pointer;
   padding: 0.25rem;
-  border-radius: 4px;
+  border-radius: var(--radius-md);
   transition: color 0.15s, background-color 0.15s;
 }
 
@@ -64,7 +64,7 @@
   border: 1px solid var(--border-secondary);
   color: var(--button-text);
   padding: 0.375rem 0.75rem;
-  border-radius: 4px;
+  border-radius: var(--radius-md);
   font-size: 0.85rem;
   font-weight: 500;
   cursor: pointer;
@@ -85,7 +85,7 @@
   border: 1px solid var(--button-primary-bg);
   color: var(--button-primary-text);
   padding: 0.375rem 0.75rem;
-  border-radius: 4px;
+  border-radius: var(--radius-md);
   font-size: 0.85rem;
   font-weight: 500;
   cursor: pointer;
@@ -109,7 +109,7 @@
   box-sizing: border-box;
   flex-shrink: 0;
   position: relative;
-  z-index: 10;
+  z-index: var(--z-raised);
 }
 
 /* Hide mapped streams toggle button */
@@ -120,7 +120,7 @@
   padding: 0.375rem 0.625rem;
   background: transparent;
   border: 1px solid var(--border-secondary);
-  border-radius: 4px;
+  border-radius: var(--radius-md);
   color: var(--text-secondary);
   cursor: pointer;
   transition: all 0.15s;
@@ -170,7 +170,7 @@
   color: var(--text-secondary);
   cursor: pointer;
   padding: 0.4rem;
-  border-radius: 4px;
+  border-radius: var(--radius-md);
   transition: color 0.15s, background-color 0.15s, border-color 0.15s;
   flex-shrink: 0;
 }
@@ -191,7 +191,7 @@
   padding: 0.5rem;
   background-color: var(--input-bg);
   border: 1px solid var(--border-secondary);
-  border-radius: 4px;
+  border-radius: var(--radius-md);
   color: var(--text-primary);
   font-size: 0.9rem;
 }
@@ -219,7 +219,7 @@
   display: flex;
   align-items: center;
   padding: 0.5rem 0.75rem;
-  border-radius: 4px;
+  border-radius: var(--radius-md);
   cursor: pointer;
   user-select: none;
   transition: background-color 0.15s;
@@ -278,7 +278,7 @@ button.group-selection-checkbox {
   cursor: pointer;
   transition: color 0.15s;
   position: relative;
-  z-index: 1;
+  z-index: var(--z-base);
   /* Reset button styles */
   background: none;
   border: none;
@@ -320,7 +320,7 @@ button.group-selection-checkbox {
   color: var(--text-muted);
   background-color: var(--border-primary);
   padding: 0.125rem 0.5rem;
-  border-radius: 10px;
+  border-radius: var(--radius-2xl);
 }
 
 .stream-group-items {
@@ -336,7 +336,7 @@ button.group-selection-checkbox {
   align-items: center;
   padding: 0.5rem;
   background-color: var(--input-bg);
-  border-radius: 4px;
+  border-radius: var(--radius-md);
   cursor: default;
   transition: background-color 0.15s, transform 0.15s;
 }
@@ -403,7 +403,7 @@ button.group-selection-checkbox {
   height: 32px;
   object-fit: contain;
   margin-right: 0.75rem;
-  border-radius: 4px;
+  border-radius: var(--radius-md);
   background-color: var(--bg-tertiary);
 }
 
@@ -451,7 +451,7 @@ button.group-selection-checkbox {
   margin-top: 0.5rem;
   background-color: var(--border-primary);
   border: 1px solid var(--border-secondary);
-  border-radius: 4px;
+  border-radius: var(--radius-md);
   color: var(--button-text);
   cursor: pointer;
   transition: background-color 0.15s;
@@ -502,7 +502,7 @@ button.group-selection-checkbox {
   cursor: pointer;
   opacity: 0;
   transition: opacity 0.15s, background-color 0.15s;
-  border-radius: 4px;
+  border-radius: var(--radius-md);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -532,20 +532,20 @@ button.group-selection-checkbox {
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: 1000;
+  z-index: var(--z-overlay);
 }
 
 /* Bulk Create Modal */
 .bulk-create-modal {
   background-color: var(--bg-tertiary);
   border: 1px solid var(--border-secondary);
-  border-radius: 8px;
+  border-radius: var(--radius-xl);
   width: 90%;
   max-width: 500px;
   max-height: 80vh;
   display: flex;
   flex-direction: column;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+  box-shadow: var(--shadow-xl);
 }
 
 .modal-header {
@@ -582,7 +582,7 @@ button.group-selection-checkbox {
   padding: 0.75rem;
   background-color: #22d3ee22;
   border: 1px solid #22d3ee44;
-  border-radius: 6px;
+  border-radius: var(--radius-lg);
   margin-bottom: 1rem;
 }
 
@@ -613,7 +613,7 @@ button.group-selection-checkbox {
   padding: 0.75rem;
   background-color: var(--accent-primary)22;
   border: 1px solid var(--accent-primary)44;
-  border-radius: 6px;
+  border-radius: var(--radius-lg);
   margin-bottom: 1.25rem;
 }
 
@@ -692,7 +692,7 @@ button.group-selection-checkbox {
   font-size: 0.7rem;
   padding: 0.125rem 0.375rem;
   background-color: var(--bg-hover);
-  border-radius: 4px;
+  border-radius: var(--radius-md);
   color: var(--text-secondary);
   margin-left: 0.5rem;
 }
@@ -701,7 +701,7 @@ button.group-selection-checkbox {
   font-size: 0.7rem;
   padding: 0.125rem 0.375rem;
   background-color: var(--success)33;
-  border-radius: 4px;
+  border-radius: var(--radius-md);
   color: var(--success);
   margin-left: 0.5rem;
 }
@@ -773,7 +773,7 @@ button.group-selection-checkbox {
   color: var(--text-secondary);
   background-color: var(--bg-hover);
   padding: 0.25rem 0.5rem;
-  border-radius: 4px;
+  border-radius: var(--radius-md);
   min-width: 2.5rem;
   text-align: center;
   flex-shrink: 0;
@@ -831,7 +831,7 @@ button.group-selection-checkbox {
 .preview-list {
   background-color: var(--bg-secondary);
   border: 1px solid var(--border-primary);
-  border-radius: 6px;
+  border-radius: var(--radius-lg);
   max-height: 180px;
   overflow-y: auto;
 }
@@ -868,7 +868,7 @@ button.group-selection-checkbox {
   font-size: 0.75rem;
   padding: 0.125rem 0.375rem;
   background-color: #22d3ee22;
-  border-radius: 4px;
+  border-radius: var(--radius-md);
   color: #22d3ee;
   white-space: nowrap;
   cursor: help;
@@ -882,7 +882,7 @@ button.group-selection-checkbox {
   padding: 0.5rem 0.75rem;
   background-color: var(--warning)22;
   border: 1px solid #f59e0b44;
-  border-radius: 6px;
+  border-radius: var(--radius-lg);
   margin-bottom: 0.75rem;
 }
 
@@ -917,7 +917,7 @@ button.group-selection-checkbox {
   padding: 0.5rem 0.75rem;
   background-color: #6366f122;
   border: 1px solid #6366f144;
-  border-radius: 6px;
+  border-radius: var(--radius-lg);
   margin-bottom: 0.75rem;
 }
 
@@ -942,7 +942,7 @@ button.group-selection-checkbox {
   align-items: center;
   gap: 0.5rem;
   padding: 0.5rem 0.75rem;
-  border-radius: 4px;
+  border-radius: var(--radius-md);
   cursor: pointer;
   transition: background-color 0.15s;
 }
@@ -962,7 +962,7 @@ button.group-selection-checkbox {
   padding: 0.375rem 0.75rem;
   background: none;
   border: 1px solid var(--border-secondary);
-  border-radius: 4px;
+  border-radius: var(--radius-md);
   color: var(--text-secondary);
   font-size: 0.75rem;
   cursor: pointer;
@@ -983,7 +983,7 @@ button.group-selection-checkbox {
   padding: 0.5rem 0.75rem;
   background-color: #3b82f622;
   border: 1px solid #3b82f644;
-  border-radius: 6px;
+  border-radius: var(--radius-lg);
   margin-bottom: 0.75rem;
 }
 
@@ -1055,7 +1055,7 @@ button.group-selection-checkbox {
   padding: 0.625rem 0.75rem;
   background-color: var(--input-bg);
   border: 1px solid #3a3a3a;
-  border-radius: 6px;
+  border-radius: var(--radius-lg);
   transition: background-color 0.15s, border-color 0.15s;
 }
 
@@ -1083,7 +1083,7 @@ button.group-selection-checkbox {
   color: var(--text-secondary);
   background-color: var(--border-primary);
   padding: 0.125rem 0.5rem;
-  border-radius: 4px;
+  border-radius: var(--radius-md);
 }
 
 .naming-options-content {
@@ -1163,7 +1163,7 @@ button.group-selection-checkbox {
 .separator-btn {
   padding: 0.375rem 0.75rem;
   border: 1px solid var(--border-secondary);
-  border-radius: 4px;
+  border-radius: var(--radius-md);
   background-color: var(--input-bg);
   color: var(--button-text);
   font-size: 0.9rem;
@@ -1205,7 +1205,7 @@ button.group-selection-checkbox {
   color: var(--accent-primary);
   padding: 0.375rem 0.75rem;
   background-color: var(--bg-hover);
-  border-radius: 4px;
+  border-radius: var(--radius-md);
   margin-bottom: 0.25rem;
 }
 
@@ -1226,7 +1226,7 @@ button.group-selection-checkbox {
   padding: 0.625rem 1.25rem;
   background-color: var(--button-primary-bg);
   border: none;
-  border-radius: 6px;
+  border-radius: var(--radius-lg);
   color: var(--button-primary-text);
   font-size: 0.9rem;
   font-weight: 500;
@@ -1262,7 +1262,7 @@ button.group-selection-checkbox {
   padding: 0.5rem 0.75rem;
   background-color: var(--input-bg);
   border: 1px solid var(--border-secondary);
-  border-radius: 6px;
+  border-radius: var(--radius-lg);
   cursor: pointer;
   transition: border-color 0.15s;
 }
@@ -1293,8 +1293,8 @@ button.group-selection-checkbox {
   margin-top: 4px;
   background-color: var(--input-bg);
   border: 1px solid var(--accent-primary);
-  border-radius: 6px;
-  z-index: 9999;
+  border-radius: var(--radius-lg);
+  z-index: var(--z-toast);
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
   overflow: hidden;
 }
@@ -1317,7 +1317,7 @@ button.group-selection-checkbox {
 
 .bulk-create-modal .searchable-dropdown {
   position: relative;
-  z-index: 100;
+  z-index: var(--z-dropdown);
 }
 
 /* Add padding to the collapsible content when it contains the dropdown
@@ -1367,7 +1367,7 @@ button.group-selection-checkbox {
   padding: 0.125rem;
   cursor: pointer;
   color: var(--text-secondary);
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
 }
 
 .searchable-dropdown .dropdown-search .clear-search:hover {
@@ -1414,8 +1414,8 @@ button.group-selection-checkbox {
 .streams-context-menu {
   background-color: var(--bg-secondary);
   border: 1px solid var(--border-primary);
-  border-radius: 6px;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-md);
   min-width: 220px;
   padding: 4px 0;
   font-size: 0.9rem;
@@ -1452,8 +1452,8 @@ button.group-selection-checkbox {
 .streams-context-submenu {
   background-color: var(--bg-secondary);
   border: 1px solid var(--border-primary);
-  border-radius: 6px;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-md);
   min-width: 200px;
   max-height: 300px;
   overflow-y: auto;
@@ -1472,7 +1472,7 @@ button.group-selection-checkbox {
 
 .streams-context-submenu::-webkit-scrollbar-thumb {
   background-color: var(--text-muted);
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
 }
 
 .streams-context-submenu::-webkit-scrollbar-thumb:hover {
@@ -1494,7 +1494,7 @@ button.group-selection-checkbox {
   margin-bottom: -20px;
   background: linear-gradient(to bottom, var(--bg-secondary) 0%, transparent 100%);
   pointer-events: none;
-  z-index: 1;
+  z-index: var(--z-base);
   display: block;
 }
 
@@ -1508,7 +1508,7 @@ button.group-selection-checkbox {
   margin-top: -20px;
   background: linear-gradient(to top, var(--bg-secondary) 0%, transparent 100%);
   pointer-events: none;
-  z-index: 1;
+  z-index: var(--z-base);
   display: block;
 }
 
@@ -1520,7 +1520,7 @@ button.group-selection-checkbox {
   padding: 0.5rem;
   margin-bottom: 0.75rem;
   background-color: var(--bg-tertiary);
-  border-radius: 4px;
+  border-radius: var(--radius-md);
   font-size: 0.85rem;
   color: var(--text-secondary);
 }
@@ -1538,7 +1538,7 @@ button.group-selection-checkbox {
   margin-top: 0.75rem;
   padding: 0.75rem;
   background-color: var(--bg-tertiary);
-  border-radius: 4px;
+  border-radius: var(--radius-md);
   border: 1px solid var(--border-primary);
 }
 
@@ -1574,7 +1574,7 @@ button.group-selection-checkbox {
   font-size: 0.85rem;
   padding: 0.375rem 0.5rem;
   background-color: var(--bg-secondary);
-  border-radius: 4px;
+  border-radius: var(--radius-md);
 }
 
 .normalization-change-item .original-name {

@@ -21,7 +21,7 @@
   padding: 0.5rem 0.75rem;
   background-color: var(--input-bg);
   border: 1px solid var(--border-secondary);
-  border-radius: 6px;
+  border-radius: var(--radius-lg);
   color: var(--text-primary);
   font-size: 0.875rem;
   cursor: pointer;
@@ -36,7 +36,7 @@
 .custom-select-trigger:focus {
   outline: none;
   border-color: var(--accent-primary);
-  box-shadow: 0 0 0 2px rgba(100, 108, 255, 0.2);
+  box-shadow: var(--shadow-focus);
 }
 
 .custom-select-trigger:disabled {
@@ -46,7 +46,7 @@
 
 .custom-select.open .custom-select-trigger {
   border-color: var(--accent-primary);
-  box-shadow: 0 0 0 2px rgba(100, 108, 255, 0.2);
+  box-shadow: var(--shadow-focus);
 }
 
 /* Value display */
@@ -77,9 +77,9 @@
 .custom-select-menu {
   background-color: var(--bg-secondary, #252530);
   border: 1px solid var(--border-secondary, #4a4a55);
-  border-radius: 6px;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
-  z-index: 10000;
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-md);
+  z-index: var(--z-topmost);
   max-height: 250px;
   display: flex;
   flex-direction: column;
@@ -135,7 +135,7 @@
   padding: 0.125rem;
   cursor: pointer;
   color: var(--text-secondary);
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   transition: background-color 0.15s, color 0.15s;
 }
 
@@ -166,7 +166,7 @@
 
 .custom-select-options::-webkit-scrollbar-thumb {
   background: var(--border-secondary);
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
 }
 
 .custom-select-options::-webkit-scrollbar-thumb:hover {
@@ -178,7 +178,7 @@
   display: flex;
   align-items: center;
   padding: 0.5rem 0.75rem;
-  border-radius: 4px;
+  border-radius: var(--radius-md);
   cursor: pointer;
   font-size: 0.875rem;
   color: var(--text-primary, rgba(255, 255, 255, 0.95));

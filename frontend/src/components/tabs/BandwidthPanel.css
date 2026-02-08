@@ -3,7 +3,7 @@
 .bandwidth-panel {
   background: var(--bg-secondary);
   border: 1px solid var(--border-primary);
-  border-radius: 8px;
+  border-radius: var(--radius-xl);
   padding: 16px;
   margin-bottom: 16px;
 }
@@ -40,7 +40,7 @@
   color: var(--text-secondary);
   cursor: pointer;
   padding: 4px;
-  border-radius: 4px;
+  border-radius: var(--radius-md);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -66,7 +66,7 @@
 .bandwidth-panel .summary-card {
   background: var(--bg-tertiary);
   border: 1px solid var(--border-primary);
-  border-radius: 6px;
+  border-radius: var(--radius-lg);
   padding: 12px;
 }
 
@@ -143,7 +143,7 @@
 .bandwidth-panel .peak-card {
   background: var(--bg-tertiary);
   border: 1px solid var(--border-primary);
-  border-radius: 6px;
+  border-radius: var(--radius-lg);
   padding: 12px;
   display: flex;
   align-items: center;
@@ -229,7 +229,7 @@
 .bandwidth-panel .chart-container {
   background: var(--bg-tertiary);
   border: 1px solid var(--border-primary);
-  border-radius: 6px;
+  border-radius: var(--radius-lg);
   padding: 16px;
   overflow-x: auto;
 }
@@ -290,7 +290,7 @@
   padding: 12px;
   background: var(--bg-tertiary);
   border: 1px solid var(--border-primary);
-  border-radius: 6px;
+  border-radius: var(--radius-lg);
 }
 
 .bandwidth-panel .ratio-header {
@@ -303,7 +303,7 @@
 .bandwidth-panel .ratio-bar {
   height: 20px;
   background: var(--bg-secondary);
-  border-radius: 4px;
+  border-radius: var(--radius-md);
   overflow: hidden;
   display: flex;
   margin-bottom: 8px;
@@ -349,7 +349,7 @@
   border: 1px solid var(--error);
   color: var(--error);
   padding: 10px 14px;
-  border-radius: 6px;
+  border-radius: var(--radius-lg);
   font-size: 12px;
   margin-bottom: 12px;
 }
