@@ -10,6 +10,7 @@ A professional-grade web interface for managing IPTV configurations with Dispatc
 - **Channel Manager** - Full-featured channel and stream management with split-pane layout
 - **Guide** - TV Guide with EPG grid view showing program schedules
 - **Logo Manager** - Logo management with search, upload, and URL import
+- **Auto-Creation** - Rules-based automation pipeline for automatic channel creation, stream merging, and orphan management
 - **Journal** - Activity log tracking all changes to channels, EPG, and M3U accounts
 - **Stats** - Live streaming statistics, M3U connection counts, bandwidth tracking, and charts
 - **Settings** - Configure Dispatcharr connection, channel defaults, stream probing, scheduled tasks, alert methods, authentication, and appearance
@@ -23,7 +24,9 @@ ECM includes a comprehensive authentication system to secure access to your chan
 - **First-Run Setup** - On first launch, create an administrator account through a setup wizard
 - **Local Authentication** - Username/password authentication with secure bcrypt password hashing
 - **Dispatcharr SSO** - Single sign-on using your existing Dispatcharr credentials
+- **Account Linking** - Link multiple authentication methods to a single user account (e.g., local + Dispatcharr)
 - **Password Reset** - Email-based password reset with secure time-limited tokens (requires SMTP configuration)
+- **CLI Password Reset** - Reset passwords from the command line when locked out (see [Utility Scripts](#utility-scripts))
 - **User Management** - Admin panel for managing user accounts, roles, and access
 - **Session Management** - JWT-based sessions with automatic token refresh
 
@@ -47,6 +50,77 @@ When SMTP is configured in Settings → Email Settings:
 - Password reset emails contain a secure link valid for 1 hour
 - Professional HTML email template with fallback plain text
 - Security: Always returns success to prevent email enumeration
+
+#### CLI Password Reset
+
+When locked out or SMTP is not configured, reset passwords from the command line:
+```bash
+# Interactive mode (lists users, prompts for password)
+docker exec -it enhancedchannelmanager python /app/reset_password.py
+
+# Non-interactive (for scripting)
+docker exec enhancedchannelmanager python /app/reset_password.py -u admin -p 'NewPass123'
+
+# Skip password strength validation
+docker exec enhancedchannelmanager python /app/reset_password.py -u admin -p 'simple' --force
+```
+
+### Auto-Creation Pipeline (v0.12.0)
+
+A rules-based automation engine for automatic channel creation, stream merging, and lifecycle management:
+
+#### Rule Builder
+- **Create Rules** - Define automation rules with conditions, actions, and priority ordering
+- **Rule Priority** - Drag-and-drop reordering to control execution order
+- **Enable/Disable** - Toggle individual rules without deleting
+- **Duplicate Rules** - Clone rules as a starting point for new rules
+- **Run on M3U Refresh** - Optionally auto-execute rules when M3U accounts refresh
+- **Stop on First Match** - Stop evaluating further rules when a stream matches
+- **Normalize Names** - Apply name normalization during processing
+- **YAML Import/Export** - Share and version control rule definitions
+
+#### Conditions
+Build complex matching logic with AND/OR connectors:
+- **Stream Name** - Contains, matches (regex), starts/ends with
+- **Stream Group** - Contains, matches (regex)
+- **TVG ID** - Exists/not exists, matches pattern
+- **Logo** - Exists/not exists
+- **Provider** - Filter by specific M3U account
+- **Quality** - Minimum/maximum resolution (2160p, 1080p, 720p, 480p, 360p)
+- **Codec** - Filter by video codec (H.264, HEVC, etc.)
+- **Channel Exists** - Check if channel already exists (by name, regex, or group)
+
+#### Actions
+Define what happens when conditions match:
+- **Create Channel** - Template-based naming with variables (`{stream_name}`, `{stream_group}`, `{quality}`, `{provider}`, etc.)
+- **Create Group** - Automatically create channel groups with template naming
+- **Merge Streams** - Combine multiple streams into a single channel with quality preference ordering
+- **Assign Logo/EPG/Profile** - Automatically assign channel metadata
+- **Set Channel Number** - Auto-assign or specify channel numbering (including ranges)
+- **Set Variable** - Define reusable variables with regex extraction for use in templates
+- **Name Transform** - Apply regex find/replace to channel names
+- **If Exists Behavior** - Skip, merge, update, or use existing when channels already exist
+
+#### Execution
+- **Dry Run Mode** - Preview all changes before applying
+- **Execute Mode** - Apply changes with full audit trail
+- **Run Single Rule** - Execute or dry-run a specific rule in isolation
+- **Rollback** - Undo a completed execution to restore previous state
+- **Execution History** - View past runs with duration, match counts, and created/updated/merged counts
+- **Execution Log** - Per-stream granular log showing condition evaluation, matched rules, and action results
+
+#### Smart Stream Handling
+- **Quality-Based Sorting** - Sort streams within channels by resolution (highest first)
+- **Probe on Sort** - Optionally probe unprobed streams for resolution data before sorting
+- **Multi-Criteria Sort** - Sort by stream name, natural name, group, or quality
+- **User Settings Integration** - Honors channel numbering, default profile, timezone preference, and auto-rename settings
+
+#### Orphan Reconciliation
+Automatically manage channels that no longer match any rule:
+- **Delete** - Remove orphaned channels entirely
+- **Move to Uncategorized** - Preserve channels by moving them out of managed groups
+- **Delete and Cleanup Groups** - Delete channels and remove now-empty groups
+- **None** - Skip reconciliation (preserve all channels)
 
 ### M3U Manager
 
@@ -230,10 +304,12 @@ A unique workflow that lets you stage changes locally before committing to the s
 
 - **View Logos** - Browse available logos with previews
 - **Assign Logos** - Assign logos to channels
-- **Search Logos** - Search by name
+- **Search Logos** - Search logos by name with client-side filtering
 - **Add from URL** - Create logos from external URLs
-- **Upload Files** - Upload logo files directly
+- **Upload Files** - Upload logo files directly to Dispatcharr
 - **Usage Tracking** - See how many channels use each logo
+- **Pagination** - Configurable page sizes (25, 50, 100, 250) with page navigation
+- **Full Logo Loading** - Automatically paginates through Dispatcharr's API to load all logos
 
 ### EPG Integration
 
@@ -492,13 +568,19 @@ In-app notification system accessible from the header:
 
 ### Channel List Filters
 
-Fine-tune which groups appear in the channel list:
+Fine-tune which groups and channels appear in the channel list:
 
 - **Show/Hide Empty Groups** - Toggle visibility of groups with no channels
 - **Show/Hide Newly Created Groups** - Toggle visibility of groups created this session
 - **Show/Hide Provider Groups** - Toggle visibility of auto-populated provider groups
 - **Show/Hide Manual Groups** - Toggle visibility of manually created groups
 - **Show/Hide Auto-Sync Groups** - Toggle visibility of auto-channel sync groups
+- **Missing Data Filters** - Filter channels by missing metadata:
+  - Missing Logo - Show channels without a logo assigned
+  - Missing TVG-ID - Show channels without a TVG ID
+  - Missing EPG Data - Show channels without EPG data
+  - Missing Gracenote - Show channels without a Gracenote ID
+  - Active filter indicator on the filter button
 - **Persistent Settings** - Filter preferences saved to localStorage
 
 ### Provider Management
@@ -614,23 +696,31 @@ Comprehensive authentication and user management:
 - **Session Management** - JWT-based sessions with automatic token refresh
 - **SMTP Integration** - Password reset requires SMTP configuration; link hidden when not configured
 
-### v0.12.0 - Mobile Interface
+### ~~v0.12.0 - Auto-Creation Pipeline~~ ✅ Implemented
+Rules engine for automatic channel management:
+- **Rule-Based Automation** - Create rules with conditions and actions to automatically create channels, merge streams, and assign metadata
+- **Condition Builder** - Match streams by name, group, provider, quality, codec, TVG ID, logo, and more with AND/OR logic
+- **Action Executor** - Create channels/groups, merge streams, assign logos/EPG/profiles, set channel numbers, define variables
+- **Template Variables** - Dynamic naming with `{stream_name}`, `{stream_group}`, `{quality}`, `{provider}`, and custom variables
+- **YAML Import/Export** - Share and version control your automation rules
+- **Dry Run Mode** - Preview what changes a pipeline would make before executing
+- **Execution Rollback** - Undo completed executions to restore previous state
+- **Orphan Reconciliation** - Automatically manage channels that no longer match (delete, move, or preserve)
+- **Quality-Based Sorting** - Sort streams within channels by resolution with optional probe-on-sort
+- **User Settings Integration** - Honors channel numbering, default profile, timezone, and auto-rename preferences
+- **Execution Log** - Per-stream granular log showing condition evaluation, rule matching, and action results
+- **CLI Password Reset** - `reset_password.py` utility for command-line password recovery
+- **Missing Data Filters** - Filter channels by missing logo, TVG-ID, EPG, or Gracenote ID
+- **Account Linking** - Link multiple authentication methods to a single user account
+- **Design Tokens & Theme Compliance** - CSS variable system for consistent theming across all components
+- **Logo Manager Improvements** - File upload to Dispatcharr, pagination, full logo loading
+
+### v0.13.0 - Mobile Interface
 Full mobile support for managing channels on the go:
 - Responsive layouts for phones and tablets
 - Touch-optimized controls
 - Mobile-friendly navigation
 - Progressive Web App (PWA) support
-
-### v0.13.0 - Channel Auto-Creation Pipeline
-Rules engine for automatic channel management:
-- **Rule-Based Automation** - Create rules to automatically create/delete channels
-- **Condition Builder** - Define conditions based on stream properties, groups, M3U sources
-- **Action Executor** - Automatically assign logos, EPG, profiles, and groups
-- **Pipeline-as-Code** - Define automation pipelines in YAML format
-- **YAML Import/Export** - Share and version control your automation rules
-- **Scheduled Execution** - Run pipelines on schedules or triggered by M3U refreshes
-- **Dry Run Mode** - Preview what changes a pipeline would make before executing
-- **Audit Trail** - Full logging of automated actions for troubleshooting
 
 ### v0.14.0 - Auto-Channel Management
 Popularity-based automatic channel management:
@@ -800,6 +890,27 @@ uvicorn main:app --reload
 - `PATCH /api/tasks/{id}/schedules/{schedule_id}` - Update schedule
 - `DELETE /api/tasks/{id}/schedules/{schedule_id}` - Delete schedule
 
+### Auto-Creation
+- `GET /api/auto-creation/rules` - List all rules sorted by priority
+- `GET /api/auto-creation/rules/{id}` - Get rule details
+- `POST /api/auto-creation/rules` - Create rule
+- `PUT /api/auto-creation/rules/{id}` - Update rule
+- `DELETE /api/auto-creation/rules/{id}` - Delete rule
+- `POST /api/auto-creation/rules/reorder` - Reorder rules by priority
+- `POST /api/auto-creation/rules/{id}/toggle` - Toggle rule enabled state
+- `POST /api/auto-creation/rules/{id}/duplicate` - Duplicate a rule
+- `POST /api/auto-creation/rules/{id}/run` - Run a single rule (supports dry_run query param)
+- `POST /api/auto-creation/run` - Run the full pipeline (execute or dry_run mode)
+- `GET /api/auto-creation/executions` - Get execution history (paginated)
+- `GET /api/auto-creation/executions/{id}` - Get execution details (with optional log and entities)
+- `POST /api/auto-creation/executions/{id}/rollback` - Rollback an execution
+- `POST /api/auto-creation/validate` - Validate a rule definition
+- `GET /api/auto-creation/export/yaml` - Export all rules as YAML
+- `POST /api/auto-creation/import/yaml` - Import rules from YAML
+- `GET /api/auto-creation/schema/conditions` - Get available condition types
+- `GET /api/auto-creation/schema/actions` - Get available action types
+- `GET /api/auto-creation/schema/template-variables` - Get available template variables
+
 ### Authentication
 - `GET /api/auth/status` - Get authentication status and configuration
 - `GET /api/auth/setup-required` - Check if first-run setup is needed
@@ -824,6 +935,31 @@ uvicorn main:app --reload
 - `GET /api/health` - Health check
 
 ## Utility Scripts
+
+### Password Reset Script
+
+The `reset_password.py` utility allows you to reset user passwords from the command line when locked out or when SMTP is not configured:
+
+```bash
+# Interactive mode — lists users, prompts for everything
+docker exec -it enhancedchannelmanager python /app/reset_password.py
+
+# Non-interactive — specify username and password
+docker exec enhancedchannelmanager python /app/reset_password.py -u admin -p 'NewPass123'
+
+# Semi-interactive — specify username, prompt for password securely
+docker exec -it enhancedchannelmanager python /app/reset_password.py -u admin
+
+# Skip password strength validation
+docker exec enhancedchannelmanager python /app/reset_password.py -u admin -p 'simple' --force
+```
+
+**Features:**
+- Interactive mode shows a table of all users with username, email, admin status, active status, and auth provider
+- Password strength validation (8+ chars, upper/lower/digit) with `--force` to bypass
+- Secure password prompts (not echoed to terminal)
+- Warns when resetting password for non-local auth users
+- Uses bcrypt with 12 rounds, matching the web UI authentication system
 
 ### Search Stream Script
 
