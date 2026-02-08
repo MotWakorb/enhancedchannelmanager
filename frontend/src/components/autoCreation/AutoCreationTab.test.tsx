@@ -722,10 +722,12 @@ describe('AutoCreationTab', () => {
       await waitFor(() => {
         const statsContainer = document.querySelector('.auto-creation-stats');
         expect(statsContainer).toBeInTheDocument();
-        // Check that stat values exist
-        expect(screen.getByText('3')).toBeInTheDocument(); // 3 rules total
-        expect(screen.getByText('2')).toBeInTheDocument(); // 2 enabled
-        expect(screen.getByText('100')).toBeInTheDocument(); // 100 total matches
+        // Check that stat values exist within the stats container
+        const statValues = statsContainer!.querySelectorAll('.stat-value');
+        const values = Array.from(statValues).map(el => el.textContent);
+        expect(values).toContain('3');   // 3 rules total
+        expect(values).toContain('2');   // 2 enabled
+        expect(values).toContain('100'); // 100 total matches
       });
     });
   });
