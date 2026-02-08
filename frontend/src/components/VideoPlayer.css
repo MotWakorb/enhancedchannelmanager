@@ -5,7 +5,7 @@
   width: 100%;
   max-width: 100%;
   background-color: #000;
-  border-radius: 8px;
+  border-radius: var(--radius-xl);
   overflow: hidden;
 }
 
@@ -35,7 +35,7 @@
   gap: 12px;
   color: #fff;
   font-size: 14px;
-  z-index: 10;
+  z-index: var(--z-raised);
 }
 
 .video-player__overlay--loading {

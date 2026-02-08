@@ -3,8 +3,8 @@
 
 /* Test connection button states */
 .btn-test {
-  background-color: #2d4a3e;
-  border: 1px solid #3d6a5e;
+  background-color: var(--success-bg);
+  border: 1px solid var(--success);
   color: var(--success);
   transition: all 0.2s;
   min-width: 120px;
@@ -12,27 +12,27 @@
 }
 
 .btn-test:hover:not(:disabled) {
-  background-color: #3d5a4e;
+  filter: brightness(1.2);
 }
 
 .btn-test.btn-test-success {
-  background-color: #1a5a3a;
-  border-color: #2a7a5a;
-  color: #4ade80;
+  background-color: var(--success-bg);
+  border-color: var(--success);
+  color: var(--success);
 }
 
 .btn-test.btn-test-success:hover:not(:disabled) {
-  background-color: #1a5a3a;
-  border-color: #2a7a5a;
+  background-color: var(--success-bg);
+  border-color: var(--success);
 }
 
 .btn-test.btn-test-failed {
-  background-color: #5a2d2d;
-  border-color: #7a3d3d;
-  color: #ff6b6b;
+  background-color: var(--error-bg);
+  border-color: var(--error);
+  color: var(--error);
 }
 
 .btn-test.btn-test-failed:hover:not(:disabled) {
-  background-color: #5a2d2d;
-  border-color: #7a3d3d;
+  background-color: var(--error-bg);
+  border-color: var(--error);
 }

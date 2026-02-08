@@ -43,7 +43,6 @@ import { ChannelListItem } from './ChannelListItem';
 import { StreamListItem } from './StreamListItem';
 import { PreviewStreamModal } from './PreviewStreamModal';
 import { CSVImportModal } from './CSVImportModal';
-import { ModalOverlay } from './ModalOverlay';
 import { exportChannelsToCSV, downloadCSVTemplate } from '../services/api';
 import './ChannelsPane.css';
 
@@ -2887,8 +2886,24 @@ export function ChannelsPane({
     logger.debug('[CHANNELS-DEBUG] Visible channels per group_id (after filtering):', afterFilterCounts);
     logger.debug(`[CHANNELS-DEBUG] Visible channels: ${visibleChannels.length}, filtered out: ${localChannels.length - visibleChannels.length}`);
 
+    // Apply missing data filters
+    const hasMissingDataFilters = channelListFilters?.filterMissingLogo
+      || channelListFilters?.filterMissingTvgId
+      || channelListFilters?.filterMissingEpgData
+      || channelListFilters?.filterMissingGracenote;
+
+    const filteredChannels = hasMissingDataFilters
+      ? visibleChannels.filter((ch) => {
+          if (channelListFilters?.filterMissingLogo && ch.logo_id === null) return true;
+          if (channelListFilters?.filterMissingTvgId && (!ch.tvg_id || ch.tvg_id === '')) return true;
+          if (channelListFilters?.filterMissingEpgData && ch.epg_data_id === null) return true;
+          if (channelListFilters?.filterMissingGracenote && (!ch.tvc_guide_stationid || ch.tvc_guide_stationid === '')) return true;
+          return false;
+        })
+      : visibleChannels;
+
     // Group channels by channel_group_id
-    const grouped = visibleChannels.reduce<Record<number | 'ungrouped', Channel[]>>(
+    const grouped = filteredChannels.reduce<Record<number | 'ungrouped', Channel[]>>(
       (acc, channel) => {
         const key = channel.channel_group_id ?? 'ungrouped';
         if (!acc[key]) acc[key] = [];
@@ -4898,8 +4913,8 @@ export function ChannelsPane({
 
       {/* Create Channel Group Modal */}
       {createGroupModal.isOpen && (
-        <ModalOverlay onClose={handleCloseCreateGroupModal}>
-          <div className="modal-content">
+        <div className="modal-overlay">
+          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
             <h3>Create New Channel Group</h3>
             <div className="modal-form">
               <label>
@@ -4935,13 +4950,13 @@ export function ChannelsPane({
               </button>
             </div>
           </div>
-        </ModalOverlay>
+        </div>
       )}
 
       {/* Hidden Groups Modal */}
       {hiddenGroupsModal.isOpen && (
-        <ModalOverlay onClose={() => hiddenGroupsModal.close()}>
-          <div className="modal-content">
+        <div className="modal-overlay">
+          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
             <h3>Hidden Channel Groups</h3>
             <div className="modal-form">
               {hiddenGroups.length === 0 ? (
@@ -4988,13 +5003,13 @@ export function ChannelsPane({
               </button>
             </div>
           </div>
-        </ModalOverlay>
+        </div>
       )}
 
       {/* Delete Channel Confirmation Dialog */}
       {deleteConfirmModal.isOpen && channelToDelete && (
-        <ModalOverlay onClose={handleCancelDelete}>
-          <div className="modal-content delete-dialog">
+        <div className="modal-overlay">
+          <div className="modal-content delete-dialog" onClick={(e) => e.stopPropagation()}>
             <h3>Delete Channel</h3>
             <div className="delete-message">
               <p>
@@ -5065,13 +5080,13 @@ export function ChannelsPane({
               </button>
             </div>
           </div>
-        </ModalOverlay>
+        </div>
       )}
 
       {/* Delete Group Confirmation Dialog */}
       {deleteGroupConfirmModal.isOpen && groupToDelete && (
-          <ModalOverlay onClose={handleCancelDeleteGroup}>
-            <div className="modal-content delete-dialog">
+          <div className="modal-overlay">
+            <div className="modal-content delete-dialog" onClick={(e) => e.stopPropagation()}>
               <h3>Delete Group</h3>
               <div className="delete-message">
                 <p>
@@ -5120,13 +5135,13 @@ export function ChannelsPane({
                 </button>
               </div>
             </div>
-          </ModalOverlay>
+          </div>
       )}
 
       {/* Rename Group Dialog */}
       {renameGroupModal.isOpen && groupToRename && (
-        <ModalOverlay onClose={handleCancelRenameGroup}>
-          <div className="modal-content rename-dialog">
+        <div className="modal-overlay">
+          <div className="modal-content rename-dialog" onClick={(e) => e.stopPropagation()}>
             <h3>Rename Group</h3>
             <div className="rename-form">
               <label htmlFor="rename-group-input">Group Name</label>
@@ -5164,7 +5179,7 @@ export function ChannelsPane({
               </button>
             </div>
           </div>
-        </ModalOverlay>
+        </div>
       )}
 
       {/* Bulk Delete Channels Confirmation Dialog */}
@@ -5191,8 +5206,8 @@ export function ChannelsPane({
         }
 
         return (
-          <ModalOverlay onClose={handleCancelBulkDelete}>
-            <div className="modal-content delete-dialog">
+          <div className="modal-overlay">
+            <div className="modal-content delete-dialog" onClick={(e) => e.stopPropagation()}>
               <h3>Delete {selectedChannelIds.size} Channel{selectedChannelIds.size !== 1 ? 's' : ''}</h3>
               <div className="delete-message">
                 <p>
@@ -5237,7 +5252,7 @@ export function ChannelsPane({
                 </button>
               </div>
             </div>
-          </ModalOverlay>
+          </div>
         );
       })()}
 
@@ -5380,8 +5395,8 @@ export function ChannelsPane({
 
       {/* Cross-Group Move Modal */}
       {crossGroupMoveModal.isOpen && crossGroupMoveData && (
-        <ModalOverlay onClose={handleCrossGroupMoveCancel}>
-          <div className="modal-content cross-group-move-dialog">
+        <div className="modal-overlay">
+          <div className="modal-content cross-group-move-dialog" onClick={(e) => e.stopPropagation()}>
             <h3>Move {crossGroupMoveData.channels.length > 1 ? `${crossGroupMoveData.channels.length} Channels` : 'Channel'} to Group</h3>
 
             <div className="cross-group-move-info">
@@ -5576,13 +5591,13 @@ export function ChannelsPane({
               </button>
             </div>
           </div>
-        </ModalOverlay>
+        </div>
       )}
 
       {/* Group Reorder Modal */}
       {groupReorderModal.isOpen && groupReorderData && (
-        <ModalOverlay onClose={handleGroupReorderCancel}>
-          <div className="modal-content cross-group-move-dialog">
+        <div className="modal-overlay">
+          <div className="modal-content cross-group-move-dialog" onClick={(e) => e.stopPropagation()}>
             <h3>Reorder Group</h3>
 
             <div className="cross-group-move-info">
@@ -5702,13 +5717,13 @@ export function ChannelsPane({
               </button>
             </div>
           </div>
-        </ModalOverlay>
+        </div>
       )}
 
       {/* Sort & Renumber Modal */}
       {sortRenumberModal.isOpen && sortRenumberData && (
-        <ModalOverlay onClose={handleSortRenumberCancel}>
-          <div className="modal-content sort-renumber-dialog">
+        <div className="modal-overlay">
+          <div className="modal-content sort-renumber-dialog" onClick={(e) => e.stopPropagation()}>
             <h3>Sort & Renumber Channels</h3>
 
             <div className="sort-renumber-info">
@@ -5826,13 +5841,13 @@ export function ChannelsPane({
               </button>
             </div>
           </div>
-        </ModalOverlay>
+        </div>
       )}
 
       {/* Mass Renumber Modal */}
       {massRenumberModal.isOpen && massRenumberChannels.length > 0 && (
-        <ModalOverlay onClose={handleMassRenumberCancel}>
-          <div className="modal-content mass-renumber-dialog">
+        <div className="modal-overlay">
+          <div className="modal-content mass-renumber-dialog" onClick={(e) => e.stopPropagation()}>
             <h3>Renumber Channels</h3>
 
             <div className="mass-renumber-info">
@@ -5955,7 +5970,7 @@ export function ChannelsPane({
               )}
             </div>
           </div>
-        </ModalOverlay>
+        </div>
       )}
 
       {/* Channel Profiles Modal */}
@@ -6135,7 +6150,7 @@ export function ChannelsPane({
         {/* Channel List Filter Settings */}
         <div className="filter-settings-dropdown" ref={filterSettingsRef}>
           <button
-            className="filter-settings-button"
+            className={`filter-settings-button${channelListFilters?.filterMissingLogo || channelListFilters?.filterMissingTvgId || channelListFilters?.filterMissingEpgData || channelListFilters?.filterMissingGracenote ? ' filter-active' : ''}`}
             onClick={() => setFilterSettingsOpen(!filterSettingsOpen)}
             title="Channel List Filters"
           >
@@ -6184,6 +6199,40 @@ export function ChannelsPane({
                     onChange={(e) => onChannelListFiltersChange?.({ showAutoChannelGroups: e.target.checked })}
                   />
                   <span>Show Auto Channel Groups</span>
+                </label>
+                <div className="filter-settings-separator" />
+                <div className="filter-settings-subheader">Missing Data</div>
+                <label className="filter-settings-option">
+                  <input
+                    type="checkbox"
+                    checked={channelListFilters.filterMissingLogo ?? false}
+                    onChange={(e) => onChannelListFiltersChange?.({ filterMissingLogo: e.target.checked })}
+                  />
+                  <span>Missing Logo</span>
+                </label>
+                <label className="filter-settings-option">
+                  <input
+                    type="checkbox"
+                    checked={channelListFilters.filterMissingTvgId ?? false}
+                    onChange={(e) => onChannelListFiltersChange?.({ filterMissingTvgId: e.target.checked })}
+                  />
+                  <span>Missing TVG-ID</span>
+                </label>
+                <label className="filter-settings-option">
+                  <input
+                    type="checkbox"
+                    checked={channelListFilters.filterMissingEpgData ?? false}
+                    onChange={(e) => onChannelListFiltersChange?.({ filterMissingEpgData: e.target.checked })}
+                  />
+                  <span>Missing EPG Data</span>
+                </label>
+                <label className="filter-settings-option">
+                  <input
+                    type="checkbox"
+                    checked={channelListFilters.filterMissingGracenote ?? false}
+                    onChange={(e) => onChannelListFiltersChange?.({ filterMissingGracenote: e.target.checked })}
+                  />
+                  <span>Missing Gracenote</span>
                 </label>
               </div>
             </div>

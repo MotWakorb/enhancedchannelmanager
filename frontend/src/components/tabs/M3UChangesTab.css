@@ -88,7 +88,7 @@
   padding: 0.5rem 0.75rem;
   background-color: var(--bg-primary);
   border: 1px solid var(--border-primary);
-  border-radius: 6px;
+  border-radius: var(--radius-lg);
 }
 
 .summary-card.added .summary-icon {
@@ -107,7 +107,7 @@
   justify-content: center;
   width: 28px;
   height: 28px;
-  border-radius: 6px;
+  border-radius: var(--radius-lg);
 }
 
 .summary-icon .material-icons {
@@ -183,7 +183,7 @@
 /* Changes List */
 .changes-list {
   background-color: var(--bg-primary);
-  border-radius: 8px;
+  border-radius: var(--radius-xl);
   border: 1px solid var(--border-primary);
   flex: 1;
   min-height: 0;
@@ -213,7 +213,7 @@
   min-width: 750px;
   position: sticky;
   top: 0;
-  z-index: 1;
+  z-index: var(--z-base);
   flex-shrink: 0;
 }
 
@@ -281,20 +281,6 @@
   align-items: center;
 }
 
-.type-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.25rem;
-  padding: 0.25rem 0.5rem;
-  border-radius: 4px;
-  font-size: 0.75rem;
-  font-weight: 500;
-}
-
-.type-badge .material-icons {
-  font-size: 14px;
-}
-
 .change-added,
 .type-badge.change-added {
   background-color: var(--success-bg);
@@ -334,7 +320,7 @@
 .enabled-badge {
   display: inline-block;
   padding: 0.125rem 0.5rem;
-  border-radius: 4px;
+  border-radius: var(--radius-md);
   font-size: 0.75rem;
   font-weight: 500;
 }
@@ -415,7 +401,7 @@
   padding: 0.25rem 0.5rem;
   background-color: var(--bg-tertiary);
   border: 1px solid var(--border-primary);
-  border-radius: 4px;
+  border-radius: var(--radius-md);
   font-size: 0.75rem;
   color: var(--text-primary);
 }
@@ -513,7 +499,7 @@
   padding: 0;
   background-color: var(--input-bg);
   border: 1px solid var(--border-secondary);
-  border-radius: 6px;
+  border-radius: var(--radius-lg);
   color: var(--text-primary);
   cursor: pointer;
   transition: background-color 0.15s;

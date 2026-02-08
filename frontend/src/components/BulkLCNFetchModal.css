@@ -24,7 +24,7 @@
 }
 
 .fetching-hint {
-  margin-top: 0.5rem !important;
+  margin-top: 0.5rem;
   font-size: 0.85rem;
   color: var(--text-secondary);
 }
@@ -43,7 +43,7 @@
   font-size: 0.8rem;
   background-color: var(--bg-tertiary);
   border: 1px solid var(--border-secondary);
-  border-radius: 4px;
+  border-radius: var(--radius-md);
   color: var(--text-secondary);
   cursor: pointer;
   white-space: nowrap;

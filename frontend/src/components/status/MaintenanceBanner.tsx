@@ -77,7 +77,7 @@ export function MaintenanceBanner({ windows }: MaintenanceBannerProps) {
         <div className="banner-text">
           <div className="banner-title">
             <strong>Scheduled Maintenance</strong>
-            {hasMultiple && <span className="badge">{windows.length}</span>}
+            {hasMultiple && <span className="badge badge-info badge-pill badge-sm">{windows.length}</span>}
           </div>
           <div className="banner-details">
             <span className="maintenance-title">{primaryWindow.title}</span>

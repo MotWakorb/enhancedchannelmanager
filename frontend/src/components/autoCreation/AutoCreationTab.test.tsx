@@ -99,8 +99,8 @@ describe('AutoCreationTab', () => {
         const enabledBadge = within(enabledRow!).getByText('Enabled');
         const disabledBadge = within(disabledRow!).getByText('Disabled');
 
-        expect(enabledBadge).toHaveClass('status-badge', 'enabled');
-        expect(disabledBadge).toHaveClass('status-badge', 'disabled');
+        expect(enabledBadge).toHaveClass('badge', 'badge-sm', 'badge-uppercase', 'badge-success');
+        expect(disabledBadge).toHaveClass('badge', 'badge-sm', 'badge-uppercase');
       });
     });
 

@@ -20,6 +20,15 @@ import './AutoCreationTab.css';
 
 type FilterMode = 'all' | 'enabled' | 'disabled';
 
+const getStatusBadgeClass = (status: string) => {
+  const map: Record<string, string> = {
+    enabled: 'badge-success', completed: 'badge-success',
+    disabled: '', failed: 'badge-error',
+    running: 'badge-info', rolled_back: 'badge-warning',
+  };
+  return `badge badge-sm badge-uppercase ${map[status] || ''}`;
+};
+
 export function AutoCreationTab() {
   // State from hooks
   const {
@@ -556,7 +565,7 @@ export function AutoCreationTab() {
                       </td>
                       <td className="col-priority">{index + 1}</td>
                       <td className="col-status">
-                        <span className={`status-badge ${rule.enabled ? 'enabled' : 'disabled'}`}>
+                        <span className={getStatusBadgeClass(rule.enabled ? 'enabled' : 'disabled')}>
                           {rule.enabled ? 'Enabled' : 'Disabled'}
                         </span>
                       </td>
@@ -648,7 +657,7 @@ export function AutoCreationTab() {
               {executions.slice(0, 5).map(execution => (
                 <div key={execution.id} className="execution-item" data-testid="execution-item">
                   <div className="execution-info">
-                    <span className={`status-badge ${execution.status}`}>
+                    <span className={getStatusBadgeClass(execution.status)}>
                       {execution.status === 'rolled_back' ? 'Rolled Back' : execution.status}
                     </span>
                     <span className="execution-mode">
@@ -810,7 +819,7 @@ export function AutoCreationTab() {
               {/* Summary Section */}
               <div className="detail-row">
                 <span className="detail-label">Status:</span>
-                <span className={`status-badge ${details.status}`}>
+                <span className={getStatusBadgeClass(details.status)}>
                   {details.status}
                 </span>
               </div>

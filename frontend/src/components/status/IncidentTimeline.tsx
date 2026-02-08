@@ -71,6 +71,15 @@ function getStatusLabel(status: IncidentStatus): string {
   }
 }
 
+// Get badge class for incident status
+function getIncidentStatusClass(status: string): string {
+  const map: Record<string, string> = {
+    investigating: 'badge-info', identified: 'badge-warning',
+    monitoring: 'badge-info', resolved: 'badge-success',
+  };
+  return `badge badge-sm ${map[status] || ''}`;
+}
+
 // Get severity color class
 function getSeverityClass(severity: IncidentSeverity): string {
   switch (severity) {
@@ -150,7 +159,7 @@ export function IncidentTimeline({
                   </span>
                 </div>
                 <div className="incident-meta">
-                  <span className={`status-badge ${incident.status}`}>
+                  <span className={getIncidentStatusClass(incident.status)}>
                     {getStatusLabel(incident.status)}
                   </span>
                   <span className="incident-service">{incident.service_id}</span>

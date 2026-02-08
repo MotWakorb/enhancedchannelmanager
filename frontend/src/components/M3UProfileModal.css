@@ -51,7 +51,7 @@
   padding: 1rem;
   background-color: var(--input-bg);
   border: 1px solid var(--border-primary);
-  border-radius: 8px;
+  border-radius: var(--radius-xl);
   transition: border-color 0.15s, background-color 0.15s;
 }
 
@@ -152,7 +152,7 @@
   padding: 0;
   background: none;
   border: none;
-  border-radius: 6px;
+  border-radius: var(--radius-lg);
   color: var(--text-secondary);
   cursor: pointer;
   transition: background-color 0.15s, color 0.15s;
@@ -181,7 +181,7 @@
 .profile-form {
   background-color: var(--input-bg);
   border: 1px solid var(--border-primary);
-  border-radius: 8px;
+  border-radius: var(--radius-xl);
   padding: 1.5rem;
 }
 
@@ -198,9 +198,9 @@
   gap: 0.5rem;
   padding: 0.75rem;
   margin-bottom: 1rem;
-  background-color: rgba(59, 130, 246, 0.1);
+  background-color: var(--info-bg);
   border: 1px solid rgba(59, 130, 246, 0.3);
-  border-radius: 6px;
+  border-radius: var(--radius-lg);
   color: var(--text-primary);
   font-size: 0.875rem;
 }
@@ -231,7 +231,7 @@
   padding: 0.625rem 0.875rem;
   background-color: var(--bg-primary);
   border: 1px solid var(--border-secondary);
-  border-radius: 6px;
+  border-radius: var(--radius-lg);
   color: var(--text-primary);
   font-size: 0.875rem;
 }

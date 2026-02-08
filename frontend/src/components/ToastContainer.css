@@ -2,7 +2,7 @@
 
 .toast-container {
   position: fixed;
-  z-index: 9999;
+  z-index: var(--z-toast);
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
@@ -62,7 +62,7 @@
   font-size: 0.8rem;
   color: var(--text-muted);
   background-color: var(--bg-tertiary);
-  border-radius: 4px;
+  border-radius: var(--radius-md);
   text-align: center;
 }
 

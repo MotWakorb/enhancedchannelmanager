@@ -53,7 +53,7 @@
   padding: 0.75rem;
   background: var(--card-bg);
   border: 1px solid var(--border-primary);
-  border-radius: 8px;
+  border-radius: var(--radius-xl);
 }
 
 .search-box {
@@ -63,7 +63,7 @@
   max-width: 300px;
   background: var(--input-bg);
   border: 1px solid var(--border-primary);
-  border-radius: 6px;
+  border-radius: var(--radius-lg);
   padding: 0.25rem 0.5rem;
 }
 
@@ -106,7 +106,7 @@
   padding: 0.75rem 1rem;
   background: var(--error-bg, rgba(239, 68, 68, 0.1));
   border: 1px solid var(--error-border, #ef4444);
-  border-radius: 6px;
+  border-radius: var(--radius-lg);
   color: var(--error-text, #ef4444);
   font-size: 0.875rem;
 }
@@ -181,7 +181,7 @@
   flex: 1;
   background: var(--card-bg);
   border: 1px solid var(--border-primary);
-  border-radius: 8px;
+  border-radius: var(--radius-xl);
   overflow: hidden;
   transition: border-color 0.2s;
 }
@@ -233,7 +233,7 @@
   background: var(--bg-tertiary);
   color: var(--text-secondary);
   border: 1px solid var(--border-primary);
-  border-radius: 4px;
+  border-radius: var(--radius-md);
   font-weight: 500;
 }
 
@@ -270,7 +270,7 @@
   gap: 0.5rem;
   padding: 0.5rem 0.75rem;
   background: var(--error-bg, rgba(239, 68, 68, 0.1));
-  border-radius: 4px;
+  border-radius: var(--radius-md);
   color: var(--error-text, #ef4444);
   font-size: 0.8125rem;
 }
@@ -300,7 +300,7 @@
   gap: 0.5rem;
   cursor: pointer;
   padding: 0.25rem;
-  border-radius: 4px;
+  border-radius: var(--radius-md);
 }
 
 .description-view:hover {
@@ -334,7 +334,7 @@
   flex: 1;
   padding: 0.375rem 0.5rem;
   border: 1px solid var(--border-primary);
-  border-radius: 4px;
+  border-radius: var(--radius-md);
   background: var(--input-bg);
   color: var(--text-primary);
   font-size: 0.8125rem;
@@ -385,7 +385,7 @@
   align-items: center;
   gap: 0.25rem;
   padding: 0.25rem 0.5rem;
-  border-radius: 4px;
+  border-radius: var(--radius-md);
   font-size: 0.8125rem;
   transition: background 0.2s, border-color 0.2s, color 0.2s;
 }
@@ -455,7 +455,7 @@
   flex: 1;
   padding: 0.5rem 0.75rem;
   border: 1px solid var(--border-primary);
-  border-radius: 6px;
+  border-radius: var(--radius-lg);
   background: var(--input-bg);
   color: var(--text-primary);
   font-size: 0.875rem;
@@ -472,14 +472,14 @@
   gap: 0.5rem;
   padding: 0.75rem;
   background: var(--input-bg);
-  border-radius: 6px;
+  border-radius: var(--radius-lg);
 }
 
 .bulk-add-section textarea {
   width: 100%;
   padding: 0.5rem;
   border: 1px solid var(--border-primary);
-  border-radius: 4px;
+  border-radius: var(--radius-md);
   background: var(--card-bg);
   color: var(--text-primary);
   font-size: 0.8125rem;
@@ -507,7 +507,7 @@
   background: var(--button-primary-bg);
   color: var(--button-primary-text);
   border: none;
-  border-radius: 6px;
+  border-radius: var(--radius-lg);
   font-size: 0.875rem;
   font-weight: 500;
   cursor: pointer;
@@ -535,7 +535,7 @@
   background: var(--input-bg);
   color: var(--text-primary);
   border: 1px solid var(--border-primary);
-  border-radius: 6px;
+  border-radius: var(--radius-lg);
   font-size: 0.8125rem;
   cursor: pointer;
   transition: background 0.2s;
@@ -562,7 +562,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: 1000;
+  z-index: var(--z-overlay);
 }
 
 .modal-content {
@@ -623,7 +623,7 @@
 .form-group input {
   padding: 0.5rem 0.75rem;
   border: 1px solid var(--border-primary);
-  border-radius: 6px;
+  border-radius: var(--radius-lg);
   background: var(--input-bg);
   color: var(--text-primary);
   font-size: 0.875rem;

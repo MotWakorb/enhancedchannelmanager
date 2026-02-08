@@ -14,7 +14,7 @@
   gap: 0.75rem;
   padding: 0.875rem;
   background-color: var(--bg-secondary);
-  border-radius: 8px;
+  border-radius: var(--radius-xl);
   border-left: 3px solid var(--accent-primary);
 }
 
@@ -53,7 +53,7 @@
   gap: 0.75rem;
   padding: 0.875rem;
   background-color: var(--bg-secondary);
-  border-radius: 8px;
+  border-radius: var(--radius-xl);
   border: 1px solid var(--border-primary);
   transition: border-color 0.2s, background-color 0.2s;
 }

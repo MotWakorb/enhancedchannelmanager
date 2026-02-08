@@ -299,6 +299,10 @@ export interface ChannelListFilterSettings {
   showProviderGroups: boolean;
   showManualGroups: boolean;
   showAutoChannelGroups: boolean;
+  filterMissingLogo?: boolean;
+  filterMissingTvgId?: boolean;
+  filterMissingEpgData?: boolean;
+  filterMissingGracenote?: boolean;
 }
 
 export interface Logo {

@@ -5,7 +5,7 @@
 
 /* Modal size override - fixed size */
 .channel-profiles-modal {
-  height: 700px;
+  height: min(700px, 85vh);
   max-height: 85vh;
 }
 
@@ -20,7 +20,7 @@
 
 /* Channels view scrolls directly */
 .channel-profiles-modal .modal-body.channels-view {
-  overflow-y: auto !important;
+  overflow-y: auto;
   display: block;
 }
 
@@ -35,7 +35,7 @@
   padding: 0.375rem 0.75rem;
   background-color: var(--bg-primary);
   border: 1px solid var(--border-secondary);
-  border-radius: 6px;
+  border-radius: var(--radius-lg);
   color: var(--text-primary);
   font-size: 0.875rem;
 }
@@ -50,9 +50,9 @@
 }
 
 .create-btn {
-  background-color: var(--button-primary-bg) !important;
-  color: var(--button-primary-text) !important;
-  border: none !important;
+  background-color: var(--button-primary-bg);
+  color: var(--button-primary-text);
+  border: none;
 }
 
 .create-btn:hover:not(:disabled) {
@@ -120,7 +120,7 @@
   padding: 0.375rem 0.5rem;
   background-color: var(--input-bg);
   border: 1px solid var(--accent-primary);
-  border-radius: 4px;
+  border-radius: var(--radius-md);
   color: var(--text-primary);
   font-size: 0.9rem;
 }
@@ -135,7 +135,7 @@
   cursor: pointer;
   padding: 0.25rem 0.5rem;
   background-color: var(--border-primary);
-  border-radius: 4px;
+  border-radius: var(--radius-md);
   font-size: 0.875rem;
   color: var(--text-secondary);
 }
@@ -163,7 +163,7 @@
   user-select: none;
   padding: 0.375rem 0.75rem;
   border: 1px solid var(--border-secondary);
-  border-radius: 4px;
+  border-radius: var(--radius-md);
   transition: all 0.15s;
 }
 
@@ -241,7 +241,7 @@
 }
 
 .channel-item.changed {
-  background-color: rgba(59, 130, 246, 0.1);
+  background-color: var(--info-bg);
 }
 
 .channel-item .channel-number {

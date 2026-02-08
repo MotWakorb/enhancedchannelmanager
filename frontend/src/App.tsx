@@ -150,6 +150,10 @@ function App() {
     showProviderGroups: true,
     showManualGroups: true,
     showAutoChannelGroups: true,
+    filterMissingLogo: false,
+    filterMissingTvgId: false,
+    filterMissingEpgData: false,
+    filterMissingGracenote: false,
   };
   const [channelListFilters, setChannelListFilters] = useState<ChannelListFilterSettings>(() => {
     const saved = localStorage.getItem('channelListFilters');

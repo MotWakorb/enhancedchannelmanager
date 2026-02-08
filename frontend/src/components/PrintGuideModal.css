@@ -26,7 +26,7 @@
   justify-content: space-between;
   padding: 0.75rem;
   background-color: var(--bg-tertiary);
-  border-radius: 6px;
+  border-radius: var(--radius-lg);
   border: 1px solid var(--border-secondary);
   transition: border-color 0.15s, background-color 0.15s;
 }
@@ -56,7 +56,7 @@
 .group-color-swatch {
   width: 16px;
   height: 16px;
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   flex-shrink: 0;
 }
 
@@ -91,29 +91,29 @@
 
 .mode-toggle .mode-btn {
   padding: 0.35rem 0.6rem;
-  border: 2px solid #4A90E2;
-  border-radius: 4px;
+  border: 2px solid var(--info-text);
+  border-radius: var(--radius-md);
   font-size: 0.75rem;
   font-weight: 600;
   cursor: pointer;
   transition: all 0.15s;
   background: transparent;
-  color: #4A90E2;
+  color: var(--info-text);
 }
 
 .mode-toggle .mode-btn.summary {
-  border-color: #E67E22;
-  color: #E67E22;
+  border-color: var(--warning);
+  color: var(--warning);
 }
 
 .mode-toggle .mode-btn.active {
-  background: #4A90E2;
-  color: #fff;
+  background: var(--info-text);
+  color: var(--bg-primary);
 }
 
 .mode-toggle .mode-btn.summary.active {
-  background: #E67E22;
-  color: #fff;
+  background: var(--warning);
+  color: var(--bg-primary);
 }
 
 .mode-toggle .mode-btn:hover:not(.active) {

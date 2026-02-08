@@ -54,7 +54,7 @@
 .filter-form {
   background-color: var(--bg-tertiary);
   border: 1px solid var(--border-primary);
-  border-radius: 8px;
+  border-radius: var(--radius-xl);
   padding: 1rem;
   margin-bottom: 1rem;
 }
@@ -90,7 +90,7 @@
 /* Filters List */
 .filters-list {
   border: 1px solid var(--border-primary);
-  border-radius: 8px;
+  border-radius: var(--radius-xl);
   overflow: hidden;
 }
 
@@ -129,27 +129,19 @@
   display: flex;
 }
 
-.type-badge {
-  padding: 0.25rem 0.5rem;
-  border-radius: 4px;
-  font-size: 0.7rem;
-  font-weight: 600;
-  text-transform: uppercase;
-}
-
 .type-badge.group {
-  background-color: rgba(59, 130, 246, 0.2);
-  color: #60a5fa;
+  background-color: var(--info-bg);
+  color: var(--info-text);
 }
 
 .type-badge.name {
-  background-color: rgba(147, 51, 234, 0.2);
+  background-color: rgba(147, 51, 234, 0.15);
   color: #a855f7;
 }
 
 .type-badge.url {
-  background-color: rgba(16, 185, 129, 0.2);
-  color: #34d399;
+  background-color: var(--success-bg);
+  color: var(--success);
 }
 
 .filter-pattern {
@@ -161,7 +153,7 @@
 .filter-pattern code {
   background-color: var(--bg-primary);
   padding: 0.25rem 0.5rem;
-  border-radius: 4px;
+  border-radius: var(--radius-md);
   font-family: monospace;
   font-size: 0.8rem;
   color: var(--text-primary);
@@ -173,7 +165,7 @@
 
 .action-badge {
   padding: 0.25rem 0.5rem;
-  border-radius: 4px;
+  border-radius: var(--radius-md);
   font-size: 0.7rem;
   font-weight: 600;
   text-transform: uppercase;
@@ -210,7 +202,7 @@
   padding: 0;
   background: none;
   border: none;
-  border-radius: 4px;
+  border-radius: var(--radius-md);
   color: var(--text-secondary);
   cursor: pointer;
   transition: background-color 0.15s, color 0.15s;

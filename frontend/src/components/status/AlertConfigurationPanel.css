@@ -3,7 +3,7 @@
 .alert-config-panel {
   background: var(--bg-secondary);
   border: 1px solid var(--border-primary);
-  border-radius: 8px;
+  border-radius: var(--radius-xl);
   padding: 1rem;
 }
 
@@ -59,7 +59,7 @@
   padding: 0.375rem 0.75rem;
   background: var(--button-primary-bg);
   border: none;
-  border-radius: 4px;
+  border-radius: var(--radius-md);
   color: var(--button-primary-text);
   font-size: 0.8125rem;
   cursor: pointer;
@@ -85,8 +85,8 @@
   align-items: center;
   gap: 0.5rem;
   padding: 0.5rem 0.75rem;
-  background: rgba(239, 68, 68, 0.1);
-  border-radius: 4px;
+  background: var(--error-bg);
+  border-radius: var(--radius-md);
   margin-bottom: 1rem;
   font-size: 0.8125rem;
   color: var(--status-error);
@@ -117,7 +117,7 @@
 /* Form */
 .rule-form {
   background: var(--bg-tertiary);
-  border-radius: 6px;
+  border-radius: var(--radius-lg);
   padding: 1rem;
   margin-bottom: 1rem;
 }
@@ -179,7 +179,7 @@
   color: var(--text-muted);
   padding: 0.125rem 0.375rem;
   background: var(--bg-secondary);
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
 }
 
 .form-actions {
@@ -215,7 +215,7 @@
   align-items: center;
   padding: 0.625rem 0.75rem;
   background: var(--bg-tertiary);
-  border-radius: 6px;
+  border-radius: var(--radius-lg);
   transition: all 0.2s;
 }
 
@@ -308,7 +308,7 @@
   padding: 0;
   background: none;
   border: 1px solid var(--border-primary);
-  border-radius: 4px;
+  border-radius: var(--radius-md);
   color: var(--text-secondary);
   cursor: pointer;
   transition: all 0.2s;
@@ -321,7 +321,7 @@
 }
 
 .btn-icon-small.danger:hover {
-  background: rgba(239, 68, 68, 0.1);
+  background: var(--error-bg);
   border-color: var(--status-error);
   color: var(--status-error);
 }
