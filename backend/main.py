@@ -1576,6 +1576,7 @@ async def upload_logo(request: Request, file: UploadFile = File(...)):
     filepath = os.path.join(LOGO_UPLOAD_DIR, filename)
 
     contents = await file.read()
+    os.makedirs(LOGO_UPLOAD_DIR, exist_ok=True)
     with open(filepath, "wb") as f:
         f.write(contents)
 

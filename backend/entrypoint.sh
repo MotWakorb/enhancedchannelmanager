@@ -76,8 +76,12 @@ check_filesystem() {
         print_success "Config directory created"
     fi
 
+    # Ensure subdirectories exist (volume mounts lose Dockerfile-created dirs)
+    mkdir -p /config/tls /config/uploads/logos
+
     # Fix permissions
     chown -R appuser:appuser /config 2>/dev/null || true
+    chmod 700 /config/tls
 
     # Check if writable
     if gosu appuser touch /config/.write_test 2>/dev/null; then
