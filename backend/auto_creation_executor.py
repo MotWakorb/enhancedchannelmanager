@@ -163,9 +163,15 @@ class ActionExecutor:
         if isinstance(action, dict):
             action = Action.from_dict(action)
 
+        logger.debug(
+            f"[Action] Executing action type={action.type} for stream={stream_ctx.stream_name!r} "
+            f"(id={stream_ctx.stream_id}) dry_run={exec_ctx.dry_run} params={action.params}"
+        )
+
         try:
             action_type = ActionType(action.type)
         except ValueError:
+            logger.debug(f"[Action] Unknown action type: {action.type}")
             return ActionResult(
                 success=False,
                 action_type=action.type,
@@ -228,6 +234,11 @@ class ActionExecutor:
                 error=f"Unhandled action type"
             )
 
+        logger.debug(
+            f"[Action] Result: type={result.action_type} success={result.success} "
+            f"created={result.created} modified={result.modified} skipped={result.skipped} "
+            f"desc={result.description!r}"
+        )
         exec_ctx.add_result(result)
         return result
 
@@ -263,6 +274,7 @@ class ActionExecutor:
             for var_name, value in exec_ctx.custom_variables.items():
                 ctx[f"var:{var_name}"] = value
 
+        logger.debug(f"[Template] Built context: {ctx}")
         return ctx
 
     # =========================================================================
@@ -277,7 +289,10 @@ class ActionExecutor:
             # Convert JS-style backreferences ($1, $2) to Python (\1, \2)
             py_replacement = re.sub(r'\$(\d+)', r'\\\1', replacement)
             try:
+                original = name
                 name = re.sub(pattern, py_replacement, name)
+                if name != original:
+                    logger.debug(f"[NameTransform] '{original}' -> '{name}' (pattern=/{pattern}/ replacement='{replacement}')")
             except re.error as e:
                 logger.warning(f"Name transform regex error: {e}")
         return name.strip()
@@ -292,6 +307,7 @@ class ActionExecutor:
 
         # Check cache first
         if logo_url in self._logo_cache:
+            logger.debug(f"[Logo] Cache hit for '{logo_url[:60]}' -> id={self._logo_cache[logo_url]}")
             return self._logo_cache[logo_url]
 
         try:
@@ -326,6 +342,7 @@ class ActionExecutor:
         params = action.params
         name_template = params.get("name_template", "{stream_name}")
         channel_name = TemplateVariables.expand_template(name_template, template_ctx, exec_ctx.custom_variables)
+        logger.debug(f"[CreateChannel] Template '{name_template}' expanded to '{channel_name}'")
         channel_name = self._apply_name_transform(channel_name, params)
 
         # Apply normalization engine if enabled
@@ -340,9 +357,15 @@ class ActionExecutor:
 
         if_exists = params.get("if_exists", "skip")
         group_id = params.get("group_id") or exec_ctx.current_group_id or rule_target_group_id
+        logger.debug(
+            f"[CreateChannel] name='{channel_name}' if_exists={if_exists} "
+            f"group_id={group_id} (param={params.get('group_id')}, "
+            f"exec_ctx={exec_ctx.current_group_id}, rule={rule_target_group_id})"
+        )
 
         # Check if channel already exists (check with original name before number prefix)
         existing = self._find_channel_by_name(channel_name)
+        logger.debug(f"[CreateChannel] Lookup '{channel_name}': {'found id=' + str(existing['id']) if existing else 'not found'}")
 
         if existing:
             if if_exists == "skip":
@@ -365,10 +388,13 @@ class ActionExecutor:
 
         # Determine channel number first (needed for name prefix)
         channel_number = self._get_next_channel_number(params.get("channel_number", "auto"))
+        logger.debug(f"[CreateChannel] Channel number: spec={params.get('channel_number', 'auto')} -> {channel_number}")
 
         # Apply channel number in name if setting is enabled
         base_name = channel_name  # Save before prefix for base-name mapping
         channel_name = self._apply_channel_number_in_name(channel_name, channel_number)
+        if channel_name != base_name:
+            logger.debug(f"[CreateChannel] Name with number prefix: '{base_name}' -> '{channel_name}'")
 
         # Create new channel
         if exec_ctx.dry_run:
@@ -451,6 +477,10 @@ class ActionExecutor:
 
         # Get current streams
         current_streams = [s["id"] if isinstance(s, dict) else s for s in channel.get("streams", [])]
+        logger.debug(
+            f"[MergeStream] Adding stream {stream_ctx.stream_id} ({stream_ctx.stream_name!r}) "
+            f"to channel '{channel_name}' (id={channel_id}), current streams={current_streams}"
+        )
 
         if stream_ctx.stream_id in current_streams:
             exec_ctx.current_channel_id = channel_id
@@ -577,8 +607,10 @@ class ActionExecutor:
         params = action.params
         name_template = params.get("name_template", "{stream_group}")
         group_name = TemplateVariables.expand_template(name_template, template_ctx, exec_ctx.custom_variables)
+        logger.debug(f"[CreateGroup] Template '{name_template}' expanded to '{group_name}'")
         group_name = self._apply_name_transform(group_name, params)
         if_exists = params.get("if_exists", "use_existing")
+        logger.debug(f"[CreateGroup] name='{group_name}' if_exists={if_exists}")
 
         if not group_name:
             return ActionResult(
@@ -666,6 +698,10 @@ class ActionExecutor:
         target = params.get("target", "auto")
         find_channel_by = params.get("find_channel_by")
         find_channel_value = params.get("find_channel_value")
+        logger.debug(
+            f"[MergeStreams] target={target} find_by={find_channel_by} "
+            f"find_value={find_channel_value} stream={stream_ctx.stream_name!r}"
+        )
 
         # For existing_channel target, find the channel
         if target == "existing_channel" or target == "auto":
@@ -977,12 +1013,14 @@ class ActionExecutor:
         params = action.params
         var_name = params.get("variable_name", "")
         mode = params.get("variable_mode", "literal")
+        logger.debug(f"[SetVariable] var_name='{var_name}' mode={mode} params={params}")
 
         # Get source value for regex modes
         source_value = ""
         if mode in ("regex_extract", "regex_replace"):
             source_field = params.get("source_field", "stream_name")
             source_value = template_ctx.get(source_field, "")
+            logger.debug(f"[SetVariable] source_field={source_field} source_value={source_value!r}")
 
         try:
             if mode == "regex_extract":
@@ -1232,11 +1270,16 @@ class ActionExecutor:
         name_lower = name.lower()
         # Check newly created channels first (by exact name)
         if name_lower in self._created_channels:
+            logger.debug(f"[Lookup] '{name}' found in created channels")
             return self._created_channels[name_lower]
         # Check base-name mapping (base name -> number-prefixed channel)
         if name_lower in self._base_name_to_channel:
+            logger.debug(f"[Lookup] '{name}' found via base-name mapping")
             return self._base_name_to_channel[name_lower]
-        return self._channel_by_name.get(name_lower)
+        result = self._channel_by_name.get(name_lower)
+        if result:
+            logger.debug(f"[Lookup] '{name}' found in existing channels (id={result.get('id')})")
+        return result
 
     def _find_channel_by_regex(self, pattern: str) -> Optional[dict]:
         """Find first channel matching regex pattern."""
@@ -1283,6 +1326,7 @@ class ActionExecutor:
             Next available channel number
         """
         if isinstance(spec, int):
+            logger.debug(f"[ChannelNumber] spec={spec} (int) -> {spec}")
             return spec
 
         if isinstance(spec, str):
@@ -1291,6 +1335,7 @@ class ActionExecutor:
                 num = 1
                 while num in self._used_channel_numbers:
                     num += 1
+                logger.debug(f"[ChannelNumber] spec='auto' -> {num} (skipped {num - 1} used numbers)")
                 return num
 
             # Check for range format "min-max"
@@ -1300,13 +1345,17 @@ class ActionExecutor:
                 max_num = int(match.group(2))
                 for num in range(min_num, max_num + 1):
                     if num not in self._used_channel_numbers:
+                        logger.debug(f"[ChannelNumber] spec='{spec}' (range) -> {num}")
                         return num
                 # Range exhausted, use next after max
+                logger.debug(f"[ChannelNumber] spec='{spec}' range exhausted -> {max_num + 1}")
                 return max_num + 1
 
             # Try parsing as int
             try:
-                return int(spec)
+                num = int(spec)
+                logger.debug(f"[ChannelNumber] spec='{spec}' (parsed int) -> {num}")
+                return num
             except ValueError:
                 pass
 
@@ -1314,4 +1363,5 @@ class ActionExecutor:
         num = 1
         while num in self._used_channel_numbers:
             num += 1
+        logger.debug(f"[ChannelNumber] spec={spec!r} (fallback auto) -> {num}")
         return num

@@ -36,6 +36,10 @@ class DiscordWebhookMethod(AlertMethod):
     async def send(self, message: AlertMessage) -> bool:
         """Send a message to Discord via webhook."""
         webhook_url = self.config.get("webhook_url")
+        logger.debug(
+            f"[Discord] Sending to {self.name}: type={message.notification_type} "
+            f"title={message.title!r}"
+        )
         if not webhook_url:
             logger.error(f"Discord method {self.name}: No webhook URL configured")
             return False
@@ -92,6 +96,7 @@ class DiscordWebhookMethod(AlertMethod):
                     timeout=aiohttp.ClientTimeout(total=10),
                 ) as response:
                     if response.status == 204:
+                        logger.debug(f"[Discord] Message sent successfully to {self.name}")
                         return True
                     elif response.status == 429:
                         # Rate limited
@@ -116,13 +121,16 @@ class DiscordWebhookMethod(AlertMethod):
 
     async def test_connection(self) -> tuple[bool, str]:
         """Test the Discord webhook by sending a test message."""
+        logger.info(f"[Discord] Testing connection for method {self.name}")
         webhook_url = self.config.get("webhook_url")
         if not webhook_url:
+            logger.debug(f"[Discord] Test failed: no webhook_url for {self.name}")
             return False, "No webhook URL configured"
 
         # Validate webhook URL format
         if not webhook_url.startswith("https://discord.com/api/webhooks/") and \
            not webhook_url.startswith("https://discordapp.com/api/webhooks/"):
+            logger.debug(f"[Discord] Test failed: invalid webhook URL format for {self.name}")
             return False, "Invalid Discord webhook URL format"
 
         # Send a test message

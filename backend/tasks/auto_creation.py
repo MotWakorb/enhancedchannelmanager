@@ -59,6 +59,7 @@ class AutoCreationTask(TaskScheduler):
 
     def update_config(self, config: dict) -> None:
         """Update auto-creation configuration."""
+        logger.debug(f"[{self.task_id}] Updating config: {config}")
         if "dry_run" in config:
             self.dry_run = config["dry_run"]
         if "m3u_account_ids" in config:
@@ -74,13 +75,21 @@ class AutoCreationTask(TaskScheduler):
 
         started_at = datetime.utcnow()
         self._set_progress(status="initializing")
+        logger.info(
+            f"[{self.task_id}] Starting auto-creation task: "
+            f"dry_run={self.dry_run}, m3u_accounts={self.m3u_account_ids or 'all'}, "
+            f"rules={self.rule_ids or 'all enabled'}, run_on_refresh={self.run_on_refresh}"
+        )
 
         try:
             # Get or initialize the engine
             client = get_client()
             engine = get_auto_creation_engine()
             if not engine:
+                logger.debug(f"[{self.task_id}] No existing engine, initializing new one")
                 engine = await init_auto_creation_engine(client)
+            else:
+                logger.debug(f"[{self.task_id}] Using existing engine instance")
 
             self._set_progress(status="loading_rules")
 
@@ -97,6 +106,7 @@ class AutoCreationTask(TaskScheduler):
                 session.close()
 
             if rule_count == 0:
+                logger.info(f"[{self.task_id}] No enabled rules found, skipping pipeline")
                 return TaskResult(
                     success=True,
                     message="No enabled auto-creation rules to process",
@@ -104,6 +114,8 @@ class AutoCreationTask(TaskScheduler):
                     completed_at=datetime.utcnow(),
                     total_items=0,
                 )
+
+            logger.info(f"[{self.task_id}] Found {rule_count} enabled rule(s)")
 
             self._set_progress(
                 status="running_pipeline",
@@ -119,6 +131,7 @@ class AutoCreationTask(TaskScheduler):
             )
 
             if self._cancel_requested:
+                logger.info(f"[{self.task_id}] Pipeline cancelled by user")
                 return TaskResult(
                     success=False,
                     message="Auto-creation cancelled",
@@ -130,6 +143,13 @@ class AutoCreationTask(TaskScheduler):
             # Build result
             mode_str = "Dry-run" if self.dry_run else "Executed"
             stats = result
+            duration = (datetime.utcnow() - started_at).total_seconds()
+            logger.info(
+                f"[{self.task_id}] {mode_str} pipeline completed in {duration:.1f}s: "
+                f"evaluated={stats.get('streams_evaluated', 0)} matched={stats.get('streams_matched', 0)} "
+                f"created={stats.get('channels_created', 0)} updated={stats.get('channels_updated', 0)} "
+                f"groups={stats.get('groups_created', 0)} conflicts={len(stats.get('conflicts', []))}"
+            )
 
             self._set_progress(
                 status="completed",
@@ -225,7 +245,13 @@ async def run_auto_creation_after_refresh(
     client = get_client()
     engine = get_auto_creation_engine()
     if not engine:
+        logger.debug("[AutoCreation] No existing engine for post-refresh, initializing new one")
         engine = await init_auto_creation_engine(client)
+
+    logger.debug(
+        f"[AutoCreation] Running post-refresh pipeline: "
+        f"rule_ids={rule_ids}, m3u_accounts={m3u_account_ids}, triggered_by={triggered_by}"
+    )
 
     # Run the pipeline with only the run_on_refresh rules
     try:

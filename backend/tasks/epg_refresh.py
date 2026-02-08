@@ -55,6 +55,7 @@ class EPGRefreshTask(TaskScheduler):
 
     def update_config(self, config: dict) -> None:
         """Update EPG refresh configuration."""
+        logger.debug(f"[{self.task_id}] Updating config: {config}")
         if "source_ids" in config:
             self.source_ids = config["source_ids"] or []
 
@@ -73,19 +74,28 @@ class EPGRefreshTask(TaskScheduler):
             # Filter sources to refresh
             sources_to_refresh = []
             for source in all_sources:
+                source_name = source.get("name", f"Source {source['id']}")
                 # Skip inactive sources
                 if not source.get("is_active", True):
+                    logger.debug(f"[{self.task_id}] Skipping inactive source: {source_name} (id={source['id']})")
                     continue
 
                 # Always skip dummy sources (they refresh automatically with M3U refresh)
                 if source.get("source_type") == "dummy":
+                    logger.debug(f"[{self.task_id}] Skipping dummy source: {source_name} (id={source['id']})")
                     continue
 
                 # Filter by source IDs if specified
                 if self.source_ids and source["id"] not in self.source_ids:
+                    logger.debug(f"[{self.task_id}] Skipping source not in filter: {source_name} (id={source['id']})")
                     continue
 
                 sources_to_refresh.append(source)
+
+            logger.info(
+                f"[{self.task_id}] {len(sources_to_refresh)} of {len(all_sources)} sources selected for refresh"
+                + (f" (filter: {self.source_ids})" if self.source_ids else "")
+            )
 
             if not sources_to_refresh:
                 return TaskResult(
@@ -124,13 +134,15 @@ class EPGRefreshTask(TaskScheduler):
                     initial_source = await client.get_epg_source(source_id)
                     initial_updated = initial_source.get("updated_at") or initial_source.get("last_updated")
 
-                    logger.info(f"[{self.task_id}] Triggering EPG refresh for: {source_name}")
+                    logger.info(f"[{self.task_id}] Triggering EPG refresh for: {source_name} (id={source_id})")
+                    logger.debug(f"[{self.task_id}] Initial updated_at for {source_name}: {initial_updated}")
                     await client.refresh_epg_source(source_id)
 
                     # Poll until refresh completes or timeout
                     self._set_progress(current_item=f"Waiting for {source_name} to complete...")
                     refresh_complete = False
                     wait_start = datetime.utcnow()
+                    poll_count = 0
 
                     while not refresh_complete and not self._cancel_requested:
                         elapsed = (datetime.utcnow() - wait_start).total_seconds()
@@ -139,10 +151,15 @@ class EPGRefreshTask(TaskScheduler):
                             break
 
                         await asyncio.sleep(POLL_INTERVAL_SECONDS)
+                        poll_count += 1
 
                         # Check if source has been updated
                         current_source = await client.get_epg_source(source_id)
                         current_updated = current_source.get("updated_at") or current_source.get("last_updated")
+                        logger.debug(
+                            f"[{self.task_id}] Poll #{poll_count} for {source_name}: "
+                            f"current_updated={current_updated} elapsed={elapsed:.0f}s"
+                        )
 
                         if current_updated and current_updated != initial_updated:
                             refresh_complete = True
@@ -167,6 +184,13 @@ class EPGRefreshTask(TaskScheduler):
                 success_count=success_count,
                 failed_count=failed_count,
                 status="completed" if not self._cancel_requested else "cancelled",
+            )
+
+            duration = (datetime.utcnow() - started_at).total_seconds()
+            logger.info(
+                f"[{self.task_id}] EPG refresh finished in {duration:.1f}s: "
+                f"{success_count} succeeded, {failed_count} failed, "
+                f"refreshed=[{', '.join(refreshed)}]"
             )
 
             # Build result

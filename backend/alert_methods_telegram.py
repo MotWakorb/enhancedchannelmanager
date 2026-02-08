@@ -122,6 +122,10 @@ class TelegramBotMethod(AlertMethod):
         """Send a message to Telegram via Bot API."""
         bot_token = self.config.get("bot_token")
         chat_id = self.config.get("chat_id")
+        logger.debug(
+            f"[Telegram] Sending to {self.name}: type={message.notification_type} "
+            f"title={message.title!r} chat_id={chat_id}"
+        )
 
         if not bot_token or not chat_id:
             logger.error(f"Telegram method {self.name}: Missing bot_token or chat_id")
@@ -158,6 +162,7 @@ class TelegramBotMethod(AlertMethod):
                     result = await response.json()
 
                     if response.status == 200 and result.get("ok"):
+                        logger.debug(f"[Telegram] Message sent successfully to {self.name}")
                         return True
                     elif response.status == 429:
                         # Rate limited
@@ -182,15 +187,19 @@ class TelegramBotMethod(AlertMethod):
 
     async def test_connection(self) -> tuple[bool, str]:
         """Test the Telegram bot connection."""
+        logger.info(f"[Telegram] Testing connection for method {self.name}")
         bot_token = self.config.get("bot_token")
         chat_id = self.config.get("chat_id")
 
         if not bot_token:
+            logger.debug(f"[Telegram] Test failed: no bot_token for {self.name}")
             return False, "Bot token not configured"
         if not chat_id:
+            logger.debug(f"[Telegram] Test failed: no chat_id for {self.name}")
             return False, "Chat ID not configured"
 
         # First, verify the bot token by calling getMe
+        logger.debug(f"[Telegram] Verifying bot token via getMe")
         url = f"{self.TELEGRAM_API_BASE}{bot_token}/getMe"
 
         try:
@@ -206,6 +215,7 @@ class TelegramBotMethod(AlertMethod):
                         return False, f"Bot verification failed: {error_desc}"
 
                     bot_username = result.get("result", {}).get("username", "Unknown")
+                    logger.debug(f"[Telegram] Bot verified: @{bot_username}")
 
             # Send test message
             test_message = AlertMessage(
