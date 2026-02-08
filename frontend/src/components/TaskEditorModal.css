@@ -5,7 +5,7 @@
 .task-editor-modal .task-description {
   background-color: var(--bg-secondary);
   padding: 1rem;
-  border-radius: 6px;
+  border-radius: var(--radius-lg);
   margin-bottom: 1.5rem;
   font-size: 0.9rem;
   color: var(--text-secondary);
@@ -61,7 +61,7 @@
   gap: 0.25rem;
   padding: 0.5rem 0.75rem;
   border: none;
-  border-radius: 4px;
+  border-radius: var(--radius-md);
   background-color: var(--button-primary-bg);
   color: var(--button-primary-text);
   cursor: pointer;
@@ -80,7 +80,7 @@
 .task-editor-modal .empty-schedules {
   background-color: var(--bg-secondary);
   padding: 2rem;
-  border-radius: 6px;
+  border-radius: var(--radius-lg);
   text-align: center;
   color: var(--text-muted);
 }
@@ -108,7 +108,7 @@
   gap: 0.75rem;
   padding: 0.75rem 1rem;
   background-color: var(--bg-secondary);
-  border-radius: 6px;
+  border-radius: var(--radius-lg);
   border: 1px solid transparent;
 }
 
@@ -154,7 +154,7 @@
   cursor: pointer;
   padding: 0.25rem;
   color: var(--text-secondary);
-  border-radius: 4px;
+  border-radius: var(--radius-md);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -170,7 +170,7 @@
 }
 
 .task-editor-modal .schedule-action-btn.delete:hover {
-  background-color: rgba(239, 68, 68, 0.1);
+  background-color: var(--error-bg);
 }
 
 .task-editor-modal .schedule-action-btn.run {
@@ -198,7 +198,7 @@
 .task-editor-modal .config-section {
   background-color: var(--bg-secondary);
   padding: 1rem;
-  border-radius: 6px;
+  border-radius: var(--radius-lg);
   margin-bottom: 1.5rem;
 }
 
@@ -225,7 +225,7 @@
   gap: 0.5rem;
   padding: 0.5rem;
   cursor: pointer;
-  border-radius: 4px;
+  border-radius: var(--radius-md);
 }
 
 .task-editor-modal .config-checkbox:hover {
@@ -257,7 +257,7 @@
   width: 100px;
   padding: 0.5rem;
   border: 1px solid var(--border-color);
-  border-radius: 4px;
+  border-radius: var(--radius-md);
   background-color: var(--bg-primary);
   color: var(--text-primary);
 }
@@ -278,7 +278,7 @@
 .task-editor-modal .alert-config-section {
   background-color: var(--bg-secondary);
   padding: 1rem;
-  border-radius: 6px;
+  border-radius: var(--radius-lg);
   margin-bottom: 1.5rem;
 }
 

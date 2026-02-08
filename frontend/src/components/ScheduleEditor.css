@@ -18,7 +18,7 @@
   width: 100%;
   padding: 0.5rem 0.75rem;
   border: 1px solid var(--border-color);
-  border-radius: 4px;
+  border-radius: var(--radius-md);
   background-color: var(--bg-primary);
   color: var(--text-primary);
   font-size: 0.9rem;
@@ -63,7 +63,7 @@
   gap: 0.25rem;
   padding: 0.75rem 0.5rem;
   border: 1px solid var(--border-color);
-  border-radius: 6px;
+  border-radius: var(--radius-lg);
   background-color: var(--bg-secondary);
   color: var(--text-primary);
   cursor: pointer;
@@ -93,7 +93,7 @@
 /* Config Section */
 .schedule-editor .config-section {
   background-color: var(--bg-secondary);
-  border-radius: 6px;
+  border-radius: var(--radius-lg);
   padding: 1rem;
   margin-bottom: 1.5rem;
 }
@@ -120,7 +120,7 @@
 .schedule-editor .preset-button {
   padding: 0.5rem;
   border: 1px solid var(--border-color);
-  border-radius: 4px;
+  border-radius: var(--radius-md);
   background-color: var(--bg-tertiary);
   color: var(--text-primary);
   cursor: pointer;
@@ -151,7 +151,7 @@
   width: 60px;
   padding: 0.5rem;
   border: 1px solid var(--border-color);
-  border-radius: 4px;
+  border-radius: var(--radius-md);
   background-color: var(--bg-primary);
   color: var(--text-primary);
   text-align: center;
@@ -173,7 +173,7 @@
 .schedule-editor .time-input {
   padding: 0.5rem;
   border: 1px solid var(--border-color);
-  border-radius: 4px;
+  border-radius: var(--radius-md);
   background-color: var(--bg-primary);
   color: var(--text-primary);
   font-size: 0.9rem;
@@ -184,7 +184,7 @@
   min-width: 150px;
   padding: 0.5rem;
   border: 1px solid var(--border-color);
-  border-radius: 4px;
+  border-radius: var(--radius-md);
   background-color: var(--bg-primary);
   color: var(--text-primary);
   font-size: 0.9rem;
@@ -200,7 +200,7 @@
 .schedule-editor .quick-button {
   padding: 0.25rem 0.5rem;
   border: 1px solid var(--border-color);
-  border-radius: 4px;
+  border-radius: var(--radius-md);
   background-color: var(--bg-tertiary);
   color: var(--text-secondary);
   cursor: pointer;
@@ -253,7 +253,7 @@
 .schedule-editor .day-select {
   padding: 0.5rem;
   border: 1px solid var(--border-color);
-  border-radius: 4px;
+  border-radius: var(--radius-md);
   background-color: var(--bg-primary);
   color: var(--text-primary);
   font-size: 0.9rem;
@@ -271,7 +271,7 @@
 /* Parameters Section */
 .schedule-editor .parameters-section {
   background-color: var(--bg-secondary);
-  border-radius: 6px;
+  border-radius: var(--radius-lg);
   padding: 1rem;
   margin-bottom: 1.5rem;
 }
@@ -291,7 +291,7 @@
   margin: 0 0 1rem 0;
   padding: 0.5rem 0.75rem;
   background-color: var(--bg-tertiary);
-  border-radius: 4px;
+  border-radius: var(--radius-md);
   border-left: 3px solid var(--accent-primary);
 }
 
@@ -316,7 +316,7 @@
   max-height: 200px;
   overflow-y: auto;
   border: 1px solid var(--border-color);
-  border-radius: 4px;
+  border-radius: var(--radius-md);
   background-color: var(--bg-secondary);
 }
 
@@ -361,7 +361,7 @@
   color: #22d3ee;
   background-color: rgba(34, 211, 238, 0.15);
   padding: 0.125rem 0.375rem;
-  border-radius: 4px;
+  border-radius: var(--radius-md);
   text-transform: uppercase;
 }
 

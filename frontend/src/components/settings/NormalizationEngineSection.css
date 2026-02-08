@@ -3,7 +3,7 @@
 .norm-engine-section {
   padding: 1.5rem;
   background: var(--card-bg);
-  border-radius: 8px;
+  border-radius: var(--radius-xl);
   border: 1px solid var(--border-primary);
   overflow: hidden;
 }
@@ -69,7 +69,7 @@
   margin-bottom: 1rem;
   background: var(--status-error-bg);
   border: 1px solid var(--status-error-border);
-  border-radius: 6px;
+  border-radius: var(--radius-lg);
   color: var(--status-error-text);
 }
 
@@ -90,7 +90,7 @@
   margin-bottom: 1.5rem;
   padding: 1rem;
   background: var(--input-bg);
-  border-radius: 6px;
+  border-radius: var(--radius-lg);
 }
 
 .norm-engine-stat {
@@ -126,7 +126,7 @@
 .norm-engine-group {
   background: var(--input-bg);
   border: 1px solid var(--border-primary);
-  border-radius: 6px;
+  border-radius: var(--radius-lg);
   overflow: hidden;
   position: relative;
   display: flex;
@@ -147,7 +147,7 @@
 .norm-engine-group.dragging {
   background: var(--card-bg);
   border: 1px solid var(--accent-primary);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  box-shadow: var(--shadow-md);
 }
 
 .norm-engine-group-drag-handle {
@@ -227,7 +227,7 @@
   font-weight: 600;
   text-transform: uppercase;
   padding: 0.125rem 0.375rem;
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   white-space: nowrap;
 }
 
@@ -263,7 +263,7 @@
   justify-content: space-between;
   padding: 0.5rem 0.75rem;
   margin: 0.25rem 0;
-  border-radius: 4px;
+  border-radius: var(--radius-md);
   cursor: pointer;
   transition: background 0.15s;
 }
@@ -314,7 +314,7 @@
   color: var(--text-muted);
   padding: 0.25rem;
   margin-right: 0.25rem;
-  border-radius: 4px;
+  border-radius: var(--radius-md);
   touch-action: none;
 }
 
@@ -335,7 +335,7 @@
 .norm-engine-rule.dragging {
   background: var(--card-bg);
   border: 1px solid var(--accent-primary);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  box-shadow: var(--shadow-md);
 }
 
 .norm-engine-add-rule {
@@ -346,7 +346,7 @@
   margin-top: 0.5rem;
   background: none;
   border: 1px dashed var(--border-primary);
-  border-radius: 4px;
+  border-radius: var(--radius-md);
   color: var(--text-secondary);
   cursor: pointer;
   font-size: 0.875rem;
@@ -437,7 +437,7 @@
   padding: 0.5rem 1rem;
   background: var(--input-bg);
   border: 1px solid var(--border-primary);
-  border-radius: 6px;
+  border-radius: var(--radius-lg);
   color: var(--text-primary);
   font-size: 0.875rem;
   cursor: pointer;
@@ -471,7 +471,7 @@
   padding: 0.375rem;
   background: none;
   border: none;
-  border-radius: 4px;
+  border-radius: var(--radius-md);
   color: var(--text-muted);
   cursor: pointer;
   transition: all 0.15s;
@@ -499,7 +499,7 @@
 .norm-engine-test-panel {
   background: var(--input-bg);
   border: 1px solid var(--border-primary);
-  border-radius: 6px;
+  border-radius: var(--radius-lg);
   margin-bottom: 1rem;
   overflow: hidden;
 }
@@ -559,7 +559,7 @@
   padding: 0.75rem;
   background: var(--card-bg);
   border: 1px solid var(--border-primary);
-  border-radius: 6px;
+  border-radius: var(--radius-lg);
   color: var(--text-primary);
   font-family: monospace;
   font-size: 0.875rem;
@@ -591,7 +591,7 @@
   margin-bottom: 0.75rem;
   background: var(--card-bg);
   border: 1px solid var(--border-secondary);
-  border-radius: 6px;
+  border-radius: var(--radius-lg);
 }
 
 .norm-engine-test-original,
@@ -682,13 +682,13 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: 1000;
+  z-index: var(--z-overlay);
 }
 
 .norm-engine-modal {
   background: var(--card-bg);
   border: 1px solid var(--border-primary);
-  border-radius: 8px;
+  border-radius: var(--radius-xl);
   width: 100%;
   max-width: 560px;
   max-height: 90vh;
@@ -746,7 +746,7 @@
   padding: 0.625rem 0.75rem;
   background: var(--input-bg);
   border: 1px solid var(--border-primary);
-  border-radius: 6px;
+  border-radius: var(--radius-lg);
   color: var(--text-primary);
   font-size: 0.875rem;
 }
@@ -800,7 +800,7 @@
 .norm-engine-preview {
   padding: 1rem;
   background: var(--input-bg);
-  border-radius: 6px;
+  border-radius: var(--radius-lg);
   margin-top: 0.5rem;
 }
 
@@ -854,7 +854,7 @@
   padding: 0.125rem 0.5rem;
   background: var(--bg-tertiary);
   border: 1px solid var(--border-primary);
-  border-radius: 4px;
+  border-radius: var(--radius-md);
   font-size: 0.75rem;
   color: var(--text-secondary);
 }
@@ -869,7 +869,7 @@
   padding: 0.125rem 0.375rem;
   background: var(--warning-bg, rgba(234, 179, 8, 0.2));
   color: var(--warning-text, #eab308);
-  border-radius: 4px;
+  border-radius: var(--radius-md);
   font-size: 0.6875rem;
   font-weight: 600;
   text-transform: uppercase;
@@ -883,7 +883,7 @@
   margin-bottom: 1rem;
   padding: 0.75rem;
   background: var(--input-bg);
-  border-radius: 6px;
+  border-radius: var(--radius-lg);
 }
 
 .norm-engine-mode-label {
@@ -897,7 +897,7 @@
   gap: 0;
   background: var(--card-bg);
   border: 1px solid var(--border-primary);
-  border-radius: 6px;
+  border-radius: var(--radius-lg);
   overflow: hidden;
 }
 
@@ -924,7 +924,7 @@
 .norm-engine-compound-conditions {
   background: var(--input-bg);
   border: 1px solid var(--border-primary);
-  border-radius: 6px;
+  border-radius: var(--radius-lg);
   padding: 1rem;
   margin-bottom: 1rem;
 }
@@ -976,7 +976,7 @@
   padding: 0.5rem;
   background: var(--card-bg);
   border: 1px solid var(--border-secondary);
-  border-radius: 4px;
+  border-radius: var(--radius-md);
 }
 
 .norm-engine-condition-fields {
@@ -991,7 +991,7 @@
   padding: 0.375rem 0.5rem;
   background: var(--input-bg);
   border: 1px solid var(--border-primary);
-  border-radius: 4px;
+  border-radius: var(--radius-md);
   color: var(--text-primary);
   font-size: 0.8125rem;
   font-family: monospace;
@@ -1015,7 +1015,7 @@
   color: var(--text-muted);
   cursor: pointer;
   padding: 0.25rem 0.375rem;
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   transition: all 0.15s;
 }
 
@@ -1040,7 +1040,7 @@
   margin-top: 0.75rem;
   background: transparent;
   border: 1px dashed var(--border-primary);
-  border-radius: 4px;
+  border-radius: var(--radius-md);
   color: var(--text-muted);
   font-size: 0.8125rem;
   cursor: pointer;
@@ -1073,6 +1073,6 @@
   margin-top: 0.75rem;
   padding: 0.75rem;
   background: var(--bg-secondary);
-  border-radius: 6px;
+  border-radius: var(--radius-lg);
   border: 1px solid var(--border-primary);
 }

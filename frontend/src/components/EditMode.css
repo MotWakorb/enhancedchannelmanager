@@ -7,7 +7,7 @@
   background-color: var(--border-primary);
   border: 1px solid var(--border-secondary);
   color: var(--button-text);
-  border-radius: 4px;
+  border-radius: var(--radius-md);
   cursor: pointer;
   font-size: 0.85rem;
   transition: background-color 0.15s, border-color 0.15s, color 0.15s;
@@ -45,7 +45,7 @@
   background-color: var(--success);
   color: var(--success-text);
   padding: 0.125rem 0.375rem;
-  border-radius: 8px;
+  border-radius: var(--radius-xl);
   font-size: 0.7rem;
   font-weight: 600;
   min-width: 1.25rem;
@@ -105,7 +105,7 @@
 
 .edit-mode-banner-btn {
   padding: 0.25rem 0.625rem;
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   font-size: 0.8rem;
   font-weight: 500;
   cursor: pointer;
@@ -149,13 +149,13 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: 10000;
+  z-index: var(--z-topmost);
 }
 
 .edit-mode-dialog {
   background-color: var(--input-bg);
   border: 1px solid var(--border-secondary);
-  border-radius: 8px;
+  border-radius: var(--radius-xl);
   width: 90%;
   max-width: 450px;
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
@@ -233,7 +233,7 @@
   overflow-y: auto;
   background-color: var(--bg-tertiary);
   border: 1px solid var(--border-primary);
-  border-radius: 4px;
+  border-radius: var(--radius-md);
   padding: 0.5rem;
   margin-bottom: 1rem;
 }
@@ -273,7 +273,7 @@
 
 .edit-mode-dialog-btn {
   padding: 0.5rem 1rem;
-  border-radius: 4px;
+  border-radius: var(--radius-md);
   font-size: 0.85rem;
   font-weight: 500;
   cursor: pointer;
@@ -336,7 +336,7 @@
 .commit-progress-bar-container {
   height: 8px;
   background-color: var(--border-primary);
-  border-radius: 4px;
+  border-radius: var(--radius-md);
   overflow: hidden;
   margin-bottom: 0.75rem;
 }
@@ -344,7 +344,7 @@
 .commit-progress-bar {
   height: 100%;
   background-color: var(--accent-primary);
-  border-radius: 4px;
+  border-radius: var(--radius-md);
   transition: width 0.2s ease-out;
 }
 

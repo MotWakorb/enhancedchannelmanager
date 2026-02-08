@@ -55,11 +55,6 @@
 
 .status-nav-item .badge {
   margin-left: auto;
-  padding: 0.125rem 0.5rem;
-  font-size: 0.7rem;
-  border-radius: 10px;
-  background: var(--status-warning);
-  color: #000;
 }
 
 /* Sidebar Header */
@@ -198,7 +193,7 @@
   padding: 0.75rem 1rem;
   background: var(--bg-secondary);
   border: 1px solid var(--border-primary);
-  border-radius: 8px;
+  border-radius: var(--radius-xl);
 }
 
 .stat-inline {
@@ -270,7 +265,7 @@
 .services-table-container {
   background: var(--bg-secondary);
   border: 1px solid var(--border-primary);
-  border-radius: 8px;
+  border-radius: var(--radius-xl);
   overflow-x: auto;
   margin-bottom: 1.5rem;
 }
@@ -380,15 +375,6 @@
 
 
 /* Type Badge */
-.type-badge {
-  display: inline-block;
-  padding: 0.125rem 0.5rem;
-  font-size: 0.7rem;
-  font-weight: 500;
-  border-radius: 4px;
-  text-transform: uppercase;
-}
-
 .type-badge.internal {
   background: var(--bg-tertiary);
   color: var(--text-secondary);
@@ -416,7 +402,7 @@
   height: 28px;
   padding: 0;
   border: none;
-  border-radius: 4px;
+  border-radius: var(--radius-md);
   background: transparent;
   color: var(--text-secondary);
   cursor: pointer;
@@ -436,7 +422,7 @@
 .recent-incidents {
   background: var(--bg-secondary);
   border: 1px solid var(--border-primary);
-  border-radius: 8px;
+  border-radius: var(--radius-xl);
   padding: 1rem;
 }
 

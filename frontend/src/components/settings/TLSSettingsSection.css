@@ -30,7 +30,7 @@
   padding: 0.75rem 1rem;
   background: var(--error-bg, rgba(239, 68, 68, 0.1));
   border: 1px solid var(--error-border, #ef4444);
-  border-radius: 6px;
+  border-radius: var(--radius-lg);
   color: var(--error-text, #ef4444);
   font-size: 0.875rem;
 }
@@ -55,7 +55,7 @@
   padding: 1rem;
   background: var(--card-bg);
   border: 1px solid var(--border-primary);
-  border-radius: 8px;
+  border-radius: var(--radius-xl);
 }
 
 .tls-status-label {
@@ -76,7 +76,7 @@
 }
 
 .tls-status-badge.encrypted {
-  background: rgba(34, 197, 94, 0.15);
+  background: var(--success-bg);
   color: #22c55e;
   border: 1px solid rgba(34, 197, 94, 0.3);
 }
@@ -97,7 +97,7 @@
 .tls-status-card {
   background: var(--card-bg);
   border: 1px solid var(--border-primary);
-  border-radius: 8px;
+  border-radius: var(--radius-xl);
   overflow: hidden;
 }
 
@@ -177,7 +177,7 @@
 .tls-config-card {
   background: var(--card-bg);
   border: 1px solid var(--border-primary);
-  border-radius: 8px;
+  border-radius: var(--radius-xl);
   overflow: hidden;
 }
 
@@ -232,7 +232,7 @@
   padding: 1rem;
   background: var(--bg-tertiary);
   border: 1px solid var(--border-primary);
-  border-radius: 6px;
+  border-radius: var(--radius-lg);
   margin: 0.75rem 0;
 }
 
@@ -269,7 +269,7 @@
 .tls-info-box {
   background: var(--bg-tertiary);
   border: 1px solid var(--border-primary);
-  border-radius: 8px;
+  border-radius: var(--radius-xl);
   padding: 1rem;
 }
 

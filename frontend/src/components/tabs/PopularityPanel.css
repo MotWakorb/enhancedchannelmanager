@@ -3,7 +3,7 @@
 .popularity-panel {
   background: var(--bg-secondary);
   border: 1px solid var(--border-primary);
-  border-radius: 8px;
+  border-radius: var(--radius-xl);
   padding: 16px;
   margin-bottom: 16px;
 }
@@ -35,7 +35,7 @@
   color: var(--text-muted);
   background: var(--bg-tertiary);
   padding: 3px 8px;
-  border-radius: 4px;
+  border-radius: var(--radius-md);
 }
 
 .popularity-panel .header-right {
@@ -49,7 +49,7 @@
   gap: 4px;
   background: var(--bg-tertiary);
   padding: 3px;
-  border-radius: 6px;
+  border-radius: var(--radius-lg);
 }
 
 .popularity-panel .toggle-btn {
@@ -57,7 +57,7 @@
   font-size: 13px;
   font-weight: 500;
   border: none;
-  border-radius: 4px;
+  border-radius: var(--radius-md);
   background: transparent;
   color: var(--text-secondary);
   cursor: pointer;
@@ -79,7 +79,7 @@
   font-size: 13px;
   font-weight: 500;
   border: none;
-  border-radius: 6px;
+  border-radius: var(--radius-lg);
   background: var(--button-primary-bg);
   color: var(--button-primary-text);
   cursor: pointer;
@@ -101,7 +101,7 @@
   border: 1px solid var(--error);
   color: var(--error);
   padding: 10px 14px;
-  border-radius: 6px;
+  border-radius: var(--radius-lg);
   font-size: 12px;
   margin-bottom: 12px;
 }
@@ -111,7 +111,7 @@
   border: 1px solid rgba(20, 184, 166, 0.3);
   color: #14b8a6;
   padding: 10px 14px;
-  border-radius: 6px;
+  border-radius: var(--radius-lg);
   font-size: 12px;
   margin-bottom: 12px;
 }
@@ -126,7 +126,7 @@
 .popularity-panel .ranking-item {
   background: var(--bg-tertiary);
   border: 1px solid var(--border-primary);
-  border-radius: 6px;
+  border-radius: var(--radius-lg);
   cursor: pointer;
   transition: all 0.15s ease;
 }
@@ -199,14 +199,14 @@
   width: 80px;
   height: 6px;
   background: var(--bg-secondary);
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   overflow: hidden;
 }
 
 .popularity-panel .score-bar {
   height: 100%;
   background: linear-gradient(90deg, #3b82f6, #14b8a6);
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
 }
 
 .popularity-panel .score-value {
@@ -274,7 +274,7 @@
 .popularity-panel .trending-column {
   background: var(--bg-tertiary);
   border: 1px solid var(--border-primary);
-  border-radius: 6px;
+  border-radius: var(--radius-lg);
   overflow: hidden;
 }
 
@@ -314,7 +314,7 @@
   gap: 8px;
   padding: 8px 10px;
   background: var(--bg-secondary);
-  border-radius: 4px;
+  border-radius: var(--radius-md);
 }
 
 .popularity-panel .trending-rank {

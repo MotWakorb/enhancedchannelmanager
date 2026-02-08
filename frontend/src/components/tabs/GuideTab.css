@@ -52,7 +52,7 @@
   padding: 0.5rem 0.75rem;
   background-color: var(--input-bg);
   border: 1px solid var(--border-secondary);
-  border-radius: 6px;
+  border-radius: var(--radius-lg);
   color: var(--text-primary);
   font-size: 0.875rem;
   cursor: pointer;
@@ -73,7 +73,7 @@
 .group-mode-toggle {
   display: flex;
   border: 1px solid var(--border-secondary);
-  border-radius: 4px;
+  border-radius: var(--radius-md);
   overflow: hidden;
 }
 
@@ -113,7 +113,7 @@
   padding: 0.5rem 0.75rem;
   background-color: var(--button-primary-bg);
   border: none;
-  border-radius: 6px;
+  border-radius: var(--radius-lg);
   color: var(--button-primary-text);
   font-size: 0.875rem;
   font-weight: 500;
@@ -141,7 +141,7 @@
   padding: 0.5rem 0.75rem;
   background-color: var(--bg-secondary);
   border: 1px solid var(--border-secondary);
-  border-radius: 6px;
+  border-radius: var(--radius-lg);
   color: var(--text-primary);
   font-size: 0.875rem;
   font-weight: 500;
@@ -271,7 +271,7 @@
   border-right: 1px solid var(--border-primary);
   position: sticky;
   left: 0;
-  z-index: 10;
+  z-index: var(--z-raised);
   transition: background-color 0.15s;
 }
 
@@ -291,7 +291,7 @@
   height: 22px;
   padding: 0 0.375rem;
   background-color: var(--button-primary-bg);
-  border-radius: 4px;
+  border-radius: var(--radius-md);
   font-size: 0.7rem;
   font-weight: 600;
   color: var(--button-primary-text);
@@ -329,7 +329,7 @@
   bottom: 4px;
   background-color: var(--bg-tertiary);
   border: 1px solid var(--border-secondary);
-  border-radius: 4px;
+  border-radius: var(--radius-md);
   padding: 0.375rem 0.5rem;
   overflow: hidden;
   cursor: pointer;
@@ -378,7 +378,7 @@
   justify-content: center;
   background-color: transparent;
   border: 2px dashed var(--border-secondary);
-  border-radius: 4px;
+  border-radius: var(--radius-md);
 }
 
 .no-epg-text {

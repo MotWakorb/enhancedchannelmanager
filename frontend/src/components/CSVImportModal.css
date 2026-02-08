@@ -5,7 +5,7 @@
 /* Dropzone */
 .csv-dropzone {
   border: 2px dashed var(--border-secondary, #3a3a5a);
-  border-radius: 8px;
+  border-radius: var(--radius-xl);
   padding: 2rem;
   text-align: center;
   cursor: pointer;
@@ -100,7 +100,7 @@
 
 .preview-table-wrapper {
   border: 1px solid var(--border-secondary, #3a3a5a);
-  border-radius: 6px;
+  border-radius: var(--radius-lg);
   overflow: hidden;
 }
 
@@ -151,8 +151,8 @@
 .csv-validation-errors {
   margin-top: 1rem;
   border: 1px solid rgba(239, 68, 68, 0.3);
-  border-radius: 6px;
-  background: rgba(239, 68, 68, 0.1);
+  border-radius: var(--radius-lg);
+  background: var(--error-bg);
 }
 
 .errors-header {
@@ -198,7 +198,7 @@
   padding: 1.5rem;
   background: rgba(74, 222, 128, 0.1);
   border: 1px solid rgba(74, 222, 128, 0.3);
-  border-radius: 8px;
+  border-radius: var(--radius-xl);
 }
 
 .csv-import-success > .material-icons {

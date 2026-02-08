@@ -65,7 +65,7 @@
   padding: 10px 14px;
   background: rgba(220, 53, 69, 0.1);
   border: 1px solid rgba(220, 53, 69, 0.3);
-  border-radius: 6px;
+  border-radius: var(--radius-lg);
   color: var(--error-color, #dc3545);
   font-size: 13px;
   margin-bottom: 16px;
@@ -91,7 +91,7 @@
   padding: 10px 12px;
   background: var(--input-bg);
   border: 1px solid var(--border-primary);
-  border-radius: 6px;
+  border-radius: var(--radius-lg);
   color: var(--text-primary);
   font-size: 14px;
   font-family: inherit;
@@ -266,7 +266,7 @@
   padding: 10px 16px;
   background: transparent;
   border: 2px dashed var(--border-primary);
-  border-radius: 8px;
+  border-radius: var(--radius-xl);
   color: var(--text-muted);
   cursor: pointer;
   font-size: 14px;
@@ -288,13 +288,13 @@
   position: absolute;
   top: 100%;
   left: 0;
-  z-index: 100;
+  z-index: var(--z-dropdown);
   min-width: 280px;
   max-height: 400px;
   overflow-y: auto;
   background: var(--bg-primary);
   border: 1px solid var(--border-primary);
-  border-radius: 8px;
+  border-radius: var(--radius-xl);
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.2);
   margin-top: 8px;
 }
@@ -315,7 +315,7 @@
   border: none;
   color: var(--text-muted);
   cursor: pointer;
-  border-radius: 4px;
+  border-radius: var(--radius-md);
 }
 
 .type-selector-header .close-btn:hover {
@@ -365,7 +365,7 @@
 /* Buttons */
 .btn {
   padding: 10px 20px;
-  border-radius: 6px;
+  border-radius: var(--radius-lg);
   font-size: 14px;
   font-weight: 500;
   cursor: pointer;
@@ -418,7 +418,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: 1000;
+  z-index: var(--z-overlay);
 }
 
 .confirm-dialog {
