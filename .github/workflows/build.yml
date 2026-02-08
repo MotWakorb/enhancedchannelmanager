@@ -391,8 +391,13 @@ jobs:
   merge-manifests:
     name: Create Multi-Arch Manifest
     runs-on: ubuntu-latest
-    needs: [build-amd64, build-arm64]
-    if: always() && github.event_name != 'pull_request' && needs.build-amd64.result == 'success' && needs.build-arm64.result == 'success'
+    needs: [build-amd64, build-arm64, trivy-scan, dast-scan]
+    if: >-
+      always() && github.event_name != 'pull_request'
+      && needs.build-amd64.result == 'success'
+      && needs.build-arm64.result == 'success'
+      && !contains(fromJSON('["failure","cancelled"]'), needs.trivy-scan.result)
+      && !contains(fromJSON('["failure","cancelled"]'), needs.dast-scan.result)
     permissions:
       contents: read
       packages: write
