@@ -182,7 +182,7 @@
 }
 
 .watch-history-panel .history-row.active {
-  border-left: 3px solid var(--success-color, #22c55e);
+  border-left: 3px solid var(--success, #22c55e);
 }
 
 .watch-history-panel .history-row td {
@@ -219,7 +219,7 @@
 
 .watch-history-panel .status-cell .status.watching {
   background: rgba(34, 197, 94, 0.15);
-  color: var(--success-color, #22c55e);
+  color: var(--success, #22c55e);
 }
 
 .watch-history-panel .status-cell .status.completed {
@@ -334,7 +334,7 @@
 
 .watch-history-panel .error-message {
   background: rgba(239, 68, 68, 0.1);
-  color: var(--error-color, #ef4444);
+  color: var(--error, #ef4444);
   padding: 10px;
   border-radius: 4px;
   margin-bottom: 16px;

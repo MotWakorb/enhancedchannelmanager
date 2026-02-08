@@ -267,7 +267,7 @@
 }
 
 .action-btn.delete:hover:not(:disabled) {
-  background-color: rgba(239, 68, 68, 0.2);
+  background-color: var(--error-bg);
   color: var(--error);
 }
 

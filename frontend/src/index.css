@@ -33,6 +33,12 @@
   --error: #ef4444;
   --error-bg: rgba(239, 68, 68, 0.15);
   --warning: #f59e0b;
+  --warning-bg: rgba(245, 158, 11, 0.15);
+  --warning-text: #fbbf24;
+  --danger-bg: rgba(239, 68, 68, 0.15);
+  --danger-text: #f87171;
+  --info-bg: rgba(59, 130, 246, 0.15);
+  --info-text: #60a5fa;
 
   /* Interactive elements */
   --drag-handle-color: #ffffff;
@@ -83,6 +89,12 @@
   --error: #ef4444;
   --error-bg: rgba(239, 68, 68, 0.1);
   --warning: #f59e0b;
+  --warning-bg: rgba(245, 158, 11, 0.1);
+  --warning-text: #d97706;
+  --danger-bg: rgba(239, 68, 68, 0.1);
+  --danger-text: #dc2626;
+  --info-bg: rgba(59, 130, 246, 0.1);
+  --info-text: #2563eb;
 
   --input-bg: #fff;
   --input-border: #ccc;
@@ -129,6 +141,12 @@
   --error: #ff4444;
   --error-bg: rgba(255, 68, 68, 0.2);
   --warning: #ffaa00;
+  --warning-bg: rgba(255, 170, 0, 0.2);
+  --warning-text: #ffaa00;
+  --danger-bg: rgba(255, 68, 68, 0.2);
+  --danger-text: #ff4444;
+  --info-bg: rgba(100, 149, 237, 0.2);
+  --info-text: #6495ed;
 
   --input-bg: #111;
   --input-border: #666;

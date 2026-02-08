@@ -82,11 +82,11 @@
 }
 
 .bandwidth-panel .direction-icon.inbound {
-  color: #3b82f6;
+  color: var(--info-text);
 }
 
 .bandwidth-panel .direction-icon.outbound {
-  color: #22c55e;
+  color: var(--success);
 }
 
 .bandwidth-panel .direction-label {
@@ -155,11 +155,11 @@
 }
 
 .bandwidth-panel .peak-icon.inbound {
-  color: #3b82f6;
+  color: var(--info-text);
 }
 
 .bandwidth-panel .peak-icon.outbound {
-  color: #22c55e;
+  color: var(--success);
 }
 
 .bandwidth-panel .peak-info {
@@ -218,11 +218,11 @@
 }
 
 .bandwidth-panel .legend-dot.inbound {
-  background: #3b82f6;
+  background: var(--info-text);
 }
 
 .bandwidth-panel .legend-dot.outbound {
-  background: #22c55e;
+  background: var(--success);
 }
 
 /* Bar Chart */
@@ -265,11 +265,11 @@
 }
 
 .bandwidth-panel .bar.inbound {
-  background: #3b82f6;
+  background: var(--info-text);
 }
 
 .bandwidth-panel .bar.outbound {
-  background: #22c55e;
+  background: var(--success);
 }
 
 .bandwidth-panel .day-label {
@@ -321,11 +321,11 @@
 }
 
 .bandwidth-panel .ratio-segment.inbound {
-  background: #3b82f6;
+  background: var(--info-text);
 }
 
 .bandwidth-panel .ratio-segment.outbound {
-  background: #22c55e;
+  background: var(--success);
 }
 
 .bandwidth-panel .ratio-labels {
@@ -345,9 +345,9 @@
 }
 
 .bandwidth-panel .error-message {
-  background: rgba(239, 68, 68, 0.1);
-  border: 1px solid rgba(239, 68, 68, 0.3);
-  color: #ef4444;
+  background: var(--error-bg);
+  border: 1px solid var(--error);
+  color: var(--error);
   padding: 10px 14px;
   border-radius: 6px;
   font-size: 12px;

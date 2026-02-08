@@ -163,10 +163,10 @@
   align-items: center;
   gap: 0.25rem;
   padding: 0.125rem 0.375rem;
-  background-color: rgba(100, 108, 255, 0.15);
-  border: 1px solid rgba(100, 108, 255, 0.3);
+  background-color: var(--bg-tertiary);
+  border: 1px solid var(--border-secondary);
   border-radius: 10px;
-  color: var(--accent-secondary);
+  color: var(--text-secondary);
   margin-left: 0.5rem;
 }
 
