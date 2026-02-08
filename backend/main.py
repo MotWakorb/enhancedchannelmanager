@@ -9800,7 +9800,11 @@ async def rollback_auto_creation_execution(execution_id: int):
 
 @app.get("/api/auto-creation/export/yaml", tags=["Auto-Creation"])
 async def export_auto_creation_rules_yaml():
-    """Export all auto-creation rules as YAML."""
+    """Export all auto-creation rules as YAML.
+
+    Includes portable name fields (group_name, target_group_name, m3u_account_name)
+    alongside numeric IDs so rules can be shared between ECM instances.
+    """
     try:
         import yaml
         from models import AutoCreationRule
@@ -9810,6 +9814,21 @@ async def export_auto_creation_rules_yaml():
                 AutoCreationRule.priority
             ).all()
 
+            # Build id→name lookup maps for portable export
+            client = get_client()
+            group_id_to_name = {}
+            m3u_id_to_name = {}
+            try:
+                groups = await client.get_channel_groups()
+                group_id_to_name = {g["id"]: g["name"] for g in groups}
+            except Exception as e:
+                logger.warning(f"Could not fetch channel groups for YAML export: {e}")
+            try:
+                m3u_accounts = await client.get_m3u_accounts()
+                m3u_id_to_name = {a["id"]: a["name"] for a in m3u_accounts}
+            except Exception as e:
+                logger.warning(f"Could not fetch M3U accounts for YAML export: {e}")
+
             export_data = {
                 "version": 1,
                 "exported_at": datetime.utcnow().isoformat() + "Z",
@@ -9817,13 +9836,15 @@ async def export_auto_creation_rules_yaml():
             }
 
             for rule in rules:
-                export_data["rules"].append({
+                rule_dict = {
                     "name": rule.name,
                     "description": rule.description,
                     "enabled": rule.enabled,
                     "priority": rule.priority,
                     "m3u_account_id": rule.m3u_account_id,
+                    "m3u_account_name": m3u_id_to_name.get(rule.m3u_account_id),
                     "target_group_id": rule.target_group_id,
+                    "target_group_name": group_id_to_name.get(rule.target_group_id),
                     "conditions": rule.get_conditions(),
                     "actions": rule.get_actions(),
                     "run_on_refresh": rule.run_on_refresh,
@@ -9831,7 +9852,15 @@ async def export_auto_creation_rules_yaml():
                     "sort_field": rule.sort_field,
                     "sort_order": rule.sort_order or "asc",
                     "normalize_names": rule.normalize_names or False
-                })
+                }
+
+                # Add group_name to actions that have group_id
+                for action in rule_dict["actions"]:
+                    gid = action.get("group_id")
+                    if gid is not None and gid in group_id_to_name:
+                        action["group_name"] = group_id_to_name[gid]
+
+                export_data["rules"].append(rule_dict)
 
             yaml_content = yaml.dump(export_data, default_flow_style=False, sort_keys=False)
 
@@ -9851,7 +9880,12 @@ async def export_auto_creation_rules_yaml():
 
 @app.post("/api/auto-creation/import/yaml", tags=["Auto-Creation"])
 async def import_auto_creation_rules_yaml(request: ImportYAMLRequest):
-    """Import auto-creation rules from YAML."""
+    """Import auto-creation rules from YAML.
+
+    Supports portable name fields: if group_name/target_group_name/m3u_account_name
+    are present and corresponding IDs are missing, names are resolved to local IDs.
+    Explicit IDs always take priority over names.
+    """
     try:
         import yaml
         from models import AutoCreationRule
@@ -9864,15 +9898,69 @@ async def import_auto_creation_rules_yaml(request: ImportYAMLRequest):
         except yaml.YAMLError as e:
             raise HTTPException(status_code=400, detail=f"Invalid YAML: {e}")
 
+        # Accept both {"rules": [...]} and a bare list of rules
+        if isinstance(data, list):
+            data = {"rules": data}
+
         if not data or "rules" not in data:
-            raise HTTPException(status_code=400, detail="YAML must contain a 'rules' array")
+            raise HTTPException(status_code=400, detail="YAML must contain a 'rules' array or be a list of rules")
+
+        # Build name→id lookup maps for portable import
+        client = get_client()
+        group_name_to_id = {}
+        m3u_name_to_id = {}
+        try:
+            groups = await client.get_channel_groups()
+            group_name_to_id = {g["name"].lower(): g["id"] for g in groups}
+        except Exception as e:
+            logger.warning(f"Could not fetch channel groups for YAML import: {e}")
+        try:
+            m3u_accounts = await client.get_m3u_accounts()
+            m3u_name_to_id = {a["name"].lower(): a["id"] for a in m3u_accounts}
+        except Exception as e:
+            logger.warning(f"Could not fetch M3U accounts for YAML import: {e}")
 
         session = get_session()
         try:
             imported = []
             errors = []
+            warnings = []
 
             for i, rule_data in enumerate(data["rules"]):
+                # Resolve portable name fields to local IDs
+                # target_group_name → target_group_id
+                if not rule_data.get("target_group_id") and rule_data.get("target_group_name"):
+                    name = rule_data["target_group_name"]
+                    resolved_id = group_name_to_id.get(name.lower())
+                    if resolved_id:
+                        rule_data["target_group_id"] = resolved_id
+                    else:
+                        warnings.append(f"Rule '{rule_data.get('name', f'Rule {i}')}': target_group_name '{name}' not found locally")
+
+                # m3u_account_name → m3u_account_id
+                if not rule_data.get("m3u_account_id") and rule_data.get("m3u_account_name"):
+                    name = rule_data["m3u_account_name"]
+                    resolved_id = m3u_name_to_id.get(name.lower())
+                    if resolved_id:
+                        rule_data["m3u_account_id"] = resolved_id
+                    else:
+                        warnings.append(f"Rule '{rule_data.get('name', f'Rule {i}')}': m3u_account_name '{name}' not found locally")
+
+                # Resolve group_name → group_id in actions
+                for action in rule_data.get("actions", []):
+                    if not action.get("group_id") and action.get("group_name"):
+                        name = action["group_name"]
+                        resolved_id = group_name_to_id.get(name.lower())
+                        if resolved_id:
+                            action["group_id"] = resolved_id
+                        else:
+                            warnings.append(f"Rule '{rule_data.get('name', f'Rule {i}')}': action group_name '{name}' not found locally")
+                    # Strip transient name fields from stored data
+                    action.pop("group_name", None)
+
+                # Strip transient name fields from rule-level data
+                rule_data.pop("target_group_name", None)
+                rule_data.pop("m3u_account_name", None)
                 # Validate rule
                 conditions = rule_data.get("conditions", [])
                 actions = rule_data.get("actions", [])
@@ -9946,11 +10034,14 @@ async def import_auto_creation_rules_yaml(request: ImportYAMLRequest):
                     description=f"Imported {len(imported)} auto-creation rules from YAML"
                 )
 
-            return {
+            result = {
                 "success": True,
                 "imported": imported,
                 "errors": errors
             }
+            if warnings:
+                result["warnings"] = warnings
+            return result
         finally:
             session.close()
     except HTTPException:
