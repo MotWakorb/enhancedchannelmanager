@@ -617,6 +617,23 @@ class DispatcharrClient:
             raise Exception(f"Logo creation failed: {response.status_code} - {error_body}")
         return response.json()
 
+    async def upload_logo_file(self, name: str, filename: str,
+                               content: bytes, content_type: str) -> dict:
+        """Upload a logo image file directly to Dispatcharr.
+
+        Uses the /api/channels/logos/upload/ multipart endpoint so the file
+        is stored and served by Dispatcharr, not ECM.
+        """
+        response = await self._request(
+            "POST", "/api/channels/logos/upload/",
+            files={"file": (filename, content, content_type)},
+            data={"name": name},
+        )
+        if response.status_code >= 400:
+            error_body = response.text
+            raise Exception(f"Logo upload failed: {response.status_code} - {error_body}")
+        return response.json()
+
     async def find_logo_by_url(self, url: str) -> Optional[dict]:
         """Find an existing logo by its URL.
 
