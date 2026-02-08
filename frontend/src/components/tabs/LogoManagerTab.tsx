@@ -251,12 +251,12 @@ export function LogoManagerTab() {
                 </div>
                 <div className="logo-name">{logo.name}</div>
                 <div className="logo-url-cell">
-                  <span className="logo-url" title={logo.url}>
-                    {logo.url}
+                  <span className="logo-url" title={logo.cache_url || logo.url}>
+                    {logo.cache_url || logo.url}
                   </span>
                   <button
                     className="copy-btn"
-                    onClick={() => handleCopyUrl(logo.url)}
+                    onClick={() => handleCopyUrl(logo.cache_url || logo.url)}
                     title="Copy URL"
                   >
                     <span className="material-icons">content_copy</span>
@@ -325,7 +325,7 @@ export function LogoManagerTab() {
                     </button>
                     <button
                       className="action-btn"
-                      onClick={() => handleCopyUrl(logo.url)}
+                      onClick={() => handleCopyUrl(logo.cache_url || logo.url)}
                       title="Copy URL"
                     >
                       <span className="material-icons">content_copy</span>
