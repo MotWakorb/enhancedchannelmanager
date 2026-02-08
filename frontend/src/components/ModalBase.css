@@ -809,7 +809,7 @@
 
 .dropdown-option-item.selected,
 .logo-option-none.selected {
-  background-color: rgba(100, 108, 255, 0.15);
+  background-color: var(--accent-15);
 }
 
 .dropdown-option input[type="checkbox"] {
@@ -852,7 +852,7 @@
 }
 
 .dropdown-option-item.add-new-option:hover {
-  background-color: rgba(100, 108, 255, 0.1);
+  background-color: var(--accent-10);
 }
 
 
@@ -894,7 +894,7 @@
 
 .logo-grid-item.selected {
   border-color: var(--accent-primary, #6366f1);
-  background-color: rgba(100, 108, 255, 0.1);
+  background-color: var(--accent-10);
 }
 
 .logo-grid-preview {

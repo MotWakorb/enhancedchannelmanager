@@ -42,107 +42,16 @@ const REFRESH_OPTIONS = [
   { value: 300, label: '5m' },
 ];
 
-// Format duration from seconds or duration string to HH:MM:SS
-function formatDuration(duration: string | number | undefined): string {
-  if (!duration) return '-';
-
-  let totalSeconds: number;
-
-  if (typeof duration === 'string') {
-    // Check if already in HH:MM:SS format
-    if (duration.includes(':')) {
-      return duration;
-    }
-    // Try to parse existing format like "1h 23m" or "45m 30s" or "30s"
-    const hourMatch = duration.match(/(\d+)h/);
-    const minMatch = duration.match(/(\d+)m/);
-    const secMatch = duration.match(/(\d+)s/);
-
-    const hours = hourMatch ? parseInt(hourMatch[1], 10) : 0;
-    const mins = minMatch ? parseInt(minMatch[1], 10) : 0;
-    const secs = secMatch ? parseInt(secMatch[1], 10) : 0;
-
-    if (!hourMatch && !minMatch && !secMatch) {
-      // Try parsing as seconds
-      totalSeconds = parseFloat(duration);
-      if (isNaN(totalSeconds)) return duration;
-    } else {
-      totalSeconds = hours * 3600 + mins * 60 + secs;
-    }
-  } else {
-    totalSeconds = Math.floor(duration);
-  }
-
-  const hours = Math.floor(totalSeconds / 3600);
-  const minutes = Math.floor((totalSeconds % 3600) / 60);
-  const secs = Math.floor(totalSeconds % 60);
-
-  // Format as HH:MM:SS
-  const hh = hours.toString().padStart(2, '0');
-  const mm = minutes.toString().padStart(2, '0');
-  const ss = secs.toString().padStart(2, '0');
-
-  return `${hh}:${mm}:${ss}`;
-}
-
-// Format bytes to human readable
-function formatBytes(bytes: number | undefined): string {
-  if (!bytes) return '-';
-  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
-  let value = bytes;
-  let unitIndex = 0;
-  while (value >= 1024 && unitIndex < units.length - 1) {
-    value /= 1024;
-    unitIndex++;
-  }
-  return `${value.toFixed(1)} ${units[unitIndex]}`;
-}
-
-// Format seconds to human readable duration
-function formatWatchTime(seconds: number | undefined): string {
-  if (!seconds) return '0m';
-  const hours = Math.floor(seconds / 3600);
-  const minutes = Math.floor((seconds % 3600) / 60);
-  if (hours > 0) {
-    return `${hours}h ${minutes}m`;
-  }
-  return `${minutes}m`;
-}
-
-// Format timestamp for events
-function formatEventTime(isoString: string): string {
-  const date = new Date(isoString);
-  return date.toLocaleTimeString('en-US', {
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-    hour12: false,
-  });
-}
-
-// Get speed class based on value (can be number or string)
-function getSpeedClass(speed: number | string | undefined): string {
-  if (speed === undefined || speed === null) return '';
-  const numSpeed = typeof speed === 'number' ? speed : parseFloat(speed);
-  if (isNaN(numSpeed)) return '';
-  if (numSpeed >= 0.98) return 'speed-good';
-  if (numSpeed >= 0.90) return 'speed-warning';
-  return 'speed-bad';
-}
-
-// Format speed for display (can be number or string)
-function formatSpeed(speed: number | string | undefined): string {
-  if (speed === undefined || speed === null) return '-';
-  const numSpeed = typeof speed === 'number' ? speed : parseFloat(speed);
-  if (isNaN(numSpeed)) return String(speed);
-  return `${numSpeed.toFixed(2)}x`;
-}
-
-// Format FPS for display
-function formatFps(fps: number | undefined): string {
-  if (fps === undefined || fps === null) return '-';
-  return fps.toFixed(2);
-}
+// Formatting utilities imported from shared module
+import {
+  formatDurationHMS as formatDuration,
+  formatBytes,
+  formatWatchTime,
+  formatEventTime,
+  getSpeedClass,
+  formatSpeed,
+  formatFps,
+} from '../../utils/formatting';
 
 // Check if event type is streaming-related (not login, refresh, etc.)
 function isStreamingEvent(eventType: string): boolean {

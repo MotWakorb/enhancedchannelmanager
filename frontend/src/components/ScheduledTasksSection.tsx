@@ -5,15 +5,10 @@ import { logger } from '../utils/logger';
 import { TaskEditorModal } from './TaskEditorModal';
 import { TaskHistoryPanel } from './TaskHistoryPanel';
 import { useNotifications } from '../contexts/NotificationContext';
+import { formatDateTime } from '../utils/formatting';
 
 interface ScheduledTasksSectionProps {
   userTimezone?: string;
-}
-
-function formatDateTime(isoString: string | null): string {
-  if (!isoString) return 'Never';
-  const date = new Date(isoString);
-  return date.toLocaleString();
 }
 
 function formatSchedule(task: TaskStatus): { summary: string; details: string[] } {

@@ -65,8 +65,8 @@
 }
 
 .pane-header.edit-mode {
-  background-color: rgba(100, 108, 255, 0.1);
-  border-bottom-color: rgba(100, 108, 255, 0.3);
+  background-color: var(--accent-10);
+  border-bottom-color: var(--accent-30);
 }
 
 .pane-header-title {
@@ -153,7 +153,7 @@
   width: 28px;
   height: 28px;
   padding: 0;
-  background-color: rgba(100, 108, 255, 0.15);
+  background-color: var(--accent-15);
   border: 1px solid var(--accent-primary);
   color: var(--accent-primary);
   border-radius: 4px;
@@ -162,7 +162,7 @@
 }
 
 .bulk-action-btn:hover {
-  background-color: rgba(100, 108, 255, 0.3);
+  background-color: var(--accent-30);
   transform: scale(1.05);
 }
 
@@ -834,7 +834,7 @@
 }
 
 .group-header.drop-target {
-  background-color: rgba(100, 108, 255, 0.2);
+  background-color: var(--accent-20);
   border: 2px dashed var(--accent-primary);
   border-radius: 4px;
 }
@@ -979,12 +979,12 @@
 }
 
 .channel-item.multi-selected {
-  background-color: rgba(100, 108, 255, 0.15);
-  border: 1px solid rgba(100, 108, 255, 0.5);
+  background-color: var(--accent-15);
+  border: 1px solid var(--accent-50);
 }
 
 .channel-item.multi-selected:hover {
-  background-color: rgba(100, 108, 255, 0.25);
+  background-color: var(--accent-25);
 }
 
 .channel-select-indicator {
@@ -2310,7 +2310,7 @@
 .rename-input:focus {
   outline: none;
   border-color: var(--accent-primary);
-  box-shadow: 0 0 0 2px rgba(100, 108, 255, 0.2);
+  box-shadow: 0 0 0 2px var(--accent-20);
 }
 
 .rename-input:disabled {
@@ -3345,7 +3345,7 @@
 
 .move-option-radio.selected {
   border-color: var(--accent-primary);
-  background-color: rgba(100, 108, 255, 0.1);
+  background-color: var(--accent-10);
 }
 
 .move-option-radio input[type="radio"] {
@@ -3418,8 +3418,8 @@
 .cross-group-move-source-renumber {
   margin-bottom: 1.25rem;
   padding: 0.875rem;
-  background-color: rgba(100, 108, 255, 0.05);
-  border: 1px solid rgba(100, 108, 255, 0.2);
+  background-color: var(--accent-5);
+  border: 1px solid var(--accent-20);
   border-radius: 6px;
 }
 
@@ -3500,7 +3500,7 @@
   font-size: 0.8rem;
   font-weight: 600;
   color: var(--accent-primary);
-  background-color: rgba(100, 108, 255, 0.2);
+  background-color: var(--accent-20);
   padding: 0.125rem 0.5rem;
   border-radius: 10px;
   white-space: nowrap;
@@ -3518,7 +3518,7 @@
   height: 3px;
   background: linear-gradient(90deg, #646cff 0%, #8b5cf6 50%, #646cff 100%);
   border-radius: 2px;
-  box-shadow: 0 0 8px rgba(100, 108, 255, 0.6), 0 0 16px rgba(100, 108, 255, 0.3);
+  box-shadow: 0 0 8px var(--accent-60), 0 0 16px var(--accent-30);
   animation: drop-indicator-pulse 1.2s ease-in-out infinite;
 }
 
@@ -3532,7 +3532,7 @@
   height: 10px;
   background-color: var(--accent-primary);
   border-radius: 50%;
-  box-shadow: 0 0 6px rgba(100, 108, 255, 0.8);
+  box-shadow: 0 0 6px var(--accent-80);
 }
 
 .drop-indicator-line::before {
@@ -3546,11 +3546,11 @@
 @keyframes drop-indicator-pulse {
   0%, 100% {
     opacity: 1;
-    box-shadow: 0 0 8px rgba(100, 108, 255, 0.6), 0 0 16px rgba(100, 108, 255, 0.3);
+    box-shadow: 0 0 8px var(--accent-60), 0 0 16px var(--accent-30);
   }
   50% {
     opacity: 0.8;
-    box-shadow: 0 0 12px rgba(100, 108, 255, 0.8), 0 0 24px rgba(100, 108, 255, 0.5);
+    box-shadow: 0 0 12px var(--accent-80), 0 0 24px var(--accent-50);
   }
 }
 
@@ -3622,7 +3622,7 @@
 }
 
 .group-end-dropzone.drop-target-active {
-  background-color: rgba(100, 108, 255, 0.08);
+  background-color: var(--accent-8);
   border-radius: 4px;
 }
 
@@ -3648,7 +3648,7 @@
 }
 
 .group-sort-btn:hover {
-  background-color: rgba(100, 108, 255, 0.2);
+  background-color: var(--accent-20);
   color: var(--accent-primary);
 }
 
@@ -3678,7 +3678,7 @@
 }
 
 .group-sort-quality-btn:hover:not(:disabled) {
-  background-color: rgba(100, 108, 255, 0.2);
+  background-color: var(--accent-20);
   color: var(--accent-primary);
 }
 
@@ -3716,7 +3716,7 @@
 }
 
 .sort-dropdown-btn:hover:not(:disabled) {
-  background-color: rgba(100, 108, 255, 0.1);
+  background-color: var(--accent-10);
   color: var(--accent-primary);
 }
 
@@ -3769,7 +3769,7 @@
 }
 
 .sort-dropdown-item:hover {
-  background-color: rgba(100, 108, 255, 0.1);
+  background-color: var(--accent-10);
 }
 
 .sort-dropdown-item .material-icons {
@@ -3803,12 +3803,12 @@
   align-items: center;
   justify-content: center;
   padding: 0.375rem 0.5rem;
-  background-color: rgba(100, 108, 255, 0.15);
+  background-color: var(--accent-15);
   border-radius: 4px;
 }
 
 .bulk-action-btn-wrapper .sort-dropdown-btn:hover:not(:disabled) {
-  background-color: rgba(100, 108, 255, 0.25);
+  background-color: var(--accent-25);
 }
 
 /* Sort dropdown for all channels button */
@@ -3870,7 +3870,7 @@
 }
 
 .group-rename-btn:hover {
-  background-color: rgba(100, 108, 255, 0.2);
+  background-color: var(--accent-20);
   color: var(--accent-primary);
 }
 
@@ -4058,7 +4058,7 @@
   justify-content: center;
   min-width: 2.5rem;
   padding: 0.125rem 0.375rem;
-  background-color: rgba(100, 108, 255, 0.2);
+  background-color: var(--accent-20);
   color: var(--accent-secondary);
   border-radius: 3px;
   font-family: monospace;

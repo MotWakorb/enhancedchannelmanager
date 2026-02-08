@@ -86,7 +86,7 @@ export function ServiceControlPanel({
       </div>
 
       {error && (
-        <div className="panel-error">
+        <div className="error-banner">
           <span className="material-icons">error</span>
           {error}
         </div>

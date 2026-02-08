@@ -330,7 +330,7 @@
   border-color: var(--accent-primary);
   border-width: 2px;
   background-color: var(--accent-hover);
-  box-shadow: 0 0 8px rgba(100, 108, 255, 0.4);
+  box-shadow: 0 0 8px var(--accent-40);
 }
 
 .program-title {

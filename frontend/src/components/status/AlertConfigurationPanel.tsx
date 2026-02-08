@@ -193,7 +193,7 @@ export function AlertConfigurationPanel({ onRefresh: _onRefresh }: AlertConfigur
   if (loading) {
     return (
       <div className="alert-config-panel">
-        <div className="panel-loading">
+        <div className="loading-state">
           <span className="material-icons spinning">sync</span>
           Loading...
         </div>
@@ -218,10 +218,10 @@ export function AlertConfigurationPanel({ onRefresh: _onRefresh }: AlertConfigur
       </div>
 
       {error && (
-        <div className="panel-error">
+        <div className="error-banner">
           <span className="material-icons">error</span>
           {error}
-          <button className="dismiss-btn" onClick={() => setError(null)}>
+          <button onClick={() => setError(null)}>
             <span className="material-icons">close</span>
           </button>
         </div>

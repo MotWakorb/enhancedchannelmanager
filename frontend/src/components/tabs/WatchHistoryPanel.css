@@ -340,9 +340,3 @@
   margin-bottom: 16px;
   font-size: 13px;
 }
-
-/* Spin animation */
-@keyframes spin {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
-}

@@ -6,6 +6,7 @@
 import { useState } from 'react';
 import type { Incident, IncidentStatus, IncidentSeverity } from '../../types';
 import './IncidentTimeline.css';
+import { formatRelativeTime } from '../../utils/formatting';
 
 export interface IncidentTimelineProps {
   /** List of incidents to display */
@@ -16,27 +17,9 @@ export interface IncidentTimelineProps {
   onRefresh?: () => void;
 }
 
-// Format timestamp for display
+// Use shared formatRelativeTime with capitalize=true for incident display
 function formatTimestamp(isoString: string): string {
-  const date = new Date(isoString);
-  const now = new Date();
-  const diffMs = now.getTime() - date.getTime();
-  const diffMin = Math.floor(diffMs / 60000);
-  const diffHour = Math.floor(diffMs / 3600000);
-  const diffDay = Math.floor(diffMs / 86400000);
-
-  if (diffMin < 1) return 'Just now';
-  if (diffMin < 60) return `${diffMin}m ago`;
-  if (diffHour < 24) return `${diffHour}h ago`;
-  if (diffDay < 7) return `${diffDay}d ago`;
-
-  return date.toLocaleDateString('en-US', {
-    month: 'short',
-    day: 'numeric',
-    year: date.getFullYear() !== now.getFullYear() ? 'numeric' : undefined,
-    hour: 'numeric',
-    minute: '2-digit',
-  });
+  return formatRelativeTime(isoString, true);
 }
 
 // Get icon for incident status

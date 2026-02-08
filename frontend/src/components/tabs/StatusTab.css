@@ -44,7 +44,7 @@
 }
 
 .status-nav-item.active {
-  background-color: rgba(100, 108, 255, 0.1);
+  background-color: var(--accent-10);
   color: var(--accent-secondary);
   border-left-color: var(--accent-primary);
 }
@@ -158,15 +158,10 @@
   font-size: 1rem;
 }
 
-.status-loading .material-icons.spinning,
-.spinning {
+.status-loading .material-icons.spinning {
   animation: spin 1s linear infinite;
 }
 
-@keyframes spin {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
-}
 
 /* Error State */
 .status-error {
@@ -348,7 +343,7 @@
 }
 
 .services-table .service-row.selected {
-  background-color: rgba(100, 108, 255, 0.1);
+  background-color: var(--accent-10);
 }
 
 /* Service Name Cell */

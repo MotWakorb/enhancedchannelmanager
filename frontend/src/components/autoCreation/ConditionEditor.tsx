@@ -30,9 +30,18 @@ function tryUnescapeRegex(str: string): string | null {
 interface OperatorDef {
   id: string;
   label: string;
-  valueType: 'string' | 'number' | 'regex' | 'none';
+  valueType: 'string' | 'number' | 'select' | 'regex' | 'none';
   placeholder?: string;
+  selectOptions?: SelectOption[];
 }
+
+const QUALITY_OPTIONS: SelectOption[] = [
+  { value: '2160', label: 'UHD / 4K (2160p)' },
+  { value: '1080', label: 'FHD / 1080p' },
+  { value: '720', label: 'HD / 720p' },
+  { value: '480', label: 'SD / 480p' },
+  { value: '360', label: '360p' },
+];
 
 interface FieldDef {
   id: string;
@@ -69,8 +78,8 @@ const FIELDS: FieldDef[] = [
   {
     id: 'quality', label: 'Quality', category: 'stream',
     operators: [
-      { id: 'at_least', label: 'At Least', valueType: 'number', placeholder: 'e.g., 720' },
-      { id: 'at_most', label: 'At Most', valueType: 'number', placeholder: 'e.g., 1080' },
+      { id: 'at_least', label: 'At Least', valueType: 'select', selectOptions: QUALITY_OPTIONS },
+      { id: 'at_most', label: 'At Most', valueType: 'select', selectOptions: QUALITY_OPTIONS },
     ],
   },
   {
@@ -377,6 +386,7 @@ export function ConditionEditor({
   const needsValue = operatorDef != null && operatorDef.valueType !== 'none';
   const isRegex = operatorDef?.valueType === 'regex';
   const isNumber = operatorDef?.valueType === 'number';
+  const isSelect = operatorDef?.valueType === 'select';
   const isStringLike = operatorDef?.valueType === 'string' || isRegex;
 
   const operatorOptions: SelectOption[] = fieldDef?.operators.map(o => ({ value: o.id, label: o.label })) ?? [];
@@ -405,7 +415,10 @@ export function ConditionEditor({
       return;
     }
     const firstOp = def.operators[0];
-    onChange(buildCondition(newField, firstOp.id, firstOp.valueType === 'none' ? '' : '', undefined, condition.connector));
+    const defaultValue = firstOp.valueType === 'none' ? ''
+      : firstOp.selectOptions?.[0]?.value ? Number(firstOp.selectOptions[0].value)
+      : '';
+    onChange(buildCondition(newField, firstOp.id, defaultValue, undefined, condition.connector));
   };
 
   const handleOperatorChange = (newOp: string) => {
@@ -455,7 +468,16 @@ export function ConditionEditor({
           {needsValue && (
             <div className="condition-value-wrapper">
               <label htmlFor={`${id}-value`} className="sr-only">Value</label>
-              {isNumber ? (
+              {isSelect ? (
+                <CustomSelect
+                  options={operatorDef?.selectOptions ?? []}
+                  value={String(displayValue ?? '')}
+                  onChange={(val) => handleValueChange(Number(val))}
+                  placeholder="Select..."
+                  disabled={readonly}
+                  className="condition-value-select"
+                />
+              ) : isNumber ? (
                 <input
                   id={`${id}-value`}
                   type="number"

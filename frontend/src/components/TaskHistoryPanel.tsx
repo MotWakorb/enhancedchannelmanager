@@ -2,23 +2,11 @@ import { useState, useEffect, useCallback } from 'react';
 import * as api from '../services/api';
 import type { TaskExecution } from '../services/api';
 import { logger } from '../utils/logger';
+import { formatDateTime, formatDuration } from '../utils/formatting';
 
 interface TaskHistoryPanelProps {
   taskId: string;
   visible: boolean;
-}
-
-function formatDateTime(isoString: string | null): string {
-  if (!isoString) return 'Never';
-  const date = new Date(isoString);
-  return date.toLocaleString();
-}
-
-function formatDuration(seconds: number | null): string {
-  if (seconds === null) return '-';
-  if (seconds < 60) return `${Math.round(seconds)}s`;
-  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${Math.round(seconds % 60)}s`;
-  return `${Math.floor(seconds / 3600)}h ${Math.floor((seconds % 3600) / 60)}m`;
 }
 
 function StatusBadge({ status, success }: { status: string; success: boolean | null }) {

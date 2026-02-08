@@ -6,43 +6,13 @@ import { useState, useEffect, useCallback } from 'react';
 import type { WatchHistoryEntry, WatchHistoryResponse } from '../../types';
 import * as api from '../../services/api';
 import './WatchHistoryPanel.css';
+import { formatDuration, formatRelativeTime } from '../../utils/formatting';
 
-// Format seconds to human readable duration
-function formatDuration(seconds: number): string {
-  if (!seconds) return '0s';
-  const hours = Math.floor(seconds / 3600);
-  const minutes = Math.floor((seconds % 3600) / 60);
-  const secs = seconds % 60;
-  if (hours > 0) {
-    return `${hours}h ${minutes}m`;
-  }
-  if (minutes > 0) {
-    return `${minutes}m ${secs}s`;
-  }
-  return `${secs}s`;
-}
-
-// Format timestamp to readable date/time
+// Format timestamp to readable date/time, or "Still watching" if null
 function formatTimestamp(isoString: string | null): string {
   if (!isoString) return 'Still watching';
   const date = new Date(isoString);
   return date.toLocaleString();
-}
-
-// Format timestamp to relative time
-function formatRelativeTime(isoString: string): string {
-  const date = new Date(isoString);
-  const now = new Date();
-  const diffMs = now.getTime() - date.getTime();
-  const diffMins = Math.floor(diffMs / 60000);
-  const diffHours = Math.floor(diffMs / 3600000);
-  const diffDays = Math.floor(diffMs / 86400000);
-
-  if (diffMins < 1) return 'just now';
-  if (diffMins < 60) return `${diffMins}m ago`;
-  if (diffHours < 24) return `${diffHours}h ago`;
-  if (diffDays < 7) return `${diffDays}d ago`;
-  return date.toLocaleDateString();
 }
 
 interface WatchHistoryPanelProps {

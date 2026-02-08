@@ -74,7 +74,7 @@ export function ProtectedRoute({ children, requireAdmin = false }: ProtectedRout
   if (isLoading || checkingSetup) {
     return (
       <div className="protected-route-loading">
-        <div className="protected-route-spinner" />
+        <span className="material-icons spinning">sync</span>
         <p>Loading...</p>
       </div>
     );

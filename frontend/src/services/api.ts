@@ -89,6 +89,7 @@ import type {
   DNSProviderTestResponse,
 } from '../types';
 import { logger } from '../utils/logger';
+import { fetchJson, buildQuery } from './httpClient';
 import {
   type TimezonePreference,
   type NumberSeparator,
@@ -137,58 +138,7 @@ export {
 
 const API_BASE = '/api';
 
-/**
- * Build a query string from an object of parameters.
- * Filters out undefined/null values and converts to string.
- */
-function buildQuery(params: Record<string, string | number | boolean | undefined | null>): string {
-  const searchParams = new URLSearchParams();
-  for (const [key, value] of Object.entries(params)) {
-    if (value !== undefined && value !== null && value !== '') {
-      searchParams.set(key, String(value));
-    }
-  }
-  const query = searchParams.toString();
-  return query ? `?${query}` : '';
-}
-
-async function fetchJson<T>(url: string, options?: RequestInit): Promise<T> {
-  const method = options?.method || 'GET';
-  logger.debug(`API request: ${method} ${url}`);
-
-  try {
-    const response = await fetch(url, {
-      ...options,
-      credentials: 'include', // Include cookies for auth
-      headers: {
-        'Content-Type': 'application/json',
-        ...options?.headers,
-      },
-    });
-
-    if (!response.ok) {
-      // Try to extract error detail from response body
-      let errorDetail = response.statusText;
-      try {
-        const errorBody = await response.json();
-        if (errorBody.detail) {
-          errorDetail = errorBody.detail;
-        }
-      } catch {
-        // Response body isn't JSON or couldn't be parsed
-      }
-      logger.error(`API error: ${method} ${url} - ${response.status} ${errorDetail}`);
-      throw new Error(errorDetail);
-    }
-
-    const data = await response.json();
-    logger.info(`API success: ${method} ${url} - ${response.status}`);
-    return data;
-  } catch (error) {
-    logger.exception(`API request failed: ${method} ${url}`, error as Error);
-    throw error;
-  }
-}
+// fetchJson and buildQuery imported from ./httpClient
 
 // Channels
 export async function getChannels(params?: {

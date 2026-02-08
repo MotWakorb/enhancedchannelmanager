@@ -41,7 +41,7 @@
 
 .refresh-streams-btn:hover:not(:disabled) {
   color: var(--accent-primary);
-  background-color: rgba(100, 108, 255, 0.15);
+  background-color: var(--accent-15);
 }
 
 .refresh-streams-btn:disabled {
@@ -131,13 +131,13 @@
 .hide-mapped-btn:hover {
   color: var(--accent-primary);
   border-color: var(--accent-primary);
-  background-color: rgba(100, 108, 255, 0.1);
+  background-color: var(--accent-10);
 }
 
 .hide-mapped-btn.active {
   color: var(--accent-primary);
   border-color: var(--accent-primary);
-  background-color: rgba(100, 108, 255, 0.15);
+  background-color: var(--accent-15);
 }
 
 .hide-mapped-btn .material-icons {
@@ -178,7 +178,7 @@
 .clear-filters-btn:hover {
   color: var(--accent-primary);
   border-color: var(--accent-primary);
-  background-color: rgba(100, 108, 255, 0.15);
+  background-color: var(--accent-15);
 }
 
 .clear-filters-btn .material-icons {

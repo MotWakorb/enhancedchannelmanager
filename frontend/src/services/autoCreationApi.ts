@@ -20,98 +20,17 @@ import type {
   YAMLExportResponse,
   YAMLImportResponse,
 } from '../types/autoCreation';
-import { logger } from '../utils/logger';
+import { fetchJson as _fetchJson, fetchText as _fetchText, buildQuery } from './httpClient';
 
 const API_BASE = '/api';
 
-/**
- * Build a query string from an object of parameters.
- */
-function buildQuery(params: Record<string, string | number | boolean | undefined | null>): string {
-  const searchParams = new URLSearchParams();
-  for (const [key, value] of Object.entries(params)) {
-    if (value !== undefined && value !== null && value !== '') {
-      searchParams.set(key, String(value));
-    }
-  }
-  const query = searchParams.toString();
-  return query ? `?${query}` : '';
+// Wrap shared utilities with auto-creation log prefix
+function fetchJson<T>(url: string, options?: RequestInit): Promise<T> {
+  return _fetchJson<T>(url, options, 'Auto-Creation API');
 }
 
-/**
- * Fetch JSON with error handling.
- */
-async function fetchJson<T>(url: string, options?: RequestInit): Promise<T> {
-  const method = options?.method || 'GET';
-  logger.debug(`Auto-Creation API request: ${method} ${url}`);
-
-  try {
-    const response = await fetch(url, {
-      ...options,
-      credentials: 'include',
-      headers: {
-        'Content-Type': 'application/json',
-        ...options?.headers,
-      },
-    });
-
-    if (!response.ok) {
-      let errorDetail = response.statusText;
-      try {
-        const errorBody = await response.json();
-        if (errorBody.detail) {
-          errorDetail = errorBody.detail;
-        }
-      } catch {
-        // Response body isn't JSON
-      }
-      logger.error(`Auto-Creation API error: ${method} ${url} - ${response.status} ${errorDetail}`);
-      throw new Error(errorDetail);
-    }
-
-    const data = await response.json();
-    logger.info(`Auto-Creation API success: ${method} ${url} - ${response.status}`);
-    return data;
-  } catch (error) {
-    logger.exception(`Auto-Creation API request failed: ${method} ${url}`, error as Error);
-    throw error;
-  }
-}
-
-/**
- * Fetch text content (for YAML export).
- */
-async function fetchText(url: string, options?: RequestInit): Promise<string> {
-  const method = options?.method || 'GET';
-  logger.debug(`Auto-Creation API request (text): ${method} ${url}`);
-
-  try {
-    const response = await fetch(url, {
-      ...options,
-      credentials: 'include',
-    });
-
-    if (!response.ok) {
-      let errorDetail = response.statusText;
-      try {
-        const errorBody = await response.json();
-        if (errorBody.detail) {
-          errorDetail = errorBody.detail;
-        }
-      } catch {
-        // Response body isn't JSON
-      }
-      logger.error(`Auto-Creation API error: ${method} ${url} - ${response.status} ${errorDetail}`);
-      throw new Error(errorDetail);
-    }
-
-    const text = await response.text();
-    logger.info(`Auto-Creation API success: ${method} ${url} - ${response.status}`);
-    return text;
-  } catch (error) {
-    logger.exception(`Auto-Creation API request failed: ${method} ${url}`, error as Error);
-    throw error;
-  }
+function fetchText(url: string, options?: RequestInit): Promise<string> {
+  return _fetchText(url, options, 'Auto-Creation API');
 }
 
 // =============================================================================

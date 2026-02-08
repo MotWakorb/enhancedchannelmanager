@@ -27,6 +27,19 @@
   --accent-secondary: #e0e0e8;
   --accent-hover: rgba(255, 255, 255, 0.2);
 
+  /* Accent blue opacity scale (selection/highlight tints) */
+  --accent-5: rgba(100, 108, 255, 0.05);
+  --accent-8: rgba(100, 108, 255, 0.08);
+  --accent-10: rgba(100, 108, 255, 0.1);
+  --accent-15: rgba(100, 108, 255, 0.15);
+  --accent-20: rgba(100, 108, 255, 0.2);
+  --accent-25: rgba(100, 108, 255, 0.25);
+  --accent-30: rgba(100, 108, 255, 0.3);
+  --accent-40: rgba(100, 108, 255, 0.4);
+  --accent-50: rgba(100, 108, 255, 0.5);
+  --accent-60: rgba(100, 108, 255, 0.6);
+  --accent-80: rgba(100, 108, 255, 0.8);
+
   --success: #10b981;
   --success-bg: rgba(16, 185, 129, 0.2);
   --success-text: #ffffff;
@@ -83,6 +96,19 @@
   --accent-secondary: #6366f1;
   --accent-hover: rgba(100, 108, 255, 0.1);
 
+  /* Accent blue opacity scale (selection/highlight tints) */
+  --accent-5: rgba(100, 108, 255, 0.05);
+  --accent-8: rgba(100, 108, 255, 0.08);
+  --accent-10: rgba(100, 108, 255, 0.1);
+  --accent-15: rgba(100, 108, 255, 0.15);
+  --accent-20: rgba(100, 108, 255, 0.2);
+  --accent-25: rgba(100, 108, 255, 0.25);
+  --accent-30: rgba(100, 108, 255, 0.3);
+  --accent-40: rgba(100, 108, 255, 0.4);
+  --accent-50: rgba(100, 108, 255, 0.5);
+  --accent-60: rgba(100, 108, 255, 0.6);
+  --accent-80: rgba(100, 108, 255, 0.8);
+
   --success: #22c55e;
   --success-bg: rgba(34, 197, 94, 0.15);
   --success-text: #ffffff;
@@ -134,6 +160,19 @@
   --accent-primary: #ffff00;
   --accent-secondary: #ffff88;
   --accent-hover: rgba(255, 255, 0, 0.2);
+
+  /* Accent opacity scale (yellow-based for high contrast) */
+  --accent-5: rgba(255, 255, 0, 0.05);
+  --accent-8: rgba(255, 255, 0, 0.08);
+  --accent-10: rgba(255, 255, 0, 0.1);
+  --accent-15: rgba(255, 255, 0, 0.15);
+  --accent-20: rgba(255, 255, 0, 0.2);
+  --accent-25: rgba(255, 255, 0, 0.25);
+  --accent-30: rgba(255, 255, 0, 0.3);
+  --accent-40: rgba(255, 255, 0, 0.4);
+  --accent-50: rgba(255, 255, 0, 0.5);
+  --accent-60: rgba(255, 255, 0, 0.6);
+  --accent-80: rgba(255, 255, 0, 0.8);
 
   --success: #00ff00;
   --success-bg: rgba(0, 255, 0, 0.2);
@@ -210,7 +249,7 @@
   --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.3);
   --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.4);
   --shadow-xl: 0 8px 32px rgba(0, 0, 0, 0.5);
-  --shadow-focus: 0 0 0 2px rgba(100, 108, 255, 0.2);
+  --shadow-focus: 0 0 0 2px var(--accent-20);
 
   /* Z-Index Layers */
   --z-base: 1;

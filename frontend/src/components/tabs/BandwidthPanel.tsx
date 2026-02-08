@@ -6,38 +6,7 @@ import { useState, useEffect, useCallback } from 'react';
 import type { BandwidthSummary } from '../../types';
 import * as api from '../../services/api';
 import './BandwidthPanel.css';
-
-// Format bytes to human readable
-function formatBytes(bytes: number): string {
-  if (!bytes) return '0 B';
-  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
-  let value = bytes;
-  let unitIndex = 0;
-  while (value >= 1024 && unitIndex < units.length - 1) {
-    value /= 1024;
-    unitIndex++;
-  }
-  return `${value.toFixed(1)} ${units[unitIndex]}`;
-}
-
-// Format bitrate (bps) to human readable
-function formatBitrate(bps: number): string {
-  if (!bps) return '0 bps';
-  const units = ['bps', 'Kbps', 'Mbps', 'Gbps'];
-  let value = bps;
-  let unitIndex = 0;
-  while (value >= 1000 && unitIndex < units.length - 1) {
-    value /= 1000;
-    unitIndex++;
-  }
-  return `${value.toFixed(1)} ${units[unitIndex]}`;
-}
-
-// Format date for chart label
-function formatDateLabel(dateStr: string): string {
-  const date = new Date(dateStr);
-  return date.toLocaleDateString('en-US', { weekday: 'short' });
-}
+import { formatBytes, formatBitrate, formatDateLabel } from '../../utils/formatting';
 
 interface BandwidthPanelProps {
   refreshTrigger?: number;

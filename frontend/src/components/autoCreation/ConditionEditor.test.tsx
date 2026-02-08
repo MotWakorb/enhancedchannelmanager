@@ -79,8 +79,8 @@ describe('ConditionEditor', () => {
       expect(input).toHaveValue('ESPN');
     });
 
-    it('renders number input for numeric conditions', () => {
-      render(
+    it('renders dropdown for quality conditions', () => {
+      const { container } = render(
         <ConditionEditor
           condition={{ type: 'quality_min', value: 720 }}
           onChange={vi.fn()}
@@ -88,8 +88,11 @@ describe('ConditionEditor', () => {
         />
       );
 
-      const input = screen.getByRole('spinbutton');
-      expect(input).toHaveValue(720);
+      // Quality now uses a CustomSelect dropdown with preset options
+      const selects = container.querySelectorAll('.custom-select');
+      expect(selects.length).toBe(3); // field + operator + value
+      // Should display the selected quality label
+      expect(screen.getByText(/HD.*720p/)).toBeInTheDocument();
     });
 
     it('renders regex input with validation for pattern conditions', () => {
@@ -262,19 +265,27 @@ describe('ConditionEditor', () => {
       expect(screen.getByText(/invalid regex/i)).toBeInTheDocument();
     });
 
-    it('shows error for negative quality value', () => {
-      render(
+    it('shows quality dropdown with preset options', async () => {
+      const user = userEvent.setup();
+      const { container } = render(
         <ConditionEditor
-          condition={{ type: 'quality_min', value: -100 }}
+          condition={{ type: 'quality_min', value: 1080 }}
           onChange={vi.fn()}
           onRemove={vi.fn()}
           showValidation={true}
         />
       );
 
-      const errorAlert = screen.getByRole('alert');
-      expect(errorAlert.textContent?.toLowerCase()).toContain('must be');
-      expect(errorAlert.textContent?.toLowerCase()).toContain('positive');
+      // The value dropdown should show FHD / 1080p
+      expect(screen.getByText(/FHD.*1080p/)).toBeInTheDocument();
+      // Open the value dropdown to verify options
+      const valueSelect = container.querySelectorAll('.custom-select')[2];
+      const trigger = valueSelect?.querySelector('button');
+      if (trigger) {
+        await user.click(trigger);
+        expect(screen.getByText(/UHD.*4K/)).toBeInTheDocument();
+        expect(screen.getByText(/SD.*480p/)).toBeInTheDocument();
+      }
     });
   });
 

@@ -79,7 +79,6 @@
     transform: rotate(360deg);
   }
 }
-
 /* Controls */
 .video-player__controls {
   position: absolute;

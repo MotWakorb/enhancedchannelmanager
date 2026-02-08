@@ -58,8 +58,8 @@
   align-items: center;
   justify-content: space-between;
   padding: 0.5rem 1rem;
-  background-color: rgba(100, 108, 255, 0.15);
-  border-bottom: 1px solid rgba(100, 108, 255, 0.3);
+  background-color: var(--accent-15);
+  border-bottom: 1px solid var(--accent-30);
   color: var(--accent-secondary);
 }
 

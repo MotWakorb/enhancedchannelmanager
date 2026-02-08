@@ -20,30 +20,7 @@ import type {
 } from '../../types';
 import * as api from '../../services/api';
 import './EnhancedStatsPanel.css';
-
-// Format bytes to human readable
-function formatBytes(bytes: number): string {
-  if (!bytes) return '0 B';
-  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
-  let value = bytes;
-  let unitIndex = 0;
-  while (value >= 1024 && unitIndex < units.length - 1) {
-    value /= 1024;
-    unitIndex++;
-  }
-  return `${value.toFixed(1)} ${units[unitIndex]}`;
-}
-
-// Format seconds to human readable duration
-function formatWatchTime(seconds: number): string {
-  if (!seconds) return '0m';
-  const hours = Math.floor(seconds / 3600);
-  const minutes = Math.floor((seconds % 3600) / 60);
-  if (hours > 0) {
-    return `${hours}h ${minutes}m`;
-  }
-  return `${minutes}m`;
-}
+import { formatBytes, formatWatchTime } from '../../utils/formatting';
 
 // Custom tooltip for charts
 interface TooltipPayload {

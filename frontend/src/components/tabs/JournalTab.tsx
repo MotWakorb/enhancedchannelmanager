@@ -4,22 +4,7 @@ import * as api from '../../services/api';
 import { CustomSelect } from '../CustomSelect';
 import './JournalTab.css';
 import { useNotifications } from '../../contexts/NotificationContext';
-
-// Helper to format timestamp - always show actual date and time
-function formatTimestamp(isoString: string): string {
-  const date = new Date(isoString);
-  const now = new Date();
-
-  // Format: "Jan 8, 2026 2:35 PM" or "Jan 8 2:35 PM" if same year
-  return date.toLocaleDateString('en-US', {
-    month: 'short',
-    day: 'numeric',
-    year: date.getFullYear() !== now.getFullYear() ? 'numeric' : undefined,
-    hour: 'numeric',
-    minute: '2-digit',
-    hour12: true,
-  });
-}
+import { formatTimestamp } from '../../utils/formatting';
 
 // Get icon for category
 function getCategoryIcon(category: JournalCategory): string {

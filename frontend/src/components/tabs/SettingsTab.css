@@ -36,7 +36,7 @@
 }
 
 .settings-nav-item.active {
-  background-color: rgba(100, 108, 255, 0.1);
+  background-color: var(--accent-10);
   color: var(--accent-secondary);
   border-left-color: var(--accent-primary);
 }
@@ -534,7 +534,7 @@
 
 .theme-option.active {
   border-color: var(--accent-primary);
-  background-color: rgba(100, 108, 255, 0.1);
+  background-color: var(--accent-10);
 }
 
 .theme-option input[type="radio"] {
@@ -630,7 +630,7 @@
 
 .separator-btn.active {
   border-color: var(--accent-primary);
-  background-color: rgba(100, 108, 255, 0.15);
+  background-color: var(--accent-15);
   color: var(--accent-primary);
 }
 
@@ -668,7 +668,7 @@
 
 .settings-section .radio-option:has(input:checked) {
   border-color: var(--accent-primary);
-  background-color: rgba(100, 108, 255, 0.08);
+  background-color: var(--accent-8);
 }
 
 .settings-section .radio-option input[type="radio"] {
@@ -724,7 +724,7 @@
 
 .profile-checkbox:has(input:checked) {
   border-color: var(--accent-primary);
-  background-color: rgba(100, 108, 255, 0.08);
+  background-color: var(--accent-8);
 }
 
 .profile-checkbox input[type="checkbox"] {
@@ -1093,7 +1093,7 @@
 
 .sort-priority-item.dragging {
   border-color: var(--accent-primary);
-  background-color: rgba(100, 108, 255, 0.1);
+  background-color: var(--accent-10);
   box-shadow: var(--shadow-md);
 }
 
