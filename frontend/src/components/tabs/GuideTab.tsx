@@ -525,7 +525,7 @@ export function GuideTab({
   if (loading && channels.length === 0) {
     return (
       <div className="guide-tab">
-        <div className="guide-loading">
+        <div className="tab-loading">
           <span className="material-icons spinning">sync</span>
           <p>Loading guide data...</p>
         </div>

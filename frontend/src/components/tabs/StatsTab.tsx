@@ -749,8 +749,8 @@ export function StatsTab() {
   if (loading) {
     return (
       <div className="stats-tab">
-        <div className="stats-loading">
-          <span className="material-icons">sync</span>
+        <div className="tab-loading">
+          <span className="material-icons spinning">sync</span>
           <p>Loading stats...</p>
         </div>
       </div>

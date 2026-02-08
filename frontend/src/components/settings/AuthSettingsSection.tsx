@@ -96,7 +96,7 @@ export function AuthSettingsSection({ isAdmin }: Props) {
   if (loading) {
     return (
       <div className="auth-settings-section">
-        <div className="auth-settings-loading">
+        <div className="loading-state">
           <span className="material-icons spinning">sync</span>
           Loading authentication settings...
         </div>
@@ -106,13 +106,9 @@ export function AuthSettingsSection({ isAdmin }: Props) {
 
   return (
     <div className="auth-settings-section">
-      <div className="auth-settings-header">
-        <div className="header-info">
-          <h3>Authentication</h3>
-          <p className="header-description">
-            Configure authentication providers and security settings.
-          </p>
-        </div>
+      <div className="settings-page-header">
+        <h2>Authentication</h2>
+        <p>Configure authentication providers and security settings.</p>
       </div>
 
       {/* Global Settings */}
@@ -122,7 +118,7 @@ export function AuthSettingsSection({ isAdmin }: Props) {
         </div>
         <div className="auth-provider-body">
           <div className="auth-field">
-            <label className="auth-checkbox-label">
+            <label className="checkbox-label">
               <input
                 type="checkbox"
                 checked={requireAuth}
@@ -141,7 +137,7 @@ export function AuthSettingsSection({ isAdmin }: Props) {
       <div className="auth-provider-card">
         <div className="auth-provider-header">
           <div className="auth-provider-toggle">
-            <label className="auth-checkbox-label">
+            <label className="checkbox-label">
               <input
                 type="checkbox"
                 checked={localEnabled}
@@ -172,7 +168,7 @@ export function AuthSettingsSection({ isAdmin }: Props) {
       <div className="auth-provider-card">
         <div className="auth-provider-header">
           <div className="auth-provider-toggle">
-            <label className="auth-checkbox-label">
+            <label className="checkbox-label">
               <input
                 type="checkbox"
                 checked={dispatcharrEnabled}
@@ -190,7 +186,7 @@ export function AuthSettingsSection({ isAdmin }: Props) {
               The Dispatcharr URL is configured in the main settings.
             </p>
             <div className="auth-field">
-              <label className="auth-checkbox-label">
+              <label className="checkbox-label">
                 <input
                   type="checkbox"
                   checked={dispatcharrAutoCreate}

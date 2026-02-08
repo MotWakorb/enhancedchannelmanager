@@ -348,23 +348,9 @@ export function TagEngineSection() {
 
   return (
     <div className="tag-engine-section">
-      <div className="tag-engine-header">
-        <div className="header-info">
-          <h3>Tags</h3>
-          <p className="header-description">
-            Manage tag vocabularies used by normalization rules for pattern matching.
-          </p>
-        </div>
-        <div className="header-stats">
-          <span className="stat">
-            <span className="material-icons">folder</span>
-            {groups.length} groups
-          </span>
-          <span className="stat">
-            <span className="material-icons">label</span>
-            {totalTags} tags
-          </span>
-        </div>
+      <div className="settings-page-header">
+        <h2>Tags</h2>
+        <p>Manage tag vocabularies used by normalization rules for pattern matching.</p>
       </div>
 
       <div className="tag-engine-toolbar">
@@ -389,12 +375,12 @@ export function TagEngineSection() {
       </div>
 
       {loading ? (
-        <div className="tag-engine-loading">
+        <div className="loading-state">
           <span className="material-icons spinning">sync</span>
           Loading tag groups...
         </div>
       ) : filteredGroups.length === 0 ? (
-        <div className="tag-engine-empty">
+        <div className="empty-state">
           {searchQuery ? (
             <>No groups match "{searchQuery}"</>
           ) : (
