@@ -17,15 +17,7 @@ bd list --status closed  # View closed beads for historical context
 
 **IMPORTANT: Always work from the `dev` branch, never from `main`.**
 
-The `dev` branch is checked out in a beads worktree at:
-```
-/home/lecaptainc/ecm/enhancedchannelmanager/.git/beads-worktrees/dev
-```
-
-At the start of any session, ensure you're working in the dev worktree or switch to it:
-```bash
-cd /home/lecaptainc/ecm/enhancedchannelmanager/.git/beads-worktrees/dev
-```
+The root checkout at `/home/lecaptainc/ecm/enhancedchannelmanager` is on the `dev` branch. All edits, builds, and deploys happen from here directly — there is no separate worktree.
 
 ### Fast Development Workflow - CRITICAL
 
