@@ -12,8 +12,9 @@
   max-width: 800px;
 }
 
-.tls-settings-no-access,
-.tls-settings-loading {
+/* .loading-state, .error-banner → shared/common.css */
+
+.tls-settings-no-access {
   display: flex;
   align-items: center;
   justify-content: center;
@@ -23,24 +24,7 @@
   font-size: 0.875rem;
 }
 
-.tls-settings-error {
-  display: flex;
-  align-items: flex-start;
-  gap: 0.5rem;
-  padding: 0.75rem 1rem;
-  background: var(--error-bg, rgba(239, 68, 68, 0.1));
-  border: 1px solid var(--error-border, #ef4444);
-  border-radius: var(--radius-lg);
-  color: var(--error-text, #ef4444);
-  font-size: 0.875rem;
-}
-
-.tls-settings-error .material-icons {
-  font-size: 1.125rem;
-  flex-shrink: 0;
-}
-
-.tls-settings-error pre {
+pre.tls-settings-error {
   margin: 0;
   font-size: 0.8125rem;
   white-space: pre-wrap;

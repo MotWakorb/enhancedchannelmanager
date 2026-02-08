@@ -152,7 +152,7 @@ export function UserManagementSection({ isAdmin, currentUserId }: Props) {
   if (loading) {
     return (
       <div className="user-management-section">
-        <div className="user-management-loading">
+        <div className="loading-state">
           <span className="material-icons spinning">sync</span>
           Loading users...
         </div>
@@ -162,27 +162,13 @@ export function UserManagementSection({ isAdmin, currentUserId }: Props) {
 
   return (
     <div className="user-management-section">
-      <div className="user-management-header">
-        <div className="header-info">
-          <h3>Users</h3>
-          <p className="header-description">
-            Manage user accounts, roles, and access.
-          </p>
-        </div>
-        <div className="header-stats">
-          <span className="stat">
-            <span className="material-icons">people</span>
-            {users.length} users
-          </span>
-          <span className="stat">
-            <span className="material-icons">admin_panel_settings</span>
-            {users.filter(u => u.is_admin).length} admins
-          </span>
-        </div>
+      <div className="settings-page-header">
+        <h2>Users</h2>
+        <p>Manage user accounts and permissions.</p>
       </div>
 
       {error && (
-        <div className="user-management-error">
+        <div className="error-banner">
           <span className="material-icons">error</span>
           {error}
           <button onClick={() => setError(null)}>

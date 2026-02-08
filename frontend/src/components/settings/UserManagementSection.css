@@ -9,90 +9,9 @@
   max-width: 800px;
 }
 
-/* Header - matches tag-engine-header pattern */
-.user-management-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  margin-bottom: 0.5rem;
-}
+/* .settings-page-header → SettingsTab.css */
 
-.user-management-header .header-info h3 {
-  margin: 0 0 0.25rem 0;
-  color: var(--text-primary);
-  font-size: 1.25rem;
-}
-
-.user-management-header .header-description {
-  margin: 0;
-  color: var(--text-muted);
-  font-size: 0.875rem;
-}
-
-.user-management-header .header-stats {
-  display: flex;
-  gap: 1rem;
-}
-
-.user-management-header .header-stats .stat {
-  display: flex;
-  align-items: center;
-  gap: 0.25rem;
-  color: var(--text-secondary);
-  font-size: 0.875rem;
-}
-
-.user-management-header .header-stats .stat .material-icons {
-  font-size: 1rem;
-  color: var(--text-muted);
-}
-
-/* Error and Loading States */
-.user-management-error {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.75rem 1rem;
-  background: var(--error-bg, rgba(239, 68, 68, 0.1));
-  border: 1px solid var(--error-border, #ef4444);
-  border-radius: var(--radius-lg);
-  color: var(--error-text, #ef4444);
-  font-size: 0.875rem;
-}
-
-.user-management-error .material-icons {
-  font-size: 1.125rem;
-}
-
-.user-management-error button {
-  margin-left: auto;
-  background: none;
-  border: none;
-  cursor: pointer;
-  padding: 0;
-  display: flex;
-  color: inherit;
-}
-
-.user-management-loading,
-.user-management-no-access {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 0.5rem;
-  padding: 3rem;
-  color: var(--text-muted);
-  font-size: 0.875rem;
-}
-
-.spinning {
-  animation: spin 1s linear infinite;
-}
-
-@keyframes spin {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
-}
+/* .loading-state, .error-banner, .spinning → shared/common.css */
 
 /* User List - follows card pattern */
 .user-list {

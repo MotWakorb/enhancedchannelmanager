@@ -9,72 +9,9 @@
   max-width: 800px;
 }
 
-/* Header - matches tag-engine-header pattern */
-.auth-settings-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  margin-bottom: 0.5rem;
-}
+/* .settings-page-header, .checkbox-label → SettingsTab.css */
 
-.auth-settings-header .header-info h3 {
-  margin: 0 0 0.25rem 0;
-  color: var(--text-primary);
-  font-size: 1.25rem;
-}
-
-.auth-settings-header .header-description {
-  margin: 0;
-  color: var(--text-muted);
-  font-size: 0.875rem;
-}
-
-/* Error and Loading States */
-.auth-settings-error {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.75rem 1rem;
-  background: var(--error-bg, rgba(239, 68, 68, 0.1));
-  border: 1px solid var(--error-border, #ef4444);
-  border-radius: var(--radius-lg);
-  color: var(--error-text, #ef4444);
-  font-size: 0.875rem;
-}
-
-.auth-settings-error .material-icons {
-  font-size: 1.125rem;
-}
-
-.auth-settings-error button {
-  margin-left: auto;
-  background: none;
-  border: none;
-  cursor: pointer;
-  padding: 0;
-  display: flex;
-  color: inherit;
-}
-
-.auth-settings-loading,
-.auth-settings-no-access {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 0.5rem;
-  padding: 3rem;
-  color: var(--text-muted);
-  font-size: 0.875rem;
-}
-
-.spinning {
-  animation: spin 1s linear infinite;
-}
-
-@keyframes spin {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
-}
+/* .loading-state, .error-banner, .spinning → shared/common.css */
 
 /* Provider Cards - follows tag-group-card pattern */
 .auth-provider-card {
@@ -192,27 +129,6 @@
 .auth-field-row {
   display: flex;
   gap: 1.5rem;
-}
-
-/* Checkbox labels */
-.auth-checkbox-label {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  cursor: pointer;
-  font-weight: normal;
-}
-
-.auth-checkbox-label input[type="checkbox"] {
-  width: 1rem;
-  height: 1rem;
-  cursor: pointer;
-  accent-color: var(--button-primary-bg);
-}
-
-.auth-checkbox-label span {
-  color: var(--text-primary);
-  font-size: 0.875rem;
 }
 
 /* Actions - follows modal-footer pattern */

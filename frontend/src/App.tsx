@@ -2082,7 +2082,7 @@ function App() {
       />
 
       <main className="main">
-        <Suspense fallback={<div className="tab-loading"><span className="material-icons">hourglass_empty</span> Loading...</div>}>
+        <Suspense fallback={<div className="tab-loading"><span className="material-icons spinning">sync</span><p>Loading...</p></div>}>
           {activeTab === 'channel-manager' && (
             <ChannelManagerTab
               // Channel Groups

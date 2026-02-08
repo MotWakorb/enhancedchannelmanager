@@ -115,7 +115,7 @@ export function LogoManagerTab() {
   if (loading && logos.length === 0) {
     return (
       <div className="logo-manager-tab">
-        <div className="loading-state">
+        <div className="tab-loading">
           <span className="material-icons spinning">sync</span>
           <p>Loading logos...</p>
         </div>

@@ -746,8 +746,8 @@ export function NormalizationEngineSection() {
   if (loading) {
     return (
       <div className="norm-engine-section">
-        <div className="norm-engine-loading">
-          <span className="material-icons spin">sync</span>
+        <div className="loading-state">
+          <span className="material-icons spinning">sync</span>
           Loading normalization rules...
         </div>
       </div>
@@ -827,7 +827,7 @@ export function NormalizationEngineSection() {
               >
                 {testing ? (
                   <>
-                    <span className="material-icons spin">sync</span>
+                    <span className="material-icons spinning">sync</span>
                     Testing...
                   </>
                 ) : (
@@ -977,7 +977,7 @@ export function NormalizationEngineSection() {
           </DndContext>
 
           {groups.length === 0 && (
-            <div className="norm-engine-empty">
+            <div className="empty-state">
               <span className="material-icons">rule</span>
               <p>No normalization rules configured.</p>
               <button

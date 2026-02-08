@@ -6,43 +6,7 @@
   gap: 1rem;
 }
 
-/* Header */
-.tag-engine-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  margin-bottom: 0.5rem;
-}
-
-.tag-engine-header h3 {
-  margin: 0 0 0.25rem 0;
-  color: var(--text-primary);
-  font-size: 1.25rem;
-}
-
-.header-description {
-  margin: 0;
-  color: var(--text-muted);
-  font-size: 0.875rem;
-}
-
-.header-stats {
-  display: flex;
-  gap: 1rem;
-}
-
-.header-stats .stat {
-  display: flex;
-  align-items: center;
-  gap: 0.25rem;
-  color: var(--text-secondary);
-  font-size: 0.875rem;
-}
-
-.header-stats .stat .material-icons {
-  font-size: 1rem;
-  color: var(--text-muted);
-}
+/* .settings-page-header → SettingsTab.css */
 
 /* Toolbar */
 .tag-engine-toolbar {
@@ -98,48 +62,7 @@
   font-size: 1rem;
 }
 
-/* Error and Loading States */
-.tag-engine-error {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.75rem 1rem;
-  background: var(--error-bg, rgba(239, 68, 68, 0.1));
-  border: 1px solid var(--error-border, #ef4444);
-  border-radius: var(--radius-lg);
-  color: var(--error-text, #ef4444);
-  font-size: 0.875rem;
-}
-
-.tag-engine-error button {
-  margin-left: auto;
-  background: none;
-  border: none;
-  cursor: pointer;
-  padding: 0;
-  display: flex;
-  color: inherit;
-}
-
-.tag-engine-loading,
-.tag-engine-empty {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 0.5rem;
-  padding: 3rem;
-  color: var(--text-muted);
-  font-size: 0.875rem;
-}
-
-.spinning {
-  animation: spin 1s linear infinite;
-}
-
-@keyframes spin {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
-}
+/* .loading-state, .empty-state, .spinning → shared/common.css */
 
 /* Tag Groups List */
 .tag-groups-list {
