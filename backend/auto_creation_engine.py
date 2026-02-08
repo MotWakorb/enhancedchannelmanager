@@ -17,6 +17,7 @@ from datetime import datetime
 from typing import Optional
 import json
 
+from config import get_settings
 from database import get_session
 from models import (
     AutoCreationRule,
@@ -506,14 +507,20 @@ class AutoCreationEngine:
         rules: list[AutoCreationRule],
         rule_channel_order: dict,
         results: dict,
-        dry_run: bool
+        dry_run: bool,
+        settings=None,
+        stream_m3u_map: dict = None
     ):
         """
-        Pass 3.5: Reorder streams within channels by quality (resolution).
+        Pass 3.5: Reorder streams within channels using smart sort.
 
-        For each rule with sort_field set, reorder the streams within each
-        channel the rule touched by resolution_height.
+        Uses the user's stream_sort_priority, stream_sort_enabled, and
+        m3u_account_priorities settings (same logic as stream_prober smart sort).
+        Falls back to resolution-only if settings not available.
         """
+        if stream_m3u_map is None:
+            stream_m3u_map = {}
+
         for rule in rules:
             if not rule.sort_field:
                 continue
@@ -523,8 +530,6 @@ class AutoCreationEngine:
             if not channel_ids:
                 continue
 
-            sort_reverse = (rule.sort_order == "desc")
-
             for channel_id in channel_ids:
                 # Find channel in existing channels cache
                 channel = None
@@ -532,6 +537,14 @@ class AutoCreationEngine:
                     if ch.get("id") == channel_id:
                         channel = ch
                         break
+                if not channel:
+                    # Channel may have been created during this run — fetch fresh
+                    try:
+                        channel = await self.client.get_channel(channel_id)
+                        if channel and "streams" not in channel:
+                            channel["streams"] = await self.client.get_channel_streams(channel_id)
+                    except Exception:
+                        pass
                 if not channel:
                     continue
 
@@ -543,30 +556,15 @@ class AutoCreationEngine:
                 if len(current_streams) < 2:
                     continue
 
-                # Look up resolution for each stream
-                def stream_sort_key(sid):
-                    stats = self._stream_stats_cache.get(sid)
-                    if stats and stats.get("resolution"):
-                        try:
-                            parts = stats["resolution"].split("x")
-                            if len(parts) == 2:
-                                return int(parts[1])
-                        except (ValueError, IndexError):
-                            pass
-                    return 0
-
-                # Log what we're working with
                 channel_name = channel.get("name", f"Channel #{channel_id}")
-                stream_resolutions = {sid: stream_sort_key(sid) for sid in current_streams}
-                logger.info(
-                    f"[Stream-reorder] Channel '{channel_name}' ({channel_id}): "
-                    f"stream resolutions: {stream_resolutions}"
-                )
 
-                sorted_streams = sorted(
+                # Build smart sort key function
+                sorted_streams = _smart_sort_streams(
                     current_streams,
-                    key=stream_sort_key,
-                    reverse=sort_reverse
+                    self._stream_stats_cache,
+                    stream_m3u_map,
+                    channel_name,
+                    settings
                 )
 
                 # Skip if order didn't change
@@ -581,7 +579,7 @@ class AutoCreationEngine:
                         "rule_id": rule.id,
                         "rule_name": rule.name,
                         "action": f"Would reorder {len(sorted_streams)} streams in '{channel_name}' "
-                                  f"by {rule.sort_field} {rule.sort_order or 'asc'}",
+                                  f"by smart sort ({rule.sort_field})",
                         "would_create": False,
                         "would_modify": True
                     })
@@ -598,7 +596,7 @@ class AutoCreationEngine:
                             "actions_executed": [{
                                 "type": "reorder_streams",
                                 "description": f"Reordered {len(sorted_streams)} streams in '{channel_name}' "
-                                              f"by {rule.sort_field} {rule.sort_order or 'asc'}",
+                                              f"by smart sort ({rule.sort_field})",
                                 "success": True,
                                 "entity_id": channel_id,
                                 "error": None
@@ -606,7 +604,7 @@ class AutoCreationEngine:
                         })
                         logger.info(
                             f"[Stream-reorder] Reordered {len(sorted_streams)} streams in "
-                            f"'{channel_name}' by {rule.sort_field} {rule.sort_order or 'asc'}"
+                            f"'{channel_name}' by smart sort"
                         )
                     except Exception as e:
                         logger.error(
@@ -636,6 +634,9 @@ class AutoCreationEngine:
         Returns:
             Dict with processing results
         """
+        # Load user settings once for the entire pipeline run
+        settings = get_settings()
+
         # Initialize evaluator and executor
         evaluator = ConditionEvaluator(self._existing_channels, self._existing_groups)
 
@@ -649,9 +650,25 @@ class AutoCreationEngine:
             except Exception as e:
                 logger.warning(f"Failed to initialize normalization engine: {e}")
 
+        # Fetch all profile IDs if default profiles are configured
+        all_profile_ids = []
+        if settings.default_channel_profile_ids:
+            try:
+                profiles = await self.client.get_channel_profiles()
+                all_profile_ids = [p["id"] for p in profiles]
+            except Exception as e:
+                logger.warning(f"Failed to fetch channel profiles: {e}")
+
+        # Build stream_id -> m3u_account_id map for smart sort M3U priority lookups
+        stream_m3u_map = {}
+        for s in streams:
+            stream_m3u_map[s.stream_id] = s.m3u_account_id
+
         executor = ActionExecutor(
             self.client, self._existing_channels, self._existing_groups,
-            normalization_engine=norm_engine
+            normalization_engine=norm_engine,
+            settings=settings,
+            all_profile_ids=all_profile_ids
         )
 
         # Results tracking
@@ -754,6 +771,23 @@ class AutoCreationEngine:
             losing_rules = matching_rules[1:] if len(matching_rules) > 1 else []
 
             matched_entries.append((stream, winning_rule, losing_rules, stream_rules_log))
+
+        # =====================================================================
+        # Pass 1.1: Timezone filter on matched entries
+        # =====================================================================
+        if settings.timezone_preference != "both":
+            before_count = len(matched_entries)
+            matched_entries = [
+                entry for entry in matched_entries
+                if _filter_by_timezone(entry[0].stream_name, settings.timezone_preference)
+            ]
+            filtered_count = before_count - len(matched_entries)
+            if filtered_count > 0:
+                logger.info(
+                    f"[Timezone-filter] Filtered {filtered_count} streams "
+                    f"(preference={settings.timezone_preference}), "
+                    f"{len(matched_entries)} remaining"
+                )
 
         # =====================================================================
         # Pass 1.5: Probe unprobed streams (for rules with probe_on_sort)
@@ -903,6 +937,11 @@ class AutoCreationEngine:
             else:
                 try:
                     await self.client.assign_channel_numbers(channel_ids, starting_number)
+                    # Auto-rename channel names after renumber
+                    rename_count = await _auto_rename_after_renumber(
+                        self.client, channel_ids, starting_number, settings
+                    )
+                    rename_note = f", renamed {rename_count} channel names" if rename_count else ""
                     results["execution_log"].append({
                         "stream_id": None,
                         "stream_name": f"[Re-sort] Rule '{rule.name}'",
@@ -911,7 +950,7 @@ class AutoCreationEngine:
                         "actions_executed": [{
                             "type": "renumber_channels",
                             "description": f"Renumbered {len(channel_ids)} channels starting at #{starting_number} "
-                                           f"(sorted by {rule.sort_field} {rule.sort_order or 'asc'})",
+                                           f"(sorted by {rule.sort_field} {rule.sort_order or 'asc'}){rename_note}",
                             "success": True,
                             "entity_id": None,
                             "error": None
@@ -919,7 +958,7 @@ class AutoCreationEngine:
                     })
                     logger.info(
                         f"[Re-sort] Rule '{rule.name}': renumbered {len(channel_ids)} channels "
-                        f"starting at #{starting_number}"
+                        f"starting at #{starting_number}{rename_note}"
                     )
                 except Exception as e:
                     logger.error(f"[Re-sort] Rule '{rule.name}': failed to renumber channels: {e}")
@@ -938,17 +977,19 @@ class AutoCreationEngine:
                     })
 
         # =====================================================================
-        # Pass 3.5: Reorder streams within channels by quality
+        # Pass 3.5: Reorder streams within channels by smart sort
         # =====================================================================
         await self._reorder_channel_streams(
-            rules, rule_channel_order, results, dry_run
+            rules, rule_channel_order, results, dry_run,
+            settings=settings, stream_m3u_map=stream_m3u_map
         )
 
         # =====================================================================
         # Pass 4: Reconcile — clean up orphaned channels
         # =====================================================================
         await self._reconcile_orphans(
-            rules, rule_channel_order, executor, execution, results, dry_run
+            rules, rule_channel_order, executor, execution, results, dry_run,
+            settings=settings
         )
 
         return results
@@ -964,7 +1005,8 @@ class AutoCreationEngine:
         executor,
         execution: AutoCreationExecution,
         results: dict,
-        dry_run: bool
+        dry_run: bool,
+        settings=None
     ):
         """
         Reconcile orphaned channels after pipeline execution.
@@ -1108,6 +1150,11 @@ class AutoCreationEngine:
                     else:
                         try:
                             await self.client.assign_channel_numbers(remaining_channel_ids, starting_number)
+                            # Auto-rename channel names after orphan renumber
+                            rename_count = await _auto_rename_after_renumber(
+                                self.client, remaining_channel_ids, starting_number, settings
+                            )
+                            rename_note = f", renamed {rename_count} channel names" if rename_count else ""
                             results["execution_log"].append({
                                 "stream_id": None,
                                 "stream_name": f"[Renumber] Rule '{rule.name}' after orphan cleanup",
@@ -1115,7 +1162,7 @@ class AutoCreationEngine:
                                 "rules_evaluated": [],
                                 "actions_executed": [{
                                     "type": "renumber_channels",
-                                    "description": f"Renumbered {len(remaining_channel_ids)} channels starting at #{starting_number} after removing {len(orphan_ids)} orphans",
+                                    "description": f"Renumbered {len(remaining_channel_ids)} channels starting at #{starting_number} after removing {len(orphan_ids)} orphans{rename_note}",
                                     "success": True,
                                     "entity_id": None,
                                     "error": None
@@ -1123,7 +1170,7 @@ class AutoCreationEngine:
                             })
                             logger.info(
                                 f"[Reconcile] Rule '{rule.name}': renumbered {len(remaining_channel_ids)} channels "
-                                f"starting at #{starting_number} after orphan cleanup"
+                                f"starting at #{starting_number} after orphan cleanup{rename_note}"
                             )
                         except Exception as e:
                             logger.error(f"[Reconcile] Rule '{rule.name}': failed to renumber after cleanup: {e}")
@@ -1248,6 +1295,126 @@ class AutoCreationEngine:
 # Sort Helpers
 # =============================================================================
 
+def _smart_sort_streams(
+    stream_ids: list[int],
+    stats_cache: dict,
+    stream_m3u_map: dict,
+    channel_name: str = "unknown",
+    settings=None
+) -> list[int]:
+    """
+    Sort stream IDs using smart sort logic (mirrors stream_prober._smart_sort_streams).
+
+    Uses configurable sort priority and enabled criteria from settings.
+    Falls back to resolution-only if settings are unavailable.
+
+    Args:
+        stream_ids: Stream IDs to sort
+        stats_cache: stream_id -> stats dict (from StreamStats.to_dict())
+        stream_m3u_map: stream_id -> m3u_account_id
+        channel_name: For logging
+        settings: DispatcharrSettings instance
+    """
+    if settings is None:
+        # Fallback: resolution-only sort (descending)
+        def fallback_key(sid):
+            stats = stats_cache.get(sid)
+            if stats and stats.get("resolution"):
+                try:
+                    parts = stats["resolution"].split("x")
+                    if len(parts) == 2:
+                        return -int(parts[1])
+                except (ValueError, IndexError):
+                    pass
+            return 0
+        return sorted(stream_ids, key=fallback_key)
+
+    # Get active sort criteria (enabled and in priority order)
+    sort_priority = getattr(settings, 'stream_sort_priority',
+                            ["resolution", "bitrate", "framerate", "m3u_priority", "audio_channels"])
+    sort_enabled = getattr(settings, 'stream_sort_enabled',
+                           {"resolution": True, "bitrate": True, "framerate": True})
+    deprioritize_failed = getattr(settings, 'deprioritize_failed_streams', True)
+    m3u_priorities = getattr(settings, 'm3u_account_priorities', {})
+
+    active_criteria = [c for c in sort_priority if sort_enabled.get(c, False)]
+
+    logger.info(
+        f"[Stream-reorder] Channel '{channel_name}': smart sort with "
+        f"active_criteria={active_criteria}, deprioritize_failed={deprioritize_failed}"
+    )
+
+    def get_sort_value(sid: int) -> tuple:
+        stats = stats_cache.get(sid)
+
+        # Deprioritize failed/missing streams
+        if deprioritize_failed:
+            if not stats or stats.get("probe_status") in ("failed", "timeout", "pending"):
+                return (1,) + tuple(0 for _ in active_criteria)
+
+        if not stats or stats.get("probe_status") != "success":
+            return (0,) + tuple(0 for _ in active_criteria)
+
+        sort_values = [0]  # 0 = successful stream
+
+        for criterion in active_criteria:
+            if criterion == "resolution":
+                resolution_value = 0
+                if stats.get("resolution"):
+                    try:
+                        parts = stats["resolution"].split("x")
+                        if len(parts) == 2:
+                            resolution_value = int(parts[1])
+                    except (ValueError, IndexError):
+                        pass
+                sort_values.append(-resolution_value)
+
+            elif criterion == "bitrate":
+                bitrate_value = stats.get("video_bitrate") or stats.get("bitrate") or 0
+                sort_values.append(-bitrate_value)
+
+            elif criterion == "framerate":
+                framerate_value = 0
+                fps = stats.get("fps")
+                if fps:
+                    try:
+                        framerate_value = float(fps)
+                    except (ValueError, TypeError):
+                        pass
+                sort_values.append(-framerate_value)
+
+            elif criterion == "m3u_priority":
+                m3u_priority_value = 0
+                m3u_account_id = stream_m3u_map.get(sid)
+                if m3u_account_id is not None:
+                    m3u_priority_value = m3u_priorities.get(str(m3u_account_id), 0)
+                sort_values.append(-m3u_priority_value)
+
+            elif criterion == "audio_channels":
+                audio_ch = stats.get("audio_channels") or 0
+                sort_values.append(-audio_ch)
+
+        return tuple(sort_values)
+
+    # Log each stream's sort values
+    for sid in stream_ids:
+        stats = stats_cache.get(sid)
+        sname = stats.get("stream_name", f"Stream {sid}") if stats else f"Stream {sid}"
+        sv = get_sort_value(sid)
+        logger.debug(f"[Stream-reorder]   {sname} (id={sid}): sort_tuple={sv}")
+
+    sorted_ids = sorted(stream_ids, key=get_sort_value)
+
+    logger.info(f"[Stream-reorder] Channel '{channel_name}' sorted order:")
+    for idx, sid in enumerate(sorted_ids):
+        stats = stats_cache.get(sid)
+        sname = stats.get("stream_name", f"Stream {sid}") if stats else f"Stream {sid}"
+        res = stats.get("resolution", "?") if stats else "?"
+        logger.info(f"[Stream-reorder]   #{idx+1}: {sname} (id={sid}, res={res})")
+
+    return sorted_ids
+
+
 def _natural_sort_key(s: str) -> list:
     """Split string into text/number parts for natural sorting.
 
@@ -1295,6 +1462,97 @@ def _get_rule_starting_number(rule) -> Optional[int]:
             except ValueError:
                 return None
     return None
+
+
+# =============================================================================
+# Timezone Filter
+# =============================================================================
+
+# Pattern: stream name ends with EAST or WEST (possibly with parentheses/brackets)
+_TZ_SUFFIX_RE = re.compile(r'[\s\-_.\(|\[](EAST|WEST)[\s\)\]]*$', re.IGNORECASE)
+
+
+def _filter_by_timezone(stream_name: str, preference: str) -> bool:
+    """Check whether a stream should be kept based on timezone preference.
+
+    Returns True if the stream should be KEPT, False if it should be filtered out.
+
+    Behaviour:
+      - "both"  -> keep everything
+      - "east"  -> keep east-suffixed + base (no suffix), filter out WEST
+      - "west"  -> keep west-suffixed + base (no suffix), filter out EAST
+    """
+    if preference == "both":
+        return True
+
+    m = _TZ_SUFFIX_RE.search(stream_name)
+    if not m:
+        # No timezone suffix -> base stream, always keep
+        return True
+
+    suffix = m.group(1).upper()
+    if preference == "east":
+        return suffix != "WEST"
+    if preference == "west":
+        return suffix != "EAST"
+
+    return True
+
+
+# =============================================================================
+# Auto-Rename After Renumber
+# =============================================================================
+
+async def _auto_rename_after_renumber(
+    client,
+    channel_ids: list[int],
+    starting_number: int,
+    settings
+) -> int:
+    """
+    After renumbering channels, update channel names to reflect new numbers.
+
+    Mirrors the logic in main.py:2147-2174 for the manual renumber endpoint.
+    Returns the number of channels renamed.
+    """
+    if not settings or not getattr(settings, 'auto_rename_channel_number', False):
+        return 0
+    if starting_number is None:
+        return 0
+
+    renamed = 0
+    for idx, channel_id in enumerate(channel_ids):
+        try:
+            channel = await client.get_channel(channel_id)
+        except Exception:
+            continue
+
+        old_number = channel.get("channel_number")
+        new_number = starting_number + idx
+        channel_name = channel.get("name", "")
+
+        if old_number is None or old_number == new_number or not channel_name:
+            continue
+
+        old_number_str = str(int(old_number) if old_number == int(old_number) else old_number)
+        new_number_str = str(int(new_number) if new_number == int(new_number) else new_number)
+
+        # Match the number as a standalone value (not part of a larger number)
+        pattern = re.compile(r'(^|[^0-9])' + re.escape(old_number_str) + r'([^0-9]|$)')
+        if pattern.search(channel_name):
+            new_name = pattern.sub(r'\g<1>' + new_number_str + r'\g<2>', channel_name)
+            if new_name != channel_name:
+                try:
+                    await client.update_channel(channel_id, {"name": new_name})
+                    logger.info(
+                        f"[Auto-rename] Channel {channel_id}: "
+                        f"'{channel_name}' -> '{new_name}'"
+                    )
+                    renamed += 1
+                except Exception as e:
+                    logger.warning(f"[Auto-rename] Failed to rename channel {channel_id}: {e}")
+
+    return renamed
 
 
 # =============================================================================

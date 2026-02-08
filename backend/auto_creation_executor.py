@@ -108,7 +108,7 @@ class ActionExecutor:
     """
 
     def __init__(self, client, existing_channels: list = None, existing_groups: list = None,
-                 normalization_engine=None):
+                 normalization_engine=None, settings=None, all_profile_ids: list = None):
         """
         Initialize the executor.
 
@@ -117,11 +117,15 @@ class ActionExecutor:
             existing_channels: List of existing channels (for lookup/merge)
             existing_groups: List of existing groups (for lookup)
             normalization_engine: Optional NormalizationEngine for name normalization
+            settings: DispatcharrSettings instance for channel naming/profile defaults
+            all_profile_ids: All channel profile IDs (for default profile assignment)
         """
         self.client = client
         self.existing_channels = existing_channels or []
         self.existing_groups = existing_groups or []
         self._normalization_engine = normalization_engine
+        self._settings = settings
+        self._all_profile_ids = all_profile_ids or []
 
         # Build lookup indices
         self._channel_by_id = {c["id"]: c for c in self.existing_channels}
@@ -131,6 +135,7 @@ class ActionExecutor:
 
         # Track newly created entities during this execution
         self._created_channels = {}  # name.lower() -> channel dict
+        self._base_name_to_channel = {}  # base_name.lower() -> channel dict (for number-prefixed lookups)
         self._created_groups = {}  # name.lower() -> group dict
         self._logo_cache = {}  # logo_url -> logo_id
 
@@ -336,7 +341,7 @@ class ActionExecutor:
         if_exists = params.get("if_exists", "skip")
         group_id = params.get("group_id") or exec_ctx.current_group_id or rule_target_group_id
 
-        # Check if channel already exists
+        # Check if channel already exists (check with original name before number prefix)
         existing = self._find_channel_by_name(channel_name)
 
         if existing:
@@ -358,14 +363,23 @@ class ActionExecutor:
                 # Update existing channel properties
                 return await self._update_channel(existing, stream_ctx, exec_ctx, params)
 
+        # Determine channel number first (needed for name prefix)
+        channel_number = self._get_next_channel_number(params.get("channel_number", "auto"))
+
+        # Apply channel number in name if setting is enabled
+        base_name = channel_name  # Save before prefix for base-name mapping
+        channel_name = self._apply_channel_number_in_name(channel_name, channel_number)
+
         # Create new channel
         if exec_ctx.dry_run:
-            channel_number = self._get_next_channel_number(params.get("channel_number", "auto"))
             # Track simulated channel so subsequent streams in this run
             # see it as existing (matches execute-mode behavior)
             simulated = {"id": -1, "name": channel_name, "channel_number": channel_number,
                          "channel_group_id": group_id, "streams": [stream_ctx.stream_id]}
             self._created_channels[channel_name.lower()] = simulated
+            # Map base name to prefixed channel so subsequent lookups by base name merge correctly
+            if base_name.lower() != channel_name.lower():
+                self._base_name_to_channel[base_name.lower()] = simulated
             self._used_channel_numbers.add(channel_number)
             return ActionResult(
                 success=True,
@@ -377,7 +391,6 @@ class ActionExecutor:
             )
 
         # Create channel via API
-        channel_number = self._get_next_channel_number(params.get("channel_number", "auto"))
         try:
             channel_data = {
                 "name": channel_name,
@@ -398,13 +411,23 @@ class ActionExecutor:
 
             # Track the new channel
             self._created_channels[channel_name.lower()] = new_channel
+            # Map base name to prefixed channel so subsequent lookups by base name merge correctly
+            if base_name.lower() != channel_name.lower():
+                self._base_name_to_channel[base_name.lower()] = new_channel
             self._used_channel_numbers.add(channel_number)
             exec_ctx.current_channel_id = new_channel["id"]
+
+            # Assign default channel profiles if configured
+            profile_desc = await self._assign_default_profiles(new_channel["id"])
+
+            desc = f"Created channel '{channel_name}' (#{channel_number})"
+            if profile_desc:
+                desc += f", {profile_desc}"
 
             return ActionResult(
                 success=True,
                 action_type=action.type,
-                description=f"Created channel '{channel_name}' (#{channel_number})",
+                description=desc,
                 entity_type="channel",
                 entity_id=new_channel["id"],
                 entity_name=channel_name,
@@ -430,6 +453,7 @@ class ActionExecutor:
         current_streams = [s["id"] if isinstance(s, dict) else s for s in channel.get("streams", [])]
 
         if stream_ctx.stream_id in current_streams:
+            exec_ctx.current_channel_id = channel_id
             return ActionResult(
                 success=True,
                 action_type="merge_stream",
@@ -443,6 +467,7 @@ class ActionExecutor:
         if exec_ctx.dry_run:
             # Update cached channel so subsequent dry-run merges see this stream
             channel["streams"] = current_streams + [stream_ctx.stream_id]
+            exec_ctx.current_channel_id = channel_id
             return ActionResult(
                 success=True,
                 action_type="merge_stream",
@@ -1148,12 +1173,69 @@ class ActionExecutor:
     # Helper Methods
     # =========================================================================
 
+    def _apply_channel_number_in_name(self, channel_name: str, channel_number: int) -> str:
+        """Prepend channel number to name if settings.include_channel_number_in_name is enabled."""
+        if not self._settings or not getattr(self._settings, 'include_channel_number_in_name', False):
+            return channel_name
+
+        separator = getattr(self._settings, 'channel_number_separator', '-') or '-'
+        number_str = str(int(channel_number) if channel_number == int(channel_number) else channel_number)
+
+        # Strip any existing number prefix (e.g., "4000 | USA Network" -> "USA Network")
+        stripped = re.sub(r'^\d+(?:\.\d+)?\s*[|\-:]\s*', '', channel_name).strip()
+        if not stripped:
+            stripped = channel_name
+
+        result = f"{number_str} {separator} {stripped}"
+        if result != channel_name:
+            logger.debug(f"[Channel-number-in-name] '{channel_name}' -> '{result}'")
+        return result
+
+    async def _assign_default_profiles(self, channel_id: int) -> str:
+        """Assign default channel profiles to a newly created channel.
+
+        Enables channel in default profiles, disables in non-default profiles.
+        Returns a description string for logging, or empty string if no profiles configured.
+        """
+        if not self._settings or not self._settings.default_channel_profile_ids:
+            return ""
+        if not self._all_profile_ids:
+            return ""
+
+        default_ids = set(self._settings.default_channel_profile_ids)
+        enabled_count = 0
+        disabled_count = 0
+
+        for pid in self._all_profile_ids:
+            try:
+                if pid in default_ids:
+                    await self.client.update_profile_channel(pid, channel_id, {"enabled": True})
+                    enabled_count += 1
+                else:
+                    await self.client.update_profile_channel(pid, channel_id, {"enabled": False})
+                    disabled_count += 1
+            except Exception as e:
+                logger.warning(f"[Profile-assign] Failed to update profile {pid} for channel {channel_id}: {e}")
+
+        if enabled_count or disabled_count:
+            desc = f"profiles: enabled in {enabled_count}, disabled in {disabled_count}"
+            logger.info(f"[Profile-assign] Channel {channel_id}: {desc}")
+            return desc
+        return ""
+
     def _find_channel_by_name(self, name: str) -> Optional[dict]:
-        """Find channel by exact name (case-insensitive)."""
+        """Find channel by exact name (case-insensitive).
+
+        Also checks the base-name mapping so that a lookup for "USA Network"
+        finds a channel created as "4000 | USA Network".
+        """
         name_lower = name.lower()
-        # Check newly created channels first
+        # Check newly created channels first (by exact name)
         if name_lower in self._created_channels:
             return self._created_channels[name_lower]
+        # Check base-name mapping (base name -> number-prefixed channel)
+        if name_lower in self._base_name_to_channel:
+            return self._base_name_to_channel[name_lower]
         return self._channel_by_name.get(name_lower)
 
     def _find_channel_by_regex(self, pattern: str) -> Optional[dict]:
