@@ -19,11 +19,11 @@ env:
   REGISTRY: ghcr.io
 
 jobs:
-  # Security scanning jobs - only run on PRs to main
+  # Security scanning jobs - run on pushes to main and PRs to main
   security-scan-frontend:
     name: Frontend Security Scan
     runs-on: ubuntu-latest
-    if: github.event_name == 'pull_request' && github.base_ref == 'main'
+    if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && github.base_ref == 'main')
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -46,7 +46,7 @@ jobs:
   security-scan-backend:
     name: Backend Security Scan
     runs-on: ubuntu-latest
-    if: github.event_name == 'pull_request' && github.base_ref == 'main'
+    if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && github.base_ref == 'main')
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -66,7 +66,7 @@ jobs:
   codeql-analysis:
     name: CodeQL Analysis
     runs-on: ubuntu-latest
-    if: github.event_name == 'pull_request' && github.base_ref == 'main'
+    if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && github.base_ref == 'main')
     permissions:
       security-events: write
       contents: read
@@ -96,7 +96,7 @@ jobs:
   iac-security-scan:
     name: IaC Security Scan
     runs-on: ubuntu-latest
-    if: github.event_name == 'pull_request' && github.base_ref == 'main'
+    if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && github.base_ref == 'main')
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -118,7 +118,7 @@ jobs:
   container-security-scan:
     name: Container Security Scan (Trivy)
     runs-on: ubuntu-latest
-    if: github.event_name == 'pull_request' && github.base_ref == 'main'
+    if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && github.base_ref == 'main')
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -161,7 +161,7 @@ jobs:
   dast-scan:
     name: DAST Security Scan
     runs-on: ubuntu-latest
-    if: github.event_name == 'pull_request' && github.base_ref == 'main'
+    if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && github.base_ref == 'main')
     needs: [security-scan-frontend, security-scan-backend]
     steps:
       - name: Checkout repository
