@@ -97,9 +97,9 @@
 
 /* Error and Calculation Result */
 .popularity-panel .error-message {
-  background: rgba(239, 68, 68, 0.1);
-  border: 1px solid rgba(239, 68, 68, 0.3);
-  color: #ef4444;
+  background: var(--error-bg);
+  border: 1px solid var(--error);
+  color: var(--error);
   padding: 10px 14px;
   border-radius: 6px;
   font-size: 12px;
@@ -176,11 +176,11 @@
 }
 
 .popularity-panel .trend.trend-up {
-  color: #22c55e;
+  color: var(--success);
 }
 
 .popularity-panel .trend.trend-down {
-  color: #ef4444;
+  color: var(--error);
 }
 
 .popularity-panel .trend.trend-stable {
@@ -257,11 +257,11 @@
 }
 
 .popularity-panel .rank-improved {
-  color: #22c55e;
+  color: var(--success);
 }
 
 .popularity-panel .rank-declined {
-  color: #ef4444;
+  color: var(--error);
 }
 
 /* Trending Section */
@@ -294,11 +294,11 @@
 }
 
 .popularity-panel .trend-icon.up {
-  color: #22c55e;
+  color: var(--success);
 }
 
 .popularity-panel .trend-icon.down {
-  color: #ef4444;
+  color: var(--error);
 }
 
 .popularity-panel .trending-list {
@@ -339,11 +339,11 @@
 }
 
 .popularity-panel .trending-change.up {
-  color: #22c55e;
+  color: var(--success);
 }
 
 .popularity-panel .trending-change.down {
-  color: #ef4444;
+  color: var(--error);
 }
 
 .popularity-panel .empty-trending {

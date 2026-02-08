@@ -232,7 +232,7 @@
   top: 0;
   bottom: 0;
   width: 2px;
-  background-color: #e53935;
+  background-color: var(--error);
   z-index: 15;
   pointer-events: none;
 }
@@ -244,7 +244,7 @@
   left: -4px;
   width: 10px;
   height: 10px;
-  background-color: #e53935;
+  background-color: var(--error);
   border-radius: 50%;
 }
 

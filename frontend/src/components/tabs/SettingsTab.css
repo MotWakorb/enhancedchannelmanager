@@ -464,18 +464,19 @@
   gap: 0.375rem;
   padding: 0.375rem 0.75rem;
   margin-left: auto;
-  background-color: rgba(234, 179, 8, 0.2);
-  border: 1px solid rgba(234, 179, 8, 0.4);
+  background-color: var(--warning-bg);
+  border: 1px solid var(--warning);
   border-radius: 4px;
-  color: var(--warning, #eab308);
+  color: var(--warning);
   font-size: 0.8rem;
   cursor: pointer;
   transition: all 0.15s;
 }
 
 .btn-restart:hover:not(:disabled) {
-  background-color: rgba(234, 179, 8, 0.3);
-  border-color: rgba(234, 179, 8, 0.6);
+  background-color: var(--warning-bg);
+  border-color: var(--warning);
+  opacity: 0.8;
 }
 
 .btn-restart:disabled {
@@ -580,7 +581,7 @@
 .high-contrast-preview {
   background: linear-gradient(135deg, #000000, #111111);
   border: 1px solid var(--border-secondary);
-  color: var(--text-primary)f00;
+  color: #ff0000;
 }
 
 .theme-label {

@@ -434,10 +434,10 @@
   align-items: center;
   gap: 0.5rem;
   padding: 0.75rem;
-  background-color: rgba(250, 204, 21, 0.15);
-  border: 1px solid rgba(250, 204, 21, 0.3);
+  background-color: var(--warning-bg);
+  border: 1px solid var(--warning);
   border-radius: 6px;
-  color: #facc15;
+  color: var(--warning);
   font-size: 0.9rem;
 }
 

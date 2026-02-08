@@ -219,8 +219,8 @@
   font-size: 0.7rem;
   padding: 0.2rem 0.5rem;
   border-radius: 4px;
-  background: var(--accent-primary);
-  color: var(--bg-primary);
+  background: var(--button-primary-bg);
+  color: var(--button-primary-text);
   flex-shrink: 0;
   white-space: nowrap;
   max-width: 120px;
@@ -233,8 +233,8 @@
   font-size: 0.7rem;
   padding: 0.2rem 0.5rem;
   border-radius: 4px;
-  background: #8b5cf6;
-  color: white;
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
   flex-shrink: 0;
   white-space: nowrap;
   font-weight: 600;
