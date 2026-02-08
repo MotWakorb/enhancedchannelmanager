@@ -85,12 +85,11 @@ export function RuleBuilder({
     const hasChanges =
       name !== (rule?.name || '') ||
       description !== (rule?.description || '') ||
-      priority !== (rule?.priority ?? 0) ||
       enabled !== (rule?.enabled ?? true) ||
       conditions.length !== (rule?.conditions?.length || 0) ||
       actions.length !== (rule?.actions?.length || 0);
     setIsDirty(hasChanges);
-  }, [name, description, priority, enabled, conditions, actions, rule]);
+  }, [name, description, enabled, conditions, actions, rule]);
 
   const validate = useCallback((): ValidationErrors | null => {
     const newErrors: ValidationErrors = {};
@@ -260,20 +259,6 @@ export function RuleBuilder({
               rows={2}
               aria-label="Description"
             />
-          </div>
-
-          <div className="form-field">
-            <label htmlFor={`${id}-priority`}>Priority</label>
-            <input
-              id={`${id}-priority`}
-              type="number"
-              value={priority}
-              onChange={e => setPriority(e.target.valueAsNumber || 0)}
-              min={0}
-              disabled={isLoading}
-              aria-label="Priority"
-            />
-            <span className="field-hint">Lower values run first</span>
           </div>
 
           <div className="form-field">

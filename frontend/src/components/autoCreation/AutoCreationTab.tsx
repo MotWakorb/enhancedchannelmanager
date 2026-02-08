@@ -1,7 +1,7 @@
 /**
  * Main Auto-Creation tab component for managing auto-creation rules and executions.
  */
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import type {
   AutoCreationRule,
   AutoCreationExecution,
@@ -32,6 +32,7 @@ export function AutoCreationTab() {
     deleteRule,
     toggleRule,
     duplicateRule,
+    reorderRules,
     getEnabledRules,
   } = useAutoCreationRules();
 
@@ -71,6 +72,11 @@ export function AutoCreationTab() {
   const [importError, setImportError] = useState<string | null>(null);
 
   const notifications = useNotifications();
+
+  // Drag-and-drop state for rule reordering
+  const dragRuleId = useRef<number | null>(null);
+  const dragAllowed = useRef(false);
+  const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
 
   // Responsive state
   const [isMobile, setIsMobile] = useState(window.innerWidth <= 768);
@@ -143,14 +149,16 @@ export function AutoCreationTab() {
       if (editingRule) {
         await updateRule(editingRule.id, data);
       } else {
-        await createRule(data);
+        // New rule: assign priority = max existing + 1 (append at end)
+        const maxPriority = rules.length > 0 ? Math.max(...rules.map(r => r.priority)) : -1;
+        await createRule({ ...data, priority: maxPriority + 1 });
       }
       setShowRuleBuilder(false);
       setEditingRule(null);
     } catch (err) {
       notifications.error(err instanceof Error ? err.message : 'Failed to save rule', 'Auto-Creation');
     }
-  }, [editingRule, updateRule, createRule]);
+  }, [editingRule, updateRule, createRule, rules]);
 
   const handleCancelRuleBuilder = useCallback(() => {
     setShowRuleBuilder(false);
@@ -187,6 +195,53 @@ export function AutoCreationTab() {
       notifications.error(err instanceof Error ? err.message : 'Failed to duplicate rule', 'Auto-Creation');
     }
   }, [duplicateRule]);
+
+  const handleDragStart = useCallback((e: React.DragEvent, ruleId: number) => {
+    if (!dragAllowed.current) {
+      e.preventDefault();
+      return;
+    }
+    dragRuleId.current = ruleId;
+    e.dataTransfer.effectAllowed = 'move';
+    const row = (e.target as HTMLElement).closest('tr');
+    if (row) row.classList.add('dragging');
+  }, []);
+
+  const handleHandleMouseDown = useCallback(() => {
+    dragAllowed.current = true;
+  }, []);
+
+  const handleDragOver = useCallback((e: React.DragEvent, index: number) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    setDragOverIndex(index);
+  }, []);
+
+  const handleDragEnd = useCallback(() => {
+    dragRuleId.current = null;
+    dragAllowed.current = false;
+    setDragOverIndex(null);
+    document.querySelectorAll('.rules-list tr.dragging').forEach(el => el.classList.remove('dragging'));
+  }, []);
+
+  const handleDrop = useCallback(async (e: React.DragEvent, toIndex: number) => {
+    e.preventDefault();
+    setDragOverIndex(null);
+    const ruleId = dragRuleId.current;
+    dragRuleId.current = null;
+    document.querySelectorAll('.rules-list tr.dragging').forEach(el => el.classList.remove('dragging'));
+    if (ruleId == null) return;
+    const currentOrder = filteredRules.map(r => r.id);
+    const fromIndex = currentOrder.indexOf(ruleId);
+    if (fromIndex === -1 || fromIndex === toIndex) return;
+    currentOrder.splice(fromIndex, 1);
+    currentOrder.splice(toIndex, 0, ruleId);
+    try {
+      await reorderRules(currentOrder);
+    } catch (err) {
+      notifications.error(err instanceof Error ? err.message : 'Failed to reorder rules', 'Auto-Creation');
+    }
+  }, [filteredRules, reorderRules]);
 
   const handleRun = useCallback(async (dryRun: boolean = false, ruleIds?: number[]) => {
     try {
@@ -472,14 +527,24 @@ export function AutoCreationTab() {
                   </tr>
                 </thead>
                 <tbody>
-                  {filteredRules.map(rule => (
+                  {filteredRules.map((rule, index) => (
                     <tr
                       key={rule.id}
                       data-testid="rule-row"
                       tabIndex={0}
+                      draggable
+                      className={dragOverIndex === index ? 'drag-over' : ''}
+                      onDragStart={(e) => handleDragStart(e, rule.id)}
+                      onDragEnd={handleDragEnd}
+                      onDragOver={(e) => handleDragOver(e, index)}
+                      onDrop={(e) => handleDrop(e, index)}
                     >
                       <td className="col-drag">
-                        <span className="drag-handle" data-testid="drag-handle">
+                        <span
+                          className="drag-handle"
+                          data-testid="drag-handle"
+                          onMouseDown={handleHandleMouseDown}
+                        >
                           <span className="material-icons">drag_indicator</span>
                         </span>
                       </td>
@@ -489,7 +554,7 @@ export function AutoCreationTab() {
                           <div className="rule-description">{rule.description}</div>
                         )}
                       </td>
-                      <td className="col-priority">{rule.priority}</td>
+                      <td className="col-priority">{index + 1}</td>
                       <td className="col-status">
                         <span className={`status-badge ${rule.enabled ? 'enabled' : 'disabled'}`}>
                           {rule.enabled ? 'Enabled' : 'Disabled'}
