@@ -36,6 +36,7 @@ import { EditChannelModal, type ChannelMetadataChanges } from './EditChannelModa
 import { NormalizeNamesModal } from './NormalizeNamesModal';
 import { naturalCompare } from '../utils/naturalSort';
 import { useCopyFeedback } from '../hooks/useCopyFeedback';
+import { useNotifications } from '../contexts/NotificationContext';
 import { useDropdown } from '../hooks/useDropdown';
 import { useContextMenu } from '../hooks/useContextMenu';
 import { useModal } from '../hooks/useModal';
@@ -155,13 +156,13 @@ interface GroupState {
 
 // Reusable Sort Dropdown Button component
 interface SortDropdownButtonProps {
-  onSortByMode: (mode: 'smart' | 'resolution' | 'bitrate' | 'framerate') => void;
+  onSortByMode: (mode: 'smart' | 'resolution' | 'bitrate' | 'framerate' | 'm3u_priority' | 'audio_channels') => void;
   disabled?: boolean;
   isLoading?: boolean;
   className?: string;
   showLabel?: boolean;
   labelText?: string;
-  enabledCriteria?: Record<'resolution' | 'bitrate' | 'framerate', boolean>;
+  enabledCriteria?: Record<'resolution' | 'bitrate' | 'framerate' | 'm3u_priority' | 'audio_channels', boolean>;
 }
 
 const SortDropdownButton = memo(function SortDropdownButton({
@@ -171,13 +172,13 @@ const SortDropdownButton = memo(function SortDropdownButton({
   className = '',
   showLabel = false,
   labelText = 'Sort',
-  enabledCriteria = { resolution: true, bitrate: true, framerate: true },
+  enabledCriteria = { resolution: true, bitrate: true, framerate: true, m3u_priority: false, audio_channels: false },
 }: SortDropdownButtonProps) {
   const [isOpen, setIsOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
   // Check if any criteria are enabled (for Smart Sort to be useful)
-  const anyEnabled = enabledCriteria.resolution || enabledCriteria.bitrate || enabledCriteria.framerate;
+  const anyEnabled = enabledCriteria.resolution || enabledCriteria.bitrate || enabledCriteria.framerate || enabledCriteria.m3u_priority || enabledCriteria.audio_channels;
 
   // Close on outside click
   useEffect(() => {
@@ -191,7 +192,7 @@ const SortDropdownButton = memo(function SortDropdownButton({
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [isOpen]);
 
-  const handleModeClick = (mode: 'smart' | 'resolution' | 'bitrate' | 'framerate') => {
+  const handleModeClick = (mode: 'smart' | 'resolution' | 'bitrate' | 'framerate' | 'm3u_priority' | 'audio_channels') => {
     setIsOpen(false);
     onSortByMode(mode);
   };
@@ -239,6 +240,189 @@ const SortDropdownButton = memo(function SortDropdownButton({
               <span>By Framerate</span>
             </button>
           )}
+          {enabledCriteria.m3u_priority && (
+            <button className="sort-dropdown-item" onClick={() => handleModeClick('m3u_priority')}>
+              <span className="material-icons">low_priority</span>
+              <span>By M3U Priority</span>
+            </button>
+          )}
+          {enabledCriteria.audio_channels && (
+            <button className="sort-dropdown-item" onClick={() => handleModeClick('audio_channels')}>
+              <span className="material-icons">surround_sound</span>
+              <span>By Audio Channels</span>
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+});
+
+// Bulk Actions Dropdown - consolidates 6 bulk action buttons into a single menu
+interface BulkActionsDropdownProps {
+  onAssignEPG: () => void;
+  onFetchLCN: () => void;
+  onNormalize: () => void;
+  onRenumber: () => void;
+  onSortByMode: (mode: 'smart' | 'resolution' | 'bitrate' | 'framerate' | 'm3u_priority' | 'audio_channels') => void;
+  onProbe: () => void;
+  bulkEPGLoading: boolean;
+  bulkLCNLoading: boolean;
+  bulkSortingByQuality: boolean;
+  probingChannels: boolean;
+  sortEnabled?: Record<'resolution' | 'bitrate' | 'framerate' | 'm3u_priority' | 'audio_channels', boolean>;
+}
+
+const BulkActionsDropdown = memo(function BulkActionsDropdown({
+  onAssignEPG,
+  onFetchLCN,
+  onNormalize,
+  onRenumber,
+  onSortByMode,
+  onProbe,
+  bulkEPGLoading,
+  bulkLCNLoading,
+  bulkSortingByQuality,
+  probingChannels,
+  sortEnabled = { resolution: true, bitrate: true, framerate: true, m3u_priority: false, audio_channels: false },
+}: BulkActionsDropdownProps) {
+  const [isOpen, setIsOpen] = useState(false);
+  const dropdownRef = useRef<HTMLDivElement>(null);
+
+  const anyLoading = bulkEPGLoading || bulkLCNLoading || bulkSortingByQuality || probingChannels;
+  const anySortEnabled = sortEnabled.resolution || sortEnabled.bitrate || sortEnabled.framerate || sortEnabled.m3u_priority || sortEnabled.audio_channels;
+
+  // Close on outside click
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleClickOutside = (e: MouseEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
+        setIsOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [isOpen]);
+
+  const handleItemClick = (action: () => void) => {
+    setIsOpen(false);
+    action();
+  };
+
+  const handleSortClick = (mode: 'smart' | 'resolution' | 'bitrate' | 'framerate' | 'm3u_priority' | 'audio_channels') => {
+    setIsOpen(false);
+    onSortByMode(mode);
+  };
+
+  return (
+    <div className="bulk-actions-dropdown" ref={dropdownRef}>
+      <button
+        className={`bulk-action-btn${anyLoading ? ' loading' : ''}`}
+        onClick={() => setIsOpen(!isOpen)}
+        title="Bulk actions"
+      >
+        <span className={`material-icons${anyLoading ? ' spinning' : ''}`}>
+          {anyLoading ? 'sync' : 'more_vert'}
+        </span>
+        <span className="material-icons sort-dropdown-arrow">arrow_drop_down</span>
+      </button>
+      {isOpen && (
+        <div className="bulk-actions-menu">
+          <button
+            className={`bulk-actions-item${bulkEPGLoading ? ' disabled' : ''}`}
+            onClick={() => !bulkEPGLoading && handleItemClick(onAssignEPG)}
+          >
+            <span className={`material-icons${bulkEPGLoading ? ' spinning' : ''}`}>
+              {bulkEPGLoading ? 'sync' : 'live_tv'}
+            </span>
+            <span>Assign EPG</span>
+          </button>
+          <button
+            className={`bulk-actions-item${bulkLCNLoading ? ' disabled' : ''}`}
+            onClick={() => !bulkLCNLoading && handleItemClick(onFetchLCN)}
+          >
+            <span className={`material-icons${bulkLCNLoading ? ' spinning' : ''}`}>
+              {bulkLCNLoading ? 'sync' : 'confirmation_number'}
+            </span>
+            <span>Fetch Gracenote IDs</span>
+          </button>
+          <button
+            className="bulk-actions-item"
+            onClick={() => handleItemClick(onNormalize)}
+          >
+            <span className="material-icons">text_format</span>
+            <span>Normalize Names</span>
+          </button>
+          <button
+            className="bulk-actions-item"
+            onClick={() => handleItemClick(onRenumber)}
+          >
+            <span className="material-icons">tag</span>
+            <span>Renumber</span>
+          </button>
+          <div className="bulk-actions-divider" />
+          <div className="bulk-actions-section-label">Sort Streams</div>
+          {anySortEnabled && (
+            <button className="bulk-actions-item" onClick={() => handleSortClick('smart')}>
+              <span className="material-icons">auto_awesome</span>
+              <span>Smart Sort</span>
+            </button>
+          )}
+          {sortEnabled.resolution && (
+            <button
+              className={`bulk-actions-item${bulkSortingByQuality ? ' disabled' : ''}`}
+              onClick={() => !bulkSortingByQuality && handleSortClick('resolution')}
+            >
+              <span className="material-icons">aspect_ratio</span>
+              <span>By Resolution</span>
+            </button>
+          )}
+          {sortEnabled.bitrate && (
+            <button
+              className={`bulk-actions-item${bulkSortingByQuality ? ' disabled' : ''}`}
+              onClick={() => !bulkSortingByQuality && handleSortClick('bitrate')}
+            >
+              <span className="material-icons">speed</span>
+              <span>By Bitrate</span>
+            </button>
+          )}
+          {sortEnabled.framerate && (
+            <button
+              className={`bulk-actions-item${bulkSortingByQuality ? ' disabled' : ''}`}
+              onClick={() => !bulkSortingByQuality && handleSortClick('framerate')}
+            >
+              <span className="material-icons">slow_motion_video</span>
+              <span>By Framerate</span>
+            </button>
+          )}
+          {sortEnabled.m3u_priority && (
+            <button
+              className={`bulk-actions-item${bulkSortingByQuality ? ' disabled' : ''}`}
+              onClick={() => !bulkSortingByQuality && handleSortClick('m3u_priority')}
+            >
+              <span className="material-icons">low_priority</span>
+              <span>By M3U Priority</span>
+            </button>
+          )}
+          {sortEnabled.audio_channels && (
+            <button
+              className={`bulk-actions-item${bulkSortingByQuality ? ' disabled' : ''}`}
+              onClick={() => !bulkSortingByQuality && handleSortClick('audio_channels')}
+            >
+              <span className="material-icons">surround_sound</span>
+              <span>By Audio Channels</span>
+            </button>
+          )}
+          <div className="bulk-actions-divider" />
+          <button
+            className={`bulk-actions-item${probingChannels ? ' disabled' : ''}`}
+            onClick={() => !probingChannels && handleItemClick(onProbe)}
+          >
+            <span className={`material-icons${probingChannels ? ' spinning' : ''}`}>
+              {probingChannels ? 'sync' : 'speed'}
+            </span>
+            <span>Probe Streams</span>
+          </button>
         </div>
       )}
     </div>
@@ -307,9 +491,9 @@ interface DroppableGroupHeaderProps {
   onProbeGroup?: () => void;
   isProbing?: boolean;
   onSortStreamsByQuality?: () => void;
-  onSortStreamsByMode?: (mode: 'smart' | 'resolution' | 'bitrate' | 'framerate') => void;
+  onSortStreamsByMode?: (mode: 'smart' | 'resolution' | 'bitrate' | 'framerate' | 'm3u_priority' | 'audio_channels') => void;
   isSortingByQuality?: boolean;
-  enabledCriteria?: Record<'resolution' | 'bitrate' | 'framerate', boolean>;
+  enabledCriteria?: Record<'resolution' | 'bitrate' | 'framerate' | 'm3u_priority' | 'audio_channels', boolean>;
   failedChannelCount?: number;
 }
 
@@ -382,7 +566,7 @@ const DroppableGroupHeader = memo(function DroppableGroupHeader({
     onSelectAll?.();
   };
 
-  const handleSortModeClick = (mode: 'smart' | 'resolution' | 'bitrate' | 'framerate') => {
+  const handleSortModeClick = (mode: 'smart' | 'resolution' | 'bitrate' | 'framerate' | 'm3u_priority' | 'audio_channels') => {
     setSortDropdownOpen(false);
     if (onSortStreamsByMode) {
       onSortStreamsByMode(mode);
@@ -484,6 +668,12 @@ const DroppableGroupHeader = memo(function DroppableGroupHeader({
       )}
       <span className="group-count">{channelCount}</span>
       {failedChannelCount > 0 && (
+        <span className="group-good-indicator" title={`${channelCount - failedChannelCount} channel${channelCount - failedChannelCount !== 1 ? 's' : ''} with working streams`}>
+          <span className="material-icons">check_circle</span>
+          <span className="good-count">{channelCount - failedChannelCount}</span>
+        </span>
+      )}
+      {failedChannelCount > 0 && (
         <span className="group-failed-indicator" title={`${failedChannelCount} channel${failedChannelCount !== 1 ? 's' : ''} with failed streams`}>
           <span className="material-icons">error</span>
           <span className="failed-count">{failedChannelCount}</span>
@@ -551,6 +741,18 @@ const DroppableGroupHeader = memo(function DroppableGroupHeader({
                 <button className="sort-dropdown-item" onClick={() => handleSortModeClick('framerate')}>
                   <span className="material-icons">slow_motion_video</span>
                   <span>By Framerate</span>
+                </button>
+              )}
+              {enabledCriteria.m3u_priority && (
+                <button className="sort-dropdown-item" onClick={() => handleSortModeClick('m3u_priority')}>
+                  <span className="material-icons">low_priority</span>
+                  <span>By M3U Priority</span>
+                </button>
+              )}
+              {enabledCriteria.audio_channels && (
+                <button className="sort-dropdown-item" onClick={() => handleSortModeClick('audio_channels')}>
+                  <span className="material-icons">surround_sound</span>
+                  <span>By Audio Channels</span>
                 </button>
               )}
             </div>
@@ -781,6 +983,7 @@ export function ChannelsPane({
 
   // Copy to clipboard feedback state
   const { copySuccess, copyError, handleCopy } = useCopyFeedback();
+  const notifications = useNotifications();
 
   // Stream group drop state (for bulk channel creation)
   const [streamGroupDragOver, setStreamGroupDragOver] = useState(false);
@@ -1128,6 +1331,51 @@ export function ChannelsPane({
       });
     }
   }, []);
+
+  // Handle bulk probe - probes all streams for all selected channels
+  const handleBulkProbe = useCallback(async () => {
+    const streamIds: number[] = [];
+    for (const channelId of selectedChannelIds) {
+      const channel = channels.find(c => c.id === channelId);
+      if (channel) {
+        streamIds.push(...channel.streams);
+      }
+    }
+    if (streamIds.length === 0) return;
+
+    const channelCount = selectedChannelIds.size;
+    notifications.info(`Probing ${streamIds.length} stream${streamIds.length !== 1 ? 's' : ''} across ${channelCount} channel${channelCount !== 1 ? 's' : ''}...`, 'Probe Started');
+
+    setProbingChannels(prev => {
+      const next = new Set(prev);
+      selectedChannelIds.forEach(id => next.add(id));
+      return next;
+    });
+
+    try {
+      const result = await api.probeBulkStreams(streamIds);
+      if (result.results) {
+        setStreamStatsMap(prev => {
+          const next = new Map(prev);
+          for (const stats of result.results) {
+            next.set(stats.stream_id, stats);
+          }
+          return next;
+        });
+        const successCount = result.results.filter((s: StreamStats) => s.probe_status === 'success').length;
+        notifications.success(`Probed ${result.results.length} stream${result.results.length !== 1 ? 's' : ''}: ${successCount} succeeded`, 'Probe Complete');
+      }
+    } catch (err) {
+      console.error('[ChannelsPane] Bulk probe failed:', err);
+      notifications.error('Failed to probe streams', 'Probe Error');
+    } finally {
+      setProbingChannels(prev => {
+        const next = new Set(prev);
+        selectedChannelIds.forEach(id => next.delete(id));
+        return next;
+      });
+    }
+  }, [selectedChannelIds, channels, notifications]);
 
   // Handle probe group request - probes all streams in all channels of a group
   // Uses the same backend probe logic as "Probe All Streams Now" but filtered to a single group
@@ -1959,7 +2207,7 @@ export function ChannelsPane({
   };
 
   // Sort mode types
-  type SortMode = 'smart' | 'resolution' | 'bitrate' | 'framerate';
+  type SortMode = 'smart' | 'resolution' | 'bitrate' | 'framerate' | 'm3u_priority' | 'audio_channels';
 
   // Sort mode labels for journal/description
   const SORT_MODE_LABELS: Record<SortMode, string> = {
@@ -1967,6 +2215,8 @@ export function ChannelsPane({
     resolution: 'resolution',
     bitrate: 'bitrate',
     framerate: 'framerate',
+    m3u_priority: 'M3U priority',
+    audio_channels: 'audio channels',
   };
 
   // Map stream IDs to their M3U account IDs (from stream data, not probe stats)
@@ -2159,12 +2409,18 @@ export function ChannelsPane({
   const handleBulkSortStreamsByMode = useCallback(async (channelIds: number[], mode: SortMode) => {
     if (!isEditMode || !onStageReorderStreams || channelIds.length === 0) return;
 
+    const scope = channelIds.length === channels.length ? 'all channels' :
+      channelIds.length === 1 ? channels.find(ch => ch.id === channelIds[0])?.name || '1 channel' :
+      `${channelIds.length} channels`;
+
+    notifications.info(`Sorting streams by ${SORT_MODE_LABELS[mode]} in ${scope}...`, 'Sort Started');
     setBulkSortingByQuality(true);
     try {
       // Get all channels to process
       const channelsToProcess = channels.filter(ch => channelIds.includes(ch.id) && ch.streams.length > 1);
       if (channelsToProcess.length === 0) {
         setBulkSortingByQuality(false);
+        notifications.info('No channels with multiple streams to sort', 'Sort Complete');
         return;
       }
 
@@ -2180,10 +2436,10 @@ export function ChannelsPane({
 
       // Start batch operation
       if (onStartBatch) {
-        const scope = channelIds.length === channels.length ? 'all channels' :
+        const batchScope = channelIds.length === channels.length ? 'all channels' :
           channelIds.length === 1 ? `"${channelsToProcess[0]?.name}"` :
           `${channelsToProcess.length} channels`;
-        onStartBatch(`Sort streams by ${SORT_MODE_LABELS[mode]} in ${scope}`);
+        onStartBatch(`Sort streams by ${SORT_MODE_LABELS[mode]} in ${batchScope}`);
       }
 
       let changesCount = 0;
@@ -2215,13 +2471,19 @@ export function ChannelsPane({
         }
       }
 
+      if (changesCount > 0) {
+        notifications.success(`Sorted ${changesCount} of ${channelsToProcess.length} channel${channelsToProcess.length !== 1 ? 's' : ''} by ${SORT_MODE_LABELS[mode]}`, 'Sort Complete');
+      } else {
+        notifications.info(`Streams already in ${SORT_MODE_LABELS[mode]} order`, 'Sort Complete');
+      }
       logger.info(`Bulk sort by ${SORT_MODE_LABELS[mode]}: ${changesCount} of ${channelsToProcess.length} channels reordered`);
     } catch (err) {
       logger.error(`Failed to bulk sort streams by ${SORT_MODE_LABELS[mode]}:`, err);
+      notifications.error(`Failed to sort streams by ${SORT_MODE_LABELS[mode]}`, 'Sort Error');
     } finally {
       setBulkSortingByQuality(false);
     }
-  }, [isEditMode, onStageReorderStreams, channels, onStartBatch, onEndBatch, selectedChannelId, channelStreams, getEffectivePriority, createMultiCriteriaSortComparator]);
+  }, [isEditMode, onStageReorderStreams, channels, onStartBatch, onEndBatch, selectedChannelId, channelStreams, getEffectivePriority, createMultiCriteriaSortComparator, notifications]);
 
   // Sort all channels' streams by mode
   const handleSortAllStreamsByMode = useCallback((mode: SortMode) => {
@@ -2892,7 +3154,7 @@ export function ChannelsPane({
       || channelListFilters?.filterMissingEpgData
       || channelListFilters?.filterMissingGracenote;
 
-    const filteredChannels = hasMissingDataFilters
+    const afterMissingDataFilter = hasMissingDataFilters
       ? visibleChannels.filter((ch) => {
           if (channelListFilters?.filterMissingLogo && ch.logo_id === null) return true;
           if (channelListFilters?.filterMissingTvgId && (!ch.tvg_id || ch.tvg_id === '')) return true;
@@ -2901,6 +3163,33 @@ export function ChannelsPane({
           return false;
         })
       : visibleChannels;
+
+    // Apply stream status filters (all checked = show all, all unchecked = show all)
+    const showFailed = channelListFilters?.filterFailedStreams ?? true;
+    const showWorking = channelListFilters?.filterWorkingStreams ?? true;
+    const showUnprobed = channelListFilters?.filterUnprobedStreams ?? true;
+    const allSame = showFailed === showWorking && showWorking === showUnprobed;
+
+    const filteredChannels = !allSame
+      ? afterMissingDataFilter.filter((ch) => {
+          const hasFailed = ch.streams.some(streamId => {
+            const stats = streamStatsMap.get(streamId);
+            return stats && (stats.probe_status === 'failed' || stats.probe_status === 'timeout');
+          });
+          const hasWorking = ch.streams.some(streamId => {
+            const stats = streamStatsMap.get(streamId);
+            return stats && stats.probe_status === 'success';
+          });
+          const hasUnprobed = ch.streams.length === 0 || ch.streams.some(streamId => {
+            const stats = streamStatsMap.get(streamId);
+            return !stats || !stats.probe_status;
+          });
+          if (showFailed && hasFailed) return true;
+          if (showWorking && hasWorking) return true;
+          if (showUnprobed && hasUnprobed) return true;
+          return false;
+        })
+      : afterMissingDataFilter;
 
     // Group channels by channel_group_id
     const grouped = filteredChannels.reduce<Record<number | 'ungrouped', Channel[]>>(
@@ -2919,7 +3208,7 @@ export function ChannelsPane({
     });
 
     return grouped;
-  }, [localChannels, searchTerm, channelListFilters, autoSyncRelatedGroups]);
+  }, [localChannels, searchTerm, channelListFilters, autoSyncRelatedGroups, streamStatsMap]);
 
   // Sort channel groups by their lowest channel number (only groups with channels)
   const sortedChannelGroups = useMemo(() => {
@@ -4759,52 +5048,24 @@ export function ChannelsPane({
             <div className="selection-info">
               <span className="selection-count">{selectedChannelIds.size} selected</span>
               <div className="selection-actions">
-                <button
-                  className="bulk-action-btn"
-                  onClick={() => {
+                <BulkActionsDropdown
+                  onAssignEPG={() => {
                     setBulkEPGLoading(true);
-                    // Defer modal open to allow spinner to render first
                     setTimeout(() => bulkEPGModal.open(), 50);
                   }}
-                  disabled={bulkEPGLoading}
-                  title="Assign EPG to selected channels"
-                >
-                  <span className={`material-icons${bulkEPGLoading ? ' spinning' : ''}`}>
-                    {bulkEPGLoading ? 'sync' : 'live_tv'}
-                  </span>
-                </button>
-                <button
-                  className="bulk-action-btn"
-                  onClick={() => {
+                  onFetchLCN={() => {
                     setBulkLCNLoading(true);
                     setTimeout(() => bulkLCNModal.open(), 50);
                   }}
-                  disabled={bulkLCNLoading}
-                  title="Fetch Gracenote IDs for selected channels"
-                >
-                  <span className={`material-icons${bulkLCNLoading ? ' spinning' : ''}`}>
-                    {bulkLCNLoading ? 'sync' : 'confirmation_number'}
-                  </span>
-                </button>
-                <button
-                  className="bulk-action-btn"
-                  onClick={() => normalizeModal.open()}
-                  title="Normalize channel names"
-                >
-                  <span className="material-icons">text_format</span>
-                </button>
-                <button
-                  className="bulk-action-btn"
-                  onClick={handleMassRenumberClick}
-                  title="Renumber channels"
-                >
-                  <span className="material-icons">tag</span>
-                </button>
-                <SortDropdownButton
+                  onNormalize={() => normalizeModal.open()}
+                  onRenumber={handleMassRenumberClick}
                   onSortByMode={handleSortSelectedStreamsByMode}
-                  isLoading={bulkSortingByQuality}
-                  className="bulk-action-btn-wrapper"
-                  enabledCriteria={channelDefaults?.streamSortEnabled}
+                  onProbe={handleBulkProbe}
+                  bulkEPGLoading={bulkEPGLoading}
+                  bulkLCNLoading={bulkLCNLoading}
+                  bulkSortingByQuality={bulkSortingByQuality}
+                  probingChannels={probingChannels.size > 0}
+                  sortEnabled={channelDefaults?.streamSortEnabled}
                 />
                 <button
                   className="bulk-action-btn bulk-action-btn--danger"
@@ -4874,15 +5135,13 @@ export function ChannelsPane({
               >
                 <span className="material-icons">upload_file</span>
               </button>
-              {selectedChannelIds.size === 0 && (
-                <SortDropdownButton
-                  onSortByMode={handleSortAllStreamsByMode}
-                  isLoading={bulkSortingByQuality}
-                  showLabel={false}
-                  className="sort-all-quality-btn-wrapper"
-                  enabledCriteria={channelDefaults?.streamSortEnabled}
-                />
-              )}
+              <SortDropdownButton
+                onSortByMode={handleSortAllStreamsByMode}
+                isLoading={bulkSortingByQuality}
+                showLabel={false}
+                className="sort-all-quality-btn-wrapper"
+                enabledCriteria={channelDefaults?.streamSortEnabled}
+              />
             </>
           )}
           <button
@@ -6150,7 +6409,7 @@ export function ChannelsPane({
         {/* Channel List Filter Settings */}
         <div className="filter-settings-dropdown" ref={filterSettingsRef}>
           <button
-            className={`filter-settings-button${channelListFilters?.filterMissingLogo || channelListFilters?.filterMissingTvgId || channelListFilters?.filterMissingEpgData || channelListFilters?.filterMissingGracenote ? ' filter-active' : ''}`}
+            className={`filter-settings-button${channelListFilters?.filterMissingLogo || channelListFilters?.filterMissingTvgId || channelListFilters?.filterMissingEpgData || channelListFilters?.filterMissingGracenote || channelListFilters?.filterFailedStreams || channelListFilters?.filterWorkingStreams || channelListFilters?.filterUnprobedStreams ? ' filter-active' : ''}`}
             onClick={() => setFilterSettingsOpen(!filterSettingsOpen)}
             title="Channel List Filters"
           >
@@ -6233,6 +6492,32 @@ export function ChannelsPane({
                     onChange={(e) => onChannelListFiltersChange?.({ filterMissingGracenote: e.target.checked })}
                   />
                   <span>Missing Gracenote</span>
+                </label>
+                <div className="filter-settings-separator" />
+                <div className="filter-settings-subheader">Stream Status</div>
+                <label className="filter-settings-option">
+                  <input
+                    type="checkbox"
+                    checked={channelListFilters.filterFailedStreams ?? false}
+                    onChange={(e) => onChannelListFiltersChange?.({ filterFailedStreams: e.target.checked })}
+                  />
+                  <span>Failed Streams</span>
+                </label>
+                <label className="filter-settings-option">
+                  <input
+                    type="checkbox"
+                    checked={channelListFilters.filterWorkingStreams ?? false}
+                    onChange={(e) => onChannelListFiltersChange?.({ filterWorkingStreams: e.target.checked })}
+                  />
+                  <span>Working Streams</span>
+                </label>
+                <label className="filter-settings-option">
+                  <input
+                    type="checkbox"
+                    checked={channelListFilters.filterUnprobedStreams ?? false}
+                    onChange={(e) => onChannelListFiltersChange?.({ filterUnprobedStreams: e.target.checked })}
+                  />
+                  <span>Unprobed Streams</span>
                 </label>
               </div>
             </div>

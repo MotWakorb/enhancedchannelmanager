@@ -503,11 +503,15 @@ export function RuleBuilder({
 
       {/* Cancel Confirmation Dialog */}
       {showCancelConfirm && (
-        <div className="confirm-dialog-overlay">
-          <div className="confirm-dialog">
-            <h4>Unsaved Changes</h4>
-            <p>You have unsaved changes. Are you sure you want to discard them?</p>
-            <div className="confirm-dialog-actions">
+        <div className="modal-overlay">
+          <div className="modal-container modal-sm">
+            <div className="modal-header">
+              <h2>Unsaved Changes</h2>
+            </div>
+            <div className="modal-body">
+              <p style={{ margin: 0, color: 'var(--text-secondary)', fontSize: '14px', lineHeight: 1.5 }}>You have unsaved changes. Are you sure you want to discard them?</p>
+            </div>
+            <div className="modal-footer">
               <button
                 type="button"
                 className="btn btn-secondary"

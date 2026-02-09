@@ -65,8 +65,7 @@
 }
 
 .pane-header.edit-mode {
-  background-color: var(--accent-10);
-  border-bottom-color: var(--accent-30);
+  border-bottom-color: var(--border-secondary);
 }
 
 .pane-header-title {
@@ -142,28 +141,27 @@
 .selection-actions {
   display: flex;
   align-items: center;
-  gap: 0.25rem;
+  gap: 3px;
 }
 
-/* Icon-only bulk action buttons */
+/* Icon-only bulk action buttons - matches toolbar button style */
 .bulk-action-btn {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 28px;
-  height: 28px;
-  padding: 0;
-  background-color: var(--accent-15);
-  border: 1px solid var(--accent-primary);
-  color: var(--accent-primary);
+  padding: 0.375rem 0.5rem;
+  background-color: var(--button-bg);
+  border: 1px solid var(--border-secondary);
+  color: var(--button-text);
   border-radius: 4px;
   cursor: pointer;
-  transition: background-color 0.15s, transform 0.1s;
+  transition: background-color 0.15s, border-color 0.15s, color 0.15s;
 }
 
 .bulk-action-btn:hover {
-  background-color: var(--accent-30);
-  transform: scale(1.05);
+  background-color: var(--button-hover-bg);
+  border-color: var(--accent-primary);
+  color: var(--text-primary);
 }
 
 .bulk-action-btn .material-icons {
@@ -171,24 +169,116 @@
 }
 
 .bulk-action-btn--danger {
+  color: var(--error);
+}
+
+.bulk-action-btn--danger:hover {
   background-color: rgba(248, 113, 113, 0.15);
   border-color: var(--error);
   color: var(--error);
 }
 
-.bulk-action-btn--danger:hover {
-  background-color: rgba(248, 113, 113, 0.3);
-}
-
 .bulk-action-btn--clear {
-  background-color: var(--bg-hover);
-  border-color: var(--border-secondary);
   color: var(--text-secondary);
 }
 
 .bulk-action-btn--clear:hover {
   background-color: var(--button-hover-bg);
   color: var(--text-primary);
+}
+
+/* Bulk Actions Dropdown */
+.bulk-actions-dropdown {
+  position: relative;
+  display: inline-flex;
+}
+
+.bulk-actions-dropdown .bulk-action-btn {
+  gap: 0.125rem;
+}
+
+.bulk-actions-dropdown .bulk-action-btn .sort-dropdown-arrow {
+  font-size: 16px !important;
+  margin-left: -4px;
+  opacity: 0.7;
+}
+
+.bulk-actions-dropdown .bulk-action-btn.loading {
+  border-color: var(--accent-primary);
+  color: var(--accent-primary);
+  padding: 0.375rem 0.5rem;
+  text-align: left;
+}
+
+.bulk-actions-dropdown .bulk-action-btn.loading .sort-dropdown-arrow {
+  display: none;
+}
+
+.bulk-actions-dropdown .bulk-action-btn.loading .material-icons.spinning {
+  animation: spin 1s linear infinite reverse;
+}
+
+.bulk-actions-menu {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  min-width: 190px;
+  background-color: var(--bg-secondary);
+  border: 1px solid var(--border-primary);
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  z-index: 1000;
+  padding: 0.25rem 0;
+  margin-top: 2px;
+}
+
+.bulk-actions-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 0.5rem 0.75rem;
+  background: none;
+  border: none;
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: background-color 0.15s;
+  font-size: 0.85rem;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.bulk-actions-item:hover {
+  background-color: var(--accent-10);
+}
+
+.bulk-actions-item .material-icons {
+  font-size: 18px;
+  color: var(--text-secondary);
+}
+
+.bulk-actions-item:hover .material-icons {
+  color: var(--accent-primary);
+}
+
+.bulk-actions-item.disabled {
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+.bulk-actions-divider {
+  height: 1px;
+  background-color: var(--border-primary);
+  margin: 0.25rem 0;
+}
+
+.bulk-actions-section-label {
+  padding: 0.25rem 0.75rem 0.125rem;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-secondary);
+  opacity: 0.7;
 }
 
 .edit-mode-info {
@@ -911,7 +1001,30 @@
   color: var(--text-muted);
   background-color: var(--border-primary);
   padding: 0.125rem 0.5rem;
-  border-radius: 10px;
+  border-radius: 4px;
+}
+
+.group-good-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+  margin-left: 0.5rem;
+  padding: 0.125rem 0.5rem;
+  background-color: rgba(39, 174, 96, 0.15);
+  border: 1px solid rgba(39, 174, 96, 0.4);
+  border-radius: 4px;
+  color: var(--success, #27ae60);
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.group-good-indicator .material-icons {
+  font-size: 0.875rem;
+  color: var(--success, #27ae60);
+}
+
+.group-good-indicator .good-count {
+  color: var(--success, #27ae60);
 }
 
 .group-failed-indicator {
@@ -919,7 +1032,7 @@
   align-items: center;
   gap: 0.2rem;
   margin-left: 0.5rem;
-  padding: 0.1rem 0.4rem;
+  padding: 0.125rem 0.5rem;
   background-color: rgba(231, 76, 60, 0.15);
   border: 1px solid rgba(231, 76, 60, 0.4);
   border-radius: 4px;
@@ -3803,8 +3916,22 @@
   align-items: center;
   justify-content: center;
   padding: 0.375rem 0.5rem;
-  background-color: var(--accent-15);
+  background-color: var(--button-bg);
+  border: 1px solid var(--border-secondary);
   border-radius: 4px;
+}
+
+.bulk-action-btn-wrapper .sort-dropdown-btn:hover:not(:disabled) {
+  background-color: var(--button-hover-bg);
+  border-color: var(--accent-primary);
+}
+
+.bulk-action-btn-wrapper .sort-dropdown-btn .sort-dropdown-arrow {
+  display: none;
+}
+
+.bulk-action-btn-wrapper .sort-dropdown-btn .material-icons {
+  font-size: 18px;
 }
 
 .bulk-action-btn-wrapper .sort-dropdown-btn:hover:not(:disabled) {

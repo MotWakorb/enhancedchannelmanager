@@ -404,47 +404,7 @@
   opacity: 0.9;
 }
 
-/* Confirm Dialog */
-.confirm-dialog-overlay {
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background: rgba(0, 0, 0, 0.5);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: var(--z-overlay);
-}
-
-.confirm-dialog {
-  background: var(--bg-primary);
-  border-radius: 12px;
-  padding: 24px;
-  max-width: 400px;
-  width: 90%;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
-}
-
-.confirm-dialog h4 {
-  margin: 0 0 12px 0;
-  font-size: 18px;
-  color: var(--text-primary);
-}
-
-.confirm-dialog p {
-  margin: 0 0 20px 0;
-  color: var(--text-secondary);
-  font-size: 14px;
-  line-height: 1.5;
-}
-
-.confirm-dialog-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 12px;
-}
+/* Confirm Dialog - uses ModalBase.css (modal-overlay, modal-container modal-sm) */
 
 /* Responsive */
 @media (max-width: 600px) {
