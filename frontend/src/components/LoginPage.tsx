@@ -170,7 +170,7 @@ export function LoginPage({ onLoginSuccess }: LoginPageProps) {
               autoComplete="current-password"
               onKeyDown={handleKeyDown}
             />
-            {effectiveProvider === 'local' && authStatus?.smtp_configured && (
+            {effectiveProvider === 'local' && (
               <a
                 href="/forgot-password"
                 className="login-forgot-link"

@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import type { Channel, Logo, EPGProgram, EPGData, EPGSource, StreamProfile, ChannelProfile, ChannelGroup } from '../../types';
 import * as api from '../../services/api';
+import { useNotifications } from '../../contexts/NotificationContext';
 import { EditChannelModal, type ChannelMetadataChanges } from '../EditChannelModal';
 import { PrintGuideModal } from '../PrintGuideModal';
 import { CustomSelect } from '../CustomSelect';
@@ -76,7 +77,7 @@ export function GuideTab({
 
   // Loading state
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const notifications = useNotifications();
 
   // Time selection state
   const [selectedDate, setSelectedDate] = useState(() => getLocalDateString(new Date()));
@@ -222,7 +223,6 @@ export function GuideTab({
   useEffect(() => {
     const loadData = async () => {
       setLoading(true);
-      setError(null);
 
       try {
         // Fetch all needed data in parallel
@@ -240,7 +240,7 @@ export function GuideTab({
         setChannelProfiles(profilesData);
         setChannelGroups(groupsData);
       } catch (err) {
-        setError(err instanceof Error ? err.message : 'Failed to load guide data');
+        notifications.error(err instanceof Error ? err.message : 'Failed to load guide data', 'Guide');
       } finally {
         setLoading(false);
       }
@@ -252,12 +252,11 @@ export function GuideTab({
   // Refresh programs only
   const handleRefresh = useCallback(async () => {
     setLoading(true);
-    setError(null);
     try {
       const programsData = await api.getEPGGrid();
       setPrograms(programsData);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to refresh program data');
+      notifications.error(err instanceof Error ? err.message : 'Failed to refresh program data', 'Guide');
     } finally {
       setLoading(false);
     }
@@ -636,7 +635,6 @@ export function GuideTab({
           Print Guide
         </button>
 
-        {error && <span className="error-message">{error}</span>}
       </div>
 
       {/* Guide Grid */}

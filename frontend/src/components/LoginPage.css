@@ -225,6 +225,31 @@
   font-size: 0.8125rem !important;
 }
 
+/* Info message (neutral variant of success) */
+.login-info {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 1.5rem;
+  background: var(--bg-tertiary, rgba(100, 116, 139, 0.1));
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-lg);
+  text-align: center;
+}
+
+.login-info .material-icons {
+  font-size: 2.5rem;
+  color: var(--text-secondary);
+}
+
+.login-info p {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 0.9375rem;
+  line-height: 1.5;
+}
+
 /* Links section */
 .login-links {
   display: flex;

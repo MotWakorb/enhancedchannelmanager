@@ -414,13 +414,13 @@ describe('PopularityPanel', () => {
   });
 
   describe('error handling', () => {
-    it('displays error message when API fails', async () => {
+    it('shows toast notification when API fails', async () => {
       vi.mocked(api.getPopularityRankings).mockRejectedValue(new Error('Network error'));
 
       render(<PopularityPanel />);
 
       await waitFor(() => {
-        expect(screen.getByText('Network error')).toBeInTheDocument();
+        expect(mockNotifications.error).toHaveBeenCalledWith('Network error', 'Popularity');
       });
     });
   });
