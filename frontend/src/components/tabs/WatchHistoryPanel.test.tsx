@@ -10,6 +10,18 @@ import type { WatchHistoryResponse, WatchHistoryEntry } from '../../types';
 // Mock the API module
 vi.mock('../../services/api');
 
+// Mock the NotificationContext
+const mockNotifications = {
+  success: vi.fn(),
+  error: vi.fn(),
+  warning: vi.fn(),
+  info: vi.fn(),
+};
+
+vi.mock('../../contexts/NotificationContext', () => ({
+  useNotifications: () => mockNotifications,
+}));
+
 describe('WatchHistoryPanel', () => {
   // Mock data
   const mockHistoryEntries: WatchHistoryEntry[] = [
@@ -497,13 +509,13 @@ describe('WatchHistoryPanel', () => {
   });
 
   describe('error handling', () => {
-    it('displays error message when API fails', async () => {
+    it('shows toast notification when API fails', async () => {
       vi.mocked(api.getWatchHistory).mockRejectedValue(new Error('Network error'));
 
       render(<WatchHistoryPanel />);
 
       await waitFor(() => {
-        expect(screen.getByText('Network error')).toBeInTheDocument();
+        expect(mockNotifications.error).toHaveBeenCalledWith('Network error', 'Watch History');
       });
     });
   });

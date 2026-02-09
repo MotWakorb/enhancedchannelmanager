@@ -5,6 +5,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import type { BandwidthSummary } from '../../types';
 import * as api from '../../services/api';
+import { useNotifications } from '../../contexts/NotificationContext';
 import './BandwidthPanel.css';
 import { formatBytes, formatBitrate, formatDateLabel } from '../../utils/formatting';
 
@@ -13,18 +14,17 @@ interface BandwidthPanelProps {
 }
 
 export function BandwidthPanel({ refreshTrigger }: BandwidthPanelProps) {
+  const notifications = useNotifications();
   const [data, setData] = useState<BandwidthSummary | null>(null);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
 
   const fetchData = useCallback(async () => {
     try {
       setLoading(true);
-      setError(null);
       const result = await api.getBandwidthStats();
       setData(result);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load bandwidth data');
+      notifications.error(err instanceof Error ? err.message : 'Failed to load bandwidth data', 'Bandwidth');
     } finally {
       setLoading(false);
     }
@@ -82,8 +82,6 @@ export function BandwidthPanel({ refreshTrigger }: BandwidthPanelProps) {
           </button>
         </div>
       </div>
-
-      {error && <div className="error-message">{error}</div>}
 
       {data && (
         <>
@@ -219,7 +217,7 @@ export function BandwidthPanel({ refreshTrigger }: BandwidthPanelProps) {
         </>
       )}
 
-      {!data && !loading && !error && (
+      {!data && !loading && (
         <div className="empty-state">No bandwidth data available yet.</div>
       )}
     </div>
