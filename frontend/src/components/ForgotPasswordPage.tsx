@@ -1,11 +1,13 @@
 /**
  * Forgot Password page component.
  *
- * Allows users to request a password reset email.
+ * When SMTP is configured: allows users to request a password reset email.
+ * When SMTP is not configured: directs users to the CLI password reset docs.
  * Always shows success message to prevent email enumeration.
  */
 import React, { useState, FormEvent } from 'react';
 import * as api from '../services/api';
+import { useAuth } from '../hooks/useAuth';
 import './LoginPage.css';
 
 // Simple navigation helper (no React Router)
@@ -15,10 +17,13 @@ const navigateTo = (path: string) => {
 };
 
 export function ForgotPasswordPage() {
+  const { authStatus } = useAuth();
   const [email, setEmail] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const smtpConfigured = authStatus?.smtp_configured ?? false;
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
@@ -78,6 +83,49 @@ export function ForgotPasswordPage() {
               The link will expire in 1 hour.
             </p>
           </div>
+
+          <div className="login-links">
+            <a href="/login" onClick={(e) => { e.preventDefault(); navigateTo('/login'); }} className="login-link">
+              <span className="material-icons">arrow_back</span>
+              Back to Sign In
+            </a>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // When SMTP is not configured, show CLI instructions page
+  if (!smtpConfigured) {
+    return (
+      <div className="login-page">
+        <div className="login-container">
+          <div className="login-header">
+            <h1>Reset Your Password</h1>
+            <p>Email is not configured on this server</p>
+          </div>
+
+          <div className="login-info">
+            <span className="material-icons">lock_reset</span>
+            <p>
+              This ECM instance does not have email configured, so password reset
+              emails cannot be sent.
+            </p>
+            <p>
+              You can reset your password from the command line using the built-in
+              reset utility. See the documentation for instructions:
+            </p>
+          </div>
+
+          <a
+            href="https://github.com/MotWakorb/enhancedchannelmanager#password-reset-script"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="login-submit"
+            style={{ textAlign: 'center', textDecoration: 'none', display: 'block' }}
+          >
+            View Password Reset Docs
+          </a>
 
           <div className="login-links">
             <a href="/login" onClick={(e) => { e.preventDefault(); navigateTo('/login'); }} className="login-link">

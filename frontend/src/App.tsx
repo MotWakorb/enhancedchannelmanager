@@ -154,10 +154,13 @@ function App() {
     filterMissingTvgId: false,
     filterMissingEpgData: false,
     filterMissingGracenote: false,
+    filterFailedStreams: true,
+    filterWorkingStreams: true,
+    filterUnprobedStreams: true,
   };
   const [channelListFilters, setChannelListFilters] = useState<ChannelListFilterSettings>(() => {
     const saved = localStorage.getItem('channelListFilters');
-    return saved ? JSON.parse(saved) : defaultFilterSettings;
+    return saved ? { ...defaultFilterSettings, ...JSON.parse(saved) } : defaultFilterSettings;
   });
 
   // Track newly created group IDs in this session

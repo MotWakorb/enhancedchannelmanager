@@ -5,6 +5,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import type { WatchHistoryEntry, WatchHistoryResponse } from '../../types';
 import * as api from '../../services/api';
+import { useNotifications } from '../../contexts/NotificationContext';
 import './WatchHistoryPanel.css';
 import { formatDuration, formatRelativeTime } from '../../utils/formatting';
 
@@ -20,9 +21,9 @@ interface WatchHistoryPanelProps {
 }
 
 export function WatchHistoryPanel({ refreshTrigger }: WatchHistoryPanelProps) {
+  const notifications = useNotifications();
   const [data, setData] = useState<WatchHistoryResponse | null>(null);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
   const [page, setPage] = useState(1);
   const [pageSize] = useState(25);
 
@@ -37,7 +38,6 @@ export function WatchHistoryPanel({ refreshTrigger }: WatchHistoryPanelProps) {
   const fetchData = useCallback(async () => {
     try {
       setLoading(true);
-      setError(null);
       const result = await api.getWatchHistory({
         page,
         pageSize,
@@ -47,7 +47,7 @@ export function WatchHistoryPanel({ refreshTrigger }: WatchHistoryPanelProps) {
       });
       setData(result);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load watch history');
+      notifications.error(err instanceof Error ? err.message : 'Failed to load watch history', 'Watch History');
     } finally {
       setLoading(false);
     }
@@ -176,8 +176,6 @@ export function WatchHistoryPanel({ refreshTrigger }: WatchHistoryPanelProps) {
           </button>
         )}
       </div>
-
-      {error && <div className="error-message">{error}</div>}
 
       {/* History Table */}
       <div className="history-table-container">

@@ -344,11 +344,10 @@ class BandwidthTracker:
                     channel_bytes_delta = bytes_now - prev_bytes
                     total_bytes_delta += channel_bytes_delta
                     # Calculate in/out bytes
-                    # Outbound = total bytes sent to all clients
-                    total_bytes_out_delta += channel_bytes_delta
-                    # Inbound = bytes from provider (approximately bytes / client_count)
-                    # Since one stream from provider is split to N clients
-                    total_bytes_in_delta += channel_bytes_delta // max(client_count, 1)
+                    # Inbound = bytes from provider (one stream per channel)
+                    total_bytes_in_delta += channel_bytes_delta
+                    # Outbound = bytes fanned out to all clients (stream × clients)
+                    total_bytes_out_delta += channel_bytes_delta * max(client_count, 1)
 
             # Track active channels for watch counting (use string ID for UUID support)
             if channel_id:

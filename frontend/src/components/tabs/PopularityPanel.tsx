@@ -47,7 +47,6 @@ export function PopularityPanel({ refreshTrigger }: PopularityPanelProps) {
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [calculating, setCalculating] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const [activeView, setActiveView] = useState<'rankings' | 'trending'>('rankings');
   const [expandedChannel, setExpandedChannel] = useState<string | null>(null);
   const notifications = useNotifications();
@@ -55,7 +54,6 @@ export function PopularityPanel({ refreshTrigger }: PopularityPanelProps) {
   const fetchData = useCallback(async () => {
     try {
       setLoading(true);
-      setError(null);
       const [rankingsData, upData, downData] = await Promise.all([
         api.getPopularityRankings(50, 0),
         api.getTrendingChannels('up', 10),
@@ -66,7 +64,7 @@ export function PopularityPanel({ refreshTrigger }: PopularityPanelProps) {
       setTrendingUp(upData);
       setTrendingDown(downData);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load popularity data');
+      notifications.error(err instanceof Error ? err.message : 'Failed to load popularity data', 'Popularity');
     } finally {
       setLoading(false);
     }
@@ -79,7 +77,6 @@ export function PopularityPanel({ refreshTrigger }: PopularityPanelProps) {
   const handleCalculate = async () => {
     try {
       setCalculating(true);
-      setError(null);
       const result = await api.calculatePopularity(7);
       notifications.success(
         `Calculated ${result.channels_scored} channels (${result.channels_created} new, ${result.channels_updated} updated)`,
@@ -138,8 +135,6 @@ export function PopularityPanel({ refreshTrigger }: PopularityPanelProps) {
           </button>
         </div>
       </div>
-
-      {error && <div className="error-message">{error}</div>}
 
       {activeView === 'rankings' && (
         <div className="rankings-section">

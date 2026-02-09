@@ -84,6 +84,10 @@ tags_metadata = [
     {"name": "Authentication", "description": "User authentication and session management"},
     {"name": "TLS", "description": "TLS/SSL certificate management with Let's Encrypt"},
     {"name": "Auto-Creation", "description": "Automatic channel creation from streams based on rules"},
+    {"name": "Enhanced Stats", "description": "Advanced analytics: unique viewers, channel bandwidth, watch history"},
+    {"name": "Popularity", "description": "Channel popularity scores, rankings, and trending analysis"},
+    {"name": "Stream Preview", "description": "Live stream and channel preview endpoints"},
+    {"name": "Admin", "description": "User management (admin only)"},
 ]
 
 app = FastAPI(
@@ -102,12 +106,14 @@ M3U playlists, EPG data, and more.
 - **Notifications**: Get alerts via Discord, Email, or Telegram
 
 ## Authentication
-Currently, the API does not require authentication for local access.
+All API endpoints require JWT authentication. Obtain a token via `POST /api/auth/login`
+and include it as a Bearer token or session cookie. The interactive docs at `/api/docs`
+handle authentication automatically when accessed through the web UI.
 
 ## Rate Limiting
 No rate limiting is enforced, but rapid polling is logged for diagnostics.
     """,
-    version="0.8.7",
+    version="0.12.2",
     openapi_tags=tags_metadata,
     docs_url="/api/docs",
     redoc_url="/api/redoc",
@@ -611,6 +617,7 @@ class BulkCommitResponse(BaseModel):
 # Health check
 @app.get("/api/health", tags=["Health"])
 async def health_check():
+    """Health check endpoint returning version and connection status."""
     # Get version info from environment (set at build time)
     version = os.environ.get("ECM_VERSION", "unknown")
     release_channel = os.environ.get("RELEASE_CHANNEL", "latest")
@@ -1403,13 +1410,14 @@ class CreateChannelRequest(BaseModel):
     normalize: Optional[bool] = False  # Apply normalization rules to channel name
 
 
-@app.get("/api/channels")
+@app.get("/api/channels", tags=["Channels"])
 async def get_channels(
     page: int = 1,
     page_size: int = 100,
     search: Optional[str] = None,
     channel_group: Optional[int] = None,
 ):
+    """List channels with pagination, search, and group filtering."""
     start_time = time.time()
     logger.debug(
         f"[CHANNELS] Fetching channels - page={page}, page_size={page_size}, "
@@ -1461,8 +1469,9 @@ async def get_channels(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/channels")
+@app.post("/api/channels", tags=["Channels"])
 async def create_channel(request: CreateChannelRequest):
+    """Create a new channel."""
     logger.debug(f"POST /api/channels - Creating channel: {request.name}, number: {request.channel_number}, normalize: {request.normalize}")
     client = get_client()
     try:
@@ -1521,6 +1530,7 @@ async def get_logos(
     page_size: int = 100,
     search: Optional[str] = None,
 ):
+    """List logos with pagination and search."""
     client = get_client()
     try:
         return await client.get_logos(page=page, page_size=page_size, search=search)
@@ -1530,6 +1540,7 @@ async def get_logos(
 
 @app.get("/api/channels/logos/{logo_id}", tags=["Channels"])
 async def get_logo(logo_id: int):
+    """Get a single logo by ID."""
     client = get_client()
     try:
         return await client.get_logo(logo_id)
@@ -1539,6 +1550,7 @@ async def get_logo(logo_id: int):
 
 @app.post("/api/channels/logos", tags=["Channels"])
 async def create_logo(request: CreateLogoRequest):
+    """Create a logo from a URL."""
     client = get_client()
     try:
         result = await client.create_logo({"name": request.name, "url": request.url})
@@ -1586,6 +1598,7 @@ async def upload_logo(request: Request, file: UploadFile = File(...)):
 
 @app.patch("/api/channels/logos/{logo_id}", tags=["Channels"])
 async def update_logo(logo_id: int, data: dict):
+    """Update a logo."""
     client = get_client()
     try:
         return await client.update_logo(logo_id, data)
@@ -1595,6 +1608,7 @@ async def update_logo(logo_id: int, data: dict):
 
 @app.delete("/api/channels/logos/{logo_id}", tags=["Channels"])
 async def delete_logo(logo_id: int):
+    """Delete a logo."""
     client = get_client()
     try:
         await client.delete_logo(logo_id)
@@ -1940,6 +1954,7 @@ async def preview_csv(data: dict):
 # Channel by ID routes - must come after /api/channels/logos and CSV routes
 @app.get("/api/channels/{channel_id}", tags=["Channels"])
 async def get_channel(channel_id: int):
+    """Get channel details by ID."""
     client = get_client()
     try:
         return await client.get_channel(channel_id)
@@ -1949,6 +1964,7 @@ async def get_channel(channel_id: int):
 
 @app.get("/api/channels/{channel_id}/streams", tags=["Channels"])
 async def get_channel_streams(channel_id: int):
+    """Get streams assigned to a channel."""
     client = get_client()
     try:
         return await client.get_channel_streams(channel_id)
@@ -1958,6 +1974,7 @@ async def get_channel_streams(channel_id: int):
 
 @app.patch("/api/channels/{channel_id}", tags=["Channels"])
 async def update_channel(channel_id: int, data: dict):
+    """Update a channel."""
     logger.debug(f"PATCH /api/channels/{channel_id} - Updating channel with data: {data}")
     client = get_client()
     try:
@@ -2023,6 +2040,7 @@ async def update_channel(channel_id: int, data: dict):
 
 @app.delete("/api/channels/{channel_id}", tags=["Channels"])
 async def delete_channel(channel_id: int):
+    """Delete a channel."""
     logger.debug(f"DELETE /api/channels/{channel_id} - Deleting channel")
     client = get_client()
     try:
@@ -2051,6 +2069,7 @@ async def delete_channel(channel_id: int):
 
 @app.post("/api/channels/{channel_id}/add-stream", tags=["Channels"])
 async def add_stream_to_channel(channel_id: int, request: AddStreamRequest):
+    """Add a stream to a channel."""
     logger.debug(f"POST /api/channels/{channel_id}/add-stream - Adding stream {request.stream_id}")
     client = get_client()
     try:
@@ -2087,6 +2106,7 @@ async def add_stream_to_channel(channel_id: int, request: AddStreamRequest):
 
 @app.post("/api/channels/{channel_id}/remove-stream", tags=["Channels"])
 async def remove_stream_from_channel(channel_id: int, request: RemoveStreamRequest):
+    """Remove a stream from a channel."""
     logger.debug(f"POST /api/channels/{channel_id}/remove-stream - Removing stream {request.stream_id}")
     client = get_client()
     try:
@@ -2123,6 +2143,7 @@ async def remove_stream_from_channel(channel_id: int, request: RemoveStreamReque
 
 @app.post("/api/channels/{channel_id}/reorder-streams", tags=["Channels"])
 async def reorder_channel_streams(channel_id: int, request: ReorderStreamsRequest):
+    """Reorder streams within a channel."""
     client = get_client()
     try:
         # Get before state
@@ -2150,6 +2171,7 @@ async def reorder_channel_streams(channel_id: int, request: ReorderStreamsReques
 
 @app.post("/api/channels/assign-numbers", tags=["Channels"])
 async def assign_channel_numbers(request: AssignNumbersRequest):
+    """Bulk assign channel numbers."""
     client = get_client()
     settings = get_settings()
 
@@ -2749,6 +2771,7 @@ async def bulk_commit_operations(request: BulkCommitRequest):
 # Channel Groups
 @app.get("/api/channel-groups", tags=["Channel Groups"])
 async def get_channel_groups():
+    """List all channel groups (excluding hidden)."""
     client = get_client()
     try:
         groups = await client.get_channel_groups()
@@ -2780,6 +2803,7 @@ async def get_channel_groups():
 
 @app.post("/api/channel-groups", tags=["Channel Groups"])
 async def create_channel_group(request: CreateChannelGroupRequest):
+    """Create a channel group."""
     client = get_client()
     try:
         result = await client.create_channel_group(request.name)
@@ -2805,6 +2829,7 @@ async def create_channel_group(request: CreateChannelGroupRequest):
 
 @app.patch("/api/channel-groups/{group_id}", tags=["Channel Groups"])
 async def update_channel_group(group_id: int, data: dict):
+    """Update a channel group."""
     client = get_client()
     try:
         return await client.update_channel_group(group_id, data)
@@ -2989,6 +3014,7 @@ async def delete_orphaned_channel_groups(request: DeleteOrphanedGroupsRequest | 
 
 @app.delete("/api/channel-groups/{group_id}", tags=["Channel Groups"])
 async def delete_channel_group(group_id: int):
+    """Delete a channel group (hides M3U-synced groups instead)."""
     client = get_client()
     try:
         # Check if this group has M3U sync settings
@@ -3516,7 +3542,7 @@ async def get_channel_groups_with_streams():
 
 
 # Streams
-@app.get("/api/streams")
+@app.get("/api/streams", tags=["Streams"])
 async def get_streams(
     page: int = 1,
     page_size: int = 100,
@@ -3525,6 +3551,7 @@ async def get_streams(
     m3u_account: Optional[int] = None,
     bypass_cache: bool = False,
 ):
+    """List streams with pagination, search, and filtering."""
     start_time = time.time()
     logger.debug(
         f"[STREAMS] Fetching streams - page={page}, page_size={page_size}, "
@@ -3640,6 +3667,7 @@ async def cache_stats():
 # Providers (M3U Accounts)
 @app.get("/api/providers", tags=["Providers"])
 async def get_providers():
+    """List M3U accounts (legacy endpoint)."""
     client = get_client()
     try:
         return await client.get_m3u_accounts()
@@ -3660,6 +3688,7 @@ async def get_all_provider_group_settings():
 # EPG Sources
 @app.get("/api/epg/sources", tags=["EPG"])
 async def get_epg_sources():
+    """List all EPG sources."""
     client = get_client()
     try:
         return await client.get_epg_sources()
@@ -3669,6 +3698,7 @@ async def get_epg_sources():
 
 @app.get("/api/epg/sources/{source_id}", tags=["EPG"])
 async def get_epg_source(source_id: int):
+    """Get an EPG source by ID."""
     client = get_client()
     try:
         return await client.get_epg_source(source_id)
@@ -3678,6 +3708,7 @@ async def get_epg_source(source_id: int):
 
 @app.post("/api/epg/sources", tags=["EPG"])
 async def create_epg_source(request: Request):
+    """Create an EPG source (including dummy sources)."""
     client = get_client()
     try:
         data = await request.json()
@@ -3700,6 +3731,7 @@ async def create_epg_source(request: Request):
 
 @app.patch("/api/epg/sources/{source_id}", tags=["EPG"])
 async def update_epg_source(source_id: int, request: Request):
+    """Update an EPG source."""
     client = get_client()
     try:
         # Get before state
@@ -3725,6 +3757,7 @@ async def update_epg_source(source_id: int, request: Request):
 
 @app.delete("/api/epg/sources/{source_id}", tags=["EPG"])
 async def delete_epg_source(source_id: int):
+    """Delete an EPG source."""
     client = get_client()
     try:
         # Get source info before deleting
@@ -3884,6 +3917,7 @@ async def refresh_epg_source(source_id: int):
 
 @app.post("/api/epg/import", tags=["EPG"])
 async def trigger_epg_import():
+    """Trigger EPG data import."""
     client = get_client()
     try:
         return await client.trigger_epg_import()
@@ -3899,6 +3933,7 @@ async def get_epg_data(
     search: Optional[str] = None,
     epg_source: Optional[int] = None,
 ):
+    """Search EPG data with pagination and filtering."""
     client = get_client()
     try:
         return await client.get_epg_data(
@@ -3913,6 +3948,7 @@ async def get_epg_data(
 
 @app.get("/api/epg/data/{data_id}", tags=["EPG"])
 async def get_epg_data_by_id(data_id: int):
+    """Get an individual EPG data entry by ID."""
     client = get_client()
     try:
         return await client.get_epg_data_by_id(data_id)
@@ -4308,6 +4344,7 @@ async def get_epg_lcn_batch(request: BatchLCNRequest):
 # Stream Profiles
 @app.get("/api/stream-profiles", tags=["Stream Profiles"])
 async def get_stream_profiles():
+    """List available stream profiles."""
     client = get_client()
     try:
         return await client.get_stream_profiles()
@@ -9763,7 +9800,11 @@ async def rollback_auto_creation_execution(execution_id: int):
 
 @app.get("/api/auto-creation/export/yaml", tags=["Auto-Creation"])
 async def export_auto_creation_rules_yaml():
-    """Export all auto-creation rules as YAML."""
+    """Export all auto-creation rules as YAML.
+
+    Includes portable name fields (group_name, target_group_name, m3u_account_name)
+    alongside numeric IDs so rules can be shared between ECM instances.
+    """
     try:
         import yaml
         from models import AutoCreationRule
@@ -9773,6 +9814,21 @@ async def export_auto_creation_rules_yaml():
                 AutoCreationRule.priority
             ).all()
 
+            # Build id→name lookup maps for portable export
+            client = get_client()
+            group_id_to_name = {}
+            m3u_id_to_name = {}
+            try:
+                groups = await client.get_channel_groups()
+                group_id_to_name = {g["id"]: g["name"] for g in groups}
+            except Exception as e:
+                logger.warning(f"Could not fetch channel groups for YAML export: {e}")
+            try:
+                m3u_accounts = await client.get_m3u_accounts()
+                m3u_id_to_name = {a["id"]: a["name"] for a in m3u_accounts}
+            except Exception as e:
+                logger.warning(f"Could not fetch M3U accounts for YAML export: {e}")
+
             export_data = {
                 "version": 1,
                 "exported_at": datetime.utcnow().isoformat() + "Z",
@@ -9780,13 +9836,15 @@ async def export_auto_creation_rules_yaml():
             }
 
             for rule in rules:
-                export_data["rules"].append({
+                rule_dict = {
                     "name": rule.name,
                     "description": rule.description,
                     "enabled": rule.enabled,
                     "priority": rule.priority,
                     "m3u_account_id": rule.m3u_account_id,
+                    "m3u_account_name": m3u_id_to_name.get(rule.m3u_account_id),
                     "target_group_id": rule.target_group_id,
+                    "target_group_name": group_id_to_name.get(rule.target_group_id),
                     "conditions": rule.get_conditions(),
                     "actions": rule.get_actions(),
                     "run_on_refresh": rule.run_on_refresh,
@@ -9794,7 +9852,15 @@ async def export_auto_creation_rules_yaml():
                     "sort_field": rule.sort_field,
                     "sort_order": rule.sort_order or "asc",
                     "normalize_names": rule.normalize_names or False
-                })
+                }
+
+                # Add group_name to actions that have group_id
+                for action in rule_dict["actions"]:
+                    gid = action.get("group_id")
+                    if gid is not None and gid in group_id_to_name:
+                        action["group_name"] = group_id_to_name[gid]
+
+                export_data["rules"].append(rule_dict)
 
             yaml_content = yaml.dump(export_data, default_flow_style=False, sort_keys=False)
 
@@ -9814,7 +9880,12 @@ async def export_auto_creation_rules_yaml():
 
 @app.post("/api/auto-creation/import/yaml", tags=["Auto-Creation"])
 async def import_auto_creation_rules_yaml(request: ImportYAMLRequest):
-    """Import auto-creation rules from YAML."""
+    """Import auto-creation rules from YAML.
+
+    Supports portable name fields: if group_name/target_group_name/m3u_account_name
+    are present and corresponding IDs are missing, names are resolved to local IDs.
+    Explicit IDs always take priority over names.
+    """
     try:
         import yaml
         from models import AutoCreationRule
@@ -9827,15 +9898,69 @@ async def import_auto_creation_rules_yaml(request: ImportYAMLRequest):
         except yaml.YAMLError as e:
             raise HTTPException(status_code=400, detail=f"Invalid YAML: {e}")
 
+        # Accept both {"rules": [...]} and a bare list of rules
+        if isinstance(data, list):
+            data = {"rules": data}
+
         if not data or "rules" not in data:
-            raise HTTPException(status_code=400, detail="YAML must contain a 'rules' array")
+            raise HTTPException(status_code=400, detail="YAML must contain a 'rules' array or be a list of rules")
+
+        # Build name→id lookup maps for portable import
+        client = get_client()
+        group_name_to_id = {}
+        m3u_name_to_id = {}
+        try:
+            groups = await client.get_channel_groups()
+            group_name_to_id = {g["name"].lower(): g["id"] for g in groups}
+        except Exception as e:
+            logger.warning(f"Could not fetch channel groups for YAML import: {e}")
+        try:
+            m3u_accounts = await client.get_m3u_accounts()
+            m3u_name_to_id = {a["name"].lower(): a["id"] for a in m3u_accounts}
+        except Exception as e:
+            logger.warning(f"Could not fetch M3U accounts for YAML import: {e}")
 
         session = get_session()
         try:
             imported = []
             errors = []
+            warnings = []
 
             for i, rule_data in enumerate(data["rules"]):
+                # Resolve portable name fields to local IDs
+                # target_group_name → target_group_id
+                if not rule_data.get("target_group_id") and rule_data.get("target_group_name"):
+                    name = rule_data["target_group_name"]
+                    resolved_id = group_name_to_id.get(name.lower())
+                    if resolved_id:
+                        rule_data["target_group_id"] = resolved_id
+                    else:
+                        warnings.append(f"Rule '{rule_data.get('name', f'Rule {i}')}': target_group_name '{name}' not found locally")
+
+                # m3u_account_name → m3u_account_id
+                if not rule_data.get("m3u_account_id") and rule_data.get("m3u_account_name"):
+                    name = rule_data["m3u_account_name"]
+                    resolved_id = m3u_name_to_id.get(name.lower())
+                    if resolved_id:
+                        rule_data["m3u_account_id"] = resolved_id
+                    else:
+                        warnings.append(f"Rule '{rule_data.get('name', f'Rule {i}')}': m3u_account_name '{name}' not found locally")
+
+                # Resolve group_name → group_id in actions
+                for action in rule_data.get("actions", []):
+                    if not action.get("group_id") and action.get("group_name"):
+                        name = action["group_name"]
+                        resolved_id = group_name_to_id.get(name.lower())
+                        if resolved_id:
+                            action["group_id"] = resolved_id
+                        else:
+                            warnings.append(f"Rule '{rule_data.get('name', f'Rule {i}')}': action group_name '{name}' not found locally")
+                    # Strip transient name fields from stored data
+                    action.pop("group_name", None)
+
+                # Strip transient name fields from rule-level data
+                rule_data.pop("target_group_name", None)
+                rule_data.pop("m3u_account_name", None)
                 # Validate rule
                 conditions = rule_data.get("conditions", [])
                 actions = rule_data.get("actions", [])
@@ -9909,11 +10034,14 @@ async def import_auto_creation_rules_yaml(request: ImportYAMLRequest):
                     description=f"Imported {len(imported)} auto-creation rules from YAML"
                 )
 
-            return {
+            result = {
                 "success": True,
                 "imported": imported,
                 "errors": errors
             }
+            if warnings:
+                result["warnings"] = warnings
+            return result
         finally:
             session.close()
     except HTTPException:

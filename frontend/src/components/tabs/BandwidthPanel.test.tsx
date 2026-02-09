@@ -10,6 +10,18 @@ import type { BandwidthSummary } from '../../types';
 // Mock the API module
 vi.mock('../../services/api');
 
+// Mock the NotificationContext
+const mockNotifications = {
+  success: vi.fn(),
+  error: vi.fn(),
+  warning: vi.fn(),
+  info: vi.fn(),
+};
+
+vi.mock('../../contexts/NotificationContext', () => ({
+  useNotifications: () => mockNotifications,
+}));
+
 describe('BandwidthPanel', () => {
   // Mock data
   const mockBandwidthStats: BandwidthSummary = {
@@ -246,23 +258,23 @@ describe('BandwidthPanel', () => {
   });
 
   describe('error handling', () => {
-    it('displays error message when API fails', async () => {
+    it('shows toast notification when API fails', async () => {
       vi.mocked(api.getBandwidthStats).mockRejectedValue(new Error('Network error'));
 
       render(<BandwidthPanel />);
 
       await waitFor(() => {
-        expect(screen.getByText('Network error')).toBeInTheDocument();
+        expect(mockNotifications.error).toHaveBeenCalledWith('Network error', 'Bandwidth');
       });
     });
 
-    it('displays generic error for non-Error exceptions', async () => {
+    it('shows generic toast for non-Error exceptions', async () => {
       vi.mocked(api.getBandwidthStats).mockRejectedValue('Something went wrong');
 
       render(<BandwidthPanel />);
 
       await waitFor(() => {
-        expect(screen.getByText('Failed to load bandwidth data')).toBeInTheDocument();
+        expect(mockNotifications.error).toHaveBeenCalledWith('Failed to load bandwidth data', 'Bandwidth');
       });
     });
   });

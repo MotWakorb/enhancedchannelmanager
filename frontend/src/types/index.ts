@@ -303,6 +303,9 @@ export interface ChannelListFilterSettings {
   filterMissingTvgId?: boolean;
   filterMissingEpgData?: boolean;
   filterMissingGracenote?: boolean;
+  filterFailedStreams?: boolean;
+  filterWorkingStreams?: boolean;
+  filterUnprobedStreams?: boolean;
 }
 
 export interface Logo {

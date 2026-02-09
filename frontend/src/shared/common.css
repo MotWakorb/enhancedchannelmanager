@@ -1167,9 +1167,8 @@
   display: flex;
   align-items: center;
   gap: 0.75rem;
-  padding: 0.5rem 0.75rem;
-  background-color: var(--bg-secondary);
-  border-radius: var(--radius-lg);
+  padding: 0;
+  background-color: transparent;
   font-size: 0.875rem;
 }
 
