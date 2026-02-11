@@ -2220,14 +2220,16 @@ export function ChannelsPane({
   };
 
   // Map stream IDs to their M3U account IDs (from stream data, not probe stats)
+  // Uses channelStreams (selected channel's streams) instead of allStreams to avoid
+  // needing all 27k+ streams loaded — Smart Sort only operates on the selected channel.
   const streamM3uAccountMap = useMemo(() => {
     const map = new Map<number, number | null>();
-    for (const stream of allStreams) {
+    for (const stream of channelStreams) {
       map.set(stream.id, stream.m3u_account);
     }
     logger.debug(`[SmartSort] Built streamM3uAccountMap with ${map.size} streams`);
     return map;
-  }, [allStreams]);
+  }, [channelStreams]);
 
   // Get sort value for a stream based on criterion
   const getSortValue = useCallback((streamId: number, stats: StreamStats | undefined, criterion: SortCriterion): number => {
