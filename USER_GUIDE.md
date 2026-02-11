@@ -779,6 +779,16 @@ Click any preset to load its configuration instantly.
 1. Choose **Output Format**: MPEG-TS (piping to Dispatcharr) or HLS (segmented streaming)
 2. Enable/disable **Stream Options** for network resilience (auto-reconnect, buffer sizes)
 
+> **Which should you choose?**
+>
+> **Choose MPEG-TS if:** You have a wired connection, a very stable ISP, and hate when your live TV is lagging behind the "real-time" broadcast.
+>
+> **Choose HLS if:** You are on WiFi, your ISP throttles traffic, you experience buffering, or you use catch-up features.
+>
+> **For Dispatcharr:** If the IPTV provider offers both, try HLS first for better stability. However, if your IPTV provider is solid and you want the fastest possible channel changing, try MPEG-TS.
+>
+> **Performance tip:** Matching your output format to your provider's source format (e.g., MPEG-TS in → MPEG-TS out) avoids container remuxing, which reduces CPU usage and latency. If your provider delivers MPEG-TS, prefer MPEG-TS output; if they deliver HLS, prefer HLS output.
+
 ### Advanced Mode
 
 ![FFMPEG Advanced Mode](docs/images/77-ffmpeg-advanced-mode.png)
