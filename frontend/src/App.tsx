@@ -55,6 +55,7 @@ const JournalTab = lazy(() => import('./components/tabs/JournalTab').then(m => (
 const StatsTab = lazy(() => import('./components/tabs/StatsTab').then(m => ({ default: m.StatsTab })));
 const SettingsTab = lazy(() => import('./components/tabs/SettingsTab').then(m => ({ default: m.SettingsTab })));
 const AutoCreationTab = lazy(() => import('./components/autoCreation/AutoCreationTab').then(m => ({ default: m.AutoCreationTab })));
+const FFMPEGBuilderTab = lazy(() => import('./components/ffmpegBuilder/FFMPEGBuilderTab').then(m => ({ default: m.FFMPEGBuilderTab })));
 
 function App() {
   // Health check and version info
@@ -707,9 +708,9 @@ function App() {
     loadProviders();
     loadProviderGroupSettings();
     loadStreamGroups();
-    // Only reload streams if they were already loaded (lazy loading preservation)
+    // Only reset streams if they were already loaded (lazy loading preservation)
     if (streamsExplicitlyRequested.current) {
-      loadStreams();
+      resetStreams(false);
     }
     loadLogos();
     loadStreamProfiles();
@@ -922,34 +923,52 @@ function App() {
     }
   };
 
-  const loadStreams = async (bypassCache: boolean = false, signal?: AbortSignal) => {
+  // Lightweight reset: clear streams and refresh group metadata.
+  // Actual stream data loads per-group on demand via loadStreamGroup().
+  const resetStreams = async (bypassCache: boolean = false) => {
     setLoadingStates(prev => ({ ...prev, streams: true }));
     try {
-      // Fetch all pages of streams (like channels)
-      const allStreams: Stream[] = [];
-      let page = 1;
-      let hasMore = true;
+      // Clear all loaded streams and group tracking
+      setStreams([]);
+      loadedStreamGroupsRef.current.clear();
 
-      while (hasMore) {
-        const response = await api.getStreams({
-          page,
-          pageSize: 500,
-          search: streamFilters.search || undefined,
-          m3uAccount: streamFilters.providerFilter ?? undefined,
-          channelGroup: streamFilters.groupFilter ?? undefined,
-          bypassCache,
-          signal,
-        });
-        allStreams.push(...response.results);
-        hasMore = response.next !== null;
-        page++;
-      }
-
-      setStreams(allStreams);
+      // Refresh stream group metadata (lightweight — just names + counts)
+      const m3uAccountId = streamFilters.selectedProviders?.length === 1
+        ? streamFilters.selectedProviders[0] : null;
+      await loadStreamGroups(m3uAccountId);
     } catch (err) {
-      // Don't log errors for aborted requests
       if (err instanceof Error && err.name !== 'AbortError') {
-        logger.error('Failed to load streams:', err);
+        logger.error('Failed to reset streams:', err);
+      }
+    } finally {
+      setLoadingStates(prev => ({ ...prev, streams: false }));
+    }
+  };
+
+  // Search streams: fetch just the first page of server-filtered results
+  const searchStreams = async (signal?: AbortSignal) => {
+    setLoadingStates(prev => ({ ...prev, streams: true }));
+    try {
+      setStreams([]);
+      loadedStreamGroupsRef.current.clear();
+
+      const response = await api.getStreams({
+        page: 1,
+        pageSize: 500,
+        search: streamFilters.search || undefined,
+        m3uAccount: streamFilters.providerFilter ?? undefined,
+        channelGroup: streamFilters.groupFilter ?? undefined,
+        signal,
+      });
+      setStreams(response.results);
+
+      // Also refresh group metadata so groups show correct filtered counts
+      const m3uAccountId = streamFilters.selectedProviders?.length === 1
+        ? streamFilters.selectedProviders[0] : null;
+      await loadStreamGroups(m3uAccountId);
+    } catch (err) {
+      if (err instanceof Error && err.name !== 'AbortError') {
+        logger.error('Failed to search streams:', err);
       }
     } finally {
       setLoadingStates(prev => ({ ...prev, streams: false }));
@@ -959,19 +978,21 @@ function App() {
   // Force refresh streams from Dispatcharr (bypassing cache)
   const refreshStreams = useCallback(() => {
     streamsExplicitlyRequested.current = true;
-    // Clear loaded groups tracker so all groups reload
-    loadedStreamGroupsRef.current.clear();
-    loadStreams(true);
-  }, [streamFilters.search, streamFilters.providerFilter, streamFilters.groupFilter]);
+    resetStreams(true);
+  }, [streamFilters.selectedProviders]);
 
   // Request streams to be loaded (lazy loading trigger)
   // Call this when user interacts with streams (e.g., expands streams pane, searches)
+  // Just sets the flag — actual streams load per-group via loadStreamGroup()
   const requestStreamsLoad = useCallback(() => {
     if (!streamsExplicitlyRequested.current) {
       streamsExplicitlyRequested.current = true;
-      loadStreams(false);
+      // Refresh group metadata so the streams pane shows available groups
+      const m3uAccountId = streamFilters.selectedProviders?.length === 1
+        ? streamFilters.selectedProviders[0] : null;
+      loadStreamGroups(m3uAccountId);
     }
-  }, []);
+  }, [streamFilters.selectedProviders]);
 
   // Load streams for a single group (per-group lazy loading)
   // This allows loading only the streams for an expanded group instead of all streams
@@ -1075,15 +1096,14 @@ function App() {
   }, []);
 
   // Reload streams when filters change - but only if explicitly requested OR searching
-  // This prevents loading 27,000+ streams on app startup which causes high CPU
-  // But allows search to work even before streams are explicitly requested
+  // Search: fetch first page of server-filtered results
+  // Other filters: just clear and let lazy group loading handle it
   useEffect(() => {
     const hasSearchFilter = streamFilters.search?.trim();
 
     // Skip loading on initial mount - streams are loaded lazily when user interacts
     // BUT if there's a search term, we should load (server will filter)
     if (!streamsExplicitlyRequested.current && !hasSearchFilter) {
-      // Set loading to false since we're not actually loading
       setLoadingStates(prev => ({ ...prev, streams: false }));
       return;
     }
@@ -1093,16 +1113,19 @@ function App() {
       streamsExplicitlyRequested.current = true;
     }
 
-    // Clear per-group loaded tracker since we're doing a full filtered load
-    loadedStreamGroupsRef.current.clear();
-
     const abortController = new AbortController();
     const timer = setTimeout(() => {
-      loadStreams(false, abortController.signal);
+      if (hasSearchFilter) {
+        // Search: fetch first page of server-filtered results
+        searchStreams(abortController.signal);
+      } else {
+        // Filter change without search: just reset and let lazy loading handle it
+        resetStreams(false);
+      }
     }, 500); // Debounce: 500ms for less frequent API requests
     return () => {
       clearTimeout(timer);
-      abortController.abort(); // Cancel in-flight request when filters change
+      abortController.abort();
     };
   }, [streamFilters.search, streamFilters.providerFilter, streamFilters.groupFilter]);
 
@@ -2269,6 +2292,7 @@ function App() {
           {activeTab === 'auto-creation' && <AutoCreationTab />}
           {activeTab === 'journal' && <JournalTab />}
           {activeTab === 'stats' && <StatsTab />}
+          {activeTab === 'ffmpeg-builder' && <FFMPEGBuilderTab />}
           {activeTab === 'settings' && <SettingsTab onSaved={handleSettingsSaved} channelProfiles={channelProfiles} onProbeComplete={loadChannels} />}
         </Suspense>
       </main>
