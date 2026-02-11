@@ -564,16 +564,44 @@ export const handlers = [
     const url = new URL(request.url)
     const page = parseInt(url.searchParams.get('page') ?? '1')
     const pageSize = parseInt(url.searchParams.get('page_size') ?? '100')
+    const search = url.searchParams.get('search')
+    const channelGroup = url.searchParams.get('channel_group_name')
+    const m3uAccount = url.searchParams.get('m3u_account')
+
+    let results = mockDataStore.streams
+    if (search) {
+      results = results.filter(s => s.name.toLowerCase().includes(search.toLowerCase()))
+    }
+    if (channelGroup) {
+      results = results.filter(s => s.channel_group_name === channelGroup)
+    }
+    if (m3uAccount) {
+      results = results.filter(s => s.m3u_account === parseInt(m3uAccount))
+    }
 
     const start = (page - 1) * pageSize
-    const paginatedResults = mockDataStore.streams.slice(start, start + pageSize)
+    const paginatedResults = results.slice(start, start + pageSize)
 
     return HttpResponse.json({
-      count: mockDataStore.streams.length,
-      next: start + pageSize < mockDataStore.streams.length ? `${API_BASE}/streams?page=${page + 1}` : null,
+      count: results.length,
+      next: start + pageSize < results.length ? `${API_BASE}/streams?page=${page + 1}` : null,
       previous: page > 1 ? `${API_BASE}/streams?page=${page - 1}` : null,
       results: paginatedResults,
     })
+  }),
+
+  http.get(`${API_BASE}/stream-groups`, () => {
+    // Derive stream group info from streams in the store
+    const groupMap = new Map<string, number>()
+    for (const stream of mockDataStore.streams) {
+      const groupName = stream.channel_group_name ?? 'Ungrouped'
+      groupMap.set(groupName, (groupMap.get(groupName) ?? 0) + 1)
+    }
+    const groups = Array.from(groupMap.entries()).map(([name, count]) => ({
+      name,
+      stream_count: count,
+    }))
+    return HttpResponse.json(groups)
   }),
 
   // -------------------------------------------------------------------------
