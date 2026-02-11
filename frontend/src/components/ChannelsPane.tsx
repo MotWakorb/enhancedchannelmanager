@@ -2232,10 +2232,11 @@ export function ChannelsPane({
   }, [channelStreams]);
 
   // Get sort value for a stream based on criterion
-  const getSortValue = useCallback((streamId: number, stats: StreamStats | undefined, criterion: SortCriterion): number => {
+  const getSortValue = useCallback((streamId: number, stats: StreamStats | undefined, criterion: SortCriterion, m3uMapOverride?: Map<number, number | null>): number => {
     // For m3u_priority, use stream data directly (doesn't require probing)
     if (criterion === 'm3u_priority') {
-      const m3uAccountId = streamM3uAccountMap.get(streamId);
+      const effectiveMap = m3uMapOverride ?? streamM3uAccountMap;
+      const m3uAccountId = effectiveMap.get(streamId);
       const priorities = channelDefaults?.m3uAccountPriorities ?? {};
       const priority = m3uAccountId != null ? priorities[String(m3uAccountId)] : undefined;
       const result = priority ?? -1;
@@ -2271,7 +2272,8 @@ export function ChannelsPane({
   // Create comparator for multi-criteria sorting
   const createMultiCriteriaSortComparator = useCallback((
     statsMap: Map<number, StreamStats> | Record<number, StreamStats>,
-    priority: SortCriterion[]
+    priority: SortCriterion[],
+    m3uMapOverride?: Map<number, number | null>
   ) => {
     const getStats = (id: number): StreamStats | undefined => {
       if (statsMap instanceof Map) {
@@ -2312,8 +2314,8 @@ export function ChannelsPane({
 
       // Both streams succeeded (or setting disabled) - now sort by quality criteria
       for (const criterion of priority) {
-        const aVal = getSortValue(aId, aStats, criterion);
-        const bVal = getSortValue(bId, bStats, criterion);
+        const aVal = getSortValue(aId, aStats, criterion, m3uMapOverride);
+        const bVal = getSortValue(bId, bStats, criterion, m3uMapOverride);
 
         logger.debug(`[SmartSort] Criterion ${criterion}: a(${aId})=${aVal}, b(${bId})=${bVal}`);
 
@@ -2429,12 +2431,26 @@ export function ChannelsPane({
       // Collect all stream IDs
       const allStreamIds = channelsToProcess.flatMap(ch => ch.streams);
 
-      // Fetch stats for all streams
-      const stats = await api.getStreamStatsByIds(allStreamIds);
-
-      // Get sort priority and create comparator
+      // Fetch stats and stream data in parallel (stream data needed for M3U account mapping)
       const priority = getEffectivePriority(mode);
-      const comparator = createMultiCriteriaSortComparator(stats, priority);
+      const needsM3uData = priority.includes('m3u_priority');
+      const [stats, streamData] = await Promise.all([
+        api.getStreamStatsByIds(allStreamIds),
+        needsM3uData ? api.getStreamsByIds(allStreamIds) : Promise.resolve([]),
+      ]);
+
+      // Build M3U account map from fetched stream data (covers all channels, not just selected)
+      let bulkM3uMap: Map<number, number | null> | undefined;
+      if (needsM3uData && streamData.length > 0) {
+        bulkM3uMap = new Map<number, number | null>();
+        for (const stream of streamData) {
+          bulkM3uMap.set(stream.id, stream.m3u_account);
+        }
+        logger.debug(`[SmartSort] Built bulk M3U map with ${bulkM3uMap.size} streams for multi-channel sort`);
+      }
+
+      // Create comparator with bulk M3U map
+      const comparator = createMultiCriteriaSortComparator(stats, priority, bulkM3uMap);
 
       // Start batch operation
       if (onStartBatch) {

@@ -1235,7 +1235,18 @@ class StreamProber:
 
             if not stat or stat.probe_status != 'success':
                 logger.debug(f"[SMART-SORT]   {stream_name}: No successful probe data")
-                return (0,) + tuple(0 for _ in active_criteria)
+                # Still compute M3U priority for unprobed streams (M3U priority doesn't require probing)
+                sort_values = [0]
+                for criterion in active_criteria:
+                    if criterion == "m3u_priority":
+                        m3u_priority_value = 0
+                        m3u_account_id = stream_m3u_map.get(stream_id)
+                        if m3u_account_id is not None:
+                            m3u_priority_value = self.m3u_account_priorities.get(str(m3u_account_id), 0)
+                        sort_values.append(-m3u_priority_value)
+                    else:
+                        sort_values.append(0)
+                return tuple(sort_values)
 
             # Build sort values based on active criteria in priority order
             sort_values = [0]  # First element: 0 = successful stream

@@ -6943,12 +6943,23 @@ async def get_stream_stats_by_id(stream_id: int):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-class BulkStreamStatsRequest(BaseModel):
+class BulkStreamIdsRequest(BaseModel):
     stream_ids: list[int]
 
 
+@app.post("/api/streams/by-ids", tags=["Streams"])
+async def get_streams_by_ids(request: BulkStreamIdsRequest):
+    """Get multiple streams by their IDs (proxies to Dispatcharr)."""
+    try:
+        client = get_client()
+        return await client.get_streams_by_ids(request.stream_ids)
+    except Exception as e:
+        logger.error(f"Failed to get streams by IDs: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.post("/api/stream-stats/by-ids", tags=["Stream Stats"])
-async def get_stream_stats_by_ids(request: BulkStreamStatsRequest):
+async def get_stream_stats_by_ids(request: BulkStreamIdsRequest):
     """Get probe stats for multiple streams by their IDs."""
     try:
         return StreamProber.get_stats_by_stream_ids(request.stream_ids)

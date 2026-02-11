@@ -405,6 +405,13 @@ export async function getStreams(params?: {
   return fetchJson(`${API_BASE}/streams${query}`, { signal: params?.signal });
 }
 
+export async function getStreamsByIds(streamIds: number[]): Promise<Stream[]> {
+  return fetchJson(`${API_BASE}/streams/by-ids`, {
+    method: 'POST',
+    body: JSON.stringify({ stream_ids: streamIds }),
+  });
+}
+
 export async function getStreamGroups(bypassCache?: boolean, m3uAccountId?: number | null): Promise<StreamGroupInfo[]> {
   const queryParams: string[] = [];
   if (bypassCache) queryParams.push('bypass_cache=true');
