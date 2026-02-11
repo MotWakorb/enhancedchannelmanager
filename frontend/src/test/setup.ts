@@ -9,11 +9,46 @@
  */
 import '@testing-library/jest-dom'
 import { cleanup } from '@testing-library/react'
-import { afterEach, vi } from 'vitest'
+import { afterEach, beforeEach, vi } from 'vitest'
 
 // Cleanup after each test case (e.g. clearing jsdom)
 afterEach(() => {
   cleanup()
+})
+
+// Ensure navigator.clipboard is writable before every test.
+// jsdom / vitest may (re-)define it as a getter-only accessor; this beforeEach
+// walks the prototype chain and forces a writable data property.
+function ensureClipboardWritable() {
+  let obj: object | null = navigator;
+  while (obj) {
+    const desc = Object.getOwnPropertyDescriptor(obj, 'clipboard');
+    if (desc && (desc.get || (!desc.writable && !desc.set))) {
+      Object.defineProperty(obj, 'clipboard', {
+        value: {
+          writeText: vi.fn().mockResolvedValue(undefined),
+          readText: vi.fn().mockResolvedValue(''),
+        },
+        writable: true,
+        configurable: true,
+      });
+    }
+    obj = Object.getPrototypeOf(obj);
+  }
+  // Guarantee an own writable property on navigator itself
+  if (!Object.getOwnPropertyDescriptor(navigator, 'clipboard')?.writable) {
+    Object.defineProperty(navigator, 'clipboard', {
+      value: {
+        writeText: vi.fn().mockResolvedValue(undefined),
+        readText: vi.fn().mockResolvedValue(''),
+      },
+      writable: true,
+      configurable: true,
+    });
+  }
+}
+beforeEach(() => {
+  ensureClipboardWritable();
 })
 
 // Mock window.matchMedia (used by responsive components)
@@ -53,6 +88,9 @@ class IntersectionObserverMock {
   takeRecords = vi.fn().mockReturnValue([])
 }
 window.IntersectionObserver = IntersectionObserverMock as unknown as typeof IntersectionObserver
+
+// Run once at file scope too (covers beforeAll blocks that run before beforeEach)
+ensureClipboardWritable();
 
 // Mock scrollTo (JSDOM doesn't implement it)
 Element.prototype.scrollTo = vi.fn() as unknown as typeof Element.prototype.scrollTo
