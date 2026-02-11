@@ -61,18 +61,15 @@
 .m3u-accounts-list {
   display: flex;
   flex-direction: column;
-  background-color: var(--bg-primary);
+  background-color: var(--bg-secondary);
   border-radius: var(--radius-xl);
   border: 1px solid var(--border-primary);
   overflow: hidden;
-  flex: 1;
-  min-height: 0;
+  flex-shrink: 0;
 }
 
 .m3u-accounts-list-body {
-  flex: 1;
   overflow-y: auto;
-  min-height: 0;
 }
 
 .m3u-manager-tab .list-header {
@@ -96,7 +93,7 @@
   padding: 1rem;
   border-bottom: 1px solid var(--border-primary);
   align-items: center;
-  background-color: var(--bg-primary);
+  background-color: var(--bg-secondary);
   transition: background-color 0.15s;
 }
 

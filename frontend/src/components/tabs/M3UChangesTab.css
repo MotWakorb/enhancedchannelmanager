@@ -86,7 +86,7 @@
   align-items: center;
   gap: 0.5rem;
   padding: 0.5rem 0.75rem;
-  background-color: var(--bg-primary);
+  background-color: var(--bg-secondary);
   border: 1px solid var(--border-primary);
   border-radius: var(--radius-lg);
 }
@@ -182,7 +182,7 @@
 
 /* Changes List */
 .changes-list {
-  background-color: var(--bg-primary);
+  background-color: var(--bg-secondary);
   border-radius: var(--radius-xl);
   border: 1px solid var(--border-primary);
   flex: 1;
@@ -249,7 +249,7 @@
   gap: 0.75rem;
   padding: 0.5rem 1rem;
   align-items: center;
-  background-color: var(--bg-primary);
+  background-color: var(--bg-secondary);
   transition: background-color 0.15s;
   cursor: pointer;
   min-width: 750px;

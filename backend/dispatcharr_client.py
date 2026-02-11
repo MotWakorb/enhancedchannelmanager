@@ -855,6 +855,12 @@ class DispatcharrClient:
         response.raise_for_status()
         return response.json()
 
+    async def create_stream_profile(self, data: dict) -> dict:
+        """Create a new stream profile."""
+        response = await self._request("POST", "/api/core/streamprofiles/", json=data)
+        response.raise_for_status()
+        return response.json()
+
     # -------------------------------------------------------------------------
     # Channel Profiles
     # -------------------------------------------------------------------------

@@ -1794,3 +1794,33 @@ class AutoCreationConflict(Base):
 
     def __repr__(self):
         return f"<AutoCreationConflict(id={self.id}, execution_id={self.execution_id}, type={self.conflict_type})>"
+
+
+class FFmpegProfile(Base):
+    """
+    User-saved FFMPEG Builder profiles.
+    Stores the full FFMPEGBuilderState config as JSON.
+    """
+    __tablename__ = "ffmpeg_profiles"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String(255), nullable=False)
+    config = Column(Text, nullable=False)  # JSON-serialized FFMPEGBuilderState
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        Index("idx_ffmpeg_profiles_created", created_at.desc()),
+    )
+
+    def to_dict(self) -> dict:
+        """Convert to dictionary for API responses."""
+        import json
+        return {
+            "id": self.id,
+            "name": self.name,
+            "config": json.loads(self.config) if self.config else {},
+            "created_at": self.created_at.isoformat() + "Z" if self.created_at else None,
+        }
+
+    def __repr__(self):
+        return f"<FFmpegProfile(id={self.id}, name={self.name})>"

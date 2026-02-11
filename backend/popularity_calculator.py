@@ -395,6 +395,8 @@ class PopularityCalculator:
 def calculate_popularity(
     period_days: int = 7,
     weights: Optional[dict] = None,
+    evaluate_rules: bool = False,
+    rules_dry_run: bool = False,
 ) -> dict:
     """
     Run popularity calculation with specified parameters.
@@ -402,6 +404,8 @@ def calculate_popularity(
     Args:
         period_days: Number of days to consider
         weights: Optional custom weights
+        evaluate_rules: Whether to evaluate popularity rules after calculation
+        rules_dry_run: If evaluating rules, whether to run in dry-run mode
 
     Returns:
         Calculation results dict

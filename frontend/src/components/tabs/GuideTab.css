@@ -16,7 +16,7 @@
   align-items: center;
   gap: 1.5rem;
   padding: 1rem 1.5rem;
-  background-color: var(--bg-tertiary);
+  background-color: var(--bg-secondary);
   border-bottom: 1px solid var(--border-primary);
   flex-shrink: 0;
 }
@@ -378,7 +378,7 @@
   align-items: center;
   justify-content: flex-end;
   padding: 0.5rem 1rem;
-  background-color: var(--bg-tertiary);
+  background-color: var(--bg-secondary);
   border-top: 1px solid var(--border-primary);
   flex-shrink: 0;
 }

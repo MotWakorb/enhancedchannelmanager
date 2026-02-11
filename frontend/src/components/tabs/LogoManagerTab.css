@@ -97,7 +97,7 @@
 /* ===================== */
 
 .logos-list {
-  background-color: var(--bg-primary);
+  background-color: var(--bg-secondary);
   border-radius: var(--radius-xl);
   border: 1px solid var(--border-primary);
   overflow: hidden;
@@ -124,7 +124,7 @@
   padding: 0.75rem 1rem;
   border-bottom: 1px solid var(--border-primary);
   align-items: center;
-  background-color: var(--bg-primary);
+  background-color: var(--bg-secondary);
   transition: background-color 0.15s;
 }
 
@@ -277,7 +277,7 @@
 }
 
 .logo-card {
-  background-color: var(--bg-primary);
+  background-color: var(--bg-secondary);
   border: 1px solid var(--border-primary);
   border-radius: var(--radius-xl);
   overflow: hidden;
