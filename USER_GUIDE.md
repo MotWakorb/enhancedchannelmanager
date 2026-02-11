@@ -17,15 +17,16 @@ A comprehensive guide to using Enhanced Channel Manager for IPTV channel managem
 7. [Logo Manager](#logo-manager)
 8. [Stream & Channel Preview](#stream--channel-preview)
 9. [Auto-Creation Pipeline](#auto-creation-pipeline)
-10. [Journal](#journal)
-11. [Stats Dashboard](#stats-dashboard)
-12. [Notifications](#notifications)
-13. [Settings](#settings)
-14. [Authentication & Users](#authentication--users)
-15. [CLI Tools](#cli-tools)
-16. [Keyboard Shortcuts](#keyboard-shortcuts)
-17. [Tips & Best Practices](#tips--best-practices)
-18. [Screenshot Checklist](#screenshot-checklist)
+10. [FFMPEG Builder](#ffmpeg-builder)
+11. [Journal](#journal)
+12. [Stats Dashboard](#stats-dashboard)
+13. [Notifications](#notifications)
+14. [Settings](#settings)
+15. [Authentication & Users](#authentication--users)
+16. [CLI Tools](#cli-tools)
+17. [Keyboard Shortcuts](#keyboard-shortcuts)
+18. [Tips & Best Practices](#tips--best-practices)
+19. [Screenshot Checklist](#screenshot-checklist)
 
 ---
 
@@ -738,6 +739,145 @@ When a rule's conditions change and previously-matched streams no longer match, 
 
 ---
 
+## FFMPEG Builder
+
+The FFMPEG Builder tab provides a visual interface for constructing FFmpeg transcoding and streaming commands without writing command-line syntax. It's designed for IPTV streaming workflows but supports any FFmpeg use case.
+
+### Simple Mode (IPTV Wizard)
+
+![FFMPEG Simple Mode](docs/images/76-ffmpeg-simple-mode.png)
+<!-- Screenshot: FFMPEG Builder in Simple Mode showing the three-step wizard: Source, Processing, Output -->
+
+Simple mode is the default and is purpose-built for IPTV streaming:
+
+**Step 1: Choose a Preset**
+
+The preset bar at the top offers 8 optimized IPTV templates:
+
+| Preset | Description |
+|--------|-------------|
+| **Pass-through** | Copy streams without re-encoding (fastest) |
+| **IPTV Standard (H.264)** | Software encode for universal compatibility |
+| **IPTV HD (NVIDIA)** | Hardware NVENC encoding for NVIDIA GPUs |
+| **IPTV HD (Intel QSV)** | Hardware Quick Sync for Intel GPUs |
+| **Low-Latency AC3** | Minimal latency with AC3 surround sound |
+| **HLS Output** | Segmented HTTP Live Streaming format |
+| **1080p / AAC** | Full HD software encode with stereo audio |
+| **4K / AC3** | 4K HEVC with 5.1 surround sound |
+
+Click any preset to load its configuration instantly.
+
+**Step 2: Configure Source**
+
+1. Enter the **Source URL** or use `{streamUrl}` for Dispatcharr runtime substitution
+2. Choose the **Processing Mode** (codec/hardware)
+3. Select the **Audio Codec** (AAC for compatibility, AC3 for surround)
+4. Configure audio channels (stereo, 5.1, 7.1)
+
+**Step 3: Set Output**
+
+1. Choose **Output Format**: MPEG-TS (piping to Dispatcharr) or HLS (segmented streaming)
+2. Enable/disable **Stream Options** for network resilience (auto-reconnect, buffer sizes)
+
+### Advanced Mode
+
+![FFMPEG Advanced Mode](docs/images/77-ffmpeg-advanced-mode.png)
+<!-- Screenshot: FFMPEG Builder in Advanced Mode showing all configuration sections expanded -->
+
+Switch to Advanced Mode for full control over every FFmpeg parameter. The interface is organized into sections:
+
+#### Input Source
+- **Input Type** - URL or Pipe
+- **Format Override** - Auto-detect or force (MPEGTS, HLS, MP4, Matroska, FLV)
+- **Hardware Acceleration** - CUDA (NVIDIA), QSV (Intel), VAAPI (AMD/Intel), or CPU-only
+- **Device Selection** - GPU device path for VAAPI (e.g., `/dev/dri/renderD128`)
+
+#### Video Codec
+- **Codec Selection** - Software (libx264, libx265, VP9, AV1) or hardware (NVENC, QSV, VAAPI)
+- **Rate Control** - CRF (quality-based), CBR (constant bitrate), VBR (variable), CQ, QP
+- **Encoding Parameters** - Preset, profile, level, pixel format, tune
+- **Keyframe Control** - GOP size, minimum interval, scene change threshold, B-frames
+
+#### Audio Codec
+- **Codec** - Copy (passthrough), AAC, AC3, EAC3
+- **Parameters** - Bitrate, sample rate, channels, channel layout, AAC profile
+
+#### Video Filters
+Add video processing filters in an ordered chain:
+- **Scale** - Resize video resolution
+- **FPS** - Change framerate
+- **Deinterlace** - Remove interlacing (yadif)
+- **Format** - Color format conversion
+- **Hardware Upload** - Move frames to GPU memory
+- **Custom** - Write custom filter expressions
+
+#### Audio Filters
+Add audio processing filters:
+- **Volume** - Adjust loudness level
+- **Loudness Normalization** - LUFS-based normalization
+- **Resample** - Change audio sample rate
+- **Custom** - Write custom audio filter expressions
+
+#### Stream Mapping
+Select specific tracks from multi-stream inputs:
+- Map by type (video:0, audio:0, subtitle:0)
+- Or include all streams from the input
+
+#### Output
+- **Output Path** - File path or `pipe:1` for Dispatcharr piping
+- **Container Format** - MPEG-TS, HLS, or DASH
+- **Container Options** - Format-specific settings
+
+### Command Preview
+
+![FFMPEG Command Preview](docs/images/78-ffmpeg-command-preview.png)
+<!-- Screenshot: Command Preview panel showing annotated view with color-coded flags and tooltips -->
+
+The command preview updates in real-time as you configure settings:
+
+- **Plain View** - Full FFmpeg command text with copy-to-clipboard
+- **Annotated View** - Every flag explained in plain English with color coding
+- **Interactive Tooltips** - Hover over any flag for detailed explanation
+- **Warning Indicators** - Alerts for incompatible settings (e.g., audio filters with "copy" codec)
+
+### Pushing to Dispatcharr
+
+Click **Push to Dispatcharr** in the command preview to create a stream profile directly:
+
+1. The builder configuration is converted to a Dispatcharr stream profile
+2. The profile is created in your Dispatcharr instance
+3. You can then assign it to channels in Channel Manager
+
+### Saved Profiles
+
+Save your builder configurations for reuse:
+
+1. Configure the builder with your desired settings
+2. Click **Save Profile** and enter a name
+3. Your profile appears in the "My Profiles" section of the preset bar
+4. Click any saved profile to load it instantly
+5. Delete profiles you no longer need
+
+### Stream Probing
+
+Probe your input source to see what's available:
+
+1. Enter a source URL in the input section
+2. Click **Probe** to analyze the source
+3. View detected streams with codec, resolution, framerate, and bitrate
+4. Use the probe results to inform your codec and filter decisions
+
+### ECM Integration
+
+Apply builder configurations to your channel system:
+
+- **All Channels** - Apply a profile to every channel
+- **By Group** - Apply to channels in a specific group
+- **By Channel** - Apply to individual channels
+- Enable/disable profiles without deleting them
+
+---
+
 ## Journal
 
 ### Activity Log
@@ -1278,6 +1418,11 @@ Use this checklist to capture all screenshots for the guide:
 - [ ] `71-authentication-settings.png` - Authentication configuration
 - [ ] `72-user-management.png` - User list and management
 
+### FFMPEG Builder (3 screenshots)
+- [ ] `76-ffmpeg-simple-mode.png` - Simple Mode with IPTV wizard (Source, Processing, Output)
+- [ ] `77-ffmpeg-advanced-mode.png` - Advanced Mode with all configuration sections
+- [ ] `78-ffmpeg-command-preview.png` - Command Preview with annotated view and tooltips
+
 ### Authentication (2 screenshots)
 - [ ] `73-login-page.png` - Login page with local and Dispatcharr options
 - [ ] `74-setup-wizard.png` - First-run admin account setup
@@ -1285,7 +1430,7 @@ Use this checklist to capture all screenshots for the guide:
 ### CLI Tools (1 screenshot)
 - [ ] `75-password-reset-cli.png` - Interactive password reset terminal output
 
-**Total: 75 screenshots**
+**Total: 78 screenshots**
 
 ---
 
