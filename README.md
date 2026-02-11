@@ -11,6 +11,7 @@ A professional-grade web interface for managing IPTV configurations with Dispatc
 - **Guide** - TV Guide with EPG grid view showing program schedules
 - **Logo Manager** - Logo management with search, upload, and URL import
 - **Auto-Creation** - Rules-based automation pipeline for automatic channel creation, stream merging, and orphan management
+- **FFMPEG Builder** - Visual FFmpeg command builder with Simple (IPTV wizard) and Advanced modes, IPTV presets, saved profiles, and Dispatcharr integration
 - **Journal** - Activity log tracking all changes to channels, EPG, and M3U accounts
 - **Stats** - Live streaming statistics, M3U connection counts, bandwidth tracking, and charts
 - **Settings** - Configure Dispatcharr connection, channel defaults, stream probing, scheduled tasks, alert methods, authentication, and appearance
@@ -121,6 +122,72 @@ Automatically manage channels that no longer match any rule:
 - **Move to Uncategorized** - Preserve channels by moving them out of managed groups
 - **Delete and Cleanup Groups** - Delete channels and remove now-empty groups
 - **None** - Skip reconciliation (preserve all channels)
+
+### FFMPEG Builder (v0.12.5)
+
+A visual, form-based interface for constructing FFmpeg transcoding and streaming commands without manual command-line syntax. Designed for IPTV streaming workflows with support for any FFmpeg use case.
+
+#### Two Operating Modes
+- **Simple Mode** (Default) - Three-step IPTV wizard: Source → Processing → Output with pre-configured options
+- **Advanced Mode** - Full section-by-section control over all FFmpeg parameters
+
+#### Input Source Configuration
+- **Input Types** - URL (network streams) or Pipe (process input)
+- **URL Placeholder** - `{streamUrl}` for Dispatcharr runtime substitution
+- **Format Override** - Auto-detect or force format (MPEGTS, HLS, MP4, Matroska, FLV)
+- **Hardware Acceleration** - CUDA (NVIDIA), QSV (Intel), VAAPI (AMD/Intel Linux), or CPU-only
+- **Device Selection** - GPU device path selection for VAAPI
+
+#### Video Codec Settings
+- **Software Codecs** - libx264, libx265, libvpx-vp9, libaom-av1, libsvtav1, copy (passthrough)
+- **Hardware Codecs** - h264_nvenc, hevc_nvenc (NVIDIA), h264_qsv, hevc_qsv (Intel), h264_vaapi, hevc_vaapi
+- **Rate Control** - CRF, CBR, VBR, CQ (NVIDIA), QP, Global Quality (QSV)
+- **Encoding Parameters** - Preset, bitrate, CRF value, profile, level, pixel format, tune
+- **Keyframe Control** - GOP size, minimum interval, scene change threshold, B-frames
+
+#### Audio Codec Settings
+- **Codecs** - Copy (passthrough), AAC, AC3 (Dolby Digital), EAC3 (Dolby Digital Plus)
+- **Parameters** - Bitrate, sample rate, channels (mono/stereo/5.1/7.1), channel layout, AAC profile
+
+#### Video & Audio Filters
+- **Video Filters** - Scale, FPS, deinterlace, format conversion, hardware upload, custom expressions
+- **Audio Filters** - Volume, loudness normalization (LUFS), resample, custom expressions
+- **Filter Chain** - Ordered list with per-filter enable/disable toggles
+
+#### Stream Mapping
+- Select specific video, audio, or subtitle tracks from multi-stream inputs
+- Map by type (video:0, audio:0, subtitle:0) or include all streams
+
+#### Output Configuration
+- **Output Paths** - File, `pipe:1` (stdout for Dispatcharr piping), or device
+- **Container Formats** - MPEG-TS (IPTV standard), HLS (segmented), DASH (adaptive)
+- **Container Options** - Format-specific settings (mpegts_flags, hls_time, etc.)
+
+#### Command Preview
+- **Plain View** - Full command text with copy-to-clipboard
+- **Annotated View** - Human-readable explanation of every flag with interactive tooltips
+- **Warning Indicators** - Alerts for codec/filter incompatibilities
+- **Push to Dispatcharr** - Create a Dispatcharr stream profile directly from the builder
+
+#### IPTV Presets
+8 built-in optimized templates:
+- Pass-through, IPTV Standard (H.264), IPTV HD (NVIDIA), IPTV HD (Intel QSV)
+- Low-Latency AC3, HLS Output, 1080p/AAC, 4K/AC3
+
+#### Saved Profiles
+- Save builder configurations for reuse
+- Load profiles with one click
+- Convert profiles to Dispatcharr stream profiles
+
+#### ECM Integration
+- Save configurations as channel profiles applied to channels
+- Scope profiles to all channels, specific groups, or individual channels
+- Enable/disable profiles without deletion
+
+#### Stream Probing
+- Probe input sources to detect codec, resolution, framerate, bitrate per stream
+- View container format, duration, and file size
+- Use probe results to inform codec and filter decisions
 
 ### M3U Manager
 
@@ -715,6 +782,22 @@ Rules engine for automatic channel management:
 - **Design Tokens & Theme Compliance** - CSS variable system for consistent theming across all components
 - **Logo Manager Improvements** - File upload to Dispatcharr, pagination, full logo loading
 
+### ~~v0.12.5 - FFMPEG Builder & Performance~~ ✅ Implemented
+Visual FFmpeg command builder and frontend performance improvements:
+- **FFMPEG Builder Tab** - Full visual interface for constructing FFmpeg commands with Simple (IPTV wizard) and Advanced modes
+- **IPTV Presets** - 8 built-in optimized templates (pass-through, H.264, NVIDIA NVENC, Intel QSV, low-latency AC3, HLS, 1080p/AAC, 4K/AC3)
+- **Saved Profiles** - Save and load builder configurations for reuse
+- **Command Preview** - Real-time annotated command generation with interactive tooltips
+- **Hardware Acceleration** - CUDA, QSV, VAAPI support with auto-detection
+- **Stream Probing** - Probe input sources for codec, resolution, framerate detection
+- **Push to Dispatcharr** - Create stream profiles directly from the builder
+- **ECM Integration** - Apply builder profiles to channels, groups, or all channels
+- **Lazy Stream Loading** - Eliminated eager fetching of all streams on page load (fixes 100% CPU with 27k+ streams)
+- **Channel Badges** - Visual indicators on channel cards for stream count, status, and metadata
+- **Stream Status Filters** - Filter streams by online/offline/unknown probe status
+- **Auto Token Refresh** - Automatic JWT token refresh for uninterrupted sessions
+- **CSS Design Token Refinements** - Consistent theming across all tab CSS files
+
 ### v0.13.0 - Mobile Interface
 Full mobile support for managing channels on the go:
 - Responsive layouts for phones and tablets
@@ -1103,6 +1186,30 @@ Interactive API documentation is available at `/api/docs` (Swagger UI) and `/api
 | `GET /api/auto-creation/schema/conditions` | Get available condition types |
 | `GET /api/auto-creation/schema/actions` | Get available action types |
 | `GET /api/auto-creation/schema/template-variables` | Get available template variables |
+
+### FFMPEG Builder
+
+| Endpoint | Description |
+|----------|-------------|
+| `GET /api/ffmpeg/capabilities` | Detect system FFmpeg capabilities (codecs, formats, filters, hardware) |
+| `POST /api/ffmpeg/probe` | Probe a media source for stream info (codec, resolution, bitrate) |
+| `GET /api/ffmpeg/configs` | List all saved configurations |
+| `POST /api/ffmpeg/configs` | Create new configuration |
+| `GET /api/ffmpeg/configs/{id}` | Get specific configuration |
+| `PUT /api/ffmpeg/configs/{id}` | Update configuration |
+| `DELETE /api/ffmpeg/configs/{id}` | Delete configuration |
+| `POST /api/ffmpeg/validate` | Validate builder state, return errors/warnings |
+| `POST /api/ffmpeg/generate-command` | Generate annotated FFmpeg command from builder state |
+| `GET /api/ffmpeg/jobs` | List all transcoding jobs |
+| `POST /api/ffmpeg/jobs` | Create and queue new transcoding job |
+| `GET /api/ffmpeg/jobs/{id}` | Get job status and progress |
+| `POST /api/ffmpeg/jobs/{id}/cancel` | Cancel running job |
+| `DELETE /api/ffmpeg/jobs/{id}` | Delete job record |
+| `GET /api/ffmpeg/queue-config` | Get job queue configuration |
+| `PUT /api/ffmpeg/queue-config` | Update queue settings (max concurrent, retries) |
+| `GET /api/ffmpeg/profiles` | List saved user profiles |
+| `POST /api/ffmpeg/profiles` | Save builder state as a profile |
+| `DELETE /api/ffmpeg/profiles/{id}` | Delete saved profile |
 
 ### Cache
 
