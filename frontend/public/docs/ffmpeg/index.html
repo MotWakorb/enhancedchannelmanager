@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>FFmpeg Reference - ECM</title>
+  <style>
+    :root {
+      --bg: #1a1a2e;
+      --surface: #16213e;
+      --text: #e0e0e0;
+      --text-muted: #a0a0b0;
+      --accent: #4fc3f7;
+      --accent-hover: #81d4fa;
+      --border: #2a2a4a;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+      min-height: 100vh;
+    }
+    .container {
+      max-width: 800px;
+      margin: 0 auto;
+      padding: 2rem;
+    }
+    h1 {
+      font-size: 1.75rem;
+      margin-bottom: 0.5rem;
+      color: var(--accent);
+    }
+    .subtitle {
+      color: var(--text-muted);
+      margin-bottom: 2rem;
+      font-size: 0.95rem;
+    }
+    .card-grid {
+      display: grid;
+      gap: 1rem;
+    }
+    .card {
+      display: block;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 1.25rem 1.5rem;
+      text-decoration: none;
+      color: var(--text);
+      transition: border-color 0.2s, transform 0.1s;
+    }
+    .card:hover {
+      border-color: var(--accent);
+      transform: translateY(-1px);
+    }
+    .card h2 {
+      font-size: 1.1rem;
+      color: var(--accent);
+      margin-bottom: 0.35rem;
+    }
+    .card p {
+      font-size: 0.9rem;
+      color: var(--text-muted);
+      margin: 0;
+    }
+    .card .size {
+      font-size: 0.8rem;
+      color: var(--text-muted);
+      opacity: 0.7;
+      margin-top: 0.5rem;
+    }
+    .back-link {
+      display: inline-block;
+      margin-bottom: 1.5rem;
+      color: var(--accent);
+      text-decoration: none;
+      font-size: 0.9rem;
+    }
+    .back-link:hover { color: var(--accent-hover); }
+    .note {
+      margin-top: 2rem;
+      padding: 1rem;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      font-size: 0.85rem;
+      color: var(--text-muted);
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <a href="/" class="back-link">&larr; Back to ECM</a>
+    <h1>FFmpeg Reference Documentation</h1>
+    <p class="subtitle">Official FFmpeg man pages, bundled for offline reference.</p>
+
+    <div class="card-grid">
+      <a href="ffmpeg.html" class="card">
+        <h2>ffmpeg(1) &mdash; Main Manual</h2>
+        <p>Command syntax, stream selection, global options, input/output handling, expression evaluation, and processing pipeline.</p>
+        <div class="size">Core reference &middot; ~190 KB</div>
+      </a>
+
+      <a href="ffmpeg-codecs.html" class="card">
+        <h2>ffmpeg-codecs &mdash; Codec Reference</h2>
+        <p>Video encoders (x264, x265, VP9, AV1, NVENC, QSV, VAAPI), audio encoders (AAC, MP3, Opus, FLAC, AC3), and all their options.</p>
+        <div class="size">Encoder/decoder options &middot; ~280 KB</div>
+      </a>
+
+      <a href="ffmpeg-filters.html" class="card">
+        <h2>ffmpeg-filters &mdash; Filter Reference</h2>
+        <p>All video filters (scale, crop, fps, yadif, drawtext, overlay, ...) and audio filters (volume, loudnorm, equalizer, atempo, ...) with full parameter docs.</p>
+        <div class="size">Complete filter library &middot; ~1.4 MB</div>
+      </a>
+    </div>
+
+    <div class="note">
+      Source: <a href="https://ffmpeg.org/documentation.html" style="color: var(--accent);">ffmpeg.org</a>.
+      These pages are bundled for offline use within ECM's FFMPEG Syntax Builder.
+    </div>
+  </div>
+</body>
+</html>

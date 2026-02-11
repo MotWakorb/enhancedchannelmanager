@@ -105,7 +105,7 @@
 
 /* Entries List */
 .entries-list {
-  background-color: var(--bg-primary);
+  background-color: var(--bg-secondary);
   border-radius: var(--radius-xl);
   border: 1px solid var(--border-primary);
   flex: 1;
@@ -153,7 +153,7 @@
   gap: 0.75rem;
   padding: 0.5rem 1rem;
   align-items: center;
-  background-color: var(--bg-primary);
+  background-color: var(--bg-secondary);
   transition: background-color 0.15s;
   cursor: pointer;
   min-width: 700px;

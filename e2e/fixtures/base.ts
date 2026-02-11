@@ -134,6 +134,7 @@ const tabContentSelectors: Record<string, string> = {
   'guide': '.guide-tab',
   'journal': '.journal-tab',
   'auto-creation': '.auto-creation-tab, [data-testid="auto-creation-tab"]',
+  'ffmpeg-builder': '.ffmpeg-builder-tab, [data-testid="ffmpeg-builder-tab"]',
 }
 
 /**

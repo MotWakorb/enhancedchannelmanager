@@ -1127,6 +1127,18 @@ export async function getStreamProfiles(): Promise<StreamProfile[]> {
   return fetchJson(`${API_BASE}/stream-profiles`);
 }
 
+export async function createStreamProfile(data: {
+  name: string;
+  command: string;
+  parameters: string;
+  is_active?: boolean;
+}): Promise<StreamProfile> {
+  return fetchJson(`${API_BASE}/stream-profiles`, {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
 // Channel Profiles
 export async function getChannelProfiles(): Promise<ChannelProfile[]> {
   return fetchJson(`${API_BASE}/channel-profiles`);

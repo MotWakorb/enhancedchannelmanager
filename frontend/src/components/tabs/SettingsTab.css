@@ -2,7 +2,7 @@
   height: 100%;
   width: 100%;
   display: flex;
-  background-color: var(--bg-tertiary);
+  background-color: var(--bg-primary);
 }
 
 .settings-sidebar {
@@ -94,7 +94,7 @@
 }
 
 .settings-section {
-  background-color: var(--bg-tertiary);
+  background-color: var(--bg-secondary);
   border: 1px solid var(--border-primary);
   border-radius: var(--radius-xl);
   padding: 1.25rem;
@@ -156,7 +156,7 @@
   flex-direction: column;
   gap: 0.75rem;
   padding: 1rem;
-  background-color: var(--bg-secondary);
+  background-color: var(--bg-tertiary);
   border: 1px solid var(--border-primary);
   border-radius: var(--radius-xl);
 }
@@ -1213,7 +1213,7 @@
   font-weight: 500;
   color: var(--text-primary);
   padding: 0.75rem;
-  background-color: var(--bg-secondary);
+  background-color: var(--bg-tertiary);
   border-radius: var(--radius-md);
   word-break: break-word;
 }

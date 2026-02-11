@@ -41,7 +41,7 @@
 
 /* EPG Sources List */
 .epg-sources-list {
-  background-color: var(--bg-primary);
+  background-color: var(--bg-secondary);
   border-radius: var(--radius-xl);
   border: 1px solid var(--border-primary);
   overflow-x: auto;
@@ -86,7 +86,7 @@
   padding: 1rem;
   border-bottom: 1px solid var(--border-primary);
   align-items: center;
-  background-color: var(--bg-primary);
+  background-color: var(--bg-secondary);
   transition: background-color 0.15s;
   min-width: 900px;
 }
@@ -421,7 +421,7 @@
   align-items: center;
   gap: 0.75rem;
   padding: 1.5rem;
-  background-color: var(--bg-primary);
+  background-color: var(--bg-secondary);
   border-radius: var(--radius-xl);
   border: 1px dashed #444;
 }
@@ -439,7 +439,7 @@
 
 /* Dummy Sources List */
 .dummy-sources-list {
-  background-color: var(--bg-primary);
+  background-color: var(--bg-secondary);
   border-radius: var(--radius-xl);
   border: 1px solid var(--border-primary);
   overflow: hidden;
@@ -452,7 +452,7 @@
   padding: 0.875rem 1rem;
   border-bottom: 1px solid var(--border-primary);
   align-items: center;
-  background-color: var(--bg-primary);
+  background-color: var(--bg-secondary);
   transition: background-color 0.15s;
 }
 
