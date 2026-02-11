@@ -174,6 +174,7 @@ class TaskScheduler(ABC):
         self._update_notification_callback = None
         self._delete_notification_callback = None
         self._show_notifications: bool = True  # Whether to show in NotificationCenter
+        self._send_alerts: bool = True  # Whether to send external alerts (Discord, Telegram, etc.)
         self._last_notification_update: float = 0
         self._notification_update_interval: float = 2.0  # Update every 2 seconds max
 
@@ -275,12 +276,14 @@ class TaskScheduler(ABC):
         update_callback=None,
         delete_callback=None,
         show_notifications: bool = True,
+        send_alerts: bool = True,
     ):
         """Set notification callbacks for progress updates."""
         self._create_notification_callback = create_callback
         self._update_notification_callback = update_callback
         self._delete_notification_callback = delete_callback
         self._show_notifications = show_notifications
+        self._send_alerts = send_alerts
 
     async def _create_progress_notification(self):
         """Create a progress notification when task starts."""
@@ -300,6 +303,7 @@ class TaskScheduler(ABC):
                 title=self.task_name,
                 source=f"task_{self.task_id}",
                 source_id=f"progress_{int(time.time())}",
+                send_alerts=self._send_alerts,
                 metadata={
                     "progress": {
                         "current": 0,

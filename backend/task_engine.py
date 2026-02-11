@@ -508,8 +508,9 @@ class TaskEngine:
 
             logger.info(f"[{task_id}] Starting task execution (triggered_by={triggered_by})")
 
-            # Get show_notifications setting from database
+            # Get notification settings from database
             show_notifications = True  # Default to true
+            send_alerts = True  # Default to true
             try:
                 session = get_session()
                 try:
@@ -519,10 +520,11 @@ class TaskEngine:
                     ).first()
                     if scheduled_task:
                         show_notifications = scheduled_task.show_notifications
+                        send_alerts = scheduled_task.send_alerts
                 finally:
                     session.close()
             except Exception as e:
-                logger.warning(f"[{task_id}] Failed to get show_notifications setting: {e}")
+                logger.warning(f"[{task_id}] Failed to get notification settings: {e}")
 
             # Set notification callbacks on the task instance
             if self._create_notification_callback:
@@ -531,6 +533,7 @@ class TaskEngine:
                     update_callback=self._update_notification_callback,
                     delete_callback=self._delete_notification_callback,
                     show_notifications=show_notifications,
+                    send_alerts=send_alerts,
                 )
 
             # Log task start to journal

@@ -754,7 +754,13 @@ export function ActionEditor({
               <label>Target</label>
               <CustomSelect
                 value={action.target || 'auto'}
-                onChange={val => onChange({ ...action, target: val as 'auto' | 'existing_channel' | 'new_channel' })}
+                onChange={val => {
+                  const updated = { ...action, target: val as 'auto' | 'existing_channel' | 'new_channel' };
+                  if (val === 'existing_channel' && !action.find_channel_by) {
+                    updated.find_channel_by = 'name_exact';
+                  }
+                  onChange(updated);
+                }}
                 options={TARGET_OPTIONS.map(opt => ({
                   value: opt.value,
                   label: opt.label,

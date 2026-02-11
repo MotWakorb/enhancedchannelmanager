@@ -1,0 +1,1654 @@
+/**
+ * FFMPEGBuilderTab styles
+ *
+ * Uses common.css for: .btn-primary, .btn-secondary, .form-group, .empty-state
+ * Uses SettingsTab.css for: .settings-section, .settings-section-header, .settings-page-header
+ *
+ * Follows the Settings tab layout pattern:
+ *   scrollable container → page-header → sections with cards
+ */
+
+/* =========================================================================
+   Container & scroll
+   ========================================================================= */
+
+.ffmpeg-builder-tab {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+  width: 100%;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 1.5rem 2rem;
+  background: var(--bg-primary);
+}
+
+.ffmpeg-builder-page {
+  max-width: 900px;
+  width: 100%;
+}
+
+/* =========================================================================
+   Page header — reuses settings-page-header pattern
+   ========================================================================= */
+
+.ffmpeg-builder-tab .settings-page-header {
+  margin-bottom: 1.5rem;
+}
+
+/* =========================================================================
+   Preset bar
+   ========================================================================= */
+
+.ffmpeg-preset-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 1.5rem;
+  padding: 0.75rem 1rem;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-xl);
+}
+
+.ffmpeg-preset-bar label {
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.ffmpeg-preset-bar select {
+  flex: 1;
+  max-width: 300px;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--border-secondary);
+  border-radius: var(--radius-lg);
+  background-color: var(--input-bg);
+  color: var(--text-primary);
+  font-size: 0.875rem;
+}
+
+.ffmpeg-preset-bar select:focus {
+  outline: none;
+  border-color: var(--accent-primary);
+  box-shadow: var(--shadow-focus);
+}
+
+/* =========================================================================
+   Section cards — extends settings-section
+   ========================================================================= */
+
+.ffmpeg-section {
+  background-color: var(--bg-secondary);
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-xl);
+  padding: 1.25rem;
+  margin-bottom: 1.5rem;
+}
+
+.ffmpeg-section-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+  padding-bottom: 0.75rem;
+  border-bottom: 1px solid var(--border-primary);
+}
+
+.ffmpeg-section-header .material-icons {
+  font-size: 20px;
+  color: var(--text-secondary);
+}
+
+.ffmpeg-section-header h3 {
+  font-size: 1rem;
+  font-weight: 500;
+  color: var(--text-primary);
+  margin: 0;
+  flex: 1;
+}
+
+.ffmpeg-section-description {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  margin: -0.5rem 0 1rem 0;
+  line-height: 1.4;
+}
+
+/* =========================================================================
+   Form fields — overrides for .form-group within ffmpeg sections
+   ========================================================================= */
+
+.ffmpeg-section .form-group {
+  position: relative;
+  margin-bottom: 1rem;
+}
+
+.ffmpeg-section .form-group label {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--text-primary);
+  margin-bottom: 0.375rem;
+}
+
+.ffmpeg-section .form-group input[type="text"],
+.ffmpeg-section .form-group input[type="number"],
+.ffmpeg-section .form-group input[type="url"],
+.ffmpeg-section .form-group select,
+.ffmpeg-section .setting-row input[type="text"],
+.ffmpeg-section .setting-row input[type="number"] {
+  width: 100%;
+  max-width: 500px;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--border-secondary);
+  border-radius: var(--radius-lg);
+  background-color: var(--input-bg);
+  color: var(--text-primary);
+  font-size: 0.875rem;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.ffmpeg-section .form-group input:focus,
+.ffmpeg-section .form-group select:focus,
+.ffmpeg-section .setting-row input:focus {
+  outline: none;
+  border-color: var(--accent-primary);
+  box-shadow: var(--shadow-focus);
+}
+
+.ffmpeg-section .form-group input::placeholder,
+.ffmpeg-section .setting-row input::placeholder {
+  color: var(--text-muted);
+}
+
+/* Two-column grid for compact fields */
+.ffmpeg-fields-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0 1.5rem;
+}
+
+@media (max-width: 600px) {
+  .ffmpeg-fields-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* =========================================================================
+   Info icons & tooltips
+   ========================================================================= */
+
+.ffmpeg-section .info-icon {
+  position: relative;
+  cursor: help;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  user-select: none;
+}
+
+.ffmpeg-section .info-icon:hover {
+  color: var(--text-secondary);
+}
+
+.ffmpeg-section .tooltip {
+  position: absolute;
+  z-index: 100;
+  left: 0;
+  top: calc(100% + 6px);
+  padding: 0.5rem 0.75rem;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-secondary);
+  border-radius: var(--radius-lg);
+  color: var(--text-primary);
+  font-size: 0.75rem;
+  line-height: 1.4;
+  width: max-content;
+  max-width: 280px;
+  box-shadow: var(--shadow-md);
+  pointer-events: none;
+}
+
+/* =========================================================================
+   Dropdown (custom combobox used by sub-components)
+   ========================================================================= */
+
+.ffmpeg-section .dropdown-trigger {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  width: 100%;
+  max-width: 500px;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--border-secondary);
+  border-radius: var(--radius-lg);
+  background-color: var(--input-bg);
+  color: var(--text-primary);
+  font-size: 0.875rem;
+  cursor: pointer;
+  transition: border-color 0.15s;
+  min-height: 2.25rem;
+}
+
+.ffmpeg-section .dropdown-trigger::after {
+  content: 'expand_more';
+  font-family: 'Material Icons';
+  font-size: 1.25rem;
+  color: var(--text-secondary);
+  margin-left: 0.5rem;
+  flex-shrink: 0;
+}
+
+.ffmpeg-section .dropdown-trigger[aria-expanded="true"]::after {
+  content: 'expand_less';
+}
+
+.ffmpeg-section .dropdown-trigger:hover {
+  border-color: var(--text-muted);
+}
+
+.ffmpeg-section .dropdown-list {
+  position: absolute;
+  z-index: 50;
+  left: 0;
+  right: 0;
+  max-width: 500px;
+  margin-top: 2px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-secondary);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-md);
+  overflow: hidden;
+}
+
+.ffmpeg-section .dropdown-option {
+  padding: 0.5rem 0.75rem;
+  font-size: 0.875rem;
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: background-color 0.1s;
+}
+
+.ffmpeg-section .dropdown-option:hover {
+  background-color: var(--bg-hover);
+}
+
+.ffmpeg-section .dropdown-option.selected {
+  background-color: var(--accent-10, rgba(100, 108, 255, 0.1));
+  font-weight: 500;
+}
+
+/* =========================================================================
+   Validation errors
+   ========================================================================= */
+
+.ffmpeg-section .validation-error {
+  font-size: 0.75rem;
+  color: var(--error, #ef4444);
+  margin-top: 0.25rem;
+}
+
+/* =========================================================================
+   Checkbox styling (output overwrite, movflags)
+   ========================================================================= */
+
+.ffmpeg-section input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--accent-primary);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.ffmpeg-section label:has(input[type="checkbox"]) {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  cursor: pointer;
+  font-weight: 400;
+}
+
+/* =========================================================================
+   Codec buttons (VideoCodecSettings / AudioCodecSettings)
+   ========================================================================= */
+
+.ffmpeg-section button[aria-expanded],
+.ffmpeg-section .codec-trigger {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  max-width: 500px;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--border-secondary);
+  border-radius: var(--radius-lg);
+  background-color: var(--input-bg);
+  color: var(--text-primary);
+  font-size: 0.875rem;
+  cursor: pointer;
+  transition: border-color 0.15s;
+  text-align: left;
+}
+
+.ffmpeg-section button[aria-expanded]:hover,
+.ffmpeg-section .codec-trigger:hover {
+  border-color: var(--text-muted);
+}
+
+/* Codec description text */
+.ffmpeg-section .codec-description {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  margin-top: 0.25rem;
+  margin-bottom: 0.5rem;
+}
+
+/* =========================================================================
+   Slider (CRF, etc.)
+   ========================================================================= */
+
+.ffmpeg-section input[type="range"] {
+  flex: 1;
+  max-width: 400px;
+  accent-color: var(--button-primary-bg);
+  cursor: pointer;
+}
+
+.ffmpeg-section .slider-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.ffmpeg-section .slider-value {
+  min-width: 2rem;
+  text-align: center;
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+/* =========================================================================
+   Bitrate quick-select buttons
+   ========================================================================= */
+
+.ffmpeg-section .bitrate-buttons {
+  display: flex;
+  gap: 0.375rem;
+  margin-top: 0.375rem;
+}
+
+.ffmpeg-section .bitrate-buttons button {
+  padding: 0.25rem 0.625rem;
+  font-size: 0.75rem;
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-md);
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.ffmpeg-section .bitrate-buttons button:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+/* =========================================================================
+   Filter section
+   ========================================================================= */
+
+.ffmpeg-section .filter-empty {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  font-style: italic;
+  padding: 0.5rem 0;
+}
+
+.ffmpeg-section button:not([aria-expanded]) {
+  /* Catch-all for Add Filter and other action buttons */
+}
+
+.ffmpeg-section .add-filter-btn,
+.ffmpeg-section button[data-testid="add-video-filter"],
+.ffmpeg-section button[data-testid="add-audio-filter"] {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.5rem 1rem;
+  border: 1px dashed var(--border-secondary);
+  border-radius: var(--radius-lg);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.ffmpeg-section .add-filter-btn:hover {
+  border-color: var(--text-muted);
+  color: var(--text-primary);
+  background: var(--bg-hover);
+}
+
+/* Filter items */
+.ffmpeg-section .filter-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+
+.ffmpeg-section .filter-item {
+  background: var(--bg-primary);
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-lg);
+  padding: 0.75rem;
+}
+
+.ffmpeg-section .filter-item.disabled {
+  opacity: 0.5;
+}
+
+.ffmpeg-section .filter-item-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+
+.ffmpeg-section .filter-type-label {
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--text-primary);
+  flex: 1;
+}
+
+.ffmpeg-section .filter-item-actions {
+  display: flex;
+  gap: 0.25rem;
+}
+
+/* Filter action buttons use .action-btn / .action-btn.danger from common.css */
+
+.ffmpeg-section .filter-params {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.ffmpeg-section .filter-presets {
+  display: flex;
+  gap: 0.375rem;
+  flex-wrap: wrap;
+}
+
+.ffmpeg-section .preset-btn {
+  padding: 0.25rem 0.625rem;
+  font-size: 0.75rem;
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-md);
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.ffmpeg-section .preset-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.ffmpeg-section .resolution-preview {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+.ffmpeg-section .filter-chain-preview {
+  margin-top: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  background: var(--bg-primary);
+  border-radius: var(--radius-md);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+
+.ffmpeg-section .hw-filter-notice {
+  font-size: 0.75rem;
+  color: var(--warning, #eab308);
+  margin-top: 0.25rem;
+}
+
+.ffmpeg-section .add-filter-container {
+  position: relative;
+}
+
+.ffmpeg-section .filter-type-dropdown {
+  position: absolute;
+  z-index: 50;
+  top: 100%;
+  left: 0;
+  min-width: 200px;
+  margin-top: 4px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-secondary);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-md);
+  overflow: hidden;
+}
+
+.ffmpeg-section .filter-type-option {
+  padding: 0.5rem 0.75rem;
+  font-size: 0.875rem;
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.ffmpeg-section .filter-type-option:hover {
+  background: var(--bg-hover);
+}
+
+/* Output-specific */
+.ffmpeg-section .format-description {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  margin-top: 0.25rem;
+  margin-bottom: 0.5rem;
+}
+
+.ffmpeg-section .validation-warning {
+  font-size: 0.75rem;
+  color: var(--warning, #eab308);
+  margin-top: 0.25rem;
+}
+
+.ffmpeg-section .checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  cursor: pointer;
+  font-size: 0.875rem;
+  margin-bottom: 0.25rem;
+}
+
+/* Helper text uses .form-hint from common.css */
+
+.ffmpeg-section .field-label-text {
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+/* =========================================================================
+   Sub-component shared classes (VideoCodecSettings, AudioCodecSettings)
+   ========================================================================= */
+
+.ffmpeg-section .setting-row {
+  position: relative;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.375rem;
+  margin-bottom: 0.75rem;
+}
+
+.ffmpeg-section .setting-row > label {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--text-primary);
+  min-width: 100%;
+  margin-bottom: 0.25rem;
+}
+
+.ffmpeg-section .setting-select-trigger {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  width: 100%;
+  max-width: 500px;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--border-secondary);
+  border-radius: var(--radius-lg);
+  background-color: var(--input-bg);
+  color: var(--text-primary);
+  font-size: 0.875rem;
+  cursor: pointer;
+  transition: border-color 0.15s;
+  text-align: left;
+}
+
+.ffmpeg-section .setting-select-trigger::after {
+  content: 'expand_more';
+  font-family: 'Material Icons';
+  font-size: 1.25rem;
+  color: var(--text-secondary);
+  margin-left: 0.5rem;
+  flex-shrink: 0;
+}
+
+.ffmpeg-section .setting-select-trigger[aria-expanded="true"]::after {
+  content: 'expand_less';
+}
+
+.ffmpeg-section .setting-select-trigger:hover {
+  border-color: var(--text-muted);
+}
+
+.ffmpeg-section .setting-select-trigger:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.ffmpeg-section .setting-select-trigger:disabled::after {
+  color: var(--text-muted);
+}
+
+.ffmpeg-section .setting-select-dropdown {
+  position: absolute;
+  z-index: 50;
+  left: 0;
+  right: 0;
+  max-width: 500px;
+  margin-top: 2px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-secondary);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-md);
+  overflow: hidden;
+  max-height: 280px;
+  overflow-y: auto;
+}
+
+.ffmpeg-section .setting-option {
+  padding: 0.5rem 0.75rem;
+  font-size: 0.875rem;
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: background-color 0.1s;
+}
+
+.ffmpeg-section .setting-option:hover {
+  background-color: var(--bg-hover);
+}
+
+.ffmpeg-section .setting-option[aria-selected="true"] {
+  background-color: var(--accent-10, rgba(100, 108, 255, 0.1));
+  font-weight: 500;
+}
+
+.ffmpeg-section .setting-option.disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.ffmpeg-section .option-group-header {
+  padding: 0.375rem 0.75rem;
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.ffmpeg-section .codec-description,
+.ffmpeg-section .copy-notice {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  margin-top: -0.25rem;
+  margin-bottom: 0.5rem;
+  width: 100%;
+}
+
+.ffmpeg-section .range-value {
+  min-width: 2rem;
+  text-align: center;
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.ffmpeg-section .bitrate-presets {
+  display: flex;
+  gap: 0.375rem;
+  width: 100%;
+}
+
+.ffmpeg-section .bitrate-preset-btn {
+  padding: 0.25rem 0.625rem;
+  font-size: 0.75rem;
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-md);
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.ffmpeg-section .bitrate-preset-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.ffmpeg-section .field-error {
+  font-size: 0.75rem;
+  color: var(--error, #ef4444);
+  width: 100%;
+}
+
+.ffmpeg-section .unavailable-reason {
+  padding: 0.5rem 0.75rem;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  font-style: italic;
+  background: var(--bg-primary);
+}
+
+/* Inline field descriptions below inputs in advanced mode */
+.ffmpeg-section .field-hint {
+  display: block;
+  width: 100%;
+  font-size: 0.7rem;
+  line-height: 1.45;
+  color: var(--text-muted);
+  margin-top: 0.25rem;
+  font-style: italic;
+}
+
+/* =========================================================================
+   Command Preview — matches CommandPreview.tsx class names
+   ========================================================================= */
+
+.command-preview {
+  background-color: var(--bg-secondary);
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-xl);
+  padding: 1.25rem;
+  margin-bottom: 1.5rem;
+  overflow: visible;
+}
+
+.command-preview-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+  padding-bottom: 0.75rem;
+  border-bottom: 1px solid var(--border-primary);
+  font-size: 1rem;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+/* Toggle & copy buttons */
+.command-preview-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.command-preview-actions button {
+  padding: 0.375rem 0.75rem;
+  font-size: 0.75rem;
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-md);
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.command-preview-actions button:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+/* Command text — clickable flags */
+.command-text {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  padding: 0.875rem;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-lg);
+  font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
+  font-size: 0.8rem;
+  line-height: 1.6;
+  overflow: visible;
+}
+
+.command-text span {
+  padding: 0.125rem 0.375rem;
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  cursor: pointer;
+  position: relative;
+  transition: background-color 0.1s;
+}
+
+.command-text span:hover,
+.command-text .flag-highlight {
+  background-color: var(--bg-hover);
+}
+
+.command-text .flag-tooltip {
+  position: absolute;
+  z-index: 100;
+  left: 50%;
+  bottom: calc(100% + 8px);
+  transform: translateX(-50%);
+  padding: 0.5rem 0.75rem;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-secondary);
+  border-radius: var(--radius-lg);
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 0.75rem;
+  line-height: 1.4;
+  width: max-content;
+  max-width: 280px;
+  box-shadow: var(--shadow-md);
+  pointer-events: none;
+}
+
+/* Inline explanations (annotated mode) */
+.inline-explanations {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+  margin-top: 0.75rem;
+}
+
+.inline-explanation {
+  display: flex;
+  align-items: baseline;
+  gap: 0.75rem;
+  padding: 0.5rem 0.75rem;
+  background: var(--bg-primary);
+  border-radius: var(--radius-md);
+}
+
+.inline-explanation code {
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-size: 0.8rem;
+  color: var(--text-primary);
+  background: var(--bg-tertiary);
+  padding: 0.125rem 0.375rem;
+  border-radius: var(--radius-sm);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.inline-explanation span {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  line-height: 1.4;
+}
+
+/* Annotation list (always visible) */
+.annotation-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+  margin-top: 0.75rem;
+}
+
+.annotation-item {
+  display: flex;
+  align-items: baseline;
+  gap: 0.75rem;
+  padding: 0.5rem 0.75rem;
+  background: var(--bg-primary);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: background-color 0.1s;
+}
+
+.annotation-item:hover,
+.annotation-item.highlighted {
+  background: var(--bg-hover);
+}
+
+.annotation-item code {
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-size: 0.8rem;
+  color: var(--text-primary);
+  background: var(--bg-tertiary);
+  padding: 0.125rem 0.375rem;
+  border-radius: var(--radius-sm);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.annotation-explanation {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  line-height: 1.4;
+}
+
+/* Warnings */
+.command-warning {
+  padding: 0.5rem 0.75rem;
+  margin-top: 0.5rem;
+  background: rgba(234, 179, 8, 0.1);
+  border: 1px solid rgba(234, 179, 8, 0.3);
+  border-radius: var(--radius-md);
+  color: var(--warning, #eab308);
+  font-size: 0.8rem;
+}
+
+/* Push to Dispatcharr form */
+.push-to-dispatcharr-form {
+  margin-top: 0.75rem;
+  padding: 0.75rem;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-lg);
+}
+
+.push-form-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.push-form-input {
+  flex: 1;
+  padding: 0.5rem 0.75rem;
+  font-size: 0.8rem;
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  outline: none;
+  transition: border-color 0.15s;
+}
+
+.push-form-input:focus {
+  border-color: var(--accent-primary);
+}
+
+.push-form-input:disabled {
+  opacity: 0.6;
+}
+
+.push-form-row .btn-primary {
+  padding: 0.5rem 1rem;
+  font-size: 0.8rem;
+}
+
+.push-form-row .btn-cancel {
+  padding: 0.375rem;
+}
+
+
+/* =========================================================================
+   Mode toggle (Simple / Advanced)
+   ========================================================================= */
+
+.ffmpeg-header-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.ffmpeg-header-row > div {
+  flex: 1;
+  min-width: 0;
+}
+
+/* Mode toggle uses .btn-secondary from common.css */
+.ffmpeg-header-row .btn-secondary {
+  flex-shrink: 0;
+}
+
+/* =========================================================================
+   Wizard steps (Simple mode)
+   ========================================================================= */
+
+.wizard-step {
+  background-color: var(--bg-secondary);
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-xl);
+  padding: 1.25rem;
+  margin-bottom: 1.5rem;
+}
+
+.wizard-step-header {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+  padding-bottom: 0.75rem;
+  border-bottom: 1px solid var(--border-primary);
+}
+
+.wizard-step-number {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--button-primary-bg);
+  color: var(--button-primary-text);
+  font-size: 0.8rem;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.wizard-step-header h3 {
+  font-size: 1rem;
+  font-weight: 500;
+  color: var(--text-primary);
+  margin: 0;
+}
+
+/* Wizard inputs use .form-input from common.css */
+
+/* =========================================================================
+   Processing mode card grid
+   ========================================================================= */
+
+.processing-mode-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.75rem;
+}
+
+.processing-mode-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 1rem 0.75rem;
+  background: var(--bg-primary);
+  border: 2px solid var(--border-primary);
+  border-radius: var(--radius-xl);
+  cursor: pointer;
+  transition: all 0.15s;
+  text-align: center;
+}
+
+.processing-mode-card:hover {
+  border-color: var(--text-muted);
+  background: var(--bg-hover);
+}
+
+.processing-mode-card.active {
+  border-color: var(--text-primary);
+  background: var(--bg-selected);
+}
+
+.processing-mode-icon {
+  font-size: 24px;
+  color: var(--text-secondary);
+}
+
+.processing-mode-card.active .processing-mode-icon {
+  color: var(--text-primary);
+}
+
+.processing-mode-label {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.processing-mode-desc {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  line-height: 1.3;
+}
+
+/* =========================================================================
+   Simple output card grid
+   ========================================================================= */
+
+.simple-output-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.75rem;
+}
+
+.simple-output-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 1rem 0.75rem;
+  background: var(--bg-primary);
+  border: 2px solid var(--border-primary);
+  border-radius: var(--radius-xl);
+  cursor: pointer;
+  transition: all 0.15s;
+  text-align: center;
+}
+
+.simple-output-card:hover {
+  border-color: var(--text-muted);
+  background: var(--bg-hover);
+}
+
+.simple-output-card.active {
+  border-color: var(--text-primary);
+  background: var(--bg-selected);
+}
+
+.simple-output-card .material-icons {
+  font-size: 24px;
+  color: var(--text-secondary);
+}
+
+.simple-output-card.active .material-icons {
+  color: var(--text-primary);
+}
+
+.simple-output-label {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.simple-output-desc {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  line-height: 1.3;
+}
+
+/* =========================================================================
+   Simple Audio Options
+   ========================================================================= */
+
+.simple-audio-section {
+  margin-top: 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.simple-audio-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.simple-audio-label {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  min-width: 5.5rem;
+  flex-shrink: 0;
+}
+
+.simple-audio-options {
+  display: flex;
+  gap: 0.375rem;
+  flex-wrap: wrap;
+}
+
+.simple-audio-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.375rem 0.75rem;
+  font-size: 0.75rem;
+  font-weight: 500;
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-lg);
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.15s;
+  white-space: nowrap;
+}
+
+.simple-audio-btn .material-icons {
+  font-size: 14px;
+}
+
+.simple-audio-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+  border-color: var(--text-muted);
+}
+
+.simple-audio-btn.active {
+  background: var(--button-primary-bg);
+  color: var(--button-primary-text);
+  border-color: var(--button-primary-bg);
+}
+
+/* =========================================================================
+   Stream Options Panel
+   ========================================================================= */
+
+.stream-options-panel {
+  padding: 0;
+  overflow: hidden;
+}
+
+.stream-options-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 1rem 1.25rem;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  color: var(--text-primary);
+  transition: background-color 0.15s;
+}
+
+.stream-options-toggle:hover {
+  background: var(--bg-hover);
+}
+
+.stream-options-toggle-left {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.stream-options-toggle-left h3 {
+  font-size: 1rem;
+  font-weight: 500;
+  margin: 0;
+}
+
+.stream-options-icon {
+  font-size: 20px;
+  color: var(--text-secondary);
+}
+
+.stream-options-badge {
+  font-size: 0.7rem;
+  font-weight: 600;
+  padding: 0.2rem 0.5rem;
+  border-radius: var(--radius-md);
+  background: var(--accent-10, rgba(100, 108, 255, 0.1));
+  color: var(--accent-primary, #646cff);
+}
+
+.stream-options-chevron {
+  font-size: 20px;
+  color: var(--text-secondary);
+  transition: transform 0.2s;
+}
+
+.stream-options-chevron.expanded {
+  transform: rotate(180deg);
+}
+
+.stream-options-body {
+  padding: 0 1.25rem 1.25rem;
+  border-top: 1px solid var(--border-primary);
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding-top: 1rem;
+}
+
+.stream-option-row {
+  background: var(--bg-primary);
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-lg);
+  padding: 0.75rem;
+}
+
+.stream-option-label {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  cursor: pointer;
+  font-size: 0.875rem;
+}
+
+.stream-option-label input[type="checkbox"] {
+  margin-top: 0.125rem;
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent-primary);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.stream-option-text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+}
+
+.stream-option-text strong {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.stream-option-hint {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  line-height: 1.4;
+}
+
+.stream-option-detail {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-top: 0.5rem;
+  padding-left: 1.5rem;
+}
+
+.stream-option-detail label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+
+.stream-option-detail .input-recommend {
+  font-size: 0.65rem;
+  color: var(--text-muted);
+  font-style: italic;
+  margin-top: 0.125rem;
+}
+
+.stream-option-input {
+  width: 140px;
+  padding: 0.375rem 0.5rem;
+  border: 1px solid var(--border-secondary);
+  border-radius: var(--radius-md);
+  background-color: var(--input-bg);
+  color: var(--text-primary);
+  font-size: 0.8rem;
+}
+
+.stream-option-input:focus {
+  outline: none;
+  border-color: var(--accent-primary);
+  box-shadow: var(--shadow-focus);
+}
+
+/* =========================================================================
+   IPTV preset bar
+   ========================================================================= */
+
+.iptv-preset-bar {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+  margin-bottom: 1.5rem;
+  padding: 0.625rem 1rem;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-xl);
+}
+
+.iptv-preset-bar-icon {
+  font-size: 20px;
+  color: var(--text-secondary);
+  flex-shrink: 0;
+  line-height: 1.75rem;
+}
+
+.iptv-preset-bar-label {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  flex-shrink: 0;
+  line-height: 1.75rem;
+}
+
+.iptv-preset-buttons {
+  display: flex;
+  gap: 0.375rem;
+  flex-wrap: wrap;
+}
+
+.iptv-preset-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.375rem 0.75rem;
+  font-size: 0.75rem;
+  font-weight: 500;
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-lg);
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.15s;
+  white-space: nowrap;
+}
+
+.iptv-preset-btn .material-icons {
+  font-size: 14px;
+}
+
+.iptv-preset-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+  border-color: var(--text-muted);
+}
+
+.iptv-preset-btn.active {
+  background: var(--button-primary-bg);
+  color: var(--button-primary-text);
+  border-color: var(--button-primary-bg);
+}
+
+/* Preset bar container — wraps built-in + saved rows */
+.iptv-preset-bar-container {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-bottom: 1.5rem;
+}
+
+.iptv-preset-bar-container > .iptv-preset-bar {
+  margin-bottom: 0;
+}
+
+/* Saved profiles bar */
+.saved-profiles-bar {
+  background: var(--bg-tertiary);
+}
+
+.saved-profile-chip {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-lg);
+  background: var(--bg-secondary);
+  overflow: hidden;
+  transition: all 0.15s;
+}
+
+.saved-profile-chip.active {
+  border-color: var(--button-primary-bg);
+}
+
+.saved-profile-load {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.375rem 0.5rem;
+  font-size: 0.75rem;
+  font-weight: 500;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.saved-profile-load .material-icons {
+  font-size: 14px;
+}
+
+.saved-profile-chip.active .saved-profile-load {
+  color: var(--button-primary-bg);
+  font-weight: 600;
+}
+
+.saved-profile-load:hover {
+  color: var(--text-primary);
+}
+
+.saved-profile-delete {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.25rem;
+  border: none;
+  border-left: 1px solid var(--border-primary);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.saved-profile-delete .material-icons {
+  font-size: 12px;
+}
+
+.saved-profile-delete:hover {
+  background: var(--status-error-bg, #ff4d4f22);
+  color: var(--status-error, #ff4d4f);
+}
+
+/* Save profile inline form */
+.save-profile-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.save-profile-input {
+  width: 140px;
+  padding: 0.3rem 0.5rem;
+  font-size: 0.75rem;
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-md);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  outline: none;
+}
+
+.save-profile-input:focus {
+  border-color: var(--button-primary-bg);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--button-primary-bg) 25%, transparent);
+}
+
+.save-profile-confirm,
+.save-profile-cancel {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-md);
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.save-profile-confirm .material-icons,
+.save-profile-cancel .material-icons {
+  font-size: 14px;
+}
+
+.save-profile-confirm:hover:not(:disabled) {
+  background: var(--status-success-bg, #52c41a22);
+  color: var(--status-success, #52c41a);
+  border-color: var(--status-success, #52c41a);
+}
+
+.save-profile-confirm:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.save-profile-cancel:hover {
+  background: var(--status-error-bg, #ff4d4f22);
+  color: var(--status-error, #ff4d4f);
+}
+
+/* Save profile button (in the preset row) */
+.save-profile-btn {
+  border-style: dashed;
+}
+
+.save-profile-btn:hover {
+  border-style: solid;
+}
+
+/* =========================================================================
+   Responsive
+   ========================================================================= */
+
+@media (max-width: 768px) {
+  .ffmpeg-builder-tab {
+    padding: 1rem;
+  }
+
+  .ffmpeg-fields-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .ffmpeg-section .form-group input,
+  .ffmpeg-section .form-group select,
+  .ffmpeg-section .setting-row input,
+  .ffmpeg-section .setting-row .setting-select-trigger,
+  .ffmpeg-section .setting-row .setting-select-dropdown,
+  .ffmpeg-section .dropdown-trigger,
+  .ffmpeg-section .dropdown-list,
+  .ffmpeg-section button[aria-expanded] {
+    max-width: 100%;
+  }
+
+  .processing-mode-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .simple-output-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .ffmpeg-header-row {
+    flex-direction: column;
+    gap: 0.75rem;
+  }
+
+  .iptv-preset-bar {
+    flex-wrap: wrap;
+  }
+
+  .iptv-preset-buttons {
+    flex-wrap: wrap;
+  }
+
+  .save-profile-input {
+    width: 110px;
+  }
+}
+
+@media (max-width: 480px) {
+  .processing-mode-grid {
+    grid-template-columns: 1fr;
+  }
+}

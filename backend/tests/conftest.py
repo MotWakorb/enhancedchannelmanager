@@ -31,6 +31,12 @@ from models import (
     # v0.11.5 Authentication models
     User, UserSession, PasswordResetToken,
 )
+# v0.12.5 FFMPEG Builder models
+from ffmpeg_builder.persistence import SavedConfig  # noqa: F401 — registers table
+# Register SecurityError globally for test specs that reference it without import
+from ffmpeg_builder.execution import SecurityError as _SecurityError  # noqa: F401
+import builtins as _builtins
+_builtins.SecurityError = _SecurityError
 
 
 @pytest.fixture(scope="function")
