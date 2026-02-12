@@ -343,6 +343,53 @@ function OrderNumberInput({ orderNumber, totalItems, onReorder }: {
 }
 
 // ============================================================================
+// DatePlaceholderHelp Component
+// ============================================================================
+
+function DatePlaceholderHelp({ isRegex }: { isRegex: boolean }) {
+  return (
+    <div className="date-help-box">
+      <p>Use placeholders to match dynamic dates:</p>
+      <ul>
+        <li>
+          <code>{"{date}"}</code> or <code>{"{today}"}</code>: Current date
+          (YYYY-MM-DD)
+        </li>
+        <li>
+          <code>{"{date:%d %b}"}</code>: Custom format (e.g. "12 Feb")
+        </li>
+        {isRegex && (
+          <>
+            <li>
+              <code>{"{date+3d}"}</code>: From now until 3 days later (range)
+            </li>
+            <li>
+              <code>{"{date-1w}"}</code>: From 1 week ago until now (range)
+            </li>
+            <li>
+              <code>{"{date+2d:%m-%d}"}</code>: Range + Format (e.g.{" "}
+              <code>(02-12|02-13|02-14)</code>)
+            </li>
+          </>
+        )}
+      </ul>
+      <p className="help-note">
+        <strong>Note:</strong> {isRegex ? (
+          <>
+            When using offsets (e.g. <code>+3d</code>), a regex group is generated (e.g. <code>(2023-01-01|2023-01-02)</code>).
+          </>
+        ) : (
+          <>
+            Offsets (ranges) are <strong>only</strong> supported when using the <strong>Matches (Regex)</strong> operator.
+            For other operators, only single-date placeholders like <code>{"{date}"}</code> work.
+          </>
+        )} Max range is 90 days.
+      </p>
+    </div>
+  );
+}
+
+// ============================================================================
 // ConditionEditor Component
 // ============================================================================
 
@@ -376,6 +423,7 @@ export function ConditionEditor({
   onReorder,
 }: ConditionEditorProps) {
   const id = useId();
+  const [showDateHelp, setShowDateHelp] = useState(false);
 
   // Derive field, operator, display value from the condition data
   const { field: currentField, operator: currentOperator, displayValue } = parseCondition(condition);
@@ -508,7 +556,22 @@ export function ConditionEditor({
               {isRegex && <span className="condition-hint">Regex</span>}
             </div>
           )}
+
+          {/* Date help toggle button for string inputs */}
+          {needsValue && isStringLike && !readonly && (
+            <button
+              type="button"
+              className="date-help-btn"
+              onClick={() => setShowDateHelp(!showDateHelp)}
+              aria-label="Show date placeholder help"
+              title="Date Placeholders"
+            >
+              <span className="material-icons">calendar_today</span>
+            </button>
+          )}
         </div>
+        {/* Date Help Box */}
+        {showDateHelp && isStringLike && <DatePlaceholderHelp isRegex={isRegex} />}
 
         {/* Case sensitive checkbox */}
         {showCaseSensitiveOption && isStringLike && (

@@ -154,6 +154,58 @@
   border-radius: var(--radius-md);
 }
 
+/* Date Help */
+.date-help-btn {
+    padding: 4px;
+    background: transparent;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    border-radius: var(--radius-md);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.date-help-btn:hover {
+    background: var(--bg-tertiary);
+    color: var(--accent-primary);
+}
+
+.date-help-btn .material-icons {
+    font-size: 18px;
+}
+
+.date-help-box {
+    width: 100%;
+    margin-top: 4px;
+    padding: 8px 12px;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-primary);
+    border-radius: var(--radius-lg);
+    font-size: 12px;
+    color: var(--text-secondary);
+    line-height: 1.4;
+}
+
+.date-help-box code {
+    font-family: monospace;
+    background: var(--bg-primary);
+    padding: 2px 4px;
+    border-radius: 4px;
+    color: var(--accent-primary);
+}
+
+.date-help-box ul {
+    margin: 4px 0 0 16px;
+    padding: 0;
+    list-style-type: disc;
+}
+
+.date-help-box li {
+    margin-bottom: 2px;
+}
+
 /* Options */
 .condition-options {
   display: flex;
