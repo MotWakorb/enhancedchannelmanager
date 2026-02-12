@@ -266,8 +266,11 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 @app.on_event("startup")
 async def startup_event():
     """Log configuration status on startup."""
+    from tls.https_server import is_https_subprocess
+    _is_https_subprocess = is_https_subprocess()
+
     logger.info("=" * 60)
-    logger.info("Enhanced Channel Manager starting up")
+    logger.info(f"Enhanced Channel Manager starting up{' (HTTPS subprocess)' if _is_https_subprocess else ''}")
     logger.info(f"Initial log level from environment: {initial_log_level}")
 
     # Initialize journal database
@@ -308,6 +311,12 @@ async def startup_event():
     if settings.backend_log_level:
         set_log_level(settings.backend_log_level)
         logger.info(f"Applied log level from settings: {settings.backend_log_level}")
+
+    # Skip background services in HTTPS subprocess — only the main process
+    # should run schedulers, probers, and trackers to avoid duplicate execution
+    if _is_https_subprocess:
+        logger.info("HTTPS subprocess: skipping background services (task engine, prober, tracker)")
+        return
 
     # Start bandwidth tracker if configured
     if settings.is_configured():
@@ -404,6 +413,68 @@ async def startup_event():
     except Exception as e:
         logger.error(f"Failed to start task engine: {e}", exc_info=True)
         logger.error("Scheduled tasks will not be available!")
+
+    # Schedule a background check for stale channel groups in probe schedules
+    # Runs after a short delay so Dispatcharr is available
+    async def _check_stale_groups_on_startup():
+        await asyncio.sleep(15)  # Wait for services to be ready
+        try:
+            from models import TaskSchedule as TaskScheduleModel, Notification as NotificationModel
+            client = get_client()
+            current_groups = await client.get_channel_groups()
+            current_by_id = {g["id"]: g.get("name") for g in current_groups}
+            current_by_name = {g.get("name"): g["id"] for g in current_groups}
+
+            sess = get_session()
+            try:
+                schedules = sess.query(TaskScheduleModel).filter(
+                    TaskScheduleModel.task_id == "stream_probe"
+                ).all()
+                all_stale = []
+                for sched in schedules:
+                    params = sched.get_parameters() if hasattr(sched, 'get_parameters') else {}
+                    if not params:
+                        import json as _json
+                        params = _json.loads(sched.parameters) if isinstance(sched.parameters, str) else (sched.parameters or {})
+                    stored = params.get("channel_groups", [])
+                    if not stored:
+                        continue
+                    if isinstance(stored[0], int):
+                        stale = [gid for gid in stored if gid not in current_by_id]
+                    else:
+                        stale = [n for n in stored if n not in current_by_name]
+                    all_stale.extend(stale)
+
+                if all_stale:
+                    # Deduplicate: only create if no unread notification exists
+                    existing = sess.query(NotificationModel).filter(
+                        NotificationModel.source_id == "stream_probe_stale_groups",
+                        NotificationModel.read == False,
+                    ).first()
+                    if not existing:
+                        await create_notification_internal(
+                            notification_type="warning",
+                            title="Stale Channel Groups in Probe Schedule",
+                            message=f"{len(all_stale)} channel group(s) in probe schedule(s) no longer exist: "
+                                    f"{', '.join(str(g) for g in all_stale)}. "
+                                    f"Edit the schedule to update the group selection.",
+                            source="system",
+                            source_id="stream_probe_stale_groups",
+                            action_label="Edit Schedule",
+                            send_alerts=False,
+                            metadata={
+                                "action_type": "configure_task",
+                                "task_id": "stream_probe",
+                                "stale_groups": all_stale,
+                            },
+                        )
+                        logger.info(f"Created stale groups notification for {len(all_stale)} stale group(s)")
+            finally:
+                sess.close()
+        except Exception as e:
+            logger.debug(f"Stale groups startup check skipped: {e}")
+
+    asyncio.create_task(_check_stale_groups_on_startup())
 
     # Start TLS certificate renewal manager
     try:
@@ -6936,6 +7007,107 @@ async def get_stream_stats_summary():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+class ChannelSortInput(BaseModel):
+    channel_id: int
+    stream_ids: list[int]
+
+
+class ComputeSortRequest(BaseModel):
+    channels: list[ChannelSortInput]
+    mode: str = "smart"  # "smart", "resolution", "bitrate", "framerate", "m3u_priority", "audio_channels"
+
+
+class ChannelSortResult(BaseModel):
+    channel_id: int
+    sorted_stream_ids: list[int]
+    changed: bool
+
+
+class ComputeSortResponse(BaseModel):
+    results: list[ChannelSortResult]
+
+
+# NOTE: compute-sort MUST be defined BEFORE /{stream_id} to avoid path parameter matching
+@app.post("/api/stream-stats/compute-sort", tags=["Stream Stats"], response_model=ComputeSortResponse)
+async def compute_sort(request: ComputeSortRequest):
+    """Compute sort orders for streams without applying them.
+
+    Uses server-side sort settings (priority, enabled criteria, M3U priorities,
+    deprioritize_failed) as the single source of truth.
+    Stream IDs come from the frontend (may have staged edits).
+    """
+    from stream_prober import smart_sort_streams, extract_m3u_account_id
+
+    settings = get_settings()
+
+    # Determine sort priority based on mode
+    valid_criteria = {"resolution", "bitrate", "framerate", "m3u_priority", "audio_channels"}
+    if request.mode == "smart":
+        sort_priority = [c for c in settings.stream_sort_priority if settings.stream_sort_enabled.get(c, False)]
+        sort_enabled = {c: True for c in sort_priority}
+    elif request.mode in valid_criteria:
+        sort_priority = [request.mode]
+        sort_enabled = {request.mode: True}
+    else:
+        raise HTTPException(status_code=400, detail=f"Invalid sort mode: {request.mode}")
+
+    # Collect all unique stream IDs across all channels
+    all_stream_ids = list({sid for ch in request.channels for sid in ch.stream_ids})
+
+    if not all_stream_ids:
+        return ComputeSortResponse(results=[])
+
+    # Fetch StreamStats objects from DB
+    from models import StreamStats as StreamStatsModel
+    session = get_session()
+    try:
+        BATCH_SIZE = 500
+        stats_map = {}
+        for i in range(0, len(all_stream_ids), BATCH_SIZE):
+            batch = all_stream_ids[i:i + BATCH_SIZE]
+            stats = session.query(StreamStatsModel).filter(
+                StreamStatsModel.stream_id.in_(batch)
+            ).all()
+            for s in stats:
+                stats_map[s.stream_id] = s
+    finally:
+        session.close()
+
+    # Build M3U account map if needed
+    stream_m3u_map = {}
+    needs_m3u = "m3u_priority" in sort_priority
+    if needs_m3u:
+        try:
+            client = get_client()
+            streams_data = await client.get_streams_by_ids(all_stream_ids)
+            for s in streams_data:
+                stream_m3u_map[s["id"]] = extract_m3u_account_id(s.get("m3u_account"))
+        except Exception as e:
+            logger.warning(f"[COMPUTE-SORT] Failed to fetch M3U data: {e}")
+
+    # Sort each channel
+    results = []
+    for ch in request.channels:
+        sorted_ids = smart_sort_streams(
+            stream_ids=ch.stream_ids,
+            stats_map=stats_map,
+            stream_m3u_map=stream_m3u_map,
+            stream_sort_priority=sort_priority,
+            stream_sort_enabled=sort_enabled,
+            m3u_account_priorities=settings.m3u_account_priorities,
+            deprioritize_failed_streams=settings.deprioritize_failed_streams,
+            channel_name=f"channel-{ch.channel_id}",
+        )
+        changed = sorted_ids != ch.stream_ids
+        results.append(ChannelSortResult(
+            channel_id=ch.channel_id,
+            sorted_stream_ids=sorted_ids,
+            changed=changed,
+        ))
+
+    return ComputeSortResponse(results=results)
+
+
 @app.get("/api/stream-stats/{stream_id}", tags=["Stream Stats"])
 async def get_stream_stats_by_id(stream_id: int):
     """Get probe stats for a specific stream."""
@@ -7708,10 +7880,17 @@ TASK_PARAMETER_SCHEMAS = {
         "description": "Stream health probing parameters",
         "parameters": [
             {
+                "name": "auto_sync_groups",
+                "type": "boolean",
+                "label": "Auto-sync groups",
+                "description": "Automatically probe all current groups at runtime (ignores group selection below)",
+                "default": False,
+            },
+            {
                 "name": "channel_groups",
-                "type": "string_array",
+                "type": "number_array",
                 "label": "Channel Groups",
-                "description": "Which channel groups to probe (empty = all groups)",
+                "description": "Which channel groups to include in the probe",
                 "default": [],
                 "source": "channel_groups",  # Tells UI to fetch from channel groups API
             },
@@ -7820,6 +7999,15 @@ async def list_task_schedules(task_id: str):
             # Get all schedules for this task
             schedules = session.query(TaskSchedule).filter(TaskSchedule.task_id == task_id).all()
 
+            # For stream_probe, validate channel_groups against current groups
+            current_groups_data = None
+            if task_id == "stream_probe":
+                try:
+                    client = get_client()
+                    current_groups_data = await client.get_channel_groups()
+                except Exception as e:
+                    logger.debug(f"Could not fetch current groups for validation: {e}")
+
             result = []
             for schedule in schedules:
                 schedule_dict = schedule.to_dict()
@@ -7832,7 +8020,66 @@ async def list_task_schedules(task_id: str):
                     days_of_week=schedule.get_days_of_week_list(),
                     day_of_month=schedule.day_of_month,
                 )
+                # Validate channel_groups parameters against current groups
+                if current_groups_data is not None and schedule_dict.get("parameters"):
+                    params = schedule_dict["parameters"]
+                    if "channel_groups" in params and params["channel_groups"]:
+                        stored = params["channel_groups"]
+                        current_by_id = {g["id"]: g.get("name") for g in current_groups_data}
+                        current_by_name = {g.get("name"): g["id"] for g in current_groups_data}
+
+                        if stored and isinstance(stored[0], int):
+                            # ID-based: validate IDs
+                            valid = [gid for gid in stored if gid in current_by_id]
+                            stale = [gid for gid in stored if gid not in current_by_id]
+                        else:
+                            # Legacy name-based: validate + convert to IDs
+                            valid = [current_by_name[n] for n in stored if n in current_by_name]
+                            stale = [n for n in stored if n not in current_by_name]
+
+                        if stale:
+                            params["channel_groups"] = valid
+                            params["_stale_groups"] = stale
                 result.append(schedule_dict)
+
+            # Manage stale groups notification (create or clean up)
+            all_stale = []
+            for s in result:
+                if s.get("parameters", {}).get("_stale_groups"):
+                    all_stale.extend(s["parameters"]["_stale_groups"])
+
+            from models import Notification as NotificationModel
+            if all_stale:
+                existing = session.query(NotificationModel).filter(
+                    NotificationModel.source_id == "stream_probe_stale_groups",
+                    NotificationModel.read == False,
+                ).first()
+                if not existing:
+                    await create_notification_internal(
+                        notification_type="warning",
+                        title="Stale Channel Groups in Probe Schedule",
+                        message=f"{len(all_stale)} channel group(s) in probe schedule(s) no longer exist: "
+                                f"{', '.join(str(g) for g in all_stale)}. "
+                                f"Edit the schedule to update the group selection.",
+                        source="system",
+                        source_id="stream_probe_stale_groups",
+                        action_label="Edit Schedule",
+                        send_alerts=False,
+                        metadata={
+                            "action_type": "configure_task",
+                            "task_id": "stream_probe",
+                            "stale_groups": all_stale,
+                        },
+                    )
+            else:
+                # No stale groups — clean up any existing notifications
+                stale_notifs = session.query(NotificationModel).filter(
+                    NotificationModel.source_id == "stream_probe_stale_groups",
+                ).all()
+                for n in stale_notifs:
+                    session.delete(n)
+                if stale_notifs:
+                    session.commit()
 
             return {"schedules": result}
         finally:
@@ -7874,9 +8121,10 @@ async def create_task_schedule(task_id: str, data: TaskScheduleCreate):
             if data.days_of_week:
                 schedule.set_days_of_week_list(data.days_of_week)
 
-            # Set task-specific parameters if provided
+            # Set task-specific parameters if provided (strip internal metadata keys)
             if data.parameters:
-                schedule.set_parameters(data.parameters)
+                clean_params = {k: v for k, v in data.parameters.items() if not k.startswith("_")}
+                schedule.set_parameters(clean_params)
 
             # Calculate next run time
             if data.enabled:
@@ -7954,7 +8202,8 @@ async def update_task_schedule(task_id: str, schedule_id: int, data: TaskSchedul
             if data.day_of_month is not None:
                 schedule.day_of_month = data.day_of_month
             if data.parameters is not None:
-                schedule.set_parameters(data.parameters)
+                clean_params = {k: v for k, v in data.parameters.items() if not k.startswith("_")}
+                schedule.set_parameters(clean_params)
 
             # Recalculate next run time
             if schedule.enabled:

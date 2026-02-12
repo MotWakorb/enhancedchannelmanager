@@ -438,6 +438,15 @@ function App() {
     setActiveTab(newTab);
   }, [isEditMode, stagedOperationCount, rawExitEditMode]);
 
+  // Listen for task editor navigation events from NotificationCenter
+  useEffect(() => {
+    const handler = () => {
+      setActiveTab('settings');
+    };
+    window.addEventListener('ecm:open-task-editor', handler);
+    return () => window.removeEventListener('ecm:open-task-editor', handler);
+  }, []);
+
   // Check settings and load initial data
   useEffect(() => {
     const init = async () => {

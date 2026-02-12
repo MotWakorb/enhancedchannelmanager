@@ -339,3 +339,16 @@
   color: var(--text-muted);
   margin-left: auto;
 }
+
+/* Stale groups warning on schedule items */
+.task-editor-modal .schedule-stale-warning {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  font-size: 0.75rem;
+  color: var(--warning);
+  margin-top: 0.25rem;
+}
+.task-editor-modal .schedule-stale-warning .material-icons {
+  font-size: 14px;
+}

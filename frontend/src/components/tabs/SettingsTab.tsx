@@ -207,6 +207,14 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
     return () => window.removeEventListener('services-restarted', handleServicesRestarted);
   }, [notifications]);
 
+  // Check for pending task editor navigation (from NotificationCenter)
+  useEffect(() => {
+    const pending = sessionStorage.getItem('ecm:open-task-editor');
+    if (pending) {
+      setActivePage('scheduled-tasks');
+    }
+  });
+
   // Connection settings
   const [url, setUrl] = useState('');
   const [username, setUsername] = useState('');

@@ -45,7 +45,8 @@ class StreamProbeTask(TaskScheduler):
         # The actual prober is obtained from main.py where it's initialized
         self._prober = None
         # Schedule parameter overrides (None means use prober's defaults)
-        self._channel_groups: list[str] = []  # Override for group filtering
+        self._channel_groups: list = []  # Override for group filtering (IDs or names)
+        self._auto_sync_groups: bool = False  # Probe all current groups at runtime
         self._batch_size_override: Optional[int] = None
         self._timeout_override: Optional[int] = None
         self._max_concurrent_override: Optional[int] = None
@@ -54,6 +55,7 @@ class StreamProbeTask(TaskScheduler):
         """Get stream probe configuration."""
         return {
             "channel_groups": self._channel_groups,
+            "auto_sync_groups": self._auto_sync_groups,
             "batch_size": self._batch_size_override,
             "timeout": self._timeout_override,
             "max_concurrent": self._max_concurrent_override,
@@ -70,6 +72,8 @@ class StreamProbeTask(TaskScheduler):
         """
         if "channel_groups" in config:
             self._channel_groups = config["channel_groups"] or []
+        if "auto_sync_groups" in config:
+            self._auto_sync_groups = bool(config["auto_sync_groups"])
         if "batch_size" in config:
             self._batch_size_override = config["batch_size"]
         if "timeout" in config:
@@ -78,6 +82,7 @@ class StreamProbeTask(TaskScheduler):
             self._max_concurrent_override = config["max_concurrent"]
 
         logger.info(f"[{self.task_id}] Config updated: channel_groups={self._channel_groups}, "
+                   f"auto_sync_groups={self._auto_sync_groups}, "
                    f"batch_size={self._batch_size_override}, timeout={self._timeout_override}, "
                    f"max_concurrent={self._max_concurrent_override}")
 
@@ -146,6 +151,57 @@ class StreamProbeTask(TaskScheduler):
 
             # Determine channel groups to use
             channel_groups = self._channel_groups if self._channel_groups else None
+
+            if self._auto_sync_groups:
+                # Auto-sync mode: always probe ALL current groups, ignore stored list
+                logger.info(f"[{self.task_id}] Auto-sync enabled, probing all current groups")
+                channel_groups = None  # None = probe everything
+            elif channel_groups:
+                # Fixed-list mode: validate stored IDs/names against current groups
+                try:
+                    current_groups = await self._prober.client.get_channel_groups()
+                    current_by_id = {g["id"]: g.get("name") for g in current_groups}
+                    current_by_name = {g.get("name"): g for g in current_groups}
+
+                    # Detect format: int = ID-based (new), str = name-based (legacy)
+                    if channel_groups and isinstance(channel_groups[0], int):
+                        valid_ids = [gid for gid in channel_groups if gid in current_by_id]
+                        stale_ids = [gid for gid in channel_groups if gid not in current_by_id]
+                        valid_groups = [current_by_id[gid] for gid in valid_ids]
+                        stale_groups = [f"ID:{gid}" for gid in stale_ids]
+                    else:
+                        valid_groups = [g for g in channel_groups if g in current_by_name]
+                        stale_groups = [g for g in channel_groups if g not in current_by_name]
+
+                    if stale_groups:
+                        logger.warning(f"[{self.task_id}] Stale groups in schedule: {stale_groups}")
+                        # Send warning notification
+                        if self._create_notification_callback:
+                            try:
+                                await self._create_notification_callback(
+                                    notification_type="warning",
+                                    title="Stream Probe: Stale Channel Groups",
+                                    message=f"{len(stale_groups)} channel group(s) in the probe schedule no longer exist "
+                                            f"and were skipped: {', '.join(str(g) for g in stale_groups)}. "
+                                            f"Edit the schedule to update the group selection.",
+                                    source="task",
+                                    source_id="stream_probe_stale_groups",
+                                    action_label="Edit Schedule",
+                                    send_alerts=self._send_alerts,
+                                    metadata={
+                                        "task_id": self.task_id,
+                                        "stale_groups": stale_groups,
+                                        "action_type": "configure_task",
+                                    },
+                                )
+                            except Exception as e:
+                                logger.warning(f"[{self.task_id}] Failed to send stale groups notification: {e}")
+
+                    channel_groups = valid_groups if valid_groups else None
+                    if not valid_groups:
+                        logger.info(f"[{self.task_id}] All scheduled groups are stale, probing all current groups")
+                except Exception as e:
+                    logger.warning(f"[{self.task_id}] Failed to validate channel groups: {e}")
 
             # Start the probe in background so we can poll for progress
             logger.info(f"[{self.task_id}] Starting stream probe (groups: {channel_groups})")
@@ -266,6 +322,7 @@ class StreamProbeTask(TaskScheduler):
 
             # Clear all schedule parameter overrides
             self._channel_groups = []
+            self._auto_sync_groups = False
             self._batch_size_override = None
             self._timeout_override = None
             self._max_concurrent_override = None
