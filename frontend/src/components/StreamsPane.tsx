@@ -438,11 +438,6 @@ export function StreamsPane({
   const allExpanded = groupedStreams.length > 0 && expandedGroups.size === groupedStreams.length;
   const allCollapsed = expandedGroups.size === 0;
 
-  // Clear selection when streams change (new search/filter)
-  useEffect(() => {
-    clearSelection();
-  }, [searchTerm, providerFilter, groupFilter, clearSelection]);
-
   // Clear selection when exiting edit mode
   useEffect(() => {
     if (!isEditMode) {
