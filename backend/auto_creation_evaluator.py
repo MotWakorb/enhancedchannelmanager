@@ -9,7 +9,7 @@ import re
 import logging
 from typing import Any, Optional
 from dataclasses import dataclass
-
+from datetime import datetime, timedelta
 from auto_creation_schema import Condition, ConditionType
 
 
@@ -138,6 +138,78 @@ class ConditionEvaluator:
                 if group_id not in self._channels_by_group:
                     self._channels_by_group[group_id] = []
                 self._channels_by_group[group_id].append(channel)
+                
+    
+    def _expand_date_placeholders(self, text: str) -> str:
+        """
+        Expand {date...} or {today...} placeholders in text.
+        Supported formats:
+        - {date} or {today} -> YYYY-MM-DD (today)
+        - {date+N} -> today + N days (range: today to today+N)
+        - {date-N} -> today - N days (range: today to today-N)
+        - {date+Nd} -> today + N days (range: today to today+N)
+        - {date+Nw} -> today + N weeks (range: today to today+N*7)
+        - {date:FORMAT} -> today formatted (e.g., {date:%d %b})
+        """
+        if not text or not isinstance(text, str) or "{" not in text:
+            return text
+
+        pattern = r"\{(?:date|today)([+-]\d+[dw]?)?(:[^}]+)?\}"
+
+        def replace_match(match):
+            offset_str = match.group(1)
+            format_str = match.group(2)
+
+            base_date = datetime.now()
+
+            # Default unit is days
+            unit = "d"
+            val_str = None
+            val = 0
+
+            if offset_str:
+                val_str = offset_str
+                # Check if specific unit provided (d=days, w=weeks)
+                if offset_str[-1].lower() in ("d", "w"):
+                    unit = offset_str[-1].lower()
+                    val_str = offset_str[:-1]
+
+                try:
+                    # Parse the numerical offset value
+                    val = int(val_str)
+                except ValueError:
+                    pass  # Ignore invalid offset parsing
+
+            # Remove colon from format string if present
+            fmt = "%Y-%m-%d"
+            if format_str:
+                fmt = format_str[1:]  # Skip the ':'
+
+            if val == 0:
+                try:
+                    return base_date.strftime(fmt)
+                except ValueError:
+                    return match.group(0)
+
+            # Range calculation
+            days_to_add = val
+            if unit == "w":
+                days_to_add = val * 7
+
+            dates = []
+            # range is exclusive at end, so we need +1 or -1 to include the target date
+            step = 1 if days_to_add > 0 else -1
+            end = days_to_add + step
+
+            try:
+                for i in range(0, end, step):
+                    d = base_date + timedelta(days=i)
+                    dates.append(d.strftime(fmt))
+                return f"({'|'.join(dates)})"
+            except ValueError:
+                return match.group(0)
+
+        return re.sub(pattern, replace_match, text)
 
     def evaluate(self, condition: Condition | dict, context: StreamContext) -> EvaluationResult:
         """
@@ -347,6 +419,9 @@ class ConditionEvaluator:
     def _evaluate_regex(self, pattern: str, value: str, case_sensitive: bool,
                         cond_type: str) -> EvaluationResult:
         """Evaluate regex pattern against value."""
+
+        pattern = self._expand_date_placeholders(pattern)
+
         if not pattern:
             return EvaluationResult(False, cond_type, "No pattern specified")
         if value is None:
@@ -366,6 +441,9 @@ class ConditionEvaluator:
     def _evaluate_contains(self, substring: str, value: str, case_sensitive: bool,
                            cond_type: str) -> EvaluationResult:
         """Evaluate substring containment."""
+                    
+        substring = self._expand_date_placeholders(substring)
+
         if not substring:
             return EvaluationResult(False, cond_type, "No substring specified")
         if value is None:
@@ -472,6 +550,9 @@ class ConditionEvaluator:
 
     def _evaluate_channel_exists_name(self, channel_name: str, cond_type: str) -> EvaluationResult:
         """Check if a channel with exact name exists."""
+
+        channel_name = self._expand_date_placeholders(channel_name)
+
         exists = channel_name.lower() in self._channel_names
         return EvaluationResult(
             exists, cond_type,
@@ -481,6 +562,9 @@ class ConditionEvaluator:
     def _evaluate_channel_exists_regex(self, pattern: str, case_sensitive: bool,
                                         cond_type: str) -> EvaluationResult:
         """Check if any channel matches the regex pattern."""
+        
+        pattern = self._expand_date_placeholders(pattern)
+
         try:
             flags = 0 if case_sensitive else re.IGNORECASE
             regex = re.compile(pattern, flags)
