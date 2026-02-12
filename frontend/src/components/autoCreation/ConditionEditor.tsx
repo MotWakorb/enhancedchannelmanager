@@ -372,7 +372,7 @@ function DatePlaceholderHelp() {
       <p className="help-note">
         <strong>Note:</strong> When using offsets (e.g. <code>+3d</code>), a
         regex group is generated (e.g. <code>(2023-01-01|2023-01-02)</code>).
-        Use <strong>Matches (Regex)</strong> operator for best results.
+        Max range is 90 days. Use <strong>Matches (Regex)</strong> operator for best results.
       </p>
     </div>
   );
