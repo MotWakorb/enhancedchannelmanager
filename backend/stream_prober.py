@@ -771,7 +771,7 @@ class StreamProber:
 
             # Retry on transient error patterns (HTTP errors, I/O errors, connection drops).
             # Retry the actual ffprobe — no HEAD check, since HEAD is unreliable for IPTV streams.
-            transient_patterns = ("4XX", "5XX", "Server returned", "Input/output error", "Stream ends prematurely", "Connection reset", "Broken pipe")
+            transient_patterns = ("4XX", "5XX", "Server returned", "Input/output error", "Stream ends prematurely", "Connection reset", "Broken pipe", "Invalid data found")
             if any(p in error_text for p in transient_patterns) and _retry_attempt < self.probe_retry_count:
                 logger.info(f"[PROBE-RETRY] Transient error — retry {_retry_attempt + 1}/{self.probe_retry_count} in {self.probe_retry_delay}s: {url[:80]}...")
                 await asyncio.sleep(self.probe_retry_delay)
