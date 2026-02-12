@@ -226,6 +226,8 @@ class StreamProber:
         skip_recently_probed_hours: int = 0,  # Skip streams probed within last N hours (0 = always probe)
         refresh_m3us_before_probe: bool = True,  # Refresh all M3U accounts before starting probe
         auto_reorder_after_probe: bool = False,  # Automatically reorder streams in channels after probe completes
+        probe_retry_count: int = 1,   # Retries on transient ffprobe failure (0 = no retry)
+        probe_retry_delay: int = 2,   # Seconds between retries
         deprioritize_failed_streams: bool = True,  # Deprioritize failed streams in smart sort
         stream_sort_priority: list[str] = None,  # Priority order for Smart Sort criteria
         stream_sort_enabled: dict[str, bool] = None,  # Which criteria are enabled for Smart Sort
@@ -243,6 +245,8 @@ class StreamProber:
         self.skip_recently_probed_hours = skip_recently_probed_hours
         self.refresh_m3us_before_probe = refresh_m3us_before_probe
         self.auto_reorder_after_probe = auto_reorder_after_probe
+        self.probe_retry_count = max(0, min(5, probe_retry_count))  # Clamp 0-5
+        self.probe_retry_delay = max(1, min(30, probe_retry_delay))  # Clamp 1-30
         self.deprioritize_failed_streams = deprioritize_failed_streams
         self.stream_fetch_page_limit = stream_fetch_page_limit
         logger.info(f"[PROBER-INIT] auto_reorder_after_probe={auto_reorder_after_probe}")
@@ -761,7 +765,7 @@ class StreamProber:
             logger.debug(f"HTTP status check failed for {url}: {e}")
             return None
 
-    async def _run_ffprobe(self, url: str, _is_retry: bool = False) -> dict:
+    async def _run_ffprobe(self, url: str, _retry_attempt: int = 0) -> dict:
         """Run ffprobe and parse JSON output."""
         cmd = [
             "ffprobe",
@@ -799,12 +803,12 @@ class StreamProber:
             # If ffprobe reports an HTTP error, check the actual status code
             if "4XX" in error_text or "5XX" in error_text or "Server returned" in error_text:
                 status_code = await self._check_http_status(url)
-                if status_code and status_code == 200 and not _is_retry:
+                if status_code and status_code == 200 and _retry_attempt < self.probe_retry_count:
                     # Server is reachable (HTTP 200) but ffprobe got a transient error —
-                    # likely a momentary provider glitch. Retry once after a short delay.
-                    logger.info(f"[PROBE-RETRY] ffprobe failed but HTTP 200 — retrying in 2s: {url[:80]}...")
-                    await asyncio.sleep(2)
-                    return await self._run_ffprobe(url, _is_retry=True)
+                    # likely a momentary provider glitch. Retry after a configurable delay.
+                    logger.info(f"[PROBE-RETRY] ffprobe failed but HTTP 200 — retry {_retry_attempt + 1}/{self.probe_retry_count} in {self.probe_retry_delay}s: {url[:80]}...")
+                    await asyncio.sleep(self.probe_retry_delay)
+                    return await self._run_ffprobe(url, _retry_attempt=_retry_attempt + 1)
                 elif status_code:
                     error_text = f"{error_text} (HTTP {status_code})"
                     logger.info(f"[PROBE-HTTP] URL {url[:80]}... returned HTTP {status_code}")

@@ -808,6 +808,8 @@ export interface SettingsResponse {
   skip_recently_probed_hours: number;  // Skip streams probed within last N hours (0 = always probe)
   refresh_m3us_before_probe: boolean;  // Refresh all M3U accounts before starting probe
   auto_reorder_after_probe: boolean;  // Automatically reorder streams in channels after probe completes
+  probe_retry_count: number;   // Retries on transient ffprobe failure (0 = no retry, max 5)
+  probe_retry_delay: number;   // Seconds between retries (1-30)
   stream_fetch_page_limit: number;  // Max pages when fetching streams (pages * 500 = max streams)
   stream_sort_priority: SortCriterion[];  // Priority order for Smart Sort (e.g., ['resolution', 'bitrate', 'framerate'])
   stream_sort_enabled: SortEnabledMap;  // Which sort criteria are enabled (e.g., { resolution: true, bitrate: true, framerate: false })
@@ -884,6 +886,8 @@ export async function saveSettings(settings: {
   skip_recently_probed_hours?: number;  // Optional - skip streams probed within last N hours, defaults to 0 (always probe)
   refresh_m3us_before_probe?: boolean;  // Optional - refresh all M3U accounts before starting probe, defaults to true
   auto_reorder_after_probe?: boolean;  // Optional - automatically reorder streams after probe, defaults to false
+  probe_retry_count?: number;   // Optional - retries on transient ffprobe failure (0 = no retry, max 5), defaults to 1
+  probe_retry_delay?: number;   // Optional - seconds between retries (1-30), defaults to 2
   stream_fetch_page_limit?: number;  // Optional - max pages when fetching streams, defaults to 200 (100K streams)
   stream_sort_priority?: SortCriterion[];  // Optional - priority order for Smart Sort, defaults to ['resolution', 'bitrate', 'framerate']
   stream_sort_enabled?: SortEnabledMap;  // Optional - which sort criteria are enabled, defaults to all true
@@ -1643,6 +1647,20 @@ export async function getStreamStatsByIds(streamIds: number[]): Promise<Record<n
   return fetchJson(`${API_BASE}/stream-stats/by-ids`, {
     method: 'POST',
     body: JSON.stringify({ stream_ids: streamIds }),
+  });
+}
+
+/**
+ * Compute sort orders for streams without applying them.
+ * Uses server-side sort settings as the single source of truth.
+ */
+export async function computeSort(
+  channels: { channel_id: number; stream_ids: number[] }[],
+  mode: string = 'smart'
+): Promise<{ results: { channel_id: number; sorted_stream_ids: number[]; changed: boolean }[] }> {
+  return fetchJson(`${API_BASE}/stream-stats/compute-sort`, {
+    method: 'POST',
+    body: JSON.stringify({ channels, mode }),
   });
 }
 

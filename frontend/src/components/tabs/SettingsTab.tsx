@@ -299,6 +299,8 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   const [skipRecentlyProbedHours, setSkipRecentlyProbedHours] = useState(0);
   const [refreshM3usBeforeProbe, setRefreshM3usBeforeProbe] = useState(true);
   const [autoReorderAfterProbe, setAutoReorderAfterProbe] = useState(false);
+  const [probeRetryCount, setProbeRetryCount] = useState(1);
+  const [probeRetryDelay, setProbeRetryDelay] = useState(2);
   const [streamFetchPageLimit, setStreamFetchPageLimit] = useState(200);
   const [probingAll, setProbingAll] = useState(false);
   const [totalStreamCount, setTotalStreamCount] = useState(100); // Default to 100, will be updated on load
@@ -579,6 +581,8 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       setOriginalRefreshM3usBeforeProbe(settings.refresh_m3us_before_probe ?? true);
       setAutoReorderAfterProbe(settings.auto_reorder_after_probe ?? false);
       setOriginalAutoReorder(settings.auto_reorder_after_probe ?? false);
+      setProbeRetryCount(settings.probe_retry_count ?? 1);
+      setProbeRetryDelay(settings.probe_retry_delay ?? 2);
       setStreamFetchPageLimit(settings.stream_fetch_page_limit ?? 200);
       // Merge saved criteria with any new criteria that may have been added in updates
       const merged = mergeSortCriteria(settings.stream_sort_priority, settings.stream_sort_enabled);
@@ -719,6 +723,8 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         skip_recently_probed_hours: skipRecentlyProbedHours,
         refresh_m3us_before_probe: refreshM3usBeforeProbe,
         auto_reorder_after_probe: autoReorderAfterProbe,
+        probe_retry_count: probeRetryCount,
+        probe_retry_delay: probeRetryDelay,
         stream_fetch_page_limit: streamFetchPageLimit,
         stream_sort_priority: streamSortPriority,
         stream_sort_enabled: streamSortEnabled,
@@ -2844,6 +2850,37 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                 When enabled, streams within channels will be automatically reordered using smart sort after probe completes.
                 Failed streams are deprioritized, and working streams are sorted by resolution, bitrate, and framerate.
               </span>
+            </div>
+
+            <div className="form-group-vertical">
+              <label htmlFor="probeRetryCount">Probe retry count</label>
+              <span className="form-description">
+                Number of times to retry when ffprobe fails but the stream URL is reachable (HTTP 200).
+                Handles transient provider glitches. Set to 0 to disable retries.
+              </span>
+              <input
+                id="probeRetryCount"
+                type="number"
+                min="0"
+                max="5"
+                value={probeRetryCount}
+                onChange={(e) => setProbeRetryCount(Math.max(0, Math.min(5, parseInt(e.target.value) || 0)))}
+              />
+            </div>
+
+            <div className="form-group-vertical">
+              <label htmlFor="probeRetryDelay">Probe retry delay (seconds)</label>
+              <span className="form-description">
+                Seconds to wait between retries. Longer delays give providers more time to recover from transient errors.
+              </span>
+              <input
+                id="probeRetryDelay"
+                type="number"
+                min="1"
+                max="30"
+                value={probeRetryDelay}
+                onChange={(e) => setProbeRetryDelay(Math.max(1, Math.min(30, parseInt(e.target.value) || 1)))}
+              />
             </div>
 
           </div>

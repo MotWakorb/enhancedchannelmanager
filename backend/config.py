@@ -83,6 +83,9 @@ class DispatcharrSettings(BaseModel):
     refresh_m3us_before_probe: bool = True
     # Automatically reorder streams in channels after probe completes
     auto_reorder_after_probe: bool = False
+    # Probe retry settings for transient ffprobe failures
+    probe_retry_count: int = 1  # Number of retries when ffprobe fails but HTTP returns 200 (0 = no retry)
+    probe_retry_delay: int = 2  # Seconds to wait between retries
     # Maximum pages to fetch when retrieving streams from Dispatcharr (page_size=500)
     # 200 pages = 100,000 streams max. Increase if you have more than 100K streams.
     stream_fetch_page_limit: int = 200
