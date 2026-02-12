@@ -138,16 +138,16 @@ class ConditionEvaluator:
                 if group_id not in self._channels_by_group:
                     self._channels_by_group[group_id] = []
                 self._channels_by_group[group_id].append(channel)
-    
+
     def _expand_date_placeholders(self, text: str, allow_ranges: bool = True) -> str:
         """
         Expand {date...} or {today...} placeholders in text.
-        
+
         Args:
             text: Text with potential placeholders
             allow_ranges: If True, expansions like {date+3} return a regex group (d1|d2|d3).
                          If False, only single-date placeholders are expanded.
-        
+
         Supported formats:
         - {date} or {today} -> YYYY-MM-DD (today)
         - {date+N} -> today + N days (range: today to today+N)
@@ -203,7 +203,7 @@ class ConditionEvaluator:
             days_to_add = val
             if unit == "w":
                 days_to_add = val * 7
-            
+
             max_days = 90
             # Cap the range at 90 days to prevent huge regex generation
             if days_to_add > max_days:
@@ -450,11 +450,11 @@ class ConditionEvaluator:
         except re.error as e:
             logger.error(f"Invalid regex pattern '{pattern}': {e}")
             return EvaluationResult(False, cond_type, f"Invalid regex: {e}")
-            
+
     def _evaluate_contains(self, substring: str, value: str, case_sensitive: bool,
                            cond_type: str) -> EvaluationResult:
         """Evaluate substring containment."""
-                    
+
         substring = self._expand_date_placeholders(substring, allow_ranges=False)
 
         if not substring:
@@ -575,7 +575,7 @@ class ConditionEvaluator:
     def _evaluate_channel_exists_regex(self, pattern: str, case_sensitive: bool,
                                         cond_type: str) -> EvaluationResult:
         """Check if any channel matches the regex pattern."""
-        
+
         pattern = self._expand_date_placeholders(pattern)
 
         try:
