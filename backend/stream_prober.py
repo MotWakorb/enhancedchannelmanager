@@ -26,6 +26,14 @@ DEFAULT_PROBE_TIMEOUT = 30  # seconds
 DEFAULT_PROBE_BATCH_SIZE = 10  # streams per cycle
 BITRATE_SAMPLE_DURATION = 8  # seconds to sample stream for bitrate measurement
 
+# Per-account ramp-up configuration
+RAMP_INITIAL_LIMIT = 1         # Start each account at 1 concurrent probe
+RAMP_INCREMENT = 1             # Increase allowed concurrency by 1 after each successful window
+RAMP_SUCCESS_WINDOW = 3        # Consecutive successes at current level before ramping up
+RAMP_FAILURE_HOLD_SECONDS = 10 # Seconds to hold an account after a probe failure
+RAMP_FAILURE_REDUCTION = 1     # Reduce current_limit by this on failure (min 1)
+RAMP_UNLIMITED_CAP = 4         # For accounts with max_streams=0 (unlimited), cap ramp here
+
 # Probe history persistence
 CONFIG_DIR = Path(os.environ.get("CONFIG_DIR", "/config"))
 PROBE_HISTORY_FILE = CONFIG_DIR / "probe_history.json"
@@ -277,9 +285,8 @@ class StreamProber:
         self._profile_max_streams = {}   # profile_id -> max_streams
         self._round_robin_index = {}    # account_id -> last used profile index (for round_robin strategy)
 
-        # Rate limit tracking for adaptive backoff
-        self._rate_limited_hosts = {}  # host -> {"last_429_time": timestamp, "backoff_until": timestamp, "consecutive_429s": count}
-        self._rate_limit_lock = None  # Will be initialized as asyncio.Lock() when needed
+        # Per-account ramp-up state (reset each probe run)
+        self._account_ramp_state = {}  # account_id -> ramp state dict
 
         # Notification callbacks for progress updates
         self._notification_create_callback = None  # async fn(type, title, message, source, source_id, metadata) -> dict with id
@@ -525,93 +532,69 @@ class StreamProber:
         except Exception as e:
             logger.error(f"Failed to persist probe history to {PROBE_HISTORY_FILE}: {e}")
 
-    def _extract_host_from_url(self, url: str) -> Optional[str]:
-        """Extract the host/domain from a URL."""
-        if not url:
-            return None
-        try:
-            from urllib.parse import urlparse
-            parsed = urlparse(url)
-            return parsed.netloc or parsed.hostname
-        except Exception:
-            return None
-
-    async def _is_host_rate_limited(self, host: str) -> bool:
-        """Check if a host is currently rate-limited."""
-        if not host or host not in self._rate_limited_hosts:
-            return False
-
-        host_info = self._rate_limited_hosts[host]
-        current_time = time.time()
-
-        # Check if backoff period has expired
-        if current_time >= host_info.get("backoff_until", 0):
-            return False
-
-        return True
-
-    async def _get_host_backoff_delay(self, host: str) -> float:
-        """Get the remaining backoff delay for a rate-limited host."""
-        if not host or host not in self._rate_limited_hosts:
-            return 0
-
-        host_info = self._rate_limited_hosts[host]
-        current_time = time.time()
-        backoff_until = host_info.get("backoff_until", 0)
-
-        if current_time >= backoff_until:
-            return 0
-
-        return backoff_until - current_time
-
-    async def _record_rate_limit_error(self, url: str):
-        """Record a 429 rate limit error for adaptive backoff."""
-        host = self._extract_host_from_url(url)
-        if not host:
-            return
-
-        current_time = time.time()
-
-        if host not in self._rate_limited_hosts:
-            self._rate_limited_hosts[host] = {
-                "last_429_time": current_time,
-                "backoff_until": current_time + 5.0,  # Initial 5 second backoff
-                "consecutive_429s": 1
+    def _init_account_ramp(self, account_id: int):
+        """Initialize ramp-up state for an account if not already present."""
+        if account_id not in self._account_ramp_state:
+            self._account_ramp_state[account_id] = {
+                "current_limit": RAMP_INITIAL_LIMIT,
+                "consecutive_successes": 0,
+                "hold_until": 0.0,
+                "total_successes": 0,
+                "total_failures": 0,
             }
-            logger.warning(f"[RATE-LIMIT] Host {host} rate-limited, initial backoff 5s")
+
+    def _get_account_ramp_limit(self, account_id: int, account_max: int, dispatcharr_active: int) -> int:
+        """Get current ramp-limited concurrent probe cap for an account.
+        Cap = min(ramp_level, max_streams - dispatcharr_active).
+        """
+        state = self._account_ramp_state.get(account_id)
+        if not state:
+            return RAMP_INITIAL_LIMIT
+        ramp_limit = state["current_limit"]
+        if account_max > 0:
+            dynamic_cap = max(0, account_max - dispatcharr_active)
         else:
-            host_info = self._rate_limited_hosts[host]
-            consecutive = host_info.get("consecutive_429s", 0) + 1
+            dynamic_cap = RAMP_UNLIMITED_CAP
+        return min(ramp_limit, dynamic_cap)
 
-            # Exponential backoff: 5s, 10s, 20s, 40s, max 60s
-            backoff_seconds = min(5.0 * (2 ** (consecutive - 1)), 60.0)
-            host_info["last_429_time"] = current_time
-            host_info["backoff_until"] = current_time + backoff_seconds
-            host_info["consecutive_429s"] = consecutive
-
-            logger.warning(f"[RATE-LIMIT] Host {host} rate-limited again ({consecutive} consecutive), backoff {backoff_seconds}s")
-
-    async def _record_successful_probe(self, url: str):
-        """Record a successful probe to reset rate limit tracking for a host."""
-        host = self._extract_host_from_url(url)
-        if not host or host not in self._rate_limited_hosts:
-            return
-
-        # Reset consecutive count on success, but keep backoff active until it expires
-        host_info = self._rate_limited_hosts[host]
-        if host_info.get("consecutive_429s", 0) > 0:
-            # Reduce consecutive count on success
-            host_info["consecutive_429s"] = max(0, host_info["consecutive_429s"] - 1)
-            if host_info["consecutive_429s"] == 0:
-                # Remove from rate-limited hosts when fully recovered
-                del self._rate_limited_hosts[host]
-                logger.info(f"[RATE-LIMIT] Host {host} recovered from rate limiting")
-
-    def _is_rate_limit_error(self, error_message: str) -> bool:
-        """Check if an error message indicates a 429 rate limit error."""
-        if not error_message:
+    def _is_account_held(self, account_id: int) -> bool:
+        """Check if an account is in a failure hold period."""
+        state = self._account_ramp_state.get(account_id)
+        if not state:
             return False
-        return "429" in error_message or "Too Many Requests" in error_message
+        return time.time() < state["hold_until"]
+
+    def _get_account_hold_remaining(self, account_id: int) -> float:
+        """Get remaining hold time in seconds."""
+        state = self._account_ramp_state.get(account_id)
+        if not state:
+            return 0.0
+        return max(0.0, state["hold_until"] - time.time())
+
+    def _record_probe_success(self, account_id: int):
+        """Record success. After RAMP_SUCCESS_WINDOW consecutive successes, ramp up by 1."""
+        state = self._account_ramp_state.get(account_id)
+        if not state:
+            return
+        state["total_successes"] += 1
+        state["consecutive_successes"] += 1
+        if state["consecutive_successes"] >= RAMP_SUCCESS_WINDOW:
+            state["current_limit"] += RAMP_INCREMENT
+            state["consecutive_successes"] = 0
+            logger.info(f"[RAMP-UP] Account {account_id}: ramped to {state['current_limit']} concurrent probes")
+
+    def _record_probe_failure(self, account_id: int, error_message: str):
+        """Record failure. Reduce limit, hold account, reset success window."""
+        state = self._account_ramp_state.get(account_id)
+        if not state:
+            return
+        state["total_failures"] += 1
+        state["consecutive_successes"] = 0
+        old_limit = state["current_limit"]
+        state["current_limit"] = max(1, old_limit - RAMP_FAILURE_REDUCTION)
+        state["hold_until"] = time.time() + RAMP_FAILURE_HOLD_SECONDS
+        logger.warning(f"[RAMP-DOWN] Account {account_id}: limit {old_limit}->{state['current_limit']}, "
+                       f"hold {RAMP_FAILURE_HOLD_SECONDS}s")
 
     async def start(self):
         """Initialize the stream prober (check ffprobe availability).
@@ -751,20 +734,6 @@ class StreamProber:
             logger.error(f"Stream {stream_id} probe failed: {error_msg}")
             return self._save_probe_result(stream_id, name, None, "failed", error_msg)
 
-    async def _check_http_status(self, url: str) -> Optional[int]:
-        """Make a HEAD request to check the HTTP status code of a URL."""
-        try:
-            import httpx
-            async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
-                response = await client.head(
-                    url,
-                    headers={"User-Agent": "VLC/3.0.20 LibVLC/3.0.20"}
-                )
-                return response.status_code
-        except Exception as e:
-            logger.debug(f"HTTP status check failed for {url}: {e}")
-            return None
-
     async def _run_ffprobe(self, url: str, _retry_attempt: int = 0) -> dict:
         """Run ffprobe and parse JSON output."""
         cmd = [
@@ -800,21 +769,13 @@ class StreamProber:
             if not error_text:
                 error_text = f"Exit code {process.returncode} (no stderr output)"
 
-            # Check for transient errors worth retrying:
-            # - HTTP errors reported by ffprobe (4XX/5XX/Server returned)
-            # - I/O errors (stream ends prematurely, connection reset, broken pipe)
+            # Retry on transient error patterns (HTTP errors, I/O errors, connection drops).
+            # Retry the actual ffprobe — no HEAD check, since HEAD is unreliable for IPTV streams.
             transient_patterns = ("4XX", "5XX", "Server returned", "Input/output error", "Stream ends prematurely", "Connection reset", "Broken pipe")
-            if any(p in error_text for p in transient_patterns):
-                status_code = await self._check_http_status(url)
-                if status_code and status_code == 200 and _retry_attempt < self.probe_retry_count:
-                    # Server is reachable (HTTP 200) but ffprobe got a transient error —
-                    # likely a momentary provider glitch. Retry after a configurable delay.
-                    logger.info(f"[PROBE-RETRY] ffprobe failed but HTTP 200 — retry {_retry_attempt + 1}/{self.probe_retry_count} in {self.probe_retry_delay}s: {url[:80]}...")
-                    await asyncio.sleep(self.probe_retry_delay)
-                    return await self._run_ffprobe(url, _retry_attempt=_retry_attempt + 1)
-                elif status_code:
-                    error_text = f"{error_text} (HTTP {status_code})"
-                    logger.info(f"[PROBE-HTTP] URL {url[:80]}... returned HTTP {status_code}")
+            if any(p in error_text for p in transient_patterns) and _retry_attempt < self.probe_retry_count:
+                logger.info(f"[PROBE-RETRY] Transient error — retry {_retry_attempt + 1}/{self.probe_retry_count} in {self.probe_retry_delay}s: {url[:80]}...")
+                await asyncio.sleep(self.probe_retry_delay)
+                return await self._run_ffprobe(url, _retry_attempt=_retry_attempt + 1)
 
             raise RuntimeError(f"ffprobe failed: {error_text}")
 
@@ -1562,6 +1523,7 @@ class StreamProber:
         self._probe_success_streams = []
         self._probe_failed_streams = []
         self._probe_skipped_streams = []
+        self._account_ramp_state = {}  # Fresh ramp state for each probe run
 
         probed_count = 0
         start_time = datetime.utcnow()
@@ -1737,14 +1699,6 @@ class StreamProber:
                         logger.debug(f"[PROBE-STREAM] Stream {stream_id} ({stream_name}): "
                                      f"no profile (direct URL), url={stream_url}")
 
-                    # Check if host is rate-limited and wait for backoff
-                    host = self._extract_host_from_url(stream_url)
-                    if host:
-                        backoff_delay = await self._get_host_backoff_delay(host)
-                        if backoff_delay > 0:
-                            logger.debug(f"[RATE-LIMIT] Waiting {backoff_delay:.1f}s before probing {host}")
-                            await asyncio.sleep(backoff_delay)
-
                     # Acquire global semaphore to limit total concurrent probes
                     async with global_probe_semaphore:
                         # Track concurrent probe count
@@ -1761,14 +1715,13 @@ class StreamProber:
                             error_message = result.get("error_message", "")
                             stream_info = {"id": stream_id, "name": stream_name, "url": stream_url}
 
-                            # Check for rate limit errors and record them
                             if probe_status != "success":
                                 stream_info["error"] = error_message or "Unknown error"
-                                if self._is_rate_limit_error(error_message):
-                                    await self._record_rate_limit_error(stream_url)
+                                if m3u_account_id:
+                                    self._record_probe_failure(m3u_account_id, error_message)
                             else:
-                                # Record success to help host recover from rate limiting
-                                await self._record_successful_probe(stream_url)
+                                if m3u_account_id:
+                                    self._record_probe_success(m3u_account_id)
 
                             return (probe_status, stream_info)
                         finally:
@@ -1882,30 +1835,57 @@ class StreamProber:
                                     our_account_total = our_profile_conns_snapshot.get(m3u_account_id, 0)
                                 total_account_conns = dispatcharr_active + our_account_total
 
-                                if not is_hdhomerun and profiles:
-                                    # Profile-aware selection
-                                    selected_profile = self._select_probe_profile(
-                                        m3u_account_id, dispatcharr_profile_conns,
-                                        our_profile_conns_snapshot, effective_max, total_account_conns
-                                    )
-                                    if selected_profile:
-                                        stream["_selected_profile"] = selected_profile
-                                    else:
-                                        if our_account_total > 0:
-                                            can_probe = False  # Wait for active probes to finish
-                                        else:
-                                            m3u_name = m3u_accounts_map.get(m3u_account_id, f"M3U {m3u_account_id}")
-                                            skip_reason = f"M3U '{m3u_name}' at max connections ({dispatcharr_active}/{effective_max})"
-                                            logger.info(f"Skipping stream {stream_id} ({stream_name}): {skip_reason}")
+                                # Ramp-up gate: limit concurrent probes per account
+                                self._init_account_ramp(m3u_account_id)
+                                if self._is_account_held(m3u_account_id):
+                                    can_probe = False
                                 else:
-                                    # HDHomeRun or no profiles - use account-level logic
-                                    if total_account_conns >= effective_max:
-                                        if our_account_total > 0:
-                                            can_probe = False  # Wait, don't skip
+                                    ramp_limit = self._get_account_ramp_limit(m3u_account_id, effective_max, dispatcharr_active)
+                                    if our_account_total >= ramp_limit:
+                                        can_probe = False
+
+                                if can_probe:
+                                    if not is_hdhomerun and profiles:
+                                        # Profile-aware selection
+                                        selected_profile = self._select_probe_profile(
+                                            m3u_account_id, dispatcharr_profile_conns,
+                                            our_profile_conns_snapshot, effective_max, total_account_conns
+                                        )
+                                        if selected_profile:
+                                            stream["_selected_profile"] = selected_profile
                                         else:
-                                            m3u_name = m3u_accounts_map.get(m3u_account_id, f"M3U {m3u_account_id}")
-                                            skip_reason = f"M3U '{m3u_name}' at max connections ({dispatcharr_active}/{effective_max})"
-                                            logger.info(f"Skipping stream {stream_id} ({stream_name}): {skip_reason}")
+                                            if our_account_total > 0:
+                                                can_probe = False  # Wait for active probes to finish
+                                            else:
+                                                m3u_name = m3u_accounts_map.get(m3u_account_id, f"M3U {m3u_account_id}")
+                                                skip_reason = f"M3U '{m3u_name}' at max connections ({dispatcharr_active}/{effective_max})"
+                                                logger.info(f"Skipping stream {stream_id} ({stream_name}): {skip_reason}")
+                                    else:
+                                        # HDHomeRun or no profiles - use account-level logic
+                                        if total_account_conns >= effective_max:
+                                            if our_account_total > 0:
+                                                can_probe = False  # Wait, don't skip
+                                            else:
+                                                m3u_name = m3u_accounts_map.get(m3u_account_id, f"M3U {m3u_account_id}")
+                                                skip_reason = f"M3U '{m3u_name}' at max connections ({dispatcharr_active}/{effective_max})"
+                                                logger.info(f"Skipping stream {stream_id} ({stream_name}): {skip_reason}")
+                            else:
+                                # Unlimited account — still apply ramp-up
+                                self._init_account_ramp(m3u_account_id)
+                                dispatcharr_active = dispatcharr_connections.get(m3u_account_id, 0)
+                                if self._is_account_held(m3u_account_id):
+                                    can_probe = False
+                                else:
+                                    async with probe_connections_lock:
+                                        our_profile_conns_snapshot = dict(probe_connections)
+                                    profiles = self._account_profiles.get(m3u_account_id, [])
+                                    if profiles:
+                                        our_account_total = sum(our_profile_conns_snapshot.get(p["id"], 0) for p in profiles)
+                                    else:
+                                        our_account_total = our_profile_conns_snapshot.get(m3u_account_id, 0)
+                                    ramp_limit = self._get_account_ramp_limit(m3u_account_id, 0, dispatcharr_active)
+                                    if our_account_total >= ramp_limit:
+                                        can_probe = False
 
                         if skip_reason:
                             # Skip this stream - M3U is at capacity with Dispatcharr connections
@@ -2083,13 +2063,13 @@ class StreamProber:
                     if selected_profile:
                         stream_url = self._rewrite_url_for_profile(stream_url, selected_profile)
 
-                    # Check if host is rate-limited and wait for backoff (sequential mode)
-                    host = self._extract_host_from_url(stream_url)
-                    if host:
-                        backoff_delay = await self._get_host_backoff_delay(host)
-                        if backoff_delay > 0:
-                            logger.debug(f"[RATE-LIMIT] Waiting {backoff_delay:.1f}s before probing {host}")
-                            await asyncio.sleep(backoff_delay)
+                    # Account hold check (sequential mode)
+                    if m3u_account_id:
+                        self._init_account_ramp(m3u_account_id)
+                        hold_remaining = self._get_account_hold_remaining(m3u_account_id)
+                        if hold_remaining > 0:
+                            logger.debug(f"[RAMP-HOLD] Account {m3u_account_id}: waiting {hold_remaining:.1f}s")
+                            await asyncio.sleep(hold_remaining)
 
                     result = await self.probe_stream(stream_id, stream_url, stream_name)
 
@@ -2100,16 +2080,14 @@ class StreamProber:
                     if probe_status == "success":
                         self._probe_progress_success_count += 1
                         self._probe_success_streams.append(stream_info)
-                        # Record success to help host recover from rate limiting
-                        await self._record_successful_probe(stream_url)
+                        if m3u_account_id:
+                            self._record_probe_success(m3u_account_id)
                     else:
                         self._probe_progress_failed_count += 1
-                        # Include error message for failed streams
                         stream_info["error"] = error_message or "Unknown error"
                         self._probe_failed_streams.append(stream_info)
-                        # Check for rate limit errors and record them
-                        if self._is_rate_limit_error(error_message):
-                            await self._record_rate_limit_error(stream_url)
+                        if m3u_account_id:
+                            self._record_probe_failure(m3u_account_id, error_message)
 
                     probed_count += 1
                     await self._update_probe_notification()
@@ -2158,8 +2136,8 @@ class StreamProber:
 
     def get_probe_progress(self) -> dict:
         """Get current probe all streams progress."""
-        # Get rate limit summary
-        rate_limit_info = self._get_rate_limit_summary()
+        # Get ramp-up / hold summary
+        rate_limit_info = self._get_ramp_summary()
 
         progress = {
             "in_progress": self._probing_in_progress,
@@ -2180,28 +2158,24 @@ class StreamProber:
             logger.debug(f"[PROBE-PROGRESS] in_progress=True, status={self._probe_progress_status}, {self._probe_progress_current}/{self._probe_progress_total}")
         return progress
 
-    def _get_rate_limit_summary(self) -> dict:
-        """Get a summary of current rate limit status for all hosts."""
+    def _get_ramp_summary(self) -> dict:
+        """Get a summary of current ramp-up / hold status for all accounts."""
         current_time = time.time()
-        rate_limited_hosts = []
-        max_backoff = 0
-
-        for host, info in self._rate_limited_hosts.items():
-            backoff_until = info.get("backoff_until", 0)
-            remaining = backoff_until - current_time
-
+        held_accounts = []
+        max_hold = 0.0
+        for account_id, state in self._account_ramp_state.items():
+            remaining = state["hold_until"] - current_time
             if remaining > 0:
-                rate_limited_hosts.append({
-                    "host": host,
+                held_accounts.append({
+                    "host": f"Account {account_id}",
                     "backoff_remaining": round(remaining, 1),
-                    "consecutive_429s": info.get("consecutive_429s", 0)
+                    "consecutive_429s": state["total_failures"],
                 })
-                max_backoff = max(max_backoff, remaining)
-
+                max_hold = max(max_hold, remaining)
         return {
-            "is_rate_limited": len(rate_limited_hosts) > 0,
-            "hosts": rate_limited_hosts,
-            "max_backoff_remaining": round(max_backoff, 1) if max_backoff > 0 else 0
+            "is_rate_limited": len(held_accounts) > 0,
+            "hosts": held_accounts,
+            "max_backoff_remaining": round(max_hold, 1) if max_hold > 0 else 0,
         }
 
     def get_probe_results(self) -> dict:
