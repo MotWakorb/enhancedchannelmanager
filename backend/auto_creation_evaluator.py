@@ -140,9 +140,15 @@ class ConditionEvaluator:
                 self._channels_by_group[group_id].append(channel)
                 
     
-    def _expand_date_placeholders(self, text: str) -> str:
+    def _expand_date_placeholders(self, text: str, allow_ranges: bool = True) -> str:
         """
         Expand {date...} or {today...} placeholders in text.
+        
+        Args:
+            text: Text with potential placeholders
+            allow_ranges: If True, expansions like {date+3} return a regex group (d1|d2|d3).
+                         If False, only single-date placeholders are expanded.
+        
         Supported formats:
         - {date} or {today} -> YYYY-MM-DD (today)
         - {date+N} -> today + N days (range: today to today+N)
@@ -168,6 +174,9 @@ class ConditionEvaluator:
             val = 0
 
             if offset_str:
+                if not allow_ranges:
+                    return match.group(0)  # Don't expand ranges if not allowed
+
                 val_str = offset_str
                 # Check if specific unit provided (d=days, w=weeks)
                 if offset_str[-1].lower() in ("d", "w"):
@@ -448,7 +457,7 @@ class ConditionEvaluator:
                            cond_type: str) -> EvaluationResult:
         """Evaluate substring containment."""
                     
-        substring = self._expand_date_placeholders(substring)
+        substring = self._expand_date_placeholders(substring, allow_ranges=False)
 
         if not substring:
             return EvaluationResult(False, cond_type, "No substring specified")
@@ -557,7 +566,7 @@ class ConditionEvaluator:
     def _evaluate_channel_exists_name(self, channel_name: str, cond_type: str) -> EvaluationResult:
         """Check if a channel with exact name exists."""
 
-        channel_name = self._expand_date_placeholders(channel_name)
+        channel_name = self._expand_date_placeholders(channel_name, allow_ranges=False)
 
         exists = channel_name.lower() in self._channel_names
         return EvaluationResult(
