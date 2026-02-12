@@ -53,15 +53,21 @@ export const VideoPlayer = memo(function VideoPlayer({
 
     // Check browser support
     if (!mpegts.isSupported()) {
-      handleError({
-        code: 'UNSUPPORTED',
-        message: 'Your browser does not support MPEG-TS playback',
-        details: 'Media Source Extensions (MSE) is required for playback',
-      });
-      return;
+      // Use a timeout to avoid synchronous setState during effect execution
+      const timeoutId = setTimeout(() => {
+        handleError({
+          code: 'UNSUPPORTED',
+          message: 'Your browser does not support MPEG-TS playback',
+          details: 'Media Source Extensions (MSE) is required for playback',
+        });
+      }, 0);
+      return () => clearTimeout(timeoutId);
     }
 
-    updateState('loading');
+    // Use a timeout to avoid synchronous setState during effect execution
+    const loadingTimeoutId = setTimeout(() => {
+      updateState('loading');
+    }, 0);
 
     // Create player with buffered configuration for smooth playback
     const player = mpegts.createPlayer(
@@ -152,6 +158,8 @@ export const VideoPlayer = memo(function VideoPlayer({
 
     // Cleanup on unmount
     return () => {
+      clearTimeout(timeoutId);
+      clearTimeout(loadingTimeoutId);
       if (playerRef.current) {
         playerRef.current.pause();
         playerRef.current.unload();

@@ -27,7 +27,10 @@ export const DeleteOrphanedGroupsModal = memo(function DeleteOrphanedGroupsModal
   // Select all groups by default when modal opens
   useEffect(() => {
     if (isOpen) {
-      setSelectedGroups(new Set(groups.map(g => g.id)));
+      const timeoutId = setTimeout(() => {
+        setSelectedGroups(new Set(groups.map(g => g.id)));
+      }, 0);
+      return () => clearTimeout(timeoutId);
     }
   }, [isOpen, groups]);
 

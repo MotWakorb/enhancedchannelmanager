@@ -63,16 +63,19 @@ export const BulkLCNFetchModal = memo(function BulkLCNFetchModal({
   // Fetch LCNs when modal opens
   useEffect(() => {
     if (!isOpen) {
-      // Reset state when modal closes
-      setPhase('fetching');
-      setResults([]);
-      setSelectedForAssignment(new Set());
-      setFoundExpanded(true);
-      setNoTvgIdExpanded(true);
-      setNotFoundExpanded(true);
-      setAlreadyHasExpanded(false);
-      hasFetchedRef.current = false;
-      return;
+      // Use a timeout to avoid synchronous setState during effect
+      const timeoutId = setTimeout(() => {
+        // Reset state when modal closes
+        setPhase('fetching');
+        setResults([]);
+        setSelectedForAssignment(new Set());
+        setFoundExpanded(true);
+        setNoTvgIdExpanded(true);
+        setNotFoundExpanded(true);
+        setAlreadyHasExpanded(false);
+        hasFetchedRef.current = false;
+      }, 0);
+      return () => clearTimeout(timeoutId);
     }
 
     // Only fetch once per modal open
@@ -180,7 +183,7 @@ export const BulkLCNFetchModal = memo(function BulkLCNFetchModal({
     };
 
     fetchLCNs();
-  }, [isOpen, selectedChannels, epgData]);
+  }, [isOpen, selectedChannels, epgData, notifications]);
 
   // Categorize results
   const { found, notFound, noTvgId, alreadyHas } = useMemo(() => {

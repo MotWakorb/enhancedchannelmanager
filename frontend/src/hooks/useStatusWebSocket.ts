@@ -139,6 +139,7 @@ export function useStatusWebSocket(
   const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const handlersRef = useRef(handlers);
   const subscribeServicesRef = useRef(subscribeServices);
+  const connectRef = useRef<() => void>(() => {});
 
   // Keep handlers ref up to date
   useEffect(() => {
@@ -340,7 +341,7 @@ export function useStatusWebSocket(
           reconnectAttemptsRef.current += 1;
 
           const delay = getReconnectDelay();
-          reconnectTimeoutRef.current = setTimeout(connect, delay);
+          reconnectTimeoutRef.current = setTimeout(() => connectRef.current(), delay);
         } else {
           updateConnectionState('disconnected');
           if (reconnectAttemptsRef.current >= maxReconnectAttempts) {
@@ -364,6 +365,11 @@ export function useStatusWebSocket(
     sendSubscription,
     updateConnectionState,
   ]);
+
+  // Update connectRef
+  useEffect(() => {
+    connectRef.current = connect;
+  }, [connect]);
 
   // Disconnect from WebSocket
   const disconnect = useCallback(() => {
@@ -430,10 +436,14 @@ export function useStatusWebSocket(
 
   // Auto-connect on mount
   useEffect(() => {
-    connect();
+    // Use a timeout to avoid synchronous setState during effect
+    const timeoutId = setTimeout(() => {
+      connect();
+    }, 0);
 
     return () => {
       // Cleanup on unmount
+      clearTimeout(timeoutId);
       if (reconnectTimeoutRef.current) {
         clearTimeout(reconnectTimeoutRef.current);
       }

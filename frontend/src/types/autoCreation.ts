@@ -220,7 +220,7 @@ export interface CreateRuleData {
 /**
  * Data for updating an existing rule.
  */
-export interface UpdateRuleData extends Partial<CreateRuleData> {}
+export type UpdateRuleData = Partial<CreateRuleData>
 
 // =============================================================================
 // Execution

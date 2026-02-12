@@ -106,7 +106,7 @@ export const PreviewStreamModal = memo(function PreviewStreamModal({
       setUrlCopied(true);
       setTimeout(() => setUrlCopied(false), 2000);
     }
-  }, [displayInfo?.externalUrl]);
+  }, [displayInfo]);
 
   // Open in VLC (only for streams with direct URLs)
   const handleOpenInVLC = useCallback(() => {
@@ -115,7 +115,7 @@ export const PreviewStreamModal = memo(function PreviewStreamModal({
     // Try VLC protocol handler
     const vlcUrl = `vlc://${encodeURIComponent(displayInfo.externalUrl)}`;
     window.location.href = vlcUrl;
-  }, [displayInfo?.externalUrl]);
+  }, [displayInfo]);
 
   // Download M3U file for external player
   const handleDownloadM3U = useCallback(() => {
@@ -131,7 +131,7 @@ export const PreviewStreamModal = memo(function PreviewStreamModal({
     link.click();
     document.body.removeChild(link);
     URL.revokeObjectURL(url);
-  }, [displayInfo?.name, displayInfo?.externalUrl]);
+  }, [displayInfo]);
 
   if (!isOpen || !previewTarget || !displayInfo) return null;
 

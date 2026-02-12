@@ -89,15 +89,18 @@ export const PrintGuideModal = memo(function PrintGuideModal({
   }, [channelGroups, channels]);
 
   // Reset settings when modal opens with new groups
-  useMemo(() => {
+  useEffect(() => {
     if (isOpen) {
-      setGroupSettings(
-        sortedGroups.map(g => ({
-          groupId: g.id,
-          selected: true,
-          mode: 'detailed',
-        }))
-      );
+      const timeoutId = setTimeout(() => {
+        setGroupSettings(
+          sortedGroups.map(g => ({
+            groupId: g.id,
+            selected: true,
+            mode: 'detailed',
+          }))
+        );
+      }, 0);
+      return () => clearTimeout(timeoutId);
     }
   }, [isOpen, sortedGroups]);
 

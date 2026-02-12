@@ -64,33 +64,14 @@ export function ECMIntegration({
   const [profileSelectOpen, setProfileSelectOpen] = useState(false);
   const [applyToOpen, setApplyToOpen] = useState(false);
 
+  // Sync selectedProfileId when profiles change
+  const currentProfileValid = profiles.some(p => p.id === selectedProfileId);
+  if (profiles.length > 0 && !currentProfileValid && selectedProfileId !== profiles[0].id) {
+    setSelectedProfileId(profiles[0].id);
+  }
+
   // Edit/Create state
   const [editing, setEditing] = useState(false);
-  const [creating, setCreating] = useState(false);
-  const [editName, setEditName] = useState('');
-  const [editDirty, setEditDirty] = useState(false);
-
-  // Confirm delete
-  const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
-
-  const selectedProfile = profiles.find(p => p.id === selectedProfileId) ?? profiles[0] ?? null;
-
-  // Fetch configs for name resolution
-  useEffect(() => {
-    fetch('/api/ffmpeg/configs')
-      .then(res => res.json())
-      .then(data => {
-        setConfigs((data.configs || []).map((c: SavedConfig) => ({ id: c.id, name: c.name })));
-      })
-      .catch(() => {});
-  }, []);
-
-  // Sync selectedProfileId when profiles change
-  useEffect(() => {
-    if (profiles.length > 0 && !profiles.find(p => p.id === selectedProfileId)) {
-      setSelectedProfileId(profiles[0].id);
-    }
-  }, [profiles, selectedProfileId]);
 
   const getConfigName = useCallback((configId: number) => {
     return configs.find(c => c.id === configId)?.name || `Config #${configId}`;

@@ -138,74 +138,78 @@ export const DummyEPGSourceModal = memo(function DummyEPGSourceModal({ isOpen, s
   // Load source data when modal opens
   useEffect(() => {
     if (isOpen) {
-      if (source) {
-        const props = (source.custom_properties as DummyEPGCustomProperties) || {};
-        setName(source.name);
-        setIsActive(source.is_active);
-        setNameSource(props.name_source || 'channel');
-        setStreamIndex(props.stream_index || 1);
-        setTitlePattern(props.title_pattern || '');
-        setTimePattern(props.time_pattern || '');
-        setDatePattern(props.date_pattern || '');
-        setTitleTemplate(props.title_template || '');
-        setDescriptionTemplate(props.description_template || '');
-        setUpcomingTitleTemplate(props.upcoming_title_template || '');
-        setUpcomingDescriptionTemplate(props.upcoming_description_template || '');
-        setEndedTitleTemplate(props.ended_title_template || '');
-        setEndedDescriptionTemplate(props.ended_description_template || '');
-        setFallbackTitleTemplate(props.fallback_title_template || '');
-        setFallbackDescriptionTemplate(props.fallback_description_template || '');
-        setEventTimezone(props.event_timezone || 'US/Eastern');
-        setOutputTimezone(props.output_timezone || '');
-        setProgramDuration(props.program_duration || 180);
-        setCategories(props.categories || '');
-        setChannelLogoUrl(props.channel_logo_url || '');
-        setProgramPosterUrl(props.program_poster_url || '');
-        setIncludeDateTag(props.include_date_tag || false);
-        setIncludeLiveTag(props.include_live_tag || false);
-        setIncludeNewTag(props.include_new_tag || false);
+      // Use a timeout to avoid synchronous setState during effect
+      const timeoutId = setTimeout(() => {
+        if (source) {
+          const props = (source.custom_properties as DummyEPGCustomProperties) || {};
+          setName(source.name);
+          setIsActive(source.is_active);
+          setNameSource(props.name_source || 'channel');
+          setStreamIndex(props.stream_index || 1);
+          setTitlePattern(props.title_pattern || '');
+          setTimePattern(props.time_pattern || '');
+          setDatePattern(props.date_pattern || '');
+          setTitleTemplate(props.title_template || '');
+          setDescriptionTemplate(props.description_template || '');
+          setUpcomingTitleTemplate(props.upcoming_title_template || '');
+          setUpcomingDescriptionTemplate(props.upcoming_description_template || '');
+          setEndedTitleTemplate(props.ended_title_template || '');
+          setEndedDescriptionTemplate(props.ended_description_template || '');
+          setFallbackTitleTemplate(props.fallback_title_template || '');
+          setFallbackDescriptionTemplate(props.fallback_description_template || '');
+          setEventTimezone(props.event_timezone || 'US/Eastern');
+          setOutputTimezone(props.output_timezone || '');
+          setProgramDuration(props.program_duration || 180);
+          setCategories(props.categories || '');
+          setChannelLogoUrl(props.channel_logo_url || '');
+          setProgramPosterUrl(props.program_poster_url || '');
+          setIncludeDateTag(props.include_date_tag || false);
+          setIncludeLiveTag(props.include_live_tag || false);
+          setIncludeNewTag(props.include_new_tag || false);
 
-        // Open collapsible sections if they have content
-        setUpcomingEndedOpen(Boolean(props.upcoming_title_template || props.upcoming_description_template || props.ended_title_template || props.ended_description_template));
-        setFallbackOpen(Boolean(props.fallback_title_template || props.fallback_description_template));
-        setLogoUrlsOpen(Boolean(props.channel_logo_url || props.program_poster_url));
-        setEpgTagsOpen(Boolean(props.include_date_tag || props.include_live_tag || props.include_new_tag));
-      } else {
-        // Reset to defaults for new source
-        setName('');
-        setIsActive(true);
-        setNameSource('channel');
-        setStreamIndex(1);
-        setTitlePattern('');
-        setTimePattern('');
-        setDatePattern('');
-        setTitleTemplate('');
-        setDescriptionTemplate('');
-        setUpcomingTitleTemplate('');
-        setUpcomingDescriptionTemplate('');
-        setEndedTitleTemplate('');
-        setEndedDescriptionTemplate('');
-        setFallbackTitleTemplate('');
-        setFallbackDescriptionTemplate('');
-        setEventTimezone('US/Eastern');
-        setOutputTimezone('');
-        setProgramDuration(180);
-        setCategories('');
-        setChannelLogoUrl('');
-        setProgramPosterUrl('');
-        setIncludeDateTag(false);
-        setIncludeLiveTag(false);
-        setIncludeNewTag(false);
-        setUpcomingEndedOpen(false);
-        setFallbackOpen(false);
-        setLogoUrlsOpen(false);
-        setEpgTagsOpen(false);
-      }
-      setSampleChannelName('');
-      clearError();
-      setTitlePatternError(null);
-      setTimePatternError(null);
-      setDatePatternError(null);
+          // Open collapsible sections if they have content
+          setUpcomingEndedOpen(Boolean(props.upcoming_title_template || props.upcoming_description_template || props.ended_title_template || props.ended_description_template));
+          setFallbackOpen(Boolean(props.fallback_title_template || props.fallback_description_template));
+          setLogoUrlsOpen(Boolean(props.channel_logo_url || props.program_poster_url));
+          setEpgTagsOpen(Boolean(props.include_date_tag || props.include_live_tag || props.include_new_tag));
+        } else {
+          // Reset to defaults for new source
+          setName('');
+          setIsActive(true);
+          setNameSource('channel');
+          setStreamIndex(1);
+          setTitlePattern('');
+          setTimePattern('');
+          setDatePattern('');
+          setTitleTemplate('');
+          setDescriptionTemplate('');
+          setUpcomingTitleTemplate('');
+          setUpcomingDescriptionTemplate('');
+          setEndedTitleTemplate('');
+          setEndedDescriptionTemplate('');
+          setFallbackTitleTemplate('');
+          setFallbackDescriptionTemplate('');
+          setEventTimezone('US/Eastern');
+          setOutputTimezone('');
+          setProgramDuration(180);
+          setCategories('');
+          setChannelLogoUrl('');
+          setProgramPosterUrl('');
+          setIncludeDateTag(false);
+          setIncludeLiveTag(false);
+          setIncludeNewTag(false);
+          setUpcomingEndedOpen(false);
+          setFallbackOpen(false);
+          setLogoUrlsOpen(false);
+          setEpgTagsOpen(false);
+        }
+        setSampleChannelName('');
+        clearError();
+        setTitlePatternError(null);
+        setTimePatternError(null);
+        setDatePatternError(null);
+      }, 0);
+      return () => clearTimeout(timeoutId);
     }
   }, [isOpen, source, clearError]);
 

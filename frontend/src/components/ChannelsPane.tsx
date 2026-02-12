@@ -2779,7 +2779,7 @@ export function ChannelsPane({
   const stripCountryPrefix = useCallback((channelName: string): string => {
     // Match country code (2-3 uppercase letters) followed by separator and the rest
     // Supports: "US | Name", "UK: Name", "CA - Name", "USA | Name", etc.
-    const match = channelName.match(/^[A-Z]{2,3}\s*[|:\-]\s*(.+)$/);
+    const match = channelName.match(/^[A-Z]{2,3}\s*[|:-]\s*(.+)$/);
     if (match) {
       return match[1].trim();
     }
@@ -4347,7 +4347,7 @@ export function ChannelsPane({
   // Handle the Move button click based on selected option
   const handleMoveButtonClick = () => {
     if (!crossGroupMoveData) return;
-
+    let customNum;
     switch (selectedNumberingOption) {
       case 'keep':
         handleCrossGroupMoveConfirm(true, undefined, renumberSourceGroup);
@@ -4358,7 +4358,7 @@ export function ChannelsPane({
         }
         break;
       case 'custom':
-        const customNum = parseInt(customStartingNumber, 10);
+        customNum = parseInt(customStartingNumber, 10);
         if (!isNaN(customNum) && customNum >= 1) {
           handleCrossGroupMoveConfirm(false, customNum, renumberSourceGroup);
         }
@@ -4493,7 +4493,7 @@ export function ChannelsPane({
       const newNumber = startingNumber + index;
       if (channel.channel_number !== newNumber) {
         // Apply auto-rename if enabled in dialog
-        let updates: Partial<Channel> = { channel_number: newNumber };
+        const updates: Partial<Channel> = { channel_number: newNumber };
         if (sortRenumberUpdateNames && channel.channel_number !== null) {
           const newName = computeAutoRename(channel.name, channel.channel_number, newNumber);
           if (newName && newName !== channel.name) {
@@ -4591,7 +4591,7 @@ export function ChannelsPane({
       sortedConflicts.forEach((channel, index) => {
         // New number = endNum + 1 + (position from the end of conflicts)
         const newNumber = endNum + 1 + (sortedConflicts.length - 1 - index);
-        let updates: Partial<Channel> = { channel_number: newNumber };
+        const updates: Partial<Channel> = { channel_number: newNumber };
 
         // Apply auto-rename if enabled in the dialog
         if (massRenumberUpdateNames && channel.channel_number !== null) {
@@ -4612,7 +4612,7 @@ export function ChannelsPane({
     massRenumberChannels.forEach((channel, index) => {
       const newNumber = startNum + index;
       if (channel.channel_number !== newNumber) {
-        let updates: Partial<Channel> = { channel_number: newNumber };
+        const updates: Partial<Channel> = { channel_number: newNumber };
 
         // Apply auto-rename if enabled in the dialog
         if (massRenumberUpdateNames && channel.channel_number !== null) {

@@ -57,11 +57,20 @@ export const M3UProfileModal = memo(function M3UProfileModal({
 
   // Load profiles when modal opens
   useEffect(() => {
+    let isMounted = true;
     if (isOpen) {
-      loadProfiles();
-      setEditingProfile(null);
-      setIsAddingNew(false);
+      // Use an async function to avoid synchronous setState during effect
+      const initModal = async () => {
+        if (!isMounted) return;
+        await loadProfiles();
+        if (isMounted) {
+          setEditingProfile(null);
+          setIsAddingNew(false);
+        }
+      };
+      initModal();
     }
+    return () => { isMounted = false; };
   }, [isOpen, loadProfiles]);
 
   const handleAddNew = () => {
