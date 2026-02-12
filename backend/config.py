@@ -75,6 +75,8 @@ class DispatcharrSettings(BaseModel):
     parallel_probing_enabled: bool = True
     # Max simultaneous probes when parallel probing is enabled (1-16)
     max_concurrent_probes: int = 8
+    # How to distribute probes across M3U profiles: fill_first, round_robin, least_loaded
+    profile_distribution_strategy: str = "fill_first"
     # Skip streams that were successfully probed within the last N hours (0 = always probe)
     skip_recently_probed_hours: int = 0
     # Refresh all M3U accounts before starting probe

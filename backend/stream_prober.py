@@ -12,6 +12,7 @@ from datetime import datetime, timedelta
 from typing import Optional
 from pathlib import Path
 import os
+import re
 
 import httpx
 
@@ -50,6 +51,7 @@ class StreamProber:
         bitrate_sample_duration: int = 10,  # Duration in seconds to sample stream for bitrate (10, 20, or 30)
         parallel_probing_enabled: bool = True,  # Probe streams from different M3Us simultaneously
         max_concurrent_probes: int = 8,  # Max simultaneous probes when parallel probing is enabled (1-16)
+        profile_distribution_strategy: str = "fill_first",  # How to distribute probes across profiles: fill_first, round_robin, least_loaded
         skip_recently_probed_hours: int = 0,  # Skip streams probed within last N hours (0 = always probe)
         refresh_m3us_before_probe: bool = True,  # Refresh all M3U accounts before starting probe
         auto_reorder_after_probe: bool = False,  # Automatically reorder streams in channels after probe completes
@@ -66,6 +68,7 @@ class StreamProber:
         self.bitrate_sample_duration = bitrate_sample_duration
         self.parallel_probing_enabled = parallel_probing_enabled
         self.max_concurrent_probes = max(1, min(16, max_concurrent_probes))  # Clamp to 1-16
+        self.profile_distribution_strategy = profile_distribution_strategy
         self.skip_recently_probed_hours = skip_recently_probed_hours
         self.refresh_m3us_before_probe = refresh_m3us_before_probe
         self.auto_reorder_after_probe = auto_reorder_after_probe
@@ -92,6 +95,12 @@ class StreamProber:
         self._probe_progress_skipped_count = 0
         # Probe history - list of last 5 probe runs
         self._probe_history = []  # List of {timestamp, total, success_count, failed_count, status, success_streams, failed_streams}
+
+        # Profile-to-account mapping for connection tracking
+        self._profile_to_account_map = {}  # profile_id -> account_id (built during probe_all_streams)
+        self._account_profiles = {}      # account_id -> [sorted list of active profile dicts]
+        self._profile_max_streams = {}   # profile_id -> max_streams
+        self._round_robin_index = {}    # account_id -> last used profile index (for round_robin strategy)
 
         # Rate limit tracking for adaptive backoff
         self._rate_limited_hosts = {}  # host -> {"last_429_time": timestamp, "backoff_until": timestamp, "consecutive_429s": count}
@@ -143,7 +152,8 @@ class StreamProber:
             logger.error(f"Failed to load probe history from {PROBE_HISTORY_FILE}: {e}")
             self._probe_history = []
 
-    def update_probing_settings(self, parallel_probing_enabled: bool, max_concurrent_probes: int) -> None:
+    def update_probing_settings(self, parallel_probing_enabled: bool, max_concurrent_probes: int,
+                                profile_distribution_strategy: str = "fill_first") -> None:
         """Update the parallel probing settings.
 
         This allows updating the prober's concurrency settings without restarting the service.
@@ -152,13 +162,17 @@ class StreamProber:
         Args:
             parallel_probing_enabled: Whether to enable parallel probing.
             max_concurrent_probes: Max simultaneous probes (clamped to 1-16).
+            profile_distribution_strategy: How to distribute probes across profiles.
         """
         old_parallel = self.parallel_probing_enabled
         old_concurrent = self.max_concurrent_probes
+        old_strategy = self.profile_distribution_strategy
         self.parallel_probing_enabled = parallel_probing_enabled
         self.max_concurrent_probes = max(1, min(16, max_concurrent_probes))
+        self.profile_distribution_strategy = profile_distribution_strategy
         logger.info(f"Updated probing settings: parallel_probing_enabled={old_parallel}->{self.parallel_probing_enabled}, "
-                    f"max_concurrent_probes={old_concurrent}->{self.max_concurrent_probes}")
+                    f"max_concurrent_probes={old_concurrent}->{self.max_concurrent_probes}, "
+                    f"profile_distribution_strategy={old_strategy}->{self.profile_distribution_strategy}")
 
     def update_sort_settings(
         self,
@@ -1003,6 +1017,9 @@ class StreamProber:
         Fetch current active connection counts for all M3U accounts.
         Makes a single API call to Dispatcharr to get real-time connection status.
 
+        Channel stats report connections by m3u_profile_id (profile-level),
+        so we aggregate them up to account-level using _profile_to_account_map.
+
         Returns:
             Dict mapping M3U account ID to active connection count.
         """
@@ -1011,14 +1028,163 @@ class StreamProber:
             channels = channel_stats.get("channels", [])
             counts = {}
             for ch in channels:
-                m3u_id = ch.get("m3u_profile_id")
-                if m3u_id:
-                    counts[m3u_id] = counts.get(m3u_id, 0) + 1
+                profile_id = ch.get("m3u_profile_id")
+                if profile_id:
+                    # Map profile ID back to parent account ID
+                    account_id = self._profile_to_account_map.get(profile_id, profile_id)
+                    counts[account_id] = counts.get(account_id, 0) + 1
             return counts
         except Exception as e:
             logger.warning(f"Failed to fetch M3U connection counts: {e}")
             # Return empty dict on failure - allows probes to proceed (fail-open)
             return {}
+
+    async def _get_profile_active_connections(self) -> dict[int, int]:
+        """
+        Fetch current active connection counts per profile.
+        Unlike _get_all_m3u_active_connections which aggregates to account level,
+        this returns counts at the profile level for profile-aware probing.
+
+        Returns:
+            Dict mapping profile_id to active connection count.
+        """
+        try:
+            channel_stats = await self.client.get_channel_stats()
+            channels = channel_stats.get("channels", [])
+            counts = {}
+            for ch in channels:
+                profile_id = ch.get("m3u_profile_id")
+                if profile_id:
+                    counts[profile_id] = counts.get(profile_id, 0) + 1
+            return counts
+        except Exception as e:
+            logger.warning(f"Failed to fetch profile connection counts: {e}")
+            return {}
+
+    def _profile_has_capacity(self, profile: dict, dispatcharr_profile_conns: dict,
+                              our_profile_conns: dict) -> bool:
+        """Check if a profile has capacity for another probe connection.
+
+        Args:
+            profile: Profile dict with 'id' key
+            dispatcharr_profile_conns: {profile_id -> active connection count} from Dispatcharr
+            our_profile_conns: {profile_id -> active probe count} from our concurrent probes
+
+        Returns:
+            True if the profile has capacity, False if at max
+        """
+        profile_id = profile["id"]
+        profile_max = self._profile_max_streams.get(profile_id, 0)
+        if profile_max == 0:
+            return True  # Unlimited
+        profile_total = dispatcharr_profile_conns.get(profile_id, 0) + our_profile_conns.get(profile_id, 0)
+        return profile_total < profile_max
+
+    def _select_probe_profile(self, account_id: int, dispatcharr_profile_conns: dict,
+                               our_profile_conns: dict, account_max: int,
+                               total_account_conns: int) -> Optional[dict]:
+        """Select the best profile to use for probing a stream from this account.
+
+        Distributes probes across profiles using the configured strategy:
+        - fill_first: Use profiles in order, filling each to capacity before moving on
+        - round_robin: Rotate across profiles evenly, cycling through each in turn
+        - least_loaded: Pick the profile with the most available headroom
+
+        Args:
+            account_id: The M3U account ID
+            dispatcharr_profile_conns: {profile_id -> active connection count} from Dispatcharr
+            our_profile_conns: {profile_id -> active probe count} from our concurrent probes
+            account_max: Account-level max_streams (0 = unlimited)
+            total_account_conns: Total connections across all profiles for this account
+
+        Returns:
+            Profile dict if one has capacity, None if all at capacity
+        """
+        # Check account-level cap first
+        if account_max > 0 and total_account_conns >= account_max:
+            logger.debug(f"[PROFILE-SELECT] Account {account_id}: at account cap ({total_account_conns}/{account_max})")
+            return None
+
+        profiles = self._account_profiles.get(account_id, [])
+        if not profiles:
+            return None
+
+        if self.profile_distribution_strategy == "round_robin":
+            # Rotate across profiles evenly, starting from the next one after last used
+            last_idx = self._round_robin_index.get(account_id, -1)
+            for i in range(len(profiles)):
+                idx = (last_idx + 1 + i) % len(profiles)
+                profile = profiles[idx]
+                if self._profile_has_capacity(profile, dispatcharr_profile_conns, our_profile_conns):
+                    self._round_robin_index[account_id] = idx
+                    logger.debug(f"[PROFILE-SELECT] Account {account_id}: round_robin selected profile {profile['id']} "
+                               f"('{profile.get('name', 'unnamed')}', idx={idx})")
+                    return profile
+            logger.debug(f"[PROFILE-SELECT] Account {account_id}: round_robin - all profiles at capacity")
+            return None
+
+        elif self.profile_distribution_strategy == "least_loaded":
+            # Pick profile with most available headroom
+            best = None
+            best_headroom = -1
+            for profile in profiles:
+                profile_id = profile["id"]
+                profile_max = self._profile_max_streams.get(profile_id, 0)
+                if profile_max == 0:
+                    # Unlimited = always best
+                    logger.debug(f"[PROFILE-SELECT] Account {account_id}: least_loaded selected profile {profile_id} "
+                               f"('{profile.get('name', 'unnamed')}', unlimited)")
+                    return profile
+                current = dispatcharr_profile_conns.get(profile_id, 0) + our_profile_conns.get(profile_id, 0)
+                headroom = profile_max - current
+                if headroom > 0 and headroom > best_headroom:
+                    best = profile
+                    best_headroom = headroom
+            if best:
+                logger.debug(f"[PROFILE-SELECT] Account {account_id}: least_loaded selected profile {best['id']} "
+                           f"('{best.get('name', 'unnamed')}', headroom={best_headroom})")
+            else:
+                logger.debug(f"[PROFILE-SELECT] Account {account_id}: least_loaded - all profiles at capacity")
+            return best
+
+        else:
+            # "fill_first" (default) — iterate in order, pick first with capacity
+            for profile in profiles:
+                if self._profile_has_capacity(profile, dispatcharr_profile_conns, our_profile_conns):
+                    logger.debug(f"[PROFILE-SELECT] Account {account_id}: fill_first selected profile {profile['id']} "
+                               f"('{profile.get('name', 'unnamed')}')")
+                    return profile
+            logger.debug(f"[PROFILE-SELECT] Account {account_id}: fill_first - all profiles at capacity")
+            return None
+
+    def _rewrite_url_for_profile(self, original_url: str, profile: dict) -> str:
+        """Rewrite a stream URL for a specific profile using search/replace patterns.
+
+        Args:
+            original_url: The original stream URL
+            profile: Profile dict with search_pattern and replace_pattern fields
+
+        Returns:
+            Rewritten URL, or original URL if no rewriting needed
+        """
+        if profile.get("is_default", False):
+            return original_url
+
+        search_pattern = profile.get("search_pattern", "")
+        replace_pattern = profile.get("replace_pattern", "")
+
+        if not search_pattern:
+            return original_url
+
+        try:
+            rewritten = re.sub(search_pattern, replace_pattern, original_url)
+            if rewritten != original_url:
+                logger.debug(f"[PROFILE-REWRITE] Profile {profile['id']}: rewrote URL "
+                           f"(pattern: {search_pattern} -> {replace_pattern})")
+            return rewritten
+        except re.error as e:
+            logger.warning(f"[PROFILE-REWRITE] Invalid regex in profile {profile['id']}: {e}")
+            return original_url
 
     async def _auto_reorder_channels(self, channel_groups_override: list[str] = None, stream_to_channels: dict = None) -> list[dict]:
         """
@@ -1381,22 +1547,29 @@ class StreamProber:
             # Fetch M3U accounts to map account IDs to names and max_streams
             logger.info("Fetching M3U accounts...")
             m3u_accounts_map = {}  # id -> name
-            m3u_max_streams = {}   # id -> max_streams (considering profiles)
+            m3u_max_streams = {}   # id -> max_streams
+            self._profile_to_account_map = {}  # profile_id -> account_id
+            self._account_profiles = {}  # account_id -> [sorted list of active profile dicts]
+            self._profile_max_streams = {}  # profile_id -> max_streams
             try:
                 m3u_accounts = await self.client.get_m3u_accounts()
                 for account in m3u_accounts:
                     account_id = account["id"]
                     m3u_accounts_map[account_id] = account.get("name", f"M3U {account_id}")
-                    # Calculate max_streams considering profiles (like Stats tab does)
-                    profiles = account.get("profiles", [])
-                    active_profiles = [p for p in profiles if p.get("is_active", True)]
-                    if active_profiles:
-                        # Sum max_streams from active profiles
-                        profile_max = sum(p.get("max_streams", 0) for p in active_profiles)
-                        m3u_max_streams[account_id] = profile_max if profile_max > 0 else account.get("max_streams", 0)
-                    else:
-                        m3u_max_streams[account_id] = account.get("max_streams", 0)
-                logger.info(f"Found {len(m3u_accounts_map)} M3U accounts")
+                    # Build profile-to-account map and profile lists
+                    account_profiles = []
+                    for profile in account.get("profiles", []):
+                        self._profile_to_account_map[profile["id"]] = account_id
+                        self._profile_max_streams[profile["id"]] = profile.get("max_streams", 0)
+                        if profile.get("is_active", True):
+                            account_profiles.append(profile)
+                    # Sort profiles: default first, then by ID
+                    account_profiles.sort(key=lambda p: (not p.get("is_default", False), p["id"]))
+                    self._account_profiles[account_id] = account_profiles
+                    # Use the account-level max_streams as the cap
+                    m3u_max_streams[account_id] = account.get("max_streams", 0)
+                logger.info(f"Found {len(m3u_accounts_map)} M3U accounts, {len(self._profile_to_account_map)} profiles mapped, "
+                           f"{sum(len(v) for v in self._account_profiles.values())} active profiles")
             except Exception as e:
                 logger.warning(f"Failed to fetch M3U accounts: {e}")
 
@@ -1486,7 +1659,7 @@ class StreamProber:
                 # Track our own probe connections per M3U (separate from Dispatcharr's active connections)
                 # This lets us know how many streams WE are currently probing per M3U
                 probe_connections_lock = asyncio.Lock()
-                probe_connections = {}  # m3u_id -> count of our active probes
+                probe_connections = {}  # profile_id (or m3u_id fallback) -> count of our active probes
 
                 # Results lock for thread-safe updates
                 results_lock = asyncio.Lock()
@@ -1501,6 +1674,11 @@ class StreamProber:
                     stream_name = stream.get("name", f"Stream {stream_id}")
                     stream_url = stream.get("url", "")
                     m3u_account_id = self._extract_m3u_account_id(stream.get("m3u_account"))
+
+                    # Apply profile URL rewriting if a profile was selected
+                    selected_profile = stream.get("_selected_profile")
+                    if selected_profile:
+                        stream_url = self._rewrite_url_for_profile(stream_url, selected_profile)
 
                     # Check if host is rate-limited and wait for backoff
                     host = self._extract_host_from_url(stream_url)
@@ -1541,11 +1719,12 @@ class StreamProber:
                             async with active_probe_count_lock:
                                 active_probe_count[0] -= 1
                                 logger.debug(f"[PROBE-PARALLEL] Released semaphore: active={active_probe_count[0]}/{self.max_concurrent_probes}, stream={stream_id}")
-                            # Release our probe connection for this M3U
-                            if m3u_account_id:
+                            # Release our probe connection (by profile_id or m3u_account_id)
+                            release_key = selected_profile["id"] if selected_profile else m3u_account_id
+                            if release_key:
                                 async with probe_connections_lock:
-                                    if m3u_account_id in probe_connections:
-                                        probe_connections[m3u_account_id] = max(0, probe_connections[m3u_account_id] - 1)
+                                    if release_key in probe_connections:
+                                        probe_connections[release_key] = max(0, probe_connections[release_key] - 1)
 
                 # Process streams with parallel probing
                 pending_streams = list(streams_to_probe)  # Streams waiting to be probed
@@ -1578,8 +1757,13 @@ class StreamProber:
                     if self._probe_progress_status == "paused":
                         self._probe_progress_status = "probing"
 
-                    # Get fresh M3U connection counts from Dispatcharr
-                    dispatcharr_connections = await self._get_all_m3u_active_connections()
+                    # Get fresh connection counts from Dispatcharr (profile and account level)
+                    dispatcharr_profile_conns = await self._get_profile_active_connections()
+                    # Derive account-level from profile-level
+                    dispatcharr_connections = {}
+                    for pid, cnt in dispatcharr_profile_conns.items():
+                        aid = self._profile_to_account_map.get(pid, pid)
+                        dispatcharr_connections[aid] = dispatcharr_connections.get(aid, 0) + cnt
 
                     # Try to start new probes for streams that have available M3U capacity
                     streams_started_this_round = []
@@ -1627,22 +1811,44 @@ class StreamProber:
                             effective_max = 2 if is_hdhomerun else max_streams
 
                             if effective_max > 0:
-                                # Total connections = Dispatcharr active + our active probes
+                                # Calculate total account connections (dispatcharr + our probes)
                                 dispatcharr_active = dispatcharr_connections.get(m3u_account_id, 0)
                                 async with probe_connections_lock:
-                                    our_probes = probe_connections.get(m3u_account_id, 0)
-                                total_active = dispatcharr_active + our_probes
+                                    our_profile_conns_snapshot = dict(probe_connections)
+                                # Sum our probes for this account across all profiles
+                                profiles = self._account_profiles.get(m3u_account_id, [])
+                                if profiles:
+                                    our_account_total = sum(
+                                        our_profile_conns_snapshot.get(p["id"], 0) for p in profiles
+                                    )
+                                else:
+                                    our_account_total = our_profile_conns_snapshot.get(m3u_account_id, 0)
+                                total_account_conns = dispatcharr_active + our_account_total
 
-                                if total_active >= effective_max:
-                                    # Check if we have any active probes for this M3U
-                                    # If we do, wait for them to finish (don't skip yet)
-                                    if our_probes > 0:
-                                        can_probe = False  # Wait, don't skip
+                                if not is_hdhomerun and profiles:
+                                    # Profile-aware selection
+                                    selected_profile = self._select_probe_profile(
+                                        m3u_account_id, dispatcharr_profile_conns,
+                                        our_profile_conns_snapshot, effective_max, total_account_conns
+                                    )
+                                    if selected_profile:
+                                        stream["_selected_profile"] = selected_profile
                                     else:
-                                        # No probes running, Dispatcharr is using all connections
-                                        m3u_name = m3u_accounts_map.get(m3u_account_id, f"M3U {m3u_account_id}")
-                                        skip_reason = f"M3U '{m3u_name}' at max connections ({dispatcharr_active}/{effective_max})"
-                                        logger.info(f"Skipping stream {stream_id} ({stream_name}): {skip_reason}")
+                                        if our_account_total > 0:
+                                            can_probe = False  # Wait for active probes to finish
+                                        else:
+                                            m3u_name = m3u_accounts_map.get(m3u_account_id, f"M3U {m3u_account_id}")
+                                            skip_reason = f"M3U '{m3u_name}' at max connections ({dispatcharr_active}/{effective_max})"
+                                            logger.info(f"Skipping stream {stream_id} ({stream_name}): {skip_reason}")
+                                else:
+                                    # HDHomeRun or no profiles - use account-level logic
+                                    if total_account_conns >= effective_max:
+                                        if our_account_total > 0:
+                                            can_probe = False  # Wait, don't skip
+                                        else:
+                                            m3u_name = m3u_accounts_map.get(m3u_account_id, f"M3U {m3u_account_id}")
+                                            skip_reason = f"M3U '{m3u_name}' at max connections ({dispatcharr_active}/{effective_max})"
+                                            logger.info(f"Skipping stream {stream_id} ({stream_name}): {skip_reason}")
 
                         if skip_reason:
                             # Skip this stream - M3U is at capacity with Dispatcharr connections
@@ -1657,10 +1863,12 @@ class StreamProber:
                             continue
 
                         if can_probe:
-                            # Reserve a probe connection for this M3U
-                            if m3u_account_id:
+                            # Reserve a probe connection (by profile_id or m3u_account_id)
+                            selected_profile = stream.get("_selected_profile")
+                            reserve_key = selected_profile["id"] if selected_profile else m3u_account_id
+                            if reserve_key:
                                 async with probe_connections_lock:
-                                    probe_connections[m3u_account_id] = probe_connections.get(m3u_account_id, 0) + 1
+                                    probe_connections[reserve_key] = probe_connections.get(reserve_key, 0) + 1
 
                             # Start the probe task
                             task = asyncio.create_task(probe_single_stream(stream, display_string))
@@ -1776,15 +1984,34 @@ class StreamProber:
 
                     # Check if M3U is at max connections before probing (fresh check each time)
                     skip_reason = None
+                    selected_profile = None
                     if m3u_account_id:
                         max_streams = m3u_max_streams.get(m3u_account_id, 0)
                         if max_streams > 0:
-                            dispatcharr_connections = await self._get_all_m3u_active_connections()
-                            current_streams = dispatcharr_connections.get(m3u_account_id, 0)
-                            if current_streams >= max_streams:
-                                m3u_name = m3u_accounts_map.get(m3u_account_id, f"M3U {m3u_account_id}")
-                                skip_reason = f"M3U '{m3u_name}' at max connections ({current_streams}/{max_streams})"
-                                logger.info(f"Skipping stream {stream_id} ({stream_name}): {skip_reason}")
+                            dispatcharr_profile_conns = await self._get_profile_active_connections()
+                            dispatcharr_connections = {}
+                            for pid, cnt in dispatcharr_profile_conns.items():
+                                aid = self._profile_to_account_map.get(pid, pid)
+                                dispatcharr_connections[aid] = dispatcharr_connections.get(aid, 0) + cnt
+                            total_account_conns = dispatcharr_connections.get(m3u_account_id, 0)
+
+                            profiles = self._account_profiles.get(m3u_account_id, [])
+                            if profiles:
+                                # Profile-aware selection
+                                selected_profile = self._select_probe_profile(
+                                    m3u_account_id, dispatcharr_profile_conns, {},
+                                    max_streams, total_account_conns
+                                )
+                                if not selected_profile:
+                                    m3u_name = m3u_accounts_map.get(m3u_account_id, f"M3U {m3u_account_id}")
+                                    skip_reason = f"M3U '{m3u_name}' at max connections ({total_account_conns}/{max_streams})"
+                                    logger.info(f"Skipping stream {stream_id} ({stream_name}): {skip_reason}")
+                            else:
+                                # No profiles - use account-level logic
+                                if total_account_conns >= max_streams:
+                                    m3u_name = m3u_accounts_map.get(m3u_account_id, f"M3U {m3u_account_id}")
+                                    skip_reason = f"M3U '{m3u_name}' at max connections ({total_account_conns}/{max_streams})"
+                                    logger.info(f"Skipping stream {stream_id} ({stream_name}): {skip_reason}")
 
                     if skip_reason:
                         # Skip this stream - M3U is at capacity
@@ -1794,6 +2021,10 @@ class StreamProber:
                         probed_count += 1
                         await self._update_probe_notification()
                         continue
+
+                    # Rewrite URL if a profile was selected
+                    if selected_profile:
+                        stream_url = self._rewrite_url_for_profile(stream_url, selected_profile)
 
                     # Check if host is rate-limited and wait for backoff (sequential mode)
                     host = self._extract_host_from_url(stream_url)
