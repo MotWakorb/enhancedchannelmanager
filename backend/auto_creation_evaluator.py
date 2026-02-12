@@ -178,7 +178,7 @@ class ConditionEvaluator:
                     # Parse the numerical offset value
                     val = int(val_str)
                 except ValueError:
-                    pass  # Ignore invalid offset parsing
+                    return match.group(0)  # Return original if parsing fails
 
             # Remove colon from format string if present
             fmt = "%Y-%m-%d"
