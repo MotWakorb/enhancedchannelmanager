@@ -1241,6 +1241,27 @@ Interactive API documentation is available at `/api/docs` (Swagger UI) and `/api
 | `POST /api/tls/https/restart` | Restart HTTPS server |
 | `GET /api/tls/https/status` | Get HTTPS server status |
 
+### Auto-Creation
+- `GET /api/auto-creation/rules` - List all rules sorted by priority
+- `GET /api/auto-creation/rules/{id}` - Get rule details
+- `POST /api/auto-creation/rules` - Create rule
+- `PUT /api/auto-creation/rules/{id}` - Update rule
+- `DELETE /api/auto-creation/rules/{id}` - Delete rule
+- `POST /api/auto-creation/rules/reorder` - Reorder rules by priority
+- `POST /api/auto-creation/rules/{id}/toggle` - Toggle rule enabled state
+- `POST /api/auto-creation/rules/{id}/duplicate` - Duplicate a rule
+- `POST /api/auto-creation/rules/{id}/run` - Run a single rule (supports dry_run query param)
+- `POST /api/auto-creation/run` - Run the full pipeline (execute or dry_run mode)
+- `GET /api/auto-creation/executions` - Get execution history (paginated)
+- `GET /api/auto-creation/executions/{id}` - Get execution details (with optional log and entities)
+- `POST /api/auto-creation/executions/{id}/rollback` - Rollback an execution
+- `POST /api/auto-creation/validate` - Validate a rule definition
+- `GET /api/auto-creation/export/yaml` - Export all rules as YAML
+- `POST /api/auto-creation/import/yaml` - Import rules from YAML
+- `GET /api/auto-creation/schema/conditions` - Get available condition types
+- `GET /api/auto-creation/schema/actions` - Get available action types
+- `GET /api/auto-creation/schema/template-variables` - Get available template variables
+
 ### Authentication
 
 | Endpoint | Description |
