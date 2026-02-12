@@ -265,6 +265,13 @@ export function ActionEditor({
       }
     }
 
+    if (action.type === 'create_channel' && !action.group_id) {
+      const hasPriorCreateGroup = previousActions.some(a => a.type === 'create_group');
+      if (!hasPriorCreateGroup) {
+        return 'Target group is required (or add a Create Group action before this action)';
+      }
+    }
+
     if (action.type === 'merge_streams' && action.target === 'existing_channel') {
       if (action.find_channel_by && !action.find_channel_value) {
         return 'Find value is required';

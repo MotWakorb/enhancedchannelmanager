@@ -112,6 +112,17 @@ export function RuleBuilder({
 
     if (actions.length === 0) {
       newErrors.actions = 'At least one action is required';
+    } else {
+      // Validate individual action fields
+      for (const [i, action] of actions.entries()) {
+        if (action.type === 'create_channel' && !action.group_id) {
+          const hasPriorCreateGroup = actions.slice(0, i).some(a => a.type === 'create_group');
+          if (!hasPriorCreateGroup) {
+            newErrors.actions = 'Create Channel requires a target group (or a prior Create Group action)';
+            break;
+          }
+        }
+      }
     }
 
     setErrors(newErrors);
