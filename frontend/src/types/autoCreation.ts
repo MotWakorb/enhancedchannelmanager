@@ -325,6 +325,7 @@ export interface ActionLogEntry {
   success: boolean;
   entity_id?: number;
   error?: string;
+  details?: string[];
 }
 
 // =============================================================================

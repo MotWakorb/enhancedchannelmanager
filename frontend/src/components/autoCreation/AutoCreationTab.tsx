@@ -1004,6 +1004,19 @@ export function AutoCreationTab() {
                                           </span>
                                           <span className="log-action-desc">{action.description}</span>
                                           {action.error && <span className="log-action-error-msg">{action.error}</span>}
+                                          {action.details && action.details.length > 0 && (
+                                            <div className="log-action-details">
+                                              {action.details.map((detail, di) => {
+                                                const isTip = detail.includes('To create separate channels');
+                                                return (
+                                                  <span key={di} className={`log-action-detail ${isTip ? 'log-action-tip' : ''}`}>
+                                                    {isTip && <span className="material-icons tip-icon">lightbulb</span>}
+                                                    {detail}
+                                                  </span>
+                                                );
+                                              })}
+                                            </div>
+                                          )}
                                         </div>
                                       );
                                     })}

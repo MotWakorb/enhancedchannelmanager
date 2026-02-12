@@ -803,3 +803,36 @@
   font-size: 11px;
   margin-top: 2px;
 }
+
+.log-action-details {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin-top: 2px;
+  padding-left: 18px;
+}
+
+.log-action-detail {
+  font-size: 11px;
+  color: var(--text-secondary, #aaa);
+  font-style: italic;
+}
+
+.log-action-tip {
+  display: flex;
+  align-items: flex-start;
+  gap: 4px;
+  color: var(--status-warning, #f59e0b);
+  font-style: normal;
+  margin-top: 4px;
+  padding: 4px 6px;
+  background: rgba(245, 158, 11, 0.08);
+  border-radius: 4px;
+  line-height: 1.4;
+}
+
+.tip-icon {
+  font-size: 13px;
+  flex-shrink: 0;
+  margin-top: 1px;
+}
