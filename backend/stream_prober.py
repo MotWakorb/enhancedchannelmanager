@@ -800,8 +800,11 @@ class StreamProber:
             if not error_text:
                 error_text = f"Exit code {process.returncode} (no stderr output)"
 
-            # If ffprobe reports an HTTP error, check the actual status code
-            if "4XX" in error_text or "5XX" in error_text or "Server returned" in error_text:
+            # Check for transient errors worth retrying:
+            # - HTTP errors reported by ffprobe (4XX/5XX/Server returned)
+            # - I/O errors (stream ends prematurely, connection reset, broken pipe)
+            transient_patterns = ("4XX", "5XX", "Server returned", "Input/output error", "Stream ends prematurely", "Connection reset", "Broken pipe")
+            if any(p in error_text for p in transient_patterns):
                 status_code = await self._check_http_status(url)
                 if status_code and status_code == 200 and _retry_attempt < self.probe_retry_count:
                     # Server is reachable (HTTP 200) but ffprobe got a transient error —
