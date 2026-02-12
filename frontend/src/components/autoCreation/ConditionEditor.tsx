@@ -356,19 +356,21 @@ function DatePlaceholderHelp({ isRegex }: { isRegex: boolean }) {
           (YYYY-MM-DD)
         </li>
         <li>
-          <code>{"{date+3d}"}</code>: From now until 3 days later {isRegex ? '(range)' : <span className="range-warning">(Requires Regex)</span>}
-        </li>
-        <li>
-          <code>{"{date-1w}"}</code>: From 1 week ago until now {isRegex ? '(range)' : <span className="range-warning">(Requires Regex)</span>}
-        </li>
-        <li>
           <code>{"{date:%d %b}"}</code>: Custom format (e.g. "12 Feb")
         </li>
         {isRegex && (
-          <li>
-            <code>{"{date+2d:%m-%d}"}</code>: Range + Format (e.g.{" "}
-            <code>(02-12|02-13|02-14)</code>)
-          </li>
+          <>
+            <li>
+              <code>{"{date+3d}"}</code>: From now until 3 days later (range)
+            </li>
+            <li>
+              <code>{"{date-1w}"}</code>: From 1 week ago until now (range)
+            </li>
+            <li>
+              <code>{"{date+2d:%m-%d}"}</code>: Range + Format (e.g.{" "}
+              <code>(02-12|02-13|02-14)</code>)
+            </li>
+          </>
         )}
       </ul>
       <p className="help-note">
