@@ -761,7 +761,7 @@ class StreamProber:
             logger.debug(f"HTTP status check failed for {url}: {e}")
             return None
 
-    async def _run_ffprobe(self, url: str) -> dict:
+    async def _run_ffprobe(self, url: str, _is_retry: bool = False) -> dict:
         """Run ffprobe and parse JSON output."""
         cmd = [
             "ffprobe",
@@ -796,10 +796,16 @@ class StreamProber:
             if not error_text:
                 error_text = f"Exit code {process.returncode} (no stderr output)"
 
-            # If ffprobe reports a vague HTTP error, check the actual status code
+            # If ffprobe reports an HTTP error, check the actual status code
             if "4XX" in error_text or "5XX" in error_text or "Server returned" in error_text:
                 status_code = await self._check_http_status(url)
-                if status_code:
+                if status_code and status_code == 200 and not _is_retry:
+                    # Server is reachable (HTTP 200) but ffprobe got a transient error —
+                    # likely a momentary provider glitch. Retry once after a short delay.
+                    logger.info(f"[PROBE-RETRY] ffprobe failed but HTTP 200 — retrying in 2s: {url[:80]}...")
+                    await asyncio.sleep(2)
+                    return await self._run_ffprobe(url, _is_retry=True)
+                elif status_code:
                     error_text = f"{error_text} (HTTP {status_code})"
                     logger.info(f"[PROBE-HTTP] URL {url[:80]}... returned HTTP {status_code}")
 
