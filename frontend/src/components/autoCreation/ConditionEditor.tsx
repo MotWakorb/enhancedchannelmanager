@@ -378,7 +378,7 @@ function DatePlaceholderHelp({ isRegex }: { isRegex: boolean }) {
           </>
         ) : (
           <>
-            Offsets (ranges) are <strong>only</strong> supported when using the <strong>Matches (Regex)</strong> operator. 
+            Offsets (ranges) are <strong>only</strong> supported when using the <strong>Matches (Regex)</strong> operator.
             For other operators, only single-date placeholders like <code>{"{date}"}</code> work.
           </>
         )} Max range is 90 days.
