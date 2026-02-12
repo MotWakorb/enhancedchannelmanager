@@ -138,7 +138,6 @@ class ConditionEvaluator:
                 if group_id not in self._channels_by_group:
                     self._channels_by_group[group_id] = []
                 self._channels_by_group[group_id].append(channel)
-                
     
     def _expand_date_placeholders(self, text: str, allow_ranges: bool = True) -> str:
         """
@@ -436,7 +435,6 @@ class ConditionEvaluator:
         """Evaluate regex pattern against value."""
 
         pattern = self._expand_date_placeholders(pattern)
-        logger.info(pattern)
         if not pattern:
             return EvaluationResult(False, cond_type, "No pattern specified")
         if value is None:
@@ -452,7 +450,7 @@ class ConditionEvaluator:
         except re.error as e:
             logger.error(f"Invalid regex pattern '{pattern}': {e}")
             return EvaluationResult(False, cond_type, f"Invalid regex: {e}")
-
+            
     def _evaluate_contains(self, substring: str, value: str, case_sensitive: bool,
                            cond_type: str) -> EvaluationResult:
         """Evaluate substring containment."""

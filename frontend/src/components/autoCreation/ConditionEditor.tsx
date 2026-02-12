@@ -538,7 +538,6 @@ export function ConditionEditor({
                   aria-invalid={!!validationError}
                 />
               ) : (
-
                 <input
                   id={`${id}-value`}
                   type="text"
