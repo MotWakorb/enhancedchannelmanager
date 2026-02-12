@@ -1087,6 +1087,22 @@ Configure automated stream health checking:
 4. Configure **Batch Size** and **Timeout**
 5. Select **Channel Groups** to probe
 
+#### Profile-Aware Probing
+
+When an M3U account has multiple profiles (configured in Dispatcharr), ECM automatically distributes probe connections across them. Each profile has its own max connection limit, and ECM rewrites stream URLs using the profile's search/replace patterns so probes go through the correct profile endpoint.
+
+#### Profile Distribution Strategy
+
+If any M3U account has multiple profiles, a **Profile Distribution Strategy** dropdown appears in Settings → Maintenance under "Enable parallel probing":
+
+| Strategy | Behavior |
+|----------|----------|
+| **Fill First** (default) | Uses the default profile until it reaches its connection limit, then spills over to the next profile. Best when you want to minimize the number of active profiles. |
+| **Round Robin** | Rotates across profiles one at a time so each gets an equal share of probe connections. Good for spreading usage evenly. |
+| **Least Loaded** | Picks the profile with the most remaining headroom (highest ratio of free connections). Best for maximizing throughput when profiles have different connection limits. |
+
+This setting only affects probing — it does not change how Dispatcharr routes viewer traffic.
+
 ### Stream Sort Priority
 
 ![Sort Priority](docs/images/57-sort-priority.png)

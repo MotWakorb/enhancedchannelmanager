@@ -511,6 +511,11 @@ Automated stream health checking:
 - **Auto-Reorder After Probe** - Automatically reorder streams by quality and status after scheduled probes complete
 - **Parallel Probing** - Streams from different M3U accounts probe concurrently
 - **Max Concurrent Probes** - Configure simultaneous probe limit (1-16) with guidance based on provider limits
+- **Profile-Aware Probing** - Distributes probe connections across M3U profiles within an account, respecting per-profile connection limits and rewriting stream URLs for each profile
+- **Profile Distribution Strategy** - Choose how probes are spread across profiles (only shown when an account has multiple profiles):
+  - **Fill First** - Use default profile to capacity before spilling over to others
+  - **Round Robin** - Rotate evenly across profiles for balanced usage
+  - **Least Loaded** - Pick the profile with the most remaining headroom for maximum throughput
 - **Rate Limit Detection** - Automatic backoff when providers return 429 errors, with UI notification
 - **M3U Connection Awareness** - Respects M3U max connection limits during probing
 - **Persistent History** - Probe results saved to `/config/probe_history.json` and persist across container restarts
