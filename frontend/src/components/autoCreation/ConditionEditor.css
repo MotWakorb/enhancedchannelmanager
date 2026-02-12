@@ -206,6 +206,13 @@
     margin-bottom: 2px;
 }
 
+.range-warning {
+    color: var(--error-color, #dc3545);
+    font-size: 11px;
+    font-weight: 500;
+    margin-left: 4px;
+}
+
 
 /* Options */
 .condition-options {

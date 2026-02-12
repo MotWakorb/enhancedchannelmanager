@@ -346,7 +346,7 @@ function OrderNumberInput({ orderNumber, totalItems, onReorder }: {
 // DatePlaceholderHelp Component
 // ============================================================================
 
-function DatePlaceholderHelp() {
+function DatePlaceholderHelp({ isRegex }: { isRegex: boolean }) {
   return (
     <div className="date-help-box">
       <p>Use placeholders to match dynamic dates:</p>
@@ -356,23 +356,32 @@ function DatePlaceholderHelp() {
           (YYYY-MM-DD)
         </li>
         <li>
-          <code>{"{date+3d}"}</code>: From now until 3 days later (range)
+          <code>{"{date+3d}"}</code>: From now until 3 days later {isRegex ? '(range)' : <span className="range-warning">(Requires Regex)</span>}
         </li>
         <li>
-          <code>{"{date-1w}"}</code>: From 1 week ago until now (range)
+          <code>{"{date-1w}"}</code>: From 1 week ago until now {isRegex ? '(range)' : <span className="range-warning">(Requires Regex)</span>}
         </li>
         <li>
           <code>{"{date:%d %b}"}</code>: Custom format (e.g. "12 Feb")
         </li>
-        <li>
-          <code>{"{date+2d:%m-%d}"}</code>: Range + Format (e.g.{" "}
-          <code>(02-12|02-13|02-14)</code>)
-        </li>
+        {isRegex && (
+          <li>
+            <code>{"{date+2d:%m-%d}"}</code>: Range + Format (e.g.{" "}
+            <code>(02-12|02-13|02-14)</code>)
+          </li>
+        )}
       </ul>
       <p className="help-note">
-        <strong>Note:</strong> When using offsets (e.g. <code>+3d</code>), a
-        regex group is generated (e.g. <code>(2023-01-01|2023-01-02)</code>).
-        Max range is 90 days. Use <strong>Matches (Regex)</strong> operator for best results.
+        <strong>Note:</strong> {isRegex ? (
+          <>
+            When using offsets (e.g. <code>+3d</code>), a regex group is generated (e.g. <code>(2023-01-01|2023-01-02)</code>).
+          </>
+        ) : (
+          <>
+            Offsets (ranges) are <strong>only</strong> supported when using the <strong>Matches (Regex)</strong> operator. 
+            For other operators, only single-date placeholders like <code>{"{date}"}</code> work.
+          </>
+        )} Max range is 90 days.
       </p>
     </div>
   );
@@ -561,7 +570,7 @@ export function ConditionEditor({
           )}
         </div>
         {/* Date Help Box */}
-        {showDateHelp && isStringLike && <DatePlaceholderHelp />}
+        {showDateHelp && isStringLike && <DatePlaceholderHelp isRegex={isRegex} />}
 
         {/* Case sensitive checkbox */}
         {showCaseSensitiveOption && isStringLike && (
