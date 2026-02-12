@@ -195,6 +195,13 @@ class ConditionEvaluator:
             days_to_add = val
             if unit == "w":
                 days_to_add = val * 7
+            
+            max_days = 90
+            # Cap the range at 90 days to prevent huge regex generation
+            if days_to_add > max_days:
+                days_to_add = max_days
+            elif days_to_add < -max_days:
+                days_to_add = -max_days
 
             dates = []
             # range is exclusive at end, so we need +1 or -1 to include the target date
@@ -208,7 +215,6 @@ class ConditionEvaluator:
                 return f"({'|'.join(dates)})"
             except ValueError:
                 return match.group(0)
-
         return re.sub(pattern, replace_match, text)
 
     def evaluate(self, condition: Condition | dict, context: StreamContext) -> EvaluationResult:
@@ -421,7 +427,7 @@ class ConditionEvaluator:
         """Evaluate regex pattern against value."""
 
         pattern = self._expand_date_placeholders(pattern)
-
+        logger.info(pattern)
         if not pattern:
             return EvaluationResult(False, cond_type, "No pattern specified")
         if value is None:
