@@ -287,6 +287,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   const [bitrateSampleDuration, setBitrateSampleDuration] = useState(10);
   const [parallelProbingEnabled, setParallelProbingEnabled] = useState(true);
   const [maxConcurrentProbes, setMaxConcurrentProbes] = useState(8);
+  const [profileDistributionStrategy, setProfileDistributionStrategy] = useState('fill_first');
   const [skipRecentlyProbedHours, setSkipRecentlyProbedHours] = useState(0);
   const [refreshM3usBeforeProbe, setRefreshM3usBeforeProbe] = useState(true);
   const [autoReorderAfterProbe, setAutoReorderAfterProbe] = useState(false);
@@ -324,6 +325,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   const [copiedUrl, setCopiedUrl] = useState<string | null>(null);
   // M3U accounts for guidance on max concurrent probes
   const [m3uAccountsMaxStreams, setM3uAccountsMaxStreams] = useState<{ name: string; max_streams: number }[]>([]);
+  const [hasMultipleProfiles, setHasMultipleProfiles] = useState(false);
 
   // Preserve settings not managed by this tab (to avoid overwriting them on save)
   const [linkedM3UAccounts, setLinkedM3UAccounts] = useState<number[][]>([]);
@@ -401,6 +403,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         .filter(a => a.is_active && a.max_streams > 0)
         .map(a => ({ name: a.name, max_streams: a.max_streams }));
       setM3uAccountsMaxStreams(maxStreamsList);
+      setHasMultipleProfiles(accounts.some(a => a.is_active && a.profiles && a.profiles.length > 1));
     } catch (err) {
       logger.warn('Failed to load M3U accounts for max streams guidance', err);
     }
@@ -562,6 +565,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       setBitrateSampleDuration(settings.bitrate_sample_duration ?? 10);
       setParallelProbingEnabled(settings.parallel_probing_enabled ?? true);
       setMaxConcurrentProbes(settings.max_concurrent_probes ?? 8);
+      setProfileDistributionStrategy(settings.profile_distribution_strategy ?? 'fill_first');
       setSkipRecentlyProbedHours(settings.skip_recently_probed_hours ?? 0);
       setRefreshM3usBeforeProbe(settings.refresh_m3us_before_probe ?? true);
       setOriginalRefreshM3usBeforeProbe(settings.refresh_m3us_before_probe ?? true);
@@ -703,6 +707,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         bitrate_sample_duration: bitrateSampleDuration,
         parallel_probing_enabled: parallelProbingEnabled,
         max_concurrent_probes: maxConcurrentProbes,
+        profile_distribution_strategy: profileDistributionStrategy,
         skip_recently_probed_hours: skipRecentlyProbedHours,
         refresh_m3us_before_probe: refreshM3usBeforeProbe,
         auto_reorder_after_probe: autoReorderAfterProbe,
@@ -2722,7 +2727,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
               </span>
             </div>
 
-            {parallelProbingEnabled && (
+            {parallelProbingEnabled && (<>
               <div className="form-group-vertical">
                 <label htmlFor="maxConcurrentProbes">Max concurrent probes</label>
                 <span className="form-description">
@@ -2765,7 +2770,28 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                   </span>
                 )}
               </div>
-            )}
+
+              {hasMultipleProfiles && (
+              <div className="form-group-vertical">
+                <label>Profile distribution strategy</label>
+                <span className="form-description">
+                  Controls how probe connections are spread across M3U profiles within the same account.{' '}
+                  <strong>Fill First</strong> uses the default profile until it hits its connection limit, then spills over to the next profile — best when you want to minimize the number of profiles in use.{' '}
+                  <strong>Round Robin</strong> cycles through profiles one at a time so each gets an equal share of probes — good for even wear across profiles.{' '}
+                  <strong>Least Loaded</strong> always picks the profile with the most remaining capacity — best for maximizing throughput when profiles have different connection limits.
+                </span>
+                <CustomSelect
+                  value={profileDistributionStrategy}
+                  onChange={(value) => setProfileDistributionStrategy(value)}
+                  options={[
+                    { value: 'fill_first', label: 'Fill First' },
+                    { value: 'round_robin', label: 'Round Robin' },
+                    { value: 'least_loaded', label: 'Least Loaded' },
+                  ]}
+                />
+              </div>
+              )}
+            </>)}
 
             <div className="form-group-vertical">
               <label htmlFor="skipRecentlyProbedHours">Skip recently probed streams (hours)</label>

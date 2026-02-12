@@ -334,6 +334,7 @@ async def startup_event():
                 bitrate_sample_duration=settings.bitrate_sample_duration,
                 parallel_probing_enabled=settings.parallel_probing_enabled,
                 max_concurrent_probes=settings.max_concurrent_probes,
+                profile_distribution_strategy=settings.profile_distribution_strategy,
                 skip_recently_probed_hours=settings.skip_recently_probed_hours,
                 refresh_m3us_before_probe=settings.refresh_m3us_before_probe,
                 auto_reorder_after_probe=settings.auto_reorder_after_probe,
@@ -683,6 +684,7 @@ class SettingsRequest(BaseModel):
     bitrate_sample_duration: int = 10  # Duration in seconds to sample stream for bitrate (10, 20, or 30)
     parallel_probing_enabled: bool = True  # Probe multiple streams from different M3Us simultaneously
     max_concurrent_probes: int = 8  # Max simultaneous probes when parallel probing is enabled (1-16)
+    profile_distribution_strategy: str = "fill_first"  # How to distribute probes across M3U profiles: fill_first, round_robin, least_loaded
     skip_recently_probed_hours: int = 0  # Skip streams successfully probed within last N hours (0 = always probe)
     refresh_m3us_before_probe: bool = True  # Refresh all M3U accounts before starting probe
     auto_reorder_after_probe: bool = False  # Automatically reorder streams in channels after probe completes
@@ -746,6 +748,7 @@ class SettingsResponse(BaseModel):
     bitrate_sample_duration: int
     parallel_probing_enabled: bool  # Probe multiple streams from different M3Us simultaneously
     max_concurrent_probes: int  # Max simultaneous probes when parallel probing is enabled (1-16)
+    profile_distribution_strategy: str  # How to distribute probes across M3U profiles: fill_first, round_robin, least_loaded
     skip_recently_probed_hours: int  # Skip streams successfully probed within last N hours (0 = always probe)
     refresh_m3us_before_probe: bool  # Refresh all M3U accounts before starting probe
     auto_reorder_after_probe: bool  # Automatically reorder streams in channels after probe completes
@@ -838,6 +841,7 @@ async def get_current_settings():
         bitrate_sample_duration=settings.bitrate_sample_duration,
         parallel_probing_enabled=settings.parallel_probing_enabled,
         max_concurrent_probes=settings.max_concurrent_probes,
+        profile_distribution_strategy=settings.profile_distribution_strategy,
         skip_recently_probed_hours=settings.skip_recently_probed_hours,
         refresh_m3us_before_probe=settings.refresh_m3us_before_probe,
         auto_reorder_after_probe=settings.auto_reorder_after_probe,
@@ -933,6 +937,7 @@ async def update_settings(request: SettingsRequest):
         bitrate_sample_duration=request.bitrate_sample_duration,
         parallel_probing_enabled=request.parallel_probing_enabled,
         max_concurrent_probes=request.max_concurrent_probes,
+        profile_distribution_strategy=request.profile_distribution_strategy,
         skip_recently_probed_hours=request.skip_recently_probed_hours,
         refresh_m3us_before_probe=request.refresh_m3us_before_probe,
         auto_reorder_after_probe=request.auto_reorder_after_probe,
@@ -1007,12 +1012,14 @@ async def update_settings(request: SettingsRequest):
 
     # Update prober's parallel probing settings without requiring restart
     if (new_settings.parallel_probing_enabled != current_settings.parallel_probing_enabled or
-            new_settings.max_concurrent_probes != current_settings.max_concurrent_probes):
+            new_settings.max_concurrent_probes != current_settings.max_concurrent_probes or
+            new_settings.profile_distribution_strategy != current_settings.profile_distribution_strategy):
         prober = get_prober()
         if prober:
             prober.update_probing_settings(
                 new_settings.parallel_probing_enabled,
-                new_settings.max_concurrent_probes
+                new_settings.max_concurrent_probes,
+                new_settings.profile_distribution_strategy
             )
             logger.info("Updated prober parallel probing settings from settings")
 
@@ -1329,6 +1336,7 @@ async def restart_services():
                 bitrate_sample_duration=settings.bitrate_sample_duration,
                 parallel_probing_enabled=settings.parallel_probing_enabled,
                 max_concurrent_probes=settings.max_concurrent_probes,
+                profile_distribution_strategy=settings.profile_distribution_strategy,
                 skip_recently_probed_hours=settings.skip_recently_probed_hours,
                 refresh_m3us_before_probe=settings.refresh_m3us_before_probe,
                 auto_reorder_after_probe=settings.auto_reorder_after_probe,
