@@ -911,13 +911,16 @@ class AutoCreationEngine:
                     normalize_names=getattr(winning_rule, 'normalize_names', False)
                 )
 
-                actions_log.append({
+                action_entry = {
                     "type": action_result.action_type,
                     "description": action_result.description,
                     "success": action_result.success,
                     "entity_id": action_result.entity_id,
                     "error": action_result.error
-                })
+                }
+                if action_result.details:
+                    action_entry["details"] = action_result.details
+                actions_log.append(action_entry)
 
                 # Check for stop_processing action
                 if action.type == ActionType.STOP_PROCESSING.value:

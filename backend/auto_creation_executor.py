@@ -32,6 +32,7 @@ class ActionResult:
     skipped: bool = False  # True if action was skipped (e.g., channel exists)
     previous_state: Optional[dict] = None  # For rollback
     error: Optional[str] = None
+    details: list[str] = field(default_factory=list)  # Additional context (normalization, group, etc.)
 
 
 @dataclass
@@ -334,6 +335,15 @@ class ActionExecutor:
                 logger.warning(f"Failed to create logo from '{logo_url}': {e}")
         return None
 
+    def _get_group_name(self, group_id) -> Optional[str]:
+        """Resolve a group ID to its name."""
+        if not group_id:
+            return None
+        group = self._group_by_id.get(group_id) or self._created_groups.get(
+            next((k for k, v in self._created_groups.items() if v.get("id") == group_id), None)
+        )
+        return group.get("name") if group else None
+
     async def _execute_create_channel(self, action: Action, stream_ctx: StreamContext,
                                        exec_ctx: ExecutionContext, template_ctx: dict,
                                        rule_target_group_id: int = None,
@@ -345,12 +355,17 @@ class ActionExecutor:
         logger.debug(f"[CreateChannel] Template '{name_template}' expanded to '{channel_name}'")
         channel_name = self._apply_name_transform(channel_name, params)
 
+        # Track details for the execution log
+        action_details = []
+
         # Apply normalization engine if enabled
+        pre_norm_name = channel_name
         if normalize_names and self._normalization_engine:
             try:
                 norm_result = self._normalization_engine.normalize(channel_name)
                 if norm_result.normalized != channel_name:
                     logger.debug(f"Normalized channel name: '{channel_name}' -> '{norm_result.normalized}'")
+                    action_details.append(f"Name normalized: '{channel_name}' \u2192 '{norm_result.normalized}'")
                     channel_name = norm_result.normalized
             except Exception as e:
                 logger.warning(f"Failed to normalize channel name '{channel_name}': {e}")
@@ -368,6 +383,20 @@ class ActionExecutor:
         logger.debug(f"[CreateChannel] Lookup '{channel_name}': {'found id=' + str(existing['id']) if existing else 'not found'}")
 
         if existing:
+            existing_group_name = self._get_group_name(existing.get("channel_group_id"))
+            if existing_group_name:
+                action_details.append(f"Existing channel found in group '{existing_group_name}'")
+
+            # When normalization collapsed a distinct name into an existing one,
+            # explain how to keep them separate
+            normalized_into_existing = (pre_norm_name != channel_name)
+            if normalized_into_existing:
+                action_details.append(
+                    f"'{pre_norm_name}' became '{channel_name}' after normalization and matched an existing channel. "
+                    f"To create separate channels instead: use separate rules with different target groups "
+                    f"(e.g., one per country), or adjust the name template to keep the distinguishing text."
+                )
+
             if if_exists == "skip":
                 exec_ctx.current_channel_id = existing["id"]
                 return ActionResult(
@@ -377,11 +406,14 @@ class ActionExecutor:
                     entity_type="channel",
                     entity_id=existing["id"],
                     entity_name=channel_name,
-                    skipped=True
+                    skipped=True,
+                    details=action_details
                 )
             elif if_exists == "merge":
                 # Add stream to existing channel
-                return await self._add_stream_to_channel(existing, stream_ctx, exec_ctx)
+                result = await self._add_stream_to_channel(existing, stream_ctx, exec_ctx)
+                result.details = action_details + result.details
+                return result
             elif if_exists == "update":
                 # Update existing channel properties
                 return await self._update_channel(existing, stream_ctx, exec_ctx, params)
@@ -395,6 +427,10 @@ class ActionExecutor:
         channel_name = self._apply_channel_number_in_name(channel_name, channel_number)
         if channel_name != base_name:
             logger.debug(f"[CreateChannel] Name with number prefix: '{base_name}' -> '{channel_name}'")
+
+        # Resolve group name for descriptions
+        group_name = self._get_group_name(group_id)
+        group_label = f"'{group_name}'" if group_name else str(group_id)
 
         # Create new channel
         if exec_ctx.dry_run:
@@ -410,10 +446,11 @@ class ActionExecutor:
             return ActionResult(
                 success=True,
                 action_type=action.type,
-                description=f"Would create channel '{channel_name}' (#{channel_number}) in group {group_id}",
+                description=f"Would create channel '{channel_name}' (#{channel_number}) in group {group_label}",
                 entity_type="channel",
                 entity_name=channel_name,
-                created=True
+                created=True,
+                details=action_details
             )
 
         # Create channel via API
@@ -446,7 +483,7 @@ class ActionExecutor:
             # Assign default channel profiles if configured
             profile_desc = await self._assign_default_profiles(new_channel["id"])
 
-            desc = f"Created channel '{channel_name}' (#{channel_number})"
+            desc = f"Created channel '{channel_name}' (#{channel_number}) in group {group_label}"
             if profile_desc:
                 desc += f", {profile_desc}"
 
@@ -457,7 +494,8 @@ class ActionExecutor:
                 entity_type="channel",
                 entity_id=new_channel["id"],
                 entity_name=channel_name,
-                created=True
+                created=True,
+                details=action_details
             )
 
         except Exception as e:
@@ -482,18 +520,21 @@ class ActionExecutor:
             f"to channel '{channel_name}' (id={channel_id}), current streams={current_streams}"
         )
 
+        stream_count = len(current_streams)
+
         if stream_ctx.stream_id in current_streams:
             exec_ctx.current_channel_id = channel_id
             return ActionResult(
                 success=True,
                 action_type="merge_stream",
-                description=f"Stream already in channel '{channel_name}'",
+                description=f"Stream already in channel '{channel_name}' ({stream_count} streams)",
                 entity_type="channel",
                 entity_id=channel_id,
                 entity_name=channel_name,
                 skipped=True
             )
 
+        new_count = stream_count + 1
         if exec_ctx.dry_run:
             # Update cached channel so subsequent dry-run merges see this stream
             channel["streams"] = current_streams + [stream_ctx.stream_id]
@@ -501,7 +542,7 @@ class ActionExecutor:
             return ActionResult(
                 success=True,
                 action_type="merge_stream",
-                description=f"Would add stream to channel '{channel_name}'",
+                description=f"Would add stream to channel '{channel_name}' (stream {new_count})",
                 entity_type="channel",
                 entity_id=channel_id,
                 entity_name=channel_name,
@@ -525,7 +566,7 @@ class ActionExecutor:
             return ActionResult(
                 success=True,
                 action_type="merge_stream",
-                description=f"Added stream to channel '{channel_name}'",
+                description=f"Added stream to channel '{channel_name}' (stream {new_count})",
                 entity_type="channel",
                 entity_id=channel_id,
                 entity_name=channel_name,
