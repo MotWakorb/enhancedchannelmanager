@@ -55,7 +55,7 @@ Summary: Quality gates → Update bead → Bump version → Rebuild → Close be
 
 **Quality gate commands:**
 - Backend: `python -m py_compile backend/main.py && cd backend && python -m pytest tests/ -q`
-- Frontend: `cd frontend && npm test && npm run build`
+- Frontend: `cd frontend && npm run lint && npm test && npm run build`
 
 **Non-negotiable rules:**
 - Work is NOT complete until `git push` succeeds
