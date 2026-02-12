@@ -2441,7 +2441,8 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                   min="1"
                   max="100"
                   value={digestSettings.min_changes_threshold}
-                  onChange={(e) => handleDigestSettingChange('min_changes_threshold', Math.max(1, parseInt(e.target.value) || 1))}
+                  onChange={(e) => handleDigestSettingChange('min_changes_threshold', e.target.value === '' ? 1 : parseInt(e.target.value))}
+                  onBlur={() => handleDigestSettingChange('min_changes_threshold', Math.max(1, Math.min(100, digestSettings.min_changes_threshold || 1)))}
                 />
               </div>
             </div>
@@ -2679,7 +2680,8 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                 min="1"
                 max={totalStreamCount}
                 value={streamProbeBatchSize}
-                onChange={(e) => setStreamProbeBatchSize(Math.max(1, Math.min(totalStreamCount, parseInt(e.target.value) || 10)))}
+                onChange={(e) => setStreamProbeBatchSize(e.target.value === '' ? 10 : parseInt(e.target.value))}
+                onBlur={() => setStreamProbeBatchSize(Math.max(1, Math.min(totalStreamCount, streamProbeBatchSize || 10)))}
               />
             </div>
 
@@ -2692,7 +2694,8 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                 min="5"
                 max="120"
                 value={streamProbeTimeout}
-                onChange={(e) => setStreamProbeTimeout(Math.max(5, Math.min(120, parseInt(e.target.value) || 30)))}
+                onChange={(e) => setStreamProbeTimeout(e.target.value === '' ? 30 : parseInt(e.target.value))}
+                onBlur={() => setStreamProbeTimeout(Math.max(5, Math.min(120, streamProbeTimeout || 30)))}
               />
             </div>
 
@@ -2722,7 +2725,8 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                 min="50"
                 max="1000"
                 value={streamFetchPageLimit}
-                onChange={(e) => setStreamFetchPageLimit(Math.max(50, Math.min(1000, parseInt(e.target.value) || 200)))}
+                onChange={(e) => setStreamFetchPageLimit(e.target.value === '' ? 200 : parseInt(e.target.value))}
+                onBlur={() => setStreamFetchPageLimit(Math.max(50, Math.min(1000, streamFetchPageLimit || 200)))}
               />
             </div>
 
@@ -2819,7 +2823,8 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                 min="0"
                 max="168"
                 value={skipRecentlyProbedHours}
-                onChange={(e) => setSkipRecentlyProbedHours(Math.max(0, Math.min(168, parseInt(e.target.value) || 0)))}
+                onChange={(e) => setSkipRecentlyProbedHours(e.target.value === '' ? 0 : parseInt(e.target.value))}
+                onBlur={() => setSkipRecentlyProbedHours(Math.max(0, Math.min(168, skipRecentlyProbedHours || 0)))}
               />
             </div>
 
@@ -2864,7 +2869,8 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                 min="0"
                 max="5"
                 value={probeRetryCount}
-                onChange={(e) => setProbeRetryCount(Math.max(0, Math.min(5, parseInt(e.target.value) || 0)))}
+                onChange={(e) => setProbeRetryCount(e.target.value === '' ? 0 : parseInt(e.target.value))}
+                onBlur={() => setProbeRetryCount(Math.max(0, Math.min(5, probeRetryCount || 0)))}
               />
             </div>
 
@@ -2879,7 +2885,8 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                 min="1"
                 max="30"
                 value={probeRetryDelay}
-                onChange={(e) => setProbeRetryDelay(Math.max(1, Math.min(30, parseInt(e.target.value) || 1)))}
+                onChange={(e) => setProbeRetryDelay(e.target.value === '' ? 1 : parseInt(e.target.value))}
+                onBlur={() => setProbeRetryDelay(Math.max(1, Math.min(30, probeRetryDelay || 1)))}
               />
             </div>
 
