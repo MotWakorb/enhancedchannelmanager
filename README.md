@@ -90,6 +90,7 @@ Build complex matching logic with AND/OR connectors:
 - **Quality** - Minimum/maximum resolution (2160p, 1080p, 720p, 480p, 360p)
 - **Codec** - Filter by video codec (H.264, HEVC, etc.)
 - **Channel Exists** - Check if channel already exists (by name, regex, or group)
+- **Normalized Match in Group** - Check if a stream's normalized name matches any channel in a specified channel group (strips country prefixes and applies normalization engine)
 
 #### Actions
 Define what happens when conditions match:
@@ -100,20 +101,22 @@ Define what happens when conditions match:
 - **Set Channel Number** - Auto-assign or specify channel numbering (including ranges)
 - **Set Variable** - Define reusable variables with regex extraction for use in templates
 - **Name Transform** - Apply regex find/replace to channel names
-- **If Exists Behavior** - Skip, merge, update, or use existing when channels already exist
+- **If Exists Behavior** - Skip, merge (create if new), merge only (existing only), update, or use existing when channels already exist
 
 #### Execution
 - **Dry Run Mode** - Preview all changes before applying
 - **Execute Mode** - Apply changes with full audit trail
 - **Run Single Rule** - Execute or dry-run a specific rule in isolation
 - **Rollback** - Undo a completed execution to restore previous state
-- **Execution History** - View past runs with duration, match counts, and created/updated/merged counts
+- **Execution History** - View past runs with duration, match counts, and created/updated/merged/skipped counts
+- **Running Indicator** - Live "Running" status in execution history while a pipeline is executing
 - **Execution Log** - Per-stream granular log showing condition evaluation, matched rules, and action results
 
 #### Smart Stream Handling
 - **Quality-Based Sorting** - Sort streams within channels by resolution (highest first)
 - **Probe on Sort** - Optionally probe unprobed streams for resolution data before sorting
 - **Multi-Criteria Sort** - Sort by stream name, natural name, group, or quality
+- **Auto-Find Channels** - Merge streams action with `target: auto` automatically finds existing channels by normalized name, stripping country prefixes and channel number prefixes (e.g., "US: Discovery" finds channel "113 | Discovery")
 - **User Settings Integration** - Honors channel numbering, default profile, timezone preference, and auto-rename settings
 
 #### Orphan Reconciliation
@@ -771,7 +774,7 @@ Comprehensive authentication and user management:
 ### ~~v0.12.0 - Auto-Creation Pipeline~~ ✅ Implemented
 Rules engine for automatic channel management:
 - **Rule-Based Automation** - Create rules with conditions and actions to automatically create channels, merge streams, and assign metadata
-- **Condition Builder** - Match streams by name, group, provider, quality, codec, TVG ID, logo, and more with AND/OR logic
+- **Condition Builder** - Match streams by name, group, provider, quality, codec, TVG ID, logo, normalized match in group, and more with AND/OR logic
 - **Action Executor** - Create channels/groups, merge streams, assign logos/EPG/profiles, set channel numbers, define variables
 - **Template Variables** - Dynamic naming with `{stream_name}`, `{stream_group}`, `{quality}`, `{provider}`, and custom variables
 - **YAML Import/Export** - Share and version control your automation rules
@@ -1240,27 +1243,6 @@ Interactive API documentation is available at `/api/docs` (Swagger UI) and `/api
 | `POST /api/tls/https/stop` | Stop HTTPS server |
 | `POST /api/tls/https/restart` | Restart HTTPS server |
 | `GET /api/tls/https/status` | Get HTTPS server status |
-
-### Auto-Creation
-- `GET /api/auto-creation/rules` - List all rules sorted by priority
-- `GET /api/auto-creation/rules/{id}` - Get rule details
-- `POST /api/auto-creation/rules` - Create rule
-- `PUT /api/auto-creation/rules/{id}` - Update rule
-- `DELETE /api/auto-creation/rules/{id}` - Delete rule
-- `POST /api/auto-creation/rules/reorder` - Reorder rules by priority
-- `POST /api/auto-creation/rules/{id}/toggle` - Toggle rule enabled state
-- `POST /api/auto-creation/rules/{id}/duplicate` - Duplicate a rule
-- `POST /api/auto-creation/rules/{id}/run` - Run a single rule (supports dry_run query param)
-- `POST /api/auto-creation/run` - Run the full pipeline (execute or dry_run mode)
-- `GET /api/auto-creation/executions` - Get execution history (paginated)
-- `GET /api/auto-creation/executions/{id}` - Get execution details (with optional log and entities)
-- `POST /api/auto-creation/executions/{id}/rollback` - Rollback an execution
-- `POST /api/auto-creation/validate` - Validate a rule definition
-- `GET /api/auto-creation/export/yaml` - Export all rules as YAML
-- `POST /api/auto-creation/import/yaml` - Import rules from YAML
-- `GET /api/auto-creation/schema/conditions` - Get available condition types
-- `GET /api/auto-creation/schema/actions` - Get available action types
-- `GET /api/auto-creation/schema/template-variables` - Get available template variables
 
 ### Authentication
 
