@@ -583,18 +583,40 @@ class StreamProber:
             state["consecutive_successes"] = 0
             logger.info(f"[RAMP-UP] Account {account_id}: ramped to {state['current_limit']} concurrent probes")
 
+    def _is_overload_error(self, error_message: str) -> bool:
+        """Check if an error indicates server overload (should trigger ramp-down).
+
+        Only 429 and 5XX errors suggest the server can't handle the load.
+        Dead streams (404, connection timeout, invalid data) should NOT
+        cause ramp-down because the server isn't overloaded — the stream
+        is simply gone or unreachable.
+        """
+        overload_patterns = ("429", "Too Many Requests", "5XX", "500", "502", "503", "520")
+        return any(p in error_message for p in overload_patterns)
+
     def _record_probe_failure(self, account_id: int, error_message: str):
-        """Record failure. Reduce limit, hold account, reset success window."""
+        """Record failure. Only ramp-down/hold for overload errors (429/5XX).
+
+        Dead streams (404, connection timeout, invalid data) reset the
+        consecutive success counter but do NOT reduce concurrency or hold
+        the account, since the server isn't overloaded.
+        """
         state = self._account_ramp_state.get(account_id)
         if not state:
             return
         state["total_failures"] += 1
         state["consecutive_successes"] = 0
-        old_limit = state["current_limit"]
-        state["current_limit"] = max(1, old_limit - RAMP_FAILURE_REDUCTION)
-        state["hold_until"] = time.time() + RAMP_FAILURE_HOLD_SECONDS
-        logger.warning(f"[RAMP-DOWN] Account {account_id}: limit {old_limit}->{state['current_limit']}, "
-                       f"hold {RAMP_FAILURE_HOLD_SECONDS}s")
+
+        if self._is_overload_error(error_message):
+            old_limit = state["current_limit"]
+            state["current_limit"] = max(1, old_limit - RAMP_FAILURE_REDUCTION)
+            state["hold_until"] = time.time() + RAMP_FAILURE_HOLD_SECONDS
+            logger.warning(f"[RAMP-DOWN] Account {account_id}: overload detected, "
+                           f"limit {old_limit}->{state['current_limit']}, "
+                           f"hold {RAMP_FAILURE_HOLD_SECONDS}s — {error_message[:100]}")
+        else:
+            logger.debug(f"[RAMP-NODOWN] Account {account_id}: non-overload failure, "
+                         f"no ramp-down — {error_message[:100]}")
 
     async def start(self):
         """Initialize the stream prober (check ffprobe availability).
@@ -769,10 +791,12 @@ class StreamProber:
             if not error_text:
                 error_text = f"Exit code {process.returncode} (no stderr output)"
 
-            # Retry on transient error patterns (HTTP errors, I/O errors, connection drops).
-            # Retry the actual ffprobe — no HEAD check, since HEAD is unreliable for IPTV streams.
-            transient_patterns = ("4XX", "5XX", "Server returned", "Input/output error", "Stream ends prematurely", "Connection reset", "Broken pipe", "Invalid data found")
-            if any(p in error_text for p in transient_patterns) and _retry_attempt < self.probe_retry_count:
+            # Retry only on genuinely transient errors (server errors, connection drops).
+            # Do NOT retry 404 (dead stream), connection timeouts (server down), or
+            # invalid data (corrupt stream) — these won't succeed on retry and just
+            # waste semaphore time.
+            transient_patterns = ("5XX", "500", "502", "503", "520", "Input/output error", "Stream ends prematurely", "Connection reset", "Broken pipe")
+            if any(p in error_text for p in transient_patterns) and "404" not in error_text and _retry_attempt < self.probe_retry_count:
                 logger.info(f"[PROBE-RETRY] Transient error — retry {_retry_attempt + 1}/{self.probe_retry_count} in {self.probe_retry_delay}s: {url[:80]}...")
                 await asyncio.sleep(self.probe_retry_delay)
                 return await self._run_ffprobe(url, _retry_attempt=_retry_attempt + 1)
@@ -1933,8 +1957,12 @@ class StreamProber:
                     if active_tasks:
                         done, _ = await asyncio.wait(active_tasks.keys(), return_when=asyncio.FIRST_COMPLETED)
 
+                        completed_had_hdhomerun = False
                         for task in done:
                             stream, display_string = active_tasks.pop(task)
+                            stream_url = stream.get("url", "")
+                            if ':5004/' in stream_url or 'hdhomerun' in stream_url.lower():
+                                completed_had_hdhomerun = True
                             try:
                                 probe_status, stream_info = task.result()
                                 async with results_lock:
@@ -1955,9 +1983,9 @@ class StreamProber:
                                 self._probe_progress_current = probed_count
                                 await self._update_probe_notification()
 
-                        # Small delay after probes complete to let devices (like HDHomeRun) release tuners
-                        # This prevents rapid-fire requests that can cause 5XX errors
-                        await asyncio.sleep(0.5)
+                        # Small delay only for HDHomeRun devices to let tuners release
+                        if completed_had_hdhomerun:
+                            await asyncio.sleep(0.5)
                     elif not pending_streams:
                         # No active tasks and no pending streams - we're done
                         break
