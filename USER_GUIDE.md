@@ -2,8 +2,6 @@
 
 A comprehensive guide to using Enhanced Channel Manager for IPTV channel management with Dispatcharr.
 
-> **Note**: This guide includes placeholder image references. To add screenshots, capture the described screens and save them to a `docs/images/` folder with the specified filenames.
-
 ---
 
 ## Table of Contents
