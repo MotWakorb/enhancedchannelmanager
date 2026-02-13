@@ -1195,9 +1195,18 @@ class StreamProber:
         Unlike _get_all_m3u_active_connections which aggregates to account level,
         this returns counts at the profile level for profile-aware probing.
 
+        Uses a 5-second cache to avoid hammering the Dispatcharr API on every
+        loop iteration (~660 calls per probe run without caching).
+
         Returns:
             Dict mapping profile_id to active connection count.
         """
+        # Return cached result if fresh (within 5 seconds)
+        now = time.time()
+        cache_age = now - getattr(self, '_dispatcharr_conns_cache_time', 0.0)
+        if cache_age < 5.0 and hasattr(self, '_dispatcharr_conns_cache'):
+            return self._dispatcharr_conns_cache
+
         try:
             channel_stats = await self.client.get_channel_stats()
             channels = channel_stats.get("channels", [])
@@ -1206,10 +1215,22 @@ class StreamProber:
                 profile_id = ch.get("m3u_profile_id")
                 if profile_id:
                     counts[profile_id] = counts.get(profile_id, 0) + 1
+            if channels:
+                logger.info(f"[DISPATCHARR-CONNS] {len(channels)} active channels, "
+                            f"profile connection counts: {counts}")
+                # Log channel keys if m3u_profile_id is missing — helps debug
+                # data structure mismatches with different Dispatcharr versions
+                if not counts:
+                    sample_keys = list(channels[0].keys())
+                    logger.warning(f"[DISPATCHARR-CONNS] Active channels found but no m3u_profile_id! "
+                                   f"Channel keys: {sample_keys}")
+            # Cache the result
+            self._dispatcharr_conns_cache = counts
+            self._dispatcharr_conns_cache_time = now
             return counts
         except Exception as e:
             logger.warning(f"Failed to fetch profile connection counts: {e}")
-            return {}
+            return getattr(self, '_dispatcharr_conns_cache', {})
 
     def _profile_has_capacity(self, profile: dict, dispatcharr_profile_conns: dict,
                               our_profile_conns: dict) -> bool:
@@ -1798,6 +1819,8 @@ class StreamProber:
                     for pid, cnt in dispatcharr_profile_conns.items():
                         aid = self._profile_to_account_map.get(pid, pid)
                         dispatcharr_connections[aid] = dispatcharr_connections.get(aid, 0) + cnt
+                    if dispatcharr_connections:
+                        logger.info(f"[DISPATCHARR-CONNS] Account-level active connections: {dispatcharr_connections}")
 
                     # Try to start new probes for streams that have available M3U capacity
                     streams_started_this_round = []

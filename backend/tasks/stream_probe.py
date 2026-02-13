@@ -101,6 +101,10 @@ class StreamProbeTask(TaskScheduler):
         """Set channel groups to filter by for this run."""
         self._channel_groups = groups
 
+    async def _create_progress_notification(self):
+        """Skip task engine notification — StreamProber creates its own."""
+        pass
+
     async def validate_config(self) -> tuple[bool, str]:
         """Validate that we have a prober instance."""
         if self._prober is None:

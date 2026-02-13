@@ -495,6 +495,7 @@ interface DroppableGroupHeaderProps {
   isSortingByQuality?: boolean;
   enabledCriteria?: Record<'resolution' | 'bitrate' | 'framerate' | 'm3u_priority' | 'audio_channels', boolean>;
   failedChannelCount?: number;
+  successChannelCount?: number;
 }
 
 const DroppableGroupHeader = memo(function DroppableGroupHeader({
@@ -523,6 +524,7 @@ const DroppableGroupHeader = memo(function DroppableGroupHeader({
   isSortingByQuality = false,
   enabledCriteria = { resolution: true, bitrate: true, framerate: true },
   failedChannelCount = 0,
+  successChannelCount = 0,
 }: DroppableGroupHeaderProps) {
   const droppableId = `group-${groupId}`;
   const { isOver, setNodeRef } = useDroppable({
@@ -677,10 +679,10 @@ const DroppableGroupHeader = memo(function DroppableGroupHeader({
         </span>
       )}
       <span className="group-count">{channelCount}</span>
-      {failedChannelCount > 0 && (
-        <span className="group-good-indicator" title={`${channelCount - failedChannelCount} channel${channelCount - failedChannelCount !== 1 ? 's' : ''} with working streams`}>
+      {successChannelCount > 0 && (
+        <span className="group-good-indicator" title={`${successChannelCount} channel${successChannelCount !== 1 ? 's' : ''} with working streams`}>
           <span className="material-icons">check_circle</span>
-          <span className="good-count">{channelCount - failedChannelCount}</span>
+          <span className="good-count">{successChannelCount}</span>
         </span>
       )}
       {failedChannelCount > 0 && (
@@ -4552,6 +4554,14 @@ export function ChannelsPane({
       })
     ).length;
 
+    // Count channels with at least one successfully probed stream
+    const groupSuccessChannelCount = groupChannels.filter(channel =>
+      channel.streams.some(streamId => {
+        const stats = streamStatsMap.get(streamId);
+        return stats && stats.probe_status === 'success';
+      })
+    ).length;
+
     return (
       <div key={groupId} className={`channel-group ${isEmpty ? 'empty-group' : ''}`}>
         <SortableGroupHeader
@@ -4579,6 +4589,7 @@ export function ChannelsPane({
           isSortingByQuality={bulkSortingByQuality}
           enabledCriteria={channelDefaults?.streamSortEnabled}
           failedChannelCount={groupFailedChannelCount}
+          successChannelCount={groupSuccessChannelCount}
         />
         {isExpanded && isEmpty && (
           <div className="group-channels empty-group-placeholder">
