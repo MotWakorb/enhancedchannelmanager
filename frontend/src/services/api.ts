@@ -46,14 +46,12 @@ import type {
   TestTagsResponse,
   // M3U Change Tracking
   M3USnapshot,
-  M3UChangeLog,
   M3UChangesResponse,
   M3UChangeSummary,
   M3UDigestSettings,
   M3UDigestSettingsUpdate,
   M3UChangeType,
   // Authentication
-  User,
   AuthStatus,
   AuthProvidersResponse,
   LoginResponse,

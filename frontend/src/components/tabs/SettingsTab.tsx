@@ -14,6 +14,7 @@ import type { ChannelProfile, M3UDigestSettings, M3UDigestFrequency } from '../.
 import { logger } from '../../utils/logger';
 import { copyToClipboard } from '../../utils/clipboard';
 import type { LogLevel as FrontendLogLevel } from '../../utils/logger';
+import type { VLCWindow } from '../../utils/vlc';
 import { DeleteOrphanedGroupsModal } from '../DeleteOrphanedGroupsModal';
 import { ScheduledTasksSection } from '../ScheduledTasksSection';
 import { SettingsModal } from '../SettingsModal';
@@ -437,7 +438,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
           setProbeProgress(progress);
           setProbingAll(true);
         }
-      } catch (err) {
+      } catch (_err) {
         // Silently ignore errors - this is background polling
       }
     };
@@ -605,6 +606,8 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
     onThemeChange?.(newTheme);
   };
 
+  //TODO do we need this?
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const handleTest = async () => {
     if (!url || !username || !password) {
       notifications.error('URL, username, and password are required to test connection');
@@ -620,7 +623,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       } else {
         notifications.error(result.message, 'Connection Test');
       }
-    } catch (err) {
+    } catch (_err) {
       notifications.error('Failed to test connection', 'Connection Test');
     } finally {
       setTesting(false);
@@ -640,7 +643,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       } else {
         notifications.error('Failed to reset statistics', 'Reset Statistics');
       }
-    } catch (err) {
+    } catch (_err) {
       notifications.error('Failed to reset statistics', 'Reset Statistics');
     } finally {
       setResettingStats(false);
@@ -748,7 +751,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         logger.info(`Frontend log level changed to ${frontendLevel}`);
       }
       // Update global VLC settings for vlc utility to access
-      (window as any).__vlcSettings = { behavior: vlcOpenBehavior };
+      (window as VLCWindow).__vlcSettings = { behavior: vlcOpenBehavior };
       setOriginalUrl(url);
       setOriginalUsername(username);
       setPassword('');
@@ -756,7 +759,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       // Check if any settings that require a restart have changed
       const pollOrTimezoneChanged = statsPollInterval !== originalPollInterval || userTimezone !== originalTimezone;
       const probeSettingsChanged = autoReorderAfterProbe !== originalAutoReorder ||
-                                   refreshM3usBeforeProbe !== originalRefreshM3usBeforeProbe;
+        refreshM3usBeforeProbe !== originalRefreshM3usBeforeProbe;
 
       // Debug logging for restart detection
       logger.info(`[RESTART-CHECK] Poll interval: ${statsPollInterval} vs original ${originalPollInterval}`);
@@ -923,13 +926,14 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       } else {
         notifications.error(result.message || 'Failed to restart services', 'Restart Failed');
       }
-    } catch (err) {
+    } catch (_err) {
       notifications.error('Failed to restart services', 'Restart Failed');
     } finally {
       setRestarting(false);
     }
   };
-
+  // TODO is this needed?
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const handleProbeAllStreams = async () => {
     setProbingAll(true);
     setProbeProgress(null);
@@ -1999,7 +2003,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       } else {
         notifications.error(result.message, 'SMTP Test');
       }
-    } catch (err) {
+    } catch (_err) {
       notifications.error('Failed to test SMTP connection', 'SMTP Test');
     } finally {
       setSmtpTesting(false);
@@ -2057,7 +2061,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       } else {
         notifications.error(result.message, 'Telegram Test');
       }
-    } catch (err) {
+    } catch (_err) {
       notifications.error('Failed to test Telegram bot', 'Telegram Test');
     } finally {
       setTelegramTesting(false);
@@ -2651,240 +2655,240 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         </p>
 
         <div className="settings-group" style={{ marginTop: '1rem' }}>
-            <div className="form-group-vertical">
-              <label htmlFor="probeBatchSize">Batch size</label>
-              <span className="form-description">Streams to probe per scheduled cycle (1-{totalStreamCount})</span>
-              <input
-                id="probeBatchSize"
-                type="number"
-                min="1"
-                max={totalStreamCount}
-                value={streamProbeBatchSize}
-                onChange={(e) => setStreamProbeBatchSize(Math.max(1, Math.min(totalStreamCount, parseInt(e.target.value) || 10)))}
-              />
-            </div>
-
-            <div className="form-group-vertical">
-              <label htmlFor="probeTimeout">Probe timeout (seconds)</label>
-              <span className="form-description">Timeout for each probe attempt (5-120 seconds)</span>
-              <input
-                id="probeTimeout"
-                type="number"
-                min="5"
-                max="120"
-                value={streamProbeTimeout}
-                onChange={(e) => setStreamProbeTimeout(Math.max(5, Math.min(120, parseInt(e.target.value) || 30)))}
-              />
-            </div>
-
-            <div className="form-group-vertical">
-              <label htmlFor="bitrateSampleDuration">Bitrate measurement duration</label>
-              <span className="form-description">How long to sample streams when measuring bitrate</span>
-              <CustomSelect
-                value={String(bitrateSampleDuration)}
-                onChange={(val) => setBitrateSampleDuration(Number(val))}
-                options={[
-                  { value: '10', label: '10 seconds' },
-                  { value: '20', label: '20 seconds' },
-                  { value: '30', label: '30 seconds' },
-                ]}
-              />
-            </div>
-
-            <div className="form-group-vertical">
-              <label htmlFor="streamFetchPageLimit">Stream fetch page limit</label>
-              <span className="form-description">
-                Max pages when fetching streams from Dispatcharr (×500 = max streams).
-                Default 200 = 100K streams. Increase if you have more streams.
-              </span>
-              <input
-                id="streamFetchPageLimit"
-                type="number"
-                min="50"
-                max="1000"
-                value={streamFetchPageLimit}
-                onChange={(e) => setStreamFetchPageLimit(Math.max(50, Math.min(1000, parseInt(e.target.value) || 200)))}
-              />
-            </div>
-
-            <div className="form-group-vertical">
-              <label className="checkbox-label">
-                <input
-                  type="checkbox"
-                  checked={parallelProbingEnabled}
-                  onChange={(e) => setParallelProbingEnabled(e.target.checked)}
-                />
-                Enable parallel probing
-              </label>
-              <span className="form-description">
-                When enabled, streams from different M3U accounts are probed simultaneously for faster completion.
-                Disable for sequential one-at-a-time probing.
-              </span>
-            </div>
-
-            {parallelProbingEnabled && (
-              <div className="form-group-vertical">
-                <label htmlFor="maxConcurrentProbes">Max concurrent probes</label>
-                <span className="form-description">
-                  Maximum number of streams to probe simultaneously (1-16).
-                  {m3uAccountsMaxStreams.length > 0 && (
-                    <>
-                      {' '}Based on your M3U providers:{' '}
-                      {m3uAccountsMaxStreams.map((a, i) => (
-                        <span key={a.name}>
-                          {i > 0 && ', '}
-                          <strong>{a.name}</strong>: {a.max_streams} streams
-                        </span>
-                      ))}
-                      . Set this to the lowest max_streams value to avoid rate limiting.
-                    </>
-                  )}
-                </span>
-                <input
-                  id="maxConcurrentProbes"
-                  type="text"
-                  inputMode="numeric"
-                  pattern="[0-9]*"
-                  value={maxConcurrentProbes}
-                  onChange={(e) => {
-                    const val = e.target.value.replace(/[^0-9]/g, '');
-                    if (val === '') {
-                      setMaxConcurrentProbes('' as unknown as number);
-                    } else {
-                      setMaxConcurrentProbes(parseInt(val, 10));
-                    }
-                  }}
-                  onBlur={(e) => {
-                    const val = parseInt(e.target.value, 10);
-                    setMaxConcurrentProbes(isNaN(val) ? 8 : Math.max(1, Math.min(16, val)));
-                  }}
-                />
-                {m3uAccountsMaxStreams.length > 0 && (
-                  <span className="form-hint">
-                    Recommended: {Math.min(...m3uAccountsMaxStreams.map(a => a.max_streams), 8)} (lowest provider limit)
-                  </span>
-                )}
-              </div>
-            )}
-
-            <div className="form-group-vertical">
-              <label htmlFor="skipRecentlyProbedHours">Skip recently probed streams (hours)</label>
-              <span className="form-description">
-                Skip streams that were successfully probed within the last N hours. Set to 0 to always probe all streams.
-                This prevents excessive probing requests when running multiple checks in succession.
-              </span>
-              <input
-                id="skipRecentlyProbedHours"
-                type="number"
-                min="0"
-                max="168"
-                value={skipRecentlyProbedHours}
-                onChange={(e) => setSkipRecentlyProbedHours(Math.max(0, Math.min(168, parseInt(e.target.value) || 0)))}
-              />
-            </div>
-
-            <div className="form-group-vertical">
-              <label className="checkbox-label">
-                <input
-                  type="checkbox"
-                  checked={refreshM3usBeforeProbe}
-                  onChange={(e) => setRefreshM3usBeforeProbe(e.target.checked)}
-                />
-                Refresh M3Us before probing
-              </label>
-              <span className="form-description">
-                When enabled, all M3U accounts will be refreshed before starting the probe to ensure latest stream information is used.
-              </span>
-            </div>
-
-            <div className="form-group-vertical">
-              <label className="checkbox-label">
-                <input
-                  type="checkbox"
-                  checked={autoReorderAfterProbe}
-                  onChange={(e) => setAutoReorderAfterProbe(e.target.checked)}
-                />
-                Auto-reorder streams after probe
-              </label>
-              <span className="form-description">
-                When enabled, streams within channels will be automatically reordered using smart sort after probe completes.
-                Failed streams are deprioritized, and working streams are sorted by resolution, bitrate, and framerate.
-              </span>
-            </div>
-
+          <div className="form-group-vertical">
+            <label htmlFor="probeBatchSize">Batch size</label>
+            <span className="form-description">Streams to probe per scheduled cycle (1-{totalStreamCount})</span>
+            <input
+              id="probeBatchSize"
+              type="number"
+              min="1"
+              max={totalStreamCount}
+              value={streamProbeBatchSize}
+              onChange={(e) => setStreamProbeBatchSize(Math.max(1, Math.min(totalStreamCount, parseInt(e.target.value) || 10)))}
+            />
           </div>
+
+          <div className="form-group-vertical">
+            <label htmlFor="probeTimeout">Probe timeout (seconds)</label>
+            <span className="form-description">Timeout for each probe attempt (5-120 seconds)</span>
+            <input
+              id="probeTimeout"
+              type="number"
+              min="5"
+              max="120"
+              value={streamProbeTimeout}
+              onChange={(e) => setStreamProbeTimeout(Math.max(5, Math.min(120, parseInt(e.target.value) || 30)))}
+            />
+          </div>
+
+          <div className="form-group-vertical">
+            <label htmlFor="bitrateSampleDuration">Bitrate measurement duration</label>
+            <span className="form-description">How long to sample streams when measuring bitrate</span>
+            <CustomSelect
+              value={String(bitrateSampleDuration)}
+              onChange={(val) => setBitrateSampleDuration(Number(val))}
+              options={[
+                { value: '10', label: '10 seconds' },
+                { value: '20', label: '20 seconds' },
+                { value: '30', label: '30 seconds' },
+              ]}
+            />
+          </div>
+
+          <div className="form-group-vertical">
+            <label htmlFor="streamFetchPageLimit">Stream fetch page limit</label>
+            <span className="form-description">
+              Max pages when fetching streams from Dispatcharr (×500 = max streams).
+              Default 200 = 100K streams. Increase if you have more streams.
+            </span>
+            <input
+              id="streamFetchPageLimit"
+              type="number"
+              min="50"
+              max="1000"
+              value={streamFetchPageLimit}
+              onChange={(e) => setStreamFetchPageLimit(Math.max(50, Math.min(1000, parseInt(e.target.value) || 200)))}
+            />
+          </div>
+
+          <div className="form-group-vertical">
+            <label className="checkbox-label">
+              <input
+                type="checkbox"
+                checked={parallelProbingEnabled}
+                onChange={(e) => setParallelProbingEnabled(e.target.checked)}
+              />
+              Enable parallel probing
+            </label>
+            <span className="form-description">
+              When enabled, streams from different M3U accounts are probed simultaneously for faster completion.
+              Disable for sequential one-at-a-time probing.
+            </span>
+          </div>
+
+          {parallelProbingEnabled && (
+            <div className="form-group-vertical">
+              <label htmlFor="maxConcurrentProbes">Max concurrent probes</label>
+              <span className="form-description">
+                Maximum number of streams to probe simultaneously (1-16).
+                {m3uAccountsMaxStreams.length > 0 && (
+                  <>
+                    {' '}Based on your M3U providers:{' '}
+                    {m3uAccountsMaxStreams.map((a, i) => (
+                      <span key={a.name}>
+                        {i > 0 && ', '}
+                        <strong>{a.name}</strong>: {a.max_streams} streams
+                      </span>
+                    ))}
+                    . Set this to the lowest max_streams value to avoid rate limiting.
+                  </>
+                )}
+              </span>
+              <input
+                id="maxConcurrentProbes"
+                type="text"
+                inputMode="numeric"
+                pattern="[0-9]*"
+                value={maxConcurrentProbes}
+                onChange={(e) => {
+                  const val = e.target.value.replace(/[^0-9]/g, '');
+                  if (val === '') {
+                    setMaxConcurrentProbes('' as unknown as number);
+                  } else {
+                    setMaxConcurrentProbes(parseInt(val, 10));
+                  }
+                }}
+                onBlur={(e) => {
+                  const val = parseInt(e.target.value, 10);
+                  setMaxConcurrentProbes(isNaN(val) ? 8 : Math.max(1, Math.min(16, val)));
+                }}
+              />
+              {m3uAccountsMaxStreams.length > 0 && (
+                <span className="form-hint">
+                  Recommended: {Math.min(...m3uAccountsMaxStreams.map(a => a.max_streams), 8)} (lowest provider limit)
+                </span>
+              )}
+            </div>
+          )}
+
+          <div className="form-group-vertical">
+            <label htmlFor="skipRecentlyProbedHours">Skip recently probed streams (hours)</label>
+            <span className="form-description">
+              Skip streams that were successfully probed within the last N hours. Set to 0 to always probe all streams.
+              This prevents excessive probing requests when running multiple checks in succession.
+            </span>
+            <input
+              id="skipRecentlyProbedHours"
+              type="number"
+              min="0"
+              max="168"
+              value={skipRecentlyProbedHours}
+              onChange={(e) => setSkipRecentlyProbedHours(Math.max(0, Math.min(168, parseInt(e.target.value) || 0)))}
+            />
+          </div>
+
+          <div className="form-group-vertical">
+            <label className="checkbox-label">
+              <input
+                type="checkbox"
+                checked={refreshM3usBeforeProbe}
+                onChange={(e) => setRefreshM3usBeforeProbe(e.target.checked)}
+              />
+              Refresh M3Us before probing
+            </label>
+            <span className="form-description">
+              When enabled, all M3U accounts will be refreshed before starting the probe to ensure latest stream information is used.
+            </span>
+          </div>
+
+          <div className="form-group-vertical">
+            <label className="checkbox-label">
+              <input
+                type="checkbox"
+                checked={autoReorderAfterProbe}
+                onChange={(e) => setAutoReorderAfterProbe(e.target.checked)}
+              />
+              Auto-reorder streams after probe
+            </label>
+            <span className="form-description">
+              When enabled, streams within channels will be automatically reordered using smart sort after probe completes.
+              Failed streams are deprioritized, and working streams are sorted by resolution, bitrate, and framerate.
+            </span>
+          </div>
+
         </div>
+      </div>
 
       {/* Probe Status Indicator - shows when probing */}
       {probingAll && (
         <div className="settings-section" style={{ padding: '1rem' }}>
-            <div style={{
-              display: 'flex',
-              flexDirection: 'column',
-              gap: '0.5rem',
-              padding: '0.75rem 1rem',
-              backgroundColor: 'var(--bg-tertiary)',
-              borderRadius: '6px',
-              border: '1px solid var(--accent-primary)'
-            }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-                <span className="material-icons spinning" style={{ color: 'var(--accent-primary)' }}>sync</span>
+          <div style={{
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '0.5rem',
+            padding: '0.75rem 1rem',
+            backgroundColor: 'var(--bg-tertiary)',
+            borderRadius: '6px',
+            border: '1px solid var(--accent-primary)'
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+              <span className="material-icons spinning" style={{ color: 'var(--accent-primary)' }}>sync</span>
+              <span>
+                {probeProgress
+                  ? `Probing streams... ${probeProgress.current}/${probeProgress.total} (${probeProgress.percentage}%)`
+                  : 'Starting probe...'}
+              </span>
+            </div>
+            {probeProgress && (
+              <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginLeft: '2rem' }}>
+                Success: {probeProgress.success_count} | Failed: {probeProgress.failed_count}
+                {probeProgress.skipped_count > 0 && ` | Skipped: ${probeProgress.skipped_count}`}
+              </div>
+            )}
+            {probeProgress?.rate_limited && probeProgress.rate_limited_hosts && probeProgress.rate_limited_hosts.length > 0 && (
+              <div style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.5rem',
+                marginTop: '0.25rem',
+                padding: '0.5rem 0.75rem',
+                backgroundColor: 'rgba(243, 156, 18, 0.1)',
+                borderRadius: '4px',
+                border: '1px solid rgba(243, 156, 18, 0.3)',
+                fontSize: '0.85rem',
+                color: '#f39c12'
+              }}>
+                <span className="material-icons" style={{ fontSize: '1rem' }}>warning</span>
                 <span>
-                  {probeProgress
-                    ? `Probing streams... ${probeProgress.current}/${probeProgress.total} (${probeProgress.percentage}%)`
-                    : 'Starting probe...'}
+                  Rate limited by provider{probeProgress.rate_limited_hosts.length > 1 ? 's' : ''}: {' '}
+                  {probeProgress.rate_limited_hosts.map((h, i) => (
+                    <span key={h.host}>
+                      {i > 0 && ', '}
+                      {h.host} (waiting {Math.ceil(h.backoff_remaining)}s)
+                    </span>
+                  ))}
+                  {' '}— Consider reducing max concurrent probes
                 </span>
               </div>
-              {probeProgress && (
-                <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginLeft: '2rem' }}>
-                  Success: {probeProgress.success_count} | Failed: {probeProgress.failed_count}
-                  {probeProgress.skipped_count > 0 && ` | Skipped: ${probeProgress.skipped_count}`}
-                </div>
-              )}
-              {probeProgress?.rate_limited && probeProgress.rate_limited_hosts && probeProgress.rate_limited_hosts.length > 0 && (
-                <div style={{
+            )}
+            <div style={{ marginTop: '0.5rem', display: 'flex', justifyContent: 'flex-end' }}>
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={handleCancelProbe}
+                style={{
                   display: 'flex',
                   alignItems: 'center',
-                  gap: '0.5rem',
-                  marginTop: '0.25rem',
-                  padding: '0.5rem 0.75rem',
-                  backgroundColor: 'rgba(243, 156, 18, 0.1)',
-                  borderRadius: '4px',
-                  border: '1px solid rgba(243, 156, 18, 0.3)',
-                  fontSize: '0.85rem',
-                  color: '#f39c12'
-                }}>
-                  <span className="material-icons" style={{ fontSize: '1rem' }}>warning</span>
-                  <span>
-                    Rate limited by provider{probeProgress.rate_limited_hosts.length > 1 ? 's' : ''}: {' '}
-                    {probeProgress.rate_limited_hosts.map((h, i) => (
-                      <span key={h.host}>
-                        {i > 0 && ', '}
-                        {h.host} (waiting {Math.ceil(h.backoff_remaining)}s)
-                      </span>
-                    ))}
-                    {' '}— Consider reducing max concurrent probes
-                  </span>
-                </div>
-              )}
-              <div style={{ marginTop: '0.5rem', display: 'flex', justifyContent: 'flex-end' }}>
-                <button
-                  type="button"
-                  className="btn-secondary"
-                  onClick={handleCancelProbe}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '0.25rem',
-                    padding: '0.4rem 0.8rem',
-                    fontSize: '0.85rem'
-                  }}
-                >
-                  <span className="material-icons" style={{ fontSize: '1rem' }}>stop</span>
-                  Cancel
-                </button>
-              </div>
+                  gap: '0.25rem',
+                  padding: '0.4rem 0.8rem',
+                  fontSize: '0.85rem'
+                }}
+              >
+                <span className="material-icons" style={{ fontSize: '1rem' }}>stop</span>
+                Cancel
+              </button>
             </div>
+          </div>
         </div>
       )}
 
@@ -3213,10 +3217,10 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                   {clearingAutoCreated
                     ? 'Converting...'
                     : `Convert ${selectedAutoCreatedGroups.size > 0
-                        ? autoCreatedGroups
-                            .filter(g => selectedAutoCreatedGroups.has(g.id))
-                            .reduce((sum, g) => sum + g.auto_created_count, 0)
-                        : 0} Channel(s) to Manual`}
+                      ? autoCreatedGroups
+                        .filter(g => selectedAutoCreatedGroups.has(g.id))
+                        .reduce((sum, g) => sum + g.auto_created_count, 0)
+                      : 0} Channel(s) to Manual`}
                 </button>
                 {selectedAutoCreatedGroups.size > 0 && (
                   <span style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
@@ -3389,13 +3393,13 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                 const streams = probeResultsType === 'success'
                   ? probeResults.success_streams
                   : probeResultsType === 'skipped'
-                  ? probeResults.skipped_streams
-                  : probeResults.failed_streams;
+                    ? probeResults.skipped_streams
+                    : probeResults.failed_streams;
                 const emptyText = probeResultsType === 'success'
                   ? 'successful'
                   : probeResultsType === 'skipped'
-                  ? 'skipped'
-                  : 'failed';
+                    ? 'skipped'
+                    : 'failed';
 
                 return streams.length === 0 ? (
                   <div className="empty-state">
@@ -3471,12 +3475,12 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                                   gap: '0.25rem'
                                 }}
                               >
-                            <span className="material-icons" style={{ fontSize: '14px' }}>
-                              {copiedUrl === stream.url ? 'check' : 'content_copy'}
-                            </span>
-                            {copiedUrl === stream.url ? 'Copied' : 'Copy URL'}
-                          </button>
-                        )}
+                                <span className="material-icons" style={{ fontSize: '14px' }}>
+                                  {copiedUrl === stream.url ? 'check' : 'content_copy'}
+                                </span>
+                                {copiedUrl === stream.url ? 'Copied' : 'Copy URL'}
+                              </button>
+                            )}
                           </div>
                         </div>
                       ))}

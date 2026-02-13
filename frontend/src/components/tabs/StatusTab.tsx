@@ -136,7 +136,7 @@ export function StatusTab() {
           fetchIncidents(),
           fetchMaintenance(),
         ]);
-      } catch (err) {
+      } catch (_err) {
         setError('Failed to load status data');
       } finally {
         setLoading(false);
@@ -161,6 +161,8 @@ export function StatusTab() {
   }, [services, serviceStatuses]);
 
   // Group services by type
+  // TODO is this needed?
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const groupedServices = useMemo(() => {
     const internal = servicesWithLiveStatus.filter(s => s.type === 'internal');
     const external = servicesWithLiveStatus.filter(s => s.type === 'external');
@@ -273,8 +275,8 @@ export function StatusTab() {
           <span className={`connection-dot ${isConnected ? 'connected' : 'disconnected'}`} />
           <span>
             {connectionState === 'connected' ? 'Live' :
-             connectionState === 'connecting' ? 'Connecting...' :
-             connectionState === 'reconnecting' ? 'Reconnecting...' : 'Offline'}
+              connectionState === 'connecting' ? 'Connecting...' :
+                connectionState === 'reconnecting' ? 'Reconnecting...' : 'Offline'}
           </span>
         </div>
       </nav>

@@ -3,7 +3,7 @@
  * Displays a log of all channel viewing sessions
  */
 import { useState, useEffect, useCallback } from 'react';
-import type { WatchHistoryEntry, WatchHistoryResponse } from '../../types';
+import type { WatchHistoryResponse } from '../../types';
 import * as api from '../../services/api';
 import { useNotifications } from '../../contexts/NotificationContext';
 import './WatchHistoryPanel.css';
@@ -51,7 +51,7 @@ export function WatchHistoryPanel({ refreshTrigger }: WatchHistoryPanelProps) {
     } finally {
       setLoading(false);
     }
-  }, [page, pageSize, channelFilter, ipFilter, daysFilter]);
+  }, [page, pageSize, channelFilter, ipFilter, daysFilter, notifications]);
 
   useEffect(() => {
     fetchData();

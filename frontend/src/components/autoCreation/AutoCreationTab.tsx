@@ -187,7 +187,7 @@ export function AutoCreationTab() {
         notifications.error(err instanceof Error ? err.message : 'Failed to delete rule', 'Auto-Creation');
       }
     }
-  }, [showDeleteConfirm, deleteRule]);
+  }, [showDeleteConfirm, deleteRule, notifications]);
 
   const handleToggleEnabled = useCallback(async (rule: AutoCreationRule) => {
     try {
@@ -789,8 +789,8 @@ export function AutoCreationTab() {
         const log = details.execution_log || [];
         const filteredLog = logSearch
           ? log.filter((entry: ExecutionLogEntry) =>
-              entry.stream_name.toLowerCase().includes(logSearch.toLowerCase())
-            )
+            entry.stream_name.toLowerCase().includes(logSearch.toLowerCase())
+          )
           : log;
 
         const toggleLogEntry = (streamId: number) => {
@@ -803,224 +803,224 @@ export function AutoCreationTab() {
         };
 
         return (
-        <ModalOverlay onClose={() => setShowExecutionDetails(null)} role="dialog" aria-modal="true">
-          <div className="modal-container modal-lg">
-            <div className="modal-header">
-              <h2>Execution Details</h2>
-              <button
-                className="modal-close-btn"
-                onClick={() => setShowExecutionDetails(null)}
-                aria-label="Close"
-              >
-                <span className="material-icons">close</span>
-              </button>
-            </div>
-            <div className="modal-body">
-              {/* Summary Section */}
-              <div className="detail-row">
-                <span className="detail-label">Status:</span>
-                <span className={getStatusBadgeClass(details.status)}>
-                  {details.status}
-                </span>
+          <ModalOverlay onClose={() => setShowExecutionDetails(null)} role="dialog" aria-modal="true">
+            <div className="modal-container modal-lg">
+              <div className="modal-header">
+                <h2>Execution Details</h2>
+                <button
+                  className="modal-close-btn"
+                  onClick={() => setShowExecutionDetails(null)}
+                  aria-label="Close"
+                >
+                  <span className="material-icons">close</span>
+                </button>
               </div>
-              <div className="detail-row">
-                <span className="detail-label">Mode:</span>
-                <span>{details.mode === 'dry_run' ? 'Dry Run' : 'Execute'}</span>
-              </div>
-              <div className="detail-row">
-                <span className="detail-label">Started:</span>
-                <span>{new Date(details.started_at).toLocaleString()}</span>
-              </div>
-              {details.completed_at && (
+              <div className="modal-body">
+                {/* Summary Section */}
                 <div className="detail-row">
-                  <span className="detail-label">Completed:</span>
-                  <span>{new Date(details.completed_at).toLocaleString()}</span>
+                  <span className="detail-label">Status:</span>
+                  <span className={getStatusBadgeClass(details.status)}>
+                    {details.status}
+                  </span>
                 </div>
-              )}
-              {details.duration_seconds != null && (
                 <div className="detail-row">
-                  <span className="detail-label">Duration:</span>
-                  <span>{details.duration_seconds.toFixed(1)}s</span>
+                  <span className="detail-label">Mode:</span>
+                  <span>{details.mode === 'dry_run' ? 'Dry Run' : 'Execute'}</span>
                 </div>
-              )}
-              <div className="detail-row">
-                <span className="detail-label">Streams Evaluated:</span>
-                <span>{details.streams_evaluated}</span>
-              </div>
-              <div className="detail-row">
-                <span className="detail-label">Streams Matched:</span>
-                <span>{details.streams_matched}</span>
-              </div>
-              <div className="detail-row">
-                <span className="detail-label">Channels Created:</span>
-                <span>{details.channels_created}</span>
-              </div>
-              {details.channels_updated > 0 && (
                 <div className="detail-row">
-                  <span className="detail-label">Channels Updated:</span>
-                  <span>{details.channels_updated}</span>
+                  <span className="detail-label">Started:</span>
+                  <span>{new Date(details.started_at).toLocaleString()}</span>
                 </div>
-              )}
-              {details.groups_created > 0 && (
+                {details.completed_at && (
+                  <div className="detail-row">
+                    <span className="detail-label">Completed:</span>
+                    <span>{new Date(details.completed_at).toLocaleString()}</span>
+                  </div>
+                )}
+                {details.duration_seconds != null && (
+                  <div className="detail-row">
+                    <span className="detail-label">Duration:</span>
+                    <span>{details.duration_seconds.toFixed(1)}s</span>
+                  </div>
+                )}
                 <div className="detail-row">
-                  <span className="detail-label">Groups Created:</span>
-                  <span>{details.groups_created}</span>
+                  <span className="detail-label">Streams Evaluated:</span>
+                  <span>{details.streams_evaluated}</span>
                 </div>
-              )}
-              {details.error_message && (
-                <div className="detail-row error">
-                  <span className="detail-label">Error:</span>
-                  <span>{details.error_message}</span>
+                <div className="detail-row">
+                  <span className="detail-label">Streams Matched:</span>
+                  <span>{details.streams_matched}</span>
                 </div>
-              )}
+                <div className="detail-row">
+                  <span className="detail-label">Channels Created:</span>
+                  <span>{details.channels_created}</span>
+                </div>
+                {details.channels_updated > 0 && (
+                  <div className="detail-row">
+                    <span className="detail-label">Channels Updated:</span>
+                    <span>{details.channels_updated}</span>
+                  </div>
+                )}
+                {details.groups_created > 0 && (
+                  <div className="detail-row">
+                    <span className="detail-label">Groups Created:</span>
+                    <span>{details.groups_created}</span>
+                  </div>
+                )}
+                {details.error_message && (
+                  <div className="detail-row error">
+                    <span className="detail-label">Error:</span>
+                    <span>{details.error_message}</span>
+                  </div>
+                )}
 
-              {/* Execution Log Section */}
-              <div className="execution-log-section">
-                <div className="execution-log-header">
-                  <h3>Execution Log</h3>
-                  {log.length > 0 && (
-                    <span className="log-count">
-                      {filteredLog.length === log.length
-                        ? `${log.length} matched streams`
-                        : `${filteredLog.length} of ${log.length} matched streams`}
-                    </span>
+                {/* Execution Log Section */}
+                <div className="execution-log-section">
+                  <div className="execution-log-header">
+                    <h3>Execution Log</h3>
+                    {log.length > 0 && (
+                      <span className="log-count">
+                        {filteredLog.length === log.length
+                          ? `${log.length} matched streams`
+                          : `${filteredLog.length} of ${log.length} matched streams`}
+                      </span>
+                    )}
+                  </div>
+
+                  {executionDetailsLoading ? (
+                    <div className="log-loading">
+                      <span className="material-icons spinning">sync</span>
+                      Loading execution log...
+                    </div>
+                  ) : log.length === 0 ? (
+                    <div className="log-empty">
+                      No execution log available for this run.
+                    </div>
+                  ) : (
+                    <>
+                      {log.length > 3 && (
+                        <div className="log-search-bar">
+                          <span className="material-icons">search</span>
+                          <input
+                            type="text"
+                            placeholder="Search streams..."
+                            value={logSearch}
+                            onChange={e => setLogSearch(e.target.value)}
+                            className="log-search-input"
+                          />
+                          {logSearch && (
+                            <button className="log-search-clear" onClick={() => setLogSearch('')}>
+                              <span className="material-icons">close</span>
+                            </button>
+                          )}
+                        </div>
+                      )}
+
+                      <div className="log-entries">
+                        {filteredLog.map((entry: ExecutionLogEntry) => {
+                          const isExpanded = expandedLogEntries.has(entry.stream_id);
+                          const winnerRule = entry.rules_evaluated.find(r => r.was_winner);
+                          const actionCount = entry.actions_executed.length;
+                          const hasErrors = entry.actions_executed.some(a => !a.success);
+
+                          return (
+                            <div key={entry.stream_id} className={`log-entry ${isExpanded ? 'expanded' : ''}`}>
+                              <div
+                                className="log-entry-header"
+                                onClick={() => toggleLogEntry(entry.stream_id)}
+                                role="button"
+                                tabIndex={0}
+                                onKeyDown={e => e.key === 'Enter' && toggleLogEntry(entry.stream_id)}
+                              >
+                                <span className="material-icons log-chevron">
+                                  {isExpanded ? 'expand_more' : 'chevron_right'}
+                                </span>
+                                <span className="log-stream-name">{entry.stream_name}</span>
+                                <span className="log-entry-meta">
+                                  {winnerRule && (
+                                    <span className="log-rule-badge">{winnerRule.rule_name}</span>
+                                  )}
+                                  <span className={`log-action-count ${hasErrors ? 'has-errors' : ''}`}>
+                                    {actionCount} action{actionCount !== 1 ? 's' : ''}
+                                  </span>
+                                </span>
+                              </div>
+
+                              {isExpanded && (
+                                <div className="log-entry-body">
+                                  {/* Condition evaluations */}
+                                  {entry.rules_evaluated.filter(r => r.matched || r.conditions.length > 0).map((rule, ri) => (
+                                    <div key={ri} className="log-rule-section">
+                                      <div className="log-rule-title">
+                                        <span className={`material-icons ${rule.matched ? 'condition-pass' : 'condition-fail'}`}>
+                                          {rule.matched ? 'check_circle' : 'cancel'}
+                                        </span>
+                                        <span>{rule.rule_name}</span>
+                                        {rule.was_winner && <span className="log-winner-badge">winner</span>}
+                                      </div>
+                                      <div className="log-conditions">
+                                        {rule.conditions.map((cond, ci) => (
+                                          <div key={ci}>
+                                            {ci > 0 && cond.connector && (
+                                              <div className="log-condition-connector">
+                                                <span className={`log-connector-label ${cond.connector === 'or' ? 'connector-or' : ''}`}>
+                                                  {(cond.connector || 'and').toUpperCase()}
+                                                </span>
+                                              </div>
+                                            )}
+                                            <div className={`log-condition ${cond.matched ? 'pass' : 'fail'}`}>
+                                              <span className={`material-icons condition-icon ${cond.matched ? 'condition-pass' : 'condition-fail'}`}>
+                                                {cond.matched ? 'check' : 'close'}
+                                              </span>
+                                              <span className="log-condition-type">{cond.type}</span>
+                                              {cond.value && <span className="log-condition-value">= "{cond.value}"</span>}
+                                              {cond.details && <span className="log-condition-details">{cond.details}</span>}
+                                            </div>
+                                          </div>
+                                        ))}
+                                      </div>
+                                    </div>
+                                  ))}
+
+                                  {/* Actions executed */}
+                                  {entry.actions_executed.length > 0 && (
+                                    <div className="log-actions-section">
+                                      <div className="log-actions-title">Actions</div>
+                                      {entry.actions_executed.map((action, ai) => {
+                                        const isSkip = action.description?.toLowerCase().includes('skipped');
+                                        const isStop = action.type === 'stop_processing';
+                                        const iconClass = !action.success ? 'action-error'
+                                          : isStop ? 'action-stop'
+                                            : isSkip ? 'action-skipped'
+                                              : 'action-success';
+                                        const icon = !action.success ? 'error'
+                                          : isStop ? 'stop_circle'
+                                            : isSkip ? 'skip_next'
+                                              : 'check_circle';
+                                        return (
+                                          <div key={ai} className={`log-action ${iconClass}`}>
+                                            <span className={`material-icons action-icon ${iconClass}`}>
+                                              {icon}
+                                            </span>
+                                            <span className="log-action-desc">{action.description}</span>
+                                            {action.error && <span className="log-action-error-msg">{action.error}</span>}
+                                          </div>
+                                        );
+                                      })}
+                                    </div>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </>
                   )}
                 </div>
-
-                {executionDetailsLoading ? (
-                  <div className="log-loading">
-                    <span className="material-icons spinning">sync</span>
-                    Loading execution log...
-                  </div>
-                ) : log.length === 0 ? (
-                  <div className="log-empty">
-                    No execution log available for this run.
-                  </div>
-                ) : (
-                  <>
-                    {log.length > 3 && (
-                      <div className="log-search-bar">
-                        <span className="material-icons">search</span>
-                        <input
-                          type="text"
-                          placeholder="Search streams..."
-                          value={logSearch}
-                          onChange={e => setLogSearch(e.target.value)}
-                          className="log-search-input"
-                        />
-                        {logSearch && (
-                          <button className="log-search-clear" onClick={() => setLogSearch('')}>
-                            <span className="material-icons">close</span>
-                          </button>
-                        )}
-                      </div>
-                    )}
-
-                    <div className="log-entries">
-                      {filteredLog.map((entry: ExecutionLogEntry) => {
-                        const isExpanded = expandedLogEntries.has(entry.stream_id);
-                        const winnerRule = entry.rules_evaluated.find(r => r.was_winner);
-                        const actionCount = entry.actions_executed.length;
-                        const hasErrors = entry.actions_executed.some(a => !a.success);
-
-                        return (
-                          <div key={entry.stream_id} className={`log-entry ${isExpanded ? 'expanded' : ''}`}>
-                            <div
-                              className="log-entry-header"
-                              onClick={() => toggleLogEntry(entry.stream_id)}
-                              role="button"
-                              tabIndex={0}
-                              onKeyDown={e => e.key === 'Enter' && toggleLogEntry(entry.stream_id)}
-                            >
-                              <span className="material-icons log-chevron">
-                                {isExpanded ? 'expand_more' : 'chevron_right'}
-                              </span>
-                              <span className="log-stream-name">{entry.stream_name}</span>
-                              <span className="log-entry-meta">
-                                {winnerRule && (
-                                  <span className="log-rule-badge">{winnerRule.rule_name}</span>
-                                )}
-                                <span className={`log-action-count ${hasErrors ? 'has-errors' : ''}`}>
-                                  {actionCount} action{actionCount !== 1 ? 's' : ''}
-                                </span>
-                              </span>
-                            </div>
-
-                            {isExpanded && (
-                              <div className="log-entry-body">
-                                {/* Condition evaluations */}
-                                {entry.rules_evaluated.filter(r => r.matched || r.conditions.length > 0).map((rule, ri) => (
-                                  <div key={ri} className="log-rule-section">
-                                    <div className="log-rule-title">
-                                      <span className={`material-icons ${rule.matched ? 'condition-pass' : 'condition-fail'}`}>
-                                        {rule.matched ? 'check_circle' : 'cancel'}
-                                      </span>
-                                      <span>{rule.rule_name}</span>
-                                      {rule.was_winner && <span className="log-winner-badge">winner</span>}
-                                    </div>
-                                    <div className="log-conditions">
-                                      {rule.conditions.map((cond, ci) => (
-                                        <div key={ci}>
-                                          {ci > 0 && cond.connector && (
-                                            <div className="log-condition-connector">
-                                              <span className={`log-connector-label ${cond.connector === 'or' ? 'connector-or' : ''}`}>
-                                                {(cond.connector || 'and').toUpperCase()}
-                                              </span>
-                                            </div>
-                                          )}
-                                          <div className={`log-condition ${cond.matched ? 'pass' : 'fail'}`}>
-                                            <span className={`material-icons condition-icon ${cond.matched ? 'condition-pass' : 'condition-fail'}`}>
-                                              {cond.matched ? 'check' : 'close'}
-                                            </span>
-                                            <span className="log-condition-type">{cond.type}</span>
-                                            {cond.value && <span className="log-condition-value">= "{cond.value}"</span>}
-                                            {cond.details && <span className="log-condition-details">{cond.details}</span>}
-                                          </div>
-                                        </div>
-                                      ))}
-                                    </div>
-                                  </div>
-                                ))}
-
-                                {/* Actions executed */}
-                                {entry.actions_executed.length > 0 && (
-                                  <div className="log-actions-section">
-                                    <div className="log-actions-title">Actions</div>
-                                    {entry.actions_executed.map((action, ai) => {
-                                      const isSkip = action.description?.toLowerCase().includes('skipped');
-                                      const isStop = action.type === 'stop_processing';
-                                      const iconClass = !action.success ? 'action-error'
-                                        : isStop ? 'action-stop'
-                                        : isSkip ? 'action-skipped'
-                                        : 'action-success';
-                                      const icon = !action.success ? 'error'
-                                        : isStop ? 'stop_circle'
-                                        : isSkip ? 'skip_next'
-                                        : 'check_circle';
-                                      return (
-                                        <div key={ai} className={`log-action ${iconClass}`}>
-                                          <span className={`material-icons action-icon ${iconClass}`}>
-                                            {icon}
-                                          </span>
-                                          <span className="log-action-desc">{action.description}</span>
-                                          {action.error && <span className="log-action-error-msg">{action.error}</span>}
-                                        </div>
-                                      );
-                                    })}
-                                  </div>
-                                )}
-                              </div>
-                            )}
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </>
-                )}
               </div>
             </div>
-          </div>
-        </ModalOverlay>
+          </ModalOverlay>
         );
       })()}
 

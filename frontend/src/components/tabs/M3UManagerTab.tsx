@@ -323,7 +323,7 @@ export function M3UManagerTab({
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [notifications]);
 
   useEffect(() => {
     loadData();
@@ -423,7 +423,7 @@ export function M3UManagerTab({
       await api.deleteM3UAccount(account.id);
       await loadData();
       onAccountsChange?.();  // Notify parent to reload providers
-    } catch (err) {
+    } catch (_err) {
       notifications.error('Failed to delete M3U account', 'M3U Manager');
     }
   };
@@ -446,7 +446,7 @@ export function M3UManagerTab({
       setAccounts(prev => prev.map(a =>
         a.id === account.id ? { ...a, status: 'fetching' } : a
       ));
-    } catch (err) {
+    } catch (_err) {
       notifications.error('Failed to refresh M3U account', 'M3U Manager');
     }
   };
@@ -455,7 +455,7 @@ export function M3UManagerTab({
     try {
       await api.patchM3UAccount(account.id, { is_active: !account.is_active });
       await loadData();
-    } catch (err) {
+    } catch (_err) {
       notifications.error('Failed to update M3U account', 'M3U Manager');
     }
   };
@@ -491,7 +491,7 @@ export function M3UManagerTab({
       setAccounts(prev => prev.map(a =>
         a.is_active && a.name.toLowerCase() !== 'custom' ? { ...a, status: 'fetching' } : a
       ));
-    } catch (err) {
+    } catch (_err) {
       notifications.error('Failed to refresh M3U accounts', 'M3U Manager');
     }
   };
@@ -578,7 +578,7 @@ export function M3UManagerTab({
         linked_m3u_accounts: linkGroups,
       });
       setLinkedM3UAccounts(linkGroups);
-    } catch (err) {
+    } catch (_err) {
       notifications.error('Failed to save linked accounts', 'M3U Manager');
     }
   };

@@ -187,7 +187,7 @@ function consolidateOperations(operations: StagedOperation[], workingCopy: Chann
           // Find if there's a createChannel for this temp ID that we skipped
           const wasCreatedAndDeleted = operations.some(
             o => o.apiCall.type === 'createChannel' &&
-                 o.afterSnapshot[0]?.id === op.apiCall.channelId
+              o.afterSnapshot[0]?.id === op.apiCall.channelId
           );
           if (wasCreatedAndDeleted) {
             // Both create and delete cancel out - skip the delete
@@ -1319,6 +1319,8 @@ export function useEditMode({
       summaryParts.push(`${opCounts.renameGroup} group rename${opCounts.renameGroup !== 1 ? 's' : ''}`);
     }
 
+    // TODO is this needed?
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     const operationSummary = summaryParts.length > 0
       ? summaryParts.join(', ')
       : 'No operations';
@@ -1587,7 +1589,7 @@ export function useEditMode({
         ],
       }));
     }
-  }, [state.isActive, channels]);
+  }, [state.isActive, channels, state.workingCopy]);
 
   // Determine which channels to display
   const displayChannels = state.isActive ? state.workingCopy : channels;

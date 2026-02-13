@@ -472,7 +472,7 @@ export function EPGManagerTab({ onSourcesChange, hideEpgUrls = false }: EPGManag
           updates.map(({ id, priority }) => api.updateEPGSource(id, { priority }))
         );
         await loadSources();
-      } catch (err) {
+      } catch (_err) {
         notifications.error('Failed to update priorities', 'EPG Manager');
         await loadSources();
       }
@@ -490,7 +490,7 @@ export function EPGManagerTab({ onSourcesChange, hideEpgUrls = false }: EPGManag
       const fullSource = await api.getEPGSource(source.id);
       setEditingSource(fullSource);
       setModalOpen(true);
-    } catch (err) {
+    } catch (_err) {
       notifications.error('Failed to load EPG source details', 'EPG Manager');
     }
   };
@@ -504,7 +504,7 @@ export function EPGManagerTab({ onSourcesChange, hideEpgUrls = false }: EPGManag
       await api.deleteEPGSource(source.id);
       await loadSources();
       onSourcesChange?.();
-    } catch (err) {
+    } catch (_err) {
       notifications.error('Failed to delete EPG source', 'EPG Manager');
     }
   };
@@ -537,7 +537,7 @@ export function EPGManagerTab({ onSourcesChange, hideEpgUrls = false }: EPGManag
     try {
       await api.updateEPGSource(source.id, { is_active: !source.is_active });
       await loadSources();
-    } catch (err) {
+    } catch (_err) {
       notifications.error('Failed to update EPG source', 'EPG Manager');
     }
   };
@@ -578,7 +578,7 @@ export function EPGManagerTab({ onSourcesChange, hideEpgUrls = false }: EPGManag
       await api.deleteEPGSource(source.id);
       await loadSources();
       onSourcesChange?.();
-    } catch (err) {
+    } catch (_err) {
       notifications.error('Failed to delete dummy EPG source', 'EPG Manager');
     }
   };
@@ -587,7 +587,7 @@ export function EPGManagerTab({ onSourcesChange, hideEpgUrls = false }: EPGManag
     try {
       await api.updateEPGSource(source.id, { is_active: !source.is_active });
       await loadSources();
-    } catch (err) {
+    } catch (_err) {
       notifications.error('Failed to update dummy EPG source', 'EPG Manager');
     }
   };

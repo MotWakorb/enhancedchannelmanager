@@ -14,6 +14,7 @@ import packageJson from '../package.json';
 import { logger } from './utils/logger';
 import { computeAutoRename } from './utils/channelRename';
 import { registerVLCModalCallback, downloadM3U } from './utils/vlc';
+import type { VLCWindow } from './utils/vlc';
 import { VLCProtocolHelperModal } from './components/VLCProtocolHelperModal';
 import { NotificationCenter } from './components/NotificationCenter';
 import { NotificationProvider } from './contexts/NotificationContext';
@@ -458,7 +459,7 @@ function App() {
         setNormalizeOnChannelCreate(settings.normalize_on_channel_create ?? false);
         // Store VLC settings globally for vlc utility to access
         const vlcBehavior = (settings.vlc_open_behavior as 'protocol_only' | 'm3u_fallback' | 'm3u_only') || 'm3u_fallback';
-        (window as any).__vlcSettings = { behavior: vlcBehavior };
+        (window as VLCWindow).__vlcSettings = { behavior: vlcBehavior };
         setChannelDefaults({
           includeChannelNumberInName: settings.include_channel_number_in_name,
           channelNumberSeparator: settings.channel_number_separator,
@@ -1517,8 +1518,8 @@ function App() {
     const endNumber = startingNumber + count - 1;
     const conflictingChannels = displayChannels.filter(
       (ch) => ch.channel_number !== null &&
-              ch.channel_number >= startingNumber &&
-              ch.channel_number <= endNumber
+        ch.channel_number >= startingNumber &&
+        ch.channel_number <= endNumber
     );
     return conflictingChannels.length;
   }, [displayChannels]);
@@ -1662,7 +1663,7 @@ function App() {
           // avoiding duplicate channel numbers
           const channelsToShift = displayChannels
             .filter((ch) => ch.channel_number !== null &&
-                    ch.channel_number >= startingNumber)
+              ch.channel_number >= startingNumber)
             .sort((a, b) => (b.channel_number ?? 0) - (a.channel_number ?? 0)); // Sort descending to avoid conflicts
 
           // Shift each channel by the amount needed to make room for new channels
@@ -2006,329 +2007,329 @@ function App() {
 
   return (
     <NotificationProvider position="top-right">
-    <div className="app">
-      <header className={`header ${isEditMode ? 'edit-mode-active' : ''}`}>
-        <h1>
-          <img src={ECMLogo} alt="ECM Logo" className="header-logo" />
-          Enhanced Channel Manager
-        </h1>
-        <div className="header-actions">
-          {/* Edit Mode Controls - only show on Channel Manager tab */}
-          {activeTab === 'channel-manager' && (
-            <>
-              {isEditMode ? (
-                <div className="edit-mode-header-controls">
-                  <span className="edit-mode-label">
-                    <span className="material-icons" style={{ fontSize: '18px', marginRight: '4px' }}>edit</span>
-                    Edit Mode
-                  </span>
-                  {stagedOperationCount > 0 && (
-                    <span className="edit-mode-changes">
-                      {stagedOperationCount} change{stagedOperationCount !== 1 ? 's' : ''}
+      <div className="app">
+        <header className={`header ${isEditMode ? 'edit-mode-active' : ''}`}>
+          <h1>
+            <img src={ECMLogo} alt="ECM Logo" className="header-logo" />
+            Enhanced Channel Manager
+          </h1>
+          <div className="header-actions">
+            {/* Edit Mode Controls - only show on Channel Manager tab */}
+            {activeTab === 'channel-manager' && (
+              <>
+                {isEditMode ? (
+                  <div className="edit-mode-header-controls">
+                    <span className="edit-mode-label">
+                      <span className="material-icons" style={{ fontSize: '18px', marginRight: '4px' }}>edit</span>
+                      Edit Mode
                     </span>
-                  )}
-                  {editModeDuration !== null && (
-                    <span className="edit-mode-timer">
-                      ({formatDuration(editModeDuration)})
-                    </span>
-                  )}
-                  <div className="edit-mode-buttons">
-                    <button
-                      className="edit-mode-done-btn"
-                      onClick={handleExitEditMode}
-                      disabled={isCommitting}
-                      title="Apply changes"
-                    >
-                      <span className="material-icons" style={{ fontSize: '16px', marginRight: '4px' }}>check</span>
-                      Done
-                      {stagedOperationCount > 0 && (
-                        <span className="edit-mode-done-count">{stagedOperationCount}</span>
-                      )}
-                    </button>
-                    <button
-                      className="edit-mode-cancel-btn"
-                      onClick={() => {
-                        if (stagedOperationCount > 0) {
-                          if (confirm(`You have ${stagedOperationCount} pending change${stagedOperationCount !== 1 ? 's' : ''} that will be lost. Are you sure you want to cancel?`)) {
+                    {stagedOperationCount > 0 && (
+                      <span className="edit-mode-changes">
+                        {stagedOperationCount} change{stagedOperationCount !== 1 ? 's' : ''}
+                      </span>
+                    )}
+                    {editModeDuration !== null && (
+                      <span className="edit-mode-timer">
+                        ({formatDuration(editModeDuration)})
+                      </span>
+                    )}
+                    <div className="edit-mode-buttons">
+                      <button
+                        className="edit-mode-done-btn"
+                        onClick={handleExitEditMode}
+                        disabled={isCommitting}
+                        title="Apply changes"
+                      >
+                        <span className="material-icons" style={{ fontSize: '16px', marginRight: '4px' }}>check</span>
+                        Done
+                        {stagedOperationCount > 0 && (
+                          <span className="edit-mode-done-count">{stagedOperationCount}</span>
+                        )}
+                      </button>
+                      <button
+                        className="edit-mode-cancel-btn"
+                        onClick={() => {
+                          if (stagedOperationCount > 0) {
+                            if (confirm(`You have ${stagedOperationCount} pending change${stagedOperationCount !== 1 ? 's' : ''} that will be lost. Are you sure you want to cancel?`)) {
+                              discard();
+                              setSelectedChannelIds(new Set());
+                            }
+                          } else {
                             discard();
                             setSelectedChannelIds(new Set());
                           }
-                        } else {
-                          discard();
-                          setSelectedChannelIds(new Set());
-                        }
-                      }}
-                      disabled={isCommitting}
-                      title="Cancel and discard changes"
-                    >
-                      <span className="material-icons" style={{ fontSize: '16px', marginRight: '4px' }}>close</span>
-                      Cancel
-                    </button>
+                        }}
+                        disabled={isCommitting}
+                        title="Cancel and discard changes"
+                      >
+                        <span className="material-icons" style={{ fontSize: '16px', marginRight: '4px' }}>close</span>
+                        Cancel
+                      </button>
+                    </div>
                   </div>
-                </div>
-              ) : (
-                <button
-                  className="enter-edit-mode-btn"
-                  onClick={enterEditMode}
-                  title="Enter Edit Mode to make changes"
-                >
-                  <span className="material-icons" style={{ fontSize: '16px', marginRight: '4px' }}>edit</span>
-                  Edit Mode
-                </button>
-              )}
-            </>
-          )}
-          <NotificationCenter />
-          <UserMenu />
-        </div>
-      </header>
+                ) : (
+                  <button
+                    className="enter-edit-mode-btn"
+                    onClick={enterEditMode}
+                    title="Enter Edit Mode to make changes"
+                  >
+                    <span className="material-icons" style={{ fontSize: '16px', marginRight: '4px' }}>edit</span>
+                    Edit Mode
+                  </button>
+                )}
+              </>
+            )}
+            <NotificationCenter />
+            <UserMenu />
+          </div>
+        </header>
 
-      <TabNavigation
-        activeTab={activeTab}
-        onTabChange={handleTabChange}
-        disabled={isCommitting}
-        editModeActive={isEditMode}
-      />
+        <TabNavigation
+          activeTab={activeTab}
+          onTabChange={handleTabChange}
+          disabled={isCommitting}
+          editModeActive={isEditMode}
+        />
 
-      <EditModeExitDialog
-        isOpen={showExitDialog}
-        summary={summary}
-        onApply={handleApplyChanges}
-        onDiscard={handleDiscardChanges}
-        onKeepEditing={handleKeepEditing}
-        isCommitting={isCommitting}
-        commitProgress={commitProgress}
-      />
+        <EditModeExitDialog
+          isOpen={showExitDialog}
+          summary={summary}
+          onApply={handleApplyChanges}
+          onDiscard={handleDiscardChanges}
+          onKeepEditing={handleKeepEditing}
+          isCommitting={isCommitting}
+          commitProgress={commitProgress}
+        />
 
-      {/* Keep SettingsModal for first-run configuration */}
-      <SettingsModal
-        isOpen={settingsOpen}
-        onClose={() => setSettingsOpen(false)}
-        onSaved={handleSettingsSaved}
-      />
+        {/* Keep SettingsModal for first-run configuration */}
+        <SettingsModal
+          isOpen={settingsOpen}
+          onClose={() => setSettingsOpen(false)}
+          onSaved={handleSettingsSaved}
+        />
 
-      <main className="main">
-        <Suspense fallback={<div className="tab-loading"><span className="material-icons spinning">sync</span><p>Loading...</p></div>}>
-          {activeTab === 'channel-manager' && (
-            <ChannelManagerTab
-              // Channel Groups
-              channelGroups={displayChannelGroups}
-              onChannelGroupsChange={loadChannelGroups}
-              onDeleteChannelGroup={handleDeleteChannelGroup}
+        <main className="main">
+          <Suspense fallback={<div className="tab-loading"><span className="material-icons spinning">sync</span><p>Loading...</p></div>}>
+            {activeTab === 'channel-manager' && (
+              <ChannelManagerTab
+                // Channel Groups
+                channelGroups={displayChannelGroups}
+                onChannelGroupsChange={loadChannelGroups}
+                onDeleteChannelGroup={handleDeleteChannelGroup}
 
-              // Channels
-              channels={displayChannels}
-              onChannelsChange={loadChannels}
-              onCSVImportComplete={handleCSVImportComplete}
-              selectedChannelId={selectedChannel?.id ?? null}
-              onChannelSelect={handleChannelSelect}
-              onChannelUpdate={handleChannelUpdate}
-              onChannelDrop={handleStreamDropOnChannel}
-              onBulkStreamDrop={handleBulkStreamDropOnChannel}
-              onChannelReorder={handleChannelReorder}
-              onCreateChannel={handleCreateChannel}
-              onDeleteChannel={handleDeleteChannel}
-              channelsLoading={loadingStates.channels}
+                // Channels
+                channels={displayChannels}
+                onChannelsChange={loadChannels}
+                onCSVImportComplete={handleCSVImportComplete}
+                selectedChannelId={selectedChannel?.id ?? null}
+                onChannelSelect={handleChannelSelect}
+                onChannelUpdate={handleChannelUpdate}
+                onChannelDrop={handleStreamDropOnChannel}
+                onBulkStreamDrop={handleBulkStreamDropOnChannel}
+                onChannelReorder={handleChannelReorder}
+                onCreateChannel={handleCreateChannel}
+                onDeleteChannel={handleDeleteChannel}
+                channelsLoading={loadingStates.channels}
 
-              // Channel Search & Filter
-              channelSearch={channelFilters.search}
-              onChannelSearchChange={(search) => setChannelFilters(prev => ({ ...prev, search }))}
-              selectedGroups={channelFilters.groupFilter}
-              onSelectedGroupsChange={(groupFilter) => setChannelFilters(prev => ({ ...prev, groupFilter }))}
+                // Channel Search & Filter
+                channelSearch={channelFilters.search}
+                onChannelSearchChange={(search) => setChannelFilters(prev => ({ ...prev, search }))}
+                selectedGroups={channelFilters.groupFilter}
+                onSelectedGroupsChange={(groupFilter) => setChannelFilters(prev => ({ ...prev, groupFilter }))}
 
-              // Multi-select
-              selectedChannelIds={selectedChannelIds}
-              lastSelectedChannelId={lastSelectedChannelId}
-              onToggleChannelSelection={handleToggleChannelSelection}
-              onClearChannelSelection={handleClearChannelSelection}
-              onSelectChannelRange={handleSelectChannelRange}
-              onSelectGroupChannels={handleSelectGroupChannels}
+                // Multi-select
+                selectedChannelIds={selectedChannelIds}
+                lastSelectedChannelId={lastSelectedChannelId}
+                onToggleChannelSelection={handleToggleChannelSelection}
+                onClearChannelSelection={handleClearChannelSelection}
+                onSelectChannelRange={handleSelectChannelRange}
+                onSelectGroupChannels={handleSelectGroupChannels}
 
-              // Auto-rename
-              autoRenameChannelNumber={autoRenameChannelNumber}
+                // Auto-rename
+                autoRenameChannelNumber={autoRenameChannelNumber}
 
-              // Edit Mode
-              isEditMode={isEditMode}
-              isCommitting={isCommitting}
-              modifiedChannelIds={modifiedChannelIds}
-              onStageUpdateChannel={stageUpdateChannel}
-              onStageAddStream={stageAddStream}
-              onStageRemoveStream={stageRemoveStream}
-              onStageReorderStreams={stageReorderStreams}
-              onStageBulkAssignNumbers={stageBulkAssignNumbers}
-              onStageDeleteChannel={stageDeleteChannel}
-              onStageDeleteChannelGroup={stageDeleteChannelGroup}
-              onStageRenameChannelGroup={stageRenameChannelGroup}
-              onStartBatch={startBatch}
-              onEndBatch={endBatch}
+                // Edit Mode
+                isEditMode={isEditMode}
+                isCommitting={isCommitting}
+                modifiedChannelIds={modifiedChannelIds}
+                onStageUpdateChannel={stageUpdateChannel}
+                onStageAddStream={stageAddStream}
+                onStageRemoveStream={stageRemoveStream}
+                onStageReorderStreams={stageReorderStreams}
+                onStageBulkAssignNumbers={stageBulkAssignNumbers}
+                onStageDeleteChannel={stageDeleteChannel}
+                onStageDeleteChannelGroup={stageDeleteChannelGroup}
+                onStageRenameChannelGroup={stageRenameChannelGroup}
+                onStartBatch={startBatch}
+                onEndBatch={endBatch}
 
-              // History
-              canUndo={isEditMode ? canLocalUndo : canUndo}
-              canRedo={isEditMode ? canLocalRedo : canRedo}
-              undoCount={isEditMode ? stagedOperationCount : undoCount}
-              redoCount={isEditMode ? 0 : redoCount}
-              lastChange={lastChange}
-              savePoints={savePoints}
-              hasUnsavedChanges={hasUnsavedChanges}
-              isOperationPending={isOperationPending}
-              onUndo={isEditMode ? localUndo : undo}
-              onRedo={isEditMode ? localRedo : redo}
-              onCreateSavePoint={createSavePoint}
-              onRevertToSavePoint={revertToSavePoint}
-              onDeleteSavePoint={deleteSavePoint}
+                // History
+                canUndo={isEditMode ? canLocalUndo : canUndo}
+                canRedo={isEditMode ? canLocalRedo : canRedo}
+                undoCount={isEditMode ? stagedOperationCount : undoCount}
+                redoCount={isEditMode ? 0 : redoCount}
+                lastChange={lastChange}
+                savePoints={savePoints}
+                hasUnsavedChanges={hasUnsavedChanges}
+                isOperationPending={isOperationPending}
+                onUndo={isEditMode ? localUndo : undo}
+                onRedo={isEditMode ? localRedo : redo}
+                onCreateSavePoint={createSavePoint}
+                onRevertToSavePoint={revertToSavePoint}
+                onDeleteSavePoint={deleteSavePoint}
 
-              // Logos
-              logos={logos}
-              onLogosChange={loadLogos}
+                // Logos
+                logos={logos}
+                onLogosChange={loadLogos}
 
-              // EPG & Stream Profiles
-              epgData={epgData}
-              epgSources={epgSources}
-              streamProfiles={streamProfiles}
-              epgDataLoading={loadingStates.epgData}
+                // EPG & Stream Profiles
+                epgData={epgData}
+                epgSources={epgSources}
+                streamProfiles={streamProfiles}
+                epgDataLoading={loadingStates.epgData}
 
-              // Channel Profiles
-              channelProfiles={channelProfiles}
-              onChannelProfilesChange={loadChannelProfiles}
+                // Channel Profiles
+                channelProfiles={channelProfiles}
+                onChannelProfilesChange={loadChannelProfiles}
 
-              // Provider & Filter Settings
-              providerGroupSettings={providerGroupSettings}
-              deletedGroupIds={deletedGroupIds}
-              renamedGroupNames={renamedGroupNames}
-              channelListFilters={channelListFilters}
-              onChannelListFiltersChange={updateChannelListFilters}
-              newlyCreatedGroupIds={newlyCreatedGroupIds}
-              onTrackNewlyCreatedGroup={trackNewlyCreatedGroup}
+                // Provider & Filter Settings
+                providerGroupSettings={providerGroupSettings}
+                deletedGroupIds={deletedGroupIds}
+                renamedGroupNames={renamedGroupNames}
+                channelListFilters={channelListFilters}
+                onChannelListFiltersChange={updateChannelListFilters}
+                newlyCreatedGroupIds={newlyCreatedGroupIds}
+                onTrackNewlyCreatedGroup={trackNewlyCreatedGroup}
 
-              // Streams
-              allStreams={streams}
-              streams={filteredStreams}
-              providers={providers}
-              streamGroups={streamGroups}
-              streamsLoading={loadingStates.streams}
+                // Streams
+                allStreams={streams}
+                streams={filteredStreams}
+                providers={providers}
+                streamGroups={streamGroups}
+                streamsLoading={loadingStates.streams}
 
-              // Stream Search & Filter (server-side search via useEffect debounce)
-              streamSearch={streamFilters.search}
-              onStreamSearchChange={(search) => setStreamFilters(prev => ({ ...prev, search }))}
-              streamProviderFilter={streamFilters.providerFilter}
-              onStreamProviderFilterChange={(providerFilter) => { requestStreamsLoad(); setStreamFilters(prev => ({ ...prev, providerFilter })); }}
-              streamGroupFilter={streamFilters.groupFilter}
-              onStreamGroupFilterChange={(groupFilter) => { requestStreamsLoad(); setStreamFilters(prev => ({ ...prev, groupFilter })); }}
-              selectedProviders={streamFilters.selectedProviders}
-              onSelectedProvidersChange={updateSelectedProviderFilters}
-              selectedStreamGroups={streamFilters.selectedGroups}
-              onSelectedStreamGroupsChange={updateSelectedStreamGroupFilters}
-              onClearStreamFilters={clearStreamFilters}
+                // Stream Search & Filter (server-side search via useEffect debounce)
+                streamSearch={streamFilters.search}
+                onStreamSearchChange={(search) => setStreamFilters(prev => ({ ...prev, search }))}
+                streamProviderFilter={streamFilters.providerFilter}
+                onStreamProviderFilterChange={(providerFilter) => { requestStreamsLoad(); setStreamFilters(prev => ({ ...prev, providerFilter })); }}
+                streamGroupFilter={streamFilters.groupFilter}
+                onStreamGroupFilterChange={(groupFilter) => { requestStreamsLoad(); setStreamFilters(prev => ({ ...prev, groupFilter })); }}
+                selectedProviders={streamFilters.selectedProviders}
+                onSelectedProvidersChange={updateSelectedProviderFilters}
+                selectedStreamGroups={streamFilters.selectedGroups}
+                onSelectedStreamGroupsChange={updateSelectedStreamGroupFilters}
+                onClearStreamFilters={clearStreamFilters}
 
-              // Bulk Create
-              channelDefaults={channelDefaults}
-              externalTriggerGroupNames={droppedStreamGroupNames}
-              externalTriggerStreamIds={droppedStreamIds}
-              externalTriggerTargetGroupId={droppedStreamTargetGroupId}
-              externalTriggerStartingNumber={droppedStreamStartingNumber}
-              externalTriggerManualEntry={manualEntryTrigger}
-              onExternalTriggerHandled={handleStreamGroupTriggerHandled}
-              onStreamGroupDrop={handleStreamGroupDrop}
-              onBulkStreamsDrop={handleBulkStreamsDrop}
-              onOpenCreateChannelModal={handleOpenCreateChannelModal}
-              onBulkCreateFromGroup={handleBulkCreateFromGroup}
-              onCreateChannelManual={handleCreateChannelManual}
-              defaultNormalizeOnCreate={normalizeOnChannelCreate}
-              onCheckConflicts={handleCheckConflicts}
-              onGetHighestChannelNumber={handleGetHighestChannelNumber}
+                // Bulk Create
+                channelDefaults={channelDefaults}
+                externalTriggerGroupNames={droppedStreamGroupNames}
+                externalTriggerStreamIds={droppedStreamIds}
+                externalTriggerTargetGroupId={droppedStreamTargetGroupId}
+                externalTriggerStartingNumber={droppedStreamStartingNumber}
+                externalTriggerManualEntry={manualEntryTrigger}
+                onExternalTriggerHandled={handleStreamGroupTriggerHandled}
+                onStreamGroupDrop={handleStreamGroupDrop}
+                onBulkStreamsDrop={handleBulkStreamsDrop}
+                onOpenCreateChannelModal={handleOpenCreateChannelModal}
+                onBulkCreateFromGroup={handleBulkCreateFromGroup}
+                onCreateChannelManual={handleCreateChannelManual}
+                defaultNormalizeOnCreate={normalizeOnChannelCreate}
+                onCheckConflicts={handleCheckConflicts}
+                onGetHighestChannelNumber={handleGetHighestChannelNumber}
 
-              // Dispatcharr URL for channel stream URLs
-              dispatcharrUrl={dispatcharrUrl}
+                // Dispatcharr URL for channel stream URLs
+                dispatcharrUrl={dispatcharrUrl}
 
-              // Appearance settings
-              showStreamUrls={showStreamUrls}
-              hideUngroupedStreams={hideUngroupedStreams}
+                // Appearance settings
+                showStreamUrls={showStreamUrls}
+                hideUngroupedStreams={hideUngroupedStreams}
 
-              // EPG matching settings
-              epgAutoMatchThreshold={epgAutoMatchThreshold}
+                // EPG matching settings
+                epgAutoMatchThreshold={epgAutoMatchThreshold}
 
-              // Gracenote conflict handling
-              gracenoteConflictMode={gracenoteConflictMode}
+                // Gracenote conflict handling
+                gracenoteConflictMode={gracenoteConflictMode}
 
-              // Refresh streams (bypasses cache)
-              onRefreshStreams={refreshStreams}
+                // Refresh streams (bypasses cache)
+                onRefreshStreams={refreshStreams}
 
-              // External trigger to open edit modal from Guide tab
-              externalChannelToEdit={channelToEditFromGuide}
-              onExternalChannelEditHandled={handleExternalChannelEditHandled}
+                // External trigger to open edit modal from Guide tab
+                externalChannelToEdit={channelToEditFromGuide}
+                onExternalChannelEditHandled={handleExternalChannelEditHandled}
 
-              // Lazy loading - load only the expanded group's streams
-              onStreamGroupExpand={loadStreamGroup}
-            />
-          )}
-          {activeTab === 'm3u-manager' && (
-            <M3UManagerTab
-              epgSources={epgSources}
-              channelGroups={channelGroups}
-              channelProfiles={channelProfiles}
-              streamProfiles={streamProfiles}
-              onChannelGroupsChange={loadChannelGroups}
-              onAccountsChange={loadProviders}
-              hideM3uUrls={hideM3uUrls}
-            />
-          )}
-          {activeTab === 'epg-manager' && <EPGManagerTab onSourcesChange={loadEpgSources} hideEpgUrls={hideEpgUrls} />}
-          {activeTab === 'guide' && (
-            <GuideTab
-              channels={channels}
-              logos={logos}
-              epgData={epgData}
-              epgSources={epgSources}
-              streamProfiles={streamProfiles}
-              epgDataLoading={loadingStates.epgData}
-              onChannelUpdate={handleGuideChannelUpdate}
-              onLogoCreate={handleLogoCreate}
-              onLogoUpload={handleLogoUpload}
-              onLogosChange={loadLogos}
-            />
-          )}
-          {activeTab === 'logo-manager' && <LogoManagerTab />}
-          {activeTab === 'm3u-changes' && <M3UChangesTab />}
-          {activeTab === 'auto-creation' && <AutoCreationTab />}
-          {activeTab === 'journal' && <JournalTab />}
-          {activeTab === 'stats' && <StatsTab />}
-          {activeTab === 'ffmpeg-builder' && <FFMPEGBuilderTab />}
-          {activeTab === 'settings' && <SettingsTab onSaved={handleSettingsSaved} channelProfiles={channelProfiles} onProbeComplete={loadChannels} />}
-        </Suspense>
-      </main>
+                // Lazy loading - load only the expanded group's streams
+                onStreamGroupExpand={loadStreamGroup}
+              />
+            )}
+            {activeTab === 'm3u-manager' && (
+              <M3UManagerTab
+                epgSources={epgSources}
+                channelGroups={channelGroups}
+                channelProfiles={channelProfiles}
+                streamProfiles={streamProfiles}
+                onChannelGroupsChange={loadChannelGroups}
+                onAccountsChange={loadProviders}
+                hideM3uUrls={hideM3uUrls}
+              />
+            )}
+            {activeTab === 'epg-manager' && <EPGManagerTab onSourcesChange={loadEpgSources} hideEpgUrls={hideEpgUrls} />}
+            {activeTab === 'guide' && (
+              <GuideTab
+                channels={channels}
+                logos={logos}
+                epgData={epgData}
+                epgSources={epgSources}
+                streamProfiles={streamProfiles}
+                epgDataLoading={loadingStates.epgData}
+                onChannelUpdate={handleGuideChannelUpdate}
+                onLogoCreate={handleLogoCreate}
+                onLogoUpload={handleLogoUpload}
+                onLogosChange={loadLogos}
+              />
+            )}
+            {activeTab === 'logo-manager' && <LogoManagerTab />}
+            {activeTab === 'm3u-changes' && <M3UChangesTab />}
+            {activeTab === 'auto-creation' && <AutoCreationTab />}
+            {activeTab === 'journal' && <JournalTab />}
+            {activeTab === 'stats' && <StatsTab />}
+            {activeTab === 'ffmpeg-builder' && <FFMPEGBuilderTab />}
+            {activeTab === 'settings' && <SettingsTab onSaved={handleSettingsSaved} channelProfiles={channelProfiles} onProbeComplete={loadChannels} />}
+          </Suspense>
+        </main>
 
-      <footer className="footer">
-        <div className="footer-left">
-          {error && <span className="error">API Error: {error}</span>}
-          {health && (
-            <span className="status">
-              API: {health.status} | Service: {health.service}
-            </span>
-          )}
-        </div>
-        <div className="footer-right">
-          <span className="version">v{packageJson.version}</span>
-          {updateInfo?.updateAvailable && (
-            <a
-              href={updateInfo.releaseUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="update-available"
-              title={updateInfo.latestVersion ? `Version ${updateInfo.latestVersion} available` : 'Update available'}
-            >
-              New Update Available!
-            </a>
-          )}
-        </div>
-      </footer>
+        <footer className="footer">
+          <div className="footer-left">
+            {error && <span className="error">API Error: {error}</span>}
+            {health && (
+              <span className="status">
+                API: {health.status} | Service: {health.service}
+              </span>
+            )}
+          </div>
+          <div className="footer-right">
+            <span className="version">v{packageJson.version}</span>
+            {updateInfo?.updateAvailable && (
+              <a
+                href={updateInfo.releaseUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="update-available"
+                title={updateInfo.latestVersion ? `Version ${updateInfo.latestVersion} available` : 'Update available'}
+              >
+                New Update Available!
+              </a>
+            )}
+          </div>
+        </footer>
 
-      <VLCProtocolHelperModal
-        isOpen={showVLCHelperModal}
-        onClose={() => setShowVLCHelperModal(false)}
-        onDownloadM3U={() => downloadM3U(vlcModalStreamUrl, vlcModalStreamName)}
-        streamName={vlcModalStreamName || 'Stream'}
-      />
-    </div>
+        <VLCProtocolHelperModal
+          isOpen={showVLCHelperModal}
+          onClose={() => setShowVLCHelperModal(false)}
+          onDownloadM3U={() => downloadM3U(vlcModalStreamUrl, vlcModalStreamName)}
+          streamName={vlcModalStreamName || 'Stream'}
+        />
+      </div>
     </NotificationProvider>
   );
 }
