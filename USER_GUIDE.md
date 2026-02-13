@@ -679,8 +679,11 @@ Build matching logic using a three-part editor (Field + Operator + Value) with A
 | **Quality** | at least, at most (2160p, 1080p, 720p, 480p, 360p) |
 | **Codec** | is, is not (H.264, HEVC, etc.) |
 | **Channel Exists** | by name, regex, or group |
+| **Normalized Match in Group** | stream's normalized name matches a channel in a specified group |
 
 Combine multiple conditions with **AND** (all must match) or **OR** (any can match) connectors.
+
+**Normalized Match in Group** is particularly useful for merging streams into existing channels. It normalizes both the stream name (stripping country prefixes like "US:") and channel names (stripping number prefixes like "106 |") using the normalization engine, then checks if the normalized stream name matches any channel in the selected group. The group selector only shows channel groups that actually contain channels.
 
 ### Actions
 
@@ -690,7 +693,7 @@ Define what happens when conditions match:
 |--------|-------------|
 | **Create Channel** | Template-based naming using `{stream_name}`, `{stream_group}`, `{quality}`, `{provider}`, etc. |
 | **Create Group** | Automatically create a channel group |
-| **Merge Streams** | Combine multiple streams into one channel with quality preference |
+| **Merge Streams** | Combine multiple streams into one channel with quality preference; auto-find matches by normalized name |
 | **Assign Logo** | Set channel logo from stream or URL |
 | **Assign EPG** | Assign EPG data source |
 | **Assign Profile** | Set stream transcoding profile |
@@ -699,7 +702,12 @@ Define what happens when conditions match:
 | **Name Transform** | Apply regex find/replace to channel names |
 | **Skip / Stop** | Skip stream or stop processing further rules |
 
-When a channel already exists, choose behavior: **skip**, **merge** streams into it, **update** it, or **use existing**.
+When a channel already exists, choose behavior:
+- **Skip** - Don't create the channel
+- **Merge (create if new)** - Add streams to existing channel, or create a new one if no match found
+- **Merge Only (existing only)** - Add streams to existing channel only; skip if no match (never creates new channels)
+- **Update** - Update existing channel properties
+- **Use Existing** - Use the existing channel without changes
 
 ### Rule Options
 
@@ -719,6 +727,10 @@ When a channel already exists, choose behavior: **skip**, **merge** streams into
 **Run Single Rule** - Execute or dry-run a specific rule in isolation from the rule's menu.
 
 **Rollback** - Undo a completed execution from the execution history to restore the previous state.
+
+**Execution History Summary** - Each execution in the history shows a quick summary: streams matched, channels merged, channels created, and streams skipped. A live "Running" indicator appears while a pipeline is executing.
+
+**Auto-Find for Merge Streams** - When using the `merge_streams` action with `target: auto` and no explicit `find_channel_by`, the engine automatically finds existing channels by the stream's normalized name. It strips country prefixes (e.g., "US: Discovery" → "Discovery") and matches against channel names that may have number prefixes (e.g., "113 | Discovery"). This means you can set up a simple rule with `normalized_name_in_group` + `merge_streams(target: auto)` to automatically merge streams from any provider into your existing channel lineup without manual channel-by-channel mapping.
 
 ### Orphan Reconciliation
 
