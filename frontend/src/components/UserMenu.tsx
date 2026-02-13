@@ -1,4 +1,4 @@
-r/**
+/**
  * User menu component for header.
  *
  * Shows current user info, profile editing, password change, and logout.
