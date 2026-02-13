@@ -681,9 +681,53 @@ Build matching logic using a three-part editor (Field + Operator + Value) with A
 | **Channel Exists** | by name, regex, or group |
 | **Normalized Match in Group** | stream's normalized name matches a channel in a specified group |
 
-Combine multiple conditions with **AND** (all must match) or **OR** (any can match) connectors.
+#### AND/OR Connectors
 
-**Normalized Match in Group** is particularly useful for merging streams into existing channels. It normalizes both the stream name (stripping country prefixes like "US:") and channel names (stripping number prefixes like "106 |") using the normalization engine, then checks if the normalized stream name matches any channel in the selected group. The group selector only shows channel groups that actually contain channels.
+Between each condition is a clickable **AND/OR toggle**. Click it to switch between AND and OR. Understanding how these work is important for building effective rules.
+
+**AND** means "also require this." All conditions connected by AND must be true together for a match.
+
+**OR** means "or alternatively match this." OR creates a separate group of conditions — if *any* OR-group fully matches, the stream matches the rule.
+
+**Order of operations:** AND binds tighter than OR, just like multiplication before addition in math. Conditions connected by AND are grouped together first, then OR separates those groups.
+
+**Example 1 — Simple AND (all must match):**
+
+```
+Stream Name contains "ESPN"  AND  Stream Group contains "US"
+```
+Matches only streams with "ESPN" in the name that are also in a "US" group. Both must be true.
+
+**Example 2 — Simple OR (either can match):**
+
+```
+Stream Name contains "ESPN"  OR  Stream Name contains "Fox Sports"
+```
+Matches streams with either "ESPN" or "Fox Sports" in the name.
+
+**Example 3 — Mixed AND/OR (order of operations):**
+
+```
+Stream Name contains "ESPN"  AND  Quality at least 1080p  OR  Stream Name contains "Fox Sports"  AND  Quality at least 720p
+```
+This is evaluated as two groups:
+- **Group 1:** Stream Name contains "ESPN" **AND** Quality at least 1080p
+- **Group 2:** Stream Name contains "Fox Sports" **AND** Quality at least 720p
+
+A stream matches if *either* group fully matches. So "ESPN HD 1080p" matches via Group 1, and "Fox Sports 720p" matches via Group 2, but "ESPN 480p" does not match (fails Group 1's quality requirement, and doesn't match Group 2 at all).
+
+**Example 4 — Common pattern for multi-provider merging:**
+
+```
+Normalized Match in Group = "Documentaries"  AND  Stream Group matches "^US"
+```
+Matches any stream from a US group whose normalized name matches a channel in your Documentaries channel group. Pair this with a `merge_streams(target: auto)` action to automatically merge matching streams into existing channels.
+
+> **Tip:** Think of OR as creating separate "paths to match." Each path (AND-group) is evaluated independently. If you want "match A and B, or match C and D", place AND between A-B and between C-D, with OR between the two groups.
+
+#### Normalized Match in Group
+
+This condition type is particularly useful for merging streams into existing channels. It normalizes both the stream name (stripping country prefixes like "US:") and channel names (stripping number prefixes like "106 |") using the normalization engine, then checks if the normalized stream name matches any channel in the selected group. The group selector only shows channel groups that actually contain channels.
 
 ### Actions
 
