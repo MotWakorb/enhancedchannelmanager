@@ -8,7 +8,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import * as api from '../../services/api';
 import type { TagGroup, Tag } from '../../types';
-import { useNotifications } from '../../contexts/NotificationContext';
+import { useNotifications } from '../../contexts/useNotifications';
 import { ModalOverlay } from '../ModalOverlay';
 import './TagEngineSection.css';
 

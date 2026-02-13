@@ -5,7 +5,7 @@ import type { EPGSource, M3UAccount, ChannelGroup } from '../types';
 import { logger } from '../utils/logger';
 import { ScheduleEditor } from './ScheduleEditor';
 import { ModalOverlay } from './ModalOverlay';
-import { useNotifications } from '../contexts/NotificationContext';
+import { useNotifications } from '../contexts/useNotifications';
 import './ModalBase.css';
 import './TaskEditorModal.css';
 

@@ -5,7 +5,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import type { WatchHistoryResponse } from '../../types';
 import * as api from '../../services/api';
-import { useNotifications } from '../../contexts/NotificationContext';
+import { useNotifications } from '../../contexts/useNotifications';
 import './WatchHistoryPanel.css';
 import { formatDuration, formatRelativeTime } from '../../utils/formatting';
 

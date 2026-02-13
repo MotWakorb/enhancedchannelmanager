@@ -3,7 +3,7 @@ import type { JournalEntry, JournalCategory, JournalActionType, JournalStats, Jo
 import * as api from '../../services/api';
 import { CustomSelect } from '../CustomSelect';
 import './JournalTab.css';
-import { useNotifications } from '../../contexts/NotificationContext';
+import { useNotifications } from '../../contexts/useNotifications';
 import { formatTimestamp } from '../../utils/formatting';
 
 // Get icon for category

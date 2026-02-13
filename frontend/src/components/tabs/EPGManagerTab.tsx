@@ -21,7 +21,7 @@ import * as api from '../../services/api';
 import { DummyEPGSourceModal } from '../DummyEPGSourceModal';
 import { CustomSelect } from '../CustomSelect';
 import { ModalOverlay } from '../ModalOverlay';
-import { useNotifications } from '../../contexts/NotificationContext';
+import { useNotifications } from '../../contexts/useNotifications';
 import './EPGManagerTab.css';
 
 interface SortableEPGSourceRowProps {

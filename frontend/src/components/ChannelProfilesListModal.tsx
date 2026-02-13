@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, memo } from 'react';
 import type { ChannelProfile, Channel, ChannelGroup } from '../types';
 import * as api from '../services/api';
-import { useNotifications } from '../contexts/NotificationContext';
+import { useNotifications } from '../contexts/useNotifications';
 import { naturalCompare } from '../utils/naturalSort';
 import { ModalOverlay } from './ModalOverlay';
 import './ChannelProfilesListModal.css';

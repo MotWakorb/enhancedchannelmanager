@@ -3,7 +3,7 @@ import type { M3UChangeLog, M3UChangeSummary, M3UChangeType, M3UAccount } from '
 import * as api from '../../services/api';
 import { CustomSelect } from '../CustomSelect';
 import './M3UChangesTab.css';
-import { useNotifications } from '../../contexts/NotificationContext';
+import { useNotifications } from '../../contexts/useNotifications';
 import { formatTimestamp } from '../../utils/formatting';
 
 // Get icon for change type

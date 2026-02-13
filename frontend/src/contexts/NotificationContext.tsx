@@ -3,8 +3,6 @@ import { ToastContainer, ToastData } from '../components/ToastContainer';
 import type { NotificationOptions, NotificationContextValue } from './useNotifications';
 import { NotificationContext } from './useNotifications';
 
-export { useNotifications } from './useNotifications';
-
 // Generate unique IDs for notifications
 let notificationIdCounter = 0;
 function generateId(): string {

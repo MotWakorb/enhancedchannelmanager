@@ -5,7 +5,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import type { BandwidthSummary } from '../../types';
 import * as api from '../../services/api';
-import { useNotifications } from '../../contexts/NotificationContext';
+import { useNotifications } from '../../contexts/useNotifications';
 import './BandwidthPanel.css';
 import { formatBytes, formatBitrate, formatDateLabel } from '../../utils/formatting';
 

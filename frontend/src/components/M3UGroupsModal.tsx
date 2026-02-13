@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, memo } from 'react';
 import type { M3UAccount, ChannelGroupM3UAccount, ChannelGroup, AutoSyncCustomProperties, ChannelProfile, StreamProfile, EPGSource } from '../types';
 import * as api from '../services/api';
-import { useNotifications } from '../contexts/NotificationContext';
+import { useNotifications } from '../contexts/useNotifications';
 import { naturalCompare } from '../utils/naturalSort';
 import { AutoSyncSettingsModal } from './AutoSyncSettingsModal';
 import { ModalOverlay } from './ModalOverlay';

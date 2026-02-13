@@ -4,7 +4,7 @@ import type {
   PresetCategory,
   FFMPEGBuilderState,
 } from '../../types/ffmpegBuilder';
-import { useNotifications } from '../../contexts/NotificationContext';
+import { useNotifications } from '../../contexts/useNotifications';
 
 // ---------------------------------------------------------------------------
 // Constants

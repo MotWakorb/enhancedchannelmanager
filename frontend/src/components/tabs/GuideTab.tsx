@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import type { Channel, Logo, EPGProgram, EPGData, EPGSource, StreamProfile, ChannelProfile, ChannelGroup } from '../../types';
 import * as api from '../../services/api';
-import { useNotifications } from '../../contexts/NotificationContext';
+import { useNotifications } from '../../contexts/useNotifications';
 import { EditChannelModal, type ChannelMetadataChanges } from '../EditChannelModal';
 import { PrintGuideModal } from '../PrintGuideModal';
 import { CustomSelect } from '../CustomSelect';

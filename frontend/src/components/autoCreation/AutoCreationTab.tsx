@@ -13,7 +13,7 @@ import { useAutoCreationExecution } from '../../hooks/useAutoCreationExecution';
 import { RuleBuilder } from './RuleBuilder';
 import * as autoCreationApi from '../../services/autoCreationApi';
 import { copyToClipboard } from '../../utils/clipboard';
-import { useNotifications } from '../../contexts/NotificationContext';
+import { useNotifications } from '../../contexts/useNotifications';
 import { ModalOverlay } from '../ModalOverlay';
 import '../ModalBase.css';
 import './AutoCreationTab.css';

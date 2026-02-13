@@ -4,7 +4,7 @@ import * as api from '../../services/api';
 import { LogoModal } from '../LogoModal';
 import { ModalOverlay } from '../ModalOverlay';
 import './LogoManagerTab.css';
-import { useNotifications } from '../../contexts/NotificationContext';
+import { useNotifications } from '../../contexts/useNotifications';
 
 type ViewMode = 'list' | 'grid';
 const PAGE_SIZE_OPTIONS = [25, 50, 100, 250] as const;

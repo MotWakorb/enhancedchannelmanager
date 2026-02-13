@@ -139,7 +139,7 @@ export function useStatusWebSocket(
   const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const handlersRef = useRef(handlers);
   const subscribeServicesRef = useRef(subscribeServices);
-  const connectRef = useRef<() => void>(() => {});
+  const connectRef = useRef<() => void>(() => { });
 
   // Keep handlers ref up to date
   useEffect(() => {
@@ -301,7 +301,7 @@ export function useStatusWebSocket(
   const connect = useCallback(() => {
     // Don't connect if already connected or connecting
     if (wsRef.current?.readyState === WebSocket.OPEN ||
-        wsRef.current?.readyState === WebSocket.CONNECTING) {
+      wsRef.current?.readyState === WebSocket.CONNECTING) {
       return;
     }
 
@@ -451,7 +451,7 @@ export function useStatusWebSocket(
         wsRef.current.close();
       }
     };
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [connect]);
 
   // Update subscription when subscribeServices prop changes
   useEffect(() => {
