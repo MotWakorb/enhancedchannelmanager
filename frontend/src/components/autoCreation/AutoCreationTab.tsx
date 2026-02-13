@@ -642,19 +642,38 @@ export function AutoCreationTab() {
             <h3>Execution History</h3>
           </div>
 
-          {executionsLoading ? (
+          {executionsLoading && executions.length === 0 ? (
             <div className="executions-loading">
               <span className="material-icons spinning">sync</span>
               Loading...
             </div>
-          ) : executions.length === 0 ? (
+          ) : !runningPipeline && executions.length === 0 ? (
             <div className="empty-state small">
               <span className="material-icons">history</span>
               <p>No executions yet</p>
             </div>
           ) : (
             <div className="executions-list" data-testid="executions-list">
-              {executions.slice(0, 5).map(execution => (
+              {runningPipeline && (
+                <div className="execution-item execution-running" data-testid="execution-running">
+                  <div className="execution-info">
+                    <span className={getStatusBadgeClass('running')}>
+                      <span className="material-icons spinning" style={{ fontSize: '12px', marginRight: '4px' }}>sync</span>
+                      Running
+                    </span>
+                    <span className="execution-mode">
+                      {runningSingleRule ? 'Single Rule' : 'Pipeline'}
+                    </span>
+                    <span className="execution-date">
+                      {new Date().toLocaleString()}
+                    </span>
+                    <span className="execution-stats">
+                      Processing...
+                    </span>
+                  </div>
+                </div>
+              )}
+              {executions.slice(0, runningPipeline ? 4 : 5).map(execution => (
                 <div key={execution.id} className="execution-item" data-testid="execution-item">
                   <div className="execution-info">
                     <span className={getStatusBadgeClass(execution.status)}>
@@ -667,7 +686,10 @@ export function AutoCreationTab() {
                       {new Date(execution.started_at).toLocaleString()}
                     </span>
                     <span className="execution-stats">
-                      {execution.streams_matched} matched, {execution.channels_created} created
+                      {execution.streams_matched} matched
+                      {execution.channels_updated > 0 && `, ${execution.channels_updated} merged`}
+                      {execution.channels_created > 0 && `, ${execution.channels_created} created`}
+                      {execution.streams_skipped > 0 && `, ${execution.streams_skipped} skipped`}
                     </span>
                   </div>
                   <div className="execution-actions">

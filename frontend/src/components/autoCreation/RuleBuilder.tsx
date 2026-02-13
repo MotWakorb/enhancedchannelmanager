@@ -578,6 +578,7 @@ function ConditionTypeSelector({
       types: [
         { type: 'has_channel' as ConditionType, label: 'Has Channel' },
         { type: 'channel_exists_with_name' as ConditionType, label: 'Channel Exists With Name' },
+        { type: 'normalized_name_in_group' as ConditionType, label: 'Normalized Match in Group' },
       ],
     },
     {

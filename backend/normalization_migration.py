@@ -58,6 +58,14 @@ DEMO_RULE_CONFIGS = [
         "tag_group_name": "Network Tags",
         "match_position": "suffix",  # Default to suffix; users can duplicate for prefix if needed
         "action_type": "strip_suffix"
+    },
+    {
+        "rule_group_name": "Strip Provider Tags",
+        "rule_group_description": "Remove provider source indicators like (S), (H), (A) from channel names",
+        "priority": 5,
+        "tag_group_name": "Provider Tags",
+        "match_position": "suffix",
+        "action_type": "strip_suffix"
     }
 ]
 
@@ -230,58 +238,51 @@ def get_migration_status(db: Session) -> dict:
 
 def fix_timezone_tags_remove_directional(db: Session) -> dict:
     """
-    Remove East/West and other directional suffixes from Timezone Tags rules.
-
-    These suffixes (EAST, WEST, EASTERN, WESTERN, CENTRAL, MOUNTAIN, PACIFIC)
-    are often part of legitimate channel names (e.g., "Cinemax East",
-    "SportsNet Pacific") and indicate timezone-shifted EPG content. Stripping
-    them would incorrectly merge channels with different content/timing.
-
-    Only timezone abbreviations (EST, PST, ET, PT, etc.) are safe to strip.
+    Ensure EAST and WEST are both present in Timezone Tags for consistent
+    normalization. Both should be stripped so channel names like
+    "Discovery EAST HD" and "Discovery WEST HD" normalize the same way.
 
     Returns:
-        Dict with count of rules deleted
+        Dict with count of tags added
     """
-    # Tags to remove - these are directional/regional, not abbreviations
-    tags_to_remove = ["EAST", "WEST", "EASTERN", "WESTERN", "CENTRAL", "MOUNTAIN", "PACIFIC"]
+    from models import TagGroup, Tag
 
-    # Find the Timezone Tags group by name
-    timezone_group = db.query(NormalizationRuleGroup).filter(
-        NormalizationRuleGroup.name == "Timezone Tags"
+    # Tags that must exist for consistent normalization
+    required_tags = ["EAST", "WEST"]
+
+    # Find the Timezone Tags tag group
+    timezone_group = db.query(TagGroup).filter(
+        TagGroup.name == "Timezone Tags"
     ).first()
 
     if not timezone_group:
-        logger.info("Timezone Tags group not found, skipping fix")
-        return {"rules_deleted": 0, "skipped": True}
+        logger.info("Timezone Tags tag group not found, skipping fix")
+        return {"tags_added": 0, "skipped": True}
 
-    # Update the group description to reflect the change
-    new_description = "Strip timezone abbreviation suffixes (EST, PST, ET, PT, etc.)"
-    if timezone_group.description != new_description:
-        timezone_group.description = new_description
+    # Ensure each required tag exists
+    added = 0
+    for tag_value in required_tags:
+        existing = db.query(Tag).filter(
+            Tag.group_id == timezone_group.id,
+            Tag.value == tag_value
+        ).first()
+        if not existing:
+            db.add(Tag(
+                group_id=timezone_group.id,
+                value=tag_value,
+                case_sensitive=False,
+                enabled=True,
+                is_builtin=True
+            ))
+            added += 1
 
-    # Delete rules for the directional tags
-    deleted = 0
-    for tag in tags_to_remove:
-        count = db.query(NormalizationRule).filter(
-            NormalizationRule.group_id == timezone_group.id,
-            NormalizationRule.condition_value == tag
-        ).delete()
-        deleted += count
-
-    # Also revert any case_sensitive changes we made earlier
-    db.query(NormalizationRule).filter(
-        NormalizationRule.group_id == timezone_group.id,
-        NormalizationRule.case_sensitive == True
-    ).update({"case_sensitive": False})
-
-    db.commit()
-
-    if deleted > 0:
-        logger.info(f"Removed {deleted} directional suffix rules from Timezone Tags (EAST, WEST, etc.)")
+    if added > 0:
+        db.commit()
+        logger.info(f"Added {added} missing tags to Timezone Tags (EAST/WEST)")
     else:
-        logger.info("No directional suffix rules to remove")
+        logger.info("Timezone Tags already has EAST and WEST")
 
-    return {"rules_deleted": deleted, "skipped": False}
+    return {"tags_added": added, "skipped": False}
 
 
 def fix_tag_group_action_types(db: Session) -> dict:
@@ -319,3 +320,69 @@ def fix_tag_group_action_types(db: Session) -> dict:
         logger.info("No tag-group rules needed action type fixes")
 
     return {"rules_updated": updated}
+
+
+def ensure_provider_tags_rule(db: Session) -> dict:
+    """
+    Ensure the 'Strip Provider Tags' normalization rule group exists.
+
+    For existing installations that already have normalization rules,
+    this adds the Provider Tags rule group if it's missing. The tag group
+    itself is created by _seed_builtin_tags in database.py.
+
+    Returns:
+        Dict with created status
+    """
+    # Check if the rule group already exists
+    existing = db.query(NormalizationRuleGroup).filter(
+        NormalizationRuleGroup.name == "Strip Provider Tags"
+    ).first()
+
+    if existing:
+        logger.info("Strip Provider Tags rule group already exists")
+        return {"created": False}
+
+    # Check if we have any rule groups at all (if none, create_demo_rules handles it)
+    total_groups = db.query(NormalizationRuleGroup).count()
+    if total_groups == 0:
+        logger.info("No rule groups exist yet, skipping (create_demo_rules will handle)")
+        return {"created": False}
+
+    # Find the Provider Tags tag group
+    provider_group = db.query(TagGroup).filter(
+        TagGroup.name == "Provider Tags"
+    ).first()
+
+    if not provider_group:
+        logger.warning("Provider Tags tag group not found, skipping rule creation")
+        return {"created": False}
+
+    # Create the rule group - disabled by default like other demo rules
+    rule_group = NormalizationRuleGroup(
+        name="Strip Provider Tags",
+        description="Remove provider source indicators like (S), (H), (A) from channel names",
+        enabled=False,
+        priority=5,
+        is_builtin=False
+    )
+    db.add(rule_group)
+    db.flush()
+
+    # Create the tag-group-based rule
+    rule = NormalizationRule(
+        group_id=rule_group.id,
+        name="Match Provider Tags",
+        description="Matches any tag from 'Provider Tags' and removes it",
+        enabled=True,
+        priority=0,
+        condition_type="tag_group",
+        tag_group_id=provider_group.id,
+        tag_match_position="suffix",
+        action_type="strip_suffix",
+        is_builtin=False
+    )
+    db.add(rule)
+    db.commit()
+
+    logger.info("Created 'Strip Provider Tags' rule group with tag group condition")
+    return {"created": True}

@@ -730,7 +730,7 @@ def _populate_builtin_tags(conn) -> None:
                 "EST", "EDT", "ET", "CST", "CDT", "CT", "MST", "MDT", "MT",
                 "PST", "PDT", "PT", "AST", "ADT", "HST", "AKST", "AKDT",
                 # Europe
-                "CET", "CEST", "EET", "EEST", "WET", "WEST", "BST", "IST",
+                "CET", "CEST", "EET", "EEST", "WET", "WEST", "EAST", "BST", "IST",
                 # Asia - East
                 "JST", "KST", "CST", "HKT", "PHT", "SGT", "MYT", "WIB", "WITA", "WIT",
                 # Asia - South
@@ -788,6 +788,10 @@ def _populate_builtin_tags(conn) -> None:
         "Network Tags": {
             "description": "Network and stream type indicators",
             "tags": ["PPV", "LIVE", "BACKUP", "VIP", "PREMIUM", "24/7", "REPLAY"]
+        },
+        "Provider Tags": {
+            "description": "Provider source indicators, often in parentheses like (S) or (H)",
+            "tags": ["S", "H", "A", "E", "F", "D"]
         }
     }
 

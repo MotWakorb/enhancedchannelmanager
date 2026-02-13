@@ -162,48 +162,27 @@ class StreamProbeTask(TaskScheduler):
                 channel_groups = None  # None = probe everything
             elif channel_groups:
                 # Fixed-list mode: validate stored IDs/names against current groups
+                # Note: stale groups are auto-removed on schedule load, but validate
+                # here too in case groups were deleted between loads
                 try:
                     current_groups = await self._prober.client.get_channel_groups()
                     current_by_id = {g["id"]: g.get("name") for g in current_groups}
                     current_by_name = {g.get("name"): g for g in current_groups}
 
-                    # Detect format: int = ID-based (new), str = name-based (legacy)
                     if channel_groups and isinstance(channel_groups[0], int):
                         valid_ids = [gid for gid in channel_groups if gid in current_by_id]
-                        stale_ids = [gid for gid in channel_groups if gid not in current_by_id]
+                        stale_count = len(channel_groups) - len(valid_ids)
                         valid_groups = [current_by_id[gid] for gid in valid_ids]
-                        stale_groups = [f"ID:{gid}" for gid in stale_ids]
                     else:
                         valid_groups = [g for g in channel_groups if g in current_by_name]
-                        stale_groups = [g for g in channel_groups if g not in current_by_name]
+                        stale_count = len(channel_groups) - len(valid_groups)
 
-                    if stale_groups:
-                        logger.warning(f"[{self.task_id}] Stale groups in schedule: {stale_groups}")
-                        # Send warning notification
-                        if self._create_notification_callback:
-                            try:
-                                await self._create_notification_callback(
-                                    notification_type="warning",
-                                    title="Stream Probe: Stale Channel Groups",
-                                    message=f"{len(stale_groups)} channel group(s) in the probe schedule no longer exist "
-                                            f"and were skipped: {', '.join(str(g) for g in stale_groups)}. "
-                                            f"Edit the schedule to update the group selection.",
-                                    source="task",
-                                    source_id="stream_probe_stale_groups",
-                                    action_label="Edit Schedule",
-                                    send_alerts=self._send_alerts,
-                                    metadata={
-                                        "task_id": self.task_id,
-                                        "stale_groups": stale_groups,
-                                        "action_type": "configure_task",
-                                    },
-                                )
-                            except Exception as e:
-                                logger.warning(f"[{self.task_id}] Failed to send stale groups notification: {e}")
+                    if stale_count:
+                        logger.warning(f"[{self.task_id}] Skipping {stale_count} stale group(s) (will be auto-removed on next schedule load)")
 
                     channel_groups = valid_groups if valid_groups else None
                     if not valid_groups:
-                        logger.info(f"[{self.task_id}] All scheduled groups are stale, probing all current groups")
+                        logger.info(f"[{self.task_id}] No valid groups in schedule, probing all current groups")
                 except Exception as e:
                     logger.warning(f"[{self.task_id}] Failed to validate channel groups: {e}")
 

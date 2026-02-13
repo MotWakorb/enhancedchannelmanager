@@ -6,6 +6,7 @@ import { useState, useEffect, useId } from 'react';
 import type { Condition, ConditionType } from '../../types/autoCreation';
 import { CustomSelect } from '../CustomSelect';
 import type { SelectOption } from '../CustomSelect';
+import { getM3UAccounts, getChannelGroups } from '../../services/api';
 import './ConditionEditor.css';
 
 // ============================================================================
@@ -70,8 +71,8 @@ const FIELDS: FieldDef[] = [
   {
     id: 'provider', label: 'Provider', category: 'stream',
     operators: [
-      { id: 'is', label: 'Is', valueType: 'string', placeholder: 'Enter provider name' },
-      { id: 'is_not', label: 'Is Not', valueType: 'string', placeholder: 'Enter provider name' },
+      { id: 'is', label: 'Is', valueType: 'select' },
+      { id: 'is_not', label: 'Is Not', valueType: 'select' },
     ],
   },
   { id: 'logo', label: 'Logo', category: 'stream', operators: EXISTS_OPS },
@@ -101,6 +102,10 @@ const FIELDS: FieldDef[] = [
   {
     id: 'channel_group', label: 'Channel Group', category: 'channel',
     operators: [{ id: 'is', label: 'Is', valueType: 'string', placeholder: 'Enter group name' }],
+  },
+  {
+    id: 'normalized_match_group', label: 'Normalized Match in Group', category: 'channel',
+    operators: [{ id: 'is', label: 'Is In', valueType: 'select' }],
   },
   {
     id: 'channel_streams', label: 'Channel Streams', category: 'channel',
@@ -196,6 +201,9 @@ function buildCondition(
     case 'channel_group':
       type = 'channel_in_group'; value = userValue;
       break;
+    case 'normalized_match_group':
+      type = 'normalized_name_in_group'; value = Number(userValue);
+      break;
     case 'channel_streams':
       type = 'channel_has_streams'; value = true;
       if (operator === 'does_not_exist') negate = true;
@@ -265,6 +273,8 @@ function parseCondition(condition: Condition): { field: string; operator: string
       return detectRegexOp('channel_name', String(value ?? ''), false);
     case 'channel_in_group':
       return { field: 'channel_group', operator: 'is', displayValue: String(value ?? '') };
+    case 'normalized_name_in_group':
+      return { field: 'normalized_match_group', operator: 'is', displayValue: String(value ?? '') };
     case 'channel_has_streams':
       return { field: 'channel_streams', operator: negate ? 'does_not_exist' : 'exists', displayValue: '' };
 
@@ -425,6 +435,24 @@ export function ConditionEditor({
   const id = useId();
   const [showDateHelp, setShowDateHelp] = useState(false);
 
+  const [providerOptions, setProviderOptions] = useState<SelectOption[]>([]);
+  useEffect(() => {
+    getM3UAccounts().then(accounts =>
+      setProviderOptions(accounts.map(a => ({ value: String(a.id), label: a.name })))
+    ).catch(() => setProviderOptions([]));
+  }, []);
+
+  const [groupOptions, setGroupOptions] = useState<SelectOption[]>([]);
+  useEffect(() => {
+    getChannelGroups().then(groups =>
+      setGroupOptions(
+        groups
+          .filter(g => g.channel_count > 0)
+          .map(g => ({ value: String(g.id), label: `${g.name} (${g.channel_count})` }))
+      )
+    ).catch(() => setGroupOptions([]));
+  }, []);
+
   // Derive field, operator, display value from the condition data
   const { field: currentField, operator: currentOperator, displayValue } = parseCondition(condition);
 
@@ -518,12 +546,13 @@ export function ConditionEditor({
               <label htmlFor={`${id}-value`} className="sr-only">Value</label>
               {isSelect ? (
                 <CustomSelect
-                  options={operatorDef?.selectOptions ?? []}
+                  options={currentField === 'provider' ? providerOptions : currentField === 'normalized_match_group' ? groupOptions : (operatorDef?.selectOptions ?? [])}
                   value={String(displayValue ?? '')}
                   onChange={(val) => handleValueChange(Number(val))}
-                  placeholder="Select..."
+                  placeholder={currentField === 'normalized_match_group' ? "Select group..." : "Select..."}
                   disabled={readonly}
                   className="condition-value-select"
+                  searchable={currentField === 'provider' || currentField === 'normalized_match_group'}
                 />
               ) : isNumber ? (
                 <input

@@ -282,12 +282,25 @@ async def startup_event():
         session = get_session()
         try:
             result = fix_timezone_tags_remove_directional(session)
-            if result.get("rules_deleted", 0) > 0:
-                logger.info(f"Removed {result['rules_deleted']} directional suffix rules from Timezone Tags")
+            if result.get("tags_added", 0) > 0:
+                logger.info(f"Added {result['tags_added']} missing tags to Timezone Tags")
         finally:
             session.close()
     except Exception as e:
         logger.warning(f"Could not apply timezone tags fix: {e}")
+
+    # Ensure Provider Tags normalization rule exists for existing installations
+    try:
+        from normalization_migration import ensure_provider_tags_rule
+        session = get_session()
+        try:
+            result = ensure_provider_tags_rule(session)
+            if result.get("created"):
+                logger.info("Created Provider Tags normalization rule for existing installation")
+        finally:
+            session.close()
+    except Exception as e:
+        logger.warning(f"Could not ensure Provider Tags rule: {e}")
 
     logger.info(f"CONFIG_DIR: {CONFIG_DIR}")
     logger.info(f"CONFIG_FILE: {CONFIG_FILE}")
@@ -416,8 +429,8 @@ async def startup_event():
         logger.error(f"Failed to start task engine: {e}", exc_info=True)
         logger.error("Scheduled tasks will not be available!")
 
-    # Schedule a background check for stale channel groups in probe schedules
-    # Runs after a short delay so Dispatcharr is available
+    # Schedule a background auto-sync for channel groups in probe schedules
+    # Removes stale groups and adds new groups automatically
     async def _check_stale_groups_on_startup():
         await asyncio.sleep(15)  # Wait for services to be ready
         try:
@@ -425,52 +438,60 @@ async def startup_event():
             client = get_client()
             current_groups = await client.get_channel_groups()
             current_by_id = {g["id"]: g.get("name") for g in current_groups}
-            current_by_name = {g.get("name"): g["id"] for g in current_groups}
+            current_ids_with_channels = {g["id"] for g in current_groups if g.get("channel_count", 0) > 0}
 
             sess = get_session()
             try:
                 schedules = sess.query(TaskScheduleModel).filter(
                     TaskScheduleModel.task_id == "stream_probe"
                 ).all()
-                all_stale = []
+                total_stale = 0
+                total_added = 0
                 for sched in schedules:
-                    params = sched.get_parameters() if hasattr(sched, 'get_parameters') else {}
-                    if not params:
-                        import json as _json
-                        params = _json.loads(sched.parameters) if isinstance(sched.parameters, str) else (sched.parameters or {})
+                    params = sched.get_parameters()
                     stored = params.get("channel_groups", [])
                     if not stored:
                         continue
+
                     if isinstance(stored[0], int):
+                        valid = [gid for gid in stored if gid in current_by_id]
                         stale = [gid for gid in stored if gid not in current_by_id]
                     else:
+                        current_by_name = {g.get("name"): g["id"] for g in current_groups}
+                        valid = [current_by_name[n] for n in stored if n in current_by_name]
                         stale = [n for n in stored if n not in current_by_name]
-                    all_stale.extend(stale)
 
-                if all_stale:
-                    # Deduplicate: only create if no unread notification exists
-                    existing = sess.query(NotificationModel).filter(
-                        NotificationModel.source_id == "stream_probe_stale_groups",
-                        NotificationModel.read == False,
-                    ).first()
-                    if not existing:
-                        await create_notification_internal(
-                            notification_type="warning",
-                            title="Stale Channel Groups in Probe Schedule",
-                            message=f"{len(all_stale)} channel group(s) in probe schedule(s) no longer exist: "
-                                    f"{', '.join(str(g) for g in all_stale)}. "
-                                    f"Edit the schedule to update the group selection.",
-                            source="system",
-                            source_id="stream_probe_stale_groups",
-                            action_label="Edit Schedule",
-                            send_alerts=False,
-                            metadata={
-                                "action_type": "configure_task",
-                                "task_id": "stream_probe",
-                                "stale_groups": all_stale,
-                            },
-                        )
-                        logger.info(f"Created stale groups notification for {len(all_stale)} stale group(s)")
+                    # Detect new groups not in the schedule
+                    valid_set = set(valid)
+                    new_groups = sorted(gid for gid in current_ids_with_channels if gid not in valid_set)
+
+                    if stale or new_groups:
+                        fixed_groups = valid + new_groups
+                        params["channel_groups"] = fixed_groups
+                        params.pop("_stale_groups", None)
+                        sched.set_parameters(params)
+                        sess.add(sched)
+                        total_stale += len(stale)
+                        total_added += len(new_groups)
+
+                        if stale:
+                            logger.info(f"Startup: auto-removed {len(stale)} stale group(s) from probe schedule {sched.id}")
+                        if new_groups:
+                            new_names = [current_by_id.get(gid, str(gid)) for gid in new_groups]
+                            logger.info(f"Startup: auto-added {len(new_groups)} new group(s) to probe schedule {sched.id}: {', '.join(new_names)}")
+
+                if total_stale or total_added:
+                    sess.commit()
+                    logger.info(f"Startup: auto-synced probe schedules (removed {total_stale} stale, added {total_added} new groups)")
+
+                # Clean up any stale group notifications since we auto-fix
+                stale_notifs = sess.query(NotificationModel).filter(
+                    NotificationModel.source_id == "stream_probe_stale_groups",
+                ).all()
+                for n in stale_notifs:
+                    sess.delete(n)
+                if stale_notifs:
+                    sess.commit()
             finally:
                 sess.close()
         except Exception as e:
@@ -8021,6 +8042,13 @@ async def list_task_schedules(task_id: str):
                     logger.debug(f"Could not fetch current groups for validation: {e}")
 
             result = []
+            schedules_fixed = False
+            current_by_id = {g["id"]: g.get("name") for g in current_groups_data} if current_groups_data else {}
+            current_ids_with_channels = (
+                {g["id"] for g in current_groups_data if g.get("channel_count", 0) > 0}
+                if current_groups_data else set()
+            )
+
             for schedule in schedules:
                 schedule_dict = schedule.to_dict()
                 # Add human-readable description
@@ -8032,66 +8060,56 @@ async def list_task_schedules(task_id: str):
                     days_of_week=schedule.get_days_of_week_list(),
                     day_of_month=schedule.day_of_month,
                 )
-                # Validate channel_groups parameters against current groups
+                # Auto-sync channel_groups: remove stale groups, add new groups
                 if current_groups_data is not None and schedule_dict.get("parameters"):
                     params = schedule_dict["parameters"]
-                    if "channel_groups" in params and params["channel_groups"]:
-                        stored = params["channel_groups"]
-                        current_by_id = {g["id"]: g.get("name") for g in current_groups_data}
-                        current_by_name = {g.get("name"): g["id"] for g in current_groups_data}
-
-                        if stored and isinstance(stored[0], int):
-                            # ID-based: validate IDs
+                    stored = params.get("channel_groups", [])
+                    if stored:  # Only auto-sync if schedule has an explicit group list
+                        if isinstance(stored[0], int):
                             valid = [gid for gid in stored if gid in current_by_id]
                             stale = [gid for gid in stored if gid not in current_by_id]
                         else:
-                            # Legacy name-based: validate + convert to IDs
+                            current_by_name = {g.get("name"): g["id"] for g in current_groups_data}
                             valid = [current_by_name[n] for n in stored if n in current_by_name]
                             stale = [n for n in stored if n not in current_by_name]
 
-                        if stale:
-                            params["channel_groups"] = valid
-                            params["_stale_groups"] = stale
+                        # Detect new groups (with channels) not already in the schedule
+                        valid_set = set(valid)
+                        new_groups = sorted(gid for gid in current_ids_with_channels if gid not in valid_set)
+
+                        if stale or new_groups:
+                            fixed_groups = valid + new_groups
+                            params["channel_groups"] = fixed_groups
+                            params.pop("_stale_groups", None)
+
+                            # Persist fix to DB
+                            db_params = schedule.get_parameters()
+                            db_params["channel_groups"] = fixed_groups
+                            db_params.pop("_stale_groups", None)
+                            schedule.set_parameters(db_params)
+                            session.add(schedule)
+                            schedules_fixed = True
+
+                            if stale:
+                                logger.info(f"Auto-removed {len(stale)} stale group(s) from probe schedule {schedule.id}")
+                            if new_groups:
+                                new_names = [current_by_id.get(gid, str(gid)) for gid in new_groups]
+                                logger.info(f"Auto-added {len(new_groups)} new group(s) to probe schedule {schedule.id}: {', '.join(new_names)}")
                 result.append(schedule_dict)
 
-            # Manage stale groups notification (create or clean up)
-            all_stale = []
-            for s in result:
-                if s.get("parameters", {}).get("_stale_groups"):
-                    all_stale.extend(s["parameters"]["_stale_groups"])
+            # Commit any auto-fixes
+            if schedules_fixed:
+                session.commit()
 
+            # Always clean up stale group notifications since we auto-fix now
             from models import Notification as NotificationModel
-            if all_stale:
-                existing = session.query(NotificationModel).filter(
-                    NotificationModel.source_id == "stream_probe_stale_groups",
-                    NotificationModel.read == False,
-                ).first()
-                if not existing:
-                    await create_notification_internal(
-                        notification_type="warning",
-                        title="Stale Channel Groups in Probe Schedule",
-                        message=f"{len(all_stale)} channel group(s) in probe schedule(s) no longer exist: "
-                                f"{', '.join(str(g) for g in all_stale)}. "
-                                f"Edit the schedule to update the group selection.",
-                        source="system",
-                        source_id="stream_probe_stale_groups",
-                        action_label="Edit Schedule",
-                        send_alerts=False,
-                        metadata={
-                            "action_type": "configure_task",
-                            "task_id": "stream_probe",
-                            "stale_groups": all_stale,
-                        },
-                    )
-            else:
-                # No stale groups — clean up any existing notifications
-                stale_notifs = session.query(NotificationModel).filter(
-                    NotificationModel.source_id == "stream_probe_stale_groups",
-                ).all()
-                for n in stale_notifs:
-                    session.delete(n)
-                if stale_notifs:
-                    session.commit()
+            stale_notifs = session.query(NotificationModel).filter(
+                NotificationModel.source_id == "stream_probe_stale_groups",
+            ).all()
+            for n in stale_notifs:
+                session.delete(n)
+            if stale_notifs:
+                session.commit()
 
             return {"schedules": result}
         finally:
@@ -10370,7 +10388,7 @@ async def get_auto_creation_condition_schema():
             "type": ct.value,
             "category": "logical" if ct.value in ("and", "or", "not") else
                         "special" if ct.value in ("always", "never") else
-                        "channel" if ct.value.startswith("channel_") or ct.value == "has_channel" else
+                        "channel" if ct.value.startswith("channel_") or ct.value in ("has_channel", "normalized_name_in_group") else
                         "stream"
         }
 
@@ -10394,6 +10412,9 @@ async def get_auto_creation_condition_schema():
         elif ct.value == "channel_in_group":
             condition_info["value_type"] = "integer"
             condition_info["description"] = "Channel group ID"
+        elif ct.value == "normalized_name_in_group":
+            condition_info["value_type"] = "integer"
+            condition_info["description"] = "Group ID — matches if normalized stream name equals a channel name in this group"
         elif ct.value in ("and", "or"):
             condition_info["value_type"] = "array"
             condition_info["description"] = "Array of sub-conditions"

@@ -94,7 +94,8 @@ const ACTION_CATEGORIES = [
 
 const IF_EXISTS_OPTIONS: { value: IfExistsBehavior; label: string }[] = [
   { value: 'skip', label: 'Skip' },
-  { value: 'merge', label: 'Merge' },
+  { value: 'merge', label: 'Merge (create if new)' },
+  { value: 'merge_only', label: 'Merge Only (existing only)' },
   { value: 'update', label: 'Update' },
   { value: 'use_existing', label: 'Use Existing' },
 ];

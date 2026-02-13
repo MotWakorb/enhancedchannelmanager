@@ -32,6 +32,7 @@ export type ConditionType =
   | 'channel_exists_matching'
   | 'channel_in_group'
   | 'channel_has_streams'
+  | 'normalized_name_in_group'
   // Logical operators
   | 'and'
   | 'or'
@@ -91,7 +92,7 @@ export type ActionType =
 /**
  * Behavior when a channel/group already exists.
  */
-export type IfExistsBehavior = 'skip' | 'merge' | 'update' | 'use_existing';
+export type IfExistsBehavior = 'skip' | 'merge' | 'merge_only' | 'update' | 'use_existing';
 
 /**
  * An action to execute when conditions match.

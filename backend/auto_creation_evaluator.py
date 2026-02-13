@@ -117,16 +117,19 @@ class ConditionEvaluator:
         result = evaluator.evaluate(condition, stream_context)
     """
 
-    def __init__(self, existing_channels: list[dict] = None, existing_groups: list[dict] = None):
+    def __init__(self, existing_channels: list[dict] = None, existing_groups: list[dict] = None,
+                 normalization_engine=None):
         """
         Initialize the evaluator with existing channel/group data.
 
         Args:
             existing_channels: List of existing channel dicts from Dispatcharr
             existing_groups: List of existing group dicts from Dispatcharr
+            normalization_engine: Optional NormalizationEngine for normalized_name_in_group conditions
         """
         self.existing_channels = existing_channels or []
         self.existing_groups = existing_groups or []
+        self._normalization_engine = normalization_engine
 
         # Build lookup indices for performance
         self._channel_by_id = {c["id"]: c for c in self.existing_channels}
@@ -138,6 +141,31 @@ class ConditionEvaluator:
                 if group_id not in self._channels_by_group:
                     self._channels_by_group[group_id] = []
                 self._channels_by_group[group_id].append(channel)
+
+        # Build per-group channel name sets for fast normalized name lookups
+        # Includes raw names, names with channel-number prefixes stripped (e.g. "106 | Name" -> "Name"),
+        # and normalization-engine-processed names for maximum match coverage
+        self._channel_names_by_group: dict[int, set[str]] = {}
+        channel_number_prefix = re.compile(r'^\d+\s*\|\s*')
+        for gid, channels in self._channels_by_group.items():
+            names: set[str] = set()
+            for c in channels:
+                raw = c["name"]
+                names.add(raw.lower())
+                # Strip "123 | " channel number prefixes
+                stripped = channel_number_prefix.sub('', raw)
+                if stripped != raw:
+                    names.add(stripped.lower())
+                # Apply normalization engine to the stripped name
+                if self._normalization_engine:
+                    try:
+                        result = self._normalization_engine.normalize(stripped)
+                        normalized = result.normalized
+                        if normalized:
+                            names.add(normalized.lower())
+                    except Exception:
+                        pass
+            self._channel_names_by_group[gid] = names
 
     def _expand_date_placeholders(self, text: str, allow_ranges: bool = True) -> str:
         """
@@ -354,6 +382,9 @@ class ConditionEvaluator:
 
         elif cond_enum == ConditionType.CHANNEL_HAS_STREAMS:
             return self._evaluate_channel_has_streams(condition.value, context.channel_id, cond_type)
+
+        elif cond_enum == ConditionType.NORMALIZED_NAME_IN_GROUP:
+            return self._evaluate_normalized_name_in_group(condition.value, context, cond_type)
 
         # Fallback
         logger.warning(f"Unhandled condition type: {cond_type}")
@@ -631,6 +662,39 @@ class ConditionEvaluator:
         return EvaluationResult(
             matched, cond_type,
             f"Channel has {stream_count} streams {'>='}  {min_streams}: {matched}"
+        )
+
+
+    def _evaluate_normalized_name_in_group(self, group_id: int, context: StreamContext,
+                                              cond_type: str) -> EvaluationResult:
+        """Check if the stream's normalized name matches any channel in the specified group."""
+        if not group_id:
+            return EvaluationResult(False, cond_type, "No group ID specified")
+
+        # Get channel names in the target group
+        group_names = self._channel_names_by_group.get(group_id)
+        if not group_names:
+            return EvaluationResult(False, cond_type, f"Group {group_id} has no channels")
+
+        # Normalize the stream name
+        stream_name = context.stream_name
+        if self._normalization_engine:
+            try:
+                result = self._normalization_engine.normalize(stream_name)
+                normalized = result.normalized
+            except Exception as e:
+                logger.warning(f"Normalization failed for '{stream_name}': {e}")
+                normalized = stream_name
+        else:
+            normalized = stream_name
+
+        # Check if normalized name matches any channel in the group (case-insensitive)
+        matched = normalized.lower() in group_names
+
+        return EvaluationResult(
+            matched, cond_type,
+            f"'{stream_name}' → '{normalized}' {'matches' if matched else 'no match in'} group {group_id} "
+            f"({len(group_names)} channels)"
         )
 
 

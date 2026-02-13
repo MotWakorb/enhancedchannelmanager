@@ -654,18 +654,31 @@ class AutoCreationEngine:
             f"deprioritize_failed={getattr(settings, 'deprioritize_failed_streams', True)}"
         )
 
-        # Initialize evaluator and executor
-        evaluator = ConditionEvaluator(self._existing_channels, self._existing_groups)
-
         # Create normalization engine if any rule uses normalize_names
+        # or if any condition needs it (normalized_name_in_group)
         norm_engine = None
-        if any(getattr(r, 'normalize_names', False) for r in rules):
+        needs_norm = any(getattr(r, 'normalize_names', False) for r in rules)
+        if not needs_norm:
+            # Check if any condition uses normalized_name_in_group
+            for r in rules:
+                for c in r.get_conditions():
+                    ctype = c.get("type") if isinstance(c, dict) else getattr(c, "type", "")
+                    if ctype == "normalized_name_in_group":
+                        needs_norm = True
+                        break
+                if needs_norm:
+                    break
+        if needs_norm:
             try:
                 from normalization_engine import get_normalization_engine
                 session = get_session()
                 norm_engine = get_normalization_engine(session)
             except Exception as e:
                 logger.warning(f"Failed to initialize normalization engine: {e}")
+
+        # Initialize evaluator (with normalization engine for normalized_name_in_group conditions)
+        evaluator = ConditionEvaluator(self._existing_channels, self._existing_groups,
+                                       normalization_engine=norm_engine)
 
         # Fetch all profile IDs if default profiles are configured
         all_profile_ids = []
@@ -1534,8 +1547,15 @@ def _get_rule_starting_number(rule) -> Optional[int]:
 # Timezone Filter
 # =============================================================================
 
-# Pattern: stream name ends with EAST or WEST (possibly with parentheses/brackets)
-_TZ_SUFFIX_RE = re.compile(r'[\s\-_.\(|\[](EAST|WEST)[\s\)\]]*$', re.IGNORECASE)
+# Pattern: stream name contains EAST or WEST near the end, possibly followed by
+# quality indicators (HD, FHD, UHD, SD, 4K, HEVC, H.264/5) or parenthesized/bracketed
+# tags like (CX), [HD], etc.
+_TZ_SUFFIX_RE = re.compile(
+    r'[\s\-_.\(|\[](EAST|WEST)[\s\)\]]*'
+    r'(?:\s*(?:F?HD|UHD|SD|4K|HEVC|H\.?26[45]|\([^)]*\)|\[[^\]]*\]))*'
+    r'\s*$',
+    re.IGNORECASE
+)
 
 
 def _filter_by_timezone(stream_name: str, preference: str) -> bool:

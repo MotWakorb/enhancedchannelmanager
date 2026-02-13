@@ -138,6 +138,13 @@ class ActionExecutor:
         self._created_channels = {}  # name.lower() -> channel dict
         self._base_name_to_channel = {}  # base_name.lower() -> channel dict (for number-prefixed lookups)
         self._created_groups = {}  # name.lower() -> group dict
+
+        # Pre-populate base-name mapping for existing channels with "NUMBER | " prefixes
+        _num_prefix = re.compile(r'^\d+\s*\|\s*')
+        for c in self.existing_channels:
+            stripped = _num_prefix.sub('', c["name"])
+            if stripped != c["name"]:
+                self._base_name_to_channel.setdefault(stripped.lower(), c)
         self._logo_cache = {}  # logo_url -> logo_id
 
         # Channel number tracking
@@ -409,7 +416,7 @@ class ActionExecutor:
                     skipped=True,
                     details=action_details
                 )
-            elif if_exists == "merge":
+            elif if_exists in ("merge", "merge_only"):
                 # Add stream to existing channel
                 result = await self._add_stream_to_channel(existing, stream_ctx, exec_ctx)
                 result.details = action_details + result.details
@@ -417,6 +424,18 @@ class ActionExecutor:
             elif if_exists == "update":
                 # Update existing channel properties
                 return await self._update_channel(existing, stream_ctx, exec_ctx, params)
+
+        # merge_only: don't create new channels, only merge into existing ones
+        if if_exists == "merge_only":
+            return ActionResult(
+                success=True,
+                action_type=action.type,
+                description=f"Channel '{channel_name}' not found, skipped (merge only)",
+                entity_type="channel",
+                entity_name=channel_name,
+                skipped=True,
+                details=action_details
+            )
 
         # Determine channel number first (needed for name prefix)
         channel_number = self._get_next_channel_number(params.get("channel_number", "auto"))
@@ -755,6 +774,21 @@ class ActionExecutor:
                 channel = self._find_channel_by_regex(find_channel_value)
             elif find_channel_by == "tvg_id":
                 channel = self._find_channel_by_tvg_id(find_channel_value or stream_ctx.tvg_id)
+
+            # Auto-fallback: if no find_channel_by was specified and target is "auto",
+            # try to find by normalized stream name (strips prefixes, applies normalization)
+            if not channel and target == "auto" and not find_channel_by:
+                lookup_name = stream_ctx.normalized_name or stream_ctx.stream_name
+                # Also try running normalization engine if available
+                if self._normalization_engine and not stream_ctx.normalized_name:
+                    try:
+                        norm_result = self._normalization_engine.normalize(stream_ctx.stream_name)
+                        if norm_result.normalized:
+                            lookup_name = norm_result.normalized
+                    except Exception:
+                        pass
+                logger.debug(f"[MergeStreams] Auto-lookup by normalized name: '{lookup_name}'")
+                channel = self._find_channel_by_name(lookup_name)
 
             if channel:
                 return await self._add_stream_to_channel(channel, stream_ctx, exec_ctx)
