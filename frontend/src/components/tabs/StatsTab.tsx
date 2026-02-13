@@ -141,6 +141,14 @@ interface BandwidthChartPoint {
   isToday: boolean;
 }
 
+interface CustomBarProps {
+  x?: number;
+  y?: number;
+  width?: number;
+  height?: number;
+  payload?: BandwidthChartPoint;
+}
+
 function prepareBandwidthChartData(dailyHistory: Array<{ date: string; bytes_transferred: number }>): BandwidthChartPoint[] {
   // Create a map of existing data by date string
   const dataMap = new Map<string, number>();
@@ -777,289 +785,289 @@ export function StatsTab() {
                 : null;
 
               return (
-              <div key={channel.channel_id} className="channel-card">
-                <div className="channel-card-header">
-                  <div className="channel-info">
-                    {displayNumber && (
-                      <span className="channel-number" title={`ID: ${channelIdStr}`}>
-                        {displayNumber}
+                <div key={channel.channel_id} className="channel-card">
+                  <div className="channel-card-header">
+                    <div className="channel-info">
+                      {displayNumber && (
+                        <span className="channel-number" title={`ID: ${channelIdStr}`}>
+                          {displayNumber}
+                        </span>
+                      )}
+                      <span className="channel-name" title={`${displayName}${channel.stream_name && channel.stream_name !== displayName ? ` (Stream: ${channel.stream_name})` : ''}`}>
+                        {displayName}
                       </span>
-                    )}
-                    <span className="channel-name" title={`${displayName}${channel.stream_name && channel.stream_name !== displayName ? ` (Stream: ${channel.stream_name})` : ''}`}>
-                      {displayName}
-                    </span>
-                    {m3uSource && (
-                      <span className="m3u-source" title={`M3U Source: ${m3uSource}`}>
-                        {m3uSource}
+                      {m3uSource && (
+                        <span className="m3u-source" title={`M3U Source: ${m3uSource}`}>
+                          {m3uSource}
+                        </span>
+                      )}
+                      {streamProfileName && (
+                        <span className="stream-profile" title={`Stream Profile: ${streamProfileName}`}>
+                          {streamProfileName}
+                        </span>
+                      )}
+                      {channel.audio_codec && (
+                        <span className="audio-codec-badge" title={`Audio Codec: ${channel.audio_codec.toUpperCase()}`}>
+                          {channel.audio_codec.toUpperCase()}
+                        </span>
+                      )}
+                      <span className={`channel-state ${channel.state?.toLowerCase() || ''}`}>
+                        <span className="material-icons">
+                          {channel.state === 'buffering' ? 'hourglass_empty' : 'play_arrow'}
+                        </span>
+                        {channel.state || 'Streaming'}
                       </span>
-                    )}
-                    {streamProfileName && (
-                      <span className="stream-profile" title={`Stream Profile: ${streamProfileName}`}>
-                        {streamProfileName}
-                      </span>
-                    )}
-                    {channel.audio_codec && (
-                      <span className="audio-codec-badge" title={`Audio Codec: ${channel.audio_codec.toUpperCase()}`}>
-                        {channel.audio_codec.toUpperCase()}
-                      </span>
-                    )}
-                    <span className={`channel-state ${channel.state?.toLowerCase() || ''}`}>
-                      <span className="material-icons">
-                        {channel.state === 'buffering' ? 'hourglass_empty' : 'play_arrow'}
-                      </span>
-                      {channel.state || 'Streaming'}
-                    </span>
+                    </div>
+
+                    <div className="channel-actions">
+                      <button
+                        onClick={() => toggleExpanded(channel.channel_id)}
+                        title={expandedChannels.has(channel.channel_id) ? 'Collapse' : 'Expand'}
+                      >
+                        <span className="material-icons">
+                          {expandedChannels.has(channel.channel_id) ? 'expand_less' : 'expand_more'}
+                        </span>
+                      </button>
+                      <button
+                        className="stop-btn"
+                        onClick={() => handleStopChannel(channel.channel_id)}
+                        title="Stop channel"
+                      >
+                        <span className="material-icons">stop</span>
+                      </button>
+                    </div>
                   </div>
 
-                  <div className="channel-actions">
-                    <button
-                      onClick={() => toggleExpanded(channel.channel_id)}
-                      title={expandedChannels.has(channel.channel_id) ? 'Collapse' : 'Expand'}
-                    >
-                      <span className="material-icons">
-                        {expandedChannels.has(channel.channel_id) ? 'expand_less' : 'expand_more'}
+                  {/* Quick Stats */}
+                  <div className="channel-stats">
+                    <div className="stat-item">
+                      <span className="stat-label">Clients</span>
+                      <span className="stat-value">{channel.client_count || 0}</span>
+                    </div>
+                    <div className="stat-item">
+                      <span className="stat-label">Bitrate</span>
+                      <span className="stat-value">{channel.avg_bitrate || '-'}</span>
+                    </div>
+                    <div className="stat-item">
+                      <span className="stat-label">Speed</span>
+                      <span className={`stat-value ${getSpeedClass(channel.ffmpeg_speed)}`}>
+                        {formatSpeed(channel.ffmpeg_speed)}
                       </span>
-                    </button>
-                    <button
-                      className="stop-btn"
-                      onClick={() => handleStopChannel(channel.channel_id)}
-                      title="Stop channel"
-                    >
-                      <span className="material-icons">stop</span>
-                    </button>
+                    </div>
+                    <div className="stat-item">
+                      <span className="stat-label">FPS</span>
+                      <span className="stat-value">{formatFps(channel.source_fps || channel.actual_fps || channel.ffmpeg_fps)}</span>
+                    </div>
+                    <div className="stat-item">
+                      <span className="stat-label">Resolution</span>
+                      <span className="stat-value">{channel.resolution || '-'}</span>
+                    </div>
+                    <div className="stat-item">
+                      <span className="stat-label">Uptime</span>
+                      <span className="stat-value">{formatDuration(channel.uptime)}</span>
+                    </div>
+                    <div className="stat-item">
+                      <span className="stat-label">Data</span>
+                      <span className="stat-value">{channel.total_data || formatBytes(channel.total_bytes)}</span>
+                    </div>
                   </div>
-                </div>
 
-                {/* Quick Stats */}
-                <div className="channel-stats">
-                  <div className="stat-item">
-                    <span className="stat-label">Clients</span>
-                    <span className="stat-value">{channel.client_count || 0}</span>
-                  </div>
-                  <div className="stat-item">
-                    <span className="stat-label">Bitrate</span>
-                    <span className="stat-value">{channel.avg_bitrate || '-'}</span>
-                  </div>
-                  <div className="stat-item">
-                    <span className="stat-label">Speed</span>
-                    <span className={`stat-value ${getSpeedClass(channel.ffmpeg_speed)}`}>
-                      {formatSpeed(channel.ffmpeg_speed)}
-                    </span>
-                  </div>
-                  <div className="stat-item">
-                    <span className="stat-label">FPS</span>
-                    <span className="stat-value">{formatFps(channel.source_fps || channel.actual_fps || channel.ffmpeg_fps)}</span>
-                  </div>
-                  <div className="stat-item">
-                    <span className="stat-label">Resolution</span>
-                    <span className="stat-value">{channel.resolution || '-'}</span>
-                  </div>
-                  <div className="stat-item">
-                    <span className="stat-label">Uptime</span>
-                    <span className="stat-value">{formatDuration(channel.uptime)}</span>
-                  </div>
-                  <div className="stat-item">
-                    <span className="stat-label">Data</span>
-                    <span className="stat-value">{channel.total_data || formatBytes(channel.total_bytes)}</span>
-                  </div>
-                </div>
-
-                {/* Expanded Details */}
-                {expandedChannels.has(channel.channel_id) && (
-                  <div className="channel-details">
-                    {/* Performance Graphs */}
-                    {(() => {
-                      const history = channelHistory.current.get(channelIdStr) || [];
-                      const chartData = prepareChartData(history);
-                      if (chartData.length < 2) {
-                        return (
-                          <div className="channel-graphs">
-                            <div className="graph-container graph-placeholder">
-                              <div className="graph-title">FFmpeg Speed</div>
-                              <div className="graph-waiting">
-                                <span className="material-icons">hourglass_empty</span>
-                                <span>Collecting data...</span>
+                  {/* Expanded Details */}
+                  {expandedChannels.has(channel.channel_id) && (
+                    <div className="channel-details">
+                      {/* Performance Graphs */}
+                      {(() => {
+                        const history = channelHistory.current.get(channelIdStr) || [];
+                        const chartData = prepareChartData(history);
+                        if (chartData.length < 2) {
+                          return (
+                            <div className="channel-graphs">
+                              <div className="graph-container graph-placeholder">
+                                <div className="graph-title">FFmpeg Speed</div>
+                                <div className="graph-waiting">
+                                  <span className="material-icons">hourglass_empty</span>
+                                  <span>Collecting data...</span>
+                                </div>
+                              </div>
+                              <div className="graph-container graph-placeholder">
+                                <div className="graph-title">Data Transfer</div>
+                                <div className="graph-waiting">
+                                  <span className="material-icons">hourglass_empty</span>
+                                  <span>Collecting data...</span>
+                                </div>
                               </div>
                             </div>
-                            <div className="graph-container graph-placeholder">
+                          );
+                        }
+                        return (
+                          <div className="channel-graphs">
+                            <div className="graph-container">
+                              <div className="graph-title">FFmpeg Speed</div>
+                              <ResponsiveContainer width="100%" height={160}>
+                                <LineChart data={chartData} margin={{ top: 5, right: 5, bottom: 5, left: 5 }}>
+                                  <XAxis
+                                    dataKey="label"
+                                    tick={{ fontSize: 10, fill: 'var(--text-muted)' }}
+                                    axisLine={{ stroke: 'var(--border-primary)' }}
+                                    tickLine={false}
+                                    interval="preserveStartEnd"
+                                  />
+                                  <YAxis
+                                    domain={[0.8, 1.2]}
+                                    tick={{ fontSize: 10, fill: 'var(--text-muted)' }}
+                                    axisLine={{ stroke: 'var(--border-primary)' }}
+                                    tickLine={false}
+                                    tickFormatter={(v) => `${v}x`}
+                                    width={35}
+                                  />
+                                  <Tooltip content={<SpeedTooltip />} />
+                                  <ReferenceLine
+                                    y={1}
+                                    stroke="var(--success)"
+                                    strokeDasharray="3 3"
+                                    strokeOpacity={0.5}
+                                  />
+                                  <Line
+                                    type="monotone"
+                                    dataKey="ffmpegSpeed"
+                                    stroke="var(--accent-primary)"
+                                    strokeWidth={2}
+                                    dot={false}
+                                    isAnimationActive={false}
+                                  />
+                                </LineChart>
+                              </ResponsiveContainer>
+                            </div>
+                            <div className="graph-container">
                               <div className="graph-title">Data Transfer</div>
-                              <div className="graph-waiting">
-                                <span className="material-icons">hourglass_empty</span>
-                                <span>Collecting data...</span>
-                              </div>
+                              <ResponsiveContainer width="100%" height={160}>
+                                <AreaChart data={chartData} margin={{ top: 5, right: 5, bottom: 5, left: 5 }}>
+                                  <XAxis
+                                    dataKey="label"
+                                    tick={{ fontSize: 10, fill: 'var(--text-muted)' }}
+                                    axisLine={{ stroke: 'var(--border-primary)' }}
+                                    tickLine={false}
+                                    interval="preserveStartEnd"
+                                  />
+                                  <YAxis
+                                    tick={{ fontSize: 10, fill: 'var(--text-muted)' }}
+                                    axisLine={{ stroke: 'var(--border-primary)' }}
+                                    tickLine={false}
+                                    tickFormatter={(v) => formatBytes(v)}
+                                    width={55}
+                                  />
+                                  <Tooltip content={<DataTooltip />} />
+                                  <Area
+                                    type="monotone"
+                                    dataKey="totalBytes"
+                                    stroke="var(--accent-secondary)"
+                                    fill="var(--accent-primary)"
+                                    fillOpacity={0.3}
+                                    strokeWidth={2}
+                                    isAnimationActive={false}
+                                  />
+                                </AreaChart>
+                              </ResponsiveContainer>
                             </div>
                           </div>
                         );
-                      }
-                      return (
-                        <div className="channel-graphs">
-                          <div className="graph-container">
-                            <div className="graph-title">FFmpeg Speed</div>
-                            <ResponsiveContainer width="100%" height={160}>
-                              <LineChart data={chartData} margin={{ top: 5, right: 5, bottom: 5, left: 5 }}>
-                                <XAxis
-                                  dataKey="label"
-                                  tick={{ fontSize: 10, fill: 'var(--text-muted)' }}
-                                  axisLine={{ stroke: 'var(--border-primary)' }}
-                                  tickLine={false}
-                                  interval="preserveStartEnd"
-                                />
-                                <YAxis
-                                  domain={[0.8, 1.2]}
-                                  tick={{ fontSize: 10, fill: 'var(--text-muted)' }}
-                                  axisLine={{ stroke: 'var(--border-primary)' }}
-                                  tickLine={false}
-                                  tickFormatter={(v) => `${v}x`}
-                                  width={35}
-                                />
-                                <Tooltip content={<SpeedTooltip />} />
-                                <ReferenceLine
-                                  y={1}
-                                  stroke="var(--success)"
-                                  strokeDasharray="3 3"
-                                  strokeOpacity={0.5}
-                                />
-                                <Line
-                                  type="monotone"
-                                  dataKey="ffmpegSpeed"
-                                  stroke="var(--accent-primary)"
-                                  strokeWidth={2}
-                                  dot={false}
-                                  isAnimationActive={false}
-                                />
-                              </LineChart>
-                            </ResponsiveContainer>
+                      })()}
+
+                      <div className="details-grid">
+                        <div className="detail-group">
+                          <div className="detail-group-title">Video</div>
+                          <div className="detail-row">
+                            <span className="label">Codec</span>
+                            <span className="value">{channel.video_codec || '-'}</span>
                           </div>
-                          <div className="graph-container">
-                            <div className="graph-title">Data Transfer</div>
-                            <ResponsiveContainer width="100%" height={160}>
-                              <AreaChart data={chartData} margin={{ top: 5, right: 5, bottom: 5, left: 5 }}>
-                                <XAxis
-                                  dataKey="label"
-                                  tick={{ fontSize: 10, fill: 'var(--text-muted)' }}
-                                  axisLine={{ stroke: 'var(--border-primary)' }}
-                                  tickLine={false}
-                                  interval="preserveStartEnd"
-                                />
-                                <YAxis
-                                  tick={{ fontSize: 10, fill: 'var(--text-muted)' }}
-                                  axisLine={{ stroke: 'var(--border-primary)' }}
-                                  tickLine={false}
-                                  tickFormatter={(v) => formatBytes(v)}
-                                  width={55}
-                                />
-                                <Tooltip content={<DataTooltip />} />
-                                <Area
-                                  type="monotone"
-                                  dataKey="totalBytes"
-                                  stroke="var(--accent-secondary)"
-                                  fill="var(--accent-primary)"
-                                  fillOpacity={0.3}
-                                  strokeWidth={2}
-                                  isAnimationActive={false}
-                                />
-                              </AreaChart>
-                            </ResponsiveContainer>
+                          <div className="detail-row">
+                            <span className="label">Resolution</span>
+                            <span className="value">{channel.resolution || '-'}</span>
+                          </div>
+                          <div className="detail-row">
+                            <span className="label">FPS</span>
+                            <span className="value">{formatFps(channel.source_fps || channel.actual_fps || channel.ffmpeg_fps)}</span>
                           </div>
                         </div>
-                      );
-                    })()}
 
-                    <div className="details-grid">
-                      <div className="detail-group">
-                        <div className="detail-group-title">Video</div>
-                        <div className="detail-row">
-                          <span className="label">Codec</span>
-                          <span className="value">{channel.video_codec || '-'}</span>
+                        <div className="detail-group">
+                          <div className="detail-group-title">Audio</div>
+                          <div className="detail-row">
+                            <span className="label">Codec</span>
+                            <span className="value">{channel.audio_codec || '-'}</span>
+                          </div>
+                          <div className="detail-row">
+                            <span className="label">Channels</span>
+                            <span className="value">{channel.audio_channels || '-'}</span>
+                          </div>
                         </div>
-                        <div className="detail-row">
-                          <span className="label">Resolution</span>
-                          <span className="value">{channel.resolution || '-'}</span>
-                        </div>
-                        <div className="detail-row">
-                          <span className="label">FPS</span>
-                          <span className="value">{formatFps(channel.source_fps || channel.actual_fps || channel.ffmpeg_fps)}</span>
-                        </div>
-                      </div>
 
-                      <div className="detail-group">
-                        <div className="detail-group-title">Audio</div>
-                        <div className="detail-row">
-                          <span className="label">Codec</span>
-                          <span className="value">{channel.audio_codec || '-'}</span>
+                        <div className="detail-group">
+                          <div className="detail-group-title">Stream</div>
+                          <div className="detail-row">
+                            <span className="label">Type</span>
+                            <span className="value">{channel.stream_type || '-'}</span>
+                          </div>
+                          <div className="detail-row">
+                            <span className="label">Buffer Index</span>
+                            <span className="value">{channel.buffer_index ?? '-'}</span>
+                          </div>
+                          <div className="detail-row">
+                            <span className="label">Avg Bitrate</span>
+                            <span className="value">{channel.avg_bitrate || (channel.avg_bitrate_kbps ? `${channel.avg_bitrate_kbps.toFixed(2)} kbps` : '-')}</span>
+                          </div>
                         </div>
-                        <div className="detail-row">
-                          <span className="label">Channels</span>
-                          <span className="value">{channel.audio_channels || '-'}</span>
-                        </div>
-                      </div>
 
-                      <div className="detail-group">
-                        <div className="detail-group-title">Stream</div>
-                        <div className="detail-row">
-                          <span className="label">Type</span>
-                          <span className="value">{channel.stream_type || '-'}</span>
-                        </div>
-                        <div className="detail-row">
-                          <span className="label">Buffer Index</span>
-                          <span className="value">{channel.buffer_index ?? '-'}</span>
-                        </div>
-                        <div className="detail-row">
-                          <span className="label">Avg Bitrate</span>
-                          <span className="value">{channel.avg_bitrate || (channel.avg_bitrate_kbps ? `${channel.avg_bitrate_kbps.toFixed(2)} kbps` : '-')}</span>
-                        </div>
-                      </div>
-
-                      <div className="detail-group">
-                        <div className="detail-group-title">Performance</div>
-                        <div className="detail-row">
-                          <span className="label">FFmpeg Speed</span>
-                          <span className="value">{formatSpeed(channel.ffmpeg_speed)}</span>
-                        </div>
-                        <div className="detail-row">
-                          <span className="label">Total Data</span>
-                          <span className="value">{channel.total_data || formatBytes(channel.total_bytes)}</span>
-                        </div>
-                        <div className="detail-row">
-                          <span className="label">Stream ID</span>
-                          <span className="value">{channel.stream_id || '-'}</span>
+                        <div className="detail-group">
+                          <div className="detail-group-title">Performance</div>
+                          <div className="detail-row">
+                            <span className="label">FFmpeg Speed</span>
+                            <span className="value">{formatSpeed(channel.ffmpeg_speed)}</span>
+                          </div>
+                          <div className="detail-row">
+                            <span className="label">Total Data</span>
+                            <span className="value">{channel.total_data || formatBytes(channel.total_bytes)}</span>
+                          </div>
+                          <div className="detail-row">
+                            <span className="label">Stream ID</span>
+                            <span className="value">{channel.stream_id || '-'}</span>
+                          </div>
                         </div>
                       </div>
                     </div>
-                  </div>
-                )}
+                  )}
 
-                {/* Clients */}
-                {channel.clients && channel.clients.length > 0 && (
-                  <div className="channel-clients">
-                    <div className="clients-header">
-                      <span className="material-icons">people</span>
-                      Connected Clients ({channel.clients.length})
-                    </div>
-                    <div className="client-list">
-                      {channel.clients.map((client, idx) => (
-                        <div key={client.client_id || idx} className="client-item">
-                          <div className="client-info">
-                            <span className="client-ip">{client.ip_address || 'Unknown'}</span>
-                            <span className="client-ua">{parseUserAgent(client.user_agent)}</span>
-                          </div>
-                          <div className="client-stats">
-                            <span className="client-duration">
-                              {formatDuration(client.connection_duration)}
-                            </span>
-                            {client.current_rate_KBps && (
-                              <span className="client-rate">
-                                {client.current_rate_KBps.toFixed(1)} KB/s
+                  {/* Clients */}
+                  {channel.clients && channel.clients.length > 0 && (
+                    <div className="channel-clients">
+                      <div className="clients-header">
+                        <span className="material-icons">people</span>
+                        Connected Clients ({channel.clients.length})
+                      </div>
+                      <div className="client-list">
+                        {channel.clients.map((client, idx) => (
+                          <div key={client.client_id || idx} className="client-item">
+                            <div className="client-info">
+                              <span className="client-ip">{client.ip_address || 'Unknown'}</span>
+                              <span className="client-ua">{parseUserAgent(client.user_agent)}</span>
+                            </div>
+                            <div className="client-stats">
+                              <span className="client-duration">
+                                {formatDuration(client.connection_duration)}
                               </span>
-                            )}
+                              {client.current_rate_KBps && (
+                                <span className="client-rate">
+                                  {client.current_rate_KBps.toFixed(1)} KB/s
+                                </span>
+                              )}
+                            </div>
                           </div>
-                        </div>
-                      ))}
+                        ))}
+                      </div>
                     </div>
-                  </div>
-                )}
-              </div>
-            );
+                  )}
+                </div>
+              );
             })}
           </div>
         )}
@@ -1187,9 +1195,8 @@ export function StatsTab() {
               const maxBytes = Math.max(...chartData.map(d => d.bytes), 1024);
 
               // Custom bar shape to handle fill color
-              // eslint-disable-next-line @typescript-eslint/no-explicit-any
-              const CustomBar = (props: any) => {
-                const { x = 0, y = 0, width = 0, height = 0, payload } = props;
+              const CustomBar = (props: unknown) => {
+                const { x = 0, y = 0, width = 0, height = 0, payload } = props as CustomBarProps;
                 const fill = payload?.isToday ? '#14b8a6' : '#3b82f6';
                 const radius = 4;
                 // Render empty rect if no height
