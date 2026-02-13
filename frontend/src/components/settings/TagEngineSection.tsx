@@ -34,9 +34,9 @@ function TagGroupCard({ group, isExpanded, onToggleExpand, onRefresh }: TagGroup
     if (isExpanded && tags.length === 0) {
       loadTags();
     }
-  }, [isExpanded]);
+  }, [isExpanded, tags.length, loadTags]);
 
-  const loadTags = async () => {
+  const loadTags = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
@@ -48,7 +48,7 @@ function TagGroupCard({ group, isExpanded, onToggleExpand, onRefresh }: TagGroup
     } finally {
       setLoading(false);
     }
-  };
+  }, [group.id]);
 
   const handleAddTag = async () => {
     const tagValue = newTagInput.trim();
@@ -301,7 +301,7 @@ export function TagEngineSection() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [notifications]);
 
   useEffect(() => {
     loadGroups();

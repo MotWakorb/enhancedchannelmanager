@@ -160,7 +160,7 @@ export function LinkedAccountsSection() {
     };
 
     loadData();
-  }, []);
+  }, [notifications]);
 
   // Get providers that are enabled but not yet linked
   const getAvailableProviders = useCallback((): IdentityProvider[] => {

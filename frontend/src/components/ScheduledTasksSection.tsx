@@ -271,7 +271,7 @@ export function ScheduledTasksSection({ userTimezone: _userTimezone }: Scheduled
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [notifications]);
 
   useEffect(() => {
     loadTasks();

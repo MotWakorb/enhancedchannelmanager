@@ -1166,7 +1166,7 @@ export function ChannelsPane({
       editChannelModal.open();
       onExternalChannelEditHandled?.();
     }
-  }, [externalChannelToEdit, onExternalChannelEditHandled]);
+  }, [externalChannelToEdit, onExternalChannelEditHandled, editChannelModal]);
 
   // Create a Map for O(1) logo lookups instead of O(n) array.find()
   const logoMap = useMemo(() => {
@@ -2210,14 +2210,14 @@ export function ChannelsPane({
   type SortMode = 'smart' | 'resolution' | 'bitrate' | 'framerate' | 'm3u_priority' | 'audio_channels';
 
   // Sort mode labels for journal/description
-  const SORT_MODE_LABELS: Record<SortMode, string> = {
+  const SORT_MODE_LABELS: Record<SortMode, string> = useMemo(() => ({
     smart: 'Smart Sort',
     resolution: 'resolution',
     bitrate: 'bitrate',
     framerate: 'framerate',
     m3u_priority: 'M3U priority',
     audio_channels: 'audio channels',
-  };
+  }), []);
 
   // Map stream IDs to their M3U account IDs (from stream data, not probe stats)
   // Uses channelStreams (selected channel's streams) instead of allStreams to avoid
@@ -2402,7 +2402,7 @@ export function ChannelsPane({
     logger.info(`[SmartSort] Applying new stream order: ${newStreamIds.join(', ')}`);
     setChannelStreams(sortedStreams);
     onStageReorderStreams(selectedChannelId, newStreamIds, description);
-  }, [selectedChannelId, isEditMode, onStageReorderStreams, channelStreams, streamStatsMap, channels, getEffectivePriority, createMultiCriteriaSortComparator]);
+  }, [selectedChannelId, isEditMode, onStageReorderStreams, channelStreams, streamStatsMap, channels, getEffectivePriority, createMultiCriteriaSortComparator, SORT_MODE_LABELS]);
 
   // State for bulk sort operation
   const [bulkSortingByQuality, setBulkSortingByQuality] = useState(false);
@@ -2485,7 +2485,7 @@ export function ChannelsPane({
     } finally {
       setBulkSortingByQuality(false);
     }
-  }, [isEditMode, onStageReorderStreams, channels, onStartBatch, onEndBatch, selectedChannelId, channelStreams, getEffectivePriority, createMultiCriteriaSortComparator, notifications]);
+  }, [isEditMode, onStageReorderStreams, channels, onStartBatch, onEndBatch, selectedChannelId, channelStreams, getEffectivePriority, createMultiCriteriaSortComparator, notifications, SORT_MODE_LABELS]);
 
   // Sort all channels' streams by mode
   const handleSortAllStreamsByMode = useCallback((mode: SortMode) => {
@@ -3061,19 +3061,22 @@ export function ChannelsPane({
   // Build a set of group IDs that are related to auto_channel_sync:
   // 1. Groups that have auto_channel_sync: true directly
   // 2. Groups that are group_override targets of auto_channel_sync groups
-  const autoSyncRelatedGroups = new Set<number>();
-  if (providerSettingsMap) {
-    for (const setting of Object.values(providerSettingsMap)) {
-      if (setting.auto_channel_sync) {
-        // Add the source group itself
-        autoSyncRelatedGroups.add(setting.channel_group);
-        // Also add the group_override target if set
-        if (setting.custom_properties?.group_override) {
-          autoSyncRelatedGroups.add(setting.custom_properties.group_override);
+  const autoSyncRelatedGroups = useMemo(() => {
+    const set = new Set<number>();
+    if (providerSettingsMap) {
+      for (const setting of Object.values(providerSettingsMap)) {
+        if (setting.auto_channel_sync) {
+          // Add the source group itself
+          set.add(setting.channel_group);
+          // Also add the group_override target if set
+          if (setting.custom_properties?.group_override) {
+            set.add(setting.custom_properties.group_override);
+          }
         }
       }
     }
-  }
+    return set;
+  }, [providerSettingsMap]);
 
   // Memoize expensive channel filtering and grouping operations
   const channelsByGroup = useMemo(() => {
@@ -3242,7 +3245,7 @@ export function ChannelsPane({
   }, [channelGroups]);
 
   // Helper function to determine if a group should be visible based on filter settings
-  const shouldShowGroup = (groupId: number): boolean => {
+  const shouldShowGroup = useCallback((groupId: number): boolean => {
     if (!channelListFilters) return true;
 
     const groupHasChannels = (channelsByGroup[groupId]?.length ?? 0) > 0;
@@ -3282,12 +3285,12 @@ export function ChannelsPane({
     }
 
     return true;
-  };
+  }, [channelListFilters, channelsByGroup, newlyCreatedGroupIds, autoSyncRelatedGroups, providerSettingsMap]);
 
   // Filter sorted channel groups based on filter settings
   const filteredChannelGroups = useMemo(() => {
     return sortedChannelGroups.filter((g) => shouldShowGroup(g.id));
-  }, [sortedChannelGroups, channelListFilters, channelsByGroup, newlyCreatedGroupIds, autoSyncRelatedGroups, providerSettingsMap]);
+  }, [sortedChannelGroups, shouldShowGroup]);
 
   const handleDragStart = (event: DragStartEvent) => {
     const activeId = event.active.id;

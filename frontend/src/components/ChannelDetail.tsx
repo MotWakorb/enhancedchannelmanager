@@ -96,9 +96,9 @@ export function ChannelDetail({
 
   useEffect(() => {
     loadStreams();
-  }, [channel.id, channel.streams]);
+  }, [channel.id, channel.streams, loadStreams]);
 
-  const loadStreams = async () => {
+  const loadStreams = useCallback(async () => {
     if (channel.streams.length === 0) {
       setStreams([]);
       setLoading(false);
@@ -118,7 +118,7 @@ export function ChannelDetail({
     } finally {
       setLoading(false);
     }
-  };
+  }, [channel.id, channel.streams]);
 
   const handleRemoveStream = async (streamId: number) => {
     try {

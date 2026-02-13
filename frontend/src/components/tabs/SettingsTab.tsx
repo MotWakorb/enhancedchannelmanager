@@ -389,7 +389,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
     if (activePage === 'm3u-digest' && !digestSettings && !digestLoading) {
       loadDigestSettings();
     }
-  }, [activePage, digestSettings, digestLoading]);
+  }, [activePage, digestSettings, digestLoading, loadDigestSettings]);
 
   // Load M3U accounts to show guidance for max concurrent probes
   const loadM3UAccountsMaxStreams = async () => {
@@ -812,7 +812,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   };
 
   // M3U Digest Settings Management
-  const loadDigestSettings = async () => {
+  const loadDigestSettings = useCallback(async () => {
     setDigestLoading(true);
     try {
       const settings = await api.getM3UDigestSettings();
@@ -822,7 +822,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
     } finally {
       setDigestLoading(false);
     }
-  };
+  }, [notifications]);
 
   const handleDigestSettingChange = <K extends keyof M3UDigestSettings>(
     key: K,

@@ -611,7 +611,7 @@ export function StreamsPane({
         setTimeout(() => document.body.removeChild(dragEl), 0);
       }
     },
-    [selectedGroupNames, groupedStreams, onGroupExpand]
+    [selectedGroupNames, groupedStreams, onGroupExpand, streamGroupCounts]
   );
 
   // Bulk create handlers - apply settings defaults
@@ -783,7 +783,7 @@ export function StreamsPane({
     }
 
     showContextMenu(e.clientX, e.clientY, { streamIds });
-  }, [isEditMode, isSelected, clearSelection, toggleSelect, selectedIds]);
+  }, [isEditMode, isSelected, clearSelection, toggleSelect, selectedIds, showContextMenu]);
 
   // Handler for "Create channel(s) in existing group" from context menu
   const handleCreateInGroup = useCallback((groupId: number) => {
@@ -833,7 +833,7 @@ export function StreamsPane({
     const streamIds = group.streams.map(s => s.id);
 
     showContextMenu(e.clientX, e.clientY, { streamIds });
-  }, [isEditMode]);
+  }, [isEditMode, showContextMenu]);
 
   // Toggle group selection (select/deselect all streams in group)
   const toggleGroupSelection = useCallback((group: StreamGroup) => {
@@ -1285,38 +1285,7 @@ export function StreamsPane({
     } finally {
       setBulkCreateLoading(false);
     }
-  }, [
-    streamsToCreate,
-    isFromGroup,
-    isFromMultipleGroups,
-    bulkCreateGroup,
-    bulkCreateGroups,
-    bulkCreateMultiGroupOption,
-    bulkCreateCustomGroupNames,
-    bulkCreateGroupStartNumbers,
-    bulkCreateStartingNumber,
-    bulkCreateGroupOption,
-    bulkCreateSelectedGroupId,
-    bulkCreateNewGroupName,
-    bulkCreateTimezone,
-    bulkCreateStripCountry,
-    bulkCreateKeepCountry,
-    bulkCreateCountrySeparator,
-    bulkCreateAddNumber,
-    bulkCreateSeparator,
-    bulkCreatePrefixOrder,
-    bulkCreateStripNetwork,
-    bulkCreateStripSuffix,
-    bulkCreateSelectedProfiles,
-    bulkCreateNormalize,
-    channelGroups,
-    onBulkCreateFromGroup,
-    clearSelection,
-    closeBulkCreateModal,
-    isManualEntry,
-    manualEntryChannelName,
-    onCreateChannel,
-  ]);
+  }, [isManualEntry, onCreateChannel, streamsToCreate, onBulkCreateFromGroup, isFromMultipleGroups, bulkCreateMultiGroupOption, manualEntryChannelName, bulkCreateGroupOption, bulkCreateStartingNumber, closeBulkCreateModal, bulkCreateSelectedGroupId, bulkCreateNewGroupName, isFromGroup, bulkCreateGroups, bulkCreateGroupStartNumbers, bulkCreateCustomGroupNames, channelGroups, bulkCreateTimezone, bulkCreateStripCountry, bulkCreateAddNumber, bulkCreateSeparator, bulkCreateKeepCountry, bulkCreateCountrySeparator, bulkCreatePrefixOrder, bulkCreateStripNetwork, channelDefaults?.customNetworkPrefixes, channelDefaults?.customNetworkSuffixes, bulkCreateStripSuffix, bulkCreateSelectedProfiles, bulkCreateNormalize, bulkCreateGroup, clearSelection]);
 
   // Check for conflicts and show dialog, or proceed directly if no conflicts
   const handleBulkCreate = useCallback(async () => {
@@ -1368,21 +1337,7 @@ export function StreamsPane({
 
     // No conflicts or separate mode - proceed with creation
     await doBulkCreate(false);
-  }, [
-    streamsToCreate,
-    isFromMultipleGroups,
-    bulkCreateMultiGroupOption,
-    bulkCreateGroupStartNumbers,
-    bulkCreateGroups,
-    bulkCreateStartingNumber,
-    bulkCreateStats.streamCount,
-    onBulkCreateFromGroup,
-    onCheckConflicts,
-    onGetHighestChannelNumber,
-    doBulkCreate,
-    isManualEntry,
-    manualEntryChannelName,
-  ]);
+  }, [streamsToCreate, isFromMultipleGroups, bulkCreateMultiGroupOption, bulkCreateGroupStartNumbers, bulkCreateGroups, bulkCreateStartingNumber, bulkCreateStats.streamCount, onBulkCreateFromGroup, onCheckConflicts, onGetHighestChannelNumber, doBulkCreate, isManualEntry, manualEntryChannelName]);
 
   // Handle copying stream URL to clipboard
   const handleCopyStreamUrl = async (url: string, streamName: string) => {

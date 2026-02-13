@@ -92,7 +92,7 @@ export function ScheduleEditor({ schedule, onSave, onCancel, saving, taskId, par
   useEffect(() => {
     const isPreset = INTERVAL_PRESETS.some(p => p.value === intervalSeconds);
     setUseCustomInterval(!isPreset);
-  }, []);
+  }, [intervalSeconds]);
 
   // Helper to update a single parameter
   const updateParameter = (name: string, value: unknown) => {

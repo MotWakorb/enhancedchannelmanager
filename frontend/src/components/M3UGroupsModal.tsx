@@ -122,7 +122,7 @@ export const M3UGroupsModal = memo(function M3UGroupsModal({
         })
         .finally(() => setLoading(false));
     }
-  }, [isOpen, account?.id]);
+  }, [isOpen, account, notifications]);
 
   // Filter and sort groups by search, hideDisabled, and showOnlyAutoSync
   const filteredGroups = useMemo(() => {

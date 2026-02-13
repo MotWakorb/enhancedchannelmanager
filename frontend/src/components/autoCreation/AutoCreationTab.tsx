@@ -167,7 +167,7 @@ export function AutoCreationTab() {
     } catch (err) {
       notifications.error(err instanceof Error ? err.message : 'Failed to save rule', 'Auto-Creation');
     }
-  }, [editingRule, updateRule, createRule, rules]);
+  }, [editingRule, updateRule, createRule, rules, notifications]);
 
   const handleCancelRuleBuilder = useCallback(() => {
     setShowRuleBuilder(false);
@@ -195,7 +195,7 @@ export function AutoCreationTab() {
     } catch (err) {
       notifications.error(err instanceof Error ? err.message : 'Failed to toggle rule', 'Auto-Creation');
     }
-  }, [toggleRule]);
+  }, [toggleRule, notifications]);
 
   const handleDuplicate = useCallback(async (rule: AutoCreationRule) => {
     try {
@@ -203,7 +203,7 @@ export function AutoCreationTab() {
     } catch (err) {
       notifications.error(err instanceof Error ? err.message : 'Failed to duplicate rule', 'Auto-Creation');
     }
-  }, [duplicateRule]);
+  }, [duplicateRule, notifications]);
 
   const handleDragStart = useCallback((e: React.DragEvent, ruleId: number) => {
     if (!dragAllowed.current) {
@@ -250,7 +250,7 @@ export function AutoCreationTab() {
     } catch (err) {
       notifications.error(err instanceof Error ? err.message : 'Failed to reorder rules', 'Auto-Creation');
     }
-  }, [filteredRules, reorderRules]);
+  }, [filteredRules, notifications, reorderRules]);
 
   const handleRun = useCallback(async (dryRun: boolean = false, ruleIds?: number[]) => {
     try {
@@ -305,7 +305,7 @@ export function AutoCreationTab() {
         notifications.error(err instanceof Error ? err.message : 'Failed to rollback', 'Auto-Creation');
       }
     }
-  }, [showRollbackConfirm, rollback, fetchExecutions]);
+  }, [showRollbackConfirm, rollback, fetchExecutions, notifications]);
 
   const handleViewDetails = useCallback(async (execution: AutoCreationExecution) => {
     setShowExecutionDetails(execution);
@@ -332,7 +332,7 @@ export function AutoCreationTab() {
     } catch (err) {
       notifications.error(err instanceof Error ? err.message : 'Failed to export rules', 'Auto-Creation');
     }
-  }, []);
+  }, [notifications]);
 
   const handleImport = useCallback(async () => {
     setImportLoading(true);
@@ -350,7 +350,7 @@ export function AutoCreationTab() {
     } finally {
       setImportLoading(false);
     }
-  }, [importYaml, fetchRules]);
+  }, [importYaml, fetchRules, notifications]);
 
   const handleRetry = useCallback(() => {
     fetchRules();

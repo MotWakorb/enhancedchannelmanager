@@ -28,7 +28,7 @@ export function BandwidthPanel({ refreshTrigger }: BandwidthPanelProps) {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [notifications]);
 
   useEffect(() => {
     fetchData();

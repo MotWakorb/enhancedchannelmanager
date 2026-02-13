@@ -545,7 +545,7 @@ function App() {
       }
     };
     init();
-  }, []);
+  }, [loadChannels, loadChannelGroups]);
 
   // Register VLC modal callback
   useEffect(() => {
@@ -720,14 +720,14 @@ function App() {
     loadEpgData();
   };
 
-  const loadChannelGroups = async () => {
+  const loadChannelGroups = useCallback(async () => {
     try {
       const groups = await api.getChannelGroups();
       setChannelGroups(groups);
     } catch (err) {
       logger.error('Failed to load channel groups:', err);
     }
-  };
+  }, []);
 
   const handleDeleteChannelGroup = async (groupId: number) => {
     await api.deleteChannelGroup(groupId);
@@ -784,7 +784,7 @@ function App() {
     setNewlyCreatedGroupIds((prev) => new Set([...prev, groupId]));
   }, []);
 
-  const loadChannels = async (signal?: AbortSignal) => {
+  const loadChannels = useCallback(async (signal?: AbortSignal) => {
     setLoadingStates(prev => ({ ...prev, channels: true }));
     try {
       // Fetch all pages of channels
@@ -813,7 +813,7 @@ function App() {
     } finally {
       setLoadingStates(prev => ({ ...prev, channels: false }));
     }
-  };
+  }, [channelFilters.search]);
 
   // Handle CSV import completion - refreshes data and adds new groups to filter
   const handleCSVImportComplete = useCallback(async () => {
@@ -845,7 +845,7 @@ function App() {
     } catch (err) {
       logger.error('Failed to refresh after CSV import:', err);
     }
-  }, [channelGroups]);
+  }, [channelGroups, loadChannels]);
 
   const loadProviders = async () => {
     try {
@@ -926,7 +926,7 @@ function App() {
 
   // Lightweight reset: clear streams and refresh group metadata.
   // Actual stream data loads per-group on demand via loadStreamGroup().
-  const resetStreams = async (_bypassCache: boolean = false) => {
+  const resetStreams = useCallback(async (_bypassCache: boolean = false) => {
     setLoadingStates(prev => ({ ...prev, streams: true }));
     try {
       // Clear all loaded streams and group tracking
@@ -944,10 +944,10 @@ function App() {
     } finally {
       setLoadingStates(prev => ({ ...prev, streams: false }));
     }
-  };
+  }, [streamFilters.selectedProviders]);
 
   // Search streams: fetch just the first page of server-filtered results
-  const searchStreams = async (signal?: AbortSignal) => {
+  const searchStreams = useCallback(async (signal?: AbortSignal) => {
     setLoadingStates(prev => ({ ...prev, streams: true }));
     try {
       setStreams([]);
@@ -974,13 +974,13 @@ function App() {
     } finally {
       setLoadingStates(prev => ({ ...prev, streams: false }));
     }
-  };
+  }, [streamFilters.search, streamFilters.providerFilter, streamFilters.groupFilter, streamFilters.selectedProviders]);
 
   // Force refresh streams from Dispatcharr (bypassing cache)
   const refreshStreams = useCallback(() => {
     streamsExplicitlyRequested.current = true;
     resetStreams(true);
-  }, [streamFilters.selectedProviders]);
+  }, [resetStreams]);
 
   // Request streams to be loaded (lazy loading trigger)
   // Call this when user interacts with streams (e.g., expands streams pane, searches)
@@ -1050,7 +1050,7 @@ function App() {
       clearTimeout(timer);
       abortController.abort(); // Cancel in-flight request when search changes
     };
-  }, [channelFilters.search]);
+  }, [channelFilters.search, loadChannels]);
 
   // Refresh channels/groups when auto-creation pipeline modifies them
   // Uses api.* directly and channelGroupsRef to avoid stale closures (empty [] deps)
@@ -1128,7 +1128,7 @@ function App() {
       clearTimeout(timer);
       abortController.abort();
     };
-  }, [streamFilters.search, streamFilters.providerFilter, streamFilters.groupFilter]);
+  }, [streamFilters.search, streamFilters.providerFilter, streamFilters.groupFilter, resetStreams, searchStreams]);
 
   // Initialize baseline when channels first load
   useEffect(() => {
@@ -1859,7 +1859,7 @@ function App() {
         throw err;
       }
     },
-    [isEditMode, stageCreateChannel, stageAddStream, stageUpdateChannel, startBatch, endBatch, displayChannels, defaultChannelProfileIds]
+    [isEditMode, stageCreateChannel, stageAddStream, stageUpdateChannel, startBatch, endBatch, displayChannels, defaultChannelProfileIds, autoRenameChannelNumber]
   );
 
   // Handle stream group drop on channels pane (triggers bulk create modal in streams pane)
@@ -1989,7 +1989,7 @@ function App() {
         }
       }
     },
-    [channels, displayChannels, isEditMode, stageBulkAssignNumbers, recordChange]
+    [channels, displayChannels, isEditMode, stageBulkAssignNumbers, recordChange, loadChannels]
   );
 
   // Format duration for display
