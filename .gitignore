@@ -33,3 +33,6 @@ backend/static/
 *.egg-info/
 dist/
 build/
+
+# User guide screenshots (may contain PII)
+docs/images/
