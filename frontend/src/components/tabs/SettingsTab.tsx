@@ -384,6 +384,19 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
     loadM3UAccountsMaxStreams();
   }, []);
 
+  // M3U Digest Settings Management
+  const loadDigestSettings = useCallback(async () => {
+    setDigestLoading(true);
+    try {
+      const settings = await api.getM3UDigestSettings();
+      setDigestSettings(settings);
+    } catch (err) {
+      notifications.error(err instanceof Error ? err.message : 'Failed to load digest settings', 'Digest Settings');
+    } finally {
+      setDigestLoading(false);
+    }
+  }, [notifications]);
+
   // Load M3U digest settings when that page is activated
   useEffect(() => {
     if (activePage === 'm3u-digest' && !digestSettings && !digestLoading) {
@@ -810,19 +823,6 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       setLoading(false);
     }
   };
-
-  // M3U Digest Settings Management
-  const loadDigestSettings = useCallback(async () => {
-    setDigestLoading(true);
-    try {
-      const settings = await api.getM3UDigestSettings();
-      setDigestSettings(settings);
-    } catch (err) {
-      notifications.error(err instanceof Error ? err.message : 'Failed to load digest settings', 'Digest Settings');
-    } finally {
-      setDigestLoading(false);
-    }
-  }, [notifications]);
 
   const handleDigestSettingChange = <K extends keyof M3UDigestSettings>(
     key: K,

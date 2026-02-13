@@ -545,7 +545,8 @@ function App() {
       }
     };
     init();
-  }, [loadChannels, loadChannelGroups]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loadChannelGroups, loadProviders, loadProviderGroupSettings, loadStreamGroups, loadLogos, loadStreamProfiles, loadChannelProfiles, loadEpgSources, loadEpgData]);
 
   // Register VLC modal callback
   useEffect(() => {
@@ -737,14 +738,14 @@ function App() {
     await loadChannels();
   };
 
-  const loadProviderGroupSettings = async () => {
+  const loadProviderGroupSettings = useCallback(async () => {
     try {
       const settings = await api.getProviderGroupSettings();
       setProviderGroupSettings(settings);
     } catch (err) {
       logger.error('Failed to load provider group settings:', err);
     }
-  };
+  }, []);
 
   const updateChannelListFilters = useCallback((updates: Partial<ChannelListFilterSettings>) => {
     setChannelListFilters((prev) => {
@@ -763,7 +764,7 @@ function App() {
     // When 0 or multiple providers selected, load all groups
     const m3uAccountId = providerIds.length === 1 ? providerIds[0] : null;
     loadStreamGroups(m3uAccountId);
-  }, []);
+  }, [loadStreamGroups]);
 
   const updateSelectedStreamGroupFilters = useCallback((groups: string[]) => {
     streamsExplicitlyRequested.current = true;
@@ -778,7 +779,7 @@ function App() {
     localStorage.removeItem('streamGroupFilters');
     // Reload all stream groups (no provider filter)
     loadStreamGroups(null);
-  }, []);
+  }, [loadStreamGroups]);
 
   const trackNewlyCreatedGroup = useCallback((groupId: number) => {
     setNewlyCreatedGroupIds((prev) => new Set([...prev, groupId]));
@@ -847,25 +848,25 @@ function App() {
     }
   }, [channelGroups, loadChannels]);
 
-  const loadProviders = async () => {
+  const loadProviders = useCallback(async () => {
     try {
       const accounts = await api.getM3UAccounts();
       setProviders(accounts);
     } catch (err) {
       logger.error('Failed to load providers:', err);
     }
-  };
+  }, []);
 
-  const loadStreamGroups = async (m3uAccountId?: number | null) => {
+  const loadStreamGroups = useCallback(async (m3uAccountId?: number | null) => {
     try {
       const groups = await api.getStreamGroups(false, m3uAccountId);
       setStreamGroups(groups);
     } catch (err) {
       logger.error('Failed to load stream groups:', err);
     }
-  };
+  }, []);
 
-  const loadLogos = async () => {
+  const loadLogos = useCallback(async () => {
     try {
       // Fetch all logos
       const allLogos: Logo[] = [];
@@ -883,36 +884,36 @@ function App() {
     } catch (err) {
       logger.error('Failed to load logos:', err);
     }
-  };
+  }, []);
 
-  const loadStreamProfiles = async () => {
+  const loadStreamProfiles = useCallback(async () => {
     try {
       const profiles = await api.getStreamProfiles();
       setStreamProfiles(profiles);
     } catch (err) {
       logger.error('Failed to load stream profiles:', err);
     }
-  };
+  }, []);
 
-  const loadChannelProfiles = async () => {
+  const loadChannelProfiles = useCallback(async () => {
     try {
       const profiles = await api.getChannelProfiles();
       setChannelProfiles(profiles);
     } catch (err) {
       logger.error('Failed to load channel profiles:', err);
     }
-  };
+  }, []);
 
-  const loadEpgSources = async () => {
+  const loadEpgSources = useCallback(async () => {
     try {
       const sources = await api.getEPGSources();
       setEpgSources(sources);
     } catch (err) {
       logger.error('Failed to load EPG sources:', err);
     }
-  };
+  }, []);
 
-  const loadEpgData = async () => {
+  const loadEpgData = useCallback(async () => {
     setLoadingStates(prev => ({ ...prev, epgData: true }));
     try {
       const data = await api.getEPGData();
@@ -922,7 +923,7 @@ function App() {
     } finally {
       setLoadingStates(prev => ({ ...prev, epgData: false }));
     }
-  };
+  }, []);
 
   // Lightweight reset: clear streams and refresh group metadata.
   // Actual stream data loads per-group on demand via loadStreamGroup().
@@ -944,7 +945,7 @@ function App() {
     } finally {
       setLoadingStates(prev => ({ ...prev, streams: false }));
     }
-  }, [streamFilters.selectedProviders]);
+  }, [streamFilters.selectedProviders, loadStreamGroups]);
 
   // Search streams: fetch just the first page of server-filtered results
   const searchStreams = useCallback(async (signal?: AbortSignal) => {
@@ -974,7 +975,7 @@ function App() {
     } finally {
       setLoadingStates(prev => ({ ...prev, streams: false }));
     }
-  }, [streamFilters.search, streamFilters.providerFilter, streamFilters.groupFilter, streamFilters.selectedProviders]);
+  }, [streamFilters.search, streamFilters.providerFilter, streamFilters.groupFilter, streamFilters.selectedProviders, loadStreamGroups]);
 
   // Force refresh streams from Dispatcharr (bypassing cache)
   const refreshStreams = useCallback(() => {
@@ -993,7 +994,7 @@ function App() {
         ? streamFilters.selectedProviders[0] : null;
       loadStreamGroups(m3uAccountId);
     }
-  }, [streamFilters.selectedProviders]);
+  }, [streamFilters.selectedProviders, loadStreamGroups]);
 
   // Load streams for a single group (per-group lazy loading)
   // This allows loading only the streams for an expanded group instead of all streams

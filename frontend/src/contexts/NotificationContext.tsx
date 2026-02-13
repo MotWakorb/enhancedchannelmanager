@@ -1,7 +1,9 @@
-import { useState, useCallback, ReactNode } from 'react';
+import { useState, useCallback, useMemo, ReactNode } from 'react';
 import { ToastContainer, ToastData } from '../components/ToastContainer';
 import type { NotificationOptions, NotificationContextValue } from './useNotifications';
 import { NotificationContext } from './useNotifications';
+
+export { useNotifications } from './useNotifications';
 
 // Generate unique IDs for notifications
 let notificationIdCounter = 0;
@@ -62,7 +64,7 @@ export function NotificationProvider({
     return notify({ type: 'error', message, title, duration: 8000 }); // Errors stay longer
   }, [notify]);
 
-  const value: NotificationContextValue = {
+  const value = useMemo((): NotificationContextValue => ({
     notify,
     info,
     success,
@@ -70,7 +72,7 @@ export function NotificationProvider({
     error,
     dismiss,
     dismissAll,
-  };
+  }), [notify, info, success, warning, error, dismiss, dismissAll]);
 
   return (
     <NotificationContext.Provider value={value}>
