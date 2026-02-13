@@ -444,7 +444,7 @@ export function EPGManagerTab({ onSourcesChange, hideEpgUrls = false }: EPGManag
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [notifications]);
 
   useEffect(() => {
     loadSources();
@@ -528,7 +528,7 @@ export function EPGManagerTab({ onSourcesChange, hideEpgUrls = false }: EPGManag
       }, 2000);
       // Stop polling after 5 minutes max
       setTimeout(() => clearInterval(pollInterval), 300000);
-    } catch (err) {
+    } catch (_err) {
       notifications.error('Failed to refresh EPG source', 'EPG Manager');
     }
   };
@@ -564,7 +564,7 @@ export function EPGManagerTab({ onSourcesChange, hideEpgUrls = false }: EPGManag
       const fullSource = await api.getEPGSource(source.id);
       setEditingDummySource(fullSource);
       setDummyModalOpen(true);
-    } catch (err) {
+    } catch (_err) {
       notifications.error('Failed to load EPG source details', 'EPG Manager');
     }
   };

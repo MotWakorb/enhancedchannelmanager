@@ -344,6 +344,8 @@ export function TagEngineSection() {
     ? groups.filter(g => g.name.toLowerCase().includes(searchQuery.toLowerCase()))
     : groups;
 
+  //TODO do we need this?
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const totalTags = groups.reduce((sum, g) => sum + (g.tag_count || 0), 0);
 
   return (

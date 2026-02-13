@@ -487,7 +487,7 @@ interface DroppableGroupHeaderProps {
   onSelectAll?: () => void;
   onStreamDropOnGroup?: (groupId: number | 'ungrouped', streamIds: number[]) => void;
   onContextMenu?: (e: React.MouseEvent) => void;
-  dragHandleProps?: any;
+  dragHandleProps?: React.HTMLAttributes<HTMLElement> | undefined;
   onProbeGroup?: () => void;
   isProbing?: boolean;
   onSortStreamsByQuality?: () => void;
@@ -2413,7 +2413,7 @@ export function ChannelsPane({
 
     const scope = channelIds.length === channels.length ? 'all channels' :
       channelIds.length === 1 ? channels.find(ch => ch.id === channelIds[0])?.name || '1 channel' :
-      `${channelIds.length} channels`;
+        `${channelIds.length} channels`;
 
     notifications.info(`Sorting streams by ${SORT_MODE_LABELS[mode]} in ${scope}...`, 'Sort Started');
     setBulkSortingByQuality(true);
@@ -2440,7 +2440,7 @@ export function ChannelsPane({
       if (onStartBatch) {
         const batchScope = channelIds.length === channels.length ? 'all channels' :
           channelIds.length === 1 ? `"${channelsToProcess[0]?.name}"` :
-          `${channelsToProcess.length} channels`;
+            `${channelsToProcess.length} channels`;
         onStartBatch(`Sort streams by ${SORT_MODE_LABELS[mode]} in ${batchScope}`);
       }
 
@@ -3158,12 +3158,12 @@ export function ChannelsPane({
 
     const afterMissingDataFilter = hasMissingDataFilters
       ? visibleChannels.filter((ch) => {
-          if (channelListFilters?.filterMissingLogo && ch.logo_id === null) return true;
-          if (channelListFilters?.filterMissingTvgId && (!ch.tvg_id || ch.tvg_id === '')) return true;
-          if (channelListFilters?.filterMissingEpgData && ch.epg_data_id === null) return true;
-          if (channelListFilters?.filterMissingGracenote && (!ch.tvc_guide_stationid || ch.tvc_guide_stationid === '')) return true;
-          return false;
-        })
+        if (channelListFilters?.filterMissingLogo && ch.logo_id === null) return true;
+        if (channelListFilters?.filterMissingTvgId && (!ch.tvg_id || ch.tvg_id === '')) return true;
+        if (channelListFilters?.filterMissingEpgData && ch.epg_data_id === null) return true;
+        if (channelListFilters?.filterMissingGracenote && (!ch.tvc_guide_stationid || ch.tvc_guide_stationid === '')) return true;
+        return false;
+      })
       : visibleChannels;
 
     // Apply stream status filters (all checked = show all, all unchecked = show all)
@@ -3174,23 +3174,23 @@ export function ChannelsPane({
 
     const filteredChannels = !allSame
       ? afterMissingDataFilter.filter((ch) => {
-          const hasFailed = ch.streams.some(streamId => {
-            const stats = streamStatsMap.get(streamId);
-            return stats && (stats.probe_status === 'failed' || stats.probe_status === 'timeout');
-          });
-          const hasWorking = ch.streams.some(streamId => {
-            const stats = streamStatsMap.get(streamId);
-            return stats && stats.probe_status === 'success';
-          });
-          const hasUnprobed = ch.streams.length === 0 || ch.streams.some(streamId => {
-            const stats = streamStatsMap.get(streamId);
-            return !stats || !stats.probe_status;
-          });
-          if (showFailed && hasFailed) return true;
-          if (showWorking && hasWorking) return true;
-          if (showUnprobed && hasUnprobed) return true;
-          return false;
-        })
+        const hasFailed = ch.streams.some(streamId => {
+          const stats = streamStatsMap.get(streamId);
+          return stats && (stats.probe_status === 'failed' || stats.probe_status === 'timeout');
+        });
+        const hasWorking = ch.streams.some(streamId => {
+          const stats = streamStatsMap.get(streamId);
+          return stats && stats.probe_status === 'success';
+        });
+        const hasUnprobed = ch.streams.length === 0 || ch.streams.some(streamId => {
+          const stats = streamStatsMap.get(streamId);
+          return !stats || !stats.probe_status;
+        });
+        if (showFailed && hasFailed) return true;
+        if (showWorking && hasWorking) return true;
+        if (showUnprobed && hasUnprobed) return true;
+        return false;
+      })
       : afterMissingDataFilter;
 
     // Group channels by channel_group_id
@@ -3516,7 +3516,7 @@ export function ChannelsPane({
 
       // Check if it's actually a different group
       if ((newGroupId === null && activeChannel.channel_group_id !== null) ||
-          (newGroupId !== null && activeChannel.channel_group_id !== newGroupId)) {
+        (newGroupId !== null && activeChannel.channel_group_id !== newGroupId)) {
         isCrossGroupMove = true;
       }
     } else if (overId.startsWith('group-')) {
@@ -3526,7 +3526,7 @@ export function ChannelsPane({
 
       // Check if it's actually a different group
       if ((newGroupId === null && activeChannel.channel_group_id !== null) ||
-          (newGroupId !== null && activeChannel.channel_group_id !== newGroupId)) {
+        (newGroupId !== null && activeChannel.channel_group_id !== newGroupId)) {
         isCrossGroupMove = true;
       }
     } else if (overChannel && overChannel.channel_group_id !== activeChannel.channel_group_id) {
@@ -3821,7 +3821,8 @@ export function ChannelsPane({
 
         // Get channel numbers from reorderedGroup to determine new assignments
         // Find where the selected channels ended up and what numbers they should get
-        const selectedIds = new Set(selectedInGroup.map(ch => ch.id));
+        // TODO is this needed
+        // const selectedIds = new Set(selectedInGroup.map(ch => ch.id));
 
         // Calculate updates based on new positions
         const channelUpdates: Array<{ id: number; oldNumber: number; newNumber: number; oldName: string; newName?: string }> = [];
@@ -4122,8 +4123,8 @@ export function ChannelsPane({
       // Find channels that would conflict (their number falls within the moved range)
       const conflictingChannels = targetGroupChannels.filter((ch) => {
         return ch.channel_number !== null &&
-               ch.channel_number >= movedRangeStart &&
-               ch.channel_number <= movedRangeEnd;
+          ch.channel_number >= movedRangeStart &&
+          ch.channel_number <= movedRangeEnd;
       });
 
       // If there are conflicts, we need to shift existing channels
@@ -4756,180 +4757,180 @@ export function ChannelsPane({
                     streamInsertIndicator.groupId === groupId;
 
                   return (
-                  <div key={channel.id} className="channel-wrapper">
-                    {/* Stream insert drop zone - visible when dragging streams in edit mode */}
-                    {isEditMode && (
-                      <div
-                        className={`stream-insert-zone ${showStreamInsertBefore ? 'active' : ''}`}
-                        onDragOver={(e) => {
-                          const types = e.dataTransfer.types.map(t => t.toLowerCase());
-                          if (types.includes('streamid') || types.includes('streamids')) {
+                    <div key={channel.id} className="channel-wrapper">
+                      {/* Stream insert drop zone - visible when dragging streams in edit mode */}
+                      {isEditMode && (
+                        <div
+                          className={`stream-insert-zone ${showStreamInsertBefore ? 'active' : ''}`}
+                          onDragOver={(e) => {
+                            const types = e.dataTransfer.types.map(t => t.toLowerCase());
+                            if (types.includes('streamid') || types.includes('streamids')) {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              // Set indicator for this position
+                              if (channel.channel_number !== null) {
+                                setStreamInsertIndicator({
+                                  channelId: channel.id,
+                                  position: 'before',
+                                  groupId,
+                                  channelNumber: channel.channel_number,
+                                });
+                              }
+                            }
+                          }}
+                          onDragLeave={(e) => {
+                            e.stopPropagation();
+                            // Only clear if not entering another insert zone
+                            const relatedTarget = e.relatedTarget as HTMLElement;
+                            if (!relatedTarget?.classList?.contains('stream-insert-zone')) {
+                              setStreamInsertIndicator(null);
+                            }
+                          }}
+                          onDrop={(e) => {
                             e.preventDefault();
                             e.stopPropagation();
-                            // Set indicator for this position
-                            if (channel.channel_number !== null) {
-                              setStreamInsertIndicator({
-                                channelId: channel.id,
-                                position: 'before',
-                                groupId,
-                                channelNumber: channel.channel_number,
-                              });
-                            }
-                          }
-                        }}
-                        onDragLeave={(e) => {
-                          e.stopPropagation();
-                          // Only clear if not entering another insert zone
-                          const relatedTarget = e.relatedTarget as HTMLElement;
-                          if (!relatedTarget?.classList?.contains('stream-insert-zone')) {
                             setStreamInsertIndicator(null);
-                          }
-                        }}
-                        onDrop={(e) => {
-                          e.preventDefault();
-                          e.stopPropagation();
-                          setStreamInsertIndicator(null);
 
-                          // Get stream IDs
-                          const streamIdsJson = e.dataTransfer.getData('streamIds');
-                          const streamId = e.dataTransfer.getData('streamId');
-                          let streamIds: number[] = [];
+                            // Get stream IDs
+                            const streamIdsJson = e.dataTransfer.getData('streamIds');
+                            const streamId = e.dataTransfer.getData('streamId');
+                            let streamIds: number[] = [];
 
-                          if (streamIdsJson) {
-                            try {
-                              streamIds = JSON.parse(streamIdsJson) as number[];
-                            } catch {
-                              // Fall through to single stream
+                            if (streamIdsJson) {
+                              try {
+                                streamIds = JSON.parse(streamIdsJson) as number[];
+                              } catch {
+                                // Fall through to single stream
+                              }
                             }
-                          }
-                          if (streamIds.length === 0 && streamId) {
-                            streamIds = [parseInt(streamId, 10)];
-                          }
+                            if (streamIds.length === 0 && streamId) {
+                              streamIds = [parseInt(streamId, 10)];
+                            }
 
-                          if (streamIds.length > 0 && channel.channel_number !== null) {
-                            handleStreamDropAtPosition(groupId, streamIds, channel.channel_number);
-                          }
-                        }}
-                      >
-                        {showStreamInsertBefore && (
-                          <div className="stream-insert-indicator">
-                            <div className="stream-insert-line" />
-                            <span className="stream-insert-label">Insert at {channel.channel_number}</span>
-                          </div>
-                        )}
-                      </div>
-                    )}
-                    {showIndicatorBefore && (
-                      <div className="channel-drop-indicator">
-                        <div className="drop-indicator-line" />
-                      </div>
-                    )}
-                    <ChannelListItem
-                      channel={channel}
-                      isSelected={selectedChannelId === channel.id}
-                      isMultiSelected={selectedChannelIds.has(channel.id)}
-                      isExpanded={selectedChannelId === channel.id}
-                      isDragOver={dragOverChannelId === channel.id}
-                      isEditingNumber={editingChannelId === channel.id}
-                      isEditingName={editingNameChannelId === channel.id}
-                      isModified={modifiedChannelIds?.has(channel.id) ?? false}
-                      isEditMode={isEditMode}
-                      editingNumber={editingChannelNumber}
-                      editingName={editingChannelName}
-                      logoUrl={getChannelLogoUrl(channel)}
-                      multiSelectCount={selectedChannelIds.size}
-                      onEditingNumberChange={setEditingChannelNumber}
-                      onEditingNameChange={setEditingChannelName}
-                      onStartEditNumber={(e) => handleStartEditNumber(e, channel)}
-                      onStartEditName={(e) => handleStartEditName(e, channel)}
-                      onSaveNumber={() => handleSaveChannelNumber(channel.id)}
-                      onSaveName={() => handleSaveChannelName(channel.id)}
-                      onCancelEditNumber={handleCancelEditNumber}
-                      onCancelEditName={handleCancelEditName}
-                      onClick={(e) => handleChannelClick(channel, e, groupChannels.map((c) => c.id))}
-                      onToggleExpand={() => handleToggleExpand(channel)}
-                      onToggleSelect={(e) => handleToggleSelect(channel, e, groupChannels.map((c) => c.id))}
-                      onStreamDragOver={(e) => handleStreamDragOver(e, channel.id)}
-                      onStreamDragLeave={handleStreamDragLeave}
-                      onStreamDrop={(e) => handleStreamDrop(e, channel.id)}
-                      onDelete={() => handleDeleteChannelClick(channel)}
-                      onEditChannel={() => handleEditChannel(channel)}
-                      onCopyChannelUrl={dispatcharrUrl && channel.uuid ? () => handleCopyChannelUrl(`${dispatcharrUrl}/proxy/ts/stream/${channel.uuid}`, channel.name) : undefined}
-                      onContextMenu={(e) => handleContextMenu(channel, e)}
-                      channelUrl={dispatcharrUrl && channel.uuid ? `${dispatcharrUrl}/proxy/ts/stream/${channel.uuid}` : undefined}
-                      showStreamUrls={showStreamUrls}
-                      onProbeChannel={() => handleProbeChannel(channel)}
-                      isProbing={probingChannels.has(channel.id)}
-                      hasFailedStreams={channel.streams.some(streamId => {
-                        const stats = streamStatsMap.get(streamId);
-                        return stats && (stats.probe_status === 'failed' || stats.probe_status === 'timeout');
-                      })}
-                      onPreviewChannel={() => handlePreviewChannel(channel)}
-                    />
-                    {selectedChannelId === channel.id && (
-                      <div
-                        className={`inline-streams ${dragOverChannelId === channel.id ? 'drag-over' : ''}`}
-                        onDragOver={(e) => handleStreamDragOver(e, channel.id)}
-                        onDragLeave={handleStreamDragLeave}
-                        onDrop={(e) => handleStreamDrop(e, channel.id)}
-                      >
-                        {streamsLoading ? (
-                          <div className="inline-streams-loading">Loading streams...</div>
-                        ) : channelStreams.length === 0 ? (
-                          <div className="inline-streams-empty">
-                            No streams assigned. Drag streams here to add.
-                          </div>
-                        ) : (
-                          <>
-                            {/* Stream toolbar - only in edit mode with multiple streams */}
-                            {isEditMode && onStageReorderStreams && channelStreams.length > 1 && (
-                              <div className="inline-streams-toolbar">
-                                <SortDropdownButton
-                                  onSortByMode={handleSortStreamsByMode}
-                                  className="sort-quality-btn-wrapper"
-                                  enabledCriteria={channelDefaults?.streamSortEnabled}
-                                />
-                              </div>
-                            )}
-                            <DndContext
-                              sensors={streamSensors}
-                              collisionDetection={closestCenter}
-                              onDragEnd={handleStreamDragEnd}
-                            >
-                              <SortableContext
-                                items={channelStreams.map((s) => s.id)}
-                                strategy={verticalListSortingStrategy}
-                              >
-                                <div className="inline-streams-list">
-                                  {channelStreams.map((stream, index) => (
-                                    <div key={stream.id} className="inline-stream-row">
-                                      <span className="stream-priority">{index + 1}</span>
-                                      <StreamListItem
-                                        stream={stream}
-                                        providerName={providers.find((p) => p.id === stream.m3u_account)?.name ?? null}
-                                        isEditMode={isEditMode}
-                                        onRemove={handleRemoveStream}
-                                        onCopyUrl={stream.url ? () => handleCopyStreamUrl(stream.url!, stream.name) : undefined}
-                                        onClearStats={handleClearStreamStats}
-                                        onPreview={stream.url ? (s) => handlePreviewStream(s, channel.name) : undefined}
-                                        showStreamUrls={showStreamUrls}
-                                        streamStats={streamStatsMap.get(stream.id) ?? null}
-                                      />
-                                    </div>
-                                  ))}
+                            if (streamIds.length > 0 && channel.channel_number !== null) {
+                              handleStreamDropAtPosition(groupId, streamIds, channel.channel_number);
+                            }
+                          }}
+                        >
+                          {showStreamInsertBefore && (
+                            <div className="stream-insert-indicator">
+                              <div className="stream-insert-line" />
+                              <span className="stream-insert-label">Insert at {channel.channel_number}</span>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                      {showIndicatorBefore && (
+                        <div className="channel-drop-indicator">
+                          <div className="drop-indicator-line" />
+                        </div>
+                      )}
+                      <ChannelListItem
+                        channel={channel}
+                        isSelected={selectedChannelId === channel.id}
+                        isMultiSelected={selectedChannelIds.has(channel.id)}
+                        isExpanded={selectedChannelId === channel.id}
+                        isDragOver={dragOverChannelId === channel.id}
+                        isEditingNumber={editingChannelId === channel.id}
+                        isEditingName={editingNameChannelId === channel.id}
+                        isModified={modifiedChannelIds?.has(channel.id) ?? false}
+                        isEditMode={isEditMode}
+                        editingNumber={editingChannelNumber}
+                        editingName={editingChannelName}
+                        logoUrl={getChannelLogoUrl(channel)}
+                        multiSelectCount={selectedChannelIds.size}
+                        onEditingNumberChange={setEditingChannelNumber}
+                        onEditingNameChange={setEditingChannelName}
+                        onStartEditNumber={(e) => handleStartEditNumber(e, channel)}
+                        onStartEditName={(e) => handleStartEditName(e, channel)}
+                        onSaveNumber={() => handleSaveChannelNumber(channel.id)}
+                        onSaveName={() => handleSaveChannelName(channel.id)}
+                        onCancelEditNumber={handleCancelEditNumber}
+                        onCancelEditName={handleCancelEditName}
+                        onClick={(e) => handleChannelClick(channel, e, groupChannels.map((c) => c.id))}
+                        onToggleExpand={() => handleToggleExpand(channel)}
+                        onToggleSelect={(e) => handleToggleSelect(channel, e, groupChannels.map((c) => c.id))}
+                        onStreamDragOver={(e) => handleStreamDragOver(e, channel.id)}
+                        onStreamDragLeave={handleStreamDragLeave}
+                        onStreamDrop={(e) => handleStreamDrop(e, channel.id)}
+                        onDelete={() => handleDeleteChannelClick(channel)}
+                        onEditChannel={() => handleEditChannel(channel)}
+                        onCopyChannelUrl={dispatcharrUrl && channel.uuid ? () => handleCopyChannelUrl(`${dispatcharrUrl}/proxy/ts/stream/${channel.uuid}`, channel.name) : undefined}
+                        onContextMenu={(e) => handleContextMenu(channel, e)}
+                        channelUrl={dispatcharrUrl && channel.uuid ? `${dispatcharrUrl}/proxy/ts/stream/${channel.uuid}` : undefined}
+                        showStreamUrls={showStreamUrls}
+                        onProbeChannel={() => handleProbeChannel(channel)}
+                        isProbing={probingChannels.has(channel.id)}
+                        hasFailedStreams={channel.streams.some(streamId => {
+                          const stats = streamStatsMap.get(streamId);
+                          return stats && (stats.probe_status === 'failed' || stats.probe_status === 'timeout');
+                        })}
+                        onPreviewChannel={() => handlePreviewChannel(channel)}
+                      />
+                      {selectedChannelId === channel.id && (
+                        <div
+                          className={`inline-streams ${dragOverChannelId === channel.id ? 'drag-over' : ''}`}
+                          onDragOver={(e) => handleStreamDragOver(e, channel.id)}
+                          onDragLeave={handleStreamDragLeave}
+                          onDrop={(e) => handleStreamDrop(e, channel.id)}
+                        >
+                          {streamsLoading ? (
+                            <div className="inline-streams-loading">Loading streams...</div>
+                          ) : channelStreams.length === 0 ? (
+                            <div className="inline-streams-empty">
+                              No streams assigned. Drag streams here to add.
+                            </div>
+                          ) : (
+                            <>
+                              {/* Stream toolbar - only in edit mode with multiple streams */}
+                              {isEditMode && onStageReorderStreams && channelStreams.length > 1 && (
+                                <div className="inline-streams-toolbar">
+                                  <SortDropdownButton
+                                    onSortByMode={handleSortStreamsByMode}
+                                    className="sort-quality-btn-wrapper"
+                                    enabledCriteria={channelDefaults?.streamSortEnabled}
+                                  />
                                 </div>
-                              </SortableContext>
-                            </DndContext>
-                          </>
-                        )}
-                      </div>
-                    )}
-                    {showIndicatorAfter && !dropIndicator?.atGroupEnd && (
-                      <div className="channel-drop-indicator">
-                        <div className="drop-indicator-line" />
-                      </div>
-                    )}
-                  </div>
+                              )}
+                              <DndContext
+                                sensors={streamSensors}
+                                collisionDetection={closestCenter}
+                                onDragEnd={handleStreamDragEnd}
+                              >
+                                <SortableContext
+                                  items={channelStreams.map((s) => s.id)}
+                                  strategy={verticalListSortingStrategy}
+                                >
+                                  <div className="inline-streams-list">
+                                    {channelStreams.map((stream, index) => (
+                                      <div key={stream.id} className="inline-stream-row">
+                                        <span className="stream-priority">{index + 1}</span>
+                                        <StreamListItem
+                                          stream={stream}
+                                          providerName={providers.find((p) => p.id === stream.m3u_account)?.name ?? null}
+                                          isEditMode={isEditMode}
+                                          onRemove={handleRemoveStream}
+                                          onCopyUrl={stream.url ? () => handleCopyStreamUrl(stream.url!, stream.name) : undefined}
+                                          onClearStats={handleClearStreamStats}
+                                          onPreview={stream.url ? (s) => handlePreviewStream(s, channel.name) : undefined}
+                                          showStreamUrls={showStreamUrls}
+                                          streamStats={streamStatsMap.get(stream.id) ?? null}
+                                        />
+                                      </div>
+                                    ))}
+                                  </div>
+                                </SortableContext>
+                              </DndContext>
+                            </>
+                          )}
+                        </div>
+                      )}
+                      {showIndicatorAfter && !dropIndicator?.atGroupEnd && (
+                        <div className="channel-drop-indicator">
+                          <div className="drop-indicator-line" />
+                        </div>
+                      )}
+                    </div>
                   );
                 })}
               </div>
@@ -5346,57 +5347,57 @@ export function ChannelsPane({
 
       {/* Delete Group Confirmation Dialog */}
       {deleteGroupConfirmModal.isOpen && groupToDelete && (
-          <div className="modal-overlay">
-            <div className="modal-content delete-dialog" onClick={(e) => e.stopPropagation()}>
-              <h3>Delete Group</h3>
-              <div className="delete-message">
-                <p>
-                  Are you sure you want to delete the group{' '}
-                  <strong>{groupToDelete.name}</strong>?
-                </p>
-                {groupToDelete.channel_count > 0 && (
-                  <>
-                    <p className="delete-warning">
-                      This group contains {groupToDelete.channel_count} channel{groupToDelete.channel_count !== 1 ? 's' : ''}.
-                      {!deleteGroupChannels && ' The channels will be moved to "Ungrouped".'}
-                    </p>
-                    <div className="delete-group-option">
-                      <label className="delete-channels-checkbox">
-                        <input
-                          type="checkbox"
-                          checked={deleteGroupChannels}
-                          onChange={(e) => setDeleteGroupChannels(e.target.checked)}
-                          disabled={deletingGroup}
-                        />
-                        <span>Also delete the {groupToDelete.channel_count} channel{groupToDelete.channel_count !== 1 ? 's' : ''}</span>
-                      </label>
-                    </div>
-                  </>
-                )}
-                <p className="delete-info">
-                  {isEditMode
-                    ? 'Changes can be undone while in edit mode.'
-                    : 'This action cannot be undone.'}
-                </p>
-              </div>
-              <div className="modal-actions">
-                <button
-                  className="modal-btn cancel"
-                  onClick={handleCancelDeleteGroup}
-                  disabled={deletingGroup}
-                >
-                  Cancel
-                </button>
-                <button
-                  className="modal-btn danger"
-                  onClick={handleConfirmDeleteGroup}
-                  disabled={deletingGroup}
-                >
-                  {deletingGroup ? 'Deleting...' : 'Delete'}
-                </button>
-              </div>
+        <div className="modal-overlay">
+          <div className="modal-content delete-dialog" onClick={(e) => e.stopPropagation()}>
+            <h3>Delete Group</h3>
+            <div className="delete-message">
+              <p>
+                Are you sure you want to delete the group{' '}
+                <strong>{groupToDelete.name}</strong>?
+              </p>
+              {groupToDelete.channel_count > 0 && (
+                <>
+                  <p className="delete-warning">
+                    This group contains {groupToDelete.channel_count} channel{groupToDelete.channel_count !== 1 ? 's' : ''}.
+                    {!deleteGroupChannels && ' The channels will be moved to "Ungrouped".'}
+                  </p>
+                  <div className="delete-group-option">
+                    <label className="delete-channels-checkbox">
+                      <input
+                        type="checkbox"
+                        checked={deleteGroupChannels}
+                        onChange={(e) => setDeleteGroupChannels(e.target.checked)}
+                        disabled={deletingGroup}
+                      />
+                      <span>Also delete the {groupToDelete.channel_count} channel{groupToDelete.channel_count !== 1 ? 's' : ''}</span>
+                    </label>
+                  </div>
+                </>
+              )}
+              <p className="delete-info">
+                {isEditMode
+                  ? 'Changes can be undone while in edit mode.'
+                  : 'This action cannot be undone.'}
+              </p>
+            </div>
+            <div className="modal-actions">
+              <button
+                className="modal-btn cancel"
+                onClick={handleCancelDeleteGroup}
+                disabled={deletingGroup}
+              >
+                Cancel
+              </button>
+              <button
+                className="modal-btn danger"
+                onClick={handleConfirmDeleteGroup}
+                disabled={deletingGroup}
+              >
+                {deletingGroup ? 'Deleting...' : 'Delete'}
+              </button>
             </div>
           </div>
+        </div>
       )}
 
       {/* Rename Group Dialog */}
@@ -6319,212 +6320,212 @@ export function ChannelsPane({
           </div>
         </div>
         <div className="pane-filters-row">
-        <div className="group-filter-dropdown" ref={dropdownRef}>
-          <button
-            className="group-filter-button"
-            onClick={() => setGroupDropdownOpen(!groupDropdownOpen)}
-          >
-            <span>
-              {selectedGroups.length === 0
-                ? 'No groups selected'
-                : `${selectedGroups.length} group${selectedGroups.length > 1 ? 's' : ''} selected`}
-            </span>
-            <span className="dropdown-arrow">{groupDropdownOpen ? '▲' : '▼'}</span>
-          </button>
-          {groupDropdownOpen && (
-            <div className="group-filter-menu">
-              <div className="group-filter-search">
-                <input
-                  ref={groupFilterSearchRef}
-                  type="text"
-                  placeholder="Search groups..."
-                  value={groupFilterSearch}
-                  onChange={(e) => setGroupFilterSearch(e.target.value)}
-                  className="group-filter-search-input"
-                  autoFocus
-                />
-                {groupFilterSearch && (
+          <div className="group-filter-dropdown" ref={dropdownRef}>
+            <button
+              className="group-filter-button"
+              onClick={() => setGroupDropdownOpen(!groupDropdownOpen)}
+            >
+              <span>
+                {selectedGroups.length === 0
+                  ? 'No groups selected'
+                  : `${selectedGroups.length} group${selectedGroups.length > 1 ? 's' : ''} selected`}
+              </span>
+              <span className="dropdown-arrow">{groupDropdownOpen ? '▲' : '▼'}</span>
+            </button>
+            {groupDropdownOpen && (
+              <div className="group-filter-menu">
+                <div className="group-filter-search">
+                  <input
+                    ref={groupFilterSearchRef}
+                    type="text"
+                    placeholder="Search groups..."
+                    value={groupFilterSearch}
+                    onChange={(e) => setGroupFilterSearch(e.target.value)}
+                    className="group-filter-search-input"
+                    autoFocus
+                  />
+                  {groupFilterSearch && (
+                    <button
+                      className="group-filter-search-clear"
+                      onClick={() => setGroupFilterSearch('')}
+                      title="Clear search"
+                    >
+                      <span className="material-icons">close</span>
+                    </button>
+                  )}
+                </div>
+                <div className="group-filter-actions">
                   <button
-                    className="group-filter-search-clear"
-                    onClick={() => setGroupFilterSearch('')}
-                    title="Clear search"
+                    className="group-filter-action"
+                    onClick={() => {
+                      // Select all visible groups
+                      const visibleGroups = allGroupsSorted.filter((g) =>
+                        g.name.toLowerCase().includes(groupFilterSearch.toLowerCase())
+                      );
+                      onSelectedGroupsChange(visibleGroups.map((g) => g.id));
+                    }}
                   >
-                    <span className="material-icons">close</span>
+                    Select All
                   </button>
-                )}
+                  <button
+                    className="group-filter-action"
+                    onClick={() => onSelectedGroupsChange([])}
+                  >
+                    Clear All
+                  </button>
+                </div>
+                <div className="group-filter-options">
+                  {allGroupsSorted
+                    .filter((g) => g.name.toLowerCase().includes(groupFilterSearch.toLowerCase()))
+                    .sort((a, b) => {
+                      const aSelected = selectedGroups.includes(a.id);
+                      const bSelected = selectedGroups.includes(b.id);
+                      if (aSelected && !bSelected) return -1;
+                      if (!aSelected && bSelected) return 1;
+                      return naturalCompare(a.name, b.name);
+                    })
+                    .map((group) => (
+                      <label key={group.id} className="group-filter-option">
+                        <input
+                          type="checkbox"
+                          checked={selectedGroups.includes(group.id)}
+                          onChange={(e) => {
+                            if (e.target.checked) {
+                              onSelectedGroupsChange([...selectedGroups, group.id]);
+                            } else {
+                              onSelectedGroupsChange(selectedGroups.filter((id) => id !== group.id));
+                            }
+                          }}
+                        />
+                        <span className="group-option-name">{group.name}</span>
+                        <span className="group-option-count">({channelsByGroup[group.id]?.length || 0})</span>
+                      </label>
+                    ))}
+                  {allGroupsSorted.filter((g) => g.name.toLowerCase().includes(groupFilterSearch.toLowerCase())).length === 0 && (
+                    <div className="group-filter-empty">No groups match "{groupFilterSearch}"</div>
+                  )}
+                </div>
               </div>
-              <div className="group-filter-actions">
-                <button
-                  className="group-filter-action"
-                  onClick={() => {
-                    // Select all visible groups
-                    const visibleGroups = allGroupsSorted.filter((g) =>
-                      g.name.toLowerCase().includes(groupFilterSearch.toLowerCase())
-                    );
-                    onSelectedGroupsChange(visibleGroups.map((g) => g.id));
-                  }}
-                >
-                  Select All
-                </button>
-                <button
-                  className="group-filter-action"
-                  onClick={() => onSelectedGroupsChange([])}
-                >
-                  Clear All
-                </button>
-              </div>
-              <div className="group-filter-options">
-                {allGroupsSorted
-                  .filter((g) => g.name.toLowerCase().includes(groupFilterSearch.toLowerCase()))
-                  .sort((a, b) => {
-                    const aSelected = selectedGroups.includes(a.id);
-                    const bSelected = selectedGroups.includes(b.id);
-                    if (aSelected && !bSelected) return -1;
-                    if (!aSelected && bSelected) return 1;
-                    return naturalCompare(a.name, b.name);
-                  })
-                  .map((group) => (
-                    <label key={group.id} className="group-filter-option">
-                      <input
-                        type="checkbox"
-                        checked={selectedGroups.includes(group.id)}
-                        onChange={(e) => {
-                          if (e.target.checked) {
-                            onSelectedGroupsChange([...selectedGroups, group.id]);
-                          } else {
-                            onSelectedGroupsChange(selectedGroups.filter((id) => id !== group.id));
-                          }
-                        }}
-                      />
-                      <span className="group-option-name">{group.name}</span>
-                      <span className="group-option-count">({channelsByGroup[group.id]?.length || 0})</span>
-                    </label>
-                  ))}
-                {allGroupsSorted.filter((g) => g.name.toLowerCase().includes(groupFilterSearch.toLowerCase())).length === 0 && (
-                  <div className="group-filter-empty">No groups match "{groupFilterSearch}"</div>
-                )}
-              </div>
-            </div>
-          )}
-        </div>
+            )}
+          </div>
 
-        {/* Channel List Filter Settings */}
-        <div className="filter-settings-dropdown" ref={filterSettingsRef}>
-          <button
-            className={`filter-settings-button${channelListFilters?.filterMissingLogo || channelListFilters?.filterMissingTvgId || channelListFilters?.filterMissingEpgData || channelListFilters?.filterMissingGracenote || channelListFilters?.filterFailedStreams || channelListFilters?.filterWorkingStreams || channelListFilters?.filterUnprobedStreams ? ' filter-active' : ''}`}
-            onClick={() => setFilterSettingsOpen(!filterSettingsOpen)}
-            title="Channel List Filters"
-          >
-            <span className="material-icons" style={{ fontSize: '18px' }}>tune</span>
-          </button>
-          {filterSettingsOpen && channelListFilters && (
-            <div className="filter-settings-menu">
-              <div className="filter-settings-header">Channel List Filters</div>
-              <div className="filter-settings-options">
-                <label className="filter-settings-option">
-                  <input
-                    type="checkbox"
-                    checked={channelListFilters.showEmptyGroups}
-                    onChange={(e) => onChannelListFiltersChange?.({ showEmptyGroups: e.target.checked })}
-                  />
-                  <span>Show Empty Groups</span>
-                </label>
-                <label className="filter-settings-option">
-                  <input
-                    type="checkbox"
-                    checked={channelListFilters.showNewlyCreatedGroups}
-                    onChange={(e) => onChannelListFiltersChange?.({ showNewlyCreatedGroups: e.target.checked })}
-                  />
-                  <span>Show Newly Created Groups</span>
-                </label>
-                <label className="filter-settings-option">
-                  <input
-                    type="checkbox"
-                    checked={channelListFilters.showProviderGroups}
-                    onChange={(e) => onChannelListFiltersChange?.({ showProviderGroups: e.target.checked })}
-                  />
-                  <span>Show Provider Groups</span>
-                </label>
-                <label className="filter-settings-option">
-                  <input
-                    type="checkbox"
-                    checked={channelListFilters.showManualGroups}
-                    onChange={(e) => onChannelListFiltersChange?.({ showManualGroups: e.target.checked })}
-                  />
-                  <span>Show Manual Groups</span>
-                </label>
-                <label className="filter-settings-option">
-                  <input
-                    type="checkbox"
-                    checked={channelListFilters.showAutoChannelGroups}
-                    onChange={(e) => onChannelListFiltersChange?.({ showAutoChannelGroups: e.target.checked })}
-                  />
-                  <span>Show Auto Channel Groups</span>
-                </label>
-                <div className="filter-settings-separator" />
-                <div className="filter-settings-subheader">Missing Data</div>
-                <label className="filter-settings-option">
-                  <input
-                    type="checkbox"
-                    checked={channelListFilters.filterMissingLogo ?? false}
-                    onChange={(e) => onChannelListFiltersChange?.({ filterMissingLogo: e.target.checked })}
-                  />
-                  <span>Missing Logo</span>
-                </label>
-                <label className="filter-settings-option">
-                  <input
-                    type="checkbox"
-                    checked={channelListFilters.filterMissingTvgId ?? false}
-                    onChange={(e) => onChannelListFiltersChange?.({ filterMissingTvgId: e.target.checked })}
-                  />
-                  <span>Missing TVG-ID</span>
-                </label>
-                <label className="filter-settings-option">
-                  <input
-                    type="checkbox"
-                    checked={channelListFilters.filterMissingEpgData ?? false}
-                    onChange={(e) => onChannelListFiltersChange?.({ filterMissingEpgData: e.target.checked })}
-                  />
-                  <span>Missing EPG Data</span>
-                </label>
-                <label className="filter-settings-option">
-                  <input
-                    type="checkbox"
-                    checked={channelListFilters.filterMissingGracenote ?? false}
-                    onChange={(e) => onChannelListFiltersChange?.({ filterMissingGracenote: e.target.checked })}
-                  />
-                  <span>Missing Gracenote</span>
-                </label>
-                <div className="filter-settings-separator" />
-                <div className="filter-settings-subheader">Stream Status</div>
-                <label className="filter-settings-option">
-                  <input
-                    type="checkbox"
-                    checked={channelListFilters.filterFailedStreams ?? false}
-                    onChange={(e) => onChannelListFiltersChange?.({ filterFailedStreams: e.target.checked })}
-                  />
-                  <span>Failed Streams</span>
-                </label>
-                <label className="filter-settings-option">
-                  <input
-                    type="checkbox"
-                    checked={channelListFilters.filterWorkingStreams ?? false}
-                    onChange={(e) => onChannelListFiltersChange?.({ filterWorkingStreams: e.target.checked })}
-                  />
-                  <span>Working Streams</span>
-                </label>
-                <label className="filter-settings-option">
-                  <input
-                    type="checkbox"
-                    checked={channelListFilters.filterUnprobedStreams ?? false}
-                    onChange={(e) => onChannelListFiltersChange?.({ filterUnprobedStreams: e.target.checked })}
-                  />
-                  <span>Unprobed Streams</span>
-                </label>
+          {/* Channel List Filter Settings */}
+          <div className="filter-settings-dropdown" ref={filterSettingsRef}>
+            <button
+              className={`filter-settings-button${channelListFilters?.filterMissingLogo || channelListFilters?.filterMissingTvgId || channelListFilters?.filterMissingEpgData || channelListFilters?.filterMissingGracenote || channelListFilters?.filterFailedStreams || channelListFilters?.filterWorkingStreams || channelListFilters?.filterUnprobedStreams ? ' filter-active' : ''}`}
+              onClick={() => setFilterSettingsOpen(!filterSettingsOpen)}
+              title="Channel List Filters"
+            >
+              <span className="material-icons" style={{ fontSize: '18px' }}>tune</span>
+            </button>
+            {filterSettingsOpen && channelListFilters && (
+              <div className="filter-settings-menu">
+                <div className="filter-settings-header">Channel List Filters</div>
+                <div className="filter-settings-options">
+                  <label className="filter-settings-option">
+                    <input
+                      type="checkbox"
+                      checked={channelListFilters.showEmptyGroups}
+                      onChange={(e) => onChannelListFiltersChange?.({ showEmptyGroups: e.target.checked })}
+                    />
+                    <span>Show Empty Groups</span>
+                  </label>
+                  <label className="filter-settings-option">
+                    <input
+                      type="checkbox"
+                      checked={channelListFilters.showNewlyCreatedGroups}
+                      onChange={(e) => onChannelListFiltersChange?.({ showNewlyCreatedGroups: e.target.checked })}
+                    />
+                    <span>Show Newly Created Groups</span>
+                  </label>
+                  <label className="filter-settings-option">
+                    <input
+                      type="checkbox"
+                      checked={channelListFilters.showProviderGroups}
+                      onChange={(e) => onChannelListFiltersChange?.({ showProviderGroups: e.target.checked })}
+                    />
+                    <span>Show Provider Groups</span>
+                  </label>
+                  <label className="filter-settings-option">
+                    <input
+                      type="checkbox"
+                      checked={channelListFilters.showManualGroups}
+                      onChange={(e) => onChannelListFiltersChange?.({ showManualGroups: e.target.checked })}
+                    />
+                    <span>Show Manual Groups</span>
+                  </label>
+                  <label className="filter-settings-option">
+                    <input
+                      type="checkbox"
+                      checked={channelListFilters.showAutoChannelGroups}
+                      onChange={(e) => onChannelListFiltersChange?.({ showAutoChannelGroups: e.target.checked })}
+                    />
+                    <span>Show Auto Channel Groups</span>
+                  </label>
+                  <div className="filter-settings-separator" />
+                  <div className="filter-settings-subheader">Missing Data</div>
+                  <label className="filter-settings-option">
+                    <input
+                      type="checkbox"
+                      checked={channelListFilters.filterMissingLogo ?? false}
+                      onChange={(e) => onChannelListFiltersChange?.({ filterMissingLogo: e.target.checked })}
+                    />
+                    <span>Missing Logo</span>
+                  </label>
+                  <label className="filter-settings-option">
+                    <input
+                      type="checkbox"
+                      checked={channelListFilters.filterMissingTvgId ?? false}
+                      onChange={(e) => onChannelListFiltersChange?.({ filterMissingTvgId: e.target.checked })}
+                    />
+                    <span>Missing TVG-ID</span>
+                  </label>
+                  <label className="filter-settings-option">
+                    <input
+                      type="checkbox"
+                      checked={channelListFilters.filterMissingEpgData ?? false}
+                      onChange={(e) => onChannelListFiltersChange?.({ filterMissingEpgData: e.target.checked })}
+                    />
+                    <span>Missing EPG Data</span>
+                  </label>
+                  <label className="filter-settings-option">
+                    <input
+                      type="checkbox"
+                      checked={channelListFilters.filterMissingGracenote ?? false}
+                      onChange={(e) => onChannelListFiltersChange?.({ filterMissingGracenote: e.target.checked })}
+                    />
+                    <span>Missing Gracenote</span>
+                  </label>
+                  <div className="filter-settings-separator" />
+                  <div className="filter-settings-subheader">Stream Status</div>
+                  <label className="filter-settings-option">
+                    <input
+                      type="checkbox"
+                      checked={channelListFilters.filterFailedStreams ?? false}
+                      onChange={(e) => onChannelListFiltersChange?.({ filterFailedStreams: e.target.checked })}
+                    />
+                    <span>Failed Streams</span>
+                  </label>
+                  <label className="filter-settings-option">
+                    <input
+                      type="checkbox"
+                      checked={channelListFilters.filterWorkingStreams ?? false}
+                      onChange={(e) => onChannelListFiltersChange?.({ filterWorkingStreams: e.target.checked })}
+                    />
+                    <span>Working Streams</span>
+                  </label>
+                  <label className="filter-settings-option">
+                    <input
+                      type="checkbox"
+                      checked={channelListFilters.filterUnprobedStreams ?? false}
+                      onChange={(e) => onChannelListFiltersChange?.({ filterUnprobedStreams: e.target.checked })}
+                    />
+                    <span>Unprobed Streams</span>
+                  </label>
+                </div>
               </div>
-            </div>
-          )}
-        </div>
+            )}
+          </div>
         </div>
       </div>
 

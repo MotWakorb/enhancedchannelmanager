@@ -52,7 +52,7 @@ function formatSchedule(task: TaskStatus): { summary: string; details: string[] 
   return { summary: 'Not scheduled', details: [] };
 }
 
-function TaskCard({ task, onRunNow, onCancel, onToggleEnabled, onEdit, isRunning }: {
+function TaskCard({ task, onRunNow, onCancel, onEdit, isRunning }: {
   task: TaskStatus;
   onRunNow: (taskId: string) => void;
   onCancel: (taskId: string) => void;
@@ -238,8 +238,8 @@ function TaskCard({ task, onRunNow, onCancel, onToggleEnabled, onEdit, isRunning
           <div style={{ color: 'var(--text-muted)', marginBottom: '0.25rem' }}>Status</div>
           <div style={{
             color: task.status === 'running' ? '#3498db' :
-                   task.status === 'failed' ? '#e74c3c' :
-                   task.enabled ? '#2ecc71' : 'var(--text-muted)',
+              task.status === 'failed' ? '#e74c3c' :
+                task.enabled ? '#2ecc71' : 'var(--text-muted)',
           }}>
             {task.status.charAt(0).toUpperCase() + task.status.slice(1)}
           </div>

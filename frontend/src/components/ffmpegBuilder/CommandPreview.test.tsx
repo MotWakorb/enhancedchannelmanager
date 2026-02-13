@@ -14,14 +14,7 @@ import {
 } from '../../test/mocks/server';
 import { CommandPreview } from './CommandPreview';
 import type {
-  FFMPEGBuilderState,
-  InputSource,
-  OutputConfig,
-  VideoCodecSettings,
-  AudioCodecSettings,
-  VideoFilter,
-  StreamMapping,
-  CommandAnnotation,
+  FFMPEGBuilderState
 } from '../../types/ffmpegBuilder';
 
 // Setup MSW server

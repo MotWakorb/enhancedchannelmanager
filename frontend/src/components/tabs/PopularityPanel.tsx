@@ -5,7 +5,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import type {
   ChannelPopularityScore,
-  PopularityRankingsResponse,
 } from '../../types';
 import * as api from '../../services/api';
 import { useNotifications } from '../../contexts/NotificationContext';
@@ -68,7 +67,7 @@ export function PopularityPanel({ refreshTrigger }: PopularityPanelProps) {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [notifications]);
 
   useEffect(() => {
     fetchData();

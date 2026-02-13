@@ -39,7 +39,7 @@ import type {
 import { ModalOverlay } from '../ModalOverlay';
 import './NormalizationEngineSection.css';
 import '../ModalBase.css';
-import { CustomSelect, type SelectOption } from '../CustomSelect';
+import { CustomSelect } from '../CustomSelect';
 
 // Condition type options for dropdowns
 const CONDITION_TYPES: { value: NormalizationConditionType; label: string; description: string }[] = [
@@ -875,121 +875,121 @@ export function NormalizationEngineSection() {
 
       {/* Groups and Rules */}
       <div className="norm-engine-groups">
-          <DndContext
-            sensors={sensors}
-            collisionDetection={closestCenter}
-            onDragEnd={handleGroupDragEnd}
+        <DndContext
+          sensors={sensors}
+          collisionDetection={closestCenter}
+          onDragEnd={handleGroupDragEnd}
+        >
+          <SortableContext
+            items={groups.map((g) => g.id)}
+            strategy={verticalListSortingStrategy}
           >
-            <SortableContext
-              items={groups.map((g) => g.id)}
-              strategy={verticalListSortingStrategy}
-            >
-              {groups.map((group) => (
-                <SortableGroupItem key={group.id} group={group}>
-                  <div className="norm-engine-group-header" onClick={() => toggleGroup(group.id)}>
-                <span className={`material-icons norm-engine-expand ${expandedGroups.has(group.id) ? 'expanded' : ''}`}>
-                  chevron_right
-                </span>
-                <div className="norm-engine-group-info">
-                  <span className="norm-engine-group-name">{group.name}</span>
-                  {group.is_builtin && (
-                    <span className="norm-engine-badge builtin">Built-in</span>
-                  )}
-                  <span className="norm-engine-group-count">
-                    {group.rules?.length || 0} rules
+            {groups.map((group) => (
+              <SortableGroupItem key={group.id} group={group}>
+                <div className="norm-engine-group-header" onClick={() => toggleGroup(group.id)}>
+                  <span className={`material-icons norm-engine-expand ${expandedGroups.has(group.id) ? 'expanded' : ''}`}>
+                    chevron_right
                   </span>
+                  <div className="norm-engine-group-info">
+                    <span className="norm-engine-group-name">{group.name}</span>
+                    {group.is_builtin && (
+                      <span className="norm-engine-badge builtin">Built-in</span>
+                    )}
+                    <span className="norm-engine-group-count">
+                      {group.rules?.length || 0} rules
+                    </span>
+                  </div>
+                  <div className="norm-engine-group-actions" onClick={(e) => e.stopPropagation()}>
+                    <label className="norm-engine-toggle">
+                      <input
+                        type="checkbox"
+                        checked={group.enabled}
+                        onChange={() => toggleGroupEnabled(group)}
+                      />
+                      <span className="norm-engine-toggle-slider"></span>
+                    </label>
+                    {!group.is_builtin && (
+                      <>
+                        <button
+                          className="norm-engine-btn-icon"
+                          onClick={() => openEditGroupEditor(group)}
+                          title="Edit group"
+                          type="button"
+                        >
+                          <span className="material-icons">edit</span>
+                        </button>
+                        <button
+                          className="norm-engine-btn-icon danger"
+                          onClick={() => deleteGroup(group)}
+                          title="Delete group"
+                          type="button"
+                        >
+                          <span className="material-icons">delete</span>
+                        </button>
+                      </>
+                    )}
+                  </div>
                 </div>
-                <div className="norm-engine-group-actions" onClick={(e) => e.stopPropagation()}>
-                  <label className="norm-engine-toggle">
-                    <input
-                      type="checkbox"
-                      checked={group.enabled}
-                      onChange={() => toggleGroupEnabled(group)}
-                    />
-                    <span className="norm-engine-toggle-slider"></span>
-                  </label>
-                  {!group.is_builtin && (
-                    <>
-                      <button
-                        className="norm-engine-btn-icon"
-                        onClick={() => openEditGroupEditor(group)}
-                        title="Edit group"
-                        type="button"
-                      >
-                        <span className="material-icons">edit</span>
-                      </button>
-                      <button
-                        className="norm-engine-btn-icon danger"
-                        onClick={() => deleteGroup(group)}
-                        title="Delete group"
-                        type="button"
-                      >
-                        <span className="material-icons">delete</span>
-                      </button>
-                    </>
-                  )}
-                </div>
-              </div>
 
-              {expandedGroups.has(group.id) && (
-                <div className="norm-engine-rules">
-                  {group.description && (
-                    <p className="norm-engine-group-description">{group.description}</p>
-                  )}
+                {expandedGroups.has(group.id) && (
+                  <div className="norm-engine-rules">
+                    {group.description && (
+                      <p className="norm-engine-group-description">{group.description}</p>
+                    )}
 
-                  <DndContext
-                    sensors={sensors}
-                    collisionDetection={closestCenter}
-                    onDragEnd={(event) => handleRuleDragEnd(event, group)}
-                  >
-                    <SortableContext
-                      items={group.rules?.map((r) => r.id) || []}
-                      strategy={verticalListSortingStrategy}
+                    <DndContext
+                      sensors={sensors}
+                      collisionDetection={closestCenter}
+                      onDragEnd={(event) => handleRuleDragEnd(event, group)}
                     >
-                      {group.rules?.map((rule) => (
-                        <SortableRuleItem
-                          key={rule.id}
-                          rule={rule}
-                          isSelected={selectedRule?.id === rule.id}
-                          canDrag={!group.is_builtin}
-                          onSelect={() => setSelectedRule(rule)}
-                          onToggleEnabled={() => toggleRuleEnabled(rule)}
-                          onEdit={() => openEditRuleEditor(rule)}
-                          onDelete={() => deleteRule(rule)}
-                        />
-                      ))}
-                    </SortableContext>
-                  </DndContext>
+                      <SortableContext
+                        items={group.rules?.map((r) => r.id) || []}
+                        strategy={verticalListSortingStrategy}
+                      >
+                        {group.rules?.map((rule) => (
+                          <SortableRuleItem
+                            key={rule.id}
+                            rule={rule}
+                            isSelected={selectedRule?.id === rule.id}
+                            canDrag={!group.is_builtin}
+                            onSelect={() => setSelectedRule(rule)}
+                            onToggleEnabled={() => toggleRuleEnabled(rule)}
+                            onEdit={() => openEditRuleEditor(rule)}
+                            onDelete={() => deleteRule(rule)}
+                          />
+                        ))}
+                      </SortableContext>
+                    </DndContext>
 
-                  <button
-                    className="norm-engine-add-rule"
-                    onClick={() => openNewRuleEditor(group.id)}
-                    type="button"
-                  >
-                    <span className="material-icons">add</span>
-                    Add Rule
-                  </button>
-                </div>
-              )}
-                </SortableGroupItem>
-              ))}
-            </SortableContext>
-          </DndContext>
+                    <button
+                      className="norm-engine-add-rule"
+                      onClick={() => openNewRuleEditor(group.id)}
+                      type="button"
+                    >
+                      <span className="material-icons">add</span>
+                      Add Rule
+                    </button>
+                  </div>
+                )}
+              </SortableGroupItem>
+            ))}
+          </SortableContext>
+        </DndContext>
 
-          {groups.length === 0 && (
-            <div className="empty-state">
-              <span className="material-icons">rule</span>
-              <p>No normalization rules configured.</p>
-              <button
-                className="norm-engine-btn norm-engine-btn-primary"
-                onClick={openNewGroupEditor}
-                type="button"
-              >
-                Create First Group
-              </button>
-            </div>
-          )}
-        </div>
+        {groups.length === 0 && (
+          <div className="empty-state">
+            <span className="material-icons">rule</span>
+            <p>No normalization rules configured.</p>
+            <button
+              className="norm-engine-btn norm-engine-btn-primary"
+              onClick={openNewGroupEditor}
+              type="button"
+            >
+              Create First Group
+            </button>
+          </div>
+        )}
+      </div>
 
       {/* Rule Editor Modal */}
       {ruleEditor.isOpen && (

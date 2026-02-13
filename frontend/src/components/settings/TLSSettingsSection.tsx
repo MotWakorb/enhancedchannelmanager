@@ -6,7 +6,7 @@
  */
 import { useState, useEffect, useCallback, useRef } from 'react';
 import * as api from '../../services/api';
-import type { TLSStatus, TLSSettings } from '../../types';
+import type { TLSStatus } from '../../types';
 import { useNotifications } from '../../contexts/NotificationContext';
 import './TLSSettingsSection.css';
 
@@ -374,256 +374,256 @@ export function TLSSettingsSection({ isAdmin }: Props) {
           </div>
 
           {enabled && (
-          <>
-            <div className="form-group">
-              <label>Certificate Mode</label>
-              <div className="radio-group">
-                <label className="radio-option">
-                  <input
-                    type="radio"
-                    name="mode"
-                    value="letsencrypt"
-                    checked={mode === 'letsencrypt'}
-                    onChange={() => setMode('letsencrypt')}
-                  />
-                  <span>Let's Encrypt (Automatic)</span>
-                </label>
-                <label className="radio-option">
-                  <input
-                    type="radio"
-                    name="mode"
-                    value="manual"
-                    checked={mode === 'manual'}
-                    onChange={() => setMode('manual')}
-                  />
-                  <span>Manual Certificate Upload</span>
-                </label>
+            <>
+              <div className="form-group">
+                <label>Certificate Mode</label>
+                <div className="radio-group">
+                  <label className="radio-option">
+                    <input
+                      type="radio"
+                      name="mode"
+                      value="letsencrypt"
+                      checked={mode === 'letsencrypt'}
+                      onChange={() => setMode('letsencrypt')}
+                    />
+                    <span>Let's Encrypt (Automatic)</span>
+                  </label>
+                  <label className="radio-option">
+                    <input
+                      type="radio"
+                      name="mode"
+                      value="manual"
+                      checked={mode === 'manual'}
+                      onChange={() => setMode('manual')}
+                    />
+                    <span>Manual Certificate Upload</span>
+                  </label>
+                </div>
               </div>
-            </div>
 
-            {mode === 'letsencrypt' && (
-              <>
-                <div className="form-group">
-                  <label htmlFor="domain">Domain Name</label>
-                  <input
-                    type="text"
-                    id="domain"
-                    value={domain}
-                    onChange={(e) => setDomain(e.target.value)}
-                    placeholder="ecm.example.com"
-                  />
-                  <span className="form-hint">The domain where ECM will be accessible (must point to this server)</span>
-                </div>
-
-                <div className="form-group">
-                  <label htmlFor="httpsPort">HTTPS Port</label>
-                  <input
-                    type="number"
-                    id="httpsPort"
-                    value={httpsPort}
-                    onChange={(e) => setHttpsPort(parseInt(e.target.value) || 6143)}
-                    min={1}
-                    max={65535}
-                  />
-                  <span className="form-hint">HTTPS will listen on this port (default: 6143). HTTP always stays on 6100 as fallback.</span>
-                </div>
-
-                <div className="form-group">
-                  <label htmlFor="acmeEmail">Email Address</label>
-                  <input
-                    type="email"
-                    id="acmeEmail"
-                    value={acmeEmail}
-                    onChange={(e) => setAcmeEmail(e.target.value)}
-                    placeholder="admin@example.com"
-                  />
-                  <span className="form-hint">Contact email for Let's Encrypt account (renewal notifications)</span>
-                </div>
-
-                <div className="form-group">
-                  <label htmlFor="dnsProvider">DNS Provider (for automatic TXT record management)</label>
-                  <select
-                    id="dnsProvider"
-                    value={dnsProvider}
-                    onChange={(e) => setDnsProvider(e.target.value)}
-                  >
-                    <option value="">Manual / Other Provider</option>
-                    <option value="cloudflare">Cloudflare (automatic)</option>
-                    <option value="route53">AWS Route53 (automatic)</option>
-                  </select>
-                  <span className="form-hint">
-                    Select Cloudflare or Route53 for automatic DNS record creation.
-                    For other providers, select "Manual" and create the TXT record yourself when prompted.
-                  </span>
-                </div>
-
-                {dnsProvider === 'cloudflare' && (
+              {mode === 'letsencrypt' && (
+                <>
                   <div className="form-group">
-                    <label htmlFor="dnsApiToken">Cloudflare API Token</label>
+                    <label htmlFor="domain">Domain Name</label>
                     <input
-                      type="password"
-                      id="dnsApiToken"
-                      value={dnsApiToken}
-                      onChange={(e) => setDnsApiToken(e.target.value)}
-                      placeholder="Enter Cloudflare API token..."
+                      type="text"
+                      id="domain"
+                      value={domain}
+                      onChange={(e) => setDomain(e.target.value)}
+                      placeholder="ecm.example.com"
                     />
-                    <span className="form-hint">API token with DNS:Edit permission for your zone</span>
+                    <span className="form-hint">The domain where ECM will be accessible (must point to this server)</span>
                   </div>
-                )}
 
-                {dnsProvider === 'route53' && (
-                  <>
-                    <div className="form-group">
-                      <label htmlFor="awsAccessKeyId">AWS Access Key ID</label>
-                      <input
-                        type="text"
-                        id="awsAccessKeyId"
-                        value={awsAccessKeyId}
-                        onChange={(e) => setAwsAccessKeyId(e.target.value)}
-                        placeholder="AKIA..."
-                      />
-                      <span className="form-hint">IAM user access key with Route53 permissions</span>
-                    </div>
-
-                    <div className="form-group">
-                      <label htmlFor="awsSecretAccessKey">AWS Secret Access Key</label>
-                      <input
-                        type="password"
-                        id="awsSecretAccessKey"
-                        value={awsSecretAccessKey}
-                        onChange={(e) => setAwsSecretAccessKey(e.target.value)}
-                        placeholder="Enter secret access key..."
-                      />
-                    </div>
-
-                    <div className="form-group">
-                      <label htmlFor="awsRegion">AWS Region</label>
-                      <select
-                        id="awsRegion"
-                        value={awsRegion}
-                        onChange={(e) => setAwsRegion(e.target.value)}
-                      >
-                        <option value="us-east-1">US East (N. Virginia)</option>
-                        <option value="us-east-2">US East (Ohio)</option>
-                        <option value="us-west-1">US West (N. California)</option>
-                        <option value="us-west-2">US West (Oregon)</option>
-                        <option value="eu-west-1">EU (Ireland)</option>
-                        <option value="eu-west-2">EU (London)</option>
-                        <option value="eu-central-1">EU (Frankfurt)</option>
-                        <option value="ap-northeast-1">Asia Pacific (Tokyo)</option>
-                        <option value="ap-southeast-1">Asia Pacific (Singapore)</option>
-                        <option value="ap-southeast-2">Asia Pacific (Sydney)</option>
-                      </select>
-                      <span className="form-hint">Route53 is global, but SDK requires a region</span>
-                    </div>
-                  </>
-                )}
-
-                <div className="form-group">
-                  <label htmlFor="dnsZoneId">Zone/Hosted Zone ID (Optional)</label>
-                  <input
-                    type="text"
-                    id="dnsZoneId"
-                    value={dnsZoneId}
-                    onChange={(e) => setDnsZoneId(e.target.value)}
-                    placeholder="Auto-detected from domain"
-                  />
-                  <span className="form-hint">Leave empty to auto-detect from domain</span>
-                </div>
-
-                <button
-                  type="button"
-                  className="btn-secondary"
-                  onClick={handleTestDNSProvider}
-                  disabled={!dnsProvider}
-                >
-                  Test DNS Provider
-                </button>
-
-                <div className="form-group">
-                  <label className="checkbox-label">
-                    <input
-                      type="checkbox"
-                      checked={useStaging}
-                      onChange={(e) => setUseStaging(e.target.checked)}
-                    />
-                    <span>Use Staging Environment (for testing)</span>
-                  </label>
-                  <span className="form-hint">Uses Let's Encrypt staging server (certificates won't be trusted)</span>
-                </div>
-
-                <div className="form-group">
-                  <label className="checkbox-label">
-                    <input
-                      type="checkbox"
-                      checked={autoRenew}
-                      onChange={(e) => setAutoRenew(e.target.checked)}
-                    />
-                    <span>Auto-Renew Certificate</span>
-                  </label>
-                </div>
-
-                {autoRenew && (
                   <div className="form-group">
-                    <label htmlFor="renewDaysBefore">Renew Days Before Expiry</label>
+                    <label htmlFor="httpsPort">HTTPS Port</label>
                     <input
                       type="number"
-                      id="renewDaysBefore"
-                      value={renewDaysBefore}
-                      onChange={(e) => setRenewDaysBefore(parseInt(e.target.value) || 30)}
+                      id="httpsPort"
+                      value={httpsPort}
+                      onChange={(e) => setHttpsPort(parseInt(e.target.value) || 6143)}
                       min={1}
-                      max={60}
+                      max={65535}
+                    />
+                    <span className="form-hint">HTTPS will listen on this port (default: 6143). HTTP always stays on 6100 as fallback.</span>
+                  </div>
+
+                  <div className="form-group">
+                    <label htmlFor="acmeEmail">Email Address</label>
+                    <input
+                      type="email"
+                      id="acmeEmail"
+                      value={acmeEmail}
+                      onChange={(e) => setAcmeEmail(e.target.value)}
+                      placeholder="admin@example.com"
+                    />
+                    <span className="form-hint">Contact email for Let's Encrypt account (renewal notifications)</span>
+                  </div>
+
+                  <div className="form-group">
+                    <label htmlFor="dnsProvider">DNS Provider (for automatic TXT record management)</label>
+                    <select
+                      id="dnsProvider"
+                      value={dnsProvider}
+                      onChange={(e) => setDnsProvider(e.target.value)}
+                    >
+                      <option value="">Manual / Other Provider</option>
+                      <option value="cloudflare">Cloudflare (automatic)</option>
+                      <option value="route53">AWS Route53 (automatic)</option>
+                    </select>
+                    <span className="form-hint">
+                      Select Cloudflare or Route53 for automatic DNS record creation.
+                      For other providers, select "Manual" and create the TXT record yourself when prompted.
+                    </span>
+                  </div>
+
+                  {dnsProvider === 'cloudflare' && (
+                    <div className="form-group">
+                      <label htmlFor="dnsApiToken">Cloudflare API Token</label>
+                      <input
+                        type="password"
+                        id="dnsApiToken"
+                        value={dnsApiToken}
+                        onChange={(e) => setDnsApiToken(e.target.value)}
+                        placeholder="Enter Cloudflare API token..."
+                      />
+                      <span className="form-hint">API token with DNS:Edit permission for your zone</span>
+                    </div>
+                  )}
+
+                  {dnsProvider === 'route53' && (
+                    <>
+                      <div className="form-group">
+                        <label htmlFor="awsAccessKeyId">AWS Access Key ID</label>
+                        <input
+                          type="text"
+                          id="awsAccessKeyId"
+                          value={awsAccessKeyId}
+                          onChange={(e) => setAwsAccessKeyId(e.target.value)}
+                          placeholder="AKIA..."
+                        />
+                        <span className="form-hint">IAM user access key with Route53 permissions</span>
+                      </div>
+
+                      <div className="form-group">
+                        <label htmlFor="awsSecretAccessKey">AWS Secret Access Key</label>
+                        <input
+                          type="password"
+                          id="awsSecretAccessKey"
+                          value={awsSecretAccessKey}
+                          onChange={(e) => setAwsSecretAccessKey(e.target.value)}
+                          placeholder="Enter secret access key..."
+                        />
+                      </div>
+
+                      <div className="form-group">
+                        <label htmlFor="awsRegion">AWS Region</label>
+                        <select
+                          id="awsRegion"
+                          value={awsRegion}
+                          onChange={(e) => setAwsRegion(e.target.value)}
+                        >
+                          <option value="us-east-1">US East (N. Virginia)</option>
+                          <option value="us-east-2">US East (Ohio)</option>
+                          <option value="us-west-1">US West (N. California)</option>
+                          <option value="us-west-2">US West (Oregon)</option>
+                          <option value="eu-west-1">EU (Ireland)</option>
+                          <option value="eu-west-2">EU (London)</option>
+                          <option value="eu-central-1">EU (Frankfurt)</option>
+                          <option value="ap-northeast-1">Asia Pacific (Tokyo)</option>
+                          <option value="ap-southeast-1">Asia Pacific (Singapore)</option>
+                          <option value="ap-southeast-2">Asia Pacific (Sydney)</option>
+                        </select>
+                        <span className="form-hint">Route53 is global, but SDK requires a region</span>
+                      </div>
+                    </>
+                  )}
+
+                  <div className="form-group">
+                    <label htmlFor="dnsZoneId">Zone/Hosted Zone ID (Optional)</label>
+                    <input
+                      type="text"
+                      id="dnsZoneId"
+                      value={dnsZoneId}
+                      onChange={(e) => setDnsZoneId(e.target.value)}
+                      placeholder="Auto-detected from domain"
+                    />
+                    <span className="form-hint">Leave empty to auto-detect from domain</span>
+                  </div>
+
+                  <button
+                    type="button"
+                    className="btn-secondary"
+                    onClick={handleTestDNSProvider}
+                    disabled={!dnsProvider}
+                  >
+                    Test DNS Provider
+                  </button>
+
+                  <div className="form-group">
+                    <label className="checkbox-label">
+                      <input
+                        type="checkbox"
+                        checked={useStaging}
+                        onChange={(e) => setUseStaging(e.target.checked)}
+                      />
+                      <span>Use Staging Environment (for testing)</span>
+                    </label>
+                    <span className="form-hint">Uses Let's Encrypt staging server (certificates won't be trusted)</span>
+                  </div>
+
+                  <div className="form-group">
+                    <label className="checkbox-label">
+                      <input
+                        type="checkbox"
+                        checked={autoRenew}
+                        onChange={(e) => setAutoRenew(e.target.checked)}
+                      />
+                      <span>Auto-Renew Certificate</span>
+                    </label>
+                  </div>
+
+                  {autoRenew && (
+                    <div className="form-group">
+                      <label htmlFor="renewDaysBefore">Renew Days Before Expiry</label>
+                      <input
+                        type="number"
+                        id="renewDaysBefore"
+                        value={renewDaysBefore}
+                        onChange={(e) => setRenewDaysBefore(parseInt(e.target.value) || 30)}
+                        min={1}
+                        max={60}
+                      />
+                    </div>
+                  )}
+                </>
+              )}
+
+              {mode === 'manual' && (
+                <div className="manual-upload-section">
+                  <div className="form-group">
+                    <label htmlFor="certFile">Certificate File (PEM)</label>
+                    <input
+                      type="file"
+                      id="certFile"
+                      ref={certFileRef}
+                      accept=".pem,.crt,.cer"
                     />
                   </div>
-                )}
-              </>
-            )}
 
-            {mode === 'manual' && (
-              <div className="manual-upload-section">
-                <div className="form-group">
-                  <label htmlFor="certFile">Certificate File (PEM)</label>
-                  <input
-                    type="file"
-                    id="certFile"
-                    ref={certFileRef}
-                    accept=".pem,.crt,.cer"
-                  />
+                  <div className="form-group">
+                    <label htmlFor="keyFile">Private Key File (PEM)</label>
+                    <input
+                      type="file"
+                      id="keyFile"
+                      ref={keyFileRef}
+                      accept=".pem,.key"
+                    />
+                  </div>
+
+                  <div className="form-group">
+                    <label htmlFor="chainFile">Chain File (Optional)</label>
+                    <input
+                      type="file"
+                      id="chainFile"
+                      ref={chainFileRef}
+                      accept=".pem,.crt"
+                    />
+                    <span className="form-hint">Intermediate certificates (if not included in certificate file)</span>
+                  </div>
+
+                  <button
+                    type="button"
+                    className="btn-primary"
+                    onClick={handleUploadCertificate}
+                    disabled={requesting}
+                  >
+                    {requesting ? 'Uploading...' : 'Upload Certificate'}
+                  </button>
                 </div>
-
-                <div className="form-group">
-                  <label htmlFor="keyFile">Private Key File (PEM)</label>
-                  <input
-                    type="file"
-                    id="keyFile"
-                    ref={keyFileRef}
-                    accept=".pem,.key"
-                  />
-                </div>
-
-                <div className="form-group">
-                  <label htmlFor="chainFile">Chain File (Optional)</label>
-                  <input
-                    type="file"
-                    id="chainFile"
-                    ref={chainFileRef}
-                    accept=".pem,.crt"
-                  />
-                  <span className="form-hint">Intermediate certificates (if not included in certificate file)</span>
-                </div>
-
-                <button
-                  type="button"
-                  className="btn-primary"
-                  onClick={handleUploadCertificate}
-                  disabled={requesting}
-                >
-                  {requesting ? 'Uploading...' : 'Upload Certificate'}
-                </button>
-              </div>
-            )}
-          </>
-        )}
+              )}
+            </>
+          )}
         </div>
       </div>
 

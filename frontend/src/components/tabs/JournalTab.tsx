@@ -115,7 +115,7 @@ export function JournalTab() {
     } finally {
       setLoading(false);
     }
-  }, [page, category, actionType, search]);
+  }, [page, pageSize, category, actionType, search, notifications]);
 
   // Load stats
   const loadStats = useCallback(async () => {

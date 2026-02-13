@@ -79,7 +79,7 @@ export function AlertConfigurationPanel({ onRefresh: _onRefresh }: AlertConfigur
           methods.push({ id: 'telegram', name: 'Telegram', type: 'telegram' });
         }
         setNotificationMethods(methods);
-      } catch (err) {
+      } catch (_err) {
         setError('Failed to load alert configuration');
       } finally {
         setLoading(false);
@@ -95,7 +95,7 @@ export function AlertConfigurationPanel({ onRefresh: _onRefresh }: AlertConfigur
       setRules(prev => prev.map(r =>
         r.id === ruleId ? { ...r, enabled: !enabled } : r
       ));
-    } catch (err) {
+    } catch (_err) {
       setError('Failed to update rule');
     }
   };
@@ -107,7 +107,7 @@ export function AlertConfigurationPanel({ onRefresh: _onRefresh }: AlertConfigur
     try {
       await api.deleteServiceAlertRule(ruleId);
       setRules(prev => prev.filter(r => r.id !== ruleId));
-    } catch (err) {
+    } catch (_err) {
       setError('Failed to delete rule');
     }
   };
@@ -144,7 +144,7 @@ export function AlertConfigurationPanel({ onRefresh: _onRefresh }: AlertConfigur
         threshold: 'any',
         notify_method_ids: [],
       });
-    } catch (err) {
+    } catch (_err) {
       setError('Failed to create rule');
     } finally {
       setSaving(false);
@@ -184,11 +184,11 @@ export function AlertConfigurationPanel({ onRefresh: _onRefresh }: AlertConfigur
 
   const conditionOptions = useMemo(() =>
     CONDITIONS.map(c => ({ value: c.value, label: c.label }))
-  , []);
+    , []);
 
   const thresholdOptions = useMemo(() =>
     STATUS_THRESHOLDS.map(t => ({ value: t.value, label: t.label }))
-  , []);
+    , []);
 
   if (loading) {
     return (
@@ -261,7 +261,7 @@ export function AlertConfigurationPanel({ onRefresh: _onRefresh }: AlertConfigur
                   ...prev,
                   condition: value,
                   threshold: value === 'status_change' ? 'any' :
-                             value === 'consecutive_failures' ? '3' : '5000'
+                    value === 'consecutive_failures' ? '3' : '5000'
                 }))}
               />
             </div>

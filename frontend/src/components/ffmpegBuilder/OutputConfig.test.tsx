@@ -14,7 +14,6 @@ import {
 import { OutputConfig } from './OutputConfig';
 import type {
   OutputConfig as OutputConfigType,
-  ContainerFormat,
 } from '../../types/ffmpegBuilder';
 
 // Setup MSW server

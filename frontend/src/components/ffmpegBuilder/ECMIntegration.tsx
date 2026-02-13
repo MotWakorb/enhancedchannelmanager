@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useCallback } from 'react';
 import type { FFMPEGChannelProfile } from '../../types/ffmpegBuilder';
 
 // ---------------------------------------------------------------------------
@@ -57,7 +57,7 @@ export function ECMIntegration({
   onProfileDelete,
   onSelectProfile,
 }: ECMIntegrationProps) {
-  const [configs, setConfigs] = useState<SavedConfig[]>([]);
+  const [configs, _setConfigs] = useState<SavedConfig[]>([]);
   const [selectedProfileId, setSelectedProfileId] = useState<number | null>(
     profiles.length > 0 ? profiles[0].id : null
   );
@@ -155,7 +155,7 @@ export function ECMIntegration({
   const applyToLabel = selectedProfile
     ? selectedProfile.applyTo === 'all' ? 'All Channels'
       : selectedProfile.applyTo === 'group' ? 'Group'
-      : 'Channel'
+        : 'Channel'
     : 'All Channels';
 
   return (

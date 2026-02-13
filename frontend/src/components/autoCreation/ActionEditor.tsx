@@ -67,23 +67,23 @@ const ACTION_TYPES: {
   hasNameTransform?: boolean;
   hasVariableConfig?: boolean;
 }[] = [
-  // Creation actions
-  { type: 'create_channel', label: 'Create Channel', description: 'Create a new channel for the stream', category: 'creation', hasNameTemplate: true, hasIfExists: true, hasChannelNumbering: true, hasNameTransform: true },
-  { type: 'create_group', label: 'Create Group', description: 'Create a new channel group', category: 'creation', hasNameTemplate: true, hasIfExists: true, hasNameTransform: true },
-  { type: 'merge_streams', label: 'Merge Streams', description: 'Merge stream into existing channel', category: 'creation', hasTarget: true },
-  // Assignment actions
-  { type: 'assign_logo', label: 'Assign Logo', description: 'Assign a logo to the channel', category: 'assignment', hasValue: true },
-  { type: 'assign_tvg_id', label: 'Assign TVG-ID', description: 'Set the TVG-ID for the channel', category: 'assignment', hasValue: true },
-  { type: 'assign_epg', label: 'Assign EPG', description: 'Assign EPG data source', category: 'assignment', hasEpgId: true },
-  { type: 'assign_profile', label: 'Assign Profile', description: 'Assign a stream profile', category: 'assignment' },
-  { type: 'set_channel_number', label: 'Set Channel Number', description: 'Set the channel number', category: 'assignment', hasValue: true },
-  // Variables
-  { type: 'set_variable', label: 'Set Variable', description: 'Define a reusable variable from stream data', category: 'variables', hasVariableConfig: true },
-  // Control actions
-  { type: 'skip', label: 'Skip', description: 'Skip this stream (do not process)', category: 'control' },
-  { type: 'stop_processing', label: 'Stop Processing', description: 'Stop processing further rules', category: 'control' },
-  { type: 'log_match', label: 'Log Match', description: 'Log when stream matches', category: 'control', hasMessage: true },
-];
+    // Creation actions
+    { type: 'create_channel', label: 'Create Channel', description: 'Create a new channel for the stream', category: 'creation', hasNameTemplate: true, hasIfExists: true, hasChannelNumbering: true, hasNameTransform: true },
+    { type: 'create_group', label: 'Create Group', description: 'Create a new channel group', category: 'creation', hasNameTemplate: true, hasIfExists: true, hasNameTransform: true },
+    { type: 'merge_streams', label: 'Merge Streams', description: 'Merge stream into existing channel', category: 'creation', hasTarget: true },
+    // Assignment actions
+    { type: 'assign_logo', label: 'Assign Logo', description: 'Assign a logo to the channel', category: 'assignment', hasValue: true },
+    { type: 'assign_tvg_id', label: 'Assign TVG-ID', description: 'Set the TVG-ID for the channel', category: 'assignment', hasValue: true },
+    { type: 'assign_epg', label: 'Assign EPG', description: 'Assign EPG data source', category: 'assignment', hasEpgId: true },
+    { type: 'assign_profile', label: 'Assign Profile', description: 'Assign a stream profile', category: 'assignment' },
+    { type: 'set_channel_number', label: 'Set Channel Number', description: 'Set the channel number', category: 'assignment', hasValue: true },
+    // Variables
+    { type: 'set_variable', label: 'Set Variable', description: 'Define a reusable variable from stream data', category: 'variables', hasVariableConfig: true },
+    // Control actions
+    { type: 'skip', label: 'Skip', description: 'Skip this stream (do not process)', category: 'control' },
+    { type: 'stop_processing', label: 'Stop Processing', description: 'Stop processing further rules', category: 'control' },
+    { type: 'log_match', label: 'Log Match', description: 'Log when stream matches', category: 'control', hasMessage: true },
+  ];
 
 const ACTION_CATEGORIES = [
   { id: 'creation', label: 'Creation' },
@@ -194,7 +194,6 @@ export function ActionEditor({
   showValidation = false,
   showPreview = false,
   readonly = false,
-  draggable = false,
   compact = false,
   previousActions = [],
   orderNumber,

@@ -166,7 +166,6 @@ export function AudioCodecSettings({ value, onChange }: AudioCodecSettingsProps)
   const codec = settings.codec;
   const copyMode = codec === 'copy';
   const showBitrate = !copyMode;
-  const codecMeta = AUDIO_CODECS.find(c => c.value === codec);
 
   const codecOptions: SelectOption[] = AUDIO_CODECS.map(c => ({
     value: c.value,
@@ -182,8 +181,6 @@ export function AudioCodecSettings({ value, onChange }: AudioCodecSettingsProps)
     value: String(c.value),
     label: `${c.label} (${c.layout})`,
   }));
-
-  const channelMeta = CHANNEL_OPTIONS.find(c => c.value === settings.channels);
 
   return (
     <div className="audio-codec-settings">

@@ -12,7 +12,6 @@ import {
   resetMockDataStore,
 } from '../../test/mocks/server';
 import { ConditionEditor } from './ConditionEditor';
-import type { Condition, ConditionType } from '../../types/autoCreation';
 
 // Setup MSW server
 beforeAll(() => server.listen({ onUnhandledRequest: 'error' }));

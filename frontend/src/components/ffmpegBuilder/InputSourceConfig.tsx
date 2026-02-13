@@ -192,7 +192,7 @@ export function InputSourceConfig({ value, onChange }: InputSourceConfigProps) {
 
   const handleHWAccelChange = (api: string) => {
     if (api === 'none') {
-      const { hwaccel, ...rest } = input;
+      const { hwaccel: _hwaccel, ...rest } = input;
       emit(rest as InputSource);
     } else {
       const hwaccel: HWAccelConfig = { api: api as HWAccelAPI };

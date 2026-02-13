@@ -926,7 +926,7 @@ function App() {
 
   // Lightweight reset: clear streams and refresh group metadata.
   // Actual stream data loads per-group on demand via loadStreamGroup().
-  const resetStreams = async (bypassCache: boolean = false) => {
+  const resetStreams = async (_bypassCache: boolean = false) => {
     setLoadingStates(prev => ({ ...prev, streams: true }));
     try {
       // Clear all loaded streams and group tracking

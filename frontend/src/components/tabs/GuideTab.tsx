@@ -247,7 +247,7 @@ export function GuideTab({
     };
 
     loadData();
-  }, [propChannels, propLogos]);
+  }, [notifications, propChannels, propLogos]);
 
   // Refresh programs only
   const handleRefresh = useCallback(async () => {
@@ -260,7 +260,7 @@ export function GuideTab({
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [notifications]);
 
   // Synchronized scrolling between header and content, plus virtualization scroll tracking
   const handleContentScroll = useCallback((e: React.UIEvent<HTMLDivElement>) => {

@@ -373,7 +373,7 @@ export function StreamsPane({
     setIsOpen: setBulkCreateGroupDropdownOpen,
     dropdownRef: bulkCreateGroupDropdownRef,
   } = useDropdown();
-  const [namingOptionsExpanded, setNamingOptionsExpanded] = useState(false);
+  const [_namingOptionsExpanded, setNamingOptionsExpanded] = useState(false);
   const [channelGroupExpanded, setChannelGroupExpanded] = useState(false);
   const [timezoneExpanded, setTimezoneExpanded] = useState(false);
 
@@ -1054,21 +1054,29 @@ export function StreamsPane({
   }, [streamsToCreate]);
 
   // Detect if streams have country prefixes (US, UK, CA, etc.)
+  // TODO is this needed
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const hasCountryPrefixes = useMemo(() => {
     return detectCountryPrefixes(streamsToCreate);
   }, [streamsToCreate]);
 
   // Detect if streams have network prefixes (CHAMP, PPV, etc. + custom)
+  // TODO is this needed
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const hasNetworkPrefixes = useMemo(() => {
     return detectNetworkPrefixes(streamsToCreate, channelDefaults?.customNetworkPrefixes);
   }, [streamsToCreate, channelDefaults?.customNetworkPrefixes]);
 
   // Detect if streams have network suffixes (ENGLISH, LIVE, BACKUP, etc. + custom)
+  // TODO is this needed
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const hasNetworkSuffixes = useMemo(() => {
     return detectNetworkSuffixes(streamsToCreate, channelDefaults?.customNetworkSuffixes);
   }, [streamsToCreate, channelDefaults?.customNetworkSuffixes]);
 
   // Get unique country prefixes for display
+  // TODO is this needed
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const uniqueCountryPrefixes = useMemo(() => {
     return getUniqueCountryPrefixes(streamsToCreate);
   }, [streamsToCreate]);
@@ -2148,148 +2156,148 @@ export function StreamsPane({
               {/* Channel Group - Collapsible Section */}
               {/* Hide when multi-group with separate option is selected */}
               {!(isFromMultipleGroups && bulkCreateMultiGroupOption === 'separate') && (
-              <div className="form-group collapsible-section">
-                <div
-                  className="collapsible-header"
-                  onClick={() => setChannelGroupExpanded(!channelGroupExpanded)}
-                >
-                  <span className="expand-icon">{channelGroupExpanded ? '▼︎' : '▶︎'}</span>
-                  <span className="collapsible-title">Channel Group</span>
-                  <span className="collapsible-summary">
-                    {(() => {
-                      if (bulkCreateGroupOption === 'same' && bulkCreateGroup) {
-                        return `"${bulkCreateGroup.name}"`;
-                      } else if (bulkCreateGroupOption === 'existing' && bulkCreateSelectedGroupId) {
-                        const group = channelGroups.find(g => g.id === bulkCreateSelectedGroupId);
-                        return group ? `"${group.name}"` : 'Select group';
-                      } else if (bulkCreateGroupOption === 'new' && bulkCreateNewGroupName) {
-                        return `New: "${bulkCreateNewGroupName}"`;
-                      } else if (bulkCreateGroupOption === 'new') {
-                        return 'New group';
-                      } else if (bulkCreateGroupOption === 'existing') {
-                        return 'Select group';
-                      }
-                      return 'Same as stream group';
-                    })()}
-                  </span>
-                </div>
+                <div className="form-group collapsible-section">
+                  <div
+                    className="collapsible-header"
+                    onClick={() => setChannelGroupExpanded(!channelGroupExpanded)}
+                  >
+                    <span className="expand-icon">{channelGroupExpanded ? '▼︎' : '▶︎'}</span>
+                    <span className="collapsible-title">Channel Group</span>
+                    <span className="collapsible-summary">
+                      {(() => {
+                        if (bulkCreateGroupOption === 'same' && bulkCreateGroup) {
+                          return `"${bulkCreateGroup.name}"`;
+                        } else if (bulkCreateGroupOption === 'existing' && bulkCreateSelectedGroupId) {
+                          const group = channelGroups.find(g => g.id === bulkCreateSelectedGroupId);
+                          return group ? `"${group.name}"` : 'Select group';
+                        } else if (bulkCreateGroupOption === 'new' && bulkCreateNewGroupName) {
+                          return `New: "${bulkCreateNewGroupName}"`;
+                        } else if (bulkCreateGroupOption === 'new') {
+                          return 'New group';
+                        } else if (bulkCreateGroupOption === 'existing') {
+                          return 'Select group';
+                        }
+                        return 'Same as stream group';
+                      })()}
+                    </span>
+                  </div>
 
-                {channelGroupExpanded && (
-                  <div className="collapsible-content">
-                    <div className="radio-group">
-                      {/* Only show "same name" option when creating from a single group */}
-                      {isFromGroup && bulkCreateGroup && (
+                  {channelGroupExpanded && (
+                    <div className="collapsible-content">
+                      <div className="radio-group">
+                        {/* Only show "same name" option when creating from a single group */}
+                        {isFromGroup && bulkCreateGroup && (
+                          <label className="radio-option">
+                            <input
+                              type="radio"
+                              name="groupOption"
+                              checked={bulkCreateGroupOption === 'same'}
+                              onChange={() => setBulkCreateGroupOption('same')}
+                            />
+                            <span>Use same name "{bulkCreateGroup.name}"</span>
+                            {channelGroups.find(g => g.name === bulkCreateGroup.name) ? (
+                              <span className="group-exists-badge">exists</span>
+                            ) : (
+                              <span className="group-new-badge">will create</span>
+                            )}
+                          </label>
+                        )}
+
                         <label className="radio-option">
                           <input
                             type="radio"
                             name="groupOption"
-                            checked={bulkCreateGroupOption === 'same'}
-                            onChange={() => setBulkCreateGroupOption('same')}
+                            checked={bulkCreateGroupOption === 'existing'}
+                            onChange={() => setBulkCreateGroupOption('existing')}
                           />
-                          <span>Use same name "{bulkCreateGroup.name}"</span>
-                          {channelGroups.find(g => g.name === bulkCreateGroup.name) ? (
-                            <span className="group-exists-badge">exists</span>
-                          ) : (
-                            <span className="group-new-badge">will create</span>
-                          )}
+                          <span>Select existing group</span>
                         </label>
-                      )}
-
-                      <label className="radio-option">
-                        <input
-                          type="radio"
-                          name="groupOption"
-                          checked={bulkCreateGroupOption === 'existing'}
-                          onChange={() => setBulkCreateGroupOption('existing')}
-                        />
-                        <span>Select existing group</span>
-                      </label>
-                      {bulkCreateGroupOption === 'existing' && (
-                        <div className="searchable-dropdown" ref={bulkCreateGroupDropdownRef}>
-                          <div
-                            className="dropdown-trigger"
-                            onClick={() => setBulkCreateGroupDropdownOpen(!bulkCreateGroupDropdownOpen)}
-                          >
-                            <span className="dropdown-value">
-                              {bulkCreateSelectedGroupId
-                                ? channelGroups.find(g => g.id === bulkCreateSelectedGroupId)?.name ?? '-- Select a group --'
-                                : '-- Select a group --'}
-                            </span>
-                            <span className="material-icons dropdown-arrow">
-                              {bulkCreateGroupDropdownOpen ? 'expand_less' : 'expand_more'}
-                            </span>
-                          </div>
-                          {bulkCreateGroupDropdownOpen && (
-                            <div className="dropdown-menu">
-                              <div className="dropdown-search">
-                                <span className="material-icons">search</span>
-                                <input
-                                  type="text"
-                                  placeholder="Search groups..."
-                                  value={bulkCreateGroupSearch}
-                                  onChange={(e) => setBulkCreateGroupSearch(e.target.value)}
-                                  onClick={(e) => e.stopPropagation()}
-                                  autoFocus
-                                />
-                                {bulkCreateGroupSearch && (
-                                  <button
-                                    className="clear-search"
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      setBulkCreateGroupSearch('');
-                                    }}
-                                  >
-                                    <span className="material-icons">close</span>
-                                  </button>
-                                )}
-                              </div>
-                              <div className="dropdown-options">
-                                {userCreatedChannelGroups
-                                  .filter(g => !bulkCreateGroupSearch || g.name.toLowerCase().includes(bulkCreateGroupSearch.toLowerCase()))
-                                  .map((g) => (
-                                    <div
-                                      key={g.id}
-                                      className={`dropdown-option ${bulkCreateSelectedGroupId === g.id ? 'selected' : ''}`}
-                                      onClick={() => {
-                                        setBulkCreateSelectedGroupId(g.id);
-                                        setBulkCreateGroupDropdownOpen(false);
+                        {bulkCreateGroupOption === 'existing' && (
+                          <div className="searchable-dropdown" ref={bulkCreateGroupDropdownRef}>
+                            <div
+                              className="dropdown-trigger"
+                              onClick={() => setBulkCreateGroupDropdownOpen(!bulkCreateGroupDropdownOpen)}
+                            >
+                              <span className="dropdown-value">
+                                {bulkCreateSelectedGroupId
+                                  ? channelGroups.find(g => g.id === bulkCreateSelectedGroupId)?.name ?? '-- Select a group --'
+                                  : '-- Select a group --'}
+                              </span>
+                              <span className="material-icons dropdown-arrow">
+                                {bulkCreateGroupDropdownOpen ? 'expand_less' : 'expand_more'}
+                              </span>
+                            </div>
+                            {bulkCreateGroupDropdownOpen && (
+                              <div className="dropdown-menu">
+                                <div className="dropdown-search">
+                                  <span className="material-icons">search</span>
+                                  <input
+                                    type="text"
+                                    placeholder="Search groups..."
+                                    value={bulkCreateGroupSearch}
+                                    onChange={(e) => setBulkCreateGroupSearch(e.target.value)}
+                                    onClick={(e) => e.stopPropagation()}
+                                    autoFocus
+                                  />
+                                  {bulkCreateGroupSearch && (
+                                    <button
+                                      className="clear-search"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
                                         setBulkCreateGroupSearch('');
                                       }}
                                     >
-                                      {g.name}
-                                    </div>
-                                  ))}
-                                {userCreatedChannelGroups.filter(g => !bulkCreateGroupSearch || g.name.toLowerCase().includes(bulkCreateGroupSearch.toLowerCase())).length === 0 && (
-                                  <div className="dropdown-no-results">No groups found</div>
-                                )}
+                                      <span className="material-icons">close</span>
+                                    </button>
+                                  )}
+                                </div>
+                                <div className="dropdown-options">
+                                  {userCreatedChannelGroups
+                                    .filter(g => !bulkCreateGroupSearch || g.name.toLowerCase().includes(bulkCreateGroupSearch.toLowerCase()))
+                                    .map((g) => (
+                                      <div
+                                        key={g.id}
+                                        className={`dropdown-option ${bulkCreateSelectedGroupId === g.id ? 'selected' : ''}`}
+                                        onClick={() => {
+                                          setBulkCreateSelectedGroupId(g.id);
+                                          setBulkCreateGroupDropdownOpen(false);
+                                          setBulkCreateGroupSearch('');
+                                        }}
+                                      >
+                                        {g.name}
+                                      </div>
+                                    ))}
+                                  {userCreatedChannelGroups.filter(g => !bulkCreateGroupSearch || g.name.toLowerCase().includes(bulkCreateGroupSearch.toLowerCase())).length === 0 && (
+                                    <div className="dropdown-no-results">No groups found</div>
+                                  )}
+                                </div>
                               </div>
-                            </div>
-                          )}
-                        </div>
-                      )}
+                            )}
+                          </div>
+                        )}
 
-                      <label className="radio-option">
-                        <input
-                          type="radio"
-                          name="groupOption"
-                          checked={bulkCreateGroupOption === 'new'}
-                          onChange={() => setBulkCreateGroupOption('new')}
-                        />
-                        <span>Create new group</span>
-                      </label>
-                      {bulkCreateGroupOption === 'new' && (
-                        <input
-                          type="text"
-                          value={bulkCreateNewGroupName}
-                          onChange={(e) => setBulkCreateNewGroupName(e.target.value)}
-                          placeholder="New group name"
-                          className="form-input"
-                        />
-                      )}
+                        <label className="radio-option">
+                          <input
+                            type="radio"
+                            name="groupOption"
+                            checked={bulkCreateGroupOption === 'new'}
+                            onChange={() => setBulkCreateGroupOption('new')}
+                          />
+                          <span>Create new group</span>
+                        </label>
+                        {bulkCreateGroupOption === 'new' && (
+                          <input
+                            type="text"
+                            value={bulkCreateNewGroupName}
+                            onChange={(e) => setBulkCreateNewGroupName(e.target.value)}
+                            placeholder="New group name"
+                            className="form-input"
+                          />
+                        )}
+                      </div>
                     </div>
-                  </div>
-                )}
-              </div>
+                  )}
+                </div>
               )}
 
               {/* Timezone preference - Collapsible, only show if regional variants detected */}

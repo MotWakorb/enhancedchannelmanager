@@ -35,7 +35,7 @@ export function ServiceControlPanel({
         await api.enableService(serviceId);
       }
       onRefresh?.();
-    } catch (err) {
+    } catch (_err) {
       setError(`Failed to ${currentlyEnabled ? 'disable' : 'enable'} service`);
     } finally {
       setLoading(prev => ({ ...prev, [serviceId]: false }));
@@ -50,7 +50,7 @@ export function ServiceControlPanel({
     try {
       await api.restartService(serviceId);
       onRefresh?.();
-    } catch (err) {
+    } catch (_err) {
       setError('Failed to restart service');
     } finally {
       setLoading(prev => ({ ...prev, [`restart-${serviceId}`]: false }));
@@ -64,7 +64,7 @@ export function ServiceControlPanel({
 
     try {
       await api.triggerHealthCheck(serviceId);
-    } catch (err) {
+    } catch (_err) {
       setError('Failed to trigger health check');
     } finally {
       setLoading(prev => ({ ...prev, [`check-${serviceId}`]: false }));
