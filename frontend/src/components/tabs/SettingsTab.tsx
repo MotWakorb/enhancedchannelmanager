@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import * as api from '../../services/api';
-import { useNotifications } from '../../contexts/NotificationContext';
+import { useNotifications } from '../../contexts/useNotifications';
 import type { Theme, ProbeHistoryEntry, SortCriterion, SortEnabledMap, GracenoteConflictMode, StreamPreviewMode } from '../../services/api';
 import { NormalizationEngineSection } from '../settings/NormalizationEngineSection';
 import { TagEngineSection } from '../settings/TagEngineSection';

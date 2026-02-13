@@ -7,7 +7,7 @@ import type {
   ChannelPopularityScore,
 } from '../../types';
 import * as api from '../../services/api';
-import { useNotifications } from '../../contexts/NotificationContext';
+import { useNotifications } from '../../contexts/useNotifications';
 import './PopularityPanel.css';
 import { formatBytes, formatWatchTime } from '../../utils/formatting';
 

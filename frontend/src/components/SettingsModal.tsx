@@ -1,6 +1,6 @@
 import { useState, useEffect, memo } from 'react';
 import * as api from '../services/api';
-import { useNotifications } from '../contexts/NotificationContext';
+import { useNotifications } from '../contexts/useNotifications';
 import { ModalOverlay } from './ModalOverlay';
 import type { Theme } from '../services/api';
 import './ModalBase.css';

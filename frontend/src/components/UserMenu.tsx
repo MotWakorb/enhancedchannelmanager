@@ -1,4 +1,4 @@
-/**
+r/**
  * User menu component for header.
  *
  * Shows current user info, profile editing, password change, and logout.
@@ -6,7 +6,7 @@
  */
 import React, { useState, useRef, useEffect } from 'react';
 import { useAuth, useAuthRequired } from '../hooks/useAuth';
-import { useNotifications } from '../contexts/NotificationContext';
+import { useNotifications } from '../contexts/useNotifications';
 import * as api from '../services/api';
 import { ModalOverlay } from './ModalOverlay';
 import './UserMenu.css';

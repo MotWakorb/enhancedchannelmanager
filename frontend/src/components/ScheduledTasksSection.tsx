@@ -4,7 +4,7 @@ import type { TaskStatus } from '../services/api';
 import { logger } from '../utils/logger';
 import { TaskEditorModal } from './TaskEditorModal';
 import { TaskHistoryPanel } from './TaskHistoryPanel';
-import { useNotifications } from '../contexts/NotificationContext';
+import { useNotifications } from '../contexts/useNotifications';
 import { formatDateTime } from '../utils/formatting';
 
 interface ScheduledTasksSectionProps {

@@ -7,7 +7,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import * as api from '../../services/api';
 import type { AuthSettingsPublic, AuthSettingsUpdate } from '../../types';
-import { useNotifications } from '../../contexts/NotificationContext';
+import { useNotifications } from '../../contexts/useNotifications';
 import './AuthSettingsSection.css';
 
 interface Props {

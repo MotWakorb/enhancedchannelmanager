@@ -8,7 +8,7 @@
 import { useState, useEffect, useMemo, useRef, memo } from 'react';
 import type { Channel, EPGData } from '../types';
 import { getEPGLcnBatch, type LCNLookupItem } from '../services/api';
-import { useNotifications } from '../contexts/NotificationContext';
+import { useNotifications } from '../contexts/useNotifications';
 import { naturalCompare } from '../utils/naturalSort';
 import { ModalOverlay } from './ModalOverlay';
 import './BulkLCNFetchModal.css';

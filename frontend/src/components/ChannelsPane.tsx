@@ -36,7 +36,7 @@ import { EditChannelModal, type ChannelMetadataChanges } from './EditChannelModa
 import { NormalizeNamesModal } from './NormalizeNamesModal';
 import { naturalCompare } from '../utils/naturalSort';
 import { useCopyFeedback } from '../hooks/useCopyFeedback';
-import { useNotifications } from '../contexts/NotificationContext';
+import { useNotifications } from '../contexts/useNotifications';
 import { useDropdown } from '../hooks/useDropdown';
 import { useContextMenu } from '../hooks/useContextMenu';
 import { useModal } from '../hooks/useModal';

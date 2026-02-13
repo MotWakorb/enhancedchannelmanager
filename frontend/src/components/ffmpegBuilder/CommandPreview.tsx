@@ -1,7 +1,7 @@
 import { useState, useMemo, useCallback, useRef } from 'react';
 import type { FFMPEGBuilderState } from '../../types/ffmpegBuilder';
 import { createStreamProfile } from '../../services/api';
-import { useNotifications } from '../../contexts/NotificationContext';
+import { useNotifications } from '../../contexts/useNotifications';
 import { generateCommand } from './commandGenerator';
 
 // ---------------------------------------------------------------------------

@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import * as api from '../services/api';
 import type { Notification } from '../services/api';
-import { useNotifications } from '../contexts/NotificationContext';
+import { useNotifications } from '../contexts/useNotifications';
 import './NotificationCenter.css';
 
 interface NotificationCenterProps {
@@ -41,7 +41,16 @@ const getProbeProgress = (n: Notification): ProbeProgress | null => {
 
 // Helper to check if task is actively running (not completed, failed, or idle)
 const isProbeActive = (status: ProbeProgress['status']): boolean => {
-  return ['probing', 'fetching', 'refreshing', 'reordering', 'starting', 'fetching_sources', 'fetching_accounts', 'building_digest', 'sending_email', 'sending_discord'].includes(status);
+  return status === 'probing' ||
+    status === 'fetching' ||
+    status === 'refreshing' ||
+    status === 'reordering' ||
+    status === 'starting' ||
+    status === 'fetching_sources' ||
+    status === 'fetching_accounts' ||
+    status === 'building_digest' ||
+    status === 'sending_email' ||
+    status === 'sending_discord';
 };
 
 export function NotificationCenter({ onNotificationClick }: NotificationCenterProps) {
@@ -426,34 +435,34 @@ export function NotificationCenter({ onNotificationClick }: NotificationCenterPr
                   </div>
                   {/* Hide actions for active probe notifications */}
                   {!(isProbeNotification(notification) &&
-                     getProbeProgress(notification) &&
-                     (isProbeActive(getProbeProgress(notification)!.status) ||
+                    getProbeProgress(notification) &&
+                    (isProbeActive(getProbeProgress(notification)!.status) ||
                       getProbeProgress(notification)!.status === 'paused')) && (
-                    <div className="notification-actions">
-                      <button
-                        className="notification-item-action"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleMarkRead(notification);
-                        }}
-                        title={notification.read ? 'Mark as unread' : 'Mark as read'}
-                      >
-                        <span className="material-icons">
-                          {notification.read ? 'mark_email_unread' : 'mark_email_read'}
-                        </span>
-                      </button>
-                      <button
-                        className="notification-item-action delete"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleDelete(notification);
-                        }}
-                        title="Delete"
-                      >
-                        <span className="material-icons">close</span>
-                      </button>
-                    </div>
-                  )}
+                      <div className="notification-actions">
+                        <button
+                          className="notification-item-action"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleMarkRead(notification);
+                          }}
+                          title={notification.read ? 'Mark as unread' : 'Mark as read'}
+                        >
+                          <span className="material-icons">
+                            {notification.read ? 'mark_email_unread' : 'mark_email_read'}
+                          </span>
+                        </button>
+                        <button
+                          className="notification-item-action delete"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleDelete(notification);
+                          }}
+                          title="Delete"
+                        >
+                          <span className="material-icons">close</span>
+                        </button>
+                      </div>
+                    )}
                 </div>
               ))
             )}
