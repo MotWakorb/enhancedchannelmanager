@@ -767,7 +767,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         logger.info(`Frontend log level changed to ${frontendLevel}`);
       }
       // Update global VLC settings for vlc utility to access
-      (window as any).__vlcSettings = { behavior: vlcOpenBehavior };
+      window.__vlcSettings = { behavior: vlcOpenBehavior };
       setOriginalUrl(url);
       setOriginalUsername(username);
       setPassword('');

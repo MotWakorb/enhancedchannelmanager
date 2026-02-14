@@ -79,8 +79,7 @@ class IntersectionObserverMock {
   readonly root: Element | null = null
   readonly rootMargin: string = ''
   readonly thresholds: ReadonlyArray<number> = []
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  constructor(_callback: IntersectionObserverCallback) {}
+  constructor(_callback: IntersectionObserverCallback) { }
 
   observe = vi.fn()
   unobserve = vi.fn()

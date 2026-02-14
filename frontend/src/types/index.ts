@@ -333,6 +333,9 @@ export * from './editMode';
 // Re-export journal types
 export * from './journal';
 
+// Re-export VLC types
+export * from './vlc';
+
 // =============================================================================
 // Stats & Monitoring Types
 // =============================================================================
