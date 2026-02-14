@@ -9649,6 +9649,11 @@ async def get_auto_creation_rules():
             rules = session.query(AutoCreationRule).order_by(
                 AutoCreationRule.priority
             ).all()
+            logger.debug(f"[Auto-Creation] Returning {len(rules)} rules to UI")
+            for r in rules:
+                actions = r.get_actions()
+                action_summary = ", ".join(f"{a.get('type', '?')}" for a in actions)
+                logger.debug(f"[Auto-Creation]   Rule id={r.id} '{r.name}': actions=[{action_summary}], raw_actions={r.actions}")
             return {"rules": [r.to_dict() for r in rules]}
         finally:
             session.close()
@@ -9688,6 +9693,9 @@ async def create_auto_creation_rule(request: CreateAutoCreationRuleRequest):
         import json
 
         # Validate conditions and actions
+        logger.debug(f"[Auto-Creation] Creating rule '{request.name}' with {len(request.actions)} actions")
+        for j, action in enumerate(request.actions):
+            logger.debug(f"[Auto-Creation]   Action {j}: {action}")
         validation = validate_rule(request.conditions, request.actions)
         if not validation["valid"]:
             raise HTTPException(status_code=400, detail={
@@ -9784,6 +9792,10 @@ async def update_auto_creation_rule(rule_id: int, request: UpdateAutoCreationRul
             # Validate and update conditions/actions if provided
             conditions = request.conditions if request.conditions is not None else rule.get_conditions()
             actions = request.actions if request.actions is not None else rule.get_actions()
+
+            logger.debug(f"[Auto-Creation] Updating rule id={rule_id} '{rule.name}' with {len(actions)} actions")
+            for j, action in enumerate(actions):
+                logger.debug(f"[Auto-Creation]   Action {j}: {action}")
 
             validation = validate_rule(conditions, actions)
             if not validation["valid"]:
@@ -10206,6 +10218,7 @@ async def import_auto_creation_rules_yaml(request: ImportYAMLRequest):
         # Parse YAML
         try:
             data = yaml.safe_load(request.yaml_content)
+            logger.debug(f"[YAML Import] Parsed YAML with {len(data.get('rules', data) if isinstance(data, dict) else data)} rules")
         except yaml.YAMLError as e:
             raise HTTPException(status_code=400, detail=f"Invalid YAML: {e}")
 
@@ -10238,6 +10251,12 @@ async def import_auto_creation_rules_yaml(request: ImportYAMLRequest):
             warnings = []
 
             for i, rule_data in enumerate(data["rules"]):
+                rule_name = rule_data.get('name', f'Rule {i}')
+                logger.debug(f"[YAML Import] Processing rule {i}: '{rule_name}'")
+                for j, action in enumerate(rule_data.get("actions", [])):
+                    logger.debug(f"[YAML Import]   Action {j} from YAML: type={action.get('type')}, params={{{', '.join(f'{k}={v}' for k, v in action.items() if k != 'type')}}}")
+                for j, cond in enumerate(rule_data.get("conditions", [])):
+                    logger.debug(f"[YAML Import]   Condition {j} from YAML: type={cond.get('type')}, value={cond.get('value')}, connector={cond.get('connector')}")
                 # Resolve portable name fields to local IDs
                 # target_group_name → target_group_id
                 if not rule_data.get("target_group_id") and rule_data.get("target_group_name"):
@@ -10275,6 +10294,9 @@ async def import_auto_creation_rules_yaml(request: ImportYAMLRequest):
                 # Validate rule
                 conditions = rule_data.get("conditions", [])
                 actions = rule_data.get("actions", [])
+                logger.debug(f"[YAML Import] Rule '{rule_name}': validating {len(conditions)} conditions, {len(actions)} actions")
+                for j, action in enumerate(actions):
+                    logger.debug(f"[YAML Import]   Action {j} pre-validate: type={action.get('type')}, all_keys={list(action.keys())}")
                 validation = validate_rule(conditions, actions)
 
                 if not validation["valid"]:
@@ -10305,6 +10327,7 @@ async def import_auto_creation_rules_yaml(request: ImportYAMLRequest):
                         existing.sort_field = rule_data.get("sort_field")
                         existing.sort_order = rule_data.get("sort_order", "asc")
                         existing.normalize_names = rule_data.get("normalize_names", False)
+                        logger.debug(f"[YAML Import] Rule '{rule_name}': updated existing (id={existing.id}), stored actions={existing.actions}")
                         imported.append({"name": existing.name, "action": "updated"})
                     else:
                         errors.append({
@@ -10331,6 +10354,7 @@ async def import_auto_creation_rules_yaml(request: ImportYAMLRequest):
                         normalize_names=rule_data.get("normalize_names", False)
                     )
                     session.add(rule)
+                    logger.debug(f"[YAML Import] Rule '{rule_name}': created new, stored actions={rule.actions}")
                     imported.append({"name": rule.name, "action": "created"})
 
             session.commit()
