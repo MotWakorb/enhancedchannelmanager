@@ -7,6 +7,7 @@ import type {
   AutoCreationExecution,
   CreateRuleData,
   ExecutionLogEntry,
+  ActionLogEntry,
 } from '../../types/autoCreation';
 import { useAutoCreationRules } from '../../hooks/useAutoCreationRules';
 import { useAutoCreationExecution } from '../../hooks/useAutoCreationExecution';
@@ -28,6 +29,24 @@ const getStatusBadgeClass = (status: string) => {
   };
   return `badge badge-sm badge-uppercase ${map[status] || ''}`;
 };
+
+/** Categorize a log action into a filter bucket. */
+function getActionCategory(action: ActionLogEntry): string | null {
+  const desc = action.description?.toLowerCase() || '';
+  if (action.type === 'create_channel' || action.type === 'create_group') {
+    return 'created';
+  } else if (action.type === 'merge_streams' || action.type === 'merge_stream') {
+    return (desc.includes('will create new') || desc.includes('no existing channel found'))
+      ? 'created' : 'merged';
+  } else if (action.type === 'skip' || desc.includes('skipped')) {
+    return 'skipped';
+  } else if (action.type === 'update_channel') {
+    return 'updated';
+  } else if (['assign_logo', 'assign_tvg_id', 'assign_epg', 'assign_profile', 'set_channel_number'].includes(action.type)) {
+    return 'assigned';
+  }
+  return null;
+}
 
 export function AutoCreationTab() {
   // State from hooks
@@ -72,6 +91,7 @@ export function AutoCreationTab() {
   const [executionDetails, setExecutionDetails] = useState<AutoCreationExecution | null>(null);
   const [executionDetailsLoading, setExecutionDetailsLoading] = useState(false);
   const [logSearch, setLogSearch] = useState('');
+  const [logFilters, setLogFilters] = useState<Set<string>>(new Set());
   const [expandedLogEntries, setExpandedLogEntries] = useState<Set<number>>(new Set());
 
   // Import/Export state
@@ -311,11 +331,22 @@ export function AutoCreationTab() {
     setShowExecutionDetails(execution);
     setExecutionDetails(null);
     setLogSearch('');
+    setLogFilters(new Set());
     setExpandedLogEntries(new Set());
     setExecutionDetailsLoading(true);
     try {
       const details = await autoCreationApi.getExecutionDetails(execution.id);
       setExecutionDetails(details);
+      // Pre-select all filter categories so user clicks to *remove*
+      const allCats = new Set<string>();
+      for (const entry of (details.execution_log || [])) {
+        for (const action of entry.actions_executed) {
+          if (!action.success) allCats.add('errors');
+          const cat = getActionCategory(action);
+          if (cat) allCats.add(cat);
+        }
+      }
+      if (allCats.size > 1) setLogFilters(allCats);
     } catch {
       // Fall back to the basic execution data we already have
       setExecutionDetails(null);
@@ -809,11 +840,59 @@ export function AutoCreationTab() {
       {showExecutionDetails && (() => {
         const details = executionDetails || showExecutionDetails;
         const log = details.execution_log || [];
-        const filteredLog = logSearch
-          ? log.filter((entry: ExecutionLogEntry) =>
-              entry.stream_name.toLowerCase().includes(logSearch.toLowerCase())
-            )
-          : log;
+
+        // Categorize each entry by its action types for filtering
+        const getEntryCategories = (entry: ExecutionLogEntry): Set<string> => {
+          const cats = new Set<string>();
+          for (const action of entry.actions_executed) {
+            if (!action.success) cats.add('errors');
+            const cat = getActionCategory(action);
+            if (cat) cats.add(cat);
+          }
+          return cats;
+        };
+
+        // Count entries per filter category
+        const filterCounts: Record<string, number> = {};
+        for (const entry of log) {
+          const cats = getEntryCategories(entry);
+          cats.forEach(c => { filterCounts[c] = (filterCounts[c] || 0) + 1; });
+        }
+
+        const filterDefs: { key: string; label: string; icon: string }[] = [
+          { key: 'created', label: 'Created', icon: 'add_circle' },
+          { key: 'merged', label: 'Merged', icon: 'merge' },
+          { key: 'updated', label: 'Updated', icon: 'edit' },
+          { key: 'skipped', label: 'Skipped', icon: 'skip_next' },
+          { key: 'assigned', label: 'Assigned', icon: 'label' },
+          { key: 'errors', label: 'Errors', icon: 'error' },
+        ];
+
+        const activeFilters = filterDefs.filter(f => filterCounts[f.key] > 0);
+
+        const toggleFilter = (key: string) => {
+          setLogFilters(prev => {
+            const next = new Set(prev);
+            if (next.has(key)) next.delete(key);
+            else next.add(key);
+            return next;
+          });
+        };
+
+        const filteredLog = log.filter((entry: ExecutionLogEntry) => {
+          // Text search filter
+          if (logSearch && !entry.stream_name.toLowerCase().includes(logSearch.toLowerCase())) {
+            return false;
+          }
+          // Action type filters (OR logic: show if entry matches any active filter)
+          if (logFilters.size > 0) {
+            const cats = getEntryCategories(entry);
+            let matchesFilter = false;
+            logFilters.forEach(f => { if (cats.has(f)) matchesFilter = true; });
+            if (!matchesFilter) return false;
+          }
+          return true;
+        });
 
         const toggleLogEntry = (streamId: number) => {
           setExpandedLogEntries(prev => {
@@ -933,6 +1012,30 @@ export function AutoCreationTab() {
                         {logSearch && (
                           <button className="log-search-clear" onClick={() => setLogSearch('')}>
                             <span className="material-icons">close</span>
+                          </button>
+                        )}
+                      </div>
+                    )}
+
+                    {activeFilters.length > 1 && (
+                      <div className="log-filter-chips">
+                        {activeFilters.map(f => (
+                          <button
+                            key={f.key}
+                            className={`log-filter-chip ${logFilters.has(f.key) ? 'active' : ''} ${f.key === 'errors' ? 'chip-errors' : ''}`}
+                            onClick={() => toggleFilter(f.key)}
+                          >
+                            <span className="material-icons">{f.icon}</span>
+                            {f.label}
+                            <span className="log-filter-count">{filterCounts[f.key]}</span>
+                          </button>
+                        ))}
+                        {logFilters.size > 0 && (
+                          <button
+                            className="log-filter-clear"
+                            onClick={() => setLogFilters(new Set())}
+                          >
+                            Clear
                           </button>
                         )}
                       </div>
