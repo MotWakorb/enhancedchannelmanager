@@ -663,7 +663,8 @@ class AutoCreationEngine:
             for r in rules:
                 for c in r.get_conditions():
                     ctype = c.get("type") if isinstance(c, dict) else getattr(c, "type", "")
-                    if ctype == "normalized_name_in_group":
+                    if ctype in ("normalized_name_in_group", "normalized_name_not_in_group",
+                                  "normalized_name_exists", "normalized_name_not_exists"):
                         needs_norm = True
                         break
                 if needs_norm:
@@ -689,6 +690,19 @@ class AutoCreationEngine:
             except Exception as e:
                 logger.warning(f"Failed to fetch channel profiles: {e}")
 
+        # Pre-fetch EPG data if any rule uses assign_epg (for epg_id -> epg_data_id resolution)
+        epg_data = []
+        needs_epg = any(
+            a.get("type") == "assign_epg" if isinstance(a, dict) else getattr(a, "type", "") == "assign_epg"
+            for r in rules for a in r.get_actions()
+        )
+        if needs_epg:
+            try:
+                epg_data = await self.client.get_epg_data()
+                logger.debug(f"[Engine] Fetched {len(epg_data)} EPG data entries for assign_epg resolution")
+            except Exception as e:
+                logger.warning(f"Failed to fetch EPG data for assign_epg: {e}")
+
         # Build stream_id -> m3u_account_id map for smart sort M3U priority lookups
         stream_m3u_map = {}
         for s in streams:
@@ -698,7 +712,8 @@ class AutoCreationEngine:
             self.client, self._existing_channels, self._existing_groups,
             normalization_engine=norm_engine,
             settings=settings,
-            all_profile_ids=all_profile_ids
+            all_profile_ids=all_profile_ids,
+            epg_data=epg_data
         )
 
         # Results tracking

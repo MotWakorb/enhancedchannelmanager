@@ -109,7 +109,8 @@ class ActionExecutor:
     """
 
     def __init__(self, client, existing_channels: list = None, existing_groups: list = None,
-                 normalization_engine=None, settings=None, all_profile_ids: list = None):
+                 normalization_engine=None, settings=None, all_profile_ids: list = None,
+                 epg_data: list = None):
         """
         Initialize the executor.
 
@@ -120,6 +121,7 @@ class ActionExecutor:
             normalization_engine: Optional NormalizationEngine for name normalization
             settings: DispatcharrSettings instance for channel naming/profile defaults
             all_profile_ids: All channel profile IDs (for default profile assignment)
+            epg_data: EPG data entries from Dispatcharr (for assign_epg resolution)
         """
         self.client = client
         self.existing_channels = existing_channels or []
@@ -127,6 +129,13 @@ class ActionExecutor:
         self._normalization_engine = normalization_engine
         self._settings = settings
         self._all_profile_ids = all_profile_ids or []
+
+        # Build EPG data lookup: epg_source_id -> list of data entries
+        self._epg_data_by_source: dict[int, list[dict]] = {}
+        for entry in (epg_data or []):
+            src_id = entry.get("epg_source")
+            if src_id is not None:
+                self._epg_data_by_source.setdefault(src_id, []).append(entry)
 
         # Build lookup indices
         self._channel_by_id = {c["id"]: c for c in self.existing_channels}
@@ -926,7 +935,15 @@ class ActionExecutor:
 
     async def _execute_assign_epg(self, action: Action, stream_ctx: StreamContext,
                                    exec_ctx: ExecutionContext) -> ActionResult:
-        """Execute assign_epg action."""
+        """Execute assign_epg action.
+
+        The user selects an EPG source ID (epg_id), but Dispatcharr channels use
+        epg_data_id (an EPG data entry). This method resolves the source to the
+        best-matching data entry:
+        1. For dummy EPGs (1 entry per source): uses that single entry
+        2. For standard EPGs: matches by the channel's tvg_id
+        3. Fallback: first entry from the source
+        """
         if not exec_ctx.current_channel_id:
             return ActionResult(
                 success=False,
@@ -935,8 +952,8 @@ class ActionExecutor:
                 error="No channel to update"
             )
 
-        epg_id = action.params.get("epg_id")
-        if not epg_id:
+        epg_source_id = action.params.get("epg_id")
+        if epg_source_id is None:
             return ActionResult(
                 success=False,
                 action_type=action.type,
@@ -944,38 +961,227 @@ class ActionExecutor:
                 error="Missing epg_id"
             )
 
+        # Resolve EPG source ID -> epg_data_id
+        source_entries = self._epg_data_by_source.get(epg_source_id, [])
+        if not source_entries:
+            logger.warning(
+                f"[assign_epg] No EPG data entries found for source {epg_source_id}"
+            )
+            return ActionResult(
+                success=False,
+                action_type=action.type,
+                description=f"No EPG data entries found for source {epg_source_id}",
+                error=f"EPG source {epg_source_id} has no data entries"
+            )
+
+        channel = self._channel_by_id.get(exec_ctx.current_channel_id, {})
+        epg_data_entry = self._match_epg_data(channel, source_entries)
+
+        if not epg_data_entry:
+            channel_name = channel.get("name", "unknown")
+            logger.warning(f"[assign_epg] No EPG match for channel '{channel_name}' in source {epg_source_id}")
+            return ActionResult(
+                success=False,
+                action_type=action.type,
+                description=f"No matching EPG data for '{channel_name}' in source {epg_source_id}",
+                error="No EPG data match found"
+            )
+
+        epg_data_id = epg_data_entry["id"]
+
         if exec_ctx.dry_run:
             return ActionResult(
                 success=True,
                 action_type=action.type,
-                description=f"Would assign EPG source {epg_id}",
+                description=f"Would assign EPG data {epg_data_id} (source {epg_source_id}) to channel",
                 entity_type="channel",
                 entity_id=exec_ctx.current_channel_id,
                 modified=True
             )
 
         try:
-            channel = self._channel_by_id.get(exec_ctx.current_channel_id, {})
-            previous_state = {"epg_id": channel.get("epg_id")}
+            previous_state = {"epg_data_id": channel.get("epg_data_id")}
 
-            await self.client.update_channel(exec_ctx.current_channel_id, {"epg_id": epg_id})
+            await self.client.update_channel(exec_ctx.current_channel_id, {"epg_data_id": epg_data_id})
+
+            logger.debug(
+                f"[assign_epg] Assigned epg_data_id={epg_data_id} (source={epg_source_id}, "
+                f"tvg_id={epg_data_entry.get('tvg_id')}) to channel {exec_ctx.current_channel_id}"
+            )
 
             return ActionResult(
                 success=True,
                 action_type=action.type,
-                description=f"Assigned EPG source {epg_id} to channel",
+                description=f"Assigned EPG data {epg_data_id} (source {epg_source_id}) to channel",
                 entity_type="channel",
                 entity_id=exec_ctx.current_channel_id,
                 modified=True,
                 previous_state=previous_state
             )
         except Exception as e:
+            logger.error(f"[assign_epg] Failed to assign EPG: {e}")
             return ActionResult(
                 success=False,
                 action_type=action.type,
                 description="Failed to assign EPG",
                 error=str(e)
             )
+
+    # =========================================================================
+    # EPG Matching (mirrors frontend epgMatching.ts logic)
+    # =========================================================================
+
+    # Quality/timezone suffixes stripped during normalization
+    _QUALITY_SUFFIXES = ['fhd', 'uhd', '4k', 'hd', 'sd', '1080p', '1080i', '720p', '480p', '2160p', 'hevc', 'h264', 'h265']
+    _TIMEZONE_SUFFIXES = ['east', 'west', 'et', 'pt', 'ct', 'mt']
+    _LEAGUE_SUFFIXES = ['nfl', 'nba', 'mlb', 'nhl', 'mls', 'wnba', 'ncaa', 'cfb', 'cbb',
+                        'epl', 'premierleague', 'laliga', 'bundesliga', 'seriea', 'ligue1',
+                        'uefa', 'fifa', 'f1', 'nascar', 'pga', 'atp', 'wta', 'wwe', 'ufc', 'aew', 'boxing']
+    _LEAGUE_PREFIXES_RE = re.compile(
+        r'^(?:NFL|NBA|MLB|NHL|MLS|WNBA|NCAA|CFB|CBB|EPL|UEFA|FIFA|F1|NASCAR|PGA|ATP|WTA|WWE|UFC|AEW|BOXING)\s*[:|]\s*',
+        re.IGNORECASE
+    )
+
+    @staticmethod
+    def _normalize_for_epg(name: str) -> str:
+        """Normalize a channel/EPG name for matching (mirrors frontend normalizeForEPGMatch)."""
+        n = name.strip()
+        # Strip channel number prefix: "107 | Name", "107 - Name", "107: Name"
+        n = re.sub(r'^\d+(?:\.\d+)?\s*[|\-:.]\s*', '', n)
+        # Strip "107 Name" (number + space + letter)
+        n = re.sub(r'^\d+(?:\.\d+)?\s+(?=[A-Za-z])', '', n)
+        # Strip country prefix: "US: Name", "UK | Name"
+        n = re.sub(r'^[A-Z]{2}\s*[:|]\s*', '', n)
+        # Strip league prefix: "NFL: Arizona Cardinals"
+        n = ActionExecutor._LEAGUE_PREFIXES_RE.sub('', n)
+        # Strip quality suffixes
+        for suffix in ActionExecutor._QUALITY_SUFFIXES:
+            n = re.sub(rf'[\s\-_|:]*{suffix}\s*$', '', n, flags=re.IGNORECASE)
+        # Strip timezone suffixes
+        for suffix in ActionExecutor._TIMEZONE_SUFFIXES:
+            n = re.sub(rf'[\s\-_|:]*{suffix}\s*$', '', n, flags=re.IGNORECASE)
+        # Convert semantic characters
+        n = n.replace('+', 'plus').replace('&', 'and')
+        # Lowercase alphanumeric only
+        n = re.sub(r'[^a-z0-9]', '', n.lower())
+        # Strip leading digits
+        n = re.sub(r'^\d+', '', n)
+        return n
+
+    @staticmethod
+    def _parse_tvg_id(tvg_id: str) -> str:
+        """Parse tvg_id to extract the normalized base name (mirrors frontend parseTvgId)."""
+        lower = tvg_id.lower()
+        last_dot = lower.rfind('.')
+        name_part = tvg_id
+
+        if last_dot != -1:
+            suffix = lower[last_dot + 1:]
+            # Known league suffix
+            if suffix in ActionExecutor._LEAGUE_SUFFIXES:
+                name_part = tvg_id[:last_dot]
+            # Looks like a country code (2-3 lowercase letters)
+            elif 2 <= len(suffix) <= 3 and suffix.isalpha():
+                name_part = tvg_id[:last_dot]
+
+        # Strip call signs in parentheses: "AdultSwim(ADSM)" -> "AdultSwim"
+        name_part = re.sub(r'\([^)]+\)', '', name_part)
+        return ActionExecutor._normalize_for_epg(name_part)
+
+    def _match_epg_data(self, channel: dict, source_entries: list[dict]) -> Optional[dict]:
+        """
+        Find the best EPG data entry for a channel from a list of source entries.
+        Mirrors the frontend's "Accept Best Guesses" matching logic.
+
+        Match priority:
+        1. Exact tvg_id match (channel.tvg_id == entry.tvg_id)
+        2. Exact normalized name match (channel name == entry tvg_id or name)
+        3. Prefix match (channel name starts with entry name or vice versa)
+        4. Fallback: first entry (for single-entry sources like dummy EPGs)
+        """
+        channel_tvg_id = channel.get("tvg_id")
+        channel_name = channel.get("name", "")
+
+        # 1. Exact tvg_id match
+        if channel_tvg_id:
+            for entry in source_entries:
+                if entry.get("tvg_id") == channel_tvg_id:
+                    logger.debug(f"[assign_epg] Exact tvg_id match: {channel_tvg_id}")
+                    return entry
+
+        # Normalize channel name
+        norm_channel = self._normalize_for_epg(channel_name)
+        if not norm_channel:
+            # Can't match by name, use fallback
+            if len(source_entries) == 1:
+                logger.debug(f"[assign_epg] Single entry fallback for '{channel_name}'")
+                return source_entries[0]
+            return None
+
+        # Build lookup from source entries
+        exact_matches = []
+        prefix_matches = []
+
+        for entry in source_entries:
+            entry_tvg_id = entry.get("tvg_id") or ""
+            entry_name = entry.get("name") or ""
+
+            # Normalize tvg_id and name
+            norm_tvg = self._parse_tvg_id(entry_tvg_id) if entry_tvg_id else ""
+            norm_name = self._normalize_for_epg(entry_name) if entry_name else ""
+
+            # 2. Exact normalized match
+            if norm_channel == norm_tvg or norm_channel == norm_name:
+                exact_matches.append((entry, norm_tvg, abs(len(norm_tvg) - len(norm_channel))))
+                continue
+
+            # Also check call sign in parentheses: "CartoonNetwork(STOONHD).us"
+            call_sign_match = re.search(r'\(([^)]+)\)', entry_tvg_id)
+            if call_sign_match:
+                call_sign = re.sub(r'[^a-z0-9]', '', call_sign_match.group(1).lower())
+                # Strip HD/SD suffix from call sign
+                call_sign_base = re.sub(r'(hd|sd|fhd|uhd)$', '', call_sign)
+                if norm_channel == call_sign or norm_channel == call_sign_base:
+                    exact_matches.append((entry, norm_tvg, 0))
+                    continue
+
+            # 3. Prefix match (at least 4 chars to avoid false positives)
+            if len(norm_channel) >= 4 and norm_tvg:
+                if norm_tvg.startswith(norm_channel) or norm_channel.startswith(norm_tvg):
+                    len_diff = abs(len(norm_tvg) - len(norm_channel))
+                    prefix_matches.append((entry, norm_tvg, len_diff))
+            if len(norm_channel) >= 4 and norm_name:
+                if norm_name.startswith(norm_channel) or norm_channel.startswith(norm_name):
+                    len_diff = abs(len(norm_name) - len(norm_channel))
+                    # Avoid duplicates
+                    if not any(e[0]["id"] == entry["id"] for e in prefix_matches):
+                        prefix_matches.append((entry, norm_name, len_diff))
+
+        # Pick best match: exact > prefix, then sort by name length similarity
+        if exact_matches:
+            exact_matches.sort(key=lambda x: x[2])
+            best = exact_matches[0][0]
+            logger.debug(
+                f"[assign_epg] Exact name match: '{channel_name}' -> "
+                f"'{best.get('name')}' (tvg_id={best.get('tvg_id')})"
+            )
+            return best
+
+        if prefix_matches:
+            prefix_matches.sort(key=lambda x: x[2])
+            best = prefix_matches[0][0]
+            logger.debug(
+                f"[assign_epg] Prefix match: '{channel_name}' -> "
+                f"'{best.get('name')}' (tvg_id={best.get('tvg_id')})"
+            )
+            return best
+
+        # 4. Fallback for single-entry sources (dummy EPGs)
+        if len(source_entries) == 1:
+            logger.debug(f"[assign_epg] Single entry fallback for '{channel_name}'")
+            return source_entries[0]
+
+        return None
 
     async def _execute_assign_profile(self, action: Action, stream_ctx: StreamContext,
                                        exec_ctx: ExecutionContext) -> ActionResult:
