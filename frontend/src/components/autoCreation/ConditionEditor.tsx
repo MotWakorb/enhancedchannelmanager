@@ -69,7 +69,7 @@ const FIELDS: FieldDef[] = [
   { id: 'stream_group', label: 'Stream Group', category: 'stream', operators: TEXT_OPS },
   { id: 'tvg_id', label: 'TVG-ID', category: 'stream', operators: [...EXISTS_OPS, ...TEXT_OPS] },
   {
-    id: 'provider', label: 'Provider', category: 'stream',
+    id: 'provider', label: 'M3U Account', category: 'stream',
     operators: [
       { id: 'is', label: 'Is', valueType: 'select' },
       { id: 'is_not', label: 'Is Not', valueType: 'select' },
@@ -105,7 +105,17 @@ const FIELDS: FieldDef[] = [
   },
   {
     id: 'normalized_match_group', label: 'Normalized Match in Group', category: 'channel',
-    operators: [{ id: 'is', label: 'Is In', valueType: 'select' }],
+    operators: [
+      { id: 'is', label: 'Is In', valueType: 'select' },
+      { id: 'is_not', label: 'Not In', valueType: 'select' },
+    ],
+  },
+  {
+    id: 'normalized_match_any', label: 'Normalized Match (Any Group)', category: 'channel',
+    operators: [
+      { id: 'exists', label: 'Exists', valueType: 'none' },
+      { id: 'does_not_exist', label: 'Does Not Exist', valueType: 'none' },
+    ],
   },
   {
     id: 'channel_streams', label: 'Channel Streams', category: 'channel',
@@ -202,7 +212,11 @@ function buildCondition(
       type = 'channel_in_group'; value = userValue;
       break;
     case 'normalized_match_group':
-      type = 'normalized_name_in_group'; value = Number(userValue);
+      type = operator === 'is_not' ? 'normalized_name_not_in_group' : 'normalized_name_in_group';
+      value = Number(userValue);
+      break;
+    case 'normalized_match_any':
+      type = operator === 'does_not_exist' ? 'normalized_name_not_exists' : 'normalized_name_exists';
       break;
     case 'channel_streams':
       type = 'channel_has_streams'; value = true;
@@ -275,6 +289,12 @@ function parseCondition(condition: Condition): { field: string; operator: string
       return { field: 'channel_group', operator: 'is', displayValue: String(value ?? '') };
     case 'normalized_name_in_group':
       return { field: 'normalized_match_group', operator: 'is', displayValue: String(value ?? '') };
+    case 'normalized_name_not_in_group':
+      return { field: 'normalized_match_group', operator: 'is_not', displayValue: String(value ?? '') };
+    case 'normalized_name_exists':
+      return { field: 'normalized_match_any', operator: 'exists', displayValue: '' };
+    case 'normalized_name_not_exists':
+      return { field: 'normalized_match_any', operator: 'does_not_exist', displayValue: '' };
     case 'channel_has_streams':
       return { field: 'channel_streams', operator: negate ? 'does_not_exist' : 'exists', displayValue: '' };
 

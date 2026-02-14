@@ -10439,6 +10439,15 @@ async def get_auto_creation_condition_schema():
         elif ct.value == "normalized_name_in_group":
             condition_info["value_type"] = "integer"
             condition_info["description"] = "Group ID — matches if normalized stream name equals a channel name in this group"
+        elif ct.value == "normalized_name_not_in_group":
+            condition_info["value_type"] = "integer"
+            condition_info["description"] = "Group ID — matches if normalized stream name does NOT equal any channel name in this group"
+        elif ct.value == "normalized_name_exists":
+            condition_info["value_type"] = "none"
+            condition_info["description"] = "Matches if normalized stream name equals a channel name in ANY group"
+        elif ct.value == "normalized_name_not_exists":
+            condition_info["value_type"] = "none"
+            condition_info["description"] = "Matches if normalized stream name does NOT equal any channel name in any group"
         elif ct.value in ("and", "or"):
             condition_info["value_type"] = "array"
             condition_info["description"] = "Array of sub-conditions"

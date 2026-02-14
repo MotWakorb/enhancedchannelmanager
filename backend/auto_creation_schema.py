@@ -42,6 +42,9 @@ class ConditionType(str, Enum):
     CHANNEL_IN_GROUP = "channel_in_group"            # Channel exists in specific group
     CHANNEL_HAS_STREAMS = "channel_has_streams"      # Channel already has N streams
     NORMALIZED_NAME_IN_GROUP = "normalized_name_in_group"  # Normalized stream name matches a channel in group
+    NORMALIZED_NAME_NOT_IN_GROUP = "normalized_name_not_in_group"  # Normalized name does NOT match any channel in group
+    NORMALIZED_NAME_EXISTS = "normalized_name_exists"  # Normalized name matches a channel in ANY group
+    NORMALIZED_NAME_NOT_EXISTS = "normalized_name_not_exists"  # Normalized name does NOT match any channel in any group
 
     # Logical operators
     AND = "and"
@@ -182,9 +185,12 @@ class Condition:
             if not isinstance(self.value, int):
                 errors.append(f"{self.type} requires a group ID (integer)")
 
-        elif cond_type == ConditionType.NORMALIZED_NAME_IN_GROUP:
+        elif cond_type in (ConditionType.NORMALIZED_NAME_IN_GROUP, ConditionType.NORMALIZED_NAME_NOT_IN_GROUP):
             if not isinstance(self.value, int):
                 errors.append(f"{self.type} requires a group ID (integer)")
+
+        elif cond_type in (ConditionType.NORMALIZED_NAME_EXISTS, ConditionType.NORMALIZED_NAME_NOT_EXISTS):
+            pass  # No value required — checks all groups
 
         elif cond_type in (ConditionType.TVG_ID_EXISTS, ConditionType.LOGO_EXISTS, ConditionType.HAS_CHANNEL):
             if self.value is not None and not isinstance(self.value, bool):

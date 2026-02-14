@@ -167,6 +167,11 @@ class ConditionEvaluator:
                         pass
             self._channel_names_by_group[gid] = names
 
+        # Build global set of all channel names across all groups for normalized_name_exists
+        self._all_channel_names: set[str] = set()
+        for names_set in self._channel_names_by_group.values():
+            self._all_channel_names.update(names_set)
+
     def _expand_date_placeholders(self, text: str, allow_ranges: bool = True) -> str:
         """
         Expand {date...} or {today...} placeholders in text.
@@ -385,6 +390,15 @@ class ConditionEvaluator:
 
         elif cond_enum == ConditionType.NORMALIZED_NAME_IN_GROUP:
             return self._evaluate_normalized_name_in_group(condition.value, context, cond_type)
+
+        elif cond_enum == ConditionType.NORMALIZED_NAME_NOT_IN_GROUP:
+            return self._evaluate_normalized_name_not_in_group(condition.value, context, cond_type)
+
+        elif cond_enum == ConditionType.NORMALIZED_NAME_EXISTS:
+            return self._evaluate_normalized_name_exists(context, cond_type)
+
+        elif cond_enum == ConditionType.NORMALIZED_NAME_NOT_EXISTS:
+            return self._evaluate_normalized_name_not_exists(context, cond_type)
 
         # Fallback
         logger.warning(f"Unhandled condition type: {cond_type}")
@@ -695,6 +709,54 @@ class ConditionEvaluator:
             matched, cond_type,
             f"'{stream_name}' → '{normalized}' {'matches' if matched else 'no match in'} group {group_id} "
             f"({len(group_names)} channels)"
+        )
+
+    def _evaluate_normalized_name_not_in_group(self, group_id: int, context: StreamContext,
+                                                  cond_type: str) -> EvaluationResult:
+        """Check if the stream's normalized name does NOT match any channel in the specified group."""
+        # Reuse the in-group evaluator and invert the result
+        result = self._evaluate_normalized_name_in_group(group_id, context, "normalized_name_in_group")
+        return EvaluationResult(
+            not result.matched, cond_type,
+            result.details.replace("matches", "NOT in").replace("no match in", "confirmed not in")
+            if result.details else f"Inverted group check for group {group_id}"
+        )
+
+    def _normalize_stream_name(self, context: StreamContext) -> str:
+        """Normalize the stream name using the normalization engine if available."""
+        stream_name = context.stream_name
+        if self._normalization_engine:
+            try:
+                result = self._normalization_engine.normalize(stream_name)
+                return result.normalized
+            except Exception as e:
+                logger.warning(f"Normalization failed for '{stream_name}': {e}")
+                return stream_name
+        return stream_name
+
+    def _evaluate_normalized_name_exists(self, context: StreamContext,
+                                            cond_type: str) -> EvaluationResult:
+        """Check if the stream's normalized name matches any channel in ANY group."""
+        if not self._all_channel_names:
+            return EvaluationResult(False, cond_type, "No channels exist in any group")
+
+        normalized = self._normalize_stream_name(context)
+        matched = normalized.lower() in self._all_channel_names
+
+        return EvaluationResult(
+            matched, cond_type,
+            f"'{context.stream_name}' → '{normalized}' {'found' if matched else 'not found'} "
+            f"across all groups ({len(self._all_channel_names)} names)"
+        )
+
+    def _evaluate_normalized_name_not_exists(self, context: StreamContext,
+                                                cond_type: str) -> EvaluationResult:
+        """Check if the stream's normalized name does NOT match any channel in any group."""
+        result = self._evaluate_normalized_name_exists(context, "normalized_name_exists")
+        return EvaluationResult(
+            not result.matched, cond_type,
+            result.details.replace("found", "confirmed absent").replace("not found", "confirmed absent")
+            if result.details else "Inverted global check"
         )
 
 

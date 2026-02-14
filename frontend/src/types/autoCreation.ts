@@ -33,6 +33,9 @@ export type ConditionType =
   | 'channel_in_group'
   | 'channel_has_streams'
   | 'normalized_name_in_group'
+  | 'normalized_name_not_in_group'
+  | 'normalized_name_exists'
+  | 'normalized_name_not_exists'
   // Logical operators
   | 'and'
   | 'or'
