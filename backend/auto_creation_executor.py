@@ -154,6 +154,22 @@ class ActionExecutor:
             stripped = _num_prefix.sub('', c["name"])
             if stripped != c["name"]:
                 self._base_name_to_channel.setdefault(stripped.lower(), c)
+
+        # Pre-populate normalized-name mapping so merge_streams auto-lookup
+        # can find channels the same way normalized_name_in_group does
+        self._normalized_name_to_channel: dict[str, dict] = {}
+        if self._normalization_engine:
+            for c in self.existing_channels:
+                stripped = _num_prefix.sub('', c["name"])
+                try:
+                    result = self._normalization_engine.normalize(stripped)
+                    if result.normalized and result.normalized.lower() != stripped.lower():
+                        self._normalized_name_to_channel.setdefault(
+                            result.normalized.lower(), c
+                        )
+                except Exception:
+                    pass
+
         self._logo_cache = {}  # logo_url -> logo_id
 
         # Channel number tracking
@@ -1546,7 +1562,9 @@ class ActionExecutor:
         """Find channel by exact name (case-insensitive).
 
         Also checks the base-name mapping so that a lookup for "USA Network"
-        finds a channel created as "4000 | USA Network".
+        finds a channel created as "4000 | USA Network", and the normalized-name
+        mapping so that merge_streams can find channels the same way
+        normalized_name_in_group does.
         """
         name_lower = name.lower()
         # Check newly created channels first (by exact name)
@@ -1560,7 +1578,13 @@ class ActionExecutor:
         result = self._channel_by_name.get(name_lower)
         if result:
             logger.debug(f"[Lookup] '{name}' found in existing channels (id={result.get('id')})")
-        return result
+            return result
+        # Check normalized-name mapping (normalization-engine-processed channel names)
+        if name_lower in self._normalized_name_to_channel:
+            result = self._normalized_name_to_channel[name_lower]
+            logger.debug(f"[Lookup] '{name}' found via normalized-name mapping (id={result.get('id')}, name='{result.get('name')}')")
+            return result
+        return None
 
     def _find_channel_by_regex(self, pattern: str) -> Optional[dict]:
         """Find first channel matching regex pattern."""
