@@ -3,7 +3,7 @@
  * Behavior depends on user settings: protocol_only, m3u_fallback, or m3u_only.
  */
 
-export type VLCOpenBehavior = 'protocol_only' | 'm3u_fallback' | 'm3u_only';
+import type { VLCOpenBehavior, VLCWindow } from '../types';
 
 // Store modal trigger callbacks
 type ModalCallback = (url: string, name?: string) => void;
@@ -26,7 +26,7 @@ export function registerVLCModalCallback(callback: ModalCallback): () => void {
  */
 function getVLCBehavior(): VLCOpenBehavior {
   // Get from window global if App.tsx has set it
-  const globalSettings = (window as any).__vlcSettings;
+  const globalSettings = (window as VLCWindow).__vlcSettings;
   return globalSettings?.behavior || 'm3u_fallback';
 }
 
