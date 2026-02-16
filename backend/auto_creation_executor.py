@@ -179,7 +179,7 @@ class ActionExecutor:
                 stripped = _num_prefix.sub('', c["name"])
                 try:
                     core = self._normalization_engine.extract_core_name(stripped)
-                    if core and core.lower() != stripped.lower():
+                    if core:
                         self._core_name_to_channel.setdefault(core.lower(), c)
                 except Exception:
                     pass
@@ -850,7 +850,7 @@ class ActionExecutor:
                     core_name = self._normalization_engine.extract_core_name(stream_ctx.stream_name)
                     if core_name:
                         logger.debug(f"[MergeStreams] Core name fallback: '{stream_ctx.stream_name}' -> '{core_name}'")
-                        channel = self._core_name_to_channel.get(core_name.lower())
+                        channel = self._core_name_to_channel.get(core_name.lower()) or self._find_channel_by_name(core_name)
                         if channel:
                             logger.debug(f"[MergeStreams] Core name matched '{channel.get('name')}' (id={channel.get('id')})")
                 except Exception as e:
