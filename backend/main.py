@@ -789,6 +789,7 @@ class SettingsRequest(BaseModel):
     stream_sort_enabled: dict[str, bool] = {"resolution": True, "bitrate": True, "framerate": True, "m3u_priority": False, "audio_channels": False}  # Which criteria are enabled
     m3u_account_priorities: dict[str, int] = {}  # M3U account priorities (account_id -> priority value)
     deprioritize_failed_streams: bool = True  # When enabled, failed/timeout/pending streams sort to bottom
+    strike_threshold: int = 3  # Consecutive failures before flagging stream (0 = disabled)
     normalization_settings: Optional[NormalizationSettings] = None  # User-configurable normalization tags
     normalize_on_channel_create: bool = False  # Default state for normalization toggle when creating channels
     # Shared SMTP settings
@@ -855,6 +856,7 @@ class SettingsResponse(BaseModel):
     stream_sort_enabled: dict[str, bool]  # Which criteria are enabled
     m3u_account_priorities: dict[str, int]  # M3U account priorities (account_id -> priority value)
     deprioritize_failed_streams: bool  # When enabled, failed/timeout/pending streams sort to bottom
+    strike_threshold: int  # Consecutive failures before flagging stream (0 = disabled)
     normalization_settings: NormalizationSettings  # User-configurable normalization tags
     normalize_on_channel_create: bool  # Default state for normalization toggle when creating channels
     # Shared SMTP settings
@@ -950,6 +952,7 @@ async def get_current_settings():
         stream_sort_enabled=settings.stream_sort_enabled,
         m3u_account_priorities=settings.m3u_account_priorities,
         deprioritize_failed_streams=settings.deprioritize_failed_streams,
+        strike_threshold=settings.strike_threshold,
         normalization_settings=NormalizationSettings(
             disabledBuiltinTags=settings.disabled_builtin_tags,
             customTags=[
@@ -1048,6 +1051,7 @@ async def update_settings(request: SettingsRequest):
         stream_sort_enabled=request.stream_sort_enabled,
         m3u_account_priorities=request.m3u_account_priorities,
         deprioritize_failed_streams=request.deprioritize_failed_streams,
+        strike_threshold=request.strike_threshold,
         # Convert normalization_settings from API format to backend format
         disabled_builtin_tags=(
             request.normalization_settings.disabledBuiltinTags
@@ -7060,7 +7064,103 @@ class ComputeSortResponse(BaseModel):
     results: list[ChannelSortResult]
 
 
-# NOTE: compute-sort MUST be defined BEFORE /{stream_id} to avoid path parameter matching
+# NOTE: These routes MUST be defined BEFORE /{stream_id} to avoid path parameter matching
+
+class RemoveStruckOutRequest(BaseModel):
+    stream_ids: list[int]
+
+
+@app.get("/api/stream-stats/struck-out", tags=["Stream Stats"])
+async def get_struck_out_streams():
+    """Get streams that have exceeded the strike threshold."""
+    from models import StreamStats
+
+    settings = get_settings()
+    threshold = settings.strike_threshold
+
+    if threshold <= 0:
+        return {"streams": [], "threshold": 0, "enabled": False}
+
+    session = get_session()
+    try:
+        struck = session.query(StreamStats).filter(
+            StreamStats.consecutive_failures >= threshold
+        ).all()
+
+        if not struck:
+            return {"streams": [], "threshold": threshold, "enabled": True}
+
+        # Build a set of struck stream IDs for lookup
+        struck_ids = {s.stream_id for s in struck}
+
+        # Find which channels contain these streams
+        client = get_client()
+        channels = await client.get_channels()
+        stream_channels: dict[int, list[dict]] = {sid: [] for sid in struck_ids}
+
+        for ch in channels:
+            ch_streams = ch.get("streams", [])
+            for sid in struck_ids:
+                if sid in ch_streams:
+                    stream_channels[sid].append({
+                        "id": ch["id"],
+                        "name": ch.get("name", "Unknown"),
+                    })
+
+        result = []
+        for s in struck:
+            d = s.to_dict()
+            d["channels"] = stream_channels.get(s.stream_id, [])
+            result.append(d)
+
+        return {"streams": result, "threshold": threshold, "enabled": True}
+    except Exception as e:
+        logger.exception(f"Failed to get struck-out streams: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        session.close()
+
+
+@app.post("/api/stream-stats/struck-out/remove", tags=["Stream Stats"])
+async def remove_struck_out_streams(request: RemoveStruckOutRequest):
+    """Remove struck-out streams from all channels they belong to."""
+    from models import StreamStats
+
+    client = get_client()
+    removed_count = 0
+
+    try:
+        channels = await client.get_channels()
+
+        for ch in channels:
+            ch_streams = ch.get("streams", [])
+            filtered = [sid for sid in ch_streams if sid not in request.stream_ids]
+            if len(filtered) < len(ch_streams):
+                removed_here = len(ch_streams) - len(filtered)
+                await client.update_channel(ch["id"], {"streams": filtered})
+                removed_count += removed_here
+                logger.info(f"Removed {removed_here} struck-out streams from channel {ch['id']} ({ch.get('name')})")
+
+        # Reset consecutive_failures for removed streams
+        session = get_session()
+        try:
+            for sid in request.stream_ids:
+                stats = session.query(StreamStats).filter_by(stream_id=sid).first()
+                if stats:
+                    stats.consecutive_failures = 0
+            session.commit()
+        finally:
+            session.close()
+
+        return {
+            "removed_from_channels": removed_count,
+            "stream_ids": request.stream_ids,
+        }
+    except Exception as e:
+        logger.exception(f"Failed to remove struck-out streams: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.post("/api/stream-stats/compute-sort", tags=["Stream Stats"], response_model=ComputeSortResponse)
 async def compute_sort(request: ComputeSortRequest):
     """Compute sort orders for streams without applying them.

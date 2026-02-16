@@ -153,6 +153,7 @@ export interface StreamStats {
   error_message: string | null;
   last_probed: string | null;      // ISO timestamp
   created_at: string;
+  consecutive_failures: number;    // Strike rule: consecutive probe failures
 }
 
 export interface StreamStatsSummary {

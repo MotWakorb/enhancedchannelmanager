@@ -138,6 +138,7 @@ interface ChannelsPaneProps {
   onOpenCreateChannelModal?: () => void;
   // Appearance settings
   showStreamUrls?: boolean;
+  strikeThreshold?: number;
   // EPG matching settings
   epgAutoMatchThreshold?: number;
   // Gracenote conflict handling
@@ -922,6 +923,7 @@ export function ChannelsPane({
   onOpenCreateChannelModal,
   // Appearance settings
   showStreamUrls = true,
+  strikeThreshold = 3,
   // EPG matching settings
   epgAutoMatchThreshold = 80,
   // Gracenote conflict handling
@@ -4790,6 +4792,7 @@ export function ChannelsPane({
                                         onPreview={stream.url ? (s) => handlePreviewStream(s, channel.name) : undefined}
                                         showStreamUrls={showStreamUrls}
                                         streamStats={streamStatsMap.get(stream.id) ?? null}
+                                        strikeThreshold={strikeThreshold}
                                       />
                                     </div>
                                   ))}

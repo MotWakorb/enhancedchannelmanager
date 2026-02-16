@@ -240,6 +240,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   const [streamSortEnabled, setStreamSortEnabled] = useState<SortEnabledMap>({ resolution: true, bitrate: true, framerate: true, m3u_priority: false, audio_channels: false });
   const [m3uAccountPriorities, setM3uAccountPriorities] = useState<Record<string, number>>({});
   const [deprioritizeFailedStreams, setDeprioritizeFailedStreams] = useState(true);
+  const [strikeThreshold, setStrikeThreshold] = useState(3);
 
   // Appearance settings
   const [showStreamUrls, setShowStreamUrls] = useState(true);
@@ -358,6 +359,13 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   const [loadingAutoCreated, setLoadingAutoCreated] = useState(false);
   const [selectedAutoCreatedGroups, setSelectedAutoCreatedGroups] = useState<Set<number>>(new Set());
   const [clearingAutoCreated, setClearingAutoCreated] = useState(false);
+
+  // Strike rule state
+  const [struckOutStreams, setStruckOutStreams] = useState<api.StruckOutStream[]>([]);
+  const [loadingStruckOut, setLoadingStruckOut] = useState(false);
+  const [removingStruckOut, setRemovingStruckOut] = useState(false);
+  const [selectedStruckOut, setSelectedStruckOut] = useState<Set<number>>(new Set());
+  const [struckOutScanned, setStruckOutScanned] = useState(false);
 
   // Track original URL/username to detect if auth settings changed
   const [originalUrl, setOriginalUrl] = useState('');
@@ -590,6 +598,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       setStreamSortEnabled(merged.enabled);
       setM3uAccountPriorities(settings.m3u_account_priorities ?? {});
       setDeprioritizeFailedStreams(settings.deprioritize_failed_streams ?? true);
+      setStrikeThreshold(settings.strike_threshold ?? 3);
       // Shared SMTP settings
       setSmtpHost(settings.smtp_host ?? '');
       setSmtpPort(settings.smtp_port ?? 587);
@@ -730,6 +739,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         stream_sort_enabled: streamSortEnabled,
         m3u_account_priorities: m3uAccountPriorities,
         deprioritize_failed_streams: deprioritizeFailedStreams,
+        strike_threshold: strikeThreshold,
         // Shared SMTP settings
         smtp_host: smtpHost,
         smtp_port: smtpPort,
@@ -1084,6 +1094,39 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       return date.toLocaleString();
     } catch {
       return isoTimestamp;
+    }
+  };
+
+  const handleScanStruckOut = async () => {
+    setLoadingStruckOut(true);
+    setStruckOutScanned(true);
+    try {
+      const result = await api.getStruckOutStreams();
+      setStruckOutStreams(result.streams);
+      setSelectedStruckOut(new Set());
+      if (result.streams.length === 0) {
+        notifications.success('No struck-out streams found.');
+      }
+    } catch (err) {
+      notifications.error(`Failed to scan for struck-out streams: ${err}`);
+    } finally {
+      setLoadingStruckOut(false);
+    }
+  };
+
+  const handleRemoveStruckOut = async () => {
+    if (selectedStruckOut.size === 0) return;
+    setRemovingStruckOut(true);
+    try {
+      const result = await api.removeStruckOutStreams(Array.from(selectedStruckOut));
+      notifications.success(`Removed ${selectedStruckOut.size} stream(s) from ${result.removed_from_channels} channel assignment(s).`);
+      // Rescan
+      await handleScanStruckOut();
+      onSaved();
+    } catch (err) {
+      notifications.error(`Failed to remove struck-out streams: ${err}`);
+    } finally {
+      setRemovingStruckOut(false);
     }
   };
 
@@ -3188,6 +3231,144 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
           )}
 
         </div>
+      </div>
+
+      {/* Strike Rule Section */}
+      <div className="settings-section">
+        <div className="settings-section-header">
+          <span className="material-icons">gavel</span>
+          <h3>Strike Rule</h3>
+        </div>
+        <p className="form-hint" style={{ marginBottom: '1rem' }}>
+          Flag streams that repeatedly fail probing. When a stream reaches the threshold of consecutive failures,
+          it is marked as "struck out" and can be bulk-removed from all channels.
+        </p>
+
+        <div className="settings-group">
+          <div className="form-group-vertical">
+            <label htmlFor="strikeThreshold">Strike threshold</label>
+            <span className="form-description">
+              Number of consecutive probe failures before a stream is flagged. Set to 0 to disable.
+            </span>
+            <input
+              id="strikeThreshold"
+              type="number"
+              min="0"
+              max="20"
+              value={strikeThreshold}
+              onChange={(e) => setStrikeThreshold(e.target.value === '' ? 3 : parseInt(e.target.value))}
+              onBlur={() => setStrikeThreshold(Math.max(0, Math.min(20, strikeThreshold || 0)))}
+              style={{ width: '80px' }}
+            />
+          </div>
+        </div>
+
+        {strikeThreshold > 0 && (
+          <div className="settings-group" style={{ marginTop: '1rem' }}>
+            <div className="settings-section-header" style={{ marginBottom: '0.5rem' }}>
+              <span className="material-icons">warning_amber</span>
+              <h3 style={{ fontSize: '0.95rem' }}>Struck Out Streams</h3>
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+              <button
+                className="btn-secondary"
+                onClick={handleScanStruckOut}
+                disabled={loadingStruckOut || removingStruckOut}
+              >
+                <span className="material-icons">search</span>
+                {loadingStruckOut ? 'Scanning...' : 'Scan for Struck Out Streams'}
+              </button>
+            </div>
+
+            {struckOutScanned && struckOutStreams.length > 0 && (
+              <div style={{ marginTop: '1rem' }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.75rem' }}>
+                  <p style={{ margin: 0 }}>
+                    Found <strong>{struckOutStreams.length}</strong> struck-out stream(s)
+                  </p>
+                  <div style={{ display: 'flex', gap: '0.5rem' }}>
+                    <button
+                      className="btn-secondary"
+                      style={{ fontSize: '0.75rem', padding: '0.25rem 0.5rem' }}
+                      onClick={() => setSelectedStruckOut(new Set(struckOutStreams.map(s => s.stream_id)))}
+                    >
+                      Select All
+                    </button>
+                    <button
+                      className="btn-secondary"
+                      style={{ fontSize: '0.75rem', padding: '0.25rem 0.5rem' }}
+                      onClick={() => setSelectedStruckOut(new Set())}
+                    >
+                      Select None
+                    </button>
+                  </div>
+                </div>
+
+                <div style={{ maxHeight: '300px', overflowY: 'auto', border: '1px solid var(--border-color)', borderRadius: '6px' }}>
+                  {struckOutStreams.map((stream) => (
+                    <label
+                      key={stream.stream_id}
+                      className="checkbox-label"
+                      style={{
+                        display: 'flex',
+                        alignItems: 'flex-start',
+                        gap: '0.5rem',
+                        padding: '0.5rem 0.75rem',
+                        borderBottom: '1px solid var(--border-color)',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={selectedStruckOut.has(stream.stream_id)}
+                        onChange={(e) => {
+                          const next = new Set(selectedStruckOut);
+                          if (e.target.checked) next.add(stream.stream_id);
+                          else next.delete(stream.stream_id);
+                          setSelectedStruckOut(next);
+                        }}
+                        style={{ marginTop: '2px' }}
+                      />
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontWeight: 500 }}>{stream.stream_name || `Stream #${stream.stream_id}`}</div>
+                        <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', display: 'flex', flexWrap: 'wrap', gap: '0.5rem', marginTop: '2px' }}>
+                          <span style={{ color: '#f87171' }}>
+                            {stream.consecutive_failures}/{strikeThreshold} strikes
+                          </span>
+                          {stream.error_message && (
+                            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '300px' }} title={stream.error_message}>
+                              {stream.error_message}
+                            </span>
+                          )}
+                          {stream.last_probed && (
+                            <span>Last probed: {formatTimestamp(stream.last_probed)}</span>
+                          )}
+                        </div>
+                        {stream.channels.length > 0 && (
+                          <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '2px' }}>
+                            In channels: {stream.channels.map(c => c.name).join(', ')}
+                          </div>
+                        )}
+                      </div>
+                    </label>
+                  ))}
+                </div>
+
+                <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '1rem' }}>
+                  <button
+                    className="btn-danger"
+                    onClick={handleRemoveStruckOut}
+                    disabled={selectedStruckOut.size === 0 || removingStruckOut}
+                  >
+                    <span className="material-icons">delete_forever</span>
+                    {removingStruckOut ? 'Removing...' : `Remove ${selectedStruckOut.size} Stream(s) from All Channels`}
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Auto-Created Channels Section */}

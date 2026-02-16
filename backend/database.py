@@ -184,6 +184,9 @@ def _run_migrations(engine) -> None:
             # Add probe_on_sort column to auto_creation_rules (v0.12.0 - Quality probing)
             _add_auto_creation_rules_probe_on_sort_column(conn)
 
+            # Add consecutive_failures column to stream_stats (v0.12.5 - Strike rule)
+            _add_stream_stats_consecutive_failures_column(conn)
+
             logger.debug("All migrations complete - schema is up to date")
     except Exception as e:
         logger.exception(f"Migration failed: {e}")
@@ -1365,6 +1368,22 @@ def _add_auto_creation_rules_probe_on_sort_column(conn) -> None:
         conn.execute(text("ALTER TABLE auto_creation_rules ADD COLUMN probe_on_sort BOOLEAN DEFAULT 0 NOT NULL"))
         conn.commit()
         logger.info("Migration complete: added probe_on_sort column")
+
+
+def _add_stream_stats_consecutive_failures_column(conn) -> None:
+    """Add consecutive_failures column to stream_stats table (v0.12.5 - Strike rule)."""
+    from sqlalchemy import text
+
+    result = conn.execute(text("PRAGMA table_info(stream_stats)"))
+    columns = [row[1] for row in result.fetchall()]
+
+    if "consecutive_failures" not in columns:
+        logger.info("Adding consecutive_failures column to stream_stats")
+        conn.execute(text(
+            "ALTER TABLE stream_stats ADD COLUMN consecutive_failures INTEGER DEFAULT 0 NOT NULL"
+        ))
+        conn.commit()
+        logger.info("Migration complete: added consecutive_failures column to stream_stats")
 
 
 def _perform_maintenance(engine) -> None:

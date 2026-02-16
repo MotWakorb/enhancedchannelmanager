@@ -891,6 +891,12 @@ class StreamProber:
             stats.last_probed = datetime.utcnow()
             stats.dismissed_at = None  # Clear dismissal when re-probed
 
+            # Track consecutive failures for strike rule
+            if status in ("failed", "timeout"):
+                stats.consecutive_failures = (stats.consecutive_failures or 0) + 1
+            elif status == "success":
+                stats.consecutive_failures = 0
+
             if ffprobe_data and status == "success":
                 self._parse_ffprobe_data(stats, ffprobe_data)
 

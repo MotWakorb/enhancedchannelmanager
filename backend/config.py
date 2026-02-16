@@ -102,6 +102,8 @@ class DispatcharrSettings(BaseModel):
     m3u_account_priorities: dict[str, int] = {}
     # Deprioritize failed streams - when enabled, failed/timeout/pending streams sort to bottom
     deprioritize_failed_streams: bool = True
+    # Strike rule - flag streams with consecutive probe failures (0 = disabled)
+    strike_threshold: int = 3
     # Normalization settings - user-configurable tags for stream name normalization
     # disabled_builtin_tags: Tags to exclude from normalization (format: "group:value", e.g., "country:US")
     disabled_builtin_tags: list[str] = []

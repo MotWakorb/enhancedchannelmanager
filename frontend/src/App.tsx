@@ -116,6 +116,7 @@ function App() {
   const [autoRenameChannelNumber, setAutoRenameChannelNumber] = useState(false);
   const [dispatcharrUrl, setDispatcharrUrl] = useState('');
   const [showStreamUrls, setShowStreamUrls] = useState(true);
+  const [strikeThreshold, setStrikeThreshold] = useState(3);
   const [hideUngroupedStreams, setHideUngroupedStreams] = useState(true);
   const [hideEpgUrls, setHideEpgUrls] = useState(false);
   const [hideM3uUrls, setHideM3uUrls] = useState(false);
@@ -459,6 +460,7 @@ function App() {
         setAutoRenameChannelNumber(settings.auto_rename_channel_number);
         setDispatcharrUrl(settings.url);
         setShowStreamUrls(settings.show_stream_urls);
+        setStrikeThreshold(settings.strike_threshold ?? 3);
         setHideUngroupedStreams(settings.hide_ungrouped_streams);
         setHideEpgUrls(settings.hide_epg_urls ?? false);
         setHideM3uUrls(settings.hide_m3u_urls ?? false);
@@ -2271,6 +2273,7 @@ function App() {
 
               // Appearance settings
               showStreamUrls={showStreamUrls}
+              strikeThreshold={strikeThreshold}
               hideUngroupedStreams={hideUngroupedStreams}
 
               // EPG matching settings

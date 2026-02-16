@@ -815,6 +815,7 @@ export interface SettingsResponse {
   stream_sort_enabled: SortEnabledMap;  // Which sort criteria are enabled (e.g., { resolution: true, bitrate: true, framerate: false })
   m3u_account_priorities: M3UAccountPriorities;  // M3U account priorities for sorting (account_id -> priority)
   deprioritize_failed_streams: boolean;  // When enabled, failed/timeout/pending streams sort to bottom
+  strike_threshold: number;  // Consecutive failures before flagging stream (0 = disabled)
   normalize_on_channel_create: boolean;  // Default state for normalization toggle when creating channels
   // Shared SMTP settings
   smtp_configured: boolean;  // Whether shared SMTP is configured
@@ -893,6 +894,7 @@ export async function saveSettings(settings: {
   stream_sort_enabled?: SortEnabledMap;  // Optional - which sort criteria are enabled, defaults to all true
   m3u_account_priorities?: M3UAccountPriorities;  // Optional - M3U account priorities for sorting
   deprioritize_failed_streams?: boolean;  // Optional - deprioritize failed/timeout/pending streams in sort, defaults to true
+  strike_threshold?: number;  // Optional - consecutive failures before flagging stream, defaults to 3
   normalize_on_channel_create?: boolean;  // Optional - default state for normalization toggle, defaults to false
   // Shared SMTP settings
   smtp_host?: string;  // Optional - SMTP server hostname
@@ -1825,6 +1827,29 @@ export async function getDismissedStreamIds(): Promise<{ dismissed_stream_ids: n
   return fetchJson(`${API_BASE}/stream-stats/dismissed`, {
     method: 'GET',
   }) as Promise<{ dismissed_stream_ids: number[]; count: number }>;
+}
+
+// Strike Rule API
+
+export interface StruckOutStream extends import('../types').StreamStats {
+  channels: { id: number; name: string }[];
+}
+
+export interface StruckOutResponse {
+  streams: StruckOutStream[];
+  threshold: number;
+  enabled: boolean;
+}
+
+export async function getStruckOutStreams(): Promise<StruckOutResponse> {
+  return fetchJson(`${API_BASE}/stream-stats/struck-out`);
+}
+
+export async function removeStruckOutStreams(streamIds: number[]): Promise<{ removed_from_channels: number; stream_ids: number[] }> {
+  return fetchJson(`${API_BASE}/stream-stats/struck-out/remove`, {
+    method: 'POST',
+    body: JSON.stringify({ stream_ids: streamIds }),
+  });
 }
 
 export interface SortConfig {
