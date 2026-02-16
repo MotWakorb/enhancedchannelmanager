@@ -721,7 +721,10 @@ def _populate_builtin_tags(conn) -> None:
                 # Southeast Asia
                 "SG", "MY", "TH", "VN", "PH", "ID", "MM",
                 # Oceania
-                "AU", "NZ", "FJ"
+                "AU", "NZ", "FJ",
+                # Common alpha-3 / regional codes (for merge_streams core-name matching)
+                "USA", "CAN", "GBR", "AUS", "NZL", "MEX", "BRA",
+                "LATAM", "LATINO", "LATIN"
             ]
         },
         "Timezone Tags": {

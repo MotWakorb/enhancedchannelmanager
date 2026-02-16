@@ -170,6 +170,20 @@ class ActionExecutor:
                 except Exception:
                     pass
 
+        # Pre-populate core-name mapping so merge_streams can fall back
+        # to tag-group-based stripping (country prefix + quality suffix)
+        # even when normalization rules are disabled.
+        self._core_name_to_channel: dict[str, dict] = {}
+        if self._normalization_engine:
+            for c in self.existing_channels:
+                stripped = _num_prefix.sub('', c["name"])
+                try:
+                    core = self._normalization_engine.extract_core_name(stripped)
+                    if core and core.lower() != stripped.lower():
+                        self._core_name_to_channel.setdefault(core.lower(), c)
+                except Exception:
+                    pass
+
         self._logo_cache = {}  # logo_url -> logo_id
 
         # Channel number tracking
@@ -224,7 +238,8 @@ class ActionExecutor:
         elif action_type == ActionType.CREATE_GROUP:
             result = await self._execute_create_group(action, stream_ctx, exec_ctx, template_ctx)
         elif action_type == ActionType.MERGE_STREAMS:
-            result = await self._execute_merge_streams(action, stream_ctx, exec_ctx, template_ctx)
+            result = await self._execute_merge_streams(action, stream_ctx, exec_ctx, template_ctx,
+                                                         normalize_names=normalize_names)
         elif action_type == ActionType.ASSIGN_LOGO:
             result = await self._execute_assign_logo(action, stream_ctx, exec_ctx)
         elif action_type == ActionType.ASSIGN_TVG_ID:
@@ -777,7 +792,8 @@ class ActionExecutor:
     # =========================================================================
 
     async def _execute_merge_streams(self, action: Action, stream_ctx: StreamContext,
-                                      exec_ctx: ExecutionContext, template_ctx: dict) -> ActionResult:
+                                      exec_ctx: ExecutionContext, template_ctx: dict,
+                                      normalize_names: bool = False) -> ActionResult:
         """Execute merge_streams action."""
         params = action.params
         target = params.get("target", "auto")
@@ -814,6 +830,19 @@ class ActionExecutor:
                         pass
                 logger.debug(f"[MergeStreams] Auto-lookup by normalized name: '{lookup_name}'")
                 channel = self._find_channel_by_name(lookup_name)
+
+            # Core-name fallback: strip country prefix + quality suffix using
+            # tag groups directly (works even when normalization rules are disabled)
+            if not channel and normalize_names and self._normalization_engine:
+                try:
+                    core_name = self._normalization_engine.extract_core_name(stream_ctx.stream_name)
+                    if core_name:
+                        logger.debug(f"[MergeStreams] Core name fallback: '{stream_ctx.stream_name}' -> '{core_name}'")
+                        channel = self._core_name_to_channel.get(core_name.lower())
+                        if channel:
+                            logger.debug(f"[MergeStreams] Core name matched '{channel.get('name')}' (id={channel.get('id')})")
+                except Exception as e:
+                    logger.debug(f"[MergeStreams] Core name fallback failed: {e}")
 
             if channel:
                 return await self._add_stream_to_channel(channel, stream_ctx, exec_ctx)

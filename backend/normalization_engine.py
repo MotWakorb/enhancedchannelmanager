@@ -720,6 +720,77 @@ class NormalizationEngine:
 
         return current
 
+    # =================================================================
+    # Core Name Extraction (for merge_streams fallback matching)
+    # =================================================================
+
+    _tag_group_id_cache: dict[str, Optional[int]] = {}
+
+    def _get_tag_group_id_by_name(self, name: str) -> Optional[int]:
+        """Get a TagGroup's ID by its display name, with caching."""
+        if name in self._tag_group_id_cache:
+            return self._tag_group_id_cache[name]
+
+        group = self.db.query(TagGroup).filter(TagGroup.name == name).first()
+        gid = group.id if group else None
+        self._tag_group_id_cache[name] = gid
+        return gid
+
+    def extract_core_name(self, name: str) -> str:
+        """
+        Strip country prefix and quality suffix from a name using tag groups
+        DIRECTLY — does NOT depend on normalization rules being enabled.
+
+        Used by merge_streams core-name fallback when normalize_names=true.
+
+        Returns the core name (never empty; falls back to input).
+        """
+        current = name.strip()
+        if not current:
+            return current
+
+        # Convert Unicode superscripts (ᴴᴰ -> HD, etc.)
+        current = convert_superscripts(current)
+
+        # Strip leading channel-number prefix: "107 | Name", "107 - Name"
+        current = re.sub(r'^\d+\s*[|:\-]\s*', '', current).strip()
+        if not current:
+            return name.strip()
+
+        country_id = self._get_tag_group_id_by_name("Country Tags")
+        quality_id = self._get_tag_group_id_by_name("Quality Tags")
+
+        # Multi-pass: keep stripping until stable (handles stacked tags)
+        for _ in range(5):
+            before = current
+
+            # Strip country prefix
+            if country_id:
+                match = self._match_tag_group(current, country_id, "prefix")
+                if match.matched and match.match_start == 0:
+                    result = current[match.match_end:]
+                    result = re.sub(r'^[\s:\-|/]+', '', result).strip()
+                    if result:
+                        current = result
+
+            # Strip quality suffix
+            if quality_id:
+                match = self._match_tag_group(current, quality_id, "suffix")
+                if match.matched:
+                    if match.match_end == len(current) or match.match_end == len(current.rstrip()):
+                        result = current[:match.match_start]
+                        result = re.sub(r'[\s:\-|/]+$', '', result).strip()
+                        if result:
+                            current = result
+
+            # Normalize whitespace between passes
+            current = re.sub(r'\s+', ' ', current).strip()
+
+            if current == before:
+                break
+
+        return current if current else name.strip()
+
     def test_rule(
         self,
         text: str,
