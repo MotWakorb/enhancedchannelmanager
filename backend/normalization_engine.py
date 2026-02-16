@@ -791,6 +791,47 @@ class NormalizationEngine:
 
         return current if current else name.strip()
 
+    # =================================================================
+    # Call Sign Extraction (for merge_streams local affiliate matching)
+    # =================================================================
+
+    # FCC call signs: W/K + 2-3 uppercase letters
+    # Parenthesized form: "(WFTS)", "(KABC)"
+    # Bare form at end of name: "ABC 28 Tampa WFTS"
+    _CALLSIGN_FALSE_POSITIVES = frozenset({"WWE", "WEST", "KIDZ"})
+    _CALLSIGN_PAREN_RE = re.compile(r'\(([WK][A-Z]{2,3})\)')
+    _CALLSIGN_BARE_RE = re.compile(r'\b([WK][A-Z]{2,3})\b')
+
+    @staticmethod
+    def extract_call_sign(name: str) -> Optional[str]:
+        """
+        Extract an FCC call sign (W/K + 2-3 uppercase letters) from a name.
+
+        Prefers parenthesized call signs like "(WFTS)" over bare ones.
+        Returns None if no call sign found or if it's a known false positive.
+
+        Used by merge_streams call-sign fallback when normalize_names=true.
+        """
+        if not name:
+            return None
+
+        upper = name.upper()
+
+        # Prefer parenthesized: "(WFTS)", "(KABC)"
+        m = NormalizationEngine._CALLSIGN_PAREN_RE.search(upper)
+        if m:
+            cs = m.group(1)
+            if cs not in NormalizationEngine._CALLSIGN_FALSE_POSITIVES:
+                return cs
+
+        # Fall back to bare call sign
+        for m in NormalizationEngine._CALLSIGN_BARE_RE.finditer(upper):
+            cs = m.group(1)
+            if cs not in NormalizationEngine._CALLSIGN_FALSE_POSITIVES:
+                return cs
+
+        return None
+
     def test_rule(
         self,
         text: str,

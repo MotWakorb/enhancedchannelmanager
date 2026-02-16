@@ -184,6 +184,18 @@ class ActionExecutor:
                 except Exception:
                     pass
 
+        # Pre-populate call-sign mapping so merge_streams can match
+        # local affiliates by FCC call sign (W/K + 2-3 letters).
+        self._callsign_to_channel: dict[str, dict] = {}
+        if self._normalization_engine:
+            for c in self.existing_channels:
+                try:
+                    cs = self._normalization_engine.extract_call_sign(c["name"])
+                    if cs:
+                        self._callsign_to_channel.setdefault(cs, c)
+                except Exception:
+                    pass
+
         self._logo_cache = {}  # logo_url -> logo_id
 
         # Channel number tracking
@@ -843,6 +855,19 @@ class ActionExecutor:
                             logger.debug(f"[MergeStreams] Core name matched '{channel.get('name')}' (id={channel.get('id')})")
                 except Exception as e:
                     logger.debug(f"[MergeStreams] Core name fallback failed: {e}")
+
+            # Call-sign fallback: match local affiliates by FCC call sign
+            # (W/K + 2-3 letters) extracted from both stream and channel names
+            if not channel and normalize_names and self._normalization_engine:
+                try:
+                    cs = self._normalization_engine.extract_call_sign(stream_ctx.stream_name)
+                    if cs:
+                        logger.debug(f"[MergeStreams] Call sign fallback: '{stream_ctx.stream_name}' -> '{cs}'")
+                        channel = self._callsign_to_channel.get(cs)
+                        if channel:
+                            logger.debug(f"[MergeStreams] Call sign matched '{channel.get('name')}' (id={channel.get('id')})")
+                except Exception as e:
+                    logger.debug(f"[MergeStreams] Call sign fallback failed: {e}")
 
             if channel:
                 return await self._add_stream_to_channel(channel, stream_ctx, exec_ctx)
