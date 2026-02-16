@@ -798,9 +798,21 @@ class NormalizationEngine:
     # FCC call signs: W/K + 2-3 uppercase letters
     # Parenthesized form: "(WFTS)", "(KABC)"
     # Bare form at end of name: "ABC 28 Tampa WFTS"
-    _CALLSIGN_FALSE_POSITIVES = frozenset({"WWE", "WEST", "KIDZ"})
+    _CALLSIGN_FALSE_POSITIVES = frozenset({"WWE", "WEST", "KIDZ", "KIDS", "WNBA", "WPT"})
     _CALLSIGN_PAREN_RE = re.compile(r'\(([WK][A-Z]{2,3})\)')
     _CALLSIGN_BARE_RE = re.compile(r'\b([WK][A-Z]{2,3})\b')
+
+    # Broadcast networks — bare call sign extraction requires one of these
+    # (or a channel number) to be present, preventing false positives on
+    # random English words like WAVE, KIDS, WAR
+    _BROADCAST_NETWORKS = frozenset({
+        "ABC", "CBS", "NBC", "FOX", "PBS", "CW", "MY", "ION",
+        "UPN", "WB", "MNT", "UNIVISION", "TELEMUNDO",
+    })
+
+    # Prefixes that disqualify a name from call sign extraction —
+    # these are content categories, not local station streams/channels
+    _CALLSIGN_EXCLUDED_PREFIXES = ("TEAMS:",)
 
     @staticmethod
     def extract_call_sign(name: str) -> Optional[str]:
@@ -808,6 +820,8 @@ class NormalizationEngine:
         Extract an FCC call sign (W/K + 2-3 uppercase letters) from a name.
 
         Prefers parenthesized call signs like "(WFTS)" over bare ones.
+        For bare form, requires a broadcast network name or channel number
+        nearby to prevent false positives on common words.
         Returns None if no call sign found or if it's a known false positive.
 
         Used by merge_streams call-sign fallback when normalize_names=true.
@@ -817,6 +831,12 @@ class NormalizationEngine:
 
         upper = name.upper()
 
+        # Skip names with disqualifying prefixes (e.g., "Teams: CBS Texans (KENS)")
+        # Strip leading channel numbers like "2072 | " before checking prefix
+        stripped = re.sub(r'^\d+\s*\|\s*', '', upper)
+        if any(stripped.startswith(p) for p in NormalizationEngine._CALLSIGN_EXCLUDED_PREFIXES):
+            return None
+
         # Prefer parenthesized: "(WFTS)", "(KABC)"
         m = NormalizationEngine._CALLSIGN_PAREN_RE.search(upper)
         if m:
@@ -824,13 +844,26 @@ class NormalizationEngine:
             if cs not in NormalizationEngine._CALLSIGN_FALSE_POSITIVES:
                 return cs
 
-        # Fall back to bare call sign
+        # Bare form: only attempt if name contains a broadcast network or
+        # channel number — this prevents matching random words in names
+        # like "(MC Radio) New Wave" or "DOCUBOX: MILITARY AND WAR"
+        has_network = any(
+            re.search(r'\b' + net + r'\b', upper)
+            for net in NormalizationEngine._BROADCAST_NETWORKS
+        )
+        has_channel_num = bool(re.search(r'\b\d{1,2}\b', upper))
+
+        if not has_network and not has_channel_num:
+            return None
+
+        # Take the LAST match — call signs come after city/state names
+        # e.g., "CBS: TX WACO KWTX" → want KWTX not WACO
+        last_cs = None
         for m in NormalizationEngine._CALLSIGN_BARE_RE.finditer(upper):
             cs = m.group(1)
             if cs not in NormalizationEngine._CALLSIGN_FALSE_POSITIVES:
-                return cs
-
-        return None
+                last_cs = cs
+        return last_cs
 
     def test_rule(
         self,
