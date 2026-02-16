@@ -3903,12 +3903,12 @@ export function ChannelsPane({
       );
 
       // Use batch operation for renumbering
-      startBatch(`Renumber "${groupReorderData.groupName}" starting at ${startingNumber}`);
+      onStartBatch?.(`Renumber "${groupReorderData.groupName}" starting at ${startingNumber}`);
 
       sortedChannels.forEach((channel, index) => {
         const newNumber = startingNumber + index;
         if (channel.channel_number !== newNumber) {
-          stageUpdateChannel(
+          onStageUpdateChannel?.(
             channel.id,
             { channel_number: newNumber },
             `Renumber "${channel.name}" to ${newNumber}`
@@ -3916,7 +3916,7 @@ export function ChannelsPane({
         }
       });
 
-      endBatch();
+      onEndBatch?.();
     }
 
     // Close modal and reset state
