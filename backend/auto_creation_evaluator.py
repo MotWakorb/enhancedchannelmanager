@@ -29,6 +29,7 @@ class StreamContext:
 
     # Stream metadata
     group_name: Optional[str] = None
+    channel_group_id: Optional[int] = None  # Dispatcharr channel_group numeric ID
     tvg_id: Optional[str] = None
     tvg_name: Optional[str] = None
     logo_url: Optional[str] = None
@@ -81,6 +82,7 @@ class StreamContext:
             stream_name=stream.get("name", ""),
             stream_url=stream.get("url"),
             group_name=stream.get("group_title") or stream.get("channel_group_name") or stream.get("m3u_group_name"),
+            channel_group_id=stream.get("channel_group"),
             tvg_id=stream.get("tvg_id"),
             tvg_name=stream.get("tvg_name"),
             logo_url=stream.get("logo_url") or stream.get("tvg_logo"),

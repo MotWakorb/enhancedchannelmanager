@@ -264,6 +264,7 @@ export interface AutoCreationExecution {
   groups_created: number;
   streams_merged: number;
   streams_skipped: number;
+  streams_excluded: number;
   error_message?: string;
   created_entities: CreatedEntity[];
   modified_entities: ModifiedEntity[];
@@ -391,6 +392,7 @@ export interface RunPipelineResponse {
   groups_created: number;
   streams_merged: number;
   streams_skipped: number;
+  streams_excluded: number;
   channels_removed: number;
   channels_moved: number;
   created_entities: CreatedEntity[];

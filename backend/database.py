@@ -190,6 +190,9 @@ def _run_migrations(engine) -> None:
             # Add exclude pattern columns to m3u_digest_settings (v0.12.5 - Digest exclude filters)
             _add_m3u_digest_exclude_patterns_columns(conn)
 
+            # Add streams_excluded column to auto_creation_executions (v0.12.5 - Global exclusion filters)
+            _add_auto_creation_executions_streams_excluded_column(conn)
+
             logger.debug("All migrations complete - schema is up to date")
     except Exception as e:
         logger.exception(f"Migration failed: {e}")
@@ -1420,6 +1423,27 @@ def _add_m3u_digest_exclude_patterns_columns(conn) -> None:
             "ALTER TABLE m3u_digest_settings ADD COLUMN exclude_stream_patterns TEXT"
         ))
         conn.commit()
+
+
+def _add_auto_creation_executions_streams_excluded_column(conn) -> None:
+    """Add streams_excluded column to auto_creation_executions table (v0.12.5 - Global exclusion filters)."""
+    from sqlalchemy import text
+
+    result = conn.execute(text(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='auto_creation_executions'"
+    ))
+    if not result.fetchone():
+        logger.debug("auto_creation_executions table doesn't exist yet, skipping")
+        return
+
+    columns = [r[1] for r in conn.execute(text("PRAGMA table_info(auto_creation_executions)")).fetchall()]
+    if "streams_excluded" not in columns:
+        logger.info("Adding streams_excluded column to auto_creation_executions")
+        conn.execute(text(
+            "ALTER TABLE auto_creation_executions ADD COLUMN streams_excluded INTEGER DEFAULT 0 NOT NULL"
+        ))
+        conn.commit()
+        logger.info("Migration complete: added streams_excluded column")
 
 
 def _perform_maintenance(engine) -> None:

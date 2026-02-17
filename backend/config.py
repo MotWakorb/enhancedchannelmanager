@@ -133,6 +133,10 @@ class DispatcharrSettings(BaseModel):
     # "transcode" - FFmpeg transcodes unsupported audio to AAC (CPU intensive)
     # "video_only" - Strip audio for quick preview (fast, no audio)
     stream_preview_mode: str = "passthrough"
+    # Auto-creation pipeline exclusion settings
+    auto_creation_excluded_terms: list[str] = []  # Terms that exclude streams by name (case-insensitive substring)
+    auto_creation_excluded_groups: list[str] = []  # M3U group names to exclude (case-insensitive exact match)
+    auto_creation_exclude_auto_sync_groups: bool = False  # Exclude streams in Dispatcharr auto-sync groups
     def is_configured(self) -> bool:
         return bool(self.url and self.username and self.password)
 

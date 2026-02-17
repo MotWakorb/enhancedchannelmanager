@@ -42,6 +42,8 @@ function getActionCategory(action: ActionLogEntry): string | null {
     return 'skipped';
   } else if (action.type === 'update_channel') {
     return 'updated';
+  } else if ((action as any).action === 'excluded' || desc.includes('excluded:')) {
+    return 'excluded';
   } else if (['assign_logo', 'assign_tvg_id', 'assign_epg', 'assign_profile', 'set_channel_number'].includes(action.type)) {
     return 'assigned';
   }
@@ -721,6 +723,7 @@ export function AutoCreationTab() {
                       {execution.channels_updated > 0 && `, ${execution.channels_updated} merged`}
                       {execution.channels_created > 0 && `, ${execution.channels_created} created`}
                       {execution.streams_skipped > 0 && `, ${execution.streams_skipped} skipped`}
+                      {execution.streams_excluded > 0 && `, ${execution.streams_excluded} excluded`}
                     </span>
                   </div>
                   <div className="execution-actions">
@@ -863,6 +866,7 @@ export function AutoCreationTab() {
           { key: 'created', label: 'Created', icon: 'add_circle' },
           { key: 'merged', label: 'Merged', icon: 'merge' },
           { key: 'updated', label: 'Updated', icon: 'edit' },
+          { key: 'excluded', label: 'Excluded', icon: 'block' },
           { key: 'skipped', label: 'Skipped', icon: 'skip_next' },
           { key: 'assigned', label: 'Assigned', icon: 'label' },
           { key: 'errors', label: 'Errors', icon: 'error' },
@@ -966,6 +970,12 @@ export function AutoCreationTab() {
                 <div className="detail-row">
                   <span className="detail-label">Groups Created:</span>
                   <span>{details.groups_created}</span>
+                </div>
+              )}
+              {details.streams_excluded > 0 && (
+                <div className="detail-row">
+                  <span className="detail-label">Streams Excluded:</span>
+                  <span>{details.streams_excluded}</span>
                 </div>
               )}
               {details.error_message && (
