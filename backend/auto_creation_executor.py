@@ -194,6 +194,14 @@ class ActionExecutor:
                 except Exception:
                     pass
 
+        # Index deparenthesized variants of core names so that
+        # "Bravo (East)" also matches channel "Bravo East" and vice versa.
+        for core_key, ch_val in list(self._core_name_to_channel.items()):
+            deparen = re.sub(r'\(([^)]+)\)', r'\1', core_key)
+            deparen = re.sub(r'\s+', ' ', deparen).strip()
+            if deparen != core_key:
+                self._core_name_to_channel.setdefault(deparen, ch_val)
+
         # Pre-populate call-sign mapping so merge_streams can match
         # local affiliates by FCC call sign (W/K + 2-3 letters).
         self._callsign_to_channel: dict[str, dict] = {}
@@ -877,6 +885,37 @@ class ActionExecutor:
                     if core_name:
                         logger.debug(f"[MergeStreams] Core name fallback: '{stream_ctx.stream_name}' -> '{core_name}'")
                         channel = self._core_name_to_channel.get(core_name.lower()) or self._find_channel_by_name(core_name)
+
+                        # Sub-step A: Deparenthesize stream core name and retry
+                        if not channel:
+                            deparen = re.sub(r'\(([^)]+)\)', r'\1', core_name)
+                            deparen = re.sub(r'\s+', ' ', deparen).strip()
+                            if deparen.lower() != core_name.lower():
+                                logger.debug(f"[MergeStreams] Deparen fallback: '{core_name}' -> '{deparen}'")
+                                channel = self._core_name_to_channel.get(deparen.lower()) \
+                                          or self._find_channel_by_name(deparen)
+
+                        # Sub-step B: Word-prefix containment (single-candidate only)
+                        if not channel:
+                            lookup = re.sub(r'\(([^)]+)\)', r'\1', core_name).lower()
+                            lookup = re.sub(r'\s+', ' ', lookup).strip()
+                            lookup_words = lookup.split()
+                            if len(lookup_words) >= 2:
+                                candidates = []
+                                for ch_core, ch_val in self._core_name_to_channel.items():
+                                    ch_words = ch_core.split()
+                                    if len(ch_words) >= 2:
+                                        shorter, longer = (lookup_words, ch_words) \
+                                            if len(lookup_words) <= len(ch_words) \
+                                            else (ch_words, lookup_words)
+                                        if longer[:len(shorter)] == shorter:
+                                            candidates.append(ch_val)
+                                if len(candidates) == 1:
+                                    channel = candidates[0]
+                                    logger.debug(f"[MergeStreams] Word-prefix matched '{channel.get('name')}' (id={channel.get('id')})")
+                                elif len(candidates) > 1:
+                                    logger.debug(f"[MergeStreams] Word-prefix skipped: {len(candidates)} ambiguous candidates for '{core_name}'")
+
                         if channel:
                             logger.debug(f"[MergeStreams] Core name matched '{channel.get('name')}' (id={channel.get('id')})")
                 except Exception as e:
