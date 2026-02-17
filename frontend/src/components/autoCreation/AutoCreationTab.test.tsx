@@ -323,10 +323,10 @@ describe('AutoCreationTab', () => {
         createMockAutoCreationRule({ enabled: true })
       );
 
-      // Override the run handler to delay the response
+      // Override the run handler to delay the response long enough for the test to observe
       server.use(
         http.post('/api/auto-creation/run', async () => {
-          await new Promise(resolve => setTimeout(resolve, 200));
+          await new Promise(resolve => setTimeout(resolve, 1000));
           return HttpResponse.json({
             success: true,
             execution_id: 1,
@@ -354,8 +354,9 @@ describe('AutoCreationTab', () => {
       await user.click(screen.getByRole('button', { name: /^run$/i }));
 
       // Should show loading indicator while running
+      // The button text changes to "Running..." with a spinning icon
       await waitFor(() => {
-        expect(screen.getByText(/running/i)).toBeInTheDocument();
+        expect(screen.getByText(/running\.\.\./i)).toBeInTheDocument();
       });
     });
 

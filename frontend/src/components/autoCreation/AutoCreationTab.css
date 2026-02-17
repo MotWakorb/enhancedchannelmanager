@@ -318,6 +318,11 @@
   border-radius: var(--radius-lg);
 }
 
+.execution-item.execution-running {
+  border-left: 3px solid var(--color-info, #3b82f6);
+  background: var(--bg-secondary);
+}
+
 .execution-info {
   display: flex;
   align-items: center;
@@ -566,6 +571,68 @@
   font-size: 16px;
 }
 
+/* Filter chips */
+.log-filter-chips {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+  flex-wrap: wrap;
+}
+
+.log-filter-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  border: 1px solid var(--border-primary);
+  border-radius: 999px;
+  background: var(--input-bg);
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+}
+
+.log-filter-chip .material-icons {
+  font-size: 14px;
+}
+
+.log-filter-chip:hover {
+  border-color: var(--text-muted);
+  color: var(--text-primary);
+}
+
+.log-filter-chip.active {
+  background: var(--button-primary);
+  border-color: var(--button-primary);
+  color: #fff;
+}
+
+.log-filter-chip.chip-errors.active {
+  background: var(--error-color, #ef4444);
+  border-color: var(--error-color, #ef4444);
+}
+
+.log-filter-count {
+  font-size: 11px;
+  opacity: 0.7;
+}
+
+.log-filter-clear {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 12px;
+  cursor: pointer;
+  padding: 4px 6px;
+}
+
+.log-filter-clear:hover {
+  color: var(--text-primary);
+}
+
 /* Log entries list */
 .log-entries {
   display: flex;
@@ -802,4 +869,37 @@
   color: var(--status-error, #ef4444);
   font-size: 11px;
   margin-top: 2px;
+}
+
+.log-action-details {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin-top: 2px;
+  padding-left: 18px;
+}
+
+.log-action-detail {
+  font-size: 11px;
+  color: var(--text-secondary, #aaa);
+  font-style: italic;
+}
+
+.log-action-tip {
+  display: flex;
+  align-items: flex-start;
+  gap: 4px;
+  color: var(--status-warning, #f59e0b);
+  font-style: normal;
+  margin-top: 4px;
+  padding: 4px 6px;
+  background: rgba(245, 158, 11, 0.08);
+  border-radius: 4px;
+  line-height: 1.4;
+}
+
+.tip-icon {
+  font-size: 13px;
+  flex-shrink: 0;
+  margin-top: 1px;
 }

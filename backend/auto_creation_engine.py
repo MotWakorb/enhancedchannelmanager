@@ -118,6 +118,9 @@ class AutoCreationEngine:
         streams = await self._fetch_streams(m3u_account_ids, rules)
         logger.info(f"Fetched {len(streams)} streams to evaluate against {len(rules)} rules")
 
+        # Apply global exclusion filters
+        streams, exclusion_log = await self._apply_global_filters(streams)
+
         # Create execution record
         execution = await self._create_execution(
             mode="dry_run" if dry_run else "execute",
@@ -126,6 +129,10 @@ class AutoCreationEngine:
 
         # Process streams through rules
         results = await self._process_streams(streams, rules, execution, dry_run)
+
+        # Prepend exclusion log entries and set streams_excluded count
+        results["execution_log"] = exclusion_log + results["execution_log"]
+        results["streams_excluded"] = len(exclusion_log)
 
         # Finalize execution record
         completed_at = datetime.utcnow()
@@ -139,6 +146,7 @@ class AutoCreationEngine:
         execution.groups_created = results["groups_created"]
         execution.streams_merged = results["streams_merged"]
         execution.streams_skipped = results["streams_skipped"]
+        execution.streams_excluded = results.get("streams_excluded", 0)
         execution.set_created_entities(results["created_entities"])
         execution.set_modified_entities(results["modified_entities"])
         execution.set_execution_log(results["execution_log"])
@@ -392,6 +400,95 @@ class AutoCreationEngine:
                 logger.error(f"Failed to fetch streams from M3U account {account_id}: {e}")
 
         return all_streams
+
+    async def _apply_global_filters(self, streams: list) -> tuple:
+        """
+        Apply global exclusion filters to streams before rule evaluation.
+
+        Returns:
+            (filtered_streams, exclusion_log_entries)
+        """
+        settings = get_settings()
+        excluded_terms = settings.auto_creation_excluded_terms or []
+        excluded_groups = settings.auto_creation_excluded_groups or []
+        exclude_auto_sync = settings.auto_creation_exclude_auto_sync_groups
+
+        if not excluded_terms and not excluded_groups and not exclude_auto_sync:
+            return streams, []
+
+        # Build auto-sync group ID set if needed
+        auto_sync_group_ids = set()
+        if exclude_auto_sync:
+            try:
+                all_group_settings = await self.client.get_all_m3u_group_settings()
+                for group_id, gs in all_group_settings.items():
+                    if gs.get("auto_channel_sync"):
+                        auto_sync_group_ids.add(group_id)
+                logger.debug(f"[GlobalFilter] Found {len(auto_sync_group_ids)} auto-sync group IDs")
+            except Exception as e:
+                logger.warning(f"[GlobalFilter] Failed to fetch auto-sync groups: {e}")
+
+        # Lowercase terms for case-insensitive matching
+        terms_lower = [t.lower() for t in excluded_terms if t]
+        groups_lower = [g.lower() for g in excluded_groups if g]
+
+        filtered = []
+        exclusion_log = []
+
+        for stream in streams:
+            reason = None
+
+            # Check excluded terms (case-insensitive substring)
+            if terms_lower:
+                name_lower = (stream.stream_name or "").lower()
+                for term in terms_lower:
+                    if term in name_lower:
+                        reason = f"Excluded: matched term '{term}'"
+                        break
+
+            # Check excluded groups (case-insensitive exact match)
+            if reason is None and groups_lower:
+                group_lower = (stream.group_name or "").lower()
+                for grp in groups_lower:
+                    if group_lower == grp:
+                        reason = f"Excluded: group '{stream.group_name}'"
+                        break
+
+            # Check auto-sync groups
+            if reason is None and auto_sync_group_ids and stream.channel_group_id:
+                if stream.channel_group_id in auto_sync_group_ids:
+                    reason = "Excluded: auto-sync group"
+
+            if reason:
+                logger.debug(f"[GlobalFilter] {reason} - stream={stream.stream_name!r} id={stream.stream_id}")
+                exclusion_log.append({
+                    "stream_id": stream.stream_id,
+                    "stream_name": stream.stream_name,
+                    "m3u_account_id": stream.m3u_account_id,
+                    "rules_evaluated": [],
+                    "actions_executed": [{
+                        "action": "excluded",
+                        "success": True,
+                        "description": reason
+                    }]
+                })
+            else:
+                filtered.append(stream)
+
+        excluded_count = len(streams) - len(filtered)
+        if excluded_count > 0:
+            logger.info(
+                f"[GlobalFilter] Excluded {excluded_count} streams "
+                f"({len(streams)} total -> {len(filtered)} remaining)"
+            )
+            if terms_lower:
+                logger.info(f"[GlobalFilter]   Terms: {excluded_terms}")
+            if groups_lower:
+                logger.info(f"[GlobalFilter]   Groups: {excluded_groups}")
+            if auto_sync_group_ids:
+                logger.info(f"[GlobalFilter]   Auto-sync groups: {len(auto_sync_group_ids)} groups")
+
+        return filtered, exclusion_log
 
     async def _load_stream_stats(self):
         """Load stream stats from database for quality info."""
@@ -654,18 +751,32 @@ class AutoCreationEngine:
             f"deprioritize_failed={getattr(settings, 'deprioritize_failed_streams', True)}"
         )
 
-        # Initialize evaluator and executor
-        evaluator = ConditionEvaluator(self._existing_channels, self._existing_groups)
-
         # Create normalization engine if any rule uses normalize_names
+        # or if any condition needs it (normalized_name_in_group)
         norm_engine = None
-        if any(getattr(r, 'normalize_names', False) for r in rules):
+        needs_norm = any(getattr(r, 'normalize_names', False) for r in rules)
+        if not needs_norm:
+            # Check if any condition uses normalized_name_in_group
+            for r in rules:
+                for c in r.get_conditions():
+                    ctype = c.get("type") if isinstance(c, dict) else getattr(c, "type", "")
+                    if ctype in ("normalized_name_in_group", "normalized_name_not_in_group",
+                                  "normalized_name_exists", "normalized_name_not_exists"):
+                        needs_norm = True
+                        break
+                if needs_norm:
+                    break
+        if needs_norm:
             try:
                 from normalization_engine import get_normalization_engine
                 session = get_session()
                 norm_engine = get_normalization_engine(session)
             except Exception as e:
                 logger.warning(f"Failed to initialize normalization engine: {e}")
+
+        # Initialize evaluator (with normalization engine for normalized_name_in_group conditions)
+        evaluator = ConditionEvaluator(self._existing_channels, self._existing_groups,
+                                       normalization_engine=norm_engine)
 
         # Fetch all profile IDs if default profiles are configured
         all_profile_ids = []
@@ -676,6 +787,19 @@ class AutoCreationEngine:
             except Exception as e:
                 logger.warning(f"Failed to fetch channel profiles: {e}")
 
+        # Pre-fetch EPG data if any rule uses assign_epg (for epg_id -> epg_data_id resolution)
+        epg_data = []
+        needs_epg = any(
+            a.get("type") == "assign_epg" if isinstance(a, dict) else getattr(a, "type", "") == "assign_epg"
+            for r in rules for a in r.get_actions()
+        )
+        if needs_epg:
+            try:
+                epg_data = await self.client.get_epg_data()
+                logger.debug(f"[Engine] Fetched {len(epg_data)} EPG data entries for assign_epg resolution")
+            except Exception as e:
+                logger.warning(f"Failed to fetch EPG data for assign_epg: {e}")
+
         # Build stream_id -> m3u_account_id map for smart sort M3U priority lookups
         stream_m3u_map = {}
         for s in streams:
@@ -685,7 +809,8 @@ class AutoCreationEngine:
             self.client, self._existing_channels, self._existing_groups,
             normalization_engine=norm_engine,
             settings=settings,
-            all_profile_ids=all_profile_ids
+            all_profile_ids=all_profile_ids,
+            epg_data=epg_data
         )
 
         # Results tracking
@@ -911,13 +1036,16 @@ class AutoCreationEngine:
                     normalize_names=getattr(winning_rule, 'normalize_names', False)
                 )
 
-                actions_log.append({
+                action_entry = {
                     "type": action_result.action_type,
                     "description": action_result.description,
                     "success": action_result.success,
                     "entity_id": action_result.entity_id,
                     "error": action_result.error
-                })
+                }
+                if action_result.details:
+                    action_entry["details"] = action_result.details
+                actions_log.append(action_entry)
 
                 # Check for stop_processing action
                 if action.type == ActionType.STOP_PROCESSING.value:
@@ -1531,8 +1659,15 @@ def _get_rule_starting_number(rule) -> Optional[int]:
 # Timezone Filter
 # =============================================================================
 
-# Pattern: stream name ends with EAST or WEST (possibly with parentheses/brackets)
-_TZ_SUFFIX_RE = re.compile(r'[\s\-_.\(|\[](EAST|WEST)[\s\)\]]*$', re.IGNORECASE)
+# Pattern: stream name contains EAST or WEST near the end, possibly followed by
+# quality indicators (HD, FHD, UHD, SD, 4K, HEVC, H.264/5) or parenthesized/bracketed
+# tags like (CX), [HD], etc.
+_TZ_SUFFIX_RE = re.compile(
+    r'[\s\-_.\(|\[](EAST|WEST)[\s\)\]]*'
+    r'(?:\s*(?:F?HD|UHD|SD|4K|HEVC|H\.?26[45]|\([^)]*\)|\[[^\]]*\]))*'
+    r'\s*$',
+    re.IGNORECASE
+)
 
 
 def _filter_by_timezone(stream_name: str, preference: str) -> bool:

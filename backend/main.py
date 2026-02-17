@@ -266,8 +266,11 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 @app.on_event("startup")
 async def startup_event():
     """Log configuration status on startup."""
+    from tls.https_server import is_https_subprocess
+    _is_https_subprocess = is_https_subprocess()
+
     logger.info("=" * 60)
-    logger.info("Enhanced Channel Manager starting up")
+    logger.info(f"Enhanced Channel Manager starting up{' (HTTPS subprocess)' if _is_https_subprocess else ''}")
     logger.info(f"Initial log level from environment: {initial_log_level}")
 
     # Initialize journal database
@@ -279,12 +282,25 @@ async def startup_event():
         session = get_session()
         try:
             result = fix_timezone_tags_remove_directional(session)
-            if result.get("rules_deleted", 0) > 0:
-                logger.info(f"Removed {result['rules_deleted']} directional suffix rules from Timezone Tags")
+            if result.get("tags_added", 0) > 0:
+                logger.info(f"Added {result['tags_added']} missing tags to Timezone Tags")
         finally:
             session.close()
     except Exception as e:
         logger.warning(f"Could not apply timezone tags fix: {e}")
+
+    # Ensure Provider Tags normalization rule exists for existing installations
+    try:
+        from normalization_migration import ensure_provider_tags_rule
+        session = get_session()
+        try:
+            result = ensure_provider_tags_rule(session)
+            if result.get("created"):
+                logger.info("Created Provider Tags normalization rule for existing installation")
+        finally:
+            session.close()
+    except Exception as e:
+        logger.warning(f"Could not ensure Provider Tags rule: {e}")
 
     logger.info(f"CONFIG_DIR: {CONFIG_DIR}")
     logger.info(f"CONFIG_FILE: {CONFIG_FILE}")
@@ -308,6 +324,12 @@ async def startup_event():
     if settings.backend_log_level:
         set_log_level(settings.backend_log_level)
         logger.info(f"Applied log level from settings: {settings.backend_log_level}")
+
+    # Skip background services in HTTPS subprocess — only the main process
+    # should run schedulers, probers, and trackers to avoid duplicate execution
+    if _is_https_subprocess:
+        logger.info("HTTPS subprocess: skipping background services (task engine, prober, tracker)")
+        return
 
     # Start bandwidth tracker if configured
     if settings.is_configured():
@@ -334,9 +356,12 @@ async def startup_event():
                 bitrate_sample_duration=settings.bitrate_sample_duration,
                 parallel_probing_enabled=settings.parallel_probing_enabled,
                 max_concurrent_probes=settings.max_concurrent_probes,
+                profile_distribution_strategy=settings.profile_distribution_strategy,
                 skip_recently_probed_hours=settings.skip_recently_probed_hours,
                 refresh_m3us_before_probe=settings.refresh_m3us_before_probe,
                 auto_reorder_after_probe=settings.auto_reorder_after_probe,
+                probe_retry_count=settings.probe_retry_count,
+                probe_retry_delay=settings.probe_retry_delay,
                 deprioritize_failed_streams=settings.deprioritize_failed_streams,
                 stream_sort_priority=settings.stream_sort_priority,
                 stream_sort_enabled=settings.stream_sort_enabled,
@@ -403,6 +428,67 @@ async def startup_event():
     except Exception as e:
         logger.error(f"Failed to start task engine: {e}", exc_info=True)
         logger.error("Scheduled tasks will not be available!")
+
+    # Schedule a background auto-sync for channel groups in probe schedules
+    # Removes stale groups and adds new groups automatically
+    async def _check_stale_groups_on_startup():
+        await asyncio.sleep(15)  # Wait for services to be ready
+        try:
+            from models import TaskSchedule as TaskScheduleModel, Notification as NotificationModel
+            client = get_client()
+            current_groups = await client.get_channel_groups()
+            current_by_id = {g["id"]: g.get("name") for g in current_groups}
+
+            sess = get_session()
+            try:
+                schedules = sess.query(TaskScheduleModel).filter(
+                    TaskScheduleModel.task_id == "stream_probe"
+                ).all()
+                total_stale = 0
+                for sched in schedules:
+                    params = sched.get_parameters()
+                    stored = params.get("channel_groups", [])
+                    if not stored:
+                        continue
+
+                    if isinstance(stored[0], int):
+                        valid = [gid for gid in stored if gid in current_by_id]
+                        stale = [gid for gid in stored if gid not in current_by_id]
+                    else:
+                        current_by_name = {g.get("name"): g["id"] for g in current_groups}
+                        valid = [current_by_name[n] for n in stored if n in current_by_name]
+                        stale = [n for n in stored if n not in current_by_name]
+
+                    # Only remove stale groups — do NOT auto-add new groups.
+                    # Users control which groups to probe via the schedule editor.
+                    # The auto_sync_groups parameter handles "probe all groups" when enabled.
+                    if stale:
+                        params["channel_groups"] = valid
+                        params.pop("_stale_groups", None)
+                        sched.set_parameters(params)
+                        sess.add(sched)
+                        total_stale += len(stale)
+
+                        logger.info(f"Startup: auto-removed {len(stale)} stale group(s) from probe schedule {sched.id}")
+
+                if total_stale:
+                    sess.commit()
+                    logger.info(f"Startup: auto-removed {total_stale} stale group(s) from probe schedules")
+
+                # Clean up any stale group notifications since we auto-fix
+                stale_notifs = sess.query(NotificationModel).filter(
+                    NotificationModel.source_id == "stream_probe_stale_groups",
+                ).all()
+                for n in stale_notifs:
+                    sess.delete(n)
+                if stale_notifs:
+                    sess.commit()
+            finally:
+                sess.close()
+        except Exception as e:
+            logger.debug(f"Stale groups startup check skipped: {e}")
+
+    asyncio.create_task(_check_stale_groups_on_startup())
 
     # Start TLS certificate renewal manager
     try:
@@ -683,14 +769,18 @@ class SettingsRequest(BaseModel):
     bitrate_sample_duration: int = 10  # Duration in seconds to sample stream for bitrate (10, 20, or 30)
     parallel_probing_enabled: bool = True  # Probe multiple streams from different M3Us simultaneously
     max_concurrent_probes: int = 8  # Max simultaneous probes when parallel probing is enabled (1-16)
+    profile_distribution_strategy: str = "fill_first"  # How to distribute probes across M3U profiles: fill_first, round_robin, least_loaded
     skip_recently_probed_hours: int = 0  # Skip streams successfully probed within last N hours (0 = always probe)
     refresh_m3us_before_probe: bool = True  # Refresh all M3U accounts before starting probe
     auto_reorder_after_probe: bool = False  # Automatically reorder streams in channels after probe completes
+    probe_retry_count: int = 1  # Retries on transient ffprobe failure (0 = no retry, max 5)
+    probe_retry_delay: int = 2  # Seconds between retries (1-30)
     stream_fetch_page_limit: int = 200  # Max pages when fetching streams (200 pages * 500 = 100K streams)
     stream_sort_priority: list[str] = ["resolution", "bitrate", "framerate", "m3u_priority", "audio_channels"]  # Priority order for Smart Sort
     stream_sort_enabled: dict[str, bool] = {"resolution": True, "bitrate": True, "framerate": True, "m3u_priority": False, "audio_channels": False}  # Which criteria are enabled
     m3u_account_priorities: dict[str, int] = {}  # M3U account priorities (account_id -> priority value)
     deprioritize_failed_streams: bool = True  # When enabled, failed/timeout/pending streams sort to bottom
+    strike_threshold: int = 3  # Consecutive failures before flagging stream (0 = disabled)
     normalization_settings: Optional[NormalizationSettings] = None  # User-configurable normalization tags
     normalize_on_channel_create: bool = False  # Default state for normalization toggle when creating channels
     # Shared SMTP settings
@@ -709,6 +799,10 @@ class SettingsRequest(BaseModel):
     telegram_chat_id: str = ""
     # Stream preview mode: "passthrough", "transcode", or "video_only"
     stream_preview_mode: str = "passthrough"
+    # Auto-creation pipeline exclusion settings
+    auto_creation_excluded_terms: list[str] = []
+    auto_creation_excluded_groups: list[str] = []
+    auto_creation_exclude_auto_sync_groups: bool = False
 
 
 class SettingsResponse(BaseModel):
@@ -746,14 +840,18 @@ class SettingsResponse(BaseModel):
     bitrate_sample_duration: int
     parallel_probing_enabled: bool  # Probe multiple streams from different M3Us simultaneously
     max_concurrent_probes: int  # Max simultaneous probes when parallel probing is enabled (1-16)
+    profile_distribution_strategy: str  # How to distribute probes across M3U profiles: fill_first, round_robin, least_loaded
     skip_recently_probed_hours: int  # Skip streams successfully probed within last N hours (0 = always probe)
     refresh_m3us_before_probe: bool  # Refresh all M3U accounts before starting probe
     auto_reorder_after_probe: bool  # Automatically reorder streams in channels after probe completes
+    probe_retry_count: int  # Retries on transient ffprobe failure (0 = no retry, max 5)
+    probe_retry_delay: int  # Seconds between retries (1-30)
     stream_fetch_page_limit: int  # Max pages when fetching streams (200 pages * 500 = 100K streams)
     stream_sort_priority: list[str]  # Priority order for Smart Sort
     stream_sort_enabled: dict[str, bool]  # Which criteria are enabled
     m3u_account_priorities: dict[str, int]  # M3U account priorities (account_id -> priority value)
     deprioritize_failed_streams: bool  # When enabled, failed/timeout/pending streams sort to bottom
+    strike_threshold: int  # Consecutive failures before flagging stream (0 = disabled)
     normalization_settings: NormalizationSettings  # User-configurable normalization tags
     normalize_on_channel_create: bool  # Default state for normalization toggle when creating channels
     # Shared SMTP settings
@@ -774,6 +872,10 @@ class SettingsResponse(BaseModel):
     telegram_chat_id: str
     # Stream preview mode
     stream_preview_mode: str
+    # Auto-creation pipeline exclusion settings
+    auto_creation_excluded_terms: list[str]
+    auto_creation_excluded_groups: list[str]
+    auto_creation_exclude_auto_sync_groups: bool
 
 
 class TestConnectionRequest(BaseModel):
@@ -838,14 +940,18 @@ async def get_current_settings():
         bitrate_sample_duration=settings.bitrate_sample_duration,
         parallel_probing_enabled=settings.parallel_probing_enabled,
         max_concurrent_probes=settings.max_concurrent_probes,
+        profile_distribution_strategy=settings.profile_distribution_strategy,
         skip_recently_probed_hours=settings.skip_recently_probed_hours,
         refresh_m3us_before_probe=settings.refresh_m3us_before_probe,
         auto_reorder_after_probe=settings.auto_reorder_after_probe,
+        probe_retry_count=settings.probe_retry_count,
+        probe_retry_delay=settings.probe_retry_delay,
         stream_fetch_page_limit=settings.stream_fetch_page_limit,
         stream_sort_priority=settings.stream_sort_priority,
         stream_sort_enabled=settings.stream_sort_enabled,
         m3u_account_priorities=settings.m3u_account_priorities,
         deprioritize_failed_streams=settings.deprioritize_failed_streams,
+        strike_threshold=settings.strike_threshold,
         normalization_settings=NormalizationSettings(
             disabledBuiltinTags=settings.disabled_builtin_tags,
             customTags=[
@@ -871,6 +977,9 @@ async def get_current_settings():
         telegram_bot_token=settings.telegram_bot_token,
         telegram_chat_id=settings.telegram_chat_id,
         stream_preview_mode=settings.stream_preview_mode,
+        auto_creation_excluded_terms=settings.auto_creation_excluded_terms,
+        auto_creation_excluded_groups=settings.auto_creation_excluded_groups,
+        auto_creation_exclude_auto_sync_groups=settings.auto_creation_exclude_auto_sync_groups,
     )
 
 
@@ -933,14 +1042,18 @@ async def update_settings(request: SettingsRequest):
         bitrate_sample_duration=request.bitrate_sample_duration,
         parallel_probing_enabled=request.parallel_probing_enabled,
         max_concurrent_probes=request.max_concurrent_probes,
+        profile_distribution_strategy=request.profile_distribution_strategy,
         skip_recently_probed_hours=request.skip_recently_probed_hours,
         refresh_m3us_before_probe=request.refresh_m3us_before_probe,
         auto_reorder_after_probe=request.auto_reorder_after_probe,
+        probe_retry_count=request.probe_retry_count,
+        probe_retry_delay=request.probe_retry_delay,
         stream_fetch_page_limit=request.stream_fetch_page_limit,
         stream_sort_priority=request.stream_sort_priority,
         stream_sort_enabled=request.stream_sort_enabled,
         m3u_account_priorities=request.m3u_account_priorities,
         deprioritize_failed_streams=request.deprioritize_failed_streams,
+        strike_threshold=request.strike_threshold,
         # Convert normalization_settings from API format to backend format
         disabled_builtin_tags=(
             request.normalization_settings.disabledBuiltinTags
@@ -966,6 +1079,9 @@ async def update_settings(request: SettingsRequest):
         telegram_bot_token=request.telegram_bot_token,
         telegram_chat_id=request.telegram_chat_id,
         stream_preview_mode=request.stream_preview_mode,
+        auto_creation_excluded_terms=request.auto_creation_excluded_terms,
+        auto_creation_excluded_groups=request.auto_creation_excluded_groups,
+        auto_creation_exclude_auto_sync_groups=request.auto_creation_exclude_auto_sync_groups,
     )
     save_settings(new_settings)
     clear_settings_cache()
@@ -1007,12 +1123,14 @@ async def update_settings(request: SettingsRequest):
 
     # Update prober's parallel probing settings without requiring restart
     if (new_settings.parallel_probing_enabled != current_settings.parallel_probing_enabled or
-            new_settings.max_concurrent_probes != current_settings.max_concurrent_probes):
+            new_settings.max_concurrent_probes != current_settings.max_concurrent_probes or
+            new_settings.profile_distribution_strategy != current_settings.profile_distribution_strategy):
         prober = get_prober()
         if prober:
             prober.update_probing_settings(
                 new_settings.parallel_probing_enabled,
-                new_settings.max_concurrent_probes
+                new_settings.max_concurrent_probes,
+                new_settings.profile_distribution_strategy
             )
             logger.info("Updated prober parallel probing settings from settings")
 
@@ -1329,9 +1447,12 @@ async def restart_services():
                 bitrate_sample_duration=settings.bitrate_sample_duration,
                 parallel_probing_enabled=settings.parallel_probing_enabled,
                 max_concurrent_probes=settings.max_concurrent_probes,
+                profile_distribution_strategy=settings.profile_distribution_strategy,
                 skip_recently_probed_hours=settings.skip_recently_probed_hours,
                 refresh_m3us_before_probe=settings.refresh_m3us_before_probe,
                 auto_reorder_after_probe=settings.auto_reorder_after_probe,
+                probe_retry_count=settings.probe_retry_count,
+                probe_retry_delay=settings.probe_retry_delay,
                 deprioritize_failed_streams=settings.deprioritize_failed_streams,
                 stream_sort_priority=settings.stream_sort_priority,
                 stream_sort_enabled=settings.stream_sort_enabled,
@@ -5592,6 +5713,8 @@ class M3UDigestSettingsUpdate(BaseModel):
     show_detailed_list: Optional[bool] = None  # Show detailed list vs just summary
     min_changes_threshold: Optional[int] = None
     send_to_discord: Optional[bool] = None  # Send digest to Discord (uses shared webhook)
+    exclude_group_patterns: Optional[List[str]] = None  # Regex patterns to exclude groups
+    exclude_stream_patterns: Optional[List[str]] = None  # Regex patterns to exclude streams
 
 
 @app.put("/api/m3u/digest/settings", tags=["M3U Digest"])
@@ -5646,6 +5769,28 @@ async def update_m3u_digest_settings(request: M3UDigestSettingsUpdate):
 
         if request.send_to_discord is not None:
             settings.send_to_discord = request.send_to_discord
+
+        if request.exclude_group_patterns is not None:
+            for pattern in request.exclude_group_patterns:
+                try:
+                    re.compile(pattern)
+                except re.error as e:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Invalid group exclude regex '{pattern}': {e}"
+                    )
+            settings.set_exclude_group_patterns(request.exclude_group_patterns)
+
+        if request.exclude_stream_patterns is not None:
+            for pattern in request.exclude_stream_patterns:
+                try:
+                    re.compile(pattern)
+                except re.error as e:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Invalid stream exclude regex '{pattern}': {e}"
+                    )
+            settings.set_exclude_stream_patterns(request.exclude_stream_patterns)
 
         db.commit()
         db.refresh(settings)
@@ -6928,6 +7073,220 @@ async def get_stream_stats_summary():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+class ChannelSortInput(BaseModel):
+    channel_id: int
+    stream_ids: list[int]
+
+
+class ComputeSortRequest(BaseModel):
+    channels: list[ChannelSortInput]
+    mode: str = "smart"  # "smart", "resolution", "bitrate", "framerate", "m3u_priority", "audio_channels"
+
+
+class ChannelSortResult(BaseModel):
+    channel_id: int
+    sorted_stream_ids: list[int]
+    changed: bool
+
+
+class ComputeSortResponse(BaseModel):
+    results: list[ChannelSortResult]
+
+
+# NOTE: These routes MUST be defined BEFORE /{stream_id} to avoid path parameter matching
+
+class RemoveStruckOutRequest(BaseModel):
+    stream_ids: list[int]
+
+
+@app.get("/api/stream-stats/struck-out", tags=["Stream Stats"])
+async def get_struck_out_streams():
+    """Get streams that have exceeded the strike threshold."""
+    from models import StreamStats
+
+    settings = get_settings()
+    threshold = settings.strike_threshold
+
+    if threshold <= 0:
+        return {"streams": [], "threshold": 0, "enabled": False}
+
+    session = get_session()
+    try:
+        struck = session.query(StreamStats).filter(
+            StreamStats.consecutive_failures >= threshold
+        ).all()
+
+        if not struck:
+            return {"streams": [], "threshold": threshold, "enabled": True}
+
+        # Build a set of struck stream IDs for lookup
+        struck_ids = {s.stream_id for s in struck}
+
+        # Find which channels contain these streams (paginated)
+        client = get_client()
+        all_channels = []
+        page = 1
+        while True:
+            result = await client.get_channels(page=page, page_size=100)
+            page_channels = result.get("results", [])
+            all_channels.extend(page_channels)
+            if len(all_channels) >= result.get("count", 0) or not page_channels:
+                break
+            page += 1
+
+        stream_channels: dict[int, list[dict]] = {sid: [] for sid in struck_ids}
+
+        for ch in all_channels:
+            ch_streams = ch.get("streams", [])
+            for sid in struck_ids:
+                if sid in ch_streams:
+                    stream_channels[sid].append({
+                        "id": ch["id"],
+                        "name": ch.get("name", "Unknown"),
+                    })
+
+        result = []
+        for s in struck:
+            d = s.to_dict()
+            d["channels"] = stream_channels.get(s.stream_id, [])
+            result.append(d)
+
+        return {"streams": result, "threshold": threshold, "enabled": True}
+    except Exception as e:
+        logger.exception(f"Failed to get struck-out streams: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        session.close()
+
+
+@app.post("/api/stream-stats/struck-out/remove", tags=["Stream Stats"])
+async def remove_struck_out_streams(request: RemoveStruckOutRequest):
+    """Remove struck-out streams from all channels they belong to."""
+    from models import StreamStats
+
+    client = get_client()
+    removed_count = 0
+
+    try:
+        all_channels = []
+        page = 1
+        while True:
+            result = await client.get_channels(page=page, page_size=100)
+            page_channels = result.get("results", [])
+            all_channels.extend(page_channels)
+            if len(all_channels) >= result.get("count", 0) or not page_channels:
+                break
+            page += 1
+
+        for ch in all_channels:
+            ch_streams = ch.get("streams", [])
+            filtered = [sid for sid in ch_streams if sid not in request.stream_ids]
+            if len(filtered) < len(ch_streams):
+                removed_here = len(ch_streams) - len(filtered)
+                await client.update_channel(ch["id"], {"streams": filtered})
+                removed_count += removed_here
+                logger.info(f"Removed {removed_here} struck-out streams from channel {ch['id']} ({ch.get('name')})")
+
+        # Reset consecutive_failures for removed streams
+        session = get_session()
+        try:
+            for sid in request.stream_ids:
+                stats = session.query(StreamStats).filter_by(stream_id=sid).first()
+                if stats:
+                    stats.consecutive_failures = 0
+            session.commit()
+        finally:
+            session.close()
+
+        return {
+            "removed_from_channels": removed_count,
+            "stream_ids": request.stream_ids,
+        }
+    except Exception as e:
+        logger.exception(f"Failed to remove struck-out streams: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/stream-stats/compute-sort", tags=["Stream Stats"], response_model=ComputeSortResponse)
+async def compute_sort(request: ComputeSortRequest):
+    """Compute sort orders for streams without applying them.
+
+    Uses server-side sort settings (priority, enabled criteria, M3U priorities,
+    deprioritize_failed) as the single source of truth.
+    Stream IDs come from the frontend (may have staged edits).
+    """
+    from stream_prober import smart_sort_streams, extract_m3u_account_id
+
+    settings = get_settings()
+
+    # Determine sort priority based on mode
+    valid_criteria = {"resolution", "bitrate", "framerate", "m3u_priority", "audio_channels"}
+    if request.mode == "smart":
+        sort_priority = [c for c in settings.stream_sort_priority if settings.stream_sort_enabled.get(c, False)]
+        sort_enabled = {c: True for c in sort_priority}
+    elif request.mode in valid_criteria:
+        sort_priority = [request.mode]
+        sort_enabled = {request.mode: True}
+    else:
+        raise HTTPException(status_code=400, detail=f"Invalid sort mode: {request.mode}")
+
+    # Collect all unique stream IDs across all channels
+    all_stream_ids = list({sid for ch in request.channels for sid in ch.stream_ids})
+
+    if not all_stream_ids:
+        return ComputeSortResponse(results=[])
+
+    # Fetch StreamStats objects from DB
+    from models import StreamStats as StreamStatsModel
+    session = get_session()
+    try:
+        BATCH_SIZE = 500
+        stats_map = {}
+        for i in range(0, len(all_stream_ids), BATCH_SIZE):
+            batch = all_stream_ids[i:i + BATCH_SIZE]
+            stats = session.query(StreamStatsModel).filter(
+                StreamStatsModel.stream_id.in_(batch)
+            ).all()
+            for s in stats:
+                stats_map[s.stream_id] = s
+    finally:
+        session.close()
+
+    # Build M3U account map if needed
+    stream_m3u_map = {}
+    needs_m3u = "m3u_priority" in sort_priority
+    if needs_m3u:
+        try:
+            client = get_client()
+            streams_data = await client.get_streams_by_ids(all_stream_ids)
+            for s in streams_data:
+                stream_m3u_map[s["id"]] = extract_m3u_account_id(s.get("m3u_account"))
+        except Exception as e:
+            logger.warning(f"[COMPUTE-SORT] Failed to fetch M3U data: {e}")
+
+    # Sort each channel
+    results = []
+    for ch in request.channels:
+        sorted_ids = smart_sort_streams(
+            stream_ids=ch.stream_ids,
+            stats_map=stats_map,
+            stream_m3u_map=stream_m3u_map,
+            stream_sort_priority=sort_priority,
+            stream_sort_enabled=sort_enabled,
+            m3u_account_priorities=settings.m3u_account_priorities,
+            deprioritize_failed_streams=settings.deprioritize_failed_streams,
+            channel_name=f"channel-{ch.channel_id}",
+        )
+        changed = sorted_ids != ch.stream_ids
+        results.append(ChannelSortResult(
+            channel_id=ch.channel_id,
+            sorted_stream_ids=sorted_ids,
+            changed=changed,
+        ))
+
+    return ComputeSortResponse(results=results)
+
+
 @app.get("/api/stream-stats/{stream_id}", tags=["Stream Stats"])
 async def get_stream_stats_by_id(stream_id: int):
     """Get probe stats for a specific stream."""
@@ -6943,12 +7302,23 @@ async def get_stream_stats_by_id(stream_id: int):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-class BulkStreamStatsRequest(BaseModel):
+class BulkStreamIdsRequest(BaseModel):
     stream_ids: list[int]
 
 
+@app.post("/api/streams/by-ids", tags=["Streams"])
+async def get_streams_by_ids(request: BulkStreamIdsRequest):
+    """Get multiple streams by their IDs (proxies to Dispatcharr)."""
+    try:
+        client = get_client()
+        return await client.get_streams_by_ids(request.stream_ids)
+    except Exception as e:
+        logger.error(f"Failed to get streams by IDs: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.post("/api/stream-stats/by-ids", tags=["Stream Stats"])
-async def get_stream_stats_by_ids(request: BulkStreamStatsRequest):
+async def get_stream_stats_by_ids(request: BulkStreamIdsRequest):
     """Get probe stats for multiple streams by their IDs."""
     try:
         return StreamProber.get_stats_by_stream_ids(request.stream_ids)
@@ -7689,10 +8059,17 @@ TASK_PARAMETER_SCHEMAS = {
         "description": "Stream health probing parameters",
         "parameters": [
             {
+                "name": "auto_sync_groups",
+                "type": "boolean",
+                "label": "Auto-sync groups",
+                "description": "Automatically probe all current groups at runtime (ignores group selection below)",
+                "default": False,
+            },
+            {
                 "name": "channel_groups",
-                "type": "string_array",
+                "type": "number_array",
                 "label": "Channel Groups",
-                "description": "Which channel groups to probe (empty = all groups)",
+                "description": "Which channel groups to include in the probe",
                 "default": [],
                 "source": "channel_groups",  # Tells UI to fetch from channel groups API
             },
@@ -7801,7 +8178,19 @@ async def list_task_schedules(task_id: str):
             # Get all schedules for this task
             schedules = session.query(TaskSchedule).filter(TaskSchedule.task_id == task_id).all()
 
+            # For stream_probe, validate channel_groups against current groups
+            current_groups_data = None
+            if task_id == "stream_probe":
+                try:
+                    client = get_client()
+                    current_groups_data = await client.get_channel_groups()
+                except Exception as e:
+                    logger.debug(f"Could not fetch current groups for validation: {e}")
+
             result = []
+            schedules_fixed = False
+            current_by_id = {g["id"]: g.get("name") for g in current_groups_data} if current_groups_data else {}
+
             for schedule in schedules:
                 schedule_dict = schedule.to_dict()
                 # Add human-readable description
@@ -7813,7 +8202,49 @@ async def list_task_schedules(task_id: str):
                     days_of_week=schedule.get_days_of_week_list(),
                     day_of_month=schedule.day_of_month,
                 )
+                # Auto-cleanup: remove stale groups (deleted from Dispatcharr).
+                # Do NOT auto-add new groups — users control which groups to probe
+                # via the schedule editor. Use auto_sync_groups for "probe all".
+                if current_groups_data is not None and schedule_dict.get("parameters"):
+                    params = schedule_dict["parameters"]
+                    stored = params.get("channel_groups", [])
+                    if stored:  # Only cleanup if schedule has an explicit group list
+                        if isinstance(stored[0], int):
+                            valid = [gid for gid in stored if gid in current_by_id]
+                            stale = [gid for gid in stored if gid not in current_by_id]
+                        else:
+                            current_by_name = {g.get("name"): g["id"] for g in current_groups_data}
+                            valid = [current_by_name[n] for n in stored if n in current_by_name]
+                            stale = [n for n in stored if n not in current_by_name]
+
+                        if stale:
+                            params["channel_groups"] = valid
+                            params.pop("_stale_groups", None)
+
+                            # Persist fix to DB
+                            db_params = schedule.get_parameters()
+                            db_params["channel_groups"] = valid
+                            db_params.pop("_stale_groups", None)
+                            schedule.set_parameters(db_params)
+                            session.add(schedule)
+                            schedules_fixed = True
+
+                            logger.info(f"Auto-removed {len(stale)} stale group(s) from probe schedule {schedule.id}")
                 result.append(schedule_dict)
+
+            # Commit any auto-fixes
+            if schedules_fixed:
+                session.commit()
+
+            # Always clean up stale group notifications since we auto-fix now
+            from models import Notification as NotificationModel
+            stale_notifs = session.query(NotificationModel).filter(
+                NotificationModel.source_id == "stream_probe_stale_groups",
+            ).all()
+            for n in stale_notifs:
+                session.delete(n)
+            if stale_notifs:
+                session.commit()
 
             return {"schedules": result}
         finally:
@@ -7855,9 +8286,10 @@ async def create_task_schedule(task_id: str, data: TaskScheduleCreate):
             if data.days_of_week:
                 schedule.set_days_of_week_list(data.days_of_week)
 
-            # Set task-specific parameters if provided
+            # Set task-specific parameters if provided (strip internal metadata keys)
             if data.parameters:
-                schedule.set_parameters(data.parameters)
+                clean_params = {k: v for k, v in data.parameters.items() if not k.startswith("_")}
+                schedule.set_parameters(clean_params)
 
             # Calculate next run time
             if data.enabled:
@@ -7935,7 +8367,8 @@ async def update_task_schedule(task_id: str, schedule_id: int, data: TaskSchedul
             if data.day_of_month is not None:
                 schedule.day_of_month = data.day_of_month
             if data.parameters is not None:
-                schedule.set_parameters(data.parameters)
+                clean_params = {k: v for k, v in data.parameters.items() if not k.startswith("_")}
+                schedule.set_parameters(clean_params)
 
             # Recalculate next run time
             if schedule.enabled:
@@ -8752,6 +9185,10 @@ async def delete_tag_group(group_id: int):
             session.delete(group)  # Cascade deletes all tags
             session.commit()
             logger.info(f"Deleted tag group: id={group_id}, name={group_name}")
+
+            from normalization_engine import invalidate_tag_cache
+            invalidate_tag_cache()
+
             return {"status": "deleted", "id": group_id}
         finally:
             session.close()
@@ -8804,6 +9241,10 @@ async def add_tags_to_group(group_id: int, request: CreateTagsRequest):
             session.commit()
             logger.info(f"Added {len(created_tags)} tags to group {group_id}, skipped {len(skipped_tags)} duplicates")
 
+            if created_tags:
+                from normalization_engine import invalidate_tag_cache
+                invalidate_tag_cache()
+
             return {
                 "created": created_tags,
                 "skipped": skipped_tags,
@@ -8840,6 +9281,10 @@ async def update_tag(group_id: int, tag_id: int, request: UpdateTagRequest):
             session.commit()
             session.refresh(tag)
             logger.info(f"Updated tag: id={tag.id}, value={tag.value}")
+
+            from normalization_engine import invalidate_tag_cache
+            invalidate_tag_cache()
+
             return tag.to_dict()
         finally:
             session.close()
@@ -8871,6 +9316,10 @@ async def delete_tag(group_id: int, tag_id: int):
             session.delete(tag)
             session.commit()
             logger.info(f"Deleted tag: id={tag_id}, value={tag_value}")
+
+            from normalization_engine import invalidate_tag_cache
+            invalidate_tag_cache()
+
             return {"status": "deleted", "id": tag_id}
         finally:
             session.close()
@@ -9351,6 +9800,11 @@ async def get_auto_creation_rules():
             rules = session.query(AutoCreationRule).order_by(
                 AutoCreationRule.priority
             ).all()
+            logger.debug(f"[Auto-Creation] Returning {len(rules)} rules to UI")
+            for r in rules:
+                actions = r.get_actions()
+                action_summary = ", ".join(f"{a.get('type', '?')}" for a in actions)
+                logger.debug(f"[Auto-Creation]   Rule id={r.id} '{r.name}': actions=[{action_summary}], raw_actions={r.actions}")
             return {"rules": [r.to_dict() for r in rules]}
         finally:
             session.close()
@@ -9390,6 +9844,9 @@ async def create_auto_creation_rule(request: CreateAutoCreationRuleRequest):
         import json
 
         # Validate conditions and actions
+        logger.debug(f"[Auto-Creation] Creating rule '{request.name}' with {len(request.actions)} actions")
+        for j, action in enumerate(request.actions):
+            logger.debug(f"[Auto-Creation]   Action {j}: {action}")
         validation = validate_rule(request.conditions, request.actions)
         if not validation["valid"]:
             raise HTTPException(status_code=400, detail={
@@ -9486,6 +9943,10 @@ async def update_auto_creation_rule(rule_id: int, request: UpdateAutoCreationRul
             # Validate and update conditions/actions if provided
             conditions = request.conditions if request.conditions is not None else rule.get_conditions()
             actions = request.actions if request.actions is not None else rule.get_actions()
+
+            logger.debug(f"[Auto-Creation] Updating rule id={rule_id} '{rule.name}' with {len(actions)} actions")
+            for j, action in enumerate(actions):
+                logger.debug(f"[Auto-Creation]   Action {j}: {action}")
 
             validation = validate_rule(conditions, actions)
             if not validation["valid"]:
@@ -9908,6 +10369,7 @@ async def import_auto_creation_rules_yaml(request: ImportYAMLRequest):
         # Parse YAML
         try:
             data = yaml.safe_load(request.yaml_content)
+            logger.debug(f"[YAML Import] Parsed YAML with {len(data.get('rules', data) if isinstance(data, dict) else data)} rules")
         except yaml.YAMLError as e:
             raise HTTPException(status_code=400, detail=f"Invalid YAML: {e}")
 
@@ -9940,6 +10402,12 @@ async def import_auto_creation_rules_yaml(request: ImportYAMLRequest):
             warnings = []
 
             for i, rule_data in enumerate(data["rules"]):
+                rule_name = rule_data.get('name', f'Rule {i}')
+                logger.debug(f"[YAML Import] Processing rule {i}: '{rule_name}'")
+                for j, action in enumerate(rule_data.get("actions", [])):
+                    logger.debug(f"[YAML Import]   Action {j} from YAML: type={action.get('type')}, params={{{', '.join(f'{k}={v}' for k, v in action.items() if k != 'type')}}}")
+                for j, cond in enumerate(rule_data.get("conditions", [])):
+                    logger.debug(f"[YAML Import]   Condition {j} from YAML: type={cond.get('type')}, value={cond.get('value')}, connector={cond.get('connector')}")
                 # Resolve portable name fields to local IDs
                 # target_group_name → target_group_id
                 if not rule_data.get("target_group_id") and rule_data.get("target_group_name"):
@@ -9977,6 +10445,9 @@ async def import_auto_creation_rules_yaml(request: ImportYAMLRequest):
                 # Validate rule
                 conditions = rule_data.get("conditions", [])
                 actions = rule_data.get("actions", [])
+                logger.debug(f"[YAML Import] Rule '{rule_name}': validating {len(conditions)} conditions, {len(actions)} actions")
+                for j, action in enumerate(actions):
+                    logger.debug(f"[YAML Import]   Action {j} pre-validate: type={action.get('type')}, all_keys={list(action.keys())}")
                 validation = validate_rule(conditions, actions)
 
                 if not validation["valid"]:
@@ -10007,6 +10478,7 @@ async def import_auto_creation_rules_yaml(request: ImportYAMLRequest):
                         existing.sort_field = rule_data.get("sort_field")
                         existing.sort_order = rule_data.get("sort_order", "asc")
                         existing.normalize_names = rule_data.get("normalize_names", False)
+                        logger.debug(f"[YAML Import] Rule '{rule_name}': updated existing (id={existing.id}), stored actions={existing.actions}")
                         imported.append({"name": existing.name, "action": "updated"})
                     else:
                         errors.append({
@@ -10033,6 +10505,7 @@ async def import_auto_creation_rules_yaml(request: ImportYAMLRequest):
                         normalize_names=rule_data.get("normalize_names", False)
                     )
                     session.add(rule)
+                    logger.debug(f"[YAML Import] Rule '{rule_name}': created new, stored actions={rule.actions}")
                     imported.append({"name": rule.name, "action": "created"})
 
             session.commit()
@@ -10090,7 +10563,7 @@ async def get_auto_creation_condition_schema():
             "type": ct.value,
             "category": "logical" if ct.value in ("and", "or", "not") else
                         "special" if ct.value in ("always", "never") else
-                        "channel" if ct.value.startswith("channel_") or ct.value == "has_channel" else
+                        "channel" if ct.value.startswith("channel_") or ct.value in ("has_channel", "normalized_name_in_group") else
                         "stream"
         }
 
@@ -10114,6 +10587,18 @@ async def get_auto_creation_condition_schema():
         elif ct.value == "channel_in_group":
             condition_info["value_type"] = "integer"
             condition_info["description"] = "Channel group ID"
+        elif ct.value == "normalized_name_in_group":
+            condition_info["value_type"] = "integer"
+            condition_info["description"] = "Group ID — matches if normalized stream name equals a channel name in this group"
+        elif ct.value == "normalized_name_not_in_group":
+            condition_info["value_type"] = "integer"
+            condition_info["description"] = "Group ID — matches if normalized stream name does NOT equal any channel name in this group"
+        elif ct.value == "normalized_name_exists":
+            condition_info["value_type"] = "none"
+            condition_info["description"] = "Matches if normalized stream name equals a channel name in ANY group"
+        elif ct.value == "normalized_name_not_exists":
+            condition_info["value_type"] = "none"
+            condition_info["description"] = "Matches if normalized stream name does NOT equal any channel name in any group"
         elif ct.value in ("and", "or"):
             condition_info["value_type"] = "array"
             condition_info["description"] = "Array of sub-conditions"

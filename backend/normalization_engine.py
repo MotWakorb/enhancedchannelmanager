@@ -25,6 +25,12 @@ logger = logging.getLogger(__name__)
 _tag_group_cache: dict[int, list[tuple[str, bool]]] = {}  # group_id -> [(value, case_sensitive), ...]
 
 
+def invalidate_tag_cache():
+    """Clear the global tag caches so the next access reloads from DB."""
+    _tag_group_cache.clear()
+    NormalizationEngine._tag_group_id_cache.clear()
+
+
 # Unicode superscript to ASCII mapping for quality tags
 # Common patterns: ᴴᴰ (HD), ᶠᴴᴰ (FHD), ᵁᴴᴰ (UHD), ᴿᴬᵂ (RAW), ˢᴰ (SD), etc.
 SUPERSCRIPT_MAP = {
@@ -719,6 +725,151 @@ class NormalizationEngine:
                 logger.debug(f"Legacy tag '{tag_value}': '{before}' -> '{current}'")
 
         return current
+
+    # =================================================================
+    # Core Name Extraction (for merge_streams fallback matching)
+    # =================================================================
+
+    _tag_group_id_cache: dict[str, Optional[int]] = {}
+
+    def _get_tag_group_id_by_name(self, name: str) -> Optional[int]:
+        """Get a TagGroup's ID by its display name, with caching."""
+        if name in self._tag_group_id_cache:
+            return self._tag_group_id_cache[name]
+
+        group = self.db.query(TagGroup).filter(TagGroup.name == name).first()
+        gid = group.id if group else None
+        self._tag_group_id_cache[name] = gid
+        return gid
+
+    def extract_core_name(self, name: str) -> str:
+        """
+        Strip country prefix and quality suffix from a name using tag groups
+        DIRECTLY — does NOT depend on normalization rules being enabled.
+
+        Used by merge_streams core-name fallback when normalize_names=true.
+
+        Returns the core name (never empty; falls back to input).
+        """
+        current = name.strip()
+        if not current:
+            return current
+
+        # Convert Unicode superscripts (ᴴᴰ -> HD, etc.)
+        current = convert_superscripts(current)
+
+        # Strip leading channel-number prefix: "107 | Name", "107 - Name"
+        current = re.sub(r'^\d+\s*[|:\-]\s*', '', current).strip()
+        if not current:
+            return name.strip()
+
+        country_id = self._get_tag_group_id_by_name("Country Tags")
+        quality_id = self._get_tag_group_id_by_name("Quality Tags")
+
+        # Multi-pass: keep stripping until stable (handles stacked tags)
+        for _ in range(5):
+            before = current
+
+            # Strip country prefix
+            if country_id:
+                match = self._match_tag_group(current, country_id, "prefix")
+                if match.matched and match.match_start == 0:
+                    result = current[match.match_end:]
+                    result = re.sub(r'^[\s:\-|/]+', '', result).strip()
+                    if result:
+                        current = result
+
+            # Strip quality suffix
+            if quality_id:
+                match = self._match_tag_group(current, quality_id, "suffix")
+                if match.matched:
+                    if match.match_end == len(current) or match.match_end == len(current.rstrip()):
+                        result = current[:match.match_start]
+                        result = re.sub(r'[\s:\-|/]+$', '', result).strip()
+                        if result:
+                            current = result
+
+            # Normalize whitespace between passes
+            current = re.sub(r'\s+', ' ', current).strip()
+
+            if current == before:
+                break
+
+        return current if current else name.strip()
+
+    # =================================================================
+    # Call Sign Extraction (for merge_streams local affiliate matching)
+    # =================================================================
+
+    # FCC call signs: W/K + 2-3 uppercase letters
+    # Parenthesized form: "(WFTS)", "(KABC)"
+    # Bare form at end of name: "ABC 28 Tampa WFTS"
+    _CALLSIGN_FALSE_POSITIVES = frozenset({"WWE", "WEST", "KIDZ", "KIDS", "WNBA", "WPT"})
+    _CALLSIGN_PAREN_RE = re.compile(r'\(([WK][A-Z]{2,3})\)')
+    _CALLSIGN_BARE_RE = re.compile(r'\b([WK][A-Z]{2,3})\b')
+
+    # Broadcast networks — bare call sign extraction requires one of these
+    # (or a channel number) to be present, preventing false positives on
+    # random English words like WAVE, KIDS, WAR
+    _BROADCAST_NETWORKS = frozenset({
+        "ABC", "CBS", "NBC", "FOX", "PBS", "CW", "MY", "ION",
+        "UPN", "WB", "MNT", "UNIVISION", "TELEMUNDO",
+    })
+
+    # Prefixes that disqualify a name from call sign extraction —
+    # these are content categories, not local station streams/channels
+    _CALLSIGN_EXCLUDED_PREFIXES = ("TEAMS:",)
+
+    @staticmethod
+    def extract_call_sign(name: str) -> Optional[str]:
+        """
+        Extract an FCC call sign (W/K + 2-3 uppercase letters) from a name.
+
+        Prefers parenthesized call signs like "(WFTS)" over bare ones.
+        For bare form, requires a broadcast network name or channel number
+        nearby to prevent false positives on common words.
+        Returns None if no call sign found or if it's a known false positive.
+
+        Used by merge_streams call-sign fallback when normalize_names=true.
+        """
+        if not name:
+            return None
+
+        upper = name.upper()
+
+        # Skip names with disqualifying prefixes (e.g., "Teams: CBS Texans (KENS)")
+        # Strip leading channel numbers like "2072 | " before checking prefix
+        stripped = re.sub(r'^\d+\s*\|\s*', '', upper)
+        if any(stripped.startswith(p) for p in NormalizationEngine._CALLSIGN_EXCLUDED_PREFIXES):
+            return None
+
+        # Prefer parenthesized: "(WFTS)", "(KABC)"
+        m = NormalizationEngine._CALLSIGN_PAREN_RE.search(upper)
+        if m:
+            cs = m.group(1)
+            if cs not in NormalizationEngine._CALLSIGN_FALSE_POSITIVES:
+                return cs
+
+        # Bare form: only attempt if name contains a broadcast network or
+        # channel number — this prevents matching random words in names
+        # like "(MC Radio) New Wave" or "DOCUBOX: MILITARY AND WAR"
+        has_network = any(
+            re.search(r'\b' + net + r'\b', upper)
+            for net in NormalizationEngine._BROADCAST_NETWORKS
+        )
+        has_channel_num = bool(re.search(r'\b\d{1,2}\b', upper))
+
+        if not has_network and not has_channel_num:
+            return None
+
+        # Take the LAST match — call signs come after city/state names
+        # e.g., "CBS: TX WACO KWTX" → want KWTX not WACO
+        last_cs = None
+        for m in NormalizationEngine._CALLSIGN_BARE_RE.finditer(upper):
+            cs = m.group(1)
+            if cs not in NormalizationEngine._CALLSIGN_FALSE_POSITIVES:
+                last_cs = cs
+        return last_cs
 
     def test_rule(
         self,

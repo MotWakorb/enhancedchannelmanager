@@ -280,6 +280,23 @@ export function ScheduledTasksSection({ userTimezone: _userTimezone }: Scheduled
     return () => clearInterval(interval);
   }, [loadTasks]);
 
+  // Check for pending task editor navigation (from NotificationCenter)
+  useEffect(() => {
+    const pending = sessionStorage.getItem('ecm:open-task-editor');
+    if (pending && tasks.length > 0) {
+      try {
+        const { taskId } = JSON.parse(pending);
+        const task = tasks.find(t => t.task_id === taskId);
+        if (task) {
+          sessionStorage.removeItem('ecm:open-task-editor');
+          setEditingTask(task);
+        }
+      } catch {
+        sessionStorage.removeItem('ecm:open-task-editor');
+      }
+    }
+  }, [tasks]);
+
   const handleRunNow = async (taskId: string) => {
     // Find task name for better feedback
     const task = tasks.find(t => t.task_id === taskId);

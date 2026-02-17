@@ -96,7 +96,7 @@ Build complex matching logic with AND/OR connectors:
 Define what happens when conditions match:
 - **Create Channel** - Template-based naming with variables (`{stream_name}`, `{stream_group}`, `{quality}`, `{provider}`, etc.)
 - **Create Group** - Automatically create channel groups with template naming
-- **Merge Streams** - Combine multiple streams into a single channel with quality preference ordering
+- **Merge Streams** - Combine multiple streams into a single channel with quality preference ordering and optional per-provider stream limit
 - **Assign Logo/EPG/Profile** - Automatically assign channel metadata
 - **Set Channel Number** - Auto-assign or specify channel numbering (including ranges)
 - **Set Variable** - Define reusable variables with regex extraction for use in templates
@@ -731,6 +731,7 @@ Track and report changes to M3U sources:
 - **Stream Change Detection** - Track when streams are added, deleted, or modified
 - **M3U Changes Tab** - New tab to view all detected changes with filtering
 - **Email Digest Reports** - Configurable email digests when changes occur (immediate, hourly, daily, weekly)
+- **Exclude Filters** - Regex-based patterns to exclude noisy groups/streams from digest notifications
 - **Change History** - Full searchable history of all M3U changes over time
 - **Summary Statistics** - Dashboard cards showing total groups/streams added and removed
 

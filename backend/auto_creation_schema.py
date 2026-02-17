@@ -41,6 +41,10 @@ class ConditionType(str, Enum):
     CHANNEL_EXISTS_MATCHING = "channel_exists_matching"    # Regex match on existing channels
     CHANNEL_IN_GROUP = "channel_in_group"            # Channel exists in specific group
     CHANNEL_HAS_STREAMS = "channel_has_streams"      # Channel already has N streams
+    NORMALIZED_NAME_IN_GROUP = "normalized_name_in_group"  # Normalized stream name matches a channel in group
+    NORMALIZED_NAME_NOT_IN_GROUP = "normalized_name_not_in_group"  # Normalized name does NOT match any channel in group
+    NORMALIZED_NAME_EXISTS = "normalized_name_exists"  # Normalized name matches a channel in ANY group
+    NORMALIZED_NAME_NOT_EXISTS = "normalized_name_not_exists"  # Normalized name does NOT match any channel in any group
 
     # Logical operators
     AND = "and"
@@ -181,6 +185,13 @@ class Condition:
             if not isinstance(self.value, int):
                 errors.append(f"{self.type} requires a group ID (integer)")
 
+        elif cond_type in (ConditionType.NORMALIZED_NAME_IN_GROUP, ConditionType.NORMALIZED_NAME_NOT_IN_GROUP):
+            if not isinstance(self.value, int):
+                errors.append(f"{self.type} requires a group ID (integer)")
+
+        elif cond_type in (ConditionType.NORMALIZED_NAME_EXISTS, ConditionType.NORMALIZED_NAME_NOT_EXISTS):
+            pass  # No value required — checks all groups
+
         elif cond_type in (ConditionType.TVG_ID_EXISTS, ConditionType.LOGO_EXISTS, ConditionType.HAS_CHANNEL):
             if self.value is not None and not isinstance(self.value, bool):
                 errors.append(f"{self.type} value should be boolean or omitted")
@@ -225,7 +236,8 @@ class ActionType(str, Enum):
 class IfExistsBehavior(str, Enum):
     """Behavior when target entity already exists."""
     SKIP = "skip"           # Don't create, skip this action
-    MERGE = "merge"         # Add stream to existing channel
+    MERGE = "merge"         # Add stream to existing channel (create if not found)
+    MERGE_ONLY = "merge_only"  # Add stream to existing channel (skip if not found)
     UPDATE = "update"       # Update existing channel properties
     USE_EXISTING = "use_existing"  # Use existing group (for create_group)
 
@@ -250,7 +262,7 @@ class CreateChannelAction:
     name_template: str = "{stream_name}"  # Template with variables
     channel_number: Union[str, int] = "auto"  # "auto", specific int, or "100-199" range
     group_id: Optional[int] = None  # Target group (overrides rule's target_group_id)
-    if_exists: str = "skip"  # skip, merge, update
+    if_exists: str = "skip"  # skip, merge, merge_only, update
 
     def to_dict(self) -> dict:
         return {
@@ -353,8 +365,8 @@ class Action:
             if "name_template" not in self.params:
                 self.params["name_template"] = "{stream_name}"
             if_exists = self.params.get("if_exists", "skip")
-            if if_exists not in ("skip", "merge", "update"):
-                errors.append(f"create_channel.if_exists must be 'skip', 'merge', or 'update'")
+            if if_exists not in ("skip", "merge", "merge_only", "update"):
+                errors.append(f"create_channel.if_exists must be 'skip', 'merge', 'merge_only', or 'update'")
             # Validate optional name transform
             errors.extend(self._validate_name_transform())
 

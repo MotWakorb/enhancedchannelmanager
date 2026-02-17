@@ -312,6 +312,12 @@
   font-style: italic;
 }
 
+.schedule-editor .array-select-actions {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+
 .schedule-editor .option-list {
   max-height: 200px;
   overflow-y: auto;
@@ -367,4 +373,10 @@
 
 .schedule-editor .parameters-section .number-input {
   width: 100px;
+}
+
+/* Disabled hint for auto-sync override */
+.schedule-editor .array-options.disabled-hint {
+  opacity: 0.5;
+  pointer-events: none;
 }

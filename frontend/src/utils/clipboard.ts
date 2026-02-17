@@ -29,6 +29,8 @@ function copyWithExecCommand(text: string): boolean {
   textarea.style.background = 'transparent';
   // Use clip to hide instead of opacity (some browsers ignore opacity for copy)
   textarea.style.clip = 'rect(0, 0, 0, 0)';
+  // Ensure textarea renders above modal overlays so focus/select works in all browsers
+  textarea.style.zIndex = '99999';
   // Don't use readonly - some browsers won't copy from readonly elements
 
   document.body.appendChild(textarea);

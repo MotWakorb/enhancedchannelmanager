@@ -123,7 +123,8 @@ describe('ActionEditor', () => {
       await user.click(ifExistsTrigger);
 
       expect(screen.getByRole('option', { name: /^skip$/i })).toBeInTheDocument();
-      expect(screen.getByRole('option', { name: /^merge$/i })).toBeInTheDocument();
+      expect(screen.getByRole('option', { name: /merge \(create if new\)/i })).toBeInTheDocument();
+      expect(screen.getByRole('option', { name: /merge only/i })).toBeInTheDocument();
       expect(screen.getByRole('option', { name: /^update$/i })).toBeInTheDocument();
       expect(screen.getByRole('option', { name: /use existing/i })).toBeInTheDocument();
     });
@@ -407,8 +408,8 @@ describe('ActionEditor', () => {
       const ifExistsTrigger = ifExistsField.querySelector('.custom-select-trigger') as HTMLElement;
       await user.click(ifExistsTrigger);
 
-      // Click the "Merge" option
-      await user.click(screen.getByRole('option', { name: /^merge$/i }));
+      // Click the "Merge (create if new)" option
+      await user.click(screen.getByRole('option', { name: /merge \(create if new\)/i }));
 
       expect(onChange).toHaveBeenCalledWith(
         expect.objectContaining({ if_exists: 'merge' })

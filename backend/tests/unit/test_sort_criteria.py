@@ -15,7 +15,7 @@ import sys
 import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-from stream_prober import StreamProber
+from stream_prober import StreamProber, smart_sort_streams, extract_m3u_account_id
 from models import StreamStats
 
 
@@ -488,3 +488,153 @@ class TestUpdateSortSettings:
 
         # Higher M3U priority wins
         assert sorted_ids == [2, 1]
+
+
+def run_standalone_sort(stream_ids, stats_map, stream_m3u_map=None, **kwargs):
+    """Helper to call standalone smart_sort_streams with sensible defaults."""
+    return smart_sort_streams(
+        stream_ids=stream_ids,
+        stats_map=stats_map,
+        stream_m3u_map=stream_m3u_map or {},
+        stream_sort_priority=kwargs.get("stream_sort_priority", ["resolution", "bitrate", "framerate"]),
+        stream_sort_enabled=kwargs.get("stream_sort_enabled", {"resolution": True, "bitrate": True, "framerate": True}),
+        m3u_account_priorities=kwargs.get("m3u_account_priorities", {}),
+        deprioritize_failed_streams=kwargs.get("deprioritize_failed_streams", True),
+        channel_name=kwargs.get("channel_name", "Test Channel"),
+    )
+
+
+class TestStandaloneSortFunction:
+    """Tests for the standalone smart_sort_streams() function."""
+
+    def test_standalone_matches_prober_method(self):
+        """Same input produces identical output for both standalone and prober method."""
+        priority = ["resolution", "bitrate", "framerate"]
+        enabled = {"resolution": True, "bitrate": True, "framerate": True}
+        prober = create_prober(
+            stream_sort_priority=priority,
+            stream_sort_enabled=enabled,
+            deprioritize_failed_streams=True,
+        )
+
+        stats_map = {
+            1: create_mock_stats(1, resolution="1280x720", bitrate=3000000, fps="30"),
+            2: create_mock_stats(2, resolution="1920x1080", bitrate=5000000, fps="60"),
+            3: create_mock_stats(3, resolution="1920x1080", bitrate=5000000, fps="30"),
+        }
+
+        prober_result = prober._smart_sort_streams([1, 2, 3], stats_map, {}, "Test Channel")
+        standalone_result = smart_sort_streams(
+            [1, 2, 3], stats_map, {},
+            priority, enabled, {}, True, "Test Channel"
+        )
+
+        assert prober_result == standalone_result
+
+    def test_standalone_m3u_priority(self):
+        """M3U priority sorting works without StreamProber instance."""
+        result = run_standalone_sort(
+            [1, 2, 3],
+            {
+                1: create_mock_stats(1),
+                2: create_mock_stats(2),
+                3: create_mock_stats(3),
+            },
+            stream_m3u_map={1: 3, 2: 1, 3: 2},
+            stream_sort_priority=["m3u_priority"],
+            stream_sort_enabled={"m3u_priority": True},
+            m3u_account_priorities={"1": 100, "2": 50, "3": 10},
+        )
+        assert result == [2, 3, 1]
+
+    def test_standalone_resolution_sort(self):
+        """Resolution-based sort via standalone function."""
+        result = run_standalone_sort(
+            [1, 2],
+            {
+                1: create_mock_stats(1, resolution="1280x720"),
+                2: create_mock_stats(2, resolution="1920x1080"),
+            },
+            stream_sort_priority=["resolution"],
+            stream_sort_enabled={"resolution": True},
+        )
+        assert result == [2, 1]
+
+    def test_standalone_all_criteria(self):
+        """All 5 criteria work together via standalone function."""
+        result = run_standalone_sort(
+            [1, 2],
+            {
+                1: create_mock_stats(1, resolution="1920x1080", bitrate=5000000, fps="30"),
+                2: create_mock_stats(2, resolution="1920x1080", bitrate=5000000, fps="60"),
+            },
+            stream_sort_priority=["resolution", "bitrate", "framerate", "m3u_priority", "audio_channels"],
+            stream_sort_enabled={
+                "resolution": True, "bitrate": True, "framerate": True,
+                "m3u_priority": True, "audio_channels": True,
+            },
+        )
+        # Higher framerate wins (all else equal)
+        assert result == [2, 1]
+
+    def test_standalone_empty_list(self):
+        """Returns [] for empty input."""
+        assert run_standalone_sort([], {}) == []
+
+    def test_standalone_single_stream(self):
+        """Returns [id] for single stream."""
+        result = run_standalone_sort([42], {42: create_mock_stats(42)})
+        assert result == [42]
+
+    def test_standalone_failed_deprioritized(self):
+        """Failed streams deprioritized via standalone function."""
+        result = run_standalone_sort(
+            [1, 2],
+            {
+                1: create_mock_stats(1, resolution="1280x720", probe_status="success"),
+                2: create_mock_stats(2, resolution="1920x1080", probe_status="failed"),
+            },
+            stream_sort_priority=["resolution"],
+            stream_sort_enabled={"resolution": True},
+            deprioritize_failed_streams=True,
+        )
+        # Failed stream at bottom despite higher resolution
+        assert result == [1, 2]
+
+    def test_standalone_failed_still_sorted_by_m3u(self):
+        """Both-failed streams still get M3U priority ordering."""
+        result = run_standalone_sort(
+            [1, 2],
+            {
+                1: create_mock_stats(1, probe_status="failed"),
+                2: create_mock_stats(2, probe_status="failed"),
+            },
+            stream_m3u_map={1: 2, 2: 1},
+            stream_sort_priority=["m3u_priority"],
+            stream_sort_enabled={"m3u_priority": True},
+            m3u_account_priorities={"1": 100, "2": 50},
+            # With deprioritize enabled, both failed get (1, 0) so order is stable
+            deprioritize_failed_streams=True,
+        )
+        # Both deprioritized to bottom with same tuple, so original order preserved
+        assert result == [1, 2]
+
+
+class TestExtractM3uAccountId:
+    """Tests for the standalone extract_m3u_account_id function."""
+
+    def test_extract_from_direct_id(self):
+        """Direct integer ID is returned as-is."""
+        assert extract_m3u_account_id(3) == 3
+
+    def test_extract_from_dict(self):
+        """Nested dict format extracts the 'id' field."""
+        assert extract_m3u_account_id({"id": 3, "name": "Provider"}) == 3
+
+    def test_extract_none(self):
+        """None input returns None."""
+        assert extract_m3u_account_id(None) is None
+
+    def test_extract_dict_without_id(self):
+        """Dict without 'id' key returns None."""
+        assert extract_m3u_account_id({"name": "Provider"}) is None

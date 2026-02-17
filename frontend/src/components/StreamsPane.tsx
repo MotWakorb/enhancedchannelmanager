@@ -318,6 +318,27 @@ export function StreamsPane({
     isSelected,
   } = useSelection(displayOrderStreams);
 
+  // Cache selected stream objects so they persist across search filter changes.
+  // When the user selects streams under one search, then changes the search,
+  // the `streams` prop no longer contains the previously selected streams.
+  // This cache ensures we can still resolve those IDs to full Stream objects.
+  const selectedStreamsCacheRef = useRef<Map<number, Stream>>(new Map());
+  useEffect(() => {
+    const cache = selectedStreamsCacheRef.current;
+    // Add any currently visible selected streams to cache
+    for (const stream of streams) {
+      if (selectedIds.has(stream.id)) {
+        cache.set(stream.id, stream);
+      }
+    }
+    // Remove deselected streams from cache
+    for (const id of cache.keys()) {
+      if (!selectedIds.has(id)) {
+        cache.delete(id);
+      }
+    }
+  }, [streams, selectedIds]);
+
   // Track selected stream groups (for multi-group bulk creation)
   const [selectedGroupNames, setSelectedGroupNames] = useState<Set<string>>(new Set());
 
@@ -437,11 +458,6 @@ export function StreamsPane({
   // Check if all groups are expanded or collapsed
   const allExpanded = groupedStreams.length > 0 && expandedGroups.size === groupedStreams.length;
   const allCollapsed = expandedGroups.size === 0;
-
-  // Clear selection when streams change (new search/filter)
-  useEffect(() => {
-    clearSelection();
-  }, [searchTerm, providerFilter, groupFilter, clearSelection]);
 
   // Clear selection when exiting edit mode
   useEffect(() => {
@@ -642,8 +658,11 @@ export function StreamsPane({
   }, [channelDefaults]);
 
   const openBulkCreateModalForSelection = useCallback(() => {
-    // Get selected streams in order
-    const selectedStreamsList = streams.filter(s => selectedIds.has(s.id));
+    // Get selected streams, using cache for streams no longer in the current search results
+    const cache = selectedStreamsCacheRef.current;
+    const selectedStreamsList = Array.from(selectedIds)
+      .map(id => streams.find(s => s.id === id) || cache.get(id))
+      .filter((s): s is Stream => s !== undefined);
     setBulkCreateGroup(null);
     setBulkCreateStreams(selectedStreamsList);
     setBulkCreateStartingNumber('');
@@ -676,7 +695,11 @@ export function StreamsPane({
     targetGroupId?: number | null,
     startingNumber?: number | null
   ) => {
-    const streamsList = streams.filter(s => streamIds.includes(s.id));
+    // Use cache for streams no longer in the current search results
+    const cache = selectedStreamsCacheRef.current;
+    const streamsList = streamIds
+      .map(id => streams.find(s => s.id === id) || cache.get(id))
+      .filter((s): s is Stream => s !== undefined);
     if (streamsList.length === 0) return;
 
     setBulkCreateGroup(null);

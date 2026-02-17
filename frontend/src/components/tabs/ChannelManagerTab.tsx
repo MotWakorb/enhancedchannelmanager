@@ -119,6 +119,7 @@ export interface ChannelManagerTabProps {
 
   // Appearance settings
   showStreamUrls?: boolean;
+  strikeThreshold?: number;
   hideUngroupedStreams?: boolean;
 
   // EPG matching settings
@@ -301,6 +302,7 @@ export function ChannelManagerTab({
 
   // Appearance settings
   showStreamUrls = true,
+  strikeThreshold = 3,
   hideUngroupedStreams = true,
 
   // EPG matching settings
@@ -423,6 +425,7 @@ export function ChannelManagerTab({
           onBulkStreamsDrop={onBulkStreamsDrop}
           onOpenCreateChannelModal={onOpenCreateChannelModal}
           showStreamUrls={showStreamUrls}
+          strikeThreshold={strikeThreshold}
           epgAutoMatchThreshold={epgAutoMatchThreshold}
           gracenoteConflictMode={gracenoteConflictMode}
           externalChannelToEdit={externalChannelToEdit}
@@ -464,6 +467,7 @@ export function ChannelManagerTab({
           onCheckConflicts={onCheckConflicts}
           onGetHighestChannelNumber={onGetHighestChannelNumber}
           showStreamUrls={showStreamUrls}
+          strikeThreshold={strikeThreshold}
           hideUngroupedStreams={hideUngroupedStreams}
           onRefreshStreams={onRefreshStreams}
           mappedStreamIds={mappedStreamIds}

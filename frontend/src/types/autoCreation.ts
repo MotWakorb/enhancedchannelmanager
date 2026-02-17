@@ -32,6 +32,10 @@ export type ConditionType =
   | 'channel_exists_matching'
   | 'channel_in_group'
   | 'channel_has_streams'
+  | 'normalized_name_in_group'
+  | 'normalized_name_not_in_group'
+  | 'normalized_name_exists'
+  | 'normalized_name_not_exists'
   // Logical operators
   | 'and'
   | 'or'
@@ -91,7 +95,7 @@ export type ActionType =
 /**
  * Behavior when a channel/group already exists.
  */
-export type IfExistsBehavior = 'skip' | 'merge' | 'update' | 'use_existing';
+export type IfExistsBehavior = 'skip' | 'merge' | 'merge_only' | 'update' | 'use_existing';
 
 /**
  * An action to execute when conditions match.
@@ -108,6 +112,7 @@ export interface Action {
   target?: 'auto' | 'existing_channel' | 'new_channel';
   find_channel_by?: 'name_exact' | 'name_regex' | 'tvg_id';
   find_channel_value?: string;
+  max_streams_per_channel?: number;
   message?: string;
   // Name transform (for create_channel and create_group)
   name_transform_pattern?: string;
@@ -259,6 +264,7 @@ export interface AutoCreationExecution {
   groups_created: number;
   streams_merged: number;
   streams_skipped: number;
+  streams_excluded: number;
   error_message?: string;
   created_entities: CreatedEntity[];
   modified_entities: ModifiedEntity[];
@@ -325,6 +331,7 @@ export interface ActionLogEntry {
   success: boolean;
   entity_id?: number;
   error?: string;
+  details?: string[];
 }
 
 // =============================================================================
@@ -385,6 +392,7 @@ export interface RunPipelineResponse {
   groups_created: number;
   streams_merged: number;
   streams_skipped: number;
+  streams_excluded: number;
   channels_removed: number;
   channels_moved: number;
   created_entities: CreatedEntity[];

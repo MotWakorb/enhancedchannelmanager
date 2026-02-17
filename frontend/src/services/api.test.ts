@@ -12,6 +12,8 @@ import {
   removeStreamFromChannel,
   reorderChannelStreams,
   deleteChannel,
+  // Compute sort
+  computeSort,
   // Enhanced stats (v0.11.0)
   getBandwidthStats,
   getUniqueViewersSummary,
@@ -789,6 +791,47 @@ describe('API Service', () => {
       const result = await parseCSVPreview('channel_number,name\n101,');
 
       expect(result.errors).toHaveLength(1);
+    });
+  });
+
+  describe('computeSort', () => {
+    it('sends correct payload and returns results', async () => {
+      const channels = [
+        { channel_id: 10, stream_ids: [1, 2, 3] },
+        { channel_id: 20, stream_ids: [4, 5] },
+      ];
+
+      const result = await computeSort(channels, 'smart');
+
+      expect(result).toHaveProperty('results');
+      expect(result.results).toHaveLength(2);
+      expect(result.results[0].channel_id).toBe(10);
+      expect(result.results[0]).toHaveProperty('sorted_stream_ids');
+      expect(result.results[0]).toHaveProperty('changed');
+    });
+
+    it('defaults mode to smart', async () => {
+      let requestBody: { mode?: string } | undefined;
+      server.use(
+        http.post('/api/stream-stats/compute-sort', async ({ request }) => {
+          requestBody = await request.json() as { mode?: string };
+          return HttpResponse.json({ results: [] });
+        })
+      );
+
+      await computeSort([{ channel_id: 1, stream_ids: [1] }]);
+
+      expect(requestBody?.mode).toBe('smart');
+    });
+
+    it('handles network error', async () => {
+      server.use(
+        http.post('/api/stream-stats/compute-sort', () => {
+          return HttpResponse.error();
+        })
+      );
+
+      await expect(computeSort([{ channel_id: 1, stream_ids: [1] }])).rejects.toThrow();
     });
   });
 });

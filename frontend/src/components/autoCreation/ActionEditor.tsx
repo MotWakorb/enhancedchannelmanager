@@ -94,7 +94,8 @@ const ACTION_CATEGORIES = [
 
 const IF_EXISTS_OPTIONS: { value: IfExistsBehavior; label: string }[] = [
   { value: 'skip', label: 'Skip' },
-  { value: 'merge', label: 'Merge' },
+  { value: 'merge', label: 'Merge (create if new)' },
+  { value: 'merge_only', label: 'Merge Only (existing only)' },
   { value: 'update', label: 'Update' },
   { value: 'use_existing', label: 'Use Existing' },
 ];
@@ -262,6 +263,13 @@ export function ActionEditor({
       const unknown = usedVars.filter(v => !knownVars.includes(v) && !v.startsWith('{var:'));
       if (unknown.length > 0) {
         return `Unknown variable: ${unknown[0]}`;
+      }
+    }
+
+    if (action.type === 'create_channel' && !action.group_id) {
+      const hasPriorCreateGroup = previousActions.some(a => a.type === 'create_group');
+      if (!hasPriorCreateGroup) {
+        return 'Target group is required (or add a Create Group action before this action)';
       }
     }
 
@@ -798,6 +806,27 @@ export function ActionEditor({
                 </div>
               </>
             )}
+
+            {/* Max streams per channel */}
+            <div className="action-field">
+              <label htmlFor={`${id}-max-streams`}>Max Streams Per Provider</label>
+              <input
+                id={`${id}-max-streams`}
+                type="number"
+                className="action-input"
+                value={action.max_streams_per_channel ?? ''}
+                onChange={e => onChange({
+                  ...action,
+                  max_streams_per_channel: e.target.value ? parseInt(e.target.value, 10) : undefined
+                })}
+                placeholder="Unlimited"
+                min={1}
+                disabled={readonly}
+              />
+              <span className="field-hint">
+                Max streams per provider per channel. Use with quality sorting + probe for best results.
+              </span>
+            </div>
           </>
         )}
 

@@ -75,12 +75,17 @@ class DispatcharrSettings(BaseModel):
     parallel_probing_enabled: bool = True
     # Max simultaneous probes when parallel probing is enabled (1-16)
     max_concurrent_probes: int = 8
+    # How to distribute probes across M3U profiles: fill_first, round_robin, least_loaded
+    profile_distribution_strategy: str = "fill_first"
     # Skip streams that were successfully probed within the last N hours (0 = always probe)
     skip_recently_probed_hours: int = 0
     # Refresh all M3U accounts before starting probe
     refresh_m3us_before_probe: bool = True
     # Automatically reorder streams in channels after probe completes
     auto_reorder_after_probe: bool = False
+    # Probe retry settings for transient ffprobe failures
+    probe_retry_count: int = 1  # Number of retries when ffprobe fails but HTTP returns 200 (0 = no retry)
+    probe_retry_delay: int = 2  # Seconds to wait between retries
     # Maximum pages to fetch when retrieving streams from Dispatcharr (page_size=500)
     # 200 pages = 100,000 streams max. Increase if you have more than 100K streams.
     stream_fetch_page_limit: int = 200
@@ -97,6 +102,8 @@ class DispatcharrSettings(BaseModel):
     m3u_account_priorities: dict[str, int] = {}
     # Deprioritize failed streams - when enabled, failed/timeout/pending streams sort to bottom
     deprioritize_failed_streams: bool = True
+    # Strike rule - flag streams with consecutive probe failures (0 = disabled)
+    strike_threshold: int = 3
     # Normalization settings - user-configurable tags for stream name normalization
     # disabled_builtin_tags: Tags to exclude from normalization (format: "group:value", e.g., "country:US")
     disabled_builtin_tags: list[str] = []
@@ -126,6 +133,10 @@ class DispatcharrSettings(BaseModel):
     # "transcode" - FFmpeg transcodes unsupported audio to AAC (CPU intensive)
     # "video_only" - Strip audio for quick preview (fast, no audio)
     stream_preview_mode: str = "passthrough"
+    # Auto-creation pipeline exclusion settings
+    auto_creation_excluded_terms: list[str] = []  # Terms that exclude streams by name (case-insensitive substring)
+    auto_creation_excluded_groups: list[str] = []  # M3U group names to exclude (case-insensitive exact match)
+    auto_creation_exclude_auto_sync_groups: bool = False  # Exclude streams in Dispatcharr auto-sync groups
     def is_configured(self) -> bool:
         return bool(self.url and self.username and self.password)
 

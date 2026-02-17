@@ -14,6 +14,7 @@ export interface StreamListItemProps {
   onPreview?: (stream: Stream) => void;
   showStreamUrls?: boolean;
   streamStats?: StreamStats | null;
+  strikeThreshold?: number;
 }
 
 export const StreamListItem = memo(function StreamListItem({
@@ -25,7 +26,8 @@ export const StreamListItem = memo(function StreamListItem({
   onClearStats,
   onPreview,
   showStreamUrls = true,
-  streamStats
+  streamStats,
+  strikeThreshold = 0
 }: StreamListItemProps) {
   const {
     attributes,
@@ -141,6 +143,16 @@ export const StreamListItem = memo(function StreamListItem({
             title={streamStats.error_message || `Probe ${streamStats.probe_status}`}
           >
             <span className="material-icons">error_outline</span>
+          </span>
+        )}
+        {/* Strike count badge */}
+        {streamStats && streamStats.consecutive_failures > 0 && strikeThreshold > 0 && (
+          <span
+            className={`meta-tag strike-count${streamStats.consecutive_failures >= strikeThreshold ? ' strike-exceeded' : ''}`}
+            title={`${streamStats.consecutive_failures} consecutive failure${streamStats.consecutive_failures !== 1 ? 's' : ''}${strikeThreshold > 0 ? ` (threshold: ${strikeThreshold})` : ''}`}
+          >
+            <span className="material-icons">gavel</span>
+            {streamStats.consecutive_failures}/{strikeThreshold}
           </span>
         )}
         {showStreamUrls && stream.url && (
