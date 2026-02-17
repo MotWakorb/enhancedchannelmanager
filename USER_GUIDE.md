@@ -79,6 +79,8 @@ You'll be logged in automatically after setup.
 1. Click **Save** to store your configuration
 2. You're now ready to add M3U accounts
 
+> **Tip:** The application header includes quick-access links to the GitHub repository and this User Guide.
+
 ---
 
 ## M3U Manager
@@ -138,6 +140,8 @@ Choose from three account types:
 3. Enter your **Username** and **Password**
 4. Set **Max Streams**
 5. Click **Save**
+
+> **Tip:** When editing an existing XtreamCodes account, you can change non-credential settings (name, max streams, etc.) without re-entering the password. Leave the password field empty to keep the existing credentials.
 
 **Step 4: Account Refreshes Automatically**
 
@@ -254,6 +258,7 @@ Configure email digests for M3U changes in Settings → Alert Methods:
 - **Immediate** - Send notification as soon as changes are detected
 - **Hourly/Daily/Weekly** - Batched digest notifications
 - **Discord** - Send change notifications to Discord webhooks
+- **Regex Exclude Filters** - Define regex patterns to suppress noisy groups or streams from digest notifications (e.g., exclude VOD groups or known test streams that change frequently)
 
 ---
 
@@ -278,7 +283,7 @@ The screen is split into two panes:
 ![Stream List](docs/images/18-stream-list.png)
 <!-- Screenshot: Right pane showing stream list with provider filter dropdown and search box -->
 
-1. Use the **Provider** dropdown to filter by M3U account
+1. Use the **M3U Account** dropdown to filter by M3U account
 2. Use **Search** to find specific streams
 
 **Step 2: Drag to Create Channel**
@@ -452,7 +457,7 @@ Sort and renumber channels within a group:
   - Active filter indicator on the filter button
 
 **Stream Filters (Right Pane)**:
-- Provider dropdown
+- M3U Account dropdown
 - Group dropdown
 - Search by name
 - Hide already-mapped streams
@@ -673,11 +678,13 @@ Build matching logic using a three-part editor (Field + Operator + Value) with A
 | **Stream Group** | contains, matches (regex) |
 | **TVG ID** | exists, does not exist, matches |
 | **Logo** | exists, does not exist |
-| **Provider** | is, is not (specific M3U account) |
+| **M3U Account** | is, is not (specific M3U account) |
 | **Quality** | at least, at most (2160p, 1080p, 720p, 480p, 360p) |
 | **Codec** | is, is not (H.264, HEVC, etc.) |
 | **Channel Exists** | by name, regex, or group |
 | **Normalized Match in Group** | stream's normalized name matches a channel in a specified group |
+| **Normalized Name (Global)** | stream's normalized name matches any channel across all groups |
+| **Normalized Name (Not In)** | stream's normalized name does NOT match any channel in a specified group |
 
 #### AND/OR Connectors
 
@@ -727,6 +734,12 @@ Matches any stream from a US group whose normalized name matches a channel in yo
 
 This condition type is particularly useful for merging streams into existing channels. It normalizes both the stream name (stripping country prefixes like "US:") and channel names (stripping number prefixes like "106 |") using the normalization engine, then checks if the normalized stream name matches any channel in the selected group. The group selector only shows channel groups that actually contain channels.
 
+The **Global** variant checks against all channel groups at once, while the **Not In** variant inverts the match — useful for finding streams that don't yet have a corresponding channel.
+
+#### Date Expansion in Regex
+
+Regex conditions support date patterns that automatically expand to match current dates. For example, a pattern like `{date:YYYY-MM-DD}` in a regex condition will expand to match today's date. This is useful for matching streams that include dates in their names (e.g., PPV events). Date expansion supports patterns up to 90 days out to prevent regex overload. Contributed by @lpukatch.
+
 ### Actions
 
 Define what happens when conditions match:
@@ -735,7 +748,7 @@ Define what happens when conditions match:
 |--------|-------------|
 | **Create Channel** | Template-based naming using `{stream_name}`, `{stream_group}`, `{quality}`, `{provider}`, etc. |
 | **Create Group** | Automatically create a channel group |
-| **Merge Streams** | Combine multiple streams into one channel with quality preference; auto-find matches by normalized name |
+| **Merge Streams** | Combine multiple streams into one channel with quality preference; auto-find uses multi-stage lookup (normalized name → core-name → call sign → deparen/word-prefix); optional max streams per provider limit |
 | **Assign Logo** | Set channel logo from stream or URL |
 | **Assign EPG** | Assign EPG data source |
 | **Assign Profile** | Set stream transcoding profile |
@@ -764,7 +777,7 @@ When a channel already exists, choose behavior:
 
 **Dry Run** - Click **Dry Run** to preview what changes would occur without applying them. Review the execution results showing channels that would be created, streams that would be merged, and orphans that would be removed.
 
-**Execute** - Click **Run** to apply all rule actions. The execution log shows per-stream details of condition evaluation, rule matching, and action results.
+**Execute** - Click **Run** to apply all rule actions. The execution log shows per-stream details of condition evaluation, rule matching, action results, normalization context, and merge guidance. Use **filter chips** at the top of the log to quickly filter by result type (created, merged, skipped, etc.).
 
 **Run Single Rule** - Execute or dry-run a specific rule in isolation from the rule's menu.
 
@@ -772,7 +785,16 @@ When a channel already exists, choose behavior:
 
 **Execution History Summary** - Each execution in the history shows a quick summary: streams matched, channels merged, channels created, and streams skipped. A live "Running" indicator appears while a pipeline is executing.
 
-**Auto-Find for Merge Streams** - When using the `merge_streams` action with `target: auto` and no explicit `find_channel_by`, the engine automatically finds existing channels by the stream's normalized name. It strips country prefixes (e.g., "US: Discovery" → "Discovery") and matches against channel names that may have number prefixes (e.g., "113 | Discovery"). This means you can set up a simple rule with `normalized_name_in_group` + `merge_streams(target: auto)` to automatically merge streams from any provider into your existing channel lineup without manual channel-by-channel mapping.
+**Auto-Find for Merge Streams** - When using the `merge_streams` action with `target: auto` and no explicit `find_channel_by`, the engine uses a multi-stage lookup to find existing channels:
+
+1. **Normalized Name** - Strips country prefixes (e.g., "US: Discovery" → "Discovery") and matches against channel names that may have number prefixes (e.g., "113 | Discovery")
+2. **Core-Name Fallback** - If no match, strips all tags from the stream name and tries again
+3. **Call Sign Fallback** - If still no match, compares against channel call signs from EPG data
+4. **Deparen/Word-Prefix** - Strips parenthetical suffixes (e.g., "ESPN (East)" → "ESPN") and tries word-prefix matching
+
+This means you can set up a simple rule with `normalized_name_in_group` + `merge_streams(target: auto)` to automatically merge streams from any provider into your existing channel lineup without manual channel-by-channel mapping.
+
+**Max Streams Per Provider** - The merge_streams action supports an optional `max_streams_per_provider` setting that limits how many streams from a single M3U account can be merged into a channel. This prevents one provider from dominating a channel's stream list and is enforced against both newly-added and existing streams.
 
 ### Orphan Reconciliation
 
@@ -784,6 +806,14 @@ When a rule's conditions change and previously-matched streams no longer match, 
 | **Move to Uncategorized** | Move channels out of managed groups |
 | **Delete & Cleanup Groups** | Delete channels and remove empty groups |
 | **None** | Preserve all channels, skip reconciliation |
+
+### Global Exclusion Filters
+
+Configure stream exclusion filters in the Auto-Creation settings (gear icon at the top of the Auto-Creation tab):
+
+- **M3U Group Dropdown** - Select which M3U groups to include in rule evaluation
+- **Exclusion Patterns** - Define regex patterns to exclude streams before any rules are evaluated
+- Exclusion filters apply globally to all rules, saving you from repeating the same exclusion conditions in every rule
 
 ### YAML Import/Export
 
@@ -1102,6 +1132,7 @@ The Settings sidebar contains the following sections:
 - **VLC Integration** - VLC protocol handler setup
 - **Scheduled Tasks** - Automated background tasks
 - **Alert Methods** - External notification configuration
+- **Maintenance** - Stream strikeout management and bulk operations
 - **Authentication** - Login requirements and providers
 - **Users** - User account management (admin only)
 
@@ -1140,6 +1171,22 @@ Configure automated stream health checking:
 3. Set **Interval** (hours between probes)
 4. Configure **Batch Size** and **Timeout**
 5. Select **Channel Groups** to probe
+6. Configure **Retry Settings** - Set how many times to retry failed probes before marking a stream as failed
+
+#### Per-Account Ramp-Up
+
+ECM gradually increases probe load per M3U account rather than hitting the provider with full concurrency immediately. This prevents triggering rate limits or connection blocks. The ramp-up starts conservatively and increases over time as probes succeed.
+
+#### Probe Retry Coverage
+
+Probes automatically retry on common transient failures:
+- **Transient HTTP 200** - Server returns 200 but with invalid/empty data
+- **I/O Errors** - Network timeouts, connection resets, and socket errors
+- **"Invalid data found"** - ffprobe reports invalid data (often transient with live streams)
+
+#### Stale Group Alerts
+
+When channel groups have outdated probe data (e.g., probing was disabled or failed for an extended period), ECM generates notifications alerting you to re-probe those groups.
 
 #### Profile-Aware Probing
 
@@ -1156,6 +1203,19 @@ If any M3U account has multiple profiles, a **Profile Distribution Strategy** dr
 | **Least Loaded** | Picks the profile with the most remaining headroom (highest ratio of free connections). Best for maximizing throughput when profiles have different connection limits. |
 
 This setting only affects probing — it does not change how Dispatcharr routes viewer traffic.
+
+### Stream Strikeout System
+
+The strikeout system helps you identify and clean up streams that consistently fail probe checks.
+
+**How It Works:**
+1. Each stream tracks its **consecutive probe failures** — the counter resets when a probe succeeds
+2. When a stream exceeds the configurable **strike threshold** (set in Settings → Maintenance), it is flagged as "struck out"
+3. **Strike badges** appear on struck-out streams in the Channel Manager, showing the failure count
+4. Review all struck-out streams in **Settings → Maintenance** with details about each stream and its failure history
+5. Use **Bulk Remove** to remove all struck-out streams from every channel they're assigned to in one click
+
+This is useful for cleaning up dead or unreliable streams that accumulate over time, especially after provider changes or M3U updates.
 
 ### Stream Sort Priority
 
@@ -1195,7 +1255,7 @@ These defaults appear in the bulk create modal with a "(from settings)" indicato
 
 - **Theme** - Dark (default), Light, or High Contrast
 - **Show Stream URLs** - Toggle stream URL visibility (hide for screenshots)
-- **Hide Auto-Sync Groups** - Auto-hide auto-sync channel groups on load
+- **Hide Auto-Sync Groups** - Auto-hide auto-sync channel groups on load (channels persist in ECM even when auto-sync is later disabled in Dispatcharr)
 - **Hide EPG URLs** - Hide EPG source URLs in the EPG Manager
 - **Hide M3U URLs** - Hide M3U server URLs in the M3U Manager
 - **Gracenote ID Conflict Handling** - Ask, Skip, or Overwrite when assigning conflicting Gracenote IDs
