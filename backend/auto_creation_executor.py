@@ -982,14 +982,14 @@ class ActionExecutor:
                     description=f"No channel found matching {find_channel_by}='{find_channel_value}'",
                     error="Channel not found for merge"
                 )
-            # For auto target, fall through to create new channel
+            # For auto target, no matching channel found — skip
+            # merge_streams only adds streams to existing channels;
+            # use a create_channel action if new channels are needed.
 
-        # Create new channel with this stream
-        # This is handled by the orchestrator creating a create_channel action
         return ActionResult(
             success=True,
             action_type=action.type,
-            description="No existing channel found, will create new",
+            description="No existing channel found — stream skipped (merge_streams only adds to existing channels)",
             skipped=True
         )
 

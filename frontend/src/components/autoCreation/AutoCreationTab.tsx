@@ -36,8 +36,8 @@ function getActionCategory(action: ActionLogEntry): string | null {
   if (action.type === 'create_channel' || action.type === 'create_group') {
     return 'created';
   } else if (action.type === 'merge_streams' || action.type === 'merge_stream') {
-    return (desc.includes('will create new') || desc.includes('no existing channel found'))
-      ? 'created' : 'merged';
+    return desc.includes('no existing channel found') || desc.includes('stream skipped')
+      ? 'skipped' : 'merged';
   } else if (action.type === 'skip' || desc.includes('skipped')) {
     return 'skipped';
   } else if (action.type === 'update_channel') {
