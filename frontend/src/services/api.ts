@@ -835,6 +835,10 @@ export interface SettingsResponse {
   telegram_chat_id: string;
   // Stream preview mode: "passthrough", "transcode", or "video_only"
   stream_preview_mode: StreamPreviewMode;
+  // Auto-creation pipeline exclusion settings
+  auto_creation_excluded_terms: string[];
+  auto_creation_excluded_groups: string[];
+  auto_creation_exclude_auto_sync_groups: boolean;
 }
 
 // Stream preview mode for browser playback
@@ -911,6 +915,10 @@ export async function saveSettings(settings: {
   telegram_bot_token?: string;  // Optional - Telegram bot token
   telegram_chat_id?: string;  // Optional - Telegram chat ID
   stream_preview_mode?: StreamPreviewMode;  // Optional - Stream preview mode, defaults to "passthrough"
+  // Auto-creation pipeline exclusion settings
+  auto_creation_excluded_terms?: string[];
+  auto_creation_excluded_groups?: string[];
+  auto_creation_exclude_auto_sync_groups?: boolean;
 }): Promise<{ status: string; configured: boolean; server_changed: boolean }> {
   return fetchJson(`${API_BASE}/settings`, {
     method: 'POST',

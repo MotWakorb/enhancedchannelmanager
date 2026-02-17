@@ -808,6 +808,10 @@ class SettingsRequest(BaseModel):
     telegram_chat_id: str = ""
     # Stream preview mode: "passthrough", "transcode", or "video_only"
     stream_preview_mode: str = "passthrough"
+    # Auto-creation pipeline exclusion settings
+    auto_creation_excluded_terms: list[str] = []
+    auto_creation_excluded_groups: list[str] = []
+    auto_creation_exclude_auto_sync_groups: bool = False
 
 
 class SettingsResponse(BaseModel):
@@ -877,6 +881,10 @@ class SettingsResponse(BaseModel):
     telegram_chat_id: str
     # Stream preview mode
     stream_preview_mode: str
+    # Auto-creation pipeline exclusion settings
+    auto_creation_excluded_terms: list[str]
+    auto_creation_excluded_groups: list[str]
+    auto_creation_exclude_auto_sync_groups: bool
 
 
 class TestConnectionRequest(BaseModel):
@@ -978,6 +986,9 @@ async def get_current_settings():
         telegram_bot_token=settings.telegram_bot_token,
         telegram_chat_id=settings.telegram_chat_id,
         stream_preview_mode=settings.stream_preview_mode,
+        auto_creation_excluded_terms=settings.auto_creation_excluded_terms,
+        auto_creation_excluded_groups=settings.auto_creation_excluded_groups,
+        auto_creation_exclude_auto_sync_groups=settings.auto_creation_exclude_auto_sync_groups,
     )
 
 
@@ -1077,6 +1088,9 @@ async def update_settings(request: SettingsRequest):
         telegram_bot_token=request.telegram_bot_token,
         telegram_chat_id=request.telegram_chat_id,
         stream_preview_mode=request.stream_preview_mode,
+        auto_creation_excluded_terms=request.auto_creation_excluded_terms,
+        auto_creation_excluded_groups=request.auto_creation_excluded_groups,
+        auto_creation_exclude_auto_sync_groups=request.auto_creation_exclude_auto_sync_groups,
     )
     save_settings(new_settings)
     clear_settings_cache()

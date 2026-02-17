@@ -1588,6 +1588,7 @@ class AutoCreationExecution(Base):
     groups_created = Column(Integer, default=0, nullable=False)
     streams_merged = Column(Integer, default=0, nullable=False)
     streams_skipped = Column(Integer, default=0, nullable=False)
+    streams_excluded = Column(Integer, default=0, nullable=False)
 
     # For rollback - tracks what was created/modified
     # JSON array: [{type: "channel", id: 123, name: "ESPN HD"}, ...]
@@ -1723,6 +1724,7 @@ class AutoCreationExecution(Base):
             "groups_created": self.groups_created,
             "streams_merged": self.streams_merged,
             "streams_skipped": self.streams_skipped,
+            "streams_excluded": self.streams_excluded,
             "rolled_back_at": self.rolled_back_at.isoformat() + "Z" if self.rolled_back_at else None,
             "rolled_back_by": self.rolled_back_by,
             "created_at": self.created_at.isoformat() + "Z" if self.created_at else None,

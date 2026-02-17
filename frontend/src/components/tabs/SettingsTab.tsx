@@ -187,7 +187,7 @@ interface SettingsTabProps {
   onProbeComplete?: () => void;
 }
 
-type SettingsPage = 'general' | 'channel-defaults' | 'normalization' | 'tag-engine' | 'appearance' | 'email' | 'scheduled-tasks' | 'm3u-digest' | 'maintenance' | 'linked-accounts' | 'auth-settings' | 'user-management' | 'tls-settings';
+type SettingsPage = 'general' | 'channel-defaults' | 'normalization' | 'tag-engine' | 'appearance' | 'email' | 'scheduled-tasks' | 'auto-creation' | 'm3u-digest' | 'maintenance' | 'linked-accounts' | 'auth-settings' | 'user-management' | 'tls-settings';
 
 export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onProbeComplete }: SettingsTabProps) {
   const [activePage, setActivePage] = useState<SettingsPage>('general');
@@ -260,6 +260,14 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   // Log level settings
   const [backendLogLevel, setBackendLogLevel] = useState('INFO');
   const [frontendLogLevel, setFrontendLogLevel] = useState('INFO');
+
+  // Auto-creation exclusion settings
+  const [autoCreationExcludedTerms, setAutoCreationExcludedTerms] = useState<string[]>([]);
+  const [newExcludedTermInput, setNewExcludedTermInput] = useState('');
+  const [autoCreationExcludedGroups, setAutoCreationExcludedGroups] = useState<string[]>([]);
+  const [availableStreamGroups, setAvailableStreamGroups] = useState<string[]>([]);
+  const [selectedExcludeGroup, setSelectedExcludeGroup] = useState('');
+  const [autoCreationExcludeAutoSyncGroups, setAutoCreationExcludeAutoSyncGroups] = useState(false);
 
   // M3U Digest settings
   const [digestSettings, setDigestSettings] = useState<M3UDigestSettings | null>(null);
@@ -413,6 +421,15 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
     }
   }, [activePage, digestSettings, digestLoading]);
 
+  // Load available stream groups when auto-creation page is activated
+  useEffect(() => {
+    if (activePage === 'auto-creation' && availableStreamGroups.length === 0) {
+      api.getStreamGroups().then(groups => {
+        setAvailableStreamGroups(groups.map(g => g.name).sort((a, b) => a.localeCompare(b)));
+      }).catch(() => {});
+    }
+  }, [activePage]);
+
   // Load M3U accounts to show guidance for max concurrent probes
   const loadM3UAccountsMaxStreams = async () => {
     try {
@@ -559,6 +576,9 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       setTheme(settings.theme || 'dark');
       setVlcOpenBehavior(settings.vlc_open_behavior || 'm3u_fallback');
       setStreamPreviewMode(settings.stream_preview_mode || 'passthrough');
+      setAutoCreationExcludedTerms(settings.auto_creation_excluded_terms ?? []);
+      setAutoCreationExcludedGroups(settings.auto_creation_excluded_groups ?? []);
+      setAutoCreationExcludeAutoSyncGroups(settings.auto_creation_exclude_auto_sync_groups ?? false);
       setDefaultChannelProfileIds(settings.default_channel_profile_ids);
       setEpgAutoMatchThreshold(settings.epg_auto_match_threshold ?? 80);
       setCustomNetworkPrefixes(settings.custom_network_prefixes ?? []);
@@ -721,6 +741,9 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         frontend_log_level: frontendLogLevel,
         vlc_open_behavior: vlcOpenBehavior,
         stream_preview_mode: streamPreviewMode,
+        auto_creation_excluded_terms: autoCreationExcludedTerms,
+        auto_creation_excluded_groups: autoCreationExcludedGroups,
+        auto_creation_exclude_auto_sync_groups: autoCreationExcludeAutoSyncGroups,
         linked_m3u_accounts: linkedM3UAccounts,
         // Stream probe settings (scheduled probing is controlled by Task Engine)
         stream_probe_batch_size: streamProbeBatchSize,
@@ -2179,6 +2202,171 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       setTelegramTesting(false);
     }
   };
+
+  const renderAutoCreationPage = () => (
+    <div className="settings-page">
+      <div className="settings-page-header">
+        <h2>Auto Creation</h2>
+        <p>Configure global exclusion filters for the auto-creation pipeline. Streams matching these filters will be excluded before any rules are evaluated.</p>
+      </div>
+
+      {/* Stream Name Exclusion List */}
+      <div className="settings-section">
+        <div className="settings-section-header">
+          <span className="material-icons">block</span>
+          <h3>Stream Name Exclusion</h3>
+        </div>
+        <div className="settings-group">
+          <div className="form-group-vertical">
+            <label>Excluded Terms</label>
+            <span className="form-description">
+              Streams whose name contains any of these terms (case-insensitive) will be excluded from the pipeline.
+            </span>
+            <div className="email-recipients-list">
+              {autoCreationExcludedTerms.length === 0 ? (
+                <span className="no-recipients">No excluded terms configured</span>
+              ) : (
+                autoCreationExcludedTerms.map((term) => (
+                  <span key={term} className="email-recipient-tag">
+                    {term}
+                    <button
+                      className="remove-btn"
+                      onClick={() => setAutoCreationExcludedTerms(prev => prev.filter(t => t !== term))}
+                      title="Remove term"
+                    >
+                      <span className="material-icons">close</span>
+                    </button>
+                  </span>
+                ))
+              )}
+            </div>
+            <div className="add-email-row">
+              <input
+                type="text"
+                placeholder='e.g. PPV, Adult, XXX'
+                value={newExcludedTermInput}
+                onChange={(e) => setNewExcludedTermInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && newExcludedTermInput.trim()) {
+                    const term = newExcludedTermInput.trim();
+                    if (!autoCreationExcludedTerms.includes(term)) {
+                      setAutoCreationExcludedTerms(prev => [...prev, term]);
+                    }
+                    setNewExcludedTermInput('');
+                  }
+                }}
+              />
+              <button
+                className="btn-secondary"
+                onClick={() => {
+                  const term = newExcludedTermInput.trim();
+                  if (term && !autoCreationExcludedTerms.includes(term)) {
+                    setAutoCreationExcludedTerms(prev => [...prev, term]);
+                  }
+                  setNewExcludedTermInput('');
+                }}
+                disabled={!newExcludedTermInput.trim()}
+              >
+                <span className="material-icons">add</span>
+                Add
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* M3U Group Exclusion List */}
+      <div className="settings-section">
+        <div className="settings-section-header">
+          <span className="material-icons">folder_off</span>
+          <h3>M3U Group Exclusion</h3>
+        </div>
+        <div className="settings-group">
+          <div className="form-group-vertical">
+            <label>Excluded Groups</label>
+            <span className="form-description">
+              Streams belonging to any of these M3U groups (case-insensitive exact match) will be excluded.
+            </span>
+            <div className="email-recipients-list">
+              {autoCreationExcludedGroups.length === 0 ? (
+                <span className="no-recipients">No excluded groups configured</span>
+              ) : (
+                autoCreationExcludedGroups.map((group) => (
+                  <span key={group} className="email-recipient-tag">
+                    {group}
+                    <button
+                      className="remove-btn"
+                      onClick={() => setAutoCreationExcludedGroups(prev => prev.filter(g => g !== group))}
+                      title="Remove group"
+                    >
+                      <span className="material-icons">close</span>
+                    </button>
+                  </span>
+                ))
+              )}
+            </div>
+            <div className="add-email-row">
+              <CustomSelect
+                value={selectedExcludeGroup}
+                onChange={(val) => setSelectedExcludeGroup(val)}
+                searchable
+                searchPlaceholder="Search groups..."
+                placeholder="Select a group to exclude..."
+                options={availableStreamGroups
+                  .filter(g => !autoCreationExcludedGroups.some(eg => eg.toLowerCase() === g.toLowerCase()))
+                  .map(g => ({ value: g, label: g }))}
+              />
+              <button
+                className="btn-secondary"
+                onClick={() => {
+                  if (selectedExcludeGroup && !autoCreationExcludedGroups.includes(selectedExcludeGroup)) {
+                    setAutoCreationExcludedGroups(prev => [...prev, selectedExcludeGroup]);
+                  }
+                  setSelectedExcludeGroup('');
+                }}
+                disabled={!selectedExcludeGroup}
+              >
+                <span className="material-icons">add</span>
+                Add
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Auto-Sync Group Exclusion */}
+      <div className="settings-section">
+        <div className="settings-section-header">
+          <span className="material-icons">sync_disabled</span>
+          <h3>Auto-Sync Group Exclusion</h3>
+        </div>
+        <div className="settings-group">
+          <div className="form-group-vertical">
+            <label className="checkbox-label">
+              <input
+                type="checkbox"
+                checked={autoCreationExcludeAutoSyncGroups}
+                onChange={(e) => setAutoCreationExcludeAutoSyncGroups(e.target.checked)}
+              />
+              Exclude streams in Auto Channel Sync groups
+            </label>
+            <span className="form-description">
+              When enabled, streams belonging to Dispatcharr channel groups that have Auto Channel Sync
+              enabled will be excluded from the auto-creation pipeline.
+            </span>
+          </div>
+        </div>
+      </div>
+
+      <div className="settings-actions">
+        <div className="settings-actions-left" />
+        <button className="btn-primary" onClick={handleSave} disabled={loading}>
+          <span className="material-icons">save</span>
+          {loading ? 'Saving...' : 'Save Settings'}
+        </button>
+      </div>
+    </div>
+  );
 
   const renderEmailSettingsPage = () => (
     <div className="settings-page">
@@ -3721,6 +3909,13 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
             Scheduled Tasks
           </li>
           <li
+            className={`settings-nav-item ${activePage === 'auto-creation' ? 'active' : ''}`}
+            onClick={() => setActivePage('auto-creation')}
+          >
+            <span className="material-icons">auto_awesome</span>
+            Auto Creation
+          </li>
+          <li
             className={`settings-nav-item ${activePage === 'm3u-digest' ? 'active' : ''}`}
             onClick={() => setActivePage('m3u-digest')}
           >
@@ -3778,6 +3973,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         {activePage === 'appearance' && renderAppearancePage()}
         {activePage === 'email' && renderEmailSettingsPage()}
         {activePage === 'scheduled-tasks' && <ScheduledTasksSection userTimezone={userTimezone} />}
+        {activePage === 'auto-creation' && renderAutoCreationPage()}
         {activePage === 'm3u-digest' && renderM3UDigestPage()}
         {activePage === 'maintenance' && renderMaintenancePage()}
         {activePage === 'linked-accounts' && <LinkedAccountsSection />}
