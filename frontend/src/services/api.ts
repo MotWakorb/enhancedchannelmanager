@@ -405,6 +405,13 @@ export async function getStreams(params?: {
   return fetchJson(`${API_BASE}/streams${query}`, { signal: params?.signal });
 }
 
+export async function getStreamsByIds(streamIds: number[]): Promise<Stream[]> {
+  return fetchJson(`${API_BASE}/streams/by-ids`, {
+    method: 'POST',
+    body: JSON.stringify({ stream_ids: streamIds }),
+  });
+}
+
 export async function getStreamGroups(bypassCache?: boolean, m3uAccountId?: number | null): Promise<StreamGroupInfo[]> {
   const queryParams: string[] = [];
   if (bypassCache) queryParams.push('bypass_cache=true');
@@ -797,14 +804,18 @@ export interface SettingsResponse {
   bitrate_sample_duration: number;  // Duration in seconds to sample stream for bitrate (10, 20, or 30)
   parallel_probing_enabled: boolean;  // Probe streams from different M3Us simultaneously
   max_concurrent_probes: number;  // Max simultaneous probes when parallel probing is enabled (1-16)
+  profile_distribution_strategy: string;  // How to distribute probes across M3U profiles: fill_first, round_robin, least_loaded
   skip_recently_probed_hours: number;  // Skip streams probed within last N hours (0 = always probe)
   refresh_m3us_before_probe: boolean;  // Refresh all M3U accounts before starting probe
   auto_reorder_after_probe: boolean;  // Automatically reorder streams in channels after probe completes
+  probe_retry_count: number;   // Retries on transient ffprobe failure (0 = no retry, max 5)
+  probe_retry_delay: number;   // Seconds between retries (1-30)
   stream_fetch_page_limit: number;  // Max pages when fetching streams (pages * 500 = max streams)
   stream_sort_priority: SortCriterion[];  // Priority order for Smart Sort (e.g., ['resolution', 'bitrate', 'framerate'])
   stream_sort_enabled: SortEnabledMap;  // Which sort criteria are enabled (e.g., { resolution: true, bitrate: true, framerate: false })
   m3u_account_priorities: M3UAccountPriorities;  // M3U account priorities for sorting (account_id -> priority)
   deprioritize_failed_streams: boolean;  // When enabled, failed/timeout/pending streams sort to bottom
+  strike_threshold: number;  // Consecutive failures before flagging stream (0 = disabled)
   normalize_on_channel_create: boolean;  // Default state for normalization toggle when creating channels
   // Shared SMTP settings
   smtp_configured: boolean;  // Whether shared SMTP is configured
@@ -824,6 +835,10 @@ export interface SettingsResponse {
   telegram_chat_id: string;
   // Stream preview mode: "passthrough", "transcode", or "video_only"
   stream_preview_mode: StreamPreviewMode;
+  // Auto-creation pipeline exclusion settings
+  auto_creation_excluded_terms: string[];
+  auto_creation_excluded_groups: string[];
+  auto_creation_exclude_auto_sync_groups: boolean;
 }
 
 // Stream preview mode for browser playback
@@ -872,14 +887,18 @@ export async function saveSettings(settings: {
   stream_probe_schedule_time?: string;  // Optional - time of day for probes (HH:MM), defaults to "03:00"
   bitrate_sample_duration?: number;  // Optional - duration in seconds to sample stream for bitrate (10, 20, or 30), defaults to 10
   parallel_probing_enabled?: boolean;  // Optional - probe streams from different M3Us simultaneously, defaults to true
+  profile_distribution_strategy?: string;  // Optional - how to distribute probes across profiles: fill_first, round_robin, least_loaded
   skip_recently_probed_hours?: number;  // Optional - skip streams probed within last N hours, defaults to 0 (always probe)
   refresh_m3us_before_probe?: boolean;  // Optional - refresh all M3U accounts before starting probe, defaults to true
   auto_reorder_after_probe?: boolean;  // Optional - automatically reorder streams after probe, defaults to false
+  probe_retry_count?: number;   // Optional - retries on transient ffprobe failure (0 = no retry, max 5), defaults to 1
+  probe_retry_delay?: number;   // Optional - seconds between retries (1-30), defaults to 2
   stream_fetch_page_limit?: number;  // Optional - max pages when fetching streams, defaults to 200 (100K streams)
   stream_sort_priority?: SortCriterion[];  // Optional - priority order for Smart Sort, defaults to ['resolution', 'bitrate', 'framerate']
   stream_sort_enabled?: SortEnabledMap;  // Optional - which sort criteria are enabled, defaults to all true
   m3u_account_priorities?: M3UAccountPriorities;  // Optional - M3U account priorities for sorting
   deprioritize_failed_streams?: boolean;  // Optional - deprioritize failed/timeout/pending streams in sort, defaults to true
+  strike_threshold?: number;  // Optional - consecutive failures before flagging stream, defaults to 3
   normalize_on_channel_create?: boolean;  // Optional - default state for normalization toggle, defaults to false
   // Shared SMTP settings
   smtp_host?: string;  // Optional - SMTP server hostname
@@ -896,6 +915,10 @@ export async function saveSettings(settings: {
   telegram_bot_token?: string;  // Optional - Telegram bot token
   telegram_chat_id?: string;  // Optional - Telegram chat ID
   stream_preview_mode?: StreamPreviewMode;  // Optional - Stream preview mode, defaults to "passthrough"
+  // Auto-creation pipeline exclusion settings
+  auto_creation_excluded_terms?: string[];
+  auto_creation_excluded_groups?: string[];
+  auto_creation_exclude_auto_sync_groups?: boolean;
 }): Promise<{ status: string; configured: boolean; server_changed: boolean }> {
   return fetchJson(`${API_BASE}/settings`, {
     method: 'POST',
@@ -1638,6 +1661,20 @@ export async function getStreamStatsByIds(streamIds: number[]): Promise<Record<n
 }
 
 /**
+ * Compute sort orders for streams without applying them.
+ * Uses server-side sort settings as the single source of truth.
+ */
+export async function computeSort(
+  channels: { channel_id: number; stream_ids: number[] }[],
+  mode: string = 'smart'
+): Promise<{ results: { channel_id: number; sorted_stream_ids: number[]; changed: boolean }[] }> {
+  return fetchJson(`${API_BASE}/stream-stats/compute-sort`, {
+    method: 'POST',
+    body: JSON.stringify({ channels, mode }),
+  });
+}
+
+/**
  * Get summary of stream probe statistics.
  */
 export async function getStreamStatsSummary(): Promise<import('../types').StreamStatsSummary> {
@@ -1798,6 +1835,29 @@ export async function getDismissedStreamIds(): Promise<{ dismissed_stream_ids: n
   return fetchJson(`${API_BASE}/stream-stats/dismissed`, {
     method: 'GET',
   }) as Promise<{ dismissed_stream_ids: number[]; count: number }>;
+}
+
+// Strike Rule API
+
+export interface StruckOutStream extends import('../types').StreamStats {
+  channels: { id: number; name: string }[];
+}
+
+export interface StruckOutResponse {
+  streams: StruckOutStream[];
+  threshold: number;
+  enabled: boolean;
+}
+
+export async function getStruckOutStreams(): Promise<StruckOutResponse> {
+  return fetchJson(`${API_BASE}/stream-stats/struck-out`);
+}
+
+export async function removeStruckOutStreams(streamIds: number[]): Promise<{ removed_from_channels: number; stream_ids: number[] }> {
+  return fetchJson(`${API_BASE}/stream-stats/struck-out/remove`, {
+    method: 'POST',
+    body: JSON.stringify({ stream_ids: streamIds }),
+  });
 }
 
 export interface SortConfig {

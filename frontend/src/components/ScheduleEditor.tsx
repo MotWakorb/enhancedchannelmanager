@@ -466,34 +466,50 @@ export function ScheduleEditor({ schedule, onSave, onCancel, saving, taskId, par
                     checked={(parameters[param.name] as boolean) ?? param.default ?? false}
                     onChange={(e) => updateParameter(param.name, e.target.checked)}
                   />
-                  <span>Enabled</span>
+                  <span>{param.label || 'Enabled'}</span>
                 </label>
               )}
 
               {/* String/Number array with options */}
               {(param.type === 'string_array' || param.type === 'number_array') && parameterOptions?.[param.source || param.name] && (
-                <div className="array-options">
-                  <div className="array-hint">
-                    {((parameters[param.name] as (string | number)[]) || []).length === 0
-                      ? 'None selected (applies to all)'
-                      : `${((parameters[param.name] as (string | number)[]) || []).length} selected`}
-                  </div>
-                  <div className="option-list">
-                    {parameterOptions[param.source || param.name].map((opt) => {
-                      const selected = ((parameters[param.name] as (string | number)[]) || []).includes(opt.value);
-                      return (
-                        <label key={String(opt.value)} className="option-checkbox">
-                          <input
-                            type="checkbox"
-                            checked={selected}
-                            onChange={() => toggleArrayParameter(param.name, opt.value)}
-                          />
-                          <span>{opt.label}</span>
-                          {opt.badge && <span className="option-badge">{opt.badge}</span>}
-                        </label>
-                      );
-                    })}
-                  </div>
+                <div className={`array-options ${param.name === 'channel_groups' && parameters['auto_sync_groups'] ? 'disabled-hint' : ''}`}>
+                  {param.name === 'channel_groups' && parameters['auto_sync_groups'] ? (
+                    <div className="array-hint">Auto-sync enabled — all current groups will be probed</div>
+                  ) : (
+                    <>
+                      <div className="array-hint">
+                        {((parameters[param.name] as (string | number)[]) || []).length} of {parameterOptions[param.source || param.name].length} selected
+                      </div>
+                      <div className="array-select-actions">
+                        <button
+                          type="button"
+                          className="quick-button"
+                          onClick={() => updateParameter(param.name, parameterOptions[param.source || param.name].map(o => o.value))}
+                        >Select All</button>
+                        <button
+                          type="button"
+                          className="quick-button"
+                          onClick={() => updateParameter(param.name, [])}
+                        >Select None</button>
+                      </div>
+                      <div className="option-list">
+                        {parameterOptions[param.source || param.name].map((opt) => {
+                          const selected = ((parameters[param.name] as (string | number)[]) || []).includes(opt.value);
+                          return (
+                            <label key={String(opt.value)} className="option-checkbox">
+                              <input
+                                type="checkbox"
+                                checked={selected}
+                                onChange={() => toggleArrayParameter(param.name, opt.value)}
+                              />
+                              <span>{opt.label}</span>
+                              {opt.badge && <span className="option-badge">{opt.badge}</span>}
+                            </label>
+                          );
+                        })}
+                      </div>
+                    </>
+                  )}
                 </div>
               )}
 

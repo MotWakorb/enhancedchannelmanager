@@ -74,17 +74,24 @@ export function useAutoCreationExecution(
 
   const refreshIntervalRef = useRef<number | null>(null);
 
+  // Track whether we've done the initial fetch
+  const hasFetchedRef = useRef(false);
+
   const fetchExecutions = useCallback(async (params?: {
     limit?: number;
     offset?: number;
     status?: string;
   }): Promise<void> => {
-    setLoading(true);
+    // Only show loading spinner on initial fetch (no data yet)
+    if (!hasFetchedRef.current) {
+      setLoading(true);
+    }
     setError(null);
     try {
       const response = await api.getAutoCreationExecutions(params);
       setExecutions(response.executions);
       setTotal(response.total);
+      hasFetchedRef.current = true;
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to fetch executions');
     } finally {
@@ -112,7 +119,6 @@ export function useAutoCreationExecution(
     ruleIds?: number[];
   }): Promise<RunPipelineResponse | undefined> => {
     setIsRunning(true);
-    setLoading(true);
     setError(null);
     try {
       const response = await api.runAutoCreationPipeline({
@@ -127,12 +133,10 @@ export function useAutoCreationExecution(
       return undefined;
     } finally {
       setIsRunning(false);
-      setLoading(false);
     }
   }, [fetchExecutions]);
 
   const rollback = useCallback(async (id: number): Promise<RollbackResponse | undefined> => {
-    setLoading(true);
     setError(null);
     try {
       const response = await api.rollbackAutoCreationExecution(id);
@@ -142,8 +146,6 @@ export function useAutoCreationExecution(
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to rollback execution');
       return undefined;
-    } finally {
-      setLoading(false);
     }
   }, [fetchExecutions]);
 

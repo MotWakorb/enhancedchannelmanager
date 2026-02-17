@@ -182,6 +182,7 @@ class StreamStats(Base):
     last_probed = Column(DateTime, nullable=True)  # Last probe timestamp
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     dismissed_at = Column(DateTime, nullable=True)  # When failure was dismissed (acknowledged)
+    consecutive_failures = Column(Integer, default=0, nullable=False)  # Strike rule: consecutive probe failures
 
     __table_args__ = (
         Index("idx_stream_stats_stream_id", stream_id),
@@ -207,6 +208,7 @@ class StreamStats(Base):
             "last_probed": self.last_probed.isoformat() + "Z" if self.last_probed else None,
             "created_at": self.created_at.isoformat() + "Z" if self.created_at else None,
             "dismissed_at": self.dismissed_at.isoformat() + "Z" if self.dismissed_at else None,
+            "consecutive_failures": self.consecutive_failures or 0,
         }
 
     def __repr__(self):
@@ -973,6 +975,9 @@ class M3UDigestSettings(Base):
     min_changes_threshold = Column(Integer, default=1, nullable=False)
     # Send digest to Discord (uses shared Discord webhook from General Settings)
     send_to_discord = Column(Boolean, default=False, nullable=False)
+    # JSON arrays of regex patterns for excluding groups/streams from digest
+    exclude_group_patterns = Column(Text, nullable=True)
+    exclude_stream_patterns = Column(Text, nullable=True)
     # Tracking
     last_digest_at = Column(DateTime, nullable=True)
     # Timestamps
@@ -994,6 +999,36 @@ class M3UDigestSettings(Base):
         import json
         self.email_recipients = json.dumps(emails) if emails else None
 
+    def get_exclude_group_patterns(self) -> list:
+        """Parse exclude_group_patterns JSON into list."""
+        if not self.exclude_group_patterns:
+            return []
+        try:
+            import json
+            return json.loads(self.exclude_group_patterns)
+        except (ValueError, TypeError):
+            return []
+
+    def set_exclude_group_patterns(self, patterns: list) -> None:
+        """Set exclude_group_patterns from list."""
+        import json
+        self.exclude_group_patterns = json.dumps(patterns) if patterns else None
+
+    def get_exclude_stream_patterns(self) -> list:
+        """Parse exclude_stream_patterns JSON into list."""
+        if not self.exclude_stream_patterns:
+            return []
+        try:
+            import json
+            return json.loads(self.exclude_stream_patterns)
+        except (ValueError, TypeError):
+            return []
+
+    def set_exclude_stream_patterns(self, patterns: list) -> None:
+        """Set exclude_stream_patterns from list."""
+        import json
+        self.exclude_stream_patterns = json.dumps(patterns) if patterns else None
+
     def to_dict(self) -> dict:
         """Convert to dictionary for API responses."""
         return {
@@ -1006,6 +1041,8 @@ class M3UDigestSettings(Base):
             "show_detailed_list": self.show_detailed_list,
             "min_changes_threshold": self.min_changes_threshold,
             "send_to_discord": self.send_to_discord,
+            "exclude_group_patterns": self.get_exclude_group_patterns(),
+            "exclude_stream_patterns": self.get_exclude_stream_patterns(),
             "last_digest_at": self.last_digest_at.isoformat() + "Z" if self.last_digest_at else None,
             "created_at": self.created_at.isoformat() + "Z" if self.created_at else None,
             "updated_at": self.updated_at.isoformat() + "Z" if self.updated_at else None,
@@ -1551,6 +1588,7 @@ class AutoCreationExecution(Base):
     groups_created = Column(Integer, default=0, nullable=False)
     streams_merged = Column(Integer, default=0, nullable=False)
     streams_skipped = Column(Integer, default=0, nullable=False)
+    streams_excluded = Column(Integer, default=0, nullable=False)
 
     # For rollback - tracks what was created/modified
     # JSON array: [{type: "channel", id: 123, name: "ESPN HD"}, ...]
@@ -1686,6 +1724,7 @@ class AutoCreationExecution(Base):
             "groups_created": self.groups_created,
             "streams_merged": self.streams_merged,
             "streams_skipped": self.streams_skipped,
+            "streams_excluded": self.streams_excluded,
             "rolled_back_at": self.rolled_back_at.isoformat() + "Z" if self.rolled_back_at else None,
             "rolled_back_by": self.rolled_back_by,
             "created_at": self.created_at.isoformat() + "Z" if self.created_at else None,

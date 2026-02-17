@@ -44,8 +44,9 @@ class StreamProbeTask(TaskScheduler):
 
         # The actual prober is obtained from main.py where it's initialized
         self._prober = None
-        # Schedule parameter overrides (None means use prober's defaults)
-        self._channel_groups: list[str] = []  # Override for group filtering
+        # Schedule parameter overrides
+        self._channel_groups: Optional[list] = None  # None = not configured (probe all), [] = explicitly empty (probe nothing)
+        self._auto_sync_groups: bool = False  # Probe all current groups at runtime
         self._batch_size_override: Optional[int] = None
         self._timeout_override: Optional[int] = None
         self._max_concurrent_override: Optional[int] = None
@@ -54,6 +55,7 @@ class StreamProbeTask(TaskScheduler):
         """Get stream probe configuration."""
         return {
             "channel_groups": self._channel_groups,
+            "auto_sync_groups": self._auto_sync_groups,
             "batch_size": self._batch_size_override,
             "timeout": self._timeout_override,
             "max_concurrent": self._max_concurrent_override,
@@ -69,7 +71,11 @@ class StreamProbeTask(TaskScheduler):
         - max_concurrent: int - max concurrent probe operations
         """
         if "channel_groups" in config:
-            self._channel_groups = config["channel_groups"] or []
+            # Preserve distinction: None = not configured, [] = explicitly empty
+            val = config["channel_groups"]
+            self._channel_groups = val if val is not None else []
+        if "auto_sync_groups" in config:
+            self._auto_sync_groups = bool(config["auto_sync_groups"])
         if "batch_size" in config:
             self._batch_size_override = config["batch_size"]
         if "timeout" in config:
@@ -78,6 +84,7 @@ class StreamProbeTask(TaskScheduler):
             self._max_concurrent_override = config["max_concurrent"]
 
         logger.info(f"[{self.task_id}] Config updated: channel_groups={self._channel_groups}, "
+                   f"auto_sync_groups={self._auto_sync_groups}, "
                    f"batch_size={self._batch_size_override}, timeout={self._timeout_override}, "
                    f"max_concurrent={self._max_concurrent_override}")
 
@@ -88,13 +95,17 @@ class StreamProbeTask(TaskScheduler):
         channel groups so the task uses the prober's updated settings.
         """
         self._prober = prober
-        # Clear cached channel groups - use prober's settings instead
-        self._channel_groups = []
+        # Clear cached channel groups - will be set by schedule parameters on next run
+        self._channel_groups = None
         logger.info(f"[{self.task_id}] Prober updated, cleared channel groups cache")
 
     def set_channel_groups(self, groups: list[str]):
         """Set channel groups to filter by for this run."""
         self._channel_groups = groups
+
+    async def _create_progress_notification(self):
+        """Skip task engine notification — StreamProber creates its own."""
+        pass
 
     async def validate_config(self) -> tuple[bool, str]:
         """Validate that we have a prober instance."""
@@ -145,7 +156,38 @@ class StreamProbeTask(TaskScheduler):
                 logger.info(f"[{self.task_id}] Using schedule max_concurrent: {self._prober.max_concurrent_probes}")
 
             # Determine channel groups to use
-            channel_groups = self._channel_groups if self._channel_groups else None
+            # None = not configured (probe everything), [] = explicitly empty (probe nothing)
+            channel_groups = self._channel_groups if self._channel_groups is not None else None
+
+            if self._auto_sync_groups:
+                # Auto-sync mode: always probe ALL current groups, ignore stored list
+                logger.info(f"[{self.task_id}] Auto-sync enabled, probing all current groups")
+                channel_groups = None  # None = probe everything
+            elif channel_groups:
+                # Fixed-list mode: validate stored IDs/names against current groups
+                # Note: stale groups are auto-removed on schedule load, but validate
+                # here too in case groups were deleted between loads
+                try:
+                    current_groups = await self._prober.client.get_channel_groups()
+                    current_by_id = {g["id"]: g.get("name") for g in current_groups}
+                    current_by_name = {g.get("name"): g for g in current_groups}
+
+                    if channel_groups and isinstance(channel_groups[0], int):
+                        valid_ids = [gid for gid in channel_groups if gid in current_by_id]
+                        stale_count = len(channel_groups) - len(valid_ids)
+                        valid_groups = [current_by_id[gid] for gid in valid_ids]
+                    else:
+                        valid_groups = [g for g in channel_groups if g in current_by_name]
+                        stale_count = len(channel_groups) - len(valid_groups)
+
+                    if stale_count:
+                        logger.warning(f"[{self.task_id}] Skipping {stale_count} stale group(s) (will be auto-removed on next schedule load)")
+
+                    # Use validated group names; if all were stale, keep empty list
+                    # (empty = probe nothing, not probe everything)
+                    channel_groups = valid_groups
+                except Exception as e:
+                    logger.warning(f"[{self.task_id}] Failed to validate channel groups: {e}")
 
             # Start the probe in background so we can poll for progress
             logger.info(f"[{self.task_id}] Starting stream probe (groups: {channel_groups})")
@@ -265,7 +307,8 @@ class StreamProbeTask(TaskScheduler):
             self._prober.max_concurrent_probes = original_max_concurrent
 
             # Clear all schedule parameter overrides
-            self._channel_groups = []
+            self._channel_groups = None
+            self._auto_sync_groups = False
             self._batch_size_override = None
             self._timeout_override = None
             self._max_concurrent_override = None

@@ -4,6 +4,7 @@ M3U Digest Task.
 Scheduled task to send digest emails with M3U playlist changes.
 """
 import logging
+import re
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict
 
@@ -16,6 +17,24 @@ from task_registry import register_task
 from m3u_digest_template import M3UDigestTemplate
 
 logger = logging.getLogger(__name__)
+
+
+class _FilteredChange:
+    """Proxy that wraps an M3UChangeLog to override stream names/count after filtering."""
+
+    def __init__(self, original, kept_names: list):
+        self._original = original
+        self._kept_names = kept_names
+
+    def get_stream_names(self) -> list:
+        return self._kept_names
+
+    @property
+    def count(self):
+        return len(self._kept_names)
+
+    def __getattr__(self, name):
+        return getattr(self._original, name)
 
 
 def get_or_create_digest_settings(db: Session) -> M3UDigestSettings:
@@ -161,6 +180,48 @@ class M3UDigestTask(TaskScheduler):
                 changes = [c for c in changes if c.change_type not in ("group_added", "group_removed")]
             if not settings.include_stream_changes:
                 changes = [c for c in changes if c.change_type not in ("streams_added", "streams_removed")]
+
+            # Apply exclude patterns
+            group_patterns_raw = settings.get_exclude_group_patterns()
+            stream_patterns_raw = settings.get_exclude_stream_patterns()
+
+            if group_patterns_raw or stream_patterns_raw:
+                # Compile patterns once
+                group_regexes = []
+                for p in group_patterns_raw:
+                    try:
+                        group_regexes.append(re.compile(p, re.IGNORECASE))
+                    except re.error:
+                        pass  # Skip invalid patterns (validated on save)
+
+                stream_regexes = []
+                for p in stream_patterns_raw:
+                    try:
+                        stream_regexes.append(re.compile(p, re.IGNORECASE))
+                    except re.error:
+                        pass
+
+                filtered_changes = []
+                for change in changes:
+                    # Check group exclude: if group_name matches any pattern, drop it
+                    if group_regexes and change.group_name:
+                        if any(rx.search(change.group_name) for rx in group_regexes):
+                            continue
+
+                    # Check stream exclude: filter individual stream names
+                    if stream_regexes and change.change_type in ("streams_added", "streams_removed"):
+                        original_names = change.get_stream_names()
+                        if original_names:
+                            kept = [n for n in original_names
+                                    if not any(rx.search(n) for rx in stream_regexes)]
+                            if not kept:
+                                continue  # All streams excluded, drop entire entry
+                            if len(kept) < len(original_names):
+                                # Partial exclusion — wrap in a proxy to override count/names
+                                change = _FilteredChange(change, kept)
+
+                    filtered_changes.append(change)
+                changes = filtered_changes
 
             # Check threshold
             if len(changes) < settings.min_changes_threshold and not force:

@@ -187,7 +187,7 @@ interface SettingsTabProps {
   onProbeComplete?: () => void;
 }
 
-type SettingsPage = 'general' | 'channel-defaults' | 'normalization' | 'tag-engine' | 'appearance' | 'email' | 'scheduled-tasks' | 'm3u-digest' | 'maintenance' | 'linked-accounts' | 'auth-settings' | 'user-management' | 'tls-settings';
+type SettingsPage = 'general' | 'channel-defaults' | 'normalization' | 'tag-engine' | 'appearance' | 'email' | 'scheduled-tasks' | 'auto-creation' | 'm3u-digest' | 'maintenance' | 'linked-accounts' | 'auth-settings' | 'user-management' | 'tls-settings';
 
 export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onProbeComplete }: SettingsTabProps) {
   const [activePage, setActivePage] = useState<SettingsPage>('general');
@@ -206,6 +206,14 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
     window.addEventListener('services-restarted', handleServicesRestarted);
     return () => window.removeEventListener('services-restarted', handleServicesRestarted);
   }, [notifications]);
+
+  // Check for pending task editor navigation (from NotificationCenter)
+  useEffect(() => {
+    const pending = sessionStorage.getItem('ecm:open-task-editor');
+    if (pending) {
+      setActivePage('scheduled-tasks');
+    }
+  });
 
   // Connection settings
   const [url, setUrl] = useState('');
@@ -232,6 +240,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   const [streamSortEnabled, setStreamSortEnabled] = useState<SortEnabledMap>({ resolution: true, bitrate: true, framerate: true, m3u_priority: false, audio_channels: false });
   const [m3uAccountPriorities, setM3uAccountPriorities] = useState<Record<string, number>>({});
   const [deprioritizeFailedStreams, setDeprioritizeFailedStreams] = useState(true);
+  const [strikeThreshold, setStrikeThreshold] = useState(3);
 
   // Appearance settings
   const [showStreamUrls, setShowStreamUrls] = useState(true);
@@ -251,6 +260,14 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   // Log level settings
   const [backendLogLevel, setBackendLogLevel] = useState('INFO');
   const [frontendLogLevel, setFrontendLogLevel] = useState('INFO');
+
+  // Auto-creation exclusion settings
+  const [autoCreationExcludedTerms, setAutoCreationExcludedTerms] = useState<string[]>([]);
+  const [newExcludedTermInput, setNewExcludedTermInput] = useState('');
+  const [autoCreationExcludedGroups, setAutoCreationExcludedGroups] = useState<string[]>([]);
+  const [availableStreamGroups, setAvailableStreamGroups] = useState<string[]>([]);
+  const [selectedExcludeGroup, setSelectedExcludeGroup] = useState('');
+  const [autoCreationExcludeAutoSyncGroups, setAutoCreationExcludeAutoSyncGroups] = useState(false);
 
   // M3U Digest settings
   const [digestSettings, setDigestSettings] = useState<M3UDigestSettings | null>(null);
@@ -287,9 +304,12 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   const [bitrateSampleDuration, setBitrateSampleDuration] = useState(10);
   const [parallelProbingEnabled, setParallelProbingEnabled] = useState(true);
   const [maxConcurrentProbes, setMaxConcurrentProbes] = useState(8);
+  const [profileDistributionStrategy, setProfileDistributionStrategy] = useState('fill_first');
   const [skipRecentlyProbedHours, setSkipRecentlyProbedHours] = useState(0);
   const [refreshM3usBeforeProbe, setRefreshM3usBeforeProbe] = useState(true);
   const [autoReorderAfterProbe, setAutoReorderAfterProbe] = useState(false);
+  const [probeRetryCount, setProbeRetryCount] = useState(1);
+  const [probeRetryDelay, setProbeRetryDelay] = useState(2);
   const [streamFetchPageLimit, setStreamFetchPageLimit] = useState(200);
   const [probingAll, setProbingAll] = useState(false);
   const [totalStreamCount, setTotalStreamCount] = useState(100); // Default to 100, will be updated on load
@@ -324,6 +344,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   const [copiedUrl, setCopiedUrl] = useState<string | null>(null);
   // M3U accounts for guidance on max concurrent probes
   const [m3uAccountsMaxStreams, setM3uAccountsMaxStreams] = useState<{ name: string; max_streams: number }[]>([]);
+  const [hasMultipleProfiles, setHasMultipleProfiles] = useState(false);
 
   // Preserve settings not managed by this tab (to avoid overwriting them on save)
   const [linkedM3UAccounts, setLinkedM3UAccounts] = useState<number[][]>([]);
@@ -346,6 +367,13 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   const [loadingAutoCreated, setLoadingAutoCreated] = useState(false);
   const [selectedAutoCreatedGroups, setSelectedAutoCreatedGroups] = useState<Set<number>>(new Set());
   const [clearingAutoCreated, setClearingAutoCreated] = useState(false);
+
+  // Strike rule state
+  const [struckOutStreams, setStruckOutStreams] = useState<api.StruckOutStream[]>([]);
+  const [loadingStruckOut, setLoadingStruckOut] = useState(false);
+  const [removingStruckOut, setRemovingStruckOut] = useState(false);
+  const [selectedStruckOut, setSelectedStruckOut] = useState<Set<number>>(new Set());
+  const [struckOutScanned, setStruckOutScanned] = useState(false);
 
   // Track original URL/username to detect if auth settings changed
   const [originalUrl, setOriginalUrl] = useState('');
@@ -393,6 +421,15 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
     }
   }, [activePage, digestSettings, digestLoading]);
 
+  // Load available stream groups when auto-creation page is activated
+  useEffect(() => {
+    if (activePage === 'auto-creation' && availableStreamGroups.length === 0) {
+      api.getStreamGroups().then(groups => {
+        setAvailableStreamGroups(groups.map(g => g.name).sort((a, b) => a.localeCompare(b)));
+      }).catch(() => {});
+    }
+  }, [activePage]);
+
   // Load M3U accounts to show guidance for max concurrent probes
   const loadM3UAccountsMaxStreams = async () => {
     try {
@@ -401,6 +438,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         .filter(a => a.is_active && a.max_streams > 0)
         .map(a => ({ name: a.name, max_streams: a.max_streams }));
       setM3uAccountsMaxStreams(maxStreamsList);
+      setHasMultipleProfiles(accounts.some(a => a.is_active && a.profiles && a.profiles.length > 1));
     } catch (err) {
       logger.warn('Failed to load M3U accounts for max streams guidance', err);
     }
@@ -538,6 +576,9 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       setTheme(settings.theme || 'dark');
       setVlcOpenBehavior(settings.vlc_open_behavior || 'm3u_fallback');
       setStreamPreviewMode(settings.stream_preview_mode || 'passthrough');
+      setAutoCreationExcludedTerms(settings.auto_creation_excluded_terms ?? []);
+      setAutoCreationExcludedGroups(settings.auto_creation_excluded_groups ?? []);
+      setAutoCreationExcludeAutoSyncGroups(settings.auto_creation_exclude_auto_sync_groups ?? false);
       setDefaultChannelProfileIds(settings.default_channel_profile_ids);
       setEpgAutoMatchThreshold(settings.epg_auto_match_threshold ?? 80);
       setCustomNetworkPrefixes(settings.custom_network_prefixes ?? []);
@@ -562,11 +603,14 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       setBitrateSampleDuration(settings.bitrate_sample_duration ?? 10);
       setParallelProbingEnabled(settings.parallel_probing_enabled ?? true);
       setMaxConcurrentProbes(settings.max_concurrent_probes ?? 8);
+      setProfileDistributionStrategy(settings.profile_distribution_strategy ?? 'fill_first');
       setSkipRecentlyProbedHours(settings.skip_recently_probed_hours ?? 0);
       setRefreshM3usBeforeProbe(settings.refresh_m3us_before_probe ?? true);
       setOriginalRefreshM3usBeforeProbe(settings.refresh_m3us_before_probe ?? true);
       setAutoReorderAfterProbe(settings.auto_reorder_after_probe ?? false);
       setOriginalAutoReorder(settings.auto_reorder_after_probe ?? false);
+      setProbeRetryCount(settings.probe_retry_count ?? 1);
+      setProbeRetryDelay(settings.probe_retry_delay ?? 2);
       setStreamFetchPageLimit(settings.stream_fetch_page_limit ?? 200);
       // Merge saved criteria with any new criteria that may have been added in updates
       const merged = mergeSortCriteria(settings.stream_sort_priority, settings.stream_sort_enabled);
@@ -574,6 +618,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       setStreamSortEnabled(merged.enabled);
       setM3uAccountPriorities(settings.m3u_account_priorities ?? {});
       setDeprioritizeFailedStreams(settings.deprioritize_failed_streams ?? true);
+      setStrikeThreshold(settings.strike_threshold ?? 3);
       // Shared SMTP settings
       setSmtpHost(settings.smtp_host ?? '');
       setSmtpPort(settings.smtp_port ?? 587);
@@ -696,6 +741,9 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         frontend_log_level: frontendLogLevel,
         vlc_open_behavior: vlcOpenBehavior,
         stream_preview_mode: streamPreviewMode,
+        auto_creation_excluded_terms: autoCreationExcludedTerms,
+        auto_creation_excluded_groups: autoCreationExcludedGroups,
+        auto_creation_exclude_auto_sync_groups: autoCreationExcludeAutoSyncGroups,
         linked_m3u_accounts: linkedM3UAccounts,
         // Stream probe settings (scheduled probing is controlled by Task Engine)
         stream_probe_batch_size: streamProbeBatchSize,
@@ -703,14 +751,18 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         bitrate_sample_duration: bitrateSampleDuration,
         parallel_probing_enabled: parallelProbingEnabled,
         max_concurrent_probes: maxConcurrentProbes,
+        profile_distribution_strategy: profileDistributionStrategy,
         skip_recently_probed_hours: skipRecentlyProbedHours,
         refresh_m3us_before_probe: refreshM3usBeforeProbe,
         auto_reorder_after_probe: autoReorderAfterProbe,
+        probe_retry_count: probeRetryCount,
+        probe_retry_delay: probeRetryDelay,
         stream_fetch_page_limit: streamFetchPageLimit,
         stream_sort_priority: streamSortPriority,
         stream_sort_enabled: streamSortEnabled,
         m3u_account_priorities: m3uAccountPriorities,
         deprioritize_failed_streams: deprioritizeFailedStreams,
+        strike_threshold: strikeThreshold,
         // Shared SMTP settings
         smtp_host: smtpHost,
         smtp_port: smtpPort,
@@ -845,6 +897,8 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         show_detailed_list: digestSettings.show_detailed_list,
         min_changes_threshold: digestSettings.min_changes_threshold,
         send_to_discord: digestSettings.send_to_discord,
+        exclude_group_patterns: digestSettings.exclude_group_patterns,
+        exclude_stream_patterns: digestSettings.exclude_stream_patterns,
       });
       setDigestSettings(updated);
       notifications.success('Settings saved successfully');
@@ -869,6 +923,8 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         show_detailed_list: digestSettings.show_detailed_list,
         min_changes_threshold: digestSettings.min_changes_threshold,
         send_to_discord: digestSettings.send_to_discord,
+        exclude_group_patterns: digestSettings.exclude_group_patterns,
+        exclude_stream_patterns: digestSettings.exclude_stream_patterns,
       });
       // Now send the test
       const result = await api.sendTestM3UDigest();
@@ -899,6 +955,54 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
     setDigestSettings({
       ...digestSettings,
       email_recipients: digestSettings.email_recipients.filter(e => e !== email),
+    });
+  };
+
+  const handleAddGroupExcludePattern = (pattern: string) => {
+    if (!digestSettings || !pattern.trim()) return;
+    const trimmed = pattern.trim();
+    if (digestSettings.exclude_group_patterns.includes(trimmed)) return;
+    try {
+      new RegExp(trimmed);
+    } catch {
+      notifications.error(`Invalid regex: ${trimmed}`, 'Invalid Pattern');
+      return;
+    }
+    setDigestSettings({
+      ...digestSettings,
+      exclude_group_patterns: [...digestSettings.exclude_group_patterns, trimmed],
+    });
+  };
+
+  const handleRemoveGroupExcludePattern = (pattern: string) => {
+    if (!digestSettings) return;
+    setDigestSettings({
+      ...digestSettings,
+      exclude_group_patterns: digestSettings.exclude_group_patterns.filter(p => p !== pattern),
+    });
+  };
+
+  const handleAddStreamExcludePattern = (pattern: string) => {
+    if (!digestSettings || !pattern.trim()) return;
+    const trimmed = pattern.trim();
+    if (digestSettings.exclude_stream_patterns.includes(trimmed)) return;
+    try {
+      new RegExp(trimmed);
+    } catch {
+      notifications.error(`Invalid regex: ${trimmed}`, 'Invalid Pattern');
+      return;
+    }
+    setDigestSettings({
+      ...digestSettings,
+      exclude_stream_patterns: [...digestSettings.exclude_stream_patterns, trimmed],
+    });
+  };
+
+  const handleRemoveStreamExcludePattern = (pattern: string) => {
+    if (!digestSettings) return;
+    setDigestSettings({
+      ...digestSettings,
+      exclude_stream_patterns: digestSettings.exclude_stream_patterns.filter(p => p !== pattern),
     });
   };
 
@@ -1065,6 +1169,39 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       return date.toLocaleString();
     } catch {
       return isoTimestamp;
+    }
+  };
+
+  const handleScanStruckOut = async () => {
+    setLoadingStruckOut(true);
+    setStruckOutScanned(true);
+    try {
+      const result = await api.getStruckOutStreams();
+      setStruckOutStreams(result.streams);
+      setSelectedStruckOut(new Set());
+      if (result.streams.length === 0) {
+        notifications.success('No struck-out streams found.');
+      }
+    } catch (err) {
+      notifications.error(`Failed to scan for struck-out streams: ${err}`);
+    } finally {
+      setLoadingStruckOut(false);
+    }
+  };
+
+  const handleRemoveStruckOut = async () => {
+    if (selectedStruckOut.size === 0) return;
+    setRemovingStruckOut(true);
+    try {
+      const result = await api.removeStruckOutStreams(Array.from(selectedStruckOut));
+      notifications.success(`Removed ${selectedStruckOut.size} stream(s) from ${result.removed_from_channels} channel assignment(s).`);
+      // Rescan
+      await handleScanStruckOut();
+      onSaved();
+    } catch (err) {
+      notifications.error(`Failed to remove struck-out streams: ${err}`);
+    } finally {
+      setRemovingStruckOut(false);
     }
   };
 
@@ -1972,6 +2109,8 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
 
   // State for new email input in digest settings
   const [newDigestEmail, setNewDigestEmail] = useState('');
+  const [newGroupExcludePattern, setNewGroupExcludePattern] = useState('');
+  const [newStreamExcludePattern, setNewStreamExcludePattern] = useState('');
 
   // Handle SMTP test
   const handleTestSmtp = async () => {
@@ -2063,6 +2202,171 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       setTelegramTesting(false);
     }
   };
+
+  const renderAutoCreationPage = () => (
+    <div className="settings-page">
+      <div className="settings-page-header">
+        <h2>Auto Creation</h2>
+        <p>Configure global exclusion filters for the auto-creation pipeline. Streams matching these filters will be excluded before any rules are evaluated.</p>
+      </div>
+
+      {/* Stream Name Exclusion List */}
+      <div className="settings-section">
+        <div className="settings-section-header">
+          <span className="material-icons">block</span>
+          <h3>Stream Name Exclusion</h3>
+        </div>
+        <div className="settings-group">
+          <div className="form-group-vertical">
+            <label>Excluded Terms</label>
+            <span className="form-description">
+              Streams whose name contains any of these terms (case-insensitive) will be excluded from the pipeline.
+            </span>
+            <div className="email-recipients-list">
+              {autoCreationExcludedTerms.length === 0 ? (
+                <span className="no-recipients">No excluded terms configured</span>
+              ) : (
+                autoCreationExcludedTerms.map((term) => (
+                  <span key={term} className="email-recipient-tag">
+                    {term}
+                    <button
+                      className="remove-btn"
+                      onClick={() => setAutoCreationExcludedTerms(prev => prev.filter(t => t !== term))}
+                      title="Remove term"
+                    >
+                      <span className="material-icons">close</span>
+                    </button>
+                  </span>
+                ))
+              )}
+            </div>
+            <div className="add-email-row">
+              <input
+                type="text"
+                placeholder='e.g. PPV, Adult, XXX'
+                value={newExcludedTermInput}
+                onChange={(e) => setNewExcludedTermInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && newExcludedTermInput.trim()) {
+                    const term = newExcludedTermInput.trim();
+                    if (!autoCreationExcludedTerms.includes(term)) {
+                      setAutoCreationExcludedTerms(prev => [...prev, term]);
+                    }
+                    setNewExcludedTermInput('');
+                  }
+                }}
+              />
+              <button
+                className="btn-secondary"
+                onClick={() => {
+                  const term = newExcludedTermInput.trim();
+                  if (term && !autoCreationExcludedTerms.includes(term)) {
+                    setAutoCreationExcludedTerms(prev => [...prev, term]);
+                  }
+                  setNewExcludedTermInput('');
+                }}
+                disabled={!newExcludedTermInput.trim()}
+              >
+                <span className="material-icons">add</span>
+                Add
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* M3U Group Exclusion List */}
+      <div className="settings-section">
+        <div className="settings-section-header">
+          <span className="material-icons">folder_off</span>
+          <h3>M3U Group Exclusion</h3>
+        </div>
+        <div className="settings-group">
+          <div className="form-group-vertical">
+            <label>Excluded Groups</label>
+            <span className="form-description">
+              Streams belonging to any of these M3U groups (case-insensitive exact match) will be excluded.
+            </span>
+            <div className="email-recipients-list">
+              {autoCreationExcludedGroups.length === 0 ? (
+                <span className="no-recipients">No excluded groups configured</span>
+              ) : (
+                autoCreationExcludedGroups.map((group) => (
+                  <span key={group} className="email-recipient-tag">
+                    {group}
+                    <button
+                      className="remove-btn"
+                      onClick={() => setAutoCreationExcludedGroups(prev => prev.filter(g => g !== group))}
+                      title="Remove group"
+                    >
+                      <span className="material-icons">close</span>
+                    </button>
+                  </span>
+                ))
+              )}
+            </div>
+            <div className="add-email-row">
+              <CustomSelect
+                value={selectedExcludeGroup}
+                onChange={(val) => setSelectedExcludeGroup(val)}
+                searchable
+                searchPlaceholder="Search groups..."
+                placeholder="Select a group to exclude..."
+                options={availableStreamGroups
+                  .filter(g => !autoCreationExcludedGroups.some(eg => eg.toLowerCase() === g.toLowerCase()))
+                  .map(g => ({ value: g, label: g }))}
+              />
+              <button
+                className="btn-secondary"
+                onClick={() => {
+                  if (selectedExcludeGroup && !autoCreationExcludedGroups.includes(selectedExcludeGroup)) {
+                    setAutoCreationExcludedGroups(prev => [...prev, selectedExcludeGroup]);
+                  }
+                  setSelectedExcludeGroup('');
+                }}
+                disabled={!selectedExcludeGroup}
+              >
+                <span className="material-icons">add</span>
+                Add
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Auto-Sync Group Exclusion */}
+      <div className="settings-section">
+        <div className="settings-section-header">
+          <span className="material-icons">sync_disabled</span>
+          <h3>Auto-Sync Group Exclusion</h3>
+        </div>
+        <div className="settings-group">
+          <div className="form-group-vertical">
+            <label className="checkbox-label">
+              <input
+                type="checkbox"
+                checked={autoCreationExcludeAutoSyncGroups}
+                onChange={(e) => setAutoCreationExcludeAutoSyncGroups(e.target.checked)}
+              />
+              Exclude streams in Auto Channel Sync groups
+            </label>
+            <span className="form-description">
+              When enabled, streams belonging to Dispatcharr channel groups that have Auto Channel Sync
+              enabled will be excluded from the auto-creation pipeline.
+            </span>
+          </div>
+        </div>
+      </div>
+
+      <div className="settings-actions">
+        <div className="settings-actions-left" />
+        <button className="btn-primary" onClick={handleSave} disabled={loading}>
+          <span className="material-icons">save</span>
+          {loading ? 'Saving...' : 'Save Settings'}
+        </button>
+      </div>
+    </div>
+  );
 
   const renderEmailSettingsPage = () => (
     <div className="settings-page">
@@ -2422,7 +2726,8 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                   min="1"
                   max="100"
                   value={digestSettings.min_changes_threshold}
-                  onChange={(e) => handleDigestSettingChange('min_changes_threshold', Math.max(1, parseInt(e.target.value) || 1))}
+                  onChange={(e) => handleDigestSettingChange('min_changes_threshold', e.target.value === '' ? 1 : parseInt(e.target.value))}
+                  onBlur={() => handleDigestSettingChange('min_changes_threshold', Math.max(1, Math.min(100, digestSettings.min_changes_threshold || 1)))}
                 />
               </div>
             </div>
@@ -2472,6 +2777,120 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                 <div className="checkbox-content">
                   <label htmlFor="showDetailedList">Show detailed list</label>
                   <p>Include the full list of changed groups and streams in the digest. Disable to show only summary counts.</p>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Exclude Patterns Section */}
+          <div className="settings-section">
+            <div className="settings-section-header">
+              <span className="material-icons">filter_alt</span>
+              <h3>Exclude Patterns</h3>
+            </div>
+
+            <div className="settings-group">
+              <div className="form-group-vertical">
+                <label>Group Exclude Patterns</label>
+                <span className="form-description">
+                  Regex patterns to exclude groups from the digest. Changes in matching groups will be omitted. Case-insensitive.
+                </span>
+                <div className="email-recipients-list">
+                  {digestSettings.exclude_group_patterns.length === 0 ? (
+                    <span className="no-recipients">No exclude patterns configured</span>
+                  ) : (
+                    digestSettings.exclude_group_patterns.map((pattern) => (
+                      <span key={pattern} className="email-recipient-tag">
+                        <code>{pattern}</code>
+                        <button
+                          className="remove-btn"
+                          onClick={() => handleRemoveGroupExcludePattern(pattern)}
+                          title="Remove pattern"
+                        >
+                          <span className="material-icons">close</span>
+                        </button>
+                      </span>
+                    ))
+                  )}
+                </div>
+                <div className="add-email-row">
+                  <input
+                    type="text"
+                    placeholder="e.g. ESPN\+ or PPV.*"
+                    value={newGroupExcludePattern}
+                    onChange={(e) => setNewGroupExcludePattern(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && newGroupExcludePattern.trim()) {
+                        handleAddGroupExcludePattern(newGroupExcludePattern);
+                        setNewGroupExcludePattern('');
+                      }
+                    }}
+                  />
+                  <button
+                    className="btn-secondary"
+                    onClick={() => {
+                      if (newGroupExcludePattern.trim()) {
+                        handleAddGroupExcludePattern(newGroupExcludePattern);
+                        setNewGroupExcludePattern('');
+                      }
+                    }}
+                    disabled={!newGroupExcludePattern.trim()}
+                  >
+                    <span className="material-icons">add</span>
+                    Add
+                  </button>
+                </div>
+              </div>
+
+              <div className="form-group-vertical">
+                <label>Stream Exclude Patterns</label>
+                <span className="form-description">
+                  Regex patterns to exclude individual streams from the digest. Matching stream names will be omitted from added/removed lists. Case-insensitive.
+                </span>
+                <div className="email-recipients-list">
+                  {digestSettings.exclude_stream_patterns.length === 0 ? (
+                    <span className="no-recipients">No exclude patterns configured</span>
+                  ) : (
+                    digestSettings.exclude_stream_patterns.map((pattern) => (
+                      <span key={pattern} className="email-recipient-tag">
+                        <code>{pattern}</code>
+                        <button
+                          className="remove-btn"
+                          onClick={() => handleRemoveStreamExcludePattern(pattern)}
+                          title="Remove pattern"
+                        >
+                          <span className="material-icons">close</span>
+                        </button>
+                      </span>
+                    ))
+                  )}
+                </div>
+                <div className="add-email-row">
+                  <input
+                    type="text"
+                    placeholder="e.g. PPV.* or League Pass"
+                    value={newStreamExcludePattern}
+                    onChange={(e) => setNewStreamExcludePattern(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && newStreamExcludePattern.trim()) {
+                        handleAddStreamExcludePattern(newStreamExcludePattern);
+                        setNewStreamExcludePattern('');
+                      }
+                    }}
+                  />
+                  <button
+                    className="btn-secondary"
+                    onClick={() => {
+                      if (newStreamExcludePattern.trim()) {
+                        handleAddStreamExcludePattern(newStreamExcludePattern);
+                        setNewStreamExcludePattern('');
+                      }
+                    }}
+                    disabled={!newStreamExcludePattern.trim()}
+                  >
+                    <span className="material-icons">add</span>
+                    Add
+                  </button>
                 </div>
               </div>
             </div>
@@ -2660,7 +3079,8 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                 min="1"
                 max={totalStreamCount}
                 value={streamProbeBatchSize}
-                onChange={(e) => setStreamProbeBatchSize(Math.max(1, Math.min(totalStreamCount, parseInt(e.target.value) || 10)))}
+                onChange={(e) => setStreamProbeBatchSize(e.target.value === '' ? 10 : parseInt(e.target.value))}
+                onBlur={() => setStreamProbeBatchSize(Math.max(1, Math.min(totalStreamCount, streamProbeBatchSize || 10)))}
               />
             </div>
 
@@ -2673,7 +3093,8 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                 min="5"
                 max="120"
                 value={streamProbeTimeout}
-                onChange={(e) => setStreamProbeTimeout(Math.max(5, Math.min(120, parseInt(e.target.value) || 30)))}
+                onChange={(e) => setStreamProbeTimeout(e.target.value === '' ? 30 : parseInt(e.target.value))}
+                onBlur={() => setStreamProbeTimeout(Math.max(5, Math.min(120, streamProbeTimeout || 30)))}
               />
             </div>
 
@@ -2703,7 +3124,8 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                 min="50"
                 max="1000"
                 value={streamFetchPageLimit}
-                onChange={(e) => setStreamFetchPageLimit(Math.max(50, Math.min(1000, parseInt(e.target.value) || 200)))}
+                onChange={(e) => setStreamFetchPageLimit(e.target.value === '' ? 200 : parseInt(e.target.value))}
+                onBlur={() => setStreamFetchPageLimit(Math.max(50, Math.min(1000, streamFetchPageLimit || 200)))}
               />
             </div>
 
@@ -2722,7 +3144,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
               </span>
             </div>
 
-            {parallelProbingEnabled && (
+            {parallelProbingEnabled && (<>
               <div className="form-group-vertical">
                 <label htmlFor="maxConcurrentProbes">Max concurrent probes</label>
                 <span className="form-description">
@@ -2765,7 +3187,28 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                   </span>
                 )}
               </div>
-            )}
+
+              {hasMultipleProfiles && (
+              <div className="form-group-vertical">
+                <label>Profile distribution strategy</label>
+                <span className="form-description">
+                  Controls how probe connections are spread across M3U profiles within the same account.{' '}
+                  <strong>Fill First</strong> uses the default profile until it hits its connection limit, then spills over to the next profile — best when you want to minimize the number of profiles in use.{' '}
+                  <strong>Round Robin</strong> cycles through profiles one at a time so each gets an equal share of probes — good for even wear across profiles.{' '}
+                  <strong>Least Loaded</strong> always picks the profile with the most remaining capacity — best for maximizing throughput when profiles have different connection limits.
+                </span>
+                <CustomSelect
+                  value={profileDistributionStrategy}
+                  onChange={(value) => setProfileDistributionStrategy(value)}
+                  options={[
+                    { value: 'fill_first', label: 'Fill First' },
+                    { value: 'round_robin', label: 'Round Robin' },
+                    { value: 'least_loaded', label: 'Least Loaded' },
+                  ]}
+                />
+              </div>
+              )}
+            </>)}
 
             <div className="form-group-vertical">
               <label htmlFor="skipRecentlyProbedHours">Skip recently probed streams (hours)</label>
@@ -2779,7 +3222,8 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                 min="0"
                 max="168"
                 value={skipRecentlyProbedHours}
-                onChange={(e) => setSkipRecentlyProbedHours(Math.max(0, Math.min(168, parseInt(e.target.value) || 0)))}
+                onChange={(e) => setSkipRecentlyProbedHours(e.target.value === '' ? 0 : parseInt(e.target.value))}
+                onBlur={() => setSkipRecentlyProbedHours(Math.max(0, Math.min(168, skipRecentlyProbedHours || 0)))}
               />
             </div>
 
@@ -2810,6 +3254,39 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                 When enabled, streams within channels will be automatically reordered using smart sort after probe completes.
                 Failed streams are deprioritized, and working streams are sorted by resolution, bitrate, and framerate.
               </span>
+            </div>
+
+            <div className="form-group-vertical">
+              <label htmlFor="probeRetryCount">Probe retry count</label>
+              <span className="form-description">
+                Number of times to retry when ffprobe fails but the stream URL is reachable (HTTP 200).
+                Handles transient provider glitches. Set to 0 to disable retries.
+              </span>
+              <input
+                id="probeRetryCount"
+                type="number"
+                min="0"
+                max="5"
+                value={probeRetryCount}
+                onChange={(e) => setProbeRetryCount(e.target.value === '' ? 0 : parseInt(e.target.value))}
+                onBlur={() => setProbeRetryCount(Math.max(0, Math.min(5, probeRetryCount || 0)))}
+              />
+            </div>
+
+            <div className="form-group-vertical">
+              <label htmlFor="probeRetryDelay">Probe retry delay (seconds)</label>
+              <span className="form-description">
+                Seconds to wait between retries. Longer delays give providers more time to recover from transient errors.
+              </span>
+              <input
+                id="probeRetryDelay"
+                type="number"
+                min="1"
+                max="30"
+                value={probeRetryDelay}
+                onChange={(e) => setProbeRetryDelay(e.target.value === '' ? 1 : parseInt(e.target.value))}
+                onBlur={() => setProbeRetryDelay(Math.max(1, Math.min(30, probeRetryDelay || 1)))}
+              />
             </div>
 
           </div>
@@ -3112,6 +3589,144 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         </div>
       </div>
 
+      {/* Strike Rule Section */}
+      <div className="settings-section">
+        <div className="settings-section-header">
+          <span className="material-icons">gavel</span>
+          <h3>Strike Rule</h3>
+        </div>
+        <p className="form-hint" style={{ marginBottom: '1rem' }}>
+          Flag streams that repeatedly fail probing. When a stream reaches the threshold of consecutive failures,
+          it is marked as "struck out" and can be bulk-removed from all channels.
+        </p>
+
+        <div className="settings-group">
+          <div className="form-group-vertical">
+            <label htmlFor="strikeThreshold">Strike threshold</label>
+            <span className="form-description">
+              Number of consecutive probe failures before a stream is flagged. Set to 0 to disable.
+            </span>
+            <input
+              id="strikeThreshold"
+              type="number"
+              min="0"
+              max="20"
+              value={strikeThreshold}
+              onChange={(e) => setStrikeThreshold(e.target.value === '' ? 3 : parseInt(e.target.value))}
+              onBlur={() => setStrikeThreshold(Math.max(0, Math.min(20, strikeThreshold || 0)))}
+              style={{ width: '80px' }}
+            />
+          </div>
+        </div>
+
+        {strikeThreshold > 0 && (
+          <div className="settings-group" style={{ marginTop: '1rem' }}>
+            <div className="settings-section-header" style={{ marginBottom: '0.5rem' }}>
+              <span className="material-icons">warning_amber</span>
+              <h3 style={{ fontSize: '0.95rem' }}>Struck Out Streams</h3>
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+              <button
+                className="btn-secondary"
+                onClick={handleScanStruckOut}
+                disabled={loadingStruckOut || removingStruckOut}
+              >
+                <span className="material-icons">search</span>
+                {loadingStruckOut ? 'Scanning...' : 'Scan for Struck Out Streams'}
+              </button>
+            </div>
+
+            {struckOutScanned && struckOutStreams.length > 0 && (
+              <div style={{ marginTop: '1rem' }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.75rem' }}>
+                  <p style={{ margin: 0 }}>
+                    Found <strong>{struckOutStreams.length}</strong> struck-out stream(s)
+                  </p>
+                  <div style={{ display: 'flex', gap: '0.5rem' }}>
+                    <button
+                      className="btn-secondary"
+                      style={{ fontSize: '0.75rem', padding: '0.25rem 0.5rem' }}
+                      onClick={() => setSelectedStruckOut(new Set(struckOutStreams.map(s => s.stream_id)))}
+                    >
+                      Select All
+                    </button>
+                    <button
+                      className="btn-secondary"
+                      style={{ fontSize: '0.75rem', padding: '0.25rem 0.5rem' }}
+                      onClick={() => setSelectedStruckOut(new Set())}
+                    >
+                      Select None
+                    </button>
+                  </div>
+                </div>
+
+                <div style={{ maxHeight: '300px', overflowY: 'auto', border: '1px solid var(--border-color)', borderRadius: '6px' }}>
+                  {struckOutStreams.map((stream) => (
+                    <label
+                      key={stream.stream_id}
+                      className="checkbox-label"
+                      style={{
+                        display: 'flex',
+                        alignItems: 'flex-start',
+                        gap: '0.5rem',
+                        padding: '0.5rem 0.75rem',
+                        borderBottom: '1px solid var(--border-color)',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={selectedStruckOut.has(stream.stream_id)}
+                        onChange={(e) => {
+                          const next = new Set(selectedStruckOut);
+                          if (e.target.checked) next.add(stream.stream_id);
+                          else next.delete(stream.stream_id);
+                          setSelectedStruckOut(next);
+                        }}
+                        style={{ marginTop: '2px' }}
+                      />
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontWeight: 500 }}>{stream.stream_name || `Stream #${stream.stream_id}`}</div>
+                        <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', display: 'flex', flexWrap: 'wrap', gap: '0.5rem', marginTop: '2px' }}>
+                          <span style={{ color: '#f87171' }}>
+                            {stream.consecutive_failures}/{strikeThreshold} strikes
+                          </span>
+                          {stream.error_message && (
+                            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '300px' }} title={stream.error_message}>
+                              {stream.error_message}
+                            </span>
+                          )}
+                          {stream.last_probed && (
+                            <span>Last probed: {formatTimestamp(stream.last_probed)}</span>
+                          )}
+                        </div>
+                        {stream.channels.length > 0 && (
+                          <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '2px' }}>
+                            In channels: {stream.channels.map(c => c.name).join(', ')}
+                          </div>
+                        )}
+                      </div>
+                    </label>
+                  ))}
+                </div>
+
+                <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '1rem' }}>
+                  <button
+                    className="btn-danger"
+                    onClick={handleRemoveStruckOut}
+                    disabled={selectedStruckOut.size === 0 || removingStruckOut}
+                  >
+                    <span className="material-icons">delete_forever</span>
+                    {removingStruckOut ? 'Removing...' : `Remove ${selectedStruckOut.size} Stream(s) from All Channels`}
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
       {/* Auto-Created Channels Section */}
       <div className="settings-section">
         <div className="settings-section-header">
@@ -3294,6 +3909,13 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
             Scheduled Tasks
           </li>
           <li
+            className={`settings-nav-item ${activePage === 'auto-creation' ? 'active' : ''}`}
+            onClick={() => setActivePage('auto-creation')}
+          >
+            <span className="material-icons">auto_awesome</span>
+            Auto Creation
+          </li>
+          <li
             className={`settings-nav-item ${activePage === 'm3u-digest' ? 'active' : ''}`}
             onClick={() => setActivePage('m3u-digest')}
           >
@@ -3351,6 +3973,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         {activePage === 'appearance' && renderAppearancePage()}
         {activePage === 'email' && renderEmailSettingsPage()}
         {activePage === 'scheduled-tasks' && <ScheduledTasksSection userTimezone={userTimezone} />}
+        {activePage === 'auto-creation' && renderAutoCreationPage()}
         {activePage === 'm3u-digest' && renderM3UDigestPage()}
         {activePage === 'maintenance' && renderMaintenancePage()}
         {activePage === 'linked-accounts' && <LinkedAccountsSection />}

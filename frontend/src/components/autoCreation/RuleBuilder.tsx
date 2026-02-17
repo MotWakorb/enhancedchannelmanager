@@ -112,6 +112,17 @@ export function RuleBuilder({
 
     if (actions.length === 0) {
       newErrors.actions = 'At least one action is required';
+    } else {
+      // Validate individual action fields
+      for (const [i, action] of actions.entries()) {
+        if (action.type === 'create_channel' && !action.group_id) {
+          const hasPriorCreateGroup = actions.slice(0, i).some(a => a.type === 'create_group');
+          if (!hasPriorCreateGroup) {
+            newErrors.actions = 'Create Channel requires a target group (or a prior Create Group action)';
+            break;
+          }
+        }
+      }
     }
 
     setErrors(newErrors);
@@ -536,7 +547,7 @@ export function RuleBuilder({
 
 // Helper function to check if a condition type needs a value
 function needsValue(type: ConditionType): boolean {
-  const noValueTypes: ConditionType[] = ['always', 'never', 'tvg_id_exists', 'logo_exists', 'has_channel', 'channel_has_streams', 'has_audio_tracks'];
+  const noValueTypes: ConditionType[] = ['always', 'never', 'tvg_id_exists', 'logo_exists', 'has_channel', 'channel_has_streams', 'has_audio_tracks', 'normalized_name_exists', 'normalized_name_not_exists'];
   return !noValueTypes.includes(type);
 }
 
@@ -556,6 +567,7 @@ function ConditionTypeSelector({
         { type: 'stream_name_matches' as ConditionType, label: 'Stream Name Matches (Regex)' },
         { type: 'stream_group_contains' as ConditionType, label: 'Stream Group Contains' },
         { type: 'stream_group_matches' as ConditionType, label: 'Stream Group Matches (Regex)' },
+        { type: 'provider_is' as ConditionType, label: 'M3U Account' },
         { type: 'quality_min' as ConditionType, label: 'Minimum Quality' },
         { type: 'quality_max' as ConditionType, label: 'Maximum Quality' },
         { type: 'tvg_id_exists' as ConditionType, label: 'TVG-ID Exists' },
@@ -567,6 +579,8 @@ function ConditionTypeSelector({
       types: [
         { type: 'has_channel' as ConditionType, label: 'Has Channel' },
         { type: 'channel_exists_with_name' as ConditionType, label: 'Channel Exists With Name' },
+        { type: 'normalized_name_in_group' as ConditionType, label: 'Normalized Match in Group' },
+        { type: 'normalized_name_exists' as ConditionType, label: 'Normalized Match (Any Group)' },
       ],
     },
     {

@@ -184,6 +184,15 @@ def _run_migrations(engine) -> None:
             # Add probe_on_sort column to auto_creation_rules (v0.12.0 - Quality probing)
             _add_auto_creation_rules_probe_on_sort_column(conn)
 
+            # Add consecutive_failures column to stream_stats (v0.12.5 - Strike rule)
+            _add_stream_stats_consecutive_failures_column(conn)
+
+            # Add exclude pattern columns to m3u_digest_settings (v0.12.5 - Digest exclude filters)
+            _add_m3u_digest_exclude_patterns_columns(conn)
+
+            # Add streams_excluded column to auto_creation_executions (v0.12.5 - Global exclusion filters)
+            _add_auto_creation_executions_streams_excluded_column(conn)
+
             logger.debug("All migrations complete - schema is up to date")
     except Exception as e:
         logger.exception(f"Migration failed: {e}")
@@ -718,7 +727,10 @@ def _populate_builtin_tags(conn) -> None:
                 # Southeast Asia
                 "SG", "MY", "TH", "VN", "PH", "ID", "MM",
                 # Oceania
-                "AU", "NZ", "FJ"
+                "AU", "NZ", "FJ",
+                # Common alpha-3 / regional codes (for merge_streams core-name matching)
+                "USA", "CAN", "GBR", "AUS", "NZL", "MEX", "BRA",
+                "LATAM", "LATINO", "LATIN"
             ]
         },
         "Timezone Tags": {
@@ -730,7 +742,7 @@ def _populate_builtin_tags(conn) -> None:
                 "EST", "EDT", "ET", "CST", "CDT", "CT", "MST", "MDT", "MT",
                 "PST", "PDT", "PT", "AST", "ADT", "HST", "AKST", "AKDT",
                 # Europe
-                "CET", "CEST", "EET", "EEST", "WET", "WEST", "BST", "IST",
+                "CET", "CEST", "EET", "EEST", "WET", "WEST", "EAST", "BST", "IST",
                 # Asia - East
                 "JST", "KST", "CST", "HKT", "PHT", "SGT", "MYT", "WIB", "WITA", "WIT",
                 # Asia - South
@@ -788,6 +800,10 @@ def _populate_builtin_tags(conn) -> None:
         "Network Tags": {
             "description": "Network and stream type indicators",
             "tags": ["PPV", "LIVE", "BACKUP", "VIP", "PREMIUM", "24/7", "REPLAY"]
+        },
+        "Provider Tags": {
+            "description": "Provider source indicators, often in parentheses like (S) or (H)",
+            "tags": ["S", "H", "A", "E", "F", "D"]
         }
     }
 
@@ -1361,6 +1377,73 @@ def _add_auto_creation_rules_probe_on_sort_column(conn) -> None:
         conn.execute(text("ALTER TABLE auto_creation_rules ADD COLUMN probe_on_sort BOOLEAN DEFAULT 0 NOT NULL"))
         conn.commit()
         logger.info("Migration complete: added probe_on_sort column")
+
+
+def _add_stream_stats_consecutive_failures_column(conn) -> None:
+    """Add consecutive_failures column to stream_stats table (v0.12.5 - Strike rule)."""
+    from sqlalchemy import text
+
+    result = conn.execute(text("PRAGMA table_info(stream_stats)"))
+    columns = [row[1] for row in result.fetchall()]
+
+    if "consecutive_failures" not in columns:
+        logger.info("Adding consecutive_failures column to stream_stats")
+        conn.execute(text(
+            "ALTER TABLE stream_stats ADD COLUMN consecutive_failures INTEGER DEFAULT 0 NOT NULL"
+        ))
+        conn.commit()
+        logger.info("Migration complete: added consecutive_failures column to stream_stats")
+
+
+def _add_m3u_digest_exclude_patterns_columns(conn) -> None:
+    """Add exclude_group_patterns and exclude_stream_patterns columns to m3u_digest_settings."""
+    from sqlalchemy import text
+
+    # Check if m3u_digest_settings table exists
+    result = conn.execute(text(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='m3u_digest_settings'"
+    ))
+    if not result.fetchone():
+        logger.debug("m3u_digest_settings table doesn't exist yet, skipping migration")
+        return
+
+    result = conn.execute(text("PRAGMA table_info(m3u_digest_settings)"))
+    columns = [row[1] for row in result.fetchall()]
+
+    if "exclude_group_patterns" not in columns:
+        logger.info("Adding exclude_group_patterns column to m3u_digest_settings")
+        conn.execute(text(
+            "ALTER TABLE m3u_digest_settings ADD COLUMN exclude_group_patterns TEXT"
+        ))
+        conn.commit()
+
+    if "exclude_stream_patterns" not in columns:
+        logger.info("Adding exclude_stream_patterns column to m3u_digest_settings")
+        conn.execute(text(
+            "ALTER TABLE m3u_digest_settings ADD COLUMN exclude_stream_patterns TEXT"
+        ))
+        conn.commit()
+
+
+def _add_auto_creation_executions_streams_excluded_column(conn) -> None:
+    """Add streams_excluded column to auto_creation_executions table (v0.12.5 - Global exclusion filters)."""
+    from sqlalchemy import text
+
+    result = conn.execute(text(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='auto_creation_executions'"
+    ))
+    if not result.fetchone():
+        logger.debug("auto_creation_executions table doesn't exist yet, skipping")
+        return
+
+    columns = [r[1] for r in conn.execute(text("PRAGMA table_info(auto_creation_executions)")).fetchall()]
+    if "streams_excluded" not in columns:
+        logger.info("Adding streams_excluded column to auto_creation_executions")
+        conn.execute(text(
+            "ALTER TABLE auto_creation_executions ADD COLUMN streams_excluded INTEGER DEFAULT 0 NOT NULL"
+        ))
+        conn.commit()
+        logger.info("Migration complete: added streams_excluded column")
 
 
 def _perform_maintenance(engine) -> None:

@@ -1612,6 +1612,25 @@
   font-size: 12px;
 }
 
+.meta-tag.strike-count {
+  background: rgba(251, 146, 60, 0.2);
+  color: #fb923c;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px 5px;
+  cursor: help;
+}
+
+.meta-tag.strike-count .material-icons {
+  font-size: 11px;
+}
+
+.meta-tag.strike-count.strike-exceeded {
+  background: rgba(239, 68, 68, 0.25);
+  color: #f87171;
+}
+
 /* Probe Button - always visible to make it discoverable */
 .probe-stream-btn {
   display: flex;

@@ -93,7 +93,7 @@ export function TaskEditorModal({ task, onClose, onSaved }: TaskEditorModalProps
     const groupsWithChannels = channelGroups.filter(g => g.channel_count > 0);
     if (groupsWithChannels.length > 0) {
       options['channel_groups'] = groupsWithChannels.map(g => ({
-        value: g.name,
+        value: g.id,
         label: `${g.name} (${g.channel_count})`,
         badge: g.is_auto_sync ? 'auto' : undefined,
       }));
@@ -123,14 +123,14 @@ export function TaskEditorModal({ task, onClose, onSaved }: TaskEditorModalProps
   const defaultParameters = useMemo(() => {
     const defaults: Record<string, unknown> = {};
 
-    // For stream_probe: default to all non-auto-sync groups with channels
+    // For stream_probe: default to all groups with channels selected
     // and use settings for batch_size, timeout, max_concurrent
     if (task.task_id === 'stream_probe') {
-      const nonAutoGroups = channelGroups
-        .filter(g => g.channel_count > 0 && !g.is_auto_sync)
-        .map(g => g.name);
-      if (nonAutoGroups.length > 0) {
-        defaults['channel_groups'] = nonAutoGroups;
+      const allGroupsWithChannels = channelGroups
+        .filter(g => g.channel_count > 0)
+        .map(g => g.id);
+      if (allGroupsWithChannels.length > 0) {
+        defaults['channel_groups'] = allGroupsWithChannels;
       }
 
       // Use settings values as defaults for numeric parameters
@@ -405,6 +405,17 @@ export function TaskEditorModal({ task, onClose, onSaved }: TaskEditorModalProps
                         </div>
                       )}
                     </div>
+
+                    {/* Stale groups warning */}
+                    {schedule.parameters?._stale_groups &&
+                      (schedule.parameters._stale_groups as string[]).length > 0 && (
+                      <div className="schedule-stale-warning">
+                        <span className="material-icons">warning</span>
+                        <span>
+                          {(schedule.parameters._stale_groups as string[]).length} channel group(s) no longer exist
+                        </span>
+                      </div>
+                    )}
 
                     {/* Actions */}
                     <div className="schedule-actions">

@@ -246,6 +246,22 @@ export function NotificationCenter({ onNotificationClick }: NotificationCenterPr
     return notification.metadata?.action_type === 'restart_services';
   };
 
+  const hasConfigureTaskAction = (notification: Notification): boolean => {
+    return notification.metadata?.action_type === 'configure_task' && !!notification.metadata?.task_id;
+  };
+
+  const handleConfigureTask = (notification: Notification) => {
+    const taskId = notification.metadata?.task_id as string;
+    // Mark as read
+    handleMarkRead(notification);
+    // Close the notification panel
+    setIsOpen(false);
+    // Store intent in sessionStorage so components can pick it up when they mount
+    sessionStorage.setItem('ecm:open-task-editor', JSON.stringify({ taskId }));
+    // Dispatch event so App.tsx can switch to settings tab immediately
+    window.dispatchEvent(new CustomEvent('ecm:open-task-editor', { detail: { taskId } }));
+  };
+
   // Render progress bar for probe notifications
   const renderProbeProgress = (notification: Notification) => {
     const progress = getProbeProgress(notification);
@@ -419,6 +435,18 @@ export function NotificationCenter({ onNotificationClick }: NotificationCenterPr
                           {restartingFromNotification === notification.id ? 'sync' : 'restart_alt'}
                         </span>
                         {restartingFromNotification === notification.id ? 'Restarting...' : 'Restart Services'}
+                      </button>
+                    )}
+                    {hasConfigureTaskAction(notification) && (
+                      <button
+                        className="notification-action-btn-inline"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleConfigureTask(notification);
+                        }}
+                      >
+                        <span className="material-icons">edit_calendar</span>
+                        {notification.action_label || 'Edit Schedule'}
                       </button>
                     )}
                     {renderProbeProgress(notification)}

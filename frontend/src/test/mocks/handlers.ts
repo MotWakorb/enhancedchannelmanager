@@ -721,6 +721,20 @@ export const handlers = [
   }),
 
   // -------------------------------------------------------------------------
+  // Stream Stats - Compute Sort
+  // -------------------------------------------------------------------------
+
+  http.post(`${API_BASE}/stream-stats/compute-sort`, async ({ request }) => {
+    const body = await request.json() as { channels: { channel_id: number; stream_ids: number[] }[]; mode?: string }
+    const results = body.channels.map((ch) => ({
+      channel_id: ch.channel_id,
+      sorted_stream_ids: [...ch.stream_ids].reverse(),
+      changed: true,
+    }))
+    return HttpResponse.json({ results })
+  }),
+
+  // -------------------------------------------------------------------------
   // Enhanced Stats (v0.11.0)
   // -------------------------------------------------------------------------
 

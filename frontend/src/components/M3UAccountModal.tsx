@@ -170,9 +170,19 @@ export const M3UAccountModal = memo(function M3UAccountModal({
         setError('Server URL is required for XtreamCodes accounts');
         return;
       }
-      if (!username.trim() || !password.trim()) {
-        setError('Username and password are required for XtreamCodes accounts');
-        return;
+      if (isEdit) {
+        // When editing, only require username (pre-filled from account).
+        // Password is optional — only needed if changing credentials.
+        if (!username.trim()) {
+          setError('Username is required for XtreamCodes accounts');
+          return;
+        }
+      } else {
+        // New account: both required
+        if (!username.trim() || !password.trim()) {
+          setError('Username and password are required for XtreamCodes accounts');
+          return;
+        }
       }
     }
 
@@ -183,13 +193,15 @@ export const M3UAccountModal = memo(function M3UAccountModal({
         ? `http://${hdhrIP.trim()}/lineup.m3u`
         : (serverUrl.trim() || null);
 
-      const data = {
+      // For XC edits, only include username/password if they were actually changed
+      const usernameChanged = !isEdit || username.trim() !== (account?.username || '');
+      const passwordChanged = password.trim() !== '';
+
+      const data: Record<string, unknown> = {
         name: name.trim(),
         account_type: apiAccountType,
         server_url: apiServerUrl,
         file_path: accountType === 'STD' ? (filePath.trim() || null) : null,
-        username: accountType === 'XC' ? (username.trim() || null) : null,
-        password: accountType === 'XC' ? (password.trim() || null) : null,
         server_group: serverGroup,
         max_streams: maxStreams,
         refresh_interval: refreshInterval,
@@ -200,6 +212,11 @@ export const M3UAccountModal = memo(function M3UAccountModal({
         auto_enable_new_groups_series: autoEnableSeries,
         is_active: isActive,
       };
+
+      if (accountType === 'XC') {
+        if (usernameChanged) data.username = username.trim() || null;
+        if (passwordChanged) data.password = password.trim() || null;
+      }
 
       if (isEdit) {
         await api.updateM3UAccount(account!.id, data);
@@ -393,10 +410,11 @@ export const M3UAccountModal = memo(function M3UAccountModal({
                 <input
                   id="xcPassword"
                   type="password"
-                  placeholder="password"
+                  placeholder={isEdit ? 'Leave blank to keep current' : 'password'}
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                 />
+                {isEdit && <span className="form-hint">Only fill in if changing password</span>}
               </div>
             </>
           )}

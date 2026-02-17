@@ -856,17 +856,25 @@ class TestActionExecutorPropertyActions:
         self.client.update_channel.assert_called_with(1, {"tvg_id": "ESPN.US"})
 
     def test_assign_epg(self):
-        """Assign EPG source."""
+        """Assign EPG source — resolves epg_id (source) to epg_data_id (data entry)."""
+        # Create executor with EPG data entries
+        epg_data = [{"id": 42, "tvg_id": "dummy_epg", "epg_source": 5}]
+        executor = ActionExecutor(
+            self.client,
+            existing_channels=self.channels,
+            epg_data=epg_data
+        )
+
         action = {"type": "assign_epg", "epg_id": 5}  # Params at top level
         exec_ctx = ExecutionContext()
         exec_ctx.current_channel_id = 1
 
         result = asyncio.get_event_loop().run_until_complete(
-            self.executor.execute(action, self.stream_ctx, exec_ctx)
+            executor.execute(action, self.stream_ctx, exec_ctx)
         )
 
         assert result.success is True
-        self.client.update_channel.assert_called_with(1, {"epg_id": 5})
+        self.client.update_channel.assert_called_with(1, {"epg_data_id": 42})
 
     def test_assign_epg_missing_id(self):
         """Assign EPG fails without epg_id."""

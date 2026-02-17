@@ -1267,6 +1267,11 @@
   font-size: 16px;
 }
 
+.email-recipient-tag code {
+  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+  font-size: 0.8rem;
+}
+
 .no-recipients {
   font-size: 0.85rem;
   color: var(--text-muted);

@@ -153,6 +153,7 @@ export interface StreamStats {
   error_message: string | null;
   last_probed: string | null;      // ISO timestamp
   created_at: string;
+  consecutive_failures: number;    // Strike rule: consecutive probe failures
 }
 
 export interface StreamStatsSummary {
@@ -846,6 +847,8 @@ export interface M3UDigestSettings {
   show_detailed_list: boolean;
   min_changes_threshold: number;
   send_to_discord: boolean;  // Send digest to Discord (uses shared webhook from General Settings)
+  exclude_group_patterns: string[];  // Regex patterns to exclude groups from digest
+  exclude_stream_patterns: string[];  // Regex patterns to exclude streams from digest
   last_digest_at: string | null;  // ISO timestamp
   created_at: string;  // ISO timestamp
   updated_at: string;  // ISO timestamp
@@ -861,6 +864,8 @@ export interface M3UDigestSettingsUpdate {
   show_detailed_list?: boolean;
   min_changes_threshold?: number;
   send_to_discord?: boolean;
+  exclude_group_patterns?: string[];
+  exclude_stream_patterns?: string[];
 }
 
 // =============================================================================
