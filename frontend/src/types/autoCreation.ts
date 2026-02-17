@@ -112,6 +112,7 @@ export interface Action {
   target?: 'auto' | 'existing_channel' | 'new_channel';
   find_channel_by?: 'name_exact' | 'name_regex' | 'tvg_id';
   find_channel_value?: string;
+  max_streams_per_channel?: number;
   message?: string;
   // Name transform (for create_channel and create_group)
   name_transform_pattern?: string;

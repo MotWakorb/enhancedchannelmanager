@@ -148,6 +148,16 @@ class ActionExecutor:
         self._base_name_to_channel = {}  # base_name.lower() -> channel dict (for number-prefixed lookups)
         self._created_groups = {}  # name.lower() -> group dict
 
+        # Track streams per (channel_id, m3u_account_id) for max_streams_per_channel limit.
+        # Seeded from existing channel data; updated as merges happen.
+        self._channel_m3u_counts: dict[tuple[int, int], int] = {}
+        for c in self.existing_channels:
+            ch_id = c["id"]
+            for s in c.get("streams", []):
+                if isinstance(s, dict) and s.get("m3u_account") is not None:
+                    key = (ch_id, s["m3u_account"])
+                    self._channel_m3u_counts[key] = self._channel_m3u_counts.get(key, 0) + 1
+
         # Pre-populate base-name mapping for existing channels with "NUMBER | " prefixes
         _num_prefix = re.compile(r'^\d+\s*\|\s*')
         for c in self.existing_channels:
@@ -606,9 +616,23 @@ class ActionExecutor:
             )
 
         new_count = stream_count + 1
+
+        def _track_m3u_count():
+            """Increment per-provider stream count for max_streams_per_channel tracking."""
+            if stream_ctx.m3u_account_id is not None:
+                key = (channel_id, stream_ctx.m3u_account_id)
+                prev = self._channel_m3u_counts.get(key, 0)
+                self._channel_m3u_counts[key] = prev + 1
+                logger.debug(
+                    f"[MergeStream] Provider stream count for channel '{channel_name}' "
+                    f"(id={channel_id}), provider {stream_ctx.m3u_account_name} "
+                    f"(id={stream_ctx.m3u_account_id}): {prev} -> {prev + 1}"
+                )
+
         if exec_ctx.dry_run:
             # Update cached channel so subsequent dry-run merges see this stream
             channel["streams"] = current_streams + [stream_ctx.stream_id]
+            _track_m3u_count()
             exec_ctx.current_channel_id = channel_id
             return ActionResult(
                 success=True,
@@ -632,6 +656,7 @@ class ActionExecutor:
 
             # Update cached channel so subsequent merges see the full list
             channel["streams"] = new_streams
+            _track_m3u_count()
             exec_ctx.current_channel_id = channel_id
 
             return ActionResult(
@@ -810,6 +835,7 @@ class ActionExecutor:
         params = action.params
         target = params.get("target", "auto")
         find_channel_by = params.get("find_channel_by")
+        max_streams = params.get("max_streams_per_channel", 0)  # 0 = unlimited
         find_channel_value = params.get("find_channel_value")
         logger.debug(
             f"[MergeStreams] target={target} find_by={find_channel_by} "
@@ -870,6 +896,29 @@ class ActionExecutor:
                     logger.debug(f"[MergeStreams] Call sign fallback failed: {e}")
 
             if channel:
+                # Enforce per-provider stream limit if configured
+                if max_streams > 0 and stream_ctx.m3u_account_id is not None:
+                    provider_name = stream_ctx.m3u_account_name or f"provider #{stream_ctx.m3u_account_id}"
+                    key = (channel["id"], stream_ctx.m3u_account_id)
+                    current_count = self._channel_m3u_counts.get(key, 0)
+                    logger.debug(
+                        f"[MergeStreams] Max streams check: channel '{channel['name']}' has "
+                        f"{current_count}/{max_streams} stream(s) from {provider_name}"
+                    )
+                    if current_count >= max_streams:
+                        logger.info(
+                            f"[MergeStreams] Skipped stream '{stream_ctx.stream_name}': "
+                            f"channel '{channel['name']}' already has {current_count} stream(s) "
+                            f"from {provider_name} (limit: {max_streams})"
+                        )
+                        return ActionResult(
+                            success=True, action_type=action.type,
+                            description=f"Skipped: '{channel['name']}' already has "
+                                        f"{current_count} stream(s) from {provider_name} "
+                                        f"(limit: {max_streams}/provider)",
+                            entity_type="channel", entity_id=channel["id"],
+                            entity_name=channel["name"], skipped=True
+                        )
                 return await self._add_stream_to_channel(channel, stream_ctx, exec_ctx)
             elif target == "existing_channel":
                 return ActionResult(

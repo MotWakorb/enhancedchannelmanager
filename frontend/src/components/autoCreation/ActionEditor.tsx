@@ -806,6 +806,27 @@ export function ActionEditor({
                 </div>
               </>
             )}
+
+            {/* Max streams per channel */}
+            <div className="action-field">
+              <label htmlFor={`${id}-max-streams`}>Max Streams Per Provider</label>
+              <input
+                id={`${id}-max-streams`}
+                type="number"
+                className="action-input"
+                value={action.max_streams_per_channel ?? ''}
+                onChange={e => onChange({
+                  ...action,
+                  max_streams_per_channel: e.target.value ? parseInt(e.target.value, 10) : undefined
+                })}
+                placeholder="Unlimited"
+                min={1}
+                disabled={readonly}
+              />
+              <span className="field-hint">
+                Max streams per provider per channel. Use with quality sorting + probe for best results.
+              </span>
+            </div>
           </>
         )}
 
