@@ -86,17 +86,20 @@ Build complex matching logic with AND/OR connectors:
 - **Stream Group** - Contains, matches (regex)
 - **TVG ID** - Exists/not exists, matches pattern
 - **Logo** - Exists/not exists
-- **Provider** - Filter by specific M3U account
+- **M3U Account** - Filter by specific M3U account
 - **Quality** - Minimum/maximum resolution (2160p, 1080p, 720p, 480p, 360p)
 - **Codec** - Filter by video codec (H.264, HEVC, etc.)
 - **Channel Exists** - Check if channel already exists (by name, regex, or group)
 - **Normalized Match in Group** - Check if a stream's normalized name matches any channel in a specified channel group (strips country prefixes and applies normalization engine)
+- **Normalized Name (Global)** - Check if a stream's normalized name matches any channel across all groups
+- **Normalized Name (Not In)** - Check if a stream's normalized name does NOT match any channel in a specified group
+- **Date Expansion in Regex** - Regex conditions can include date patterns that auto-expand to match current dates (contributed by @lpukatch)
 
 #### Actions
 Define what happens when conditions match:
 - **Create Channel** - Template-based naming with variables (`{stream_name}`, `{stream_group}`, `{quality}`, `{provider}`, etc.)
 - **Create Group** - Automatically create channel groups with template naming
-- **Merge Streams** - Combine multiple streams into a single channel with quality preference ordering and optional per-provider stream limit
+- **Merge Streams** - Combine multiple streams into a single channel with quality preference ordering, optional per-provider stream limit, and multi-stage auto-lookup (exact name → core-name fallback → call sign fallback → deparen/word-prefix matching)
 - **Assign Logo/EPG/Profile** - Automatically assign channel metadata
 - **Set Channel Number** - Auto-assign or specify channel numbering (including ranges)
 - **Set Variable** - Define reusable variables with regex extraction for use in templates
@@ -110,13 +113,13 @@ Define what happens when conditions match:
 - **Rollback** - Undo a completed execution to restore previous state
 - **Execution History** - View past runs with duration, match counts, and created/updated/merged/skipped counts
 - **Running Indicator** - Live "Running" status in execution history while a pipeline is executing
-- **Execution Log** - Per-stream granular log showing condition evaluation, matched rules, and action results
+- **Execution Log** - Per-stream granular log showing condition evaluation, matched rules, action results, normalization context, and merge guidance with filter chips for quick navigation
 
 #### Smart Stream Handling
 - **Quality-Based Sorting** - Sort streams within channels by resolution (highest first)
 - **Probe on Sort** - Optionally probe unprobed streams for resolution data before sorting
 - **Multi-Criteria Sort** - Sort by stream name, natural name, group, or quality
-- **Auto-Find Channels** - Merge streams action with `target: auto` automatically finds existing channels by normalized name, stripping country prefixes and channel number prefixes (e.g., "US: Discovery" finds channel "113 | Discovery")
+- **Auto-Find Channels** - Merge streams action with `target: auto` automatically finds existing channels using a multi-stage lookup: normalized name → core-name fallback (stripping tags) → call sign fallback → deparen and word-prefix matching. For example, "US: Discovery" finds channel "113 | Discovery", and "ESPN (East)" finds "ESPN"
 - **User Settings Integration** - Honors channel numbering, default profile, timezone preference, and auto-rename settings
 
 #### Orphan Reconciliation
@@ -196,6 +199,7 @@ A visual, form-based interface for constructing FFmpeg transcoding and streaming
 
 - **Full CRUD Operations** - Create, edit, and delete M3U accounts
 - **Account Types** - Support for Standard M3U, XtreamCodes, and HD Homerun
+- **XC Non-Credential Editing** - Edit XtreamCodes account settings (name, max streams, etc.) without re-entering the password
 - **HD Homerun Simplified Setup** - Just enter the IP address; the lineup URL is auto-constructed
 - **Linked M3U Accounts** - Link multiple accounts (e.g., same provider with different regions) so group enable/disable changes cascade automatically
 - **Sync Groups** - One-click sync of enabled groups across all linked accounts using Union (OR) logic
@@ -248,7 +252,7 @@ A visual, form-based interface for constructing FFmpeg transcoding and streaming
 - **Assign Streams to Channels** - Drag-and-drop or click to add streams
 - **Stream Priority** - Reorder streams within a channel (order determines playback priority)
 - **Multi-Select** - Select multiple streams and bulk-add to channels
-- **Filter by Provider** - Filter streams by M3U account
+- **Filter by M3U Account** - Filter streams by M3U account
 - **Filter by Group** - Filter streams by their source group
 - **Copy Stream URL** - Click copy button on any stream to copy its direct URL
 - **Stream Preview** - Preview streams directly in the browser before assigning to channels
@@ -519,10 +523,23 @@ Automated stream health checking:
   - **Fill First** - Use default profile to capacity before spilling over to others
   - **Round Robin** - Rotate evenly across profiles for balanced usage
   - **Least Loaded** - Pick the profile with the most remaining headroom for maximum throughput
+- **Per-Account Ramp-Up** - Gradually increases probe load per M3U account, starting conservatively and ramping up to avoid triggering provider rate limits
+- **Configurable Retry Settings** - Configure retry count and behavior for probe failures
+- **Expanded Retry Coverage** - Automatically retries on transient HTTP 200 failures, I/O errors, and "Invalid data found" errors
 - **Rate Limit Detection** - Automatic backoff when providers return 429 errors, with UI notification
 - **M3U Connection Awareness** - Respects M3U max connection limits during probing
+- **Stale Group Alerts** - Notifications when channel groups have outdated probe data
+- **Probe Logging** - Detailed probe execution logs for troubleshooting
 - **Persistent History** - Probe results saved to `/config/probe_history.json` and persist across container restarts
 - **Failed Stream Indicators** - Visual error icons on channels and groups that contain failed/timeout streams
+
+#### Stream Strikeout System
+Track and manage streams with repeated probe failures:
+
+- **Consecutive Failure Tracking** - Tracks consecutive probe failures per stream with a configurable strike threshold
+- **Strike Badges** - Visual strike count badges on streams in the Channel Manager
+- **Maintenance UI** - Review all struck-out streams in Settings → Maintenance with stream details and failure counts
+- **Bulk Remove** - One-click removal of struck-out streams from all channels they're assigned to
 
 #### Stream Sort Priority
 Configure how streams are automatically sorted within channels:
@@ -583,7 +600,7 @@ Admin panel for managing user accounts (requires admin privileges):
   - **Light** - Bright theme for well-lit environments
   - **High Contrast** - Maximum contrast for accessibility
 - **Show Stream URLs** - Toggle visibility of stream URLs in the UI (useful for screenshots or hiding sensitive information)
-- **Hide Auto-Sync Groups** - Automatically hide channel groups managed by M3U auto-sync on app load
+- **Hide Auto-Sync Groups** - Automatically hide channel groups managed by M3U auto-sync on app load (channels persist in ECM even when auto-sync is later disabled in Dispatcharr)
 - **Hide EPG URLs** - Hide EPG source URLs in the EPG Manager tab to prevent accidental exposure in screenshots or screen shares
 - **Hide M3U URLs** - Hide M3U server URLs in the M3U Manager tab to prevent accidental exposure in screenshots or screen shares
 - **Gracenote ID Conflict Handling** - Control behavior when assigning Gracenote IDs to channels that already have different IDs:
@@ -658,13 +675,14 @@ Fine-tune which groups and channels appear in the channel list:
   - Active filter indicator on the filter button
 - **Persistent Settings** - Filter preferences saved to localStorage
 
-### Provider Management
+### M3U Account Management
 
-- **View Providers** - See all configured M3U accounts with status and stream counts
-- **Provider Groups** - View and manage stream groups from each provider
+- **View Accounts** - See all configured M3U accounts with status and stream counts
+- **Account Groups** - View and manage stream groups from each M3U account
 - **Linked Accounts** - Link accounts together to sync group settings across providers
-- **Auto-Channel Sync** - Configure automatic channel synchronization per group
-- **Group Settings** - Per-group provider configuration with start channel numbers
+- **Auto-Channel Sync** - Configure automatic channel synchronization per group (channels persist in ECM even when auto-sync is later disabled in Dispatcharr)
+- **Group Settings** - Per-group account configuration with start channel numbers
+- **GitHub & User Guide Links** - Quick-access links in the application header
 
 ## Roadmap
 
@@ -806,6 +824,23 @@ Visual FFmpeg command builder and frontend performance improvements:
 - **Stream Status Filters** - Filter streams by online/offline/unknown probe status
 - **Auto Token Refresh** - Automatic JWT token refresh for uninterrupted sessions
 - **CSS Design Token Refinements** - Consistent theming across all tab CSS files
+
+### ~~v0.12.6 - Auto-Creation, Probing & Stream Health~~ ✅ Implemented
+Major auto-creation enhancements, stream health management, and probing reliability:
+- **Global Exclusion Filters** - Auto-creation settings with M3U group dropdown for filtering streams before rule evaluation
+- **New Condition Types** - Global normalized name, not-in normalized name, and date expansion in regex conditions
+- **Merge Streams Fallbacks** - Multi-stage auto-lookup: exact → core-name → call sign → deparen/word-prefix matching
+- **Max Streams Per Provider** - Limit how many streams from a single M3U account merge into a channel
+- **Execution Log Enrichment** - Filter chips, normalization context, and merge guidance in execution logs
+- **Stream Strikeout System** - Track consecutive probe failures with configurable thresholds, strike badges, maintenance UI, and bulk remove
+- **Per-Account Ramp-Up Probing** - Gradually increases probe load to avoid triggering provider rate limits
+- **Configurable Probe Retries** - Retry settings with expanded coverage for HTTP 200, I/O, and Invalid data errors
+- **Stale Group Alerts** - Notifications for channel groups with outdated probe data
+- **Regex Exclude Filters** - Suppress noisy groups/streams from M3U digest notifications
+- **XC Non-Credential Editing** - Edit XtreamCodes account settings without re-entering the password
+- **GitHub & User Guide Links** - Quick-access links in the application header
+- **Auto-Sync Channel Persistence** - Channels remain visible in ECM when auto-channel-sync is disabled in Dispatcharr
+- **"Provider" Renamed to "M3U Account"** - Consistent terminology throughout the UI
 
 ### v0.13.0 - Mobile Interface
 Full mobile support for managing channels on the go:
@@ -1051,6 +1086,8 @@ Interactive API documentation is available at `/api/docs` (Swagger UI) and `/api
 | `GET /api/stream-stats/dismissed` | Get list of dismissed stream IDs |
 | `POST /api/stream-stats/clear` | Clear probe stats for specific streams |
 | `POST /api/stream-stats/clear-all` | Clear all probe stats |
+| `GET /api/stream-stats/struck-out` | List struck-out streams (exceeding failure threshold) |
+| `POST /api/stream-stats/struck-out/remove` | Bulk remove struck-out streams from all channels |
 
 ### Enhanced Stats
 
