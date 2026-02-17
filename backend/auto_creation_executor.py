@@ -149,14 +149,10 @@ class ActionExecutor:
         self._created_groups = {}  # name.lower() -> group dict
 
         # Track streams per (channel_id, m3u_account_id) for max_streams_per_channel limit.
-        # Seeded from existing channel data; updated as merges happen.
+        # Lazily seeded per-channel via _ensure_channel_m3u_counts() because the
+        # paginated channels API only returns stream IDs (ints), not full dicts.
         self._channel_m3u_counts: dict[tuple[int, int], int] = {}
-        for c in self.existing_channels:
-            ch_id = c["id"]
-            for s in c.get("streams", []):
-                if isinstance(s, dict) and s.get("m3u_account") is not None:
-                    key = (ch_id, s["m3u_account"])
-                    self._channel_m3u_counts[key] = self._channel_m3u_counts.get(key, 0) + 1
+        self._seeded_channels: set[int] = set()
 
         # Pre-populate base-name mapping for existing channels with "NUMBER | " prefixes
         _num_prefix = re.compile(r'^\d+\s*\|\s*')
@@ -596,6 +592,25 @@ class ActionExecutor:
                 error=str(e)
             )
 
+    async def _ensure_channel_m3u_counts(self, channel_id: int) -> None:
+        """Lazily fetch and seed per-provider stream counts for a channel."""
+        if channel_id in self._seeded_channels:
+            return
+        self._seeded_channels.add(channel_id)
+        try:
+            streams = await self.client.get_channel_streams(channel_id)
+            for s in streams:
+                if isinstance(s, dict) and s.get("m3u_account") is not None:
+                    key = (channel_id, s["m3u_account"])
+                    self._channel_m3u_counts[key] = self._channel_m3u_counts.get(key, 0) + 1
+            logger.debug(
+                f"[MergeStreams] Seeded provider counts for channel {channel_id}: "
+                f"{sum(1 for k in self._channel_m3u_counts if k[0] == channel_id)} providers, "
+                f"{sum(v for k, v in self._channel_m3u_counts.items() if k[0] == channel_id)} streams"
+            )
+        except Exception as e:
+            logger.debug(f"[MergeStreams] Failed to fetch streams for channel {channel_id}: {e}")
+
     async def _add_stream_to_channel(self, channel: dict, stream_ctx: StreamContext,
                                       exec_ctx: ExecutionContext) -> ActionResult:
         """Add a stream to an existing channel (merge behavior)."""
@@ -937,6 +952,7 @@ class ActionExecutor:
             if channel:
                 # Enforce per-provider stream limit if configured
                 if max_streams > 0 and stream_ctx.m3u_account_id is not None:
+                    await self._ensure_channel_m3u_counts(channel["id"])
                     provider_name = stream_ctx.m3u_account_name or f"provider #{stream_ctx.m3u_account_id}"
                     key = (channel["id"], stream_ctx.m3u_account_id)
                     current_count = self._channel_m3u_counts.get(key, 0)
