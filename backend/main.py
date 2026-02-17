@@ -7117,12 +7117,21 @@ async def get_struck_out_streams():
         # Build a set of struck stream IDs for lookup
         struck_ids = {s.stream_id for s in struck}
 
-        # Find which channels contain these streams
+        # Find which channels contain these streams (paginated)
         client = get_client()
-        channels = await client.get_channels()
+        all_channels = []
+        page = 1
+        while True:
+            result = await client.get_channels(page=page, page_size=100)
+            page_channels = result.get("results", [])
+            all_channels.extend(page_channels)
+            if len(all_channels) >= result.get("count", 0) or not page_channels:
+                break
+            page += 1
+
         stream_channels: dict[int, list[dict]] = {sid: [] for sid in struck_ids}
 
-        for ch in channels:
+        for ch in all_channels:
             ch_streams = ch.get("streams", [])
             for sid in struck_ids:
                 if sid in ch_streams:
@@ -7154,9 +7163,17 @@ async def remove_struck_out_streams(request: RemoveStruckOutRequest):
     removed_count = 0
 
     try:
-        channels = await client.get_channels()
+        all_channels = []
+        page = 1
+        while True:
+            result = await client.get_channels(page=page, page_size=100)
+            page_channels = result.get("results", [])
+            all_channels.extend(page_channels)
+            if len(all_channels) >= result.get("count", 0) or not page_channels:
+                break
+            page += 1
 
-        for ch in channels:
+        for ch in all_channels:
             ch_streams = ch.get("streams", [])
             filtered = [sid for sid in ch_streams if sid not in request.stream_ids]
             if len(filtered) < len(ch_streams):
