@@ -731,6 +731,7 @@ Track and report changes to M3U sources:
 - **Stream Change Detection** - Track when streams are added, deleted, or modified
 - **M3U Changes Tab** - New tab to view all detected changes with filtering
 - **Email Digest Reports** - Configurable email digests when changes occur (immediate, hourly, daily, weekly)
+- **Exclude Filters** - Regex-based patterns to exclude noisy groups/streams from digest notifications
 - **Change History** - Full searchable history of all M3U changes over time
 - **Summary Statistics** - Dashboard cards showing total groups/streams added and removed
 

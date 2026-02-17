@@ -5708,6 +5708,8 @@ class M3UDigestSettingsUpdate(BaseModel):
     show_detailed_list: Optional[bool] = None  # Show detailed list vs just summary
     min_changes_threshold: Optional[int] = None
     send_to_discord: Optional[bool] = None  # Send digest to Discord (uses shared webhook)
+    exclude_group_patterns: Optional[List[str]] = None  # Regex patterns to exclude groups
+    exclude_stream_patterns: Optional[List[str]] = None  # Regex patterns to exclude streams
 
 
 @app.put("/api/m3u/digest/settings", tags=["M3U Digest"])
@@ -5762,6 +5764,28 @@ async def update_m3u_digest_settings(request: M3UDigestSettingsUpdate):
 
         if request.send_to_discord is not None:
             settings.send_to_discord = request.send_to_discord
+
+        if request.exclude_group_patterns is not None:
+            for pattern in request.exclude_group_patterns:
+                try:
+                    re.compile(pattern)
+                except re.error as e:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Invalid group exclude regex '{pattern}': {e}"
+                    )
+            settings.set_exclude_group_patterns(request.exclude_group_patterns)
+
+        if request.exclude_stream_patterns is not None:
+            for pattern in request.exclude_stream_patterns:
+                try:
+                    re.compile(pattern)
+                except re.error as e:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Invalid stream exclude regex '{pattern}': {e}"
+                    )
+            settings.set_exclude_stream_patterns(request.exclude_stream_patterns)
 
         db.commit()
         db.refresh(settings)

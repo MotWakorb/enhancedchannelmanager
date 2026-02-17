@@ -874,6 +874,8 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         show_detailed_list: digestSettings.show_detailed_list,
         min_changes_threshold: digestSettings.min_changes_threshold,
         send_to_discord: digestSettings.send_to_discord,
+        exclude_group_patterns: digestSettings.exclude_group_patterns,
+        exclude_stream_patterns: digestSettings.exclude_stream_patterns,
       });
       setDigestSettings(updated);
       notifications.success('Settings saved successfully');
@@ -898,6 +900,8 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         show_detailed_list: digestSettings.show_detailed_list,
         min_changes_threshold: digestSettings.min_changes_threshold,
         send_to_discord: digestSettings.send_to_discord,
+        exclude_group_patterns: digestSettings.exclude_group_patterns,
+        exclude_stream_patterns: digestSettings.exclude_stream_patterns,
       });
       // Now send the test
       const result = await api.sendTestM3UDigest();
@@ -928,6 +932,54 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
     setDigestSettings({
       ...digestSettings,
       email_recipients: digestSettings.email_recipients.filter(e => e !== email),
+    });
+  };
+
+  const handleAddGroupExcludePattern = (pattern: string) => {
+    if (!digestSettings || !pattern.trim()) return;
+    const trimmed = pattern.trim();
+    if (digestSettings.exclude_group_patterns.includes(trimmed)) return;
+    try {
+      new RegExp(trimmed);
+    } catch {
+      notifications.error(`Invalid regex: ${trimmed}`, 'Invalid Pattern');
+      return;
+    }
+    setDigestSettings({
+      ...digestSettings,
+      exclude_group_patterns: [...digestSettings.exclude_group_patterns, trimmed],
+    });
+  };
+
+  const handleRemoveGroupExcludePattern = (pattern: string) => {
+    if (!digestSettings) return;
+    setDigestSettings({
+      ...digestSettings,
+      exclude_group_patterns: digestSettings.exclude_group_patterns.filter(p => p !== pattern),
+    });
+  };
+
+  const handleAddStreamExcludePattern = (pattern: string) => {
+    if (!digestSettings || !pattern.trim()) return;
+    const trimmed = pattern.trim();
+    if (digestSettings.exclude_stream_patterns.includes(trimmed)) return;
+    try {
+      new RegExp(trimmed);
+    } catch {
+      notifications.error(`Invalid regex: ${trimmed}`, 'Invalid Pattern');
+      return;
+    }
+    setDigestSettings({
+      ...digestSettings,
+      exclude_stream_patterns: [...digestSettings.exclude_stream_patterns, trimmed],
+    });
+  };
+
+  const handleRemoveStreamExcludePattern = (pattern: string) => {
+    if (!digestSettings) return;
+    setDigestSettings({
+      ...digestSettings,
+      exclude_stream_patterns: digestSettings.exclude_stream_patterns.filter(p => p !== pattern),
     });
   };
 
@@ -2034,6 +2086,8 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
 
   // State for new email input in digest settings
   const [newDigestEmail, setNewDigestEmail] = useState('');
+  const [newGroupExcludePattern, setNewGroupExcludePattern] = useState('');
+  const [newStreamExcludePattern, setNewStreamExcludePattern] = useState('');
 
   // Handle SMTP test
   const handleTestSmtp = async () => {
@@ -2535,6 +2589,120 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                 <div className="checkbox-content">
                   <label htmlFor="showDetailedList">Show detailed list</label>
                   <p>Include the full list of changed groups and streams in the digest. Disable to show only summary counts.</p>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Exclude Patterns Section */}
+          <div className="settings-section">
+            <div className="settings-section-header">
+              <span className="material-icons">filter_alt</span>
+              <h3>Exclude Patterns</h3>
+            </div>
+
+            <div className="settings-group">
+              <div className="form-group-vertical">
+                <label>Group Exclude Patterns</label>
+                <span className="form-description">
+                  Regex patterns to exclude groups from the digest. Changes in matching groups will be omitted. Case-insensitive.
+                </span>
+                <div className="email-recipients-list">
+                  {digestSettings.exclude_group_patterns.length === 0 ? (
+                    <span className="no-recipients">No exclude patterns configured</span>
+                  ) : (
+                    digestSettings.exclude_group_patterns.map((pattern) => (
+                      <span key={pattern} className="email-recipient-tag">
+                        <code>{pattern}</code>
+                        <button
+                          className="remove-btn"
+                          onClick={() => handleRemoveGroupExcludePattern(pattern)}
+                          title="Remove pattern"
+                        >
+                          <span className="material-icons">close</span>
+                        </button>
+                      </span>
+                    ))
+                  )}
+                </div>
+                <div className="add-email-row">
+                  <input
+                    type="text"
+                    placeholder="e.g. ESPN\+ or PPV.*"
+                    value={newGroupExcludePattern}
+                    onChange={(e) => setNewGroupExcludePattern(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && newGroupExcludePattern.trim()) {
+                        handleAddGroupExcludePattern(newGroupExcludePattern);
+                        setNewGroupExcludePattern('');
+                      }
+                    }}
+                  />
+                  <button
+                    className="btn-secondary"
+                    onClick={() => {
+                      if (newGroupExcludePattern.trim()) {
+                        handleAddGroupExcludePattern(newGroupExcludePattern);
+                        setNewGroupExcludePattern('');
+                      }
+                    }}
+                    disabled={!newGroupExcludePattern.trim()}
+                  >
+                    <span className="material-icons">add</span>
+                    Add
+                  </button>
+                </div>
+              </div>
+
+              <div className="form-group-vertical">
+                <label>Stream Exclude Patterns</label>
+                <span className="form-description">
+                  Regex patterns to exclude individual streams from the digest. Matching stream names will be omitted from added/removed lists. Case-insensitive.
+                </span>
+                <div className="email-recipients-list">
+                  {digestSettings.exclude_stream_patterns.length === 0 ? (
+                    <span className="no-recipients">No exclude patterns configured</span>
+                  ) : (
+                    digestSettings.exclude_stream_patterns.map((pattern) => (
+                      <span key={pattern} className="email-recipient-tag">
+                        <code>{pattern}</code>
+                        <button
+                          className="remove-btn"
+                          onClick={() => handleRemoveStreamExcludePattern(pattern)}
+                          title="Remove pattern"
+                        >
+                          <span className="material-icons">close</span>
+                        </button>
+                      </span>
+                    ))
+                  )}
+                </div>
+                <div className="add-email-row">
+                  <input
+                    type="text"
+                    placeholder="e.g. PPV.* or League Pass"
+                    value={newStreamExcludePattern}
+                    onChange={(e) => setNewStreamExcludePattern(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && newStreamExcludePattern.trim()) {
+                        handleAddStreamExcludePattern(newStreamExcludePattern);
+                        setNewStreamExcludePattern('');
+                      }
+                    }}
+                  />
+                  <button
+                    className="btn-secondary"
+                    onClick={() => {
+                      if (newStreamExcludePattern.trim()) {
+                        handleAddStreamExcludePattern(newStreamExcludePattern);
+                        setNewStreamExcludePattern('');
+                      }
+                    }}
+                    disabled={!newStreamExcludePattern.trim()}
+                  >
+                    <span className="material-icons">add</span>
+                    Add
+                  </button>
                 </div>
               </div>
             </div>
