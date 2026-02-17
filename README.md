@@ -96,7 +96,7 @@ Build complex matching logic with AND/OR connectors:
 Define what happens when conditions match:
 - **Create Channel** - Template-based naming with variables (`{stream_name}`, `{stream_group}`, `{quality}`, `{provider}`, etc.)
 - **Create Group** - Automatically create channel groups with template naming
-- **Merge Streams** - Combine multiple streams into a single channel with quality preference ordering
+- **Merge Streams** - Combine multiple streams into a single channel with quality preference ordering and optional per-provider stream limit
 - **Assign Logo/EPG/Profile** - Automatically assign channel metadata
 - **Set Channel Number** - Auto-assign or specify channel numbering (including ranges)
 - **Set Variable** - Define reusable variables with regex extraction for use in templates
