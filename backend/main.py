@@ -438,7 +438,6 @@ async def startup_event():
             client = get_client()
             current_groups = await client.get_channel_groups()
             current_by_id = {g["id"]: g.get("name") for g in current_groups}
-            current_ids_with_channels = {g["id"] for g in current_groups if g.get("channel_count", 0) > 0}
 
             sess = get_session()
             try:
@@ -446,7 +445,6 @@ async def startup_event():
                     TaskScheduleModel.task_id == "stream_probe"
                 ).all()
                 total_stale = 0
-                total_added = 0
                 for sched in schedules:
                     params = sched.get_parameters()
                     stored = params.get("channel_groups", [])
@@ -461,28 +459,21 @@ async def startup_event():
                         valid = [current_by_name[n] for n in stored if n in current_by_name]
                         stale = [n for n in stored if n not in current_by_name]
 
-                    # Detect new groups not in the schedule
-                    valid_set = set(valid)
-                    new_groups = sorted(gid for gid in current_ids_with_channels if gid not in valid_set)
-
-                    if stale or new_groups:
-                        fixed_groups = valid + new_groups
-                        params["channel_groups"] = fixed_groups
+                    # Only remove stale groups — do NOT auto-add new groups.
+                    # Users control which groups to probe via the schedule editor.
+                    # The auto_sync_groups parameter handles "probe all groups" when enabled.
+                    if stale:
+                        params["channel_groups"] = valid
                         params.pop("_stale_groups", None)
                         sched.set_parameters(params)
                         sess.add(sched)
                         total_stale += len(stale)
-                        total_added += len(new_groups)
 
-                        if stale:
-                            logger.info(f"Startup: auto-removed {len(stale)} stale group(s) from probe schedule {sched.id}")
-                        if new_groups:
-                            new_names = [current_by_id.get(gid, str(gid)) for gid in new_groups]
-                            logger.info(f"Startup: auto-added {len(new_groups)} new group(s) to probe schedule {sched.id}: {', '.join(new_names)}")
+                        logger.info(f"Startup: auto-removed {len(stale)} stale group(s) from probe schedule {sched.id}")
 
-                if total_stale or total_added:
+                if total_stale:
                     sess.commit()
-                    logger.info(f"Startup: auto-synced probe schedules (removed {total_stale} stale, added {total_added} new groups)")
+                    logger.info(f"Startup: auto-removed {total_stale} stale group(s) from probe schedules")
 
                 # Clean up any stale group notifications since we auto-fix
                 stale_notifs = sess.query(NotificationModel).filter(
@@ -8199,10 +8190,6 @@ async def list_task_schedules(task_id: str):
             result = []
             schedules_fixed = False
             current_by_id = {g["id"]: g.get("name") for g in current_groups_data} if current_groups_data else {}
-            current_ids_with_channels = (
-                {g["id"] for g in current_groups_data if g.get("channel_count", 0) > 0}
-                if current_groups_data else set()
-            )
 
             for schedule in schedules:
                 schedule_dict = schedule.to_dict()
@@ -8215,11 +8202,13 @@ async def list_task_schedules(task_id: str):
                     days_of_week=schedule.get_days_of_week_list(),
                     day_of_month=schedule.day_of_month,
                 )
-                # Auto-sync channel_groups: remove stale groups, add new groups
+                # Auto-cleanup: remove stale groups (deleted from Dispatcharr).
+                # Do NOT auto-add new groups — users control which groups to probe
+                # via the schedule editor. Use auto_sync_groups for "probe all".
                 if current_groups_data is not None and schedule_dict.get("parameters"):
                     params = schedule_dict["parameters"]
                     stored = params.get("channel_groups", [])
-                    if stored:  # Only auto-sync if schedule has an explicit group list
+                    if stored:  # Only cleanup if schedule has an explicit group list
                         if isinstance(stored[0], int):
                             valid = [gid for gid in stored if gid in current_by_id]
                             stale = [gid for gid in stored if gid not in current_by_id]
@@ -8228,28 +8217,19 @@ async def list_task_schedules(task_id: str):
                             valid = [current_by_name[n] for n in stored if n in current_by_name]
                             stale = [n for n in stored if n not in current_by_name]
 
-                        # Detect new groups (with channels) not already in the schedule
-                        valid_set = set(valid)
-                        new_groups = sorted(gid for gid in current_ids_with_channels if gid not in valid_set)
-
-                        if stale or new_groups:
-                            fixed_groups = valid + new_groups
-                            params["channel_groups"] = fixed_groups
+                        if stale:
+                            params["channel_groups"] = valid
                             params.pop("_stale_groups", None)
 
                             # Persist fix to DB
                             db_params = schedule.get_parameters()
-                            db_params["channel_groups"] = fixed_groups
+                            db_params["channel_groups"] = valid
                             db_params.pop("_stale_groups", None)
                             schedule.set_parameters(db_params)
                             session.add(schedule)
                             schedules_fixed = True
 
-                            if stale:
-                                logger.info(f"Auto-removed {len(stale)} stale group(s) from probe schedule {schedule.id}")
-                            if new_groups:
-                                new_names = [current_by_id.get(gid, str(gid)) for gid in new_groups]
-                                logger.info(f"Auto-added {len(new_groups)} new group(s) to probe schedule {schedule.id}: {', '.join(new_names)}")
+                            logger.info(f"Auto-removed {len(stale)} stale group(s) from probe schedule {schedule.id}")
                 result.append(schedule_dict)
 
             # Commit any auto-fixes

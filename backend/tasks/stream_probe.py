@@ -44,8 +44,8 @@ class StreamProbeTask(TaskScheduler):
 
         # The actual prober is obtained from main.py where it's initialized
         self._prober = None
-        # Schedule parameter overrides (None means use prober's defaults)
-        self._channel_groups: list = []  # Override for group filtering (IDs or names)
+        # Schedule parameter overrides
+        self._channel_groups: Optional[list] = None  # None = not configured (probe all), [] = explicitly empty (probe nothing)
         self._auto_sync_groups: bool = False  # Probe all current groups at runtime
         self._batch_size_override: Optional[int] = None
         self._timeout_override: Optional[int] = None
@@ -71,7 +71,9 @@ class StreamProbeTask(TaskScheduler):
         - max_concurrent: int - max concurrent probe operations
         """
         if "channel_groups" in config:
-            self._channel_groups = config["channel_groups"] or []
+            # Preserve distinction: None = not configured, [] = explicitly empty
+            val = config["channel_groups"]
+            self._channel_groups = val if val is not None else []
         if "auto_sync_groups" in config:
             self._auto_sync_groups = bool(config["auto_sync_groups"])
         if "batch_size" in config:
@@ -93,8 +95,8 @@ class StreamProbeTask(TaskScheduler):
         channel groups so the task uses the prober's updated settings.
         """
         self._prober = prober
-        # Clear cached channel groups - use prober's settings instead
-        self._channel_groups = []
+        # Clear cached channel groups - will be set by schedule parameters on next run
+        self._channel_groups = None
         logger.info(f"[{self.task_id}] Prober updated, cleared channel groups cache")
 
     def set_channel_groups(self, groups: list[str]):
@@ -154,7 +156,8 @@ class StreamProbeTask(TaskScheduler):
                 logger.info(f"[{self.task_id}] Using schedule max_concurrent: {self._prober.max_concurrent_probes}")
 
             # Determine channel groups to use
-            channel_groups = self._channel_groups if self._channel_groups else None
+            # None = not configured (probe everything), [] = explicitly empty (probe nothing)
+            channel_groups = self._channel_groups if self._channel_groups is not None else None
 
             if self._auto_sync_groups:
                 # Auto-sync mode: always probe ALL current groups, ignore stored list
@@ -180,9 +183,9 @@ class StreamProbeTask(TaskScheduler):
                     if stale_count:
                         logger.warning(f"[{self.task_id}] Skipping {stale_count} stale group(s) (will be auto-removed on next schedule load)")
 
-                    channel_groups = valid_groups if valid_groups else None
-                    if not valid_groups:
-                        logger.info(f"[{self.task_id}] No valid groups in schedule, probing all current groups")
+                    # Use validated group names; if all were stale, keep empty list
+                    # (empty = probe nothing, not probe everything)
+                    channel_groups = valid_groups
                 except Exception as e:
                     logger.warning(f"[{self.task_id}] Failed to validate channel groups: {e}")
 
@@ -304,7 +307,7 @@ class StreamProbeTask(TaskScheduler):
             self._prober.max_concurrent_probes = original_max_concurrent
 
             # Clear all schedule parameter overrides
-            self._channel_groups = []
+            self._channel_groups = None
             self._auto_sync_groups = False
             self._batch_size_override = None
             self._timeout_override = None
