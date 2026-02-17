@@ -842,19 +842,37 @@ Major auto-creation enhancements, stream health management, and probing reliabil
 - **Auto-Sync Channel Persistence** - Channels remain visible in ECM when auto-channel-sync is disabled in Dispatcharr
 - **"Provider" Renamed to "M3U Account"** - Consistent terminology throughout the UI
 
-### v0.13.0 - Mobile Interface
-Full mobile support for managing channels on the go:
-- Responsive layouts for phones and tablets
-- Touch-optimized controls
-- Mobile-friendly navigation
-- Progressive Web App (PWA) support
+### v0.13.0 - Backend Refactor
+Split the monolithic main.py (~10,800 lines) into domain-focused router modules:
+- **Phase 0** - Write full test suite against the monolith (unit, integration, E2E)
+- **Phase 1** - Extract notification service
+- **Phase 2** - Simple leaf routers (cache, health, TLS, journal)
+- **Phase 3** - Medium-complexity routers (EPG, logos, profiles)
+- **Phase 4** - Large routers (channels, streams, M3U, auto-creation, stats)
+- **Phase 5** - Clean up main.py to thin orchestration layer
 
-### v0.14.0 - Auto-Channel Management
-Popularity-based automatic channel management:
-- **Auto-Add Popular Channels** - Automatically add channels that become popular
-- **Auto-Remove Unpopular** - Optionally remove channels with low viewership
-- **Popularity Thresholds** - Configurable thresholds for auto-add/remove actions
-- **Notification on Changes** - Alert when channels are auto-added or removed
+### v0.14.0 - Enhanced Dummy EPG
+Enhanced template engine for dummy EPG generation:
+- **Text Transforms** - Apply transforms to template variables (uppercase, title case, etc.)
+- **Conditionals** - Conditional blocks in templates based on channel metadata
+- **Lookup Tables** - Database-backed lookup tables for mapping channel names to custom EPG data
+- **Per-Source Inline Lookups** - Configure lookups directly in the dummy EPG source modal
+- **Enhanced Preview** - Live preview of template output with sample data
+
+### v0.15.0 - Move Logic Server-Side
+Move heavy client-side computation to the backend:
+- **EPG Matching Algorithm** - Move 1,052-line matching engine to backend API
+- **Stream Name Normalization** - Move 524-line normalization to backend
+- **Print Guide Generation** - Move 383-line guide rendering to backend
+- **Edit Mode Consolidation** - Simplify 218-line edit mode logic
+
+### v0.16.0 - M3U/EPG Export & Cloud Distribution
+Generate M3U playlists and XMLTV EPG from managed channels with cloud distribution:
+- **Playlist Profiles** - Curated channel selections for export
+- **XMLTV Generation** - Generate EPG files from managed channel data
+- **Cloud Adapters** - S3, Google Drive, OneDrive, Dropbox support
+- **Publish Pipeline** - Scheduled generation and distribution
+- **Full Frontend UI** - Export management interface
 
 ---
 
