@@ -25,6 +25,12 @@ logger = logging.getLogger(__name__)
 _tag_group_cache: dict[int, list[tuple[str, bool]]] = {}  # group_id -> [(value, case_sensitive), ...]
 
 
+def invalidate_tag_cache():
+    """Clear the global tag caches so the next access reloads from DB."""
+    _tag_group_cache.clear()
+    NormalizationEngine._tag_group_id_cache.clear()
+
+
 # Unicode superscript to ASCII mapping for quality tags
 # Common patterns: ᴴᴰ (HD), ᶠᴴᴰ (FHD), ᵁᴴᴰ (UHD), ᴿᴬᵂ (RAW), ˢᴰ (SD), etc.
 SUPERSCRIPT_MAP = {
