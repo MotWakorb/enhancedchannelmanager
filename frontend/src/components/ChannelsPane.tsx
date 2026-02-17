@@ -2967,8 +2967,6 @@ export function ChannelsPane({
     }
 
     // Filter channels based on search term and auto-created filter
-    let hiddenDueToAutoCreated = 0;
-    const hiddenChannelsByGroup: Record<string, { count: number; samples: string[] }> = {};
     const visibleChannels = localChannels.filter((ch) => {
       // First, apply search filter if there's a search term
       if (searchTerm) {
@@ -2979,27 +2977,16 @@ export function ChannelsPane({
       }
 
       if (!ch.auto_created) return true; // Always show manual channels
-      // For auto-created channels, check if their group is related to auto_channel_sync
+      // For auto-created channels in active auto-sync groups, respect the showAutoChannelGroups filter
       const groupId = ch.channel_group_id;
       if (groupId && autoSyncRelatedGroups.has(groupId)) {
-        // Show auto-created channel if showAutoChannelGroups filter is on
         return channelListFilters?.showAutoChannelGroups !== false;
       }
-      // Track hidden channels by group for debugging
-      hiddenDueToAutoCreated++;
-      const key = groupId !== null ? String(groupId) : 'ungrouped';
-      if (!hiddenChannelsByGroup[key]) hiddenChannelsByGroup[key] = { count: 0, samples: [] };
-      hiddenChannelsByGroup[key].count++;
-      if (hiddenChannelsByGroup[key].samples.length < 5) {
-        hiddenChannelsByGroup[key].samples.push(`#${ch.channel_number} ${ch.name} (auto_created=${ch.auto_created}, auto_created_by=${ch.auto_created_by})`);
-      }
-      return false; // Hide auto-created channels from non-auto-sync groups
+      // Auto-created channels whose group no longer has auto-sync enabled are always shown.
+      // When a user turns off auto-channel-sync in Dispatcharr, the channels still exist
+      // and should remain visible in ECM.
+      return true;
     });
-
-    if (hiddenDueToAutoCreated > 0) {
-      logger.debug(`[CHANNELS-DEBUG] Hidden ${hiddenDueToAutoCreated} channels due to auto_created filter (not in autoSyncRelatedGroups)`);
-      logger.debug('[CHANNELS-DEBUG] Hidden channels by group:', hiddenChannelsByGroup);
-    }
 
     // Debug: Log after filtering
     const afterFilterCounts: Record<string, number> = {};
