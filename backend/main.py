@@ -9150,6 +9150,10 @@ async def delete_tag_group(group_id: int):
             session.delete(group)  # Cascade deletes all tags
             session.commit()
             logger.info(f"Deleted tag group: id={group_id}, name={group_name}")
+
+            from normalization_engine import invalidate_tag_cache
+            invalidate_tag_cache()
+
             return {"status": "deleted", "id": group_id}
         finally:
             session.close()
@@ -9202,6 +9206,10 @@ async def add_tags_to_group(group_id: int, request: CreateTagsRequest):
             session.commit()
             logger.info(f"Added {len(created_tags)} tags to group {group_id}, skipped {len(skipped_tags)} duplicates")
 
+            if created_tags:
+                from normalization_engine import invalidate_tag_cache
+                invalidate_tag_cache()
+
             return {
                 "created": created_tags,
                 "skipped": skipped_tags,
@@ -9238,6 +9246,10 @@ async def update_tag(group_id: int, tag_id: int, request: UpdateTagRequest):
             session.commit()
             session.refresh(tag)
             logger.info(f"Updated tag: id={tag.id}, value={tag.value}")
+
+            from normalization_engine import invalidate_tag_cache
+            invalidate_tag_cache()
+
             return tag.to_dict()
         finally:
             session.close()
@@ -9269,6 +9281,10 @@ async def delete_tag(group_id: int, tag_id: int):
             session.delete(tag)
             session.commit()
             logger.info(f"Deleted tag: id={tag_id}, value={tag_value}")
+
+            from normalization_engine import invalidate_tag_cache
+            invalidate_tag_cache()
+
             return {"status": "deleted", "id": tag_id}
         finally:
             session.close()
