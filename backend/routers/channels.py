@@ -736,7 +736,8 @@ async def import_channels_csv(file: UploadFile = File(...)):
                         warnings.append(f"Row {row_num}: Failed to link streams: {se}")
 
         except Exception as e:
-            errors.append({"row": row_num, "error": str(e)})
+            logger.warning("[CHANNELS-CSV] Row %s import error: %s", row_num, e)
+            errors.append({"row": row_num, "error": "Failed to import row"})
 
     # Log the import
     logger.info("[CHANNELS-CSV] Import completed: %s channels created, %s groups created, %s streams linked, %s logos from EPG, %s errors", channels_created, groups_created, streams_linked, logos_from_epg, len(errors))
@@ -768,9 +769,10 @@ async def preview_csv(data: dict):
             "errors": errors
         }
     except CSVParseError as e:
+        logger.warning("[CHANNELS-CSV] CSV parse error: %s", e)
         return {
             "rows": [],
-            "errors": [{"row": 1, "error": str(e)}]
+            "errors": [{"row": 1, "error": "Failed to parse CSV"}]
         }
 
 

@@ -28,6 +28,17 @@ class ProbeResult:
     raw: Optional[Dict[str, Any]] = None
 
 
+def _validate_probe_path(path: str) -> Optional[str]:
+    """Validate that a probe path uses an allowed scheme. Returns error message or None."""
+    from urllib.parse import urlparse
+    parsed = urlparse(path)
+    # Allow common streaming protocols and local files
+    allowed_schemes = {"http", "https", "rtmp", "rtsp", "rtp", "udp", "tcp", "file", ""}
+    if parsed.scheme.lower() not in allowed_schemes:
+        return f"Unsupported scheme: {parsed.scheme}"
+    return None
+
+
 def probe_source(path: str, timeout: int = DEFAULT_TIMEOUT) -> ProbeResult:
     """Probe a media file or URL using ffprobe.
 
@@ -38,6 +49,10 @@ def probe_source(path: str, timeout: int = DEFAULT_TIMEOUT) -> ProbeResult:
     Returns:
         ProbeResult with stream and format information.
     """
+    error = _validate_probe_path(path)
+    if error:
+        return ProbeResult(success=False, error=error)
+
     cmd = [
         FFPROBE_BIN,
         "-v", "quiet",

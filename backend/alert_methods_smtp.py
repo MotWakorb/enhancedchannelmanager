@@ -172,9 +172,6 @@ class SMTPMethod(AlertMethod):
         msg.attach(MIMEText(plain_text, "plain"))
         msg.attach(MIMEText(html_text, "html"))
 
-        # Get authentication credentials from shared settings
-        smtp_user = smtp_config["smtp_user"] or None
-        smtp_password = smtp_config["smtp_password"] or None
         use_tls = smtp_config["use_tls"]
         use_ssl = smtp_config["use_ssl"]
 
@@ -190,8 +187,12 @@ class SMTPMethod(AlertMethod):
                 if use_tls and not use_ssl:
                     server.starttls(context=ssl.create_default_context())
 
-                if smtp_user and smtp_password:
-                    server.login(smtp_user, smtp_password)
+                # Read credentials just before login to keep them out of log scope
+                _user = smtp_config.get("smtp_user") or None
+                _pass = smtp_config.get("smtp_password") or None
+                if _user and _pass:
+                    server.login(_user, _pass)
+                del _user, _pass
 
                 logger.debug("[ALERTS-SMTP] SMTP method %s: Sending from=%s, to=%s", self.name, from_email, to_emails)
                 server.sendmail(from_email, to_emails, msg.as_string())

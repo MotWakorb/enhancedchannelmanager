@@ -486,6 +486,11 @@ async def test_connection(request: TestConnectionRequest):
     import httpx
 
     logger.debug("[SETTINGS-TEST] POST /api/settings/test - url=%s", request.url)
+    # Validate URL scheme to prevent SSRF
+    from urllib.parse import urlparse
+    parsed = urlparse(request.url)
+    if parsed.scheme not in ("http", "https"):
+        return {"success": False, "message": "Invalid URL scheme - must be http or https"}
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             url = request.url.rstrip("/")
@@ -513,7 +518,7 @@ async def test_connection(request: TestConnectionRequest):
         return {"success": False, "message": "Connection timed out"}
     except Exception as e:
         logger.exception("[SETTINGS-TEST] Connection test failed - unexpected error: %s", e)
-        return {"success": False, "message": str(e)}
+        return {"success": False, "message": "Unexpected error during connection test"}
 
 
 @router.post("/test-smtp")
@@ -601,7 +606,7 @@ You can now use email features like M3U Digest reports.
         return {"success": False, "message": f"Connection timed out to {request.smtp_host}:{request.smtp_port}"}
     except Exception as e:
         logger.exception("[SETTINGS-TEST] SMTP test failed - unexpected error: %s", e)
-        return {"success": False, "message": str(e)}
+        return {"success": False, "message": "Unexpected error during SMTP test"}
 
 
 @router.post("/test-discord")
@@ -653,10 +658,10 @@ async def test_discord_webhook(request: DiscordTestRequest):
 
     except aiohttp.ClientError as e:
         logger.error("[SETTINGS-TEST] Discord test failed - connection error: %s", e)
-        return {"success": False, "message": f"Connection error: {str(e)}"}
+        return {"success": False, "message": "Connection error during Discord test"}
     except Exception as e:
         logger.exception("[SETTINGS-TEST] Discord test failed - unexpected error: %s", e)
-        return {"success": False, "message": str(e)}
+        return {"success": False, "message": "Unexpected error during Discord test"}
 
 
 @router.post("/test-telegram")
@@ -668,6 +673,10 @@ async def test_telegram_bot(request: TelegramTestRequest):
     chat_id = request.chat_id
     logger.debug("[SETTINGS-TEST] POST /api/settings/test-telegram")
 
+    # Validate bot token format to prevent SSRF via URL manipulation
+    import re as _re
+    if not bot_token or not _re.match(r'^\d+:[A-Za-z0-9_-]+$', bot_token):
+        return {"success": False, "message": "Invalid bot token format"}
     if not bot_token:
         return {"success": False, "message": "Bot token is required"}
     if not chat_id:
@@ -713,10 +722,10 @@ async def test_telegram_bot(request: TelegramTestRequest):
 
     except aiohttp.ClientError as e:
         logger.error("[SETTINGS-TEST] Telegram test failed - connection error: %s", e)
-        return {"success": False, "message": f"Connection error: {str(e)}"}
+        return {"success": False, "message": "Connection error during Telegram test"}
     except Exception as e:
         logger.exception("[SETTINGS-TEST] Telegram test failed - unexpected error: %s", e)
-        return {"success": False, "message": str(e)}
+        return {"success": False, "message": "Unexpected error during Telegram test"}
 
 
 @router.post("/restart-services")
@@ -792,7 +801,7 @@ async def restart_services():
             return {"success": True, "message": "Services restarted with new settings"}
         except Exception as e:
             logger.exception("[SETTINGS] Failed to restart services: %s", e)
-            return {"success": False, "message": str(e)}
+            return {"success": False, "message": "Failed to restart services"}
     else:
         return {"success": False, "message": "Settings not configured"}
 

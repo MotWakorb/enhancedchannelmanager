@@ -888,7 +888,7 @@ async def get_auto_creation_condition_schema():
     from auto_creation_schema import ConditionType
 
     conditions = []
-    for ct in ConditionType:
+    for ct in list(ConditionType):
         condition_info = {
             "type": ct.value,
             "category": "logical" if ct.value in ("and", "or", "not") else
