@@ -74,7 +74,7 @@ async def get_channel_groups():
         return result
     except Exception as e:
         logger.exception("[GROUPS] Failed to fetch channel groups")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.post("")
@@ -103,7 +103,7 @@ async def create_channel_group(request: CreateChannelGroupRequest):
             except Exception as search_err:
                 logger.error("[GROUPS] Error searching for existing group: %s", search_err)
         logger.exception("[GROUPS] Channel group creation failed: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.patch("/{group_id}")
@@ -119,7 +119,7 @@ async def update_channel_group(group_id: int, data: dict):
         return result
     except Exception as e:
         logger.exception("[GROUPS] Failed to update channel group id=%s", group_id)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 # ---------------------------------------------------------------------------
@@ -138,7 +138,7 @@ async def get_hidden_channel_groups():
             return [g.to_dict() for g in hidden_groups]
     except Exception as e:
         logger.exception("[GROUPS] Failed to get hidden channel groups: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.get("/orphaned")
@@ -256,7 +256,7 @@ async def get_orphaned_channel_groups():
         }
     except Exception as e:
         logger.exception("[GROUPS-ORPHAN] Failed to find orphaned channel groups: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.delete("/orphaned")
@@ -431,7 +431,7 @@ async def delete_orphaned_channel_groups(request: DeleteOrphanedGroupsRequest | 
         }
     except Exception as e:
         logger.exception("[GROUPS-ORPHAN] Failed to delete orphaned channel groups: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.get("/auto-created")
@@ -500,7 +500,7 @@ async def get_groups_with_auto_created_channels():
         }
     except Exception as e:
         logger.exception("[GROUPS] Failed to find groups with auto_created channels: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.get("/with-streams")
@@ -683,7 +683,7 @@ async def get_channel_groups_with_streams():
         }
     except Exception as e:
         logger.exception("[GROUPS] Failed to get channel groups with streams: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 # ---------------------------------------------------------------------------
@@ -730,7 +730,7 @@ async def delete_channel_group(group_id: int):
             return {"status": "deleted"}
     except Exception as e:
         logger.exception("[GROUPS] Failed to delete/hide channel group %s: %s", group_id, e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.post("/{group_id}/restore")
@@ -753,4 +753,4 @@ async def restore_channel_group(group_id: int):
         raise
     except Exception as e:
         logger.exception("[GROUPS] Failed to restore channel group %s: %s", group_id, e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")

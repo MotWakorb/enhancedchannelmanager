@@ -104,7 +104,7 @@ async def get_auto_creation_rules():
             session.close()
     except Exception as e:
         logger.exception("[AUTO-CREATE] Failed to get auto-creation rules: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.get("/rules/{rule_id}")
@@ -127,7 +127,7 @@ async def get_auto_creation_rule(rule_id: int):
         raise
     except Exception as e:
         logger.exception("[AUTO-CREATE] Failed to get auto-creation rule %s: %s", rule_id, e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.post("/rules")
@@ -188,7 +188,7 @@ async def create_auto_creation_rule(request: CreateAutoCreationRuleRequest):
         raise
     except Exception as e:
         logger.exception("[AUTO-CREATE] Failed to create auto-creation rule: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.put("/rules/{rule_id}")
@@ -274,7 +274,7 @@ async def update_auto_creation_rule(rule_id: int, request: UpdateAutoCreationRul
         raise
     except Exception as e:
         logger.exception("[AUTO-CREATE] Failed to update auto-creation rule %s: %s", rule_id, e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.delete("/rules/{rule_id}")
@@ -312,7 +312,7 @@ async def delete_auto_creation_rule(rule_id: int):
         raise
     except Exception as e:
         logger.exception("[AUTO-CREATE] Failed to delete auto-creation rule %s: %s", rule_id, e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.post("/rules/reorder")
@@ -335,7 +335,7 @@ async def reorder_auto_creation_rules(rule_ids: List[int] = Body(...)):
             session.close()
     except Exception as e:
         logger.exception("[AUTO-CREATE] Failed to reorder auto-creation rules: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.post("/rules/{rule_id}/toggle")
@@ -363,7 +363,7 @@ async def toggle_auto_creation_rule(rule_id: int):
         raise
     except Exception as e:
         logger.exception("[AUTO-CREATE] Failed to toggle auto-creation rule %s: %s", rule_id, e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.post("/rules/{rule_id}/duplicate")
@@ -407,7 +407,7 @@ async def duplicate_auto_creation_rule(rule_id: int):
         raise
     except Exception as e:
         logger.exception("[AUTO-CREATE] Failed to duplicate auto-creation rule %s: %s", rule_id, e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 # =============================================================================
@@ -438,7 +438,7 @@ async def run_auto_creation_pipeline(request: RunPipelineRequest):
         return result
     except Exception as e:
         logger.exception("[AUTO-CREATE] Failed to run auto-creation pipeline: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.post("/rules/{rule_id}/run")
@@ -463,7 +463,7 @@ async def run_auto_creation_rule(rule_id: int, dry_run: bool = False):
         return result
     except Exception as e:
         logger.exception("[AUTO-CREATE] Failed to run auto-creation rule %s: %s", rule_id, e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.get("/executions")
@@ -501,7 +501,7 @@ async def get_auto_creation_executions(
             session.close()
     except Exception as e:
         logger.exception("[AUTO-CREATE] Failed to get auto-creation executions: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.get("/executions/{execution_id}")
@@ -533,7 +533,7 @@ async def get_auto_creation_execution(execution_id: int, include_entities: bool 
         raise
     except Exception as e:
         logger.exception("[AUTO-CREATE] Failed to get auto-creation execution %s: %s", execution_id, e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.post("/executions/{execution_id}/rollback")
@@ -575,7 +575,7 @@ async def rollback_auto_creation_execution(execution_id: int):
         raise
     except Exception as e:
         logger.exception("[AUTO-CREATE] Failed to rollback auto-creation execution %s: %s", execution_id, e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 # =============================================================================
@@ -667,7 +667,7 @@ async def export_auto_creation_rules_yaml():
             session.close()
     except Exception as e:
         logger.exception("[AUTO-CREATE] Failed to export auto-creation rules: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.post("/import/yaml")
@@ -858,7 +858,7 @@ async def import_auto_creation_rules_yaml(request: ImportYAMLRequest):
         raise
     except Exception as e:
         logger.exception("[AUTO-CREATE] Failed to import auto-creation rules: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 # =============================================================================
@@ -879,7 +879,7 @@ async def validate_auto_creation_rule(
         return result
     except Exception as e:
         logger.exception("[AUTO-CREATE] Failed to validate auto-creation rule: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.get("/schema/conditions")

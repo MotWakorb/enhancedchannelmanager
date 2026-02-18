@@ -374,6 +374,6 @@ async def send_test_m3u_digest():
         raise
     except Exception as e:
         logger.exception("[M3U-DIGEST] Failed to send test digest")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
     finally:
         db.close()

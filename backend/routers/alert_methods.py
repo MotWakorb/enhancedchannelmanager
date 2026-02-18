@@ -92,7 +92,7 @@ async def get_alert_method_types():
         return types
     except Exception as e:
         logger.exception("[ALERTS] Failed to fetch alert method types")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.get("")
@@ -130,7 +130,7 @@ async def list_alert_methods():
         return result
     except Exception as e:
         logger.exception("[ALERTS] Failed to list alert methods")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
     finally:
         session.close()
 
@@ -195,7 +195,7 @@ async def create_alert_method(data: AlertMethodCreate):
         raise
     except Exception as e:
         logger.exception("[ALERTS] Failed to create alert method")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
     finally:
         if session:
             session.close()
@@ -242,7 +242,7 @@ async def get_alert_method(method_id: int):
         raise
     except Exception as e:
         logger.exception("[ALERTS] Failed to get alert method %s", method_id)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
     finally:
         session.close()
 
@@ -303,7 +303,7 @@ async def update_alert_method(method_id: int, data: AlertMethodUpdate):
         raise
     except Exception as e:
         logger.exception("[ALERTS] Failed to update alert method %s", method_id)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
     finally:
         session.close()
 
@@ -337,7 +337,7 @@ async def delete_alert_method(method_id: int):
         raise
     except Exception as e:
         logger.exception("[ALERTS] Failed to delete alert method %s", method_id)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
     finally:
         session.close()
 
@@ -378,6 +378,6 @@ async def test_alert_method(method_id: int):
         raise
     except Exception as e:
         logger.exception("[ALERTS] Failed to test alert method %s", method_id)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
     finally:
         session.close()

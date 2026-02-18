@@ -129,7 +129,7 @@ async def get_all_normalization_rules():
             session.close()
     except Exception as e:
         logger.exception("[NORMALIZE] Failed to get normalization rules")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.get("/groups")
@@ -148,7 +148,7 @@ async def get_normalization_groups():
             session.close()
     except Exception as e:
         logger.exception("[NORMALIZE] Failed to get normalization groups")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.post("/groups")
@@ -175,7 +175,7 @@ async def create_normalization_group(request: CreateRuleGroupRequest):
             session.close()
     except Exception as e:
         logger.exception("[NORMALIZE] Failed to create normalization group")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.get("/groups/{group_id}")
@@ -206,7 +206,7 @@ async def get_normalization_group(group_id: int):
         raise
     except Exception as e:
         logger.exception("[NORMALIZE] Failed to get normalization group %s", group_id)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.patch("/groups/{group_id}")
@@ -242,7 +242,7 @@ async def update_normalization_group(group_id: int, request: UpdateRuleGroupRequ
         raise
     except Exception as e:
         logger.exception("[NORMALIZE] Failed to update normalization group %s", group_id)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.delete("/groups/{group_id}")
@@ -275,7 +275,7 @@ async def delete_normalization_group(group_id: int):
         raise
     except Exception as e:
         logger.exception("[NORMALIZE] Failed to delete normalization group %s", group_id)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.post("/groups/reorder")
@@ -296,7 +296,7 @@ async def reorder_normalization_groups(request: ReorderGroupsRequest):
             session.close()
     except Exception as e:
         logger.exception("[NORMALIZE] Failed to reorder normalization groups")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.get("/rules/{rule_id}")
@@ -319,7 +319,7 @@ async def get_normalization_rule(rule_id: int):
         raise
     except Exception as e:
         logger.exception("[NORMALIZE] Failed to get normalization rule %s", rule_id)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.post("/rules")
@@ -371,7 +371,7 @@ async def create_normalization_rule(request: CreateRuleRequest):
         raise
     except Exception as e:
         logger.exception("[NORMALIZE] Failed to create normalization rule")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.patch("/rules/{rule_id}")
@@ -431,7 +431,7 @@ async def update_normalization_rule(rule_id: int, request: UpdateRuleRequest):
         raise
     except Exception as e:
         logger.exception("[NORMALIZE] Failed to update normalization rule %s", rule_id)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.delete("/rules/{rule_id}")
@@ -458,7 +458,7 @@ async def delete_normalization_rule(rule_id: int):
         raise
     except Exception as e:
         logger.exception("[NORMALIZE] Failed to delete normalization rule %s", rule_id)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.post("/groups/{group_id}/rules/reorder")
@@ -480,7 +480,7 @@ async def reorder_normalization_rules(group_id: int, request: ReorderRulesReques
             session.close()
     except Exception as e:
         logger.exception("[NORMALIZE] Failed to reorder rules in group %s", group_id)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.post("/test")
@@ -511,7 +511,7 @@ async def test_normalization_rule(request: TestRuleRequest):
             session.close()
     except Exception as e:
         logger.exception("[NORMALIZE] Failed to test normalization rule")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.post("/test-batch")
@@ -542,7 +542,7 @@ async def test_normalization_batch(request: TestRulesBatchRequest):
             session.close()
     except Exception as e:
         logger.exception("[NORMALIZE] Failed to test normalization batch")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.post("/normalize")
@@ -565,7 +565,7 @@ async def normalize_text(request: TestRulesBatchRequest):
             session.close()
     except Exception as e:
         logger.exception("[NORMALIZE] Failed to normalize texts")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.get("/rule-stats")
@@ -648,7 +648,7 @@ async def get_normalization_rule_stats(limit: int = 500):
             session.close()
     except Exception as e:
         logger.exception("[NORMALIZE] Failed to get rule stats")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.get("/migration/status")
@@ -665,7 +665,7 @@ async def get_normalization_migration_status():
             session.close()
     except Exception as e:
         logger.exception("[NORMALIZE] Failed to get migration status")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.post("/migration/run")
@@ -702,4 +702,4 @@ async def run_normalization_migration(force: bool = False, migrate_settings: boo
             session.close()
     except Exception as e:
         logger.exception("[NORMALIZE] Failed to create demo rules")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")

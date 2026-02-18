@@ -39,7 +39,7 @@ async def get_channel_stats():
         return result
     except Exception as e:
         logger.exception("[STATS] Failed to get channel stats")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.get("/channels/{channel_id}")
@@ -58,7 +58,7 @@ async def get_channel_stats_detail(channel_id: int):
         return result
     except Exception as e:
         logger.exception("[STATS] Failed to get channel stats for %s", channel_id)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.get("/activity")
@@ -88,7 +88,7 @@ async def get_system_events(
         return result
     except Exception as e:
         logger.exception("[STATS] Failed to get system events")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.post("/channels/{channel_id}/stop")
@@ -105,7 +105,7 @@ async def stop_channel(channel_id: str):
         return result
     except Exception as e:
         logger.exception("[STATS] Failed to stop channel %s", channel_id)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.post("/channels/{channel_id}/stop-client")
@@ -122,7 +122,7 @@ async def stop_client(channel_id: str):
         return result
     except Exception as e:
         logger.exception("[STATS] Failed to stop client for channel %s", channel_id)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.get("/bandwidth")
@@ -133,7 +133,7 @@ async def get_bandwidth_stats():
         return BandwidthTracker.get_bandwidth_summary()
     except Exception as e:
         logger.exception("[STATS] Failed to get bandwidth stats")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.get("/top-watched")
@@ -144,7 +144,7 @@ async def get_top_watched_channels(limit: int = 10, sort_by: str = "views"):
         return BandwidthTracker.get_top_watched_channels(limit=limit, sort_by=sort_by)
     except Exception as e:
         logger.exception("[STATS] Failed to get top watched channels")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 # =============================================================================
@@ -160,7 +160,7 @@ async def get_unique_viewers_summary(days: int = 7):
         return BandwidthTracker.get_unique_viewers_summary(days=days)
     except Exception as e:
         logger.exception("[STATS] Failed to get unique viewers summary")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.get("/channel-bandwidth")
@@ -171,7 +171,7 @@ async def get_channel_bandwidth_stats(days: int = 7, limit: int = 20, sort_by: s
         return BandwidthTracker.get_channel_bandwidth_stats(days=days, limit=limit, sort_by=sort_by)
     except Exception as e:
         logger.exception("[STATS] Failed to get channel bandwidth stats")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.get("/unique-viewers-by-channel")
@@ -182,7 +182,7 @@ async def get_unique_viewers_by_channel(days: int = 7, limit: int = 20):
         return BandwidthTracker.get_unique_viewers_by_channel(days=days, limit=limit)
     except Exception as e:
         logger.exception("[STATS] Failed to get unique viewers by channel")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.get("/watch-history")
@@ -278,7 +278,7 @@ async def get_watch_history(
             session.close()
     except Exception as e:
         logger.exception("[STATS] Failed to get watch history")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 # =============================================================================
@@ -295,7 +295,7 @@ async def get_popularity_rankings(limit: int = 50, offset: int = 0):
         return PopularityCalculator.get_rankings(limit=limit, offset=offset)
     except Exception as e:
         logger.exception("[STATS] Failed to get popularity rankings")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.get("/popularity/channel/{channel_id}")
@@ -312,7 +312,7 @@ async def get_channel_popularity(channel_id: str):
         raise
     except Exception as e:
         logger.exception("[STATS] Failed to get channel popularity")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.get("/popularity/trending")
@@ -326,7 +326,7 @@ async def get_trending_channels(direction: str = "up", limit: int = 10):
         return PopularityCalculator.get_trending_channels(direction=direction, limit=limit)
     except Exception as e:
         logger.exception("[STATS] Failed to get trending channels")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.post("/popularity/calculate")
@@ -347,4 +347,4 @@ async def calculate_popularity_scores(
         return result
     except Exception as e:
         logger.exception("[STATS] Failed to calculate popularity")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")

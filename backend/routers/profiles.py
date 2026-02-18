@@ -29,7 +29,7 @@ async def get_stream_profiles():
         return result
     except Exception as e:
         logger.exception("[PROFILES] Failed to fetch stream profiles")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.post("/api/stream-profiles")
@@ -46,7 +46,7 @@ async def create_stream_profile(request: Request):
         return result
     except Exception as e:
         logger.exception("[PROFILES] Failed to create stream profile")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 # Channel Profiles
@@ -63,7 +63,7 @@ async def get_channel_profiles():
         return result
     except Exception as e:
         logger.exception("[PROFILES] Failed to fetch channel profiles")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.post("/api/channel-profiles", tags=["Channel Profiles"])
@@ -80,7 +80,7 @@ async def create_channel_profile(request: Request):
         return result
     except Exception as e:
         logger.exception("[PROFILES] Failed to create channel profile")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.get("/api/channel-profiles/{profile_id}", tags=["Channel Profiles"])
@@ -96,7 +96,7 @@ async def get_channel_profile(profile_id: int):
         return result
     except Exception as e:
         logger.exception("[PROFILES] Failed to fetch channel profile id=%s", profile_id)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.patch("/api/channel-profiles/{profile_id}", tags=["Channel Profiles"])
@@ -113,7 +113,7 @@ async def update_channel_profile(profile_id: int, request: Request):
         return result
     except Exception as e:
         logger.exception("[PROFILES] Failed to update channel profile id=%s", profile_id)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.delete("/api/channel-profiles/{profile_id}", tags=["Channel Profiles"])
@@ -129,7 +129,7 @@ async def delete_channel_profile(profile_id: int):
         return {"status": "deleted"}
     except Exception as e:
         logger.exception("[PROFILES] Failed to delete channel profile id=%s", profile_id)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.patch("/api/channel-profiles/{profile_id}/channels/bulk-update", tags=["Channel Profiles"])
@@ -146,7 +146,7 @@ async def bulk_update_profile_channels(profile_id: int, request: Request):
         return result
     except Exception as e:
         logger.exception("[PROFILES] Failed to bulk update profile channels id=%s", profile_id)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.patch("/api/channel-profiles/{profile_id}/channels/{channel_id}", tags=["Channel Profiles"])
@@ -163,4 +163,4 @@ async def update_profile_channel(profile_id: int, channel_id: int, request: Requ
         return result
     except Exception as e:
         logger.exception("[PROFILES] Failed to update profile channel profile_id=%s channel_id=%s", profile_id, channel_id)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
