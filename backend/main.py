@@ -38,6 +38,9 @@ logging.basicConfig(
     level=getattr(logging, initial_log_level),
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
+# Sanitize all log arguments to prevent log injection (CWE-117)
+from log_utils import install_safe_logging  # noqa: E402
+install_safe_logging()
 logger = logging.getLogger(__name__)
 
 # OpenAPI tags for organizing endpoints in Swagger UI
