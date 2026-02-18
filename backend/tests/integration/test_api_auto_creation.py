@@ -13,7 +13,7 @@ from fastapi.testclient import TestClient
 @pytest.fixture
 def mock_db_session():
     """Mock database session."""
-    with patch("main.get_session") as mock:
+    with patch("routers.auto_creation.get_session") as mock:
         session = MagicMock()
         mock.return_value = session
         yield session
@@ -102,7 +102,7 @@ class TestAutoCreationRulesAPI:
         mock_db_session.commit = MagicMock()
         mock_db_session.refresh = MagicMock(side_effect=lambda x: setattr(x, 'id', 1))
 
-        with patch("main.journal.log_entry"):
+        with patch("routers.auto_creation.journal.log_entry"):
             response = test_client.post(
                 "/api/auto-creation/rules",
                 json={
@@ -147,7 +147,7 @@ class TestAutoCreationRulesAPI:
         mock_rule.name = "Test Rule"
         mock_db_session.query.return_value.filter.return_value.first.return_value = mock_rule
 
-        with patch("main.journal.log_entry"):
+        with patch("routers.auto_creation.journal.log_entry"):
             response = test_client.delete("/api/auto-creation/rules/1")
 
         assert response.status_code == 200
@@ -341,7 +341,7 @@ rules:
 """
         mock_db_session.query.return_value.filter.return_value.first.return_value = None
 
-        with patch("main.journal.log_entry"):
+        with patch("routers.auto_creation.journal.log_entry"):
             response = test_client.post(
                 "/api/auto-creation/import/yaml",
                 json={

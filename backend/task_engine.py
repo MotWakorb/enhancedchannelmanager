@@ -173,7 +173,7 @@ class TaskEngine:
         """
         try:
             # Import here to avoid circular imports
-            from main import create_notification_internal
+            from services.notification_service import create_notification_internal
             from models import ScheduledTask
 
             # Check task-level notification and alert settings
