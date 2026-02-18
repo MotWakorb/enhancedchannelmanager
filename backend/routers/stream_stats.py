@@ -387,12 +387,12 @@ async def probe_bulk_streams(request: BulkProbeRequest):
                 await asyncio.sleep(0.5)  # Rate limiting
             else:
                 logger.warning("[STREAM-STATS-PROBE] Stream %s not found in stream list", stream_id)
-
-        logger.info("[STREAM-STATS-PROBE] Bulk probe completed: %s streams probed", len(results))
-        return {"probed": len(results), "results": results}
     except Exception as e:
         logger.exception("[STREAM-STATS-PROBE] Bulk probe failed: %s", e)
         raise HTTPException(status_code=500, detail="Internal server error")
+
+    logger.info("[STREAM-STATS-PROBE] Bulk probe completed: %s streams probed", len(results))
+    return {"probed": len(results), "results": results}
 
 
 @router.post("/probe/all")
@@ -605,10 +605,11 @@ async def probe_single_stream(stream_id: int):
         result = await prober.probe_stream(
             stream_id, stream.get("url"), stream.get("name")
         )
-        logger.info("[STREAM-STATS-PROBE] Single stream probe completed for %s", stream_id)
-        return result
     except HTTPException:
         raise
     except Exception as e:
         logger.exception("[STREAM-STATS-PROBE] Failed to probe stream %s: %s", stream_id, e)
         raise HTTPException(status_code=500, detail="Internal server error")
+
+    logger.info("[STREAM-STATS-PROBE] Single stream probe completed for %s", stream_id)
+    return result

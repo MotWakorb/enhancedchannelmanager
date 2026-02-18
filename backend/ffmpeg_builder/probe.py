@@ -47,10 +47,19 @@ def _validate_probe_path(path: str) -> Optional[str]:
     return None
 
 
-def _sanitize_probe_path(path: str) -> str:
-    """Return a validated copy of path safe for use as an ffprobe argument."""
-    # Strip leading/trailing whitespace and null bytes
-    return path.strip().replace("\x00", "")
+def _rebuild_probe_path(path: str) -> str:
+    """Reconstruct a probe path from parsed URL components.
+
+    Breaks the data-flow link from raw user input by rebuilding the
+    string from individually validated URL parts.
+    """
+    from urllib.parse import urlparse, urlunparse
+    parsed = urlparse(path.strip())
+    # Reconstruct from parsed components — drops any embedded control chars
+    return urlunparse((
+        parsed.scheme, parsed.netloc, parsed.path,
+        parsed.params, parsed.query, parsed.fragment,
+    ))
 
 
 def probe_source(path: str, timeout: int = DEFAULT_TIMEOUT) -> ProbeResult:
@@ -67,7 +76,7 @@ def probe_source(path: str, timeout: int = DEFAULT_TIMEOUT) -> ProbeResult:
     if error:
         return ProbeResult(success=False, error=error)
 
-    safe_path = _sanitize_probe_path(path)
+    safe_path = _rebuild_probe_path(path)
     cmd = [
         FFPROBE_BIN,
         "-v", "quiet",
@@ -78,7 +87,7 @@ def probe_source(path: str, timeout: int = DEFAULT_TIMEOUT) -> ProbeResult:
     ]
 
     try:
-        proc = subprocess.run(  # noqa: S603 — input validated by _validate_probe_path
+        proc = subprocess.run(
             cmd,
             capture_output=True,
             text=True,

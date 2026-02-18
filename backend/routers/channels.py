@@ -733,7 +733,8 @@ async def import_channels_csv(file: UploadFile = File(...)):
                         await client.update_channel(channel_id, {"streams": stream_ids})
                         streams_linked += len(stream_ids)
                     except Exception as se:
-                        warnings.append(f"Row {row_num}: Failed to link streams: {se}")
+                        logger.warning("[CHANNELS-CSV] Row %s: Failed to link streams: %s", row_num, se)
+                        warnings.append(f"Row {row_num}: Failed to link streams")
 
         except Exception as e:
             logger.warning("[CHANNELS-CSV] Row %s import error: %s", row_num, e)

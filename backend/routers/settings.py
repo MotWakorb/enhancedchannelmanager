@@ -681,8 +681,6 @@ async def test_telegram_bot(request: TelegramTestRequest):
     import re as _re
     if not bot_token or not _re.match(r'^\d+:[A-Za-z0-9_-]+$', bot_token):
         return {"success": False, "message": "Invalid bot token format"}
-    if not bot_token:
-        return {"success": False, "message": "Bot token is required"}
     if not chat_id:
         return {"success": False, "message": "Chat ID is required"}
 
