@@ -16,7 +16,7 @@ from typing import Optional
 from database import get_session
 from models import TaskExecution
 from task_registry import get_registry
-from task_scheduler import TaskResult, TaskStatus
+from task_scheduler import TaskResult
 from journal import log_entry
 
 logger = logging.getLogger(__name__)
@@ -118,7 +118,7 @@ class TaskEngine:
             try:
                 await self._task
             except asyncio.CancelledError:
-                pass
+                logger.debug("[TASK-ENGINE] Task loop cancelled during shutdown")
             self._task = None
 
         # Wait for active tasks to complete (with timeout)

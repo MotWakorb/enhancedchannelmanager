@@ -4,9 +4,7 @@
  * Tests the CSV import workflow including file upload, preview, validation, and import.
  */
 import { test, expect, navigateToTab, enterEditMode } from './fixtures/base';
-import { selectors } from './fixtures/test-data';
 import { Page } from '@playwright/test';
-import path from 'path';
 
 // CSV Import selectors
 const csvSelectors = {

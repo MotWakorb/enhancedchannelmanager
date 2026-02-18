@@ -11,7 +11,6 @@
  * @see https://playwright.dev/docs/test-snapshots
  */
 import { test, expect, navigateToTab } from './fixtures/base';
-import { selectors } from './fixtures/test-data';
 
 // Consistent viewport and disabled animations for deterministic screenshots
 test.use({

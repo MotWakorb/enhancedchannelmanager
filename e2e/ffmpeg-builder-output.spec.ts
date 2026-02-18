@@ -7,9 +7,8 @@
  * - Format-specific options (movflags for MP4)
  * - Explanatory tooltips on output settings
  */
-import { test, expect, navigateToTab, waitForToast } from './fixtures/base';
-import { selectors, generateTestId } from './fixtures/test-data';
-import { ffmpegSelectors, ffmpegTestData } from './fixtures/ffmpeg-data';
+import { test, expect, navigateToTab } from './fixtures/base';
+import { ffmpegSelectors } from './fixtures/ffmpeg-data';
 
 test.describe('Output Configuration', () => {
   test.beforeEach(async ({ appPage }) => {

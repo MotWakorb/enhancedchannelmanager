@@ -7,9 +7,8 @@
  * - Loading configurations and restoring settings
  * - Managing (deleting) saved configurations
  */
-import { test, expect, navigateToTab, waitForToast } from './fixtures/base';
-import { selectors, generateTestId } from './fixtures/test-data';
-import { ffmpegSelectors, ffmpegTestData, generateConfigName } from './fixtures/ffmpeg-data';
+import { test, expect, navigateToTab } from './fixtures/base';
+import { ffmpegSelectors, generateConfigName } from './fixtures/ffmpeg-data';
 
 test.describe('Persistence', () => {
   test.beforeEach(async ({ appPage }) => {

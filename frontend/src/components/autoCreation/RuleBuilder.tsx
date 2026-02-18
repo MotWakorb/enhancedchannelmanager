@@ -30,7 +30,7 @@ export function RuleBuilder({
   const id = useId();
   const [name, setName] = useState(rule?.name || '');
   const [description, setDescription] = useState(rule?.description || '');
-  const [priority, setPriority] = useState(rule?.priority ?? 0);
+  const [priority, _setPriority] = useState(rule?.priority ?? 0);
   const [enabled, setEnabled] = useState(rule?.enabled ?? true);
   const [runOnRefresh, setRunOnRefresh] = useState(rule?.run_on_refresh ?? false);
   const [stopOnFirstMatch, setStopOnFirstMatch] = useState(rule?.stop_on_first_match ?? true);

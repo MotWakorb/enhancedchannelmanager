@@ -1,7 +1,7 @@
 /**
  * Unit tests for API service.
  */
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, afterEach } from 'vitest';
 import { server } from '../test/mocks/server';
 import { http, HttpResponse } from 'msw';
 import {

@@ -7,7 +7,7 @@ existing channels in the system.
 """
 import re
 import logging
-from typing import Any, Optional
+from typing import Optional
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from auto_creation_schema import Condition, ConditionType
@@ -74,8 +74,8 @@ class StreamContext:
                 parts = stream_stats["resolution"].split("x")
                 if len(parts) == 2:
                     resolution_height = int(parts[1])
-            except (ValueError, IndexError):
-                pass
+            except (ValueError, IndexError) as e:
+                logger.debug("[AUTO-CREATE-EVAL] Suppressed resolution parse error: %s", e)
 
         return cls(
             stream_id=stream.get("id"),

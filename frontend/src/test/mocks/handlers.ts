@@ -1098,7 +1098,7 @@ export const handlers = [
   }),
 
   http.post(`${API_BASE}/auto-creation/import/yaml`, async ({ request }) => {
-    const data = await request.json() as { yaml_content: string }
+    const _data = await request.json() as { yaml_content: string }
     // Simulate importing 1 rule
     const newRule = createMockAutoCreationRule({ name: 'Imported Rule' })
     mockDataStore.autoCreationRules.push(newRule)

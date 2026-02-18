@@ -16,7 +16,7 @@ interface Props {
 
 export function AuthSettingsSection({ isAdmin }: Props) {
   const notifications = useNotifications();
-  const [settings, setSettings] = useState<AuthSettingsPublic | null>(null);
+  const [_settings, setSettings] = useState<AuthSettingsPublic | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 

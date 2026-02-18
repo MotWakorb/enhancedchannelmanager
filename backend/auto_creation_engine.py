@@ -15,8 +15,6 @@ import re
 from collections import defaultdict
 from datetime import datetime
 from typing import Optional
-import json
-
 from config import get_settings
 from database import get_session
 from models import (
@@ -26,20 +24,16 @@ from models import (
     StreamStats
 )
 from auto_creation_schema import (
-    Condition,
     Action,
     ActionType,
-    validate_rule
 )
 from auto_creation_evaluator import (
     ConditionEvaluator,
     StreamContext,
-    EvaluationResult
 )
 from auto_creation_executor import (
     ActionExecutor,
     ExecutionContext,
-    ActionResult
 )
 
 
@@ -595,8 +589,8 @@ class AutoCreationEngine:
                     parts = stats["resolution"].split("x")
                     if len(parts) == 2:
                         stream.resolution_height = int(parts[1])
-                except (ValueError, IndexError):
-                    pass
+                except (ValueError, IndexError) as e:
+                    logger.debug("[AUTO-CREATE-ENGINE] Suppressed resolution parse error: %s", e)
 
         results["execution_log"].append({
             "stream_id": None,
@@ -1589,8 +1583,8 @@ def _smart_sort_streams(
                         parts = stats["resolution"].split("x")
                         if len(parts) == 2:
                             resolution_value = int(parts[1])
-                    except (ValueError, IndexError):
-                        pass
+                    except (ValueError, IndexError) as e:
+                        logger.debug("[AUTO-CREATE-ENGINE] Suppressed resolution parse error: %s", e)
                 sort_values.append(-resolution_value)
 
             elif criterion == "bitrate":
@@ -1603,8 +1597,8 @@ def _smart_sort_streams(
                 if fps:
                     try:
                         framerate_value = float(fps)
-                    except (ValueError, TypeError):
-                        pass
+                    except (ValueError, TypeError) as e:
+                        logger.debug("[AUTO-CREATE-ENGINE] Suppressed fps parse error: %s", e)
                 sort_values.append(-framerate_value)
 
             elif criterion == "m3u_priority":

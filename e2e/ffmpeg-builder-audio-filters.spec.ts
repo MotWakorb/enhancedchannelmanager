@@ -8,8 +8,7 @@
  * - Explanatory tooltips on audio filter settings (EBU R128, etc.)
  */
 import { test, expect, navigateToTab } from './fixtures/base';
-import { selectors } from './fixtures/test-data';
-import { ffmpegSelectors, ffmpegTestData } from './fixtures/ffmpeg-data';
+import { ffmpegSelectors } from './fixtures/ffmpeg-data';
 
 test.describe('Audio Filters Section', () => {
   test.beforeEach(async ({ appPage }) => {

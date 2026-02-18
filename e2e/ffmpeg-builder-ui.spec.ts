@@ -8,7 +8,6 @@
  * - UI interactions that update the command preview
  */
 import { test, expect, navigateToTab } from './fixtures/base';
-import { selectors, generateTestId } from './fixtures/test-data';
 import { ffmpegSelectors, ffmpegTestData } from './fixtures/ffmpeg-data';
 
 test.describe('Builder UI Layout', () => {

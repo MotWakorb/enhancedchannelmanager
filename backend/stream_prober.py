@@ -162,8 +162,8 @@ def smart_sort_streams(
                         parts = stat.resolution.split('x')
                         if len(parts) == 2:
                             resolution_value = int(parts[1])  # Use height only
-                    except:
-                        pass
+                    except Exception as e:
+                        logger.debug("[STREAM-PROBE] Suppressed resolution parse error: %s", e)
                 # Negate for descending sort (higher values first)
                 sort_values.append(-resolution_value)
 
@@ -178,8 +178,8 @@ def smart_sort_streams(
                 if stat.fps:
                     try:
                         framerate_value = float(stat.fps)
-                    except:
-                        pass
+                    except (ValueError, TypeError) as e:
+                        logger.debug("[STREAM-PROBE] Suppressed fps parse error: %s", e)
                 sort_values.append(-framerate_value)
 
             elif criterion == "m3u_priority":
@@ -995,8 +995,8 @@ class StreamProber:
         if bit_rate:
             try:
                 stats.bitrate = int(bit_rate)
-            except (ValueError, TypeError):
-                pass
+            except (ValueError, TypeError) as e:
+                logger.debug("[STREAM-PROBE] Suppressed bitrate parse error: %s", e)
 
     def _parse_fps(self, video_stream: dict) -> Optional[float]:
         """Parse FPS from various ffprobe fields."""
@@ -1007,8 +1007,8 @@ class StreamProber:
                 num, den = r_frame_rate.split("/")
                 if float(den) > 0:
                     return round(float(num) / float(den), 2)
-            except (ValueError, ZeroDivisionError):
-                pass
+            except (ValueError, ZeroDivisionError) as e:
+                logger.debug("[STREAM-PROBE] Suppressed r_frame_rate parse error: %s", e)
 
         # Try avg_frame_rate
         avg_frame_rate = video_stream.get("avg_frame_rate")
@@ -1017,8 +1017,8 @@ class StreamProber:
                 num, den = avg_frame_rate.split("/")
                 if float(den) > 0:
                     return round(float(num) / float(den), 2)
-            except (ValueError, ZeroDivisionError):
-                pass
+            except (ValueError, ZeroDivisionError) as e:
+                logger.debug("[STREAM-PROBE] Suppressed avg_frame_rate parse error: %s", e)
 
         return None
 

@@ -9,8 +9,7 @@
  * - Explanatory tooltips on video codec settings
  */
 import { test, expect, navigateToTab } from './fixtures/base';
-import { selectors } from './fixtures/test-data';
-import { ffmpegSelectors, ffmpegTestData } from './fixtures/ffmpeg-data';
+import { ffmpegSelectors } from './fixtures/ffmpeg-data';
 
 test.describe('Video Codec Section', () => {
   test.beforeEach(async ({ appPage }) => {

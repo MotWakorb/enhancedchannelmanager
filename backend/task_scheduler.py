@@ -14,7 +14,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from enum import Enum
-from typing import Any, Optional
+from typing import Optional
 from zoneinfo import ZoneInfo
 
 logger = logging.getLogger(__name__)
@@ -694,8 +694,8 @@ class TaskScheduler(ABC):
                 try:
                     tz = ZoneInfo(self.schedule_config.timezone)
                     now = datetime.now(tz)
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug("[TASK-SCHEDULER] Suppressed timezone parse error: %s", e)
 
             cron = croniter(self.schedule_config.cron_expression, now)
             next_time = cron.get_next(datetime)

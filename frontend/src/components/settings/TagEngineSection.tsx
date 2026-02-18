@@ -344,8 +344,6 @@ export function TagEngineSection() {
     ? groups.filter(g => g.name.toLowerCase().includes(searchQuery.toLowerCase()))
     : groups;
 
-  const totalTags = groups.reduce((sum, g) => sum + (g.tag_count || 0), 0);
-
   return (
     <div className="tag-engine-section">
       <div className="settings-page-header">

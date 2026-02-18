@@ -91,7 +91,7 @@ class BandwidthTracker:
             try:
                 await self._task
             except asyncio.CancelledError:
-                pass
+                logger.debug("[BANDWIDTH] Polling task cancelled during shutdown")
             self._task = None
         logger.info("[BANDWIDTH] BandwidthTracker stopped")
 
@@ -150,8 +150,6 @@ class BandwidthTracker:
 
         session = get_session()
         try:
-            now = datetime.utcnow()
-
             # Find all connections with null disconnected_at (stale "watching" entries)
             stale_connections = session.query(UniqueClientConnection).filter(
                 UniqueClientConnection.disconnected_at.is_(None)
@@ -535,8 +533,6 @@ class BandwidthTracker:
                 channel_id = ch["channel_id"]
                 channel_name = ch["channel_name"]
                 client_ips = ch.get("client_ips", [])
-                client_count = ch.get("client_count", len(client_ips))
-
                 # Get or create watch stats record
                 record = session.query(ChannelWatchStats).filter(
                     ChannelWatchStats.channel_id == channel_id
@@ -617,8 +613,6 @@ class BandwidthTracker:
                 channel_name = ch["channel_name"]
                 new_clients = ch.get("new_clients", [])
                 continuing_clients = ch.get("continuing_clients", [])
-                client_count = ch.get("client_count", 0)
-
                 record = session.query(ChannelWatchStats).filter(
                     ChannelWatchStats.channel_id == channel_id
                 ).first()

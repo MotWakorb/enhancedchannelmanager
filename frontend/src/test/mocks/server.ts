@@ -17,8 +17,8 @@
  * ```
  */
 import { setupServer } from 'msw/node'
-import { handlers, resetMockDataStore } from './handlers'
-import { ffmpegHandlers, resetFFMPEGMockDataStore } from './ffmpegHandlers'
+import { handlers } from './handlers'
+import { ffmpegHandlers } from './ffmpegHandlers'
 
 // Create the server with default handlers + FFMPEG handlers
 export const server = setupServer(...handlers, ...ffmpegHandlers)
